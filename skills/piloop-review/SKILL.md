@@ -40,6 +40,7 @@ Two rules apply to the whole review:
 | Agent screen | `<PILOOP_HOME>/workers/<worker>/transcript.txt`; `runs.log_dir` |
 | Agent session file | `workers.usage->>'$.source'` names it. Claude Code: `~/.claude/projects/-<home>--piloop-{runs,workers}-<id>-worktree/*.jsonl`. Codex: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (match `session_id`). pi: `~/.pi/agent/sessions/--<cwd>--/*.jsonl` |
 | Orchestrator | the harness that ran `piloop-operate`; its writes are signed `orchestrator`. pi: `~/.pi/agent/sessions/--<cwd>--/`, subagents in `~/.pi/agent/pi-subagents/` and `run-history.jsonl`. Claude Code: `~/.claude/projects/<cwd, non-alphanumerics as ->/*.jsonl`, subagents under `<session>/subagents/`. Codex: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
+| What agents left in `./workspace/` | `<PILOOP_HOME>/projects/<id>/workspace` while an idea runs. A done idea's files, and what a stopped campaign left (except `NOTES.md` and `research/`), are archived (`archives`): `piloop restore <project> [<idea>\|<path>]` writes them back |
 | Candidates | the project repo: `refs/piloop/<project>/r<run>/<n>`, `git show <commit_sha>`; `entire checkpoint explain <workers.checkpoint_id>` when Entire is on |
 | Side effects outside piloop | `~/.claude/settings.json`, `~/.codex/config.toml`, `~/.claude/projects/*/memory/` |
 
