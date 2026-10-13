@@ -6,18 +6,18 @@ from sqlalchemy.orm import Session
 
 from piloop.db.models import Comment, CommentKind, Journal, Project, ProjectStatus, TargetKind
 from piloop.db.session import Database
-from piloop.reports.wake import fit, lessons_overview, orchestrator_overview
+from piloop.reports.wake import Lesson, fit, lessons_overview, orchestrator_overview, parse
 
 NOW = datetime(2026, 10, 12, 21, 0, tzinfo=UTC)
 
 
-def lesson(s: Session, project: int, family: str, status: str) -> int:
+def lesson(s: Session, project: int, family: str, status: str, best: str = '+1 score') -> int:
     comment = Comment(
         target_kind=TargetKind.PROJECT,
         target_id=project,
         author='watchdog#1',
         kind=CommentKind.LESSON,
-        body=f'family: {family} | status: {status} | best: +1 score (evaluator#1)\nwhy, with ids',
+        body=f'family: {family} | status: {status} | best: {best} (evaluator#1)\nwhy, with ids',
     )
     s.add(comment)
     s.flush()
@@ -34,28 +34,56 @@ def clones(s: Session, project: Project) -> tuple[Project, Project]:
     return sibling, other
 
 
-def test_a_brief_opens_with_the_current_lesson_of_each_family_on_the_repo_this_project_first(
+def test_a_brief_opens_with_one_line_per_family_on_the_repo_from_the_newest_campaign_that_tried_it(
     db: Database, project: Project
 ) -> None:
     with db.session() as s:
         assert lessons_overview(s, s.get_one(Project, project.id), 400) == '', 'no lessons, no block'
         sibling, other = clones(s, project)
         lesson(s, sibling.id, 'voting', 'dead')
-        lesson(s, project.id, 'voting', 'promising')
-        newer = lesson(s, sibling.id, 'voting', 'promising')
-        lesson(s, other.id, 'voting', 'dead')
+        newer = lesson(s, sibling.id, 'Voting', 'promising')
+        lesson(s, project.id, 'voting', 'promising', '+9 score')
+        lesson(s, other.id, 'calibration', 'promising', '+50 score')
         mine = lesson(s, project.id, 'calibration', 'dead')
         s.commit()
         text = lessons_overview(s, s.get_one(Project, project.id), 400)
         assert text.splitlines()[4:] == [
+            f'- [sibling] family: Voting | status: promising | best: +1 score (evaluator#1) (comment#{newer})',
             f'- [demo] family: calibration | status: dead | best: +1 score (evaluator#1) (comment#{mine})',
-            '- [demo] family: voting | status: promising | best: +1 score (evaluator#1) (comment#2)',
-            f'- [sibling] family: voting | status: promising | best: +1 score (evaluator#1) (comment#{newer})',
-        ], 'the newest per (project, family); never another repo; this project first, then newest'
+        ], 'the newest lesson of the newest campaign per family, whatever the case; never another repo'
         assert text.startswith('# What past campaigns on this repo concluded')
         assert lessons_overview(s, s.get_one(Project, project.id), 0) == '', '0 turns it off'
-        short = lessons_overview(s, s.get_one(Project, project.id), 90).splitlines()
-        assert short[-1] == '… 2 more: the lessons query under "Remember past campaigns" in the procedures'
+        short = lessons_overview(s, s.get_one(Project, project.id), 110).splitlines()
+        assert short[-1] == '… 1 more: the lessons query under "Remember past campaigns" in the procedures'
+
+
+def test_lessons_rank_dead_or_promising_first_then_the_larger_effect_then_the_newer_campaign(
+    db: Database, project: Project
+) -> None:
+    with db.session() as s:
+        sibling, _ = clones(s, project)
+        lesson(s, sibling.id, 'big but untested', 'untested', '+900 score')
+        lesson(s, project.id, 'unmeasured', 'dead', 'none measured')
+        lesson(s, project.id, 'small', 'promising', '+2 score')
+        lesson(s, project.id, 'faster', 'promising', '-40.5 seconds')
+        lesson(s, project.id, 'tied, older campaign', 'dead', '+2 score')
+        lesson(s, sibling.id, 'tied, newer campaign', 'dead', '+2 score')
+        s.commit()
+        lines = lessons_overview(s, s.get_one(Project, project.id), 1000).splitlines()[4:]
+    assert [line.split(' | ')[0] for line in lines] == [
+        '- [demo] family: faster',
+        '- [sibling] family: tied, newer campaign',
+        '- [demo] family: tied, older campaign',
+        '- [demo] family: small',
+        '- [demo] family: unmeasured',
+        '- [sibling] family: big but untested',
+    ], 'in one campaign, the newer lesson first'
+
+
+def test_parse_reads_the_family_the_status_and_the_size_of_the_first_number_after_best() -> None:
+    assert parse('family: A  b | status: dead | best: -53% to -63% ms') == Lesson('a b', False, 53.0)
+    assert parse('family: a | status: untested | best: none measured (evaluator#2)') == Lesson('a', True, None)
+    assert parse('not a lesson') == Lesson('not a lesson', True, None), 'another shape ranks last'
 
 
 def test_fit_keeps_the_lines_that_fit_in_the_budget() -> None:

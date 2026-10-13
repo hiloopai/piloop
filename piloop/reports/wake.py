@@ -7,8 +7,10 @@ lines, the open inbox, the head of each active project and the current lessons. 
 ``CHARS_PER_TOKEN`` characters each. Lines that do not fit are counted in a last line that says how to read them.
 """
 
+import re
 from collections.abc import Sequence
 from datetime import datetime
+from typing import NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -45,26 +47,53 @@ def _first_line(body: str) -> str:
     return body.strip().split('\n', 1)[0]
 
 
-def current_lessons(s: Session, repos: Sequence[str | None], first: int | None = None) -> list[tuple[Comment, str]]:
-    """The current lesson of each (project, family) of the projects on ``repos``, with the project's name.
+LESSON = re.compile(r'family: (?P<family>.+?) \| status: (?P<status>\w+) \| best: (?P<best>.*)')
+EFFECT = re.compile(r'[+-]?\d+(?:\.\d+)?')
 
-    The newest lesson of a family is the current one. They come newest first, the lessons of project ``first`` before
-    the others.
+
+class Lesson(NamedTuple):
+    """The parts of a lesson's first line that rank it. A CHECK guarantees the shape; anything else ranks last."""
+
+    family: str
+    """Lower case, with runs of spaces as one: the same family across projects."""
+    untested: bool
+    effect: float | None
+    """The size of the first number after ``best:``, whatever its sign: a gain may be a lower time. None when there is
+    no number there (``none measured``)."""
+
+
+def parse(first_line: str) -> Lesson:
+    """The family, status and effect size of a lesson's first line."""
+    m = LESSON.match(first_line)
+    if m is None:
+        return Lesson(' '.join(first_line.lower().split()), True, None)
+    effect = EFFECT.match(m['best'])
+    size = None if effect is None else abs(float(effect[0]))
+    return Lesson(' '.join(m['family'].lower().split()), m['status'] == 'untested', size)
+
+
+def current_lessons(s: Session, repos: Sequence[str | None]) -> list[tuple[Comment, str]]:
+    """The current lesson of each family on each of ``repos``, most relevant first, with its project's name.
+
+    A family's current lesson is the newest one of the newest campaign that has one, whichever project on the repo
+    that is. Then they rank: dead or promising before untested, a larger effect before a smaller one and a known
+    effect before an unknown one, a newer campaign first.
     """
     rows = s.execute(
         select(Comment, Project)
         .join(Project, Project.id == Comment.target_id)
         .where(Comment.kind == CommentKind.LESSON, Project.repo.in_([r for r in repos if r is not None]))
-        .order_by(Comment.id.desc())
+        .order_by(Project.created_at.desc(), Project.id.desc(), Comment.id.desc())
     ).all()
-    seen: set[tuple[int, str]] = set()
-    current: list[tuple[Comment, str]] = []
-    for comment, project in rows:
-        family = _first_line(comment.body).split(' | ', 1)[0]
-        if (project.id, family) not in seen:
-            seen.add((project.id, family))
-            current.append((comment, project.name))
-    return sorted(current, key=lambda row: row[0].target_id != first)
+    current: dict[tuple[str | None, str], tuple[int, Lesson, Comment, str]] = {}
+    for age, (comment, project) in enumerate(rows):
+        lesson = parse(_first_line(comment.body))
+        current.setdefault((project.repo, lesson.family), (age, lesson, comment, project.name))
+    ranked = sorted(
+        current.values(),
+        key=lambda row: (row[1].untested, row[1].effect is None, -(row[1].effect or 0), row[0]),
+    )
+    return [(comment, name) for _, _, comment, name in ranked]
 
 
 def _lesson_line(comment: Comment, project: str) -> str:
@@ -73,14 +102,15 @@ def _lesson_line(comment: Comment, project: str) -> str:
 
 def lessons_overview(s: Session, project: Project, budget: int) -> str:
     """The block that opens a brief: the current lessons on the project's repo. Empty when off or when there are none."""
-    lessons = current_lessons(s, [project.repo], first=project.id) if budget else []
+    lessons = current_lessons(s, [project.repo]) if budget else []
     if not lessons:
         return ''
     head = [
         '# What past campaigns on this repo concluded',
         '',
-        'The current lesson of each mechanism family, this project first, newest first. Before you propose or build a'
-        ' mechanism, read more with the queries under "Remember past campaigns" in the procedures.',
+        'The current lesson of each mechanism family, from the newest campaign that tried it; dead or promising first,'
+        ' larger effects first. Before you propose or build a mechanism, read more with the queries under "Remember'
+        ' past campaigns" in the procedures.',
         '',
     ]
     return '\n'.join(fitted([*head, *(_lesson_line(c, name) for c, name in lessons)], budget, LESSONS_MORE))

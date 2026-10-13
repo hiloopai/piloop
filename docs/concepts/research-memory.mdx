@@ -47,9 +47,10 @@ agent of every project can read it.
 
 ## What agents read
 
-- The briefs of workers and research sweeps open with the current lessons of the repo, one line each: this project's
-  first, then the newest. The overview is `[memory] wake_budget` tokens (default 400). `[roles.<kind>] wake_budget`
-  changes it for one role, and 0 turns it off. Watchdogs do not get it by default.
+- The briefs of workers and research sweeps open with the current lessons of the repo, one line per mechanism family
+  from the newest campaign that tried it: dead or promising before untested, then the larger effect (the number after
+  `best:`, whatever its sign), then the newer campaign. The overview is `[memory] wake_budget` tokens (default 400).
+  `[roles.<kind>] wake_budget` changes it for one role, and 0 turns it off. Watchdogs do not get it by default.
 - The database procedures that every brief carries (`piloop schema`, "Remember past campaigns") have the queries:
   prior attempts at a mechanism on this repo, labelled with the project, what they came to and the metric that judged
   them; implementations to copy from any project; the current lessons; the documents; and how to read the session that
