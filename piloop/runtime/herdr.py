@@ -13,8 +13,8 @@ removes exactly its tab. A human selects workspace and tab in the Herdr sidebar,
 An agent is finished when it is idle, nothing it started still runs, and its first turn is past the startup grace
 (``herdr_startup_grace_seconds``), within which a quiet agent may still be starting. Harnesses run tool commands in
 sessions of their own (Claude Code's background shells, Codex's commands). The agent, its MCP servers and its helpers
-share the session of the pane's shell. Every process started in the pane inherits ``TOKEN_ENV``. So a tagged process in another
-session is work that the agent started and still waits on, even after its parent shell exited.
+share the session of the pane's shell. Every process started in the pane inherits ``TOKEN_ENV``. So a tagged process
+in another session is work that the agent started and still waits on, even after its parent shell exited.
 
 ``herdr`` prints ``{"result": …}`` JSON on stdout, and ``{"error": {"code", "message"}}`` on stderr with exit status
 1. Exceptions: ``pane run`` prints nothing, ``read`` prints the terminal text, and ``session list --json`` prints
@@ -232,9 +232,9 @@ class HerdrRuntime:
         A TUI that still draws its welcome screen can drop a prompt. Pickup is a state change (Herdr's
         ``state_change_seq`` advances after the prompt), not a state. On a loaded host the change can come many
         seconds after the agent started its turn: Codex records ``task_started`` a fraction of a second after the
-        prompt while Herdr still sees no change 5 s later. So pickup has the whole startup grace, not a short window. An agent whose first-run dialogs were answered
-        in a background tab already reports ``done``, and a wait for ``working`` or ``done`` would take that for a
-        finished turn. Without a state change, a ``BUSY_SCREENS`` or ``FAILED_TURN_SCREENS`` text at the bottom of the
+        prompt while Herdr still sees no change 5 s later. So pickup has the whole startup grace, not a short window.
+        An agent whose first-run dialogs were answered in a background tab already reports ``done``, and a wait for
+        ``working`` or ``done`` would take that for a finished turn. Without a state change, a ``BUSY_SCREENS`` or ``FAILED_TURN_SCREENS`` text at the bottom of the
         screen shows that the agent took the prompt while it starts up or retries the API. ``wait`` judges what
         follows. The prompt is never pasted again, because the composer or a queued turn may already hold it.
 
