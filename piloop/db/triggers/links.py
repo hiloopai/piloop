@@ -1,6 +1,6 @@
 """Idea links stay inside one project: the persistent trigger on ``idea_links``."""
 
-from piloop.db.triggers.ddl import Trigger
+from piloop.db.ddl import Trigger
 
 
 def same_project() -> Trigger:

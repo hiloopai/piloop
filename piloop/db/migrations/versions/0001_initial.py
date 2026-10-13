@@ -10,13 +10,32 @@ import sqlalchemy as sa
 from alembic import op
 
 import piloop.db.models
+from piloop.db.indexes import INDEXES
 from piloop.db.triggers import PERSISTENT
-from piloop.db.triggers.fts import FTS_COLUMNS, fts_table
 
 revision: str = '0001'
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
+
+# What this revision creates, frozen: later revisions add indexes and triggers of their own.
+CREATED_INDEXES = ('ideas_fts', 'comments_fts')
+CREATED_TRIGGERS = (
+    'projects_updated_at',
+    'ideas_updated_at',
+    'runs_updated_at',
+    'candidates_updated_at',
+    'comments_updated_at',
+    'workers_updated_at',
+    'comments_escalation_event',
+    'idea_links_project',
+    'ideas_fts_insert',
+    'ideas_fts_delete',
+    'ideas_fts_update',
+    'comments_fts_insert',
+    'comments_fts_delete',
+    'comments_fts_update',
+)
 
 
 def upgrade() -> None:
@@ -424,15 +443,17 @@ def upgrade() -> None:
     )
     with op.batch_alter_table('measurements', schema=None) as batch_op:
         batch_op.create_index('ix_measurements_candidate_evaluator', ['candidate_id', 'evaluator_id'], unique=False)
-    for table in FTS_COLUMNS:
-        op.execute(fts_table(table))
+    for name in CREATED_INDEXES:
+        for statement in INDEXES[name].create():
+            op.execute(statement)
     for trigger in PERSISTENT:
-        op.execute(trigger.sql())
+        if trigger.name in CREATED_TRIGGERS:
+            op.execute(trigger.sql())
 
 
 def downgrade() -> None:
-    for table in FTS_COLUMNS:
-        op.execute(f'DROP TABLE {table}_fts')
+    for name in CREATED_INDEXES:
+        op.execute(f'DROP TABLE {name}')
     with op.batch_alter_table('measurements', schema=None) as batch_op:
         batch_op.drop_index('ix_measurements_candidate_evaluator')
 

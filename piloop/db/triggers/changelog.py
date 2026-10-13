@@ -5,7 +5,7 @@ for a change, ``<singular>.deleted`` for a tombstone and ``comment.<kind>`` for 
 table's singular, which is also a ``TargetKind`` value. Payloads have the old and new values, never a large body.
 """
 
-from piloop.db.triggers.ddl import Trigger
+from piloop.db.ddl import Trigger
 from piloop.db.triggers.provenance import DAEMON_ACTOR, SESSION_ACTOR
 
 

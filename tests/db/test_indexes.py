@@ -1,4 +1,5 @@
-"""Full-text search over ideas and comments: the index follows every write, ranks, and is nobody's to write by hand."""
+"""The indexes: full-text search over ideas, comments and documents follows every write, ranks, and is nobody's to
+write by hand."""
 
 import sqlite3
 from contextlib import closing
@@ -9,9 +10,9 @@ from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import text
 
-from piloop.db import sql
+from piloop.db import indexes, sql
 from piloop.db.session import Database
-from piloop.db.triggers import PERSISTENT, fts, recreate
+from piloop.db.triggers import PERSISTENT, recreate
 
 IDEAS = (
     "INSERT INTO ideas (project_id, title, hypothesis, plan, created_by, track) VALUES (1, 'Soft voting ensemble', "
@@ -123,11 +124,12 @@ def test_agents_cannot_write_the_indexes_or_their_shadow_tables(db: Database, tm
         assert sql.run(con, 'SELECT count(*) > 0 FROM ideas_fts_data').rows == [(1,)], 'reading them is allowed'
 
 
-def test_fts_objects_are_the_indexes_their_shadows_and_their_sync_triggers() -> None:
-    names = (*fts.FTS_TABLES, *fts.FTS_TRIGGER_NAMES, 'ideas_fts_data')
-    assert {t.name for t in PERSISTENT if t.requires is not None} == fts.FTS_TRIGGER_NAMES
-    assert all(fts.is_fts_object(name) for name in names)
-    assert not fts.is_fts_object('ideas')
+def test_index_objects_are_the_indexes_their_shadows_and_their_sync_triggers() -> None:
+    names = (*indexes.INDEXES, *indexes.TRIGGER_NAMES, 'ideas_fts_data', 'documents_fts_idx')
+    assert {t.name for t in PERSISTENT if t.requires is not None} == indexes.TRIGGER_NAMES
+    assert all(indexes.is_index_object(name) for name in names)
+    assert not indexes.is_index_object('ideas')
+    assert not indexes.is_index_object('documents')
 
 
 def test_recreate_restores_the_sync_triggers_once_the_index_exists(db: Database) -> None:
