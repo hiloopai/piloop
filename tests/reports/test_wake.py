@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from piloop.config import load_project_config
 from piloop.db.models import Comment, CommentKind, Journal, Project, ProjectStatus, TargetKind
 from piloop.db.session import Database
-from piloop.reports.wake import Lesson, fit, lessons_overview, orchestrator_overview, parse
+from piloop.reports.wake import Lesson, Relevance, Tier, fit, lessons_overview, orchestrator_overview, parse
 
 NOW = datetime(2026, 10, 12, 21, 0, tzinfo=UTC)
 
@@ -119,6 +119,20 @@ def test_lessons_in_the_projects_metrics_outrank_larger_effects_in_other_units(d
     ], (
         'primary, then guardrails, then a metric sharing a word with the primary, then no metric, then the rest:'
         ' there, the best of each metric before the second of any'
+    )
+
+
+def test_relevance_tiers_a_metric_by_its_name_against_the_projects_metrics(project: Project) -> None:
+    metrics = [
+        {'name': 'val_correct_at_b', 'direction': 'higher', 'role': 'primary'},
+        {'name': 'val_ece', 'direction': 'lower', 'role': 'guardrail', 'margin': 0.003},
+    ]
+    relevance = Relevance([load_project_config(Path(project.path), metrics=metrics)])
+    assert [
+        relevance.tier(m)
+        for m in ('val_correct_at_b', 'val_ece', 'rep_correct_at_b', 'test_ece_bins', None, 'val_seconds')
+    ] == [Tier.PRIMARY, Tier.MEASURED, Tier.NEAR_PRIMARY, Tier.NEAR_MEASURED, Tier.NO_METRIC, Tier.UNRELATED], (
+        '`val` is a split word: it relates nothing'
     )
 
 

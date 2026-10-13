@@ -10,6 +10,7 @@ lines, the open inbox, the head of each active project and the current lessons. 
 import re
 from collections.abc import Sequence
 from datetime import datetime
+from enum import IntEnum
 from typing import NamedTuple
 
 from sqlalchemy import select
@@ -79,14 +80,28 @@ def parse(first_line: str) -> Lesson:
     return Lesson(' '.join(m['family'].lower().split()), m['status'] == 'untested', size, metric)
 
 
-class Relevance:
-    """How close a lesson's metric is to the metrics of the projects being briefed: a tier, lower is closer.
+class Tier(IntEnum):
+    """How close a lesson's metric is to the metrics of the projects being briefed. A lower tier ranks first."""
 
-    0 is a primary metric of theirs, 1 another metric they measure (a guardrail, a watched one), 2 a metric that shares
-    a word with a primary (``rep_correct_at_b`` with ``val_correct_at_b``), 3 one that shares a word with another of
-    their metrics, 4 no metric (``none measured``: it may be close, nothing says), 5 a metric that is none of these.
-    Words are runs of letters and digits; split and aggregate words (``COMMON_WORDS``) and one- or two-letter words
-    do not count.
+    PRIMARY = 0
+    """A primary metric of theirs."""
+    MEASURED = 1
+    """Another metric they measure: a guardrail, a watched one."""
+    NEAR_PRIMARY = 2
+    """Shares a word with a primary (``rep_correct_at_b`` with ``val_correct_at_b``)."""
+    NEAR_MEASURED = 3
+    """Shares a word with another of their metrics."""
+    NO_METRIC = 4
+    """The lesson names no metric (``none measured``): it may be close, nothing says."""
+    UNRELATED = 5
+    """A metric that is none of these."""
+
+
+class Relevance:
+    """The ``Tier`` of a lesson's metric against the metrics of the projects being briefed.
+
+    Words are runs of letters and digits; split and aggregate words (``COMMON_WORDS``) and one- or two-letter words do
+    not count.
     """
 
     def __init__(self, configs: Sequence[ProjectConfig]) -> None:
@@ -95,17 +110,17 @@ class Relevance:
         self._primary_words = set().union(*map(_words, self._primary))
         self._other_words = set().union(*map(_words, self._other))
 
-    def tier(self, metric: str | None) -> int:
+    def tier(self, metric: str | None) -> Tier:
         if metric is None:
-            return 4
+            return Tier.NO_METRIC
         if metric in self._primary:
-            return 0
+            return Tier.PRIMARY
         if metric in self._other:
-            return 1
+            return Tier.MEASURED
         words = _words(metric)
         if words & self._primary_words:
-            return 2
-        return 3 if words & self._other_words else 5
+            return Tier.NEAR_PRIMARY
+        return Tier.NEAR_MEASURED if words & self._other_words else Tier.UNRELATED
 
 
 def _words(metric: str) -> set[str]:
@@ -139,7 +154,7 @@ def current_lessons(s: Session, repos: Sequence[str | None], relevance: Relevanc
     for effects in by_metric.values():
         effects.sort(reverse=True)
 
-    def key(row: tuple[int, Lesson, Comment, str]) -> tuple[int, bool, bool, int, int]:
+    def key(row: tuple[int, Lesson, Comment, str]) -> tuple[Tier, bool, bool, int, int]:
         age, lesson = row[0], row[1]
         place = 0 if lesson.effect is None else by_metric[lesson.metric].index(lesson.effect)
         return relevance.tier(lesson.metric), lesson.untested, lesson.effect is None, place, age
