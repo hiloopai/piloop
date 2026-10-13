@@ -19,7 +19,8 @@ A deprecated configuration key shows a warning for at least one minor release be
     blake3(body)`.
   - `projects.repo` names the repository, whatever the clone.
   - The briefs of workers and research sweeps open with the current lessons of the repo, in `[memory] wake_budget`
-    tokens (`[roles.<kind>] wake_budget` per role, 0 turns it off).
+    tokens (`[roles.<kind>] wake_budget` per role, 0 turns it off). Lessons in the project's own metrics come first,
+    and effects are ranked within their metric, never by raw size across units.
   - The procedures, the briefs and the operate and review skills have the queries.
 - The orchestrator's journal: `piloop journal "<line>"` appends one line of at most 280 bytes, and `piloop wake`
   prints a bounded overview for a new orchestrator session: the latest journal lines, the open inbox, the active

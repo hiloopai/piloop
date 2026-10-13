@@ -1,9 +1,11 @@
 """Wake overviews: the current lessons that open a brief, and what ``piloop wake`` prints, each in its budget."""
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from piloop.config import load_project_config
 from piloop.db.models import Comment, CommentKind, Journal, Project, ProjectStatus, TargetKind
 from piloop.db.session import Database
 from piloop.reports.wake import Lesson, fit, lessons_overview, orchestrator_overview, parse
@@ -53,7 +55,7 @@ def test_a_brief_opens_with_one_line_per_family_on_the_repo_from_the_newest_camp
         ], 'the newest lesson of the newest campaign per family, whatever the case; never another repo'
         assert text.startswith('# What past campaigns on this repo concluded')
         assert lessons_overview(s, s.get_one(Project, project.id), 0) == '', '0 turns it off'
-        short = lessons_overview(s, s.get_one(Project, project.id), 110).splitlines()
+        short = lessons_overview(s, s.get_one(Project, project.id), 130).splitlines()
         assert short[-1] == '… 1 more: the lessons query under "Remember past campaigns" in the procedures'
 
 
@@ -71,17 +73,59 @@ def test_lessons_rank_dead_or_promising_first_then_the_larger_effect_then_the_ne
         s.commit()
         lines = lessons_overview(s, s.get_one(Project, project.id), 1000).splitlines()[4:]
     assert [line.split(' | ')[0] for line in lines] == [
-        '- [demo] family: faster',
         '- [sibling] family: tied, newer campaign',
         '- [demo] family: tied, older campaign',
         '- [demo] family: small',
-        '- [demo] family: unmeasured',
         '- [sibling] family: big but untested',
-    ], 'in one campaign, the newer lesson first'
+        '- [demo] family: unmeasured',
+        '- [demo] family: faster',
+    ], "the project's metric first; in one campaign, the newer lesson first; seconds are not its metric"
+
+
+def test_lessons_in_the_projects_metrics_outrank_larger_effects_in_other_units(db: Database, project: Project) -> None:
+    """comment#10930: a decoder-accuracy brief opened with eval-time lessons, because seconds outnumber words."""
+    metrics = [
+        {'name': 'val_correct_at_b', 'direction': 'higher', 'role': 'primary'},
+        {'name': 'rep_correct_at_b', 'direction': 'higher', 'role': 'guardrail', 'margin': 40},
+        {'name': 'val_ece', 'direction': 'lower', 'role': 'guardrail', 'margin': 0.003},
+    ]
+    with db.session() as s:
+        p = s.get_one(Project, project.id)
+        p.config = load_project_config(Path(project.path), metrics=metrics).model_dump(mode='json')
+        sibling, _ = clones(s, project)
+        lesson(s, sibling.id, 'cross-tree-replay', 'promising', '-1182.8 postproc_seconds')
+        lesson(s, sibling.id, 'stack-composition', 'promising', '-1071.1 full_eval_seconds')
+        lesson(s, sibling.id, 'exact-compute-cuts', 'promising', '-1054.6 full_eval_seconds')
+        lesson(s, sibling.id, 'disagreement withholding', 'promising', '+723 unseen_score')
+        lesson(s, sibling.id, 'calibration', 'promising', '+716 rep_correct_at_b')
+        lesson(s, sibling.id, 'causal acquisition', 'promising', '+658 unseen_correct_at_500')
+        lesson(s, sibling.id, 'plausibility', 'dead', '+12 val_correct_at_b')
+        lesson(s, sibling.id, 'ece trim', 'dead', '-0.004 val_ece')
+        lesson(s, sibling.id, 'never scored', 'dead', 'none measured')
+        lesson(s, sibling.id, 'binning', 'dead', '-0.01 test_ece_bins')
+        s.commit()
+        lines = lessons_overview(s, s.get_one(Project, project.id), 1000).splitlines()[4:]
+    assert [line.split(' | ')[0].removeprefix('- [sibling] family: ') for line in lines] == [
+        'plausibility',
+        'ece trim',
+        'calibration',
+        'causal acquisition',
+        'binning',
+        'never scored',
+        'disagreement withholding',
+        'stack-composition',
+        'cross-tree-replay',
+        'exact-compute-cuts',
+    ], (
+        'primary, then guardrails, then a metric sharing a word with the primary, then no metric, then the rest:'
+        ' there, the best of each metric before the second of any'
+    )
 
 
 def test_parse_reads_the_family_the_status_and_the_size_of_the_first_number_after_best() -> None:
-    assert parse('family: A  b | status: dead | best: -53% to -63% ms') == Lesson('a b', False, 53.0)
+    assert parse('family: A  b | status: dead | best: -53% to -63% ms') == Lesson('a b', False, 53.0, 'ms')
+    assert parse('family: a | status: dead | best: +716 Rep_Correct_at_B (evaluator#15)').metric == 'rep_correct_at_b'
+    assert parse('family: a | status: dead | best: +3') == Lesson('a', False, 3.0, None)
     assert parse('family: a | status: untested | best: none measured (evaluator#2)') == Lesson('a', True, None)
     assert parse('not a lesson') == Lesson('not a lesson', True, None), 'another shape ranks last'
 

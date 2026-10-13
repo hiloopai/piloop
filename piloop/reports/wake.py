@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.campaign import inbox
-from piloop.config import config_of
+from piloop.config import ProjectConfig, config_of
 from piloop.db.models import Comment, CommentKind, Journal, Project, ProjectStatus
 from piloop.reports.overview import summary
 
@@ -48,7 +48,11 @@ def _first_line(body: str) -> str:
 
 
 LESSON = re.compile(r'family: (?P<family>.+?) \| status: (?P<status>\w+) \| best: (?P<best>.*)')
-EFFECT = re.compile(r'[+-]?\d+(?:\.\d+)?')
+NUMBER = r'[+-]?\d+(?:\.\d+)?%?'
+EFFECT = re.compile(rf'(?P<number>{NUMBER})(?:\s+to\s+{NUMBER})?(?:\s+(?P<metric>[^\s(,;]+))?')
+WORD = re.compile(r'[a-z0-9]+')
+COMMON_WORDS = frozenset({'val', 'dev', 'test', 'train', 'mean', 'avg', 'total', 'all'})
+"""Words of metric names that say which split or aggregate, not what is measured: sharing one makes no relation."""
 
 
 class Lesson(NamedTuple):
@@ -60,24 +64,63 @@ class Lesson(NamedTuple):
     effect: float | None
     """The size of the first number after ``best:``, whatever its sign: a gain may be a lower time. None when there is
     no number there (``none measured``)."""
+    metric: str | None = None
+    """The word after that number (after a range's second number), lower case: the metric the effect is in."""
 
 
 def parse(first_line: str) -> Lesson:
-    """The family, status and effect size of a lesson's first line."""
+    """The family, status, effect size and metric of a lesson's first line."""
     m = LESSON.match(first_line)
     if m is None:
         return Lesson(' '.join(first_line.lower().split()), True, None)
     effect = EFFECT.match(m['best'])
-    size = None if effect is None else abs(float(effect[0]))
-    return Lesson(' '.join(m['family'].lower().split()), m['status'] == 'untested', size)
+    size = None if effect is None else abs(float(effect['number'].rstrip('%')))
+    metric = None if effect is None or effect['metric'] is None else effect['metric'].lower()
+    return Lesson(' '.join(m['family'].lower().split()), m['status'] == 'untested', size, metric)
 
 
-def current_lessons(s: Session, repos: Sequence[str | None]) -> list[tuple[Comment, str]]:
+class Relevance:
+    """How close a lesson's metric is to the metrics of the projects being briefed: a tier, lower is closer.
+
+    0 is a primary metric of theirs, 1 another metric they measure (a guardrail, a watched one), 2 a metric that shares
+    a word with a primary (``rep_correct_at_b`` with ``val_correct_at_b``), 3 one that shares a word with another of
+    their metrics, 4 no metric (``none measured``: it may be close, nothing says), 5 a metric that is none of these.
+    Words are runs of letters and digits; split and aggregate words (``COMMON_WORDS``) and one- or two-letter words
+    do not count.
+    """
+
+    def __init__(self, configs: Sequence[ProjectConfig]) -> None:
+        self._primary = {t.primary.name.lower() for cfg in configs for t in cfg.all_tracks}
+        self._other = {m.name.lower() for cfg in configs for m in cfg.metrics} - self._primary
+        self._primary_words = set().union(*map(_words, self._primary))
+        self._other_words = set().union(*map(_words, self._other))
+
+    def tier(self, metric: str | None) -> int:
+        if metric is None:
+            return 4
+        if metric in self._primary:
+            return 0
+        if metric in self._other:
+            return 1
+        words = _words(metric)
+        if words & self._primary_words:
+            return 2
+        return 3 if words & self._other_words else 5
+
+
+def _words(metric: str) -> set[str]:
+    return {w for w in WORD.findall(metric.lower()) if len(w) > 2 and w not in COMMON_WORDS}
+
+
+def current_lessons(s: Session, repos: Sequence[str | None], relevance: Relevance) -> list[tuple[Comment, str]]:
     """The current lesson of each family on each of ``repos``, most relevant first, with its project's name.
 
     A family's current lesson is the newest one of the newest campaign that has one, whichever project on the repo
-    that is. Then they rank: dead or promising before untested, a larger effect before a smaller one and a known
-    effect before an unknown one, a newer campaign first.
+    that is. Then they rank: by ``relevance`` of their metric first, so that a lesson in seconds does not outrank one
+    in the briefed project's own metric. Within a tier, dead or promising before untested, then a known effect before
+    an unknown one, then the effect's rank among the lessons in the same metric (its largest first): effects in
+    different units are never compared by size, the best of each metric comes before the second of any. Last, a newer
+    campaign first.
     """
     rows = s.execute(
         select(Comment, Project)
@@ -89,11 +132,19 @@ def current_lessons(s: Session, repos: Sequence[str | None]) -> list[tuple[Comme
     for age, (comment, project) in enumerate(rows):
         lesson = parse(_first_line(comment.body))
         current.setdefault((project.repo, lesson.family), (age, lesson, comment, project.name))
-    ranked = sorted(
-        current.values(),
-        key=lambda row: (row[1].untested, row[1].effect is None, -(row[1].effect or 0), row[0]),
-    )
-    return [(comment, name) for _, _, comment, name in ranked]
+    by_metric: dict[str | None, list[float]] = {}
+    for _, lesson, _, _ in current.values():
+        if lesson.effect is not None:
+            by_metric.setdefault(lesson.metric, []).append(lesson.effect)
+    for effects in by_metric.values():
+        effects.sort(reverse=True)
+
+    def key(row: tuple[int, Lesson, Comment, str]) -> tuple[int, bool, bool, int, int]:
+        age, lesson = row[0], row[1]
+        place = 0 if lesson.effect is None else by_metric[lesson.metric].index(lesson.effect)
+        return relevance.tier(lesson.metric), lesson.untested, lesson.effect is None, place, age
+
+    return [(comment, name) for _, _, comment, name in sorted(current.values(), key=key)]
 
 
 def _lesson_line(comment: Comment, project: str) -> str:
@@ -102,15 +153,16 @@ def _lesson_line(comment: Comment, project: str) -> str:
 
 def lessons_overview(s: Session, project: Project, budget: int) -> str:
     """The block that opens a brief: the current lessons on the project's repo. Empty when off or when there are none."""
-    lessons = current_lessons(s, [project.repo]) if budget else []
+    lessons = current_lessons(s, [project.repo], Relevance([config_of(project)])) if budget else []
     if not lessons:
         return ''
     head = [
         '# What past campaigns on this repo concluded',
         '',
-        'The current lesson of each mechanism family, from the newest campaign that tried it; dead or promising first,'
-        ' larger effects first. Before you propose or build a mechanism, read more with the queries under "Remember'
-        ' past campaigns" in the procedures.',
+        "The current lesson of each mechanism family, from the newest campaign that tried it; those in this project's"
+        ' metrics first, then related metrics; within them, dead or promising first, then the largest effects of each'
+        ' metric. Before you propose or build a mechanism, read more with the queries under "Remember past campaigns"'
+        ' in the procedures.',
         '',
     ]
     return '\n'.join(fitted([*head, *(_lesson_line(c, name) for c, name in lessons)], budget, LESSONS_MORE))
@@ -142,7 +194,8 @@ def orchestrator_overview(s: Session, budget: int, now: datetime) -> str:
     project_lines = fitted(
         [f'- {summary(s, p, config_of(p))}' for p in active], int(budget * OTHER_SHARE), 'piloop status'
     )
-    lessons = current_lessons(s, sorted({p.repo for p in active if p.repo is not None}))
+    repos = sorted({p.repo for p in active if p.repo is not None})
+    lessons = current_lessons(s, repos, Relevance([config_of(p) for p in active]))
     lesson_lines = fitted([_lesson_line(c, name) for c, name in lessons], int(budget * OTHER_SHARE), LESSONS_MORE)
     sections = (
         (f'## Journal, oldest to newest ({len(journal)} lines in all)', journal_lines),

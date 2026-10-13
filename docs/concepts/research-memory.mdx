@@ -48,8 +48,11 @@ agent of every project can read it.
 ## What agents read
 
 - The briefs of workers and research sweeps open with the current lessons of the repo, one line per mechanism family
-  from the newest campaign that tried it: dead or promising before untested, then the larger effect (the number after
-  `best:`, whatever its sign), then the newer campaign. The overview is `[memory] wake_budget` tokens (default 400).
+  from the newest campaign that tried it. Lessons in the project's own metrics come first (the metric is the word after
+  the number after `best:`): its primary, then its other metrics, then metrics that share a word with them
+  (`rep_correct_at_b` with `val_correct_at_b`), then lessons with no number, then the rest. Within each, dead or
+  promising before untested, then the larger effect (whatever its sign) among the lessons in the same metric, so
+  seconds never outrank words, then the newer campaign. The overview is `[memory] wake_budget` tokens (default 400).
   `[roles.<kind>] wake_budget` changes it for one role, and 0 turns it off. Watchdogs do not get it by default.
 - The database procedures that every brief carries (`piloop schema`, "Remember past campaigns") have the queries:
   prior attempts at a mechanism on this repo, labelled with the project, what they came to and the metric that judged

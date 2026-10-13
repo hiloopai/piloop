@@ -318,8 +318,10 @@ class Memory(BaseModel):
     wake_budget: int = Field(default=400, ge=0)
     """The size in tokens (about 4 characters each) of the overview that opens the briefs of workers and research
     sweeps: the current lesson of each mechanism family on the same repo, from the newest campaign that tried it, one
-    line each. Dead or promising come before untested, then larger effects (the number after ``best:``), then newer
-    campaigns. The brief then says how to read more. A role can change it with ``[roles.<kind>] wake_budget``. 0
+    line each. Lessons in the project's own metrics come first (the word after the number after ``best:``), then
+    lessons in related metrics, then the rest. Within those, dead or promising come before untested, then the larger
+    effects of each metric, then newer campaigns: effects in different metrics are never compared by size. The brief
+    then says how to read more. A role can change it with ``[roles.<kind>] wake_budget``. 0
     turns it off."""
 
 
