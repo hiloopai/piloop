@@ -21,6 +21,11 @@ A deprecated configuration key shows a warning for at least one minor release be
 
 - `workers.kind` holds any role name of the project. A trigger refuses a name that is not a role of the project.
 
+### Fixed
+
+- A Herdr server that does not answer for a moment (`server_unavailable`, or a `herdr` call that times out) no longer
+  ends the agents the daemon watches: reads are retried for `herdr_unavailable_seconds` (300) before they fail.
+
 ## [0.1.0] - 2026-10-13
 
 Initial public release.
