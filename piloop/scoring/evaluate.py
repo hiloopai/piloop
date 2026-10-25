@@ -7,9 +7,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from piloop.proc import STDERR_IN_ERROR, UNITS_ENV, child_env, kill_group
 
@@ -65,6 +65,17 @@ def _run(
     return Completed(rc, time.monotonic() - started)
 
 
+class Screened(BaseModel):
+    """An evaluator's explicit decision to stop before a full measurement. It contains no full-panel scores."""
+
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    version: Literal[1]
+    outcome: Literal['screened']
+    rung: Annotated[int, Field(strict=True, ge=0)]
+    evidence: dict[str, JsonValue]
+    watches: dict[str, Annotated[float, Field(strict=True, allow_inf_nan=False)]]
+
+
 @dataclass(frozen=True)
 class EvalResult:
     """The result of one run of the evaluate command."""
@@ -76,6 +87,8 @@ class EvalResult:
     """The per-unit results the evaluate wrote to ``UNITS_ENV``. Empty when it wrote none or was not asked to."""
     signal: int | None = None
     """The signal that ended the evaluate command, when one did. None after its own exit and after a timeout."""
+    screened: Screened | None = None
+    """An unmeasured early discard, separate from metrics and evaluator failures."""
 
 
 def run_evaluate(
@@ -87,17 +100,30 @@ def run_evaluate(
     required: set[str],
     track: Track = no_track,
     units_file: Path | None = None,
+    allow_screened: bool = False,
 ) -> EvalResult:
     """Run the evaluate command and parse its ``METRIC name=value`` lines. A non-zero exit gives no metrics.
 
     With ``units_file``, which must not exist yet, the command also gets ``UNITS_ENV`` set to that path. What it writes
     there is validated into ``EvalResult.units``. The file is then removed, so it never outlives the call.
+    ``allow_screened`` accepts exit 75 with one validated receipt as an unmeasured early discard.
     """
     env = child_env() | ({UNITS_ENV: str(units_file)} if units_file is not None else {})
+    env['PILOOP_EVAL_PURPOSE'] = 'experiment' if allow_screened else 'reference'
     try:
         done = _run(cmd, cwd=cwd, log_dir=log_dir, prefix='eval', timeout=timeout, track=track, env=env)
         if done.returncode is None:
             return EvalResult({}, done.seconds, f'evaluate timeout after {timeout:g}s')
+        if done.returncode == 75 and allow_screened:
+            lines = (log_dir / 'eval.stdout').read_text(errors='replace').splitlines()
+            receipts = [line.removeprefix('EVAL_SCREENED ') for line in lines if line.startswith('EVAL_SCREENED ')]
+            if len(receipts) != 1:
+                return EvalResult({}, done.seconds, 'evaluate exit 75 requires exactly one EVAL_SCREENED receipt')
+            try:
+                screened = Screened.model_validate_json(receipts[0])
+            except ValidationError as e:
+                return EvalResult({}, done.seconds, f'evaluate wrote a bad EVAL_SCREENED receipt: {e}')
+            return EvalResult({}, done.seconds, None, screened=screened)
         if done.returncode != 0:
             stderr = (log_dir / 'eval.stderr').read_text(errors='replace').strip()[-STDERR_IN_ERROR:]
             if done.returncode > 0:

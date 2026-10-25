@@ -99,7 +99,7 @@ def test_a_shared_evaluation_that_cannot_start_is_a_crash_for_every_request(
     ex = queued_executor(db, runtime, tmp_path, slots=2)
     waits = mocker.spy(ex, '_wait')
 
-    def cannot_check_out(*_: object) -> None:
+    def cannot_check_out(*_: object, **_options: object) -> None:
         until(lambda: waits.call_count == 2, 'the second request')
         raise RuntimeError('cannot check out the commit')
 
@@ -376,3 +376,32 @@ def test_a_requested_remeasure_is_listed_as_waiting_before_the_daemon_queues_it(
         s.commit()
         assert queue.requested(s) == []
         assert base.measurements[-1].error == 'evaluation cancelled by orchestrator'
+
+
+def test_two_runs_share_a_screen_without_recording_a_full_measurement(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    import shlex
+
+    from tests.daemon.test_run_executor import SCREEN_RECEIPT
+
+    (tmp_path / 'hold').touch()
+    set_config(
+        db, campaign, evaluate=held_evaluate(tmp_path, then=f'printf "%s\\n" {shlex.quote(SCREEN_RECEIPT)}; exit 75')
+    )
+    ex = queued_executor(db, runtime, tmp_path, slots=2)
+    waits = mocker.spy(ex, '_wait')
+    first, second = make_run(db, campaign), make_run(db, campaign, title='the same screened tree')
+    one = in_thread(lambda: execute(ex, db, first))
+    until(lambda: len(evaluated(tmp_path)) == 1, 'the first evaluation')
+    two = in_thread(lambda: execute(ex, db, second))
+    until(lambda: waits.call_count == 2, 'the second request')
+    (tmp_path / 'hold').unlink()
+    one.join(30)
+    two.join(30)
+    [candidate] = run_candidates(db, first)
+    assert errors(db, candidate.id) == ([], Verdict.DISCARD)
+    assert len(evaluated(tmp_path)) == 1
+    assert rows(db) == []
+    with db.session() as s:
+        assert [s.get_one(Run, r).status for r in (first, second)] == [RunStatus.SUCCEEDED] * 2

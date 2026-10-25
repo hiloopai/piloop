@@ -2698,3 +2698,65 @@ def test_every_evaluator_has_the_process_runner_and_an_uninstalled_runner_is_ref
         s.flush()
         with pytest.raises(ValueError, match=r"has the evaluator runner 'lean', which is not installed: process$"):
             current_evaluator(s, row, config_of(row))
+
+
+SCREEN_RECEIPT = (
+    'EVAL_SCREENED {"version":1,"outcome":"screened","rung":2,"evidence":{"upper":-42},"watches":{"eval_cost_usd":1.2}}'
+)
+
+
+def test_screened_run_discards_without_measurement_and_reference_rerun_is_full(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    import shlex
+
+    script = (
+        f'if test "$PILOOP_EVAL_PURPOSE" = experiment; then printf "%s\\n" {shlex.quote(SCREEN_RECEIPT)}; '
+        'exit 75; fi; echo METRIC score=2; echo METRIC size=1'
+    )
+    set_config(db, campaign, evaluate=['sh', '-c', script])
+    ex = executor(db, runtime, tmp_path)
+    run_id = make_run(db, campaign)
+    execute(ex, db, run_id)
+    with db.session() as s:
+        candidate = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
+        cid = candidate.id
+        assert candidate.verdict is Verdict.DISCARD
+        assert candidate.measurements == []
+        [event] = s.scalars(select(Event).where(Event.kind == 'candidate.screened')).all()
+        assert event.payload['watches'] == {'eval_cost_usd': 1.2}
+        assert event.payload['evaluator'] == s.get_one(Campaign, campaign.id).evaluator_id
+    assert run_row(db, run_id).status is RunStatus.SUCCEEDED
+    ex.remeasure(cid)
+    with db.session() as s:
+        candidate = s.get_one(Candidate, cid)
+        [measurement] = candidate.measurements
+        assert measurement.error is None and measurement.metrics == {'score': 2, 'size': 1}
+
+
+def test_keep_landing_during_a_screen_is_preserved(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shlex
+
+    set_config(db, campaign, evaluate=['sh', '-c', f'printf "%s\\n" {shlex.quote(SCREEN_RECEIPT)}; exit 75'])
+    ex = executor(db, runtime, tmp_path)
+    track = ex._track_evaluation
+
+    def kept_meanwhile(evaluation_id: int, proc: subprocess.Popen[bytes] | None) -> None:
+        track(evaluation_id, proc)
+        if proc is None:
+            from piloop.db.models import Evaluation
+
+            with db.session() as s:
+                candidate = s.get_one(Evaluation, evaluation_id).candidate
+                candidate.verdict, candidate.verdict_reason = Verdict.KEEP, 'kept meanwhile'
+                s.commit()
+
+    monkeypatch.setattr(ex, '_track_evaluation', kept_meanwhile)
+    run_id = make_run(db, campaign)
+    execute(ex, db, run_id)
+    with db.session() as s:
+        candidate = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
+        assert (candidate.verdict, candidate.verdict_reason) == (Verdict.KEEP, 'kept meanwhile')
+        assert candidate.measurements == []

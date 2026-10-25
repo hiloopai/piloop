@@ -677,7 +677,9 @@ class RunExecutor:
                     span.set(status='joined')
                     return True
                 try:
-                    result = self._evaluate(evaluation_id, campaign_id, cfg, repo, sha, eval_dir)
+                    result = self._evaluate(
+                        evaluation_id, campaign_id, cfg, repo, sha, eval_dir, experiment=run_id is not None
+                    )
                 except Exception as e:
                     span.error(e)
                     result = EvalResult({}, 0.0, f'{type(e).__name__}: {e}')
@@ -689,11 +691,28 @@ class RunExecutor:
                 if cancelled_by is not None:
                     span.set(status='cancelled', cancelled_by=cancelled_by)
                     return True
-                span.set(
-                    measurement=self._record(run_id, candidate_id, evaluator_id, result),
-                    error=result.error,
-                    **{f'metric.{k}': v for k, v in result.metrics.items()},
-                )
+                if result.screened is not None:
+                    with self._db.session() as s:
+                        emit(
+                            s,
+                            'candidate.screened',
+                            TargetKind.CANDIDATE,
+                            candidate_id,
+                            payload=result.screened.model_dump(mode='json')
+                            | {
+                                'run': run_id,
+                                'evaluator': evaluator_id,
+                                'seconds': result.seconds,
+                            },
+                        )
+                        s.commit()
+                    span.set(status='screened')
+                else:
+                    span.set(
+                        measurement=self._record(run_id, candidate_id, evaluator_id, result),
+                        error=result.error,
+                        **{f'metric.{k}': v for k, v in result.metrics.items()},
+                    )
             finally:
                 if mine:
                     self._leave(evaluation_id)
@@ -717,7 +736,15 @@ class RunExecutor:
         return Turn.STOPPED
 
     def _evaluate(
-        self, evaluation_id: int, campaign_id: int, cfg: CampaignConfig, repo: Repo, sha: str, eval_dir: Path
+        self,
+        evaluation_id: int,
+        campaign_id: int,
+        cfg: CampaignConfig,
+        repo: Repo,
+        sha: str,
+        eval_dir: Path,
+        *,
+        experiment: bool = False,
     ) -> EvalResult:
         """Run the evaluate command on ``sha`` in a clean worktree. Every evaluation of the daemon runs here.
 
@@ -725,11 +752,11 @@ class RunExecutor:
         so it runs once more, in a new worktree. The daemon's own kills (a stop, ``piloop eval cancel``) are not run
         again. Its logs then hold the second try.
         """
-        result = self._evaluate_once(evaluation_id, campaign_id, cfg, repo, sha, eval_dir)
+        result = self._evaluate_once(evaluation_id, campaign_id, cfg, repo, sha, eval_dir, experiment=experiment)
         if result.signal not in SENT or self._killed_by_daemon(evaluation_id):
             return result
         self._tracer.event('evaluation.retry', evaluation=evaluation_id, error=result.error)
-        return self._evaluate_once(evaluation_id, campaign_id, cfg, repo, sha, eval_dir)
+        return self._evaluate_once(evaluation_id, campaign_id, cfg, repo, sha, eval_dir, experiment=experiment)
 
     def _killed_by_daemon(self, evaluation_id: int) -> bool:
         """Whether the daemon stops the evaluation: it stops, or someone cancelled the evaluation."""
@@ -737,13 +764,23 @@ class RunExecutor:
             return self.launcher.cancelled.is_set() or s.get_one(Evaluation, evaluation_id).cancelled_by is not None
 
     def _evaluate_once(
-        self, evaluation_id: int, campaign_id: int, cfg: CampaignConfig, repo: Repo, sha: str, eval_dir: Path
+        self,
+        evaluation_id: int,
+        campaign_id: int,
+        cfg: CampaignConfig,
+        repo: Repo,
+        sha: str,
+        eval_dir: Path,
+        *,
+        experiment: bool = False,
     ) -> EvalResult:
         """Run the evaluate command on ``sha`` in a new worktree, which is removed after."""
         links = worktree_links(cfg, Path(repo.working_dir), campaign_dir(self._home, campaign_id))
         eval_dir.mkdir(parents=True, exist_ok=True)
         eval_wt = eval_dir / 'worktree'
         self._units_dir.mkdir(parents=True, exist_ok=True)
+        with self._db.session() as s:
+            allow_screened = experiment and judgeable(s.get_one(Evaluation, evaluation_id).candidate)
         try:
             git.add_worktree(repo, eval_wt, sha, links)
             return run_evaluate(
@@ -754,6 +791,7 @@ class RunExecutor:
                 required={m.name for m in cfg.metrics},
                 track=partial(self._track_evaluation, evaluation_id),
                 units_file=self._units_dir / f'{uuid.uuid4().hex}.pending',
+                allow_screened=allow_screened,
             )
         finally:
             git.remove_worktree(repo, eval_wt)
@@ -828,6 +866,22 @@ class RunExecutor:
                     candidate.verdict_reason = RECOVERED_REASON.format(run=scope.run_id)
                 elif skip:
                     candidate.verdict, candidate.verdict_reason = Verdict.UNMEASURED, SKIPPED
+                elif (
+                    not measured(candidate, scope.evaluator_id)
+                    and s.scalar(
+                        select(Event)
+                        .where(
+                            Event.kind == 'candidate.screened',
+                            Event.target_kind == TargetKind.CANDIDATE,
+                            Event.target_id == candidate_id,
+                            Event.payload['evaluator'].as_integer() == scope.evaluator_id,
+                        )
+                        .limit(1)
+                    )
+                    is not None
+                ):
+                    candidate.verdict = Verdict.DISCARD
+                    candidate.verdict_reason = 'screened before full measurement; see candidate.screened evidence'
                 else:
                     verdict, reason, onto = self._verdict(s, scope, candidate, bar_id)
                     candidate.verdict, candidate.verdict_reason = verdict, reason

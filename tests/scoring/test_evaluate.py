@@ -128,3 +128,61 @@ def test_a_rounded_metric_line_still_matches_its_units(tmp_path: Path, monkeypat
     thirds = ', '.join(f'"r{i}": {1 / 3}' for i in range(9))  # 3.0000000000000004 in floats; the line says 3
     r, _ = evaluate_with_units(tmp_path, monkeypatch, f'{{"a": {{{thirds}}}}}')
     assert r.error is None and len(r.units['a']) == 9
+
+
+@pytest.mark.parametrize('allow', [True, False])
+def test_screened_receipt_is_opt_in_and_never_full_metrics(tmp_path: Path, allow: bool) -> None:
+    payload = '{"version":1,"outcome":"screened","rung":2,"evidence":{"upper":-42},"watches":{"eval_cost_usd":1.2}}'
+    r = run_evaluate(
+        ['sh', '-c', f"printf '%s\\n' 'METRIC score=999' 'EVAL_SCREENED {payload}'; exit 75"],
+        cwd=tmp_path,
+        log_dir=tmp_path,
+        timeout=5,
+        required={'score'},
+        allow_screened=allow,
+    )
+    assert r.metrics == {} and r.units == {}
+    if allow:
+        assert r.error is None and r.screened is not None
+        assert r.screened.watches == {'eval_cost_usd': 1.2}
+        assert r.screened.evidence == {'upper': -42}
+    else:
+        assert r.screened is None and r.error is not None
+        assert r.error.startswith('evaluate exit 75')
+
+
+@pytest.mark.parametrize(
+    'receipt',
+    [
+        '',
+        'EVAL_SCREENED {}',
+        'EVAL_SCREENED {}\nEVAL_SCREENED {}',
+        'EVAL_SCREENED {"version":1,"outcome":"screened","rung":2,"evidence":{},"watches":{"cost":NaN}}',
+    ],
+)
+def test_invalid_screened_receipt_is_an_evaluator_error(tmp_path: Path, receipt: str) -> None:
+    import shlex
+
+    r = run_evaluate(
+        ['sh', '-c', f'printf %s {shlex.quote(receipt)}; exit 75'],
+        cwd=tmp_path,
+        log_dir=tmp_path,
+        timeout=5,
+        required={'score'},
+        allow_screened=True,
+    )
+    assert r.error is not None and r.screened is None and r.metrics == {}
+
+
+@pytest.mark.parametrize('allow, purpose', [(True, 'experiment'), (False, 'reference')])
+def test_executor_sets_evaluation_purpose(tmp_path: Path, allow: bool, purpose: str) -> None:
+    r = run_evaluate(
+        ['sh', '-c', 'echo "$PILOOP_EVAL_PURPOSE" > purpose; echo METRIC score=1'],
+        cwd=tmp_path,
+        log_dir=tmp_path,
+        timeout=5,
+        required={'score'},
+        allow_screened=allow,
+    )
+    assert r.error is None
+    assert (tmp_path / 'purpose').read_text().strip() == purpose

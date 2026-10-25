@@ -38,6 +38,22 @@ through the code that it is supposed to change. Tell the implementers in `brief.
 the evaluate command and the data. piloop runs the evaluate command from the commit that it measures, so an implementer that
 edits it changes its own score.
 
+### Stop at a screen
+
+An evaluator may discard an experiment before a full measurement. Backtest that rule against past keeps before using it.
+Print exactly one `EVAL_SCREENED` receipt and exit 75:
+
+```text
+EVAL_SCREENED {"version":1,"outcome":"screened","rung":2,"evidence":{"primary_upper":-42},"watches":{"eval_cost_usd":1.2}}
+```
+
+piloop stores the evidence and cost watches in a `candidate.screened` event. It records no measurement or full-panel
+score. The candidate becomes a `discard`; a keep that lands during the screen stays a keep. Other exits still fail.
+
+Honor `PILOOP_EVAL_PURPOSE`: `experiment` permits a screen; `reference` requires the full evaluator. Baseline
+registration, known keeps, imported references and requested remeasurements require full results. Exit 75 during
+those evaluations is an error. A manual remeasurement can therefore obtain a full score for a screened candidate.
+
 ## Metrics
 
 Each `[[metrics]]` table in `piloop.toml` describes one metric that the evaluate command prints:
