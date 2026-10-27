@@ -12,6 +12,6 @@ def generate() -> str:
     rows = ['| Example | Goal | Data it downloads |', '|---|---|---|']
     for name, data in EXAMPLE_DATA.items():
         goal = (TEMPLATES / name / 'brief.md').read_text().splitlines()[0].removeprefix('# ')
-        rows.append(f'| `{name}` | {cell(goal)} | {", ".join(f"`{d}`" for d in data)} |')
+        rows.append(f'| `{name}` | {cell(goal)} | {", ".join(f"`{d}`" for d in data) or "none"} |')
     source = 'the briefs of the examples in `piloop/campaign/templates/`, or `EXAMPLE_DATA`'
     return header(source) + '\n' + '\n'.join(rows) + '\n'

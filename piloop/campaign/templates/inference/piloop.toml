@@ -1,0 +1,60 @@
+# Every key: https://piloop.autoresearch.inc/reference/configuration
+name = "inference"
+evaluate = ["python3", "evaluate.py"]
+evaluate_timeout = 300
+
+[plugins.runtime]
+use = "subprocess"
+
+[plugins.harness]
+use = ["claude"]                   # add "codex" or "pi" if you have them, with a table and its model
+
+[plugins.harness.claude]
+model = "claude-opus-5-5"
+
+[plugins.stop_rule]
+max_runs = 20
+
+[plugins.role.implementer]
+timeout = 1200
+max_concurrent = 2
+
+[[metrics]]
+name = "tokens_per_s"
+direction = "higher"
+role = "primary"
+ratio = { numerator = "tokens", denominator = "seconds" }
+repeats = 3                        # a time: measure each candidate 3 times next to its bar
+
+[[metrics]]
+name = "tokens"
+direction = "higher"
+
+[[metrics]]
+name = "seconds"
+direction = "lower"
+
+[[metrics]]
+name = "match"                     # the quality: the share of checked tokens that equal the reference
+direction = "higher"
+role = "guardrail"
+margin = 0.01
+floor = 0.98
+
+[[metrics]]
+name = "p95_ms"
+direction = "lower"
+role = "guardrail"
+fraction = 0.25                    # timing noise: up to 25% slower than the bar still holds
+
+[[metrics]]
+name = "p50_ms"
+direction = "lower"
+
+[[ladder]]
+name = "smoke"                     # 2 requests: does it serve the right tokens?
+stop = { match = { floor = 0.9 } }
+
+[[ladder]]
+name = "load"                      # 8 requests at concurrency 4 for 0.5 s: is it not much slower?
+stop = { p50_ms = { fraction = 0.5 } }

@@ -1,0 +1,28 @@
+"""``min_speedup``: the built-in verdict, but a keep must beat the bar by at least ``min_speedup`` of its value.
+
+A throughput benchmark is noisy, and a gain of a few percent can be luck that three pairs do not rule out. Each keep
+moves the head, and every later run must beat it, so a lucky keep costs the runs after it. The rule is ``bootstrap``
+with one more test: its confidence, guardrails and reasons stay.
+"""
+
+from piloop.capabilities import Bootstrap, Case, Judgement, Outcome
+
+
+class MinSpeedup(Bootstrap):
+    """What ``bootstrap`` decides, but a keep that beats the bar by less than ``min_speedup`` is ``interesting``."""
+
+    min_speedup: float
+    """The smallest gain that keeps, as a fraction of the bar: ``0.05`` for 5%."""
+
+    def decide(self, case: Case) -> Judgement:
+        judged = super().decide(case)
+        name = case.primary.name
+        bar = case.bar.means.get(name)
+        if judged.verdict is not Outcome.KEEP or not bar:
+            return judged
+        speedup = case.primary.direction.gain(case.candidate.means[name], bar) / abs(bar)
+        if speedup >= self.min_speedup:
+            return judged
+        return Judgement(
+            Outcome.INTERESTING, f'{judged.reason}; {speedup:.1%} is below min_speedup {self.min_speedup:.0%}'
+        )

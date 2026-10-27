@@ -275,7 +275,15 @@ def db(tmp_path_factory: pytest.TempPathFactory, schema: Path) -> Path:
 def examples(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
     """The example plugins installed, so that a page that selects one (``runtime = "nice"``) validates."""
     site = tmp_path_factory.mktemp('site')
-    for name in ('nice-runtime', 'sqlite-cas', 'min-gain', 'stop-after-keeps', 'keep-cost', 'inline-executor'):
+    for name in (
+        'nice-runtime',
+        'sqlite-cas',
+        'min-gain',
+        'stop-after-keeps',
+        'keep-cost',
+        'inline-executor',
+        'inference',
+    ):
         example(site, name)
     with pytest.MonkeyPatch.context() as patch:
         patch.syspath_prepend(str(site))

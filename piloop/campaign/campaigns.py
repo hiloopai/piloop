@@ -81,6 +81,7 @@ EXAMPLE_DATA: dict[str, dict[str, str]] = {
     'titanic-tracks': {
         'data/train.csv': 'https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv'
     },
+    'inference': {},
 }
 """Per example template: ``relative path → URL`` downloaded into the campaign (in no version: ``IGNORED``)."""
 EVALUATE_CONTRACT = """The evaluate command is the referee. piloop runs it (the `evaluate` argv in piloop.toml) in a clean checkout of every

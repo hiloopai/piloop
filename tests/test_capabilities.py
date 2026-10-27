@@ -17,6 +17,7 @@ from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import get_type_hints
 
+import piloop_inference.min_speedup
 import piloop_inline
 import piloop_keep_cost
 import piloop_min_gain
@@ -360,6 +361,7 @@ def test_the_example_plugins_import_piloop_only_from_the_module() -> None:
         piloop_nice,
         piloop_stop_after_keeps,
         piloop_keep_cost,
+        piloop_inference.min_speedup,
         route_plugin,
     ]
     for plugin in plugins:
@@ -386,7 +388,7 @@ def test_a_pure_example_plugin_uses_only_pure_contracts_and_pure_providers() -> 
         if isinstance(v, type) and v.__module__.startswith('piloop.plugins.campaign_type.kit.')
     }
     modules |= {Capability.__module__, metric.__name__, facts.__name__}
-    plugins = [piloop_min_gain, piloop_stop_after_keeps, piloop_keep_cost]
+    plugins = [piloop_min_gain, piloop_stop_after_keeps, piloop_keep_cost, piloop_inference.min_speedup]
     for plugin in plugins:
         tree = ast.parse(Path(plugin.__file__ or '').read_text())
         imports = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == 'piloop.capabilities']

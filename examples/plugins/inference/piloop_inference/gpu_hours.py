@@ -1,0 +1,39 @@
+"""``gpu_hours``: the GPU-hours that the campaign's evaluations held, and what they cost.
+
+Each evaluation holds ``gpus`` GPUs for its wall time. ``hold_at = { gpu_usd = 50 }`` in ``[plugins.stop_rule]`` then
+holds the campaign at a GPU budget.
+"""
+
+from datetime import datetime
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from piloop.capabilities import Fact, FactSource, FactValue
+from piloop.db.models import Campaign
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+
+GPU_HOURS = Fact[float]('gpu_hours', 'The GPU-hours that the evaluations of the campaign held.')
+GPU_USD = Fact[float]('gpu_usd', 'What the GPU-hours of the evaluations cost, in USD.')
+
+
+class GpuHours(FactSource):
+    """The wall time of every evaluation of the campaign, times ``gpus``, and its price."""
+
+    gpus: int = 1
+    """The GPUs that one evaluation holds."""
+    usd_per_gpu_hour: float
+    """The price of one GPU for one hour."""
+
+    def supplies(self) -> tuple[Fact[FactValue], ...]:
+        return (GPU_HOURS, GPU_USD)
+
+    def gather(
+        self, s: Session, campaign: Campaign, wanted: frozenset[Fact[FactValue]], now: datetime
+    ) -> dict[Fact[FactValue], FactValue]:
+        mine = select(Candidate.id).where(Candidate.campaign_id == campaign.id)
+        seconds = s.scalar(select(func.total(Measurement.seconds)).where(Measurement.candidate_id.in_(mine))) or 0.0
+        hours = seconds * self.gpus / 3600
+        found: dict[Fact[FactValue], FactValue] = {GPU_HOURS: hours, GPU_USD: hours * self.usd_per_gpu_hour}
+        return {fact: value for fact, value in found.items() if fact in wanted}

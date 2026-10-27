@@ -37,6 +37,7 @@
         "group": "Guides",
         "pages": [
           "guides/running-for-days",
+          "guides/inference-optimization",
           "guides/secrets",
           "guides/workers",
           "guides/mcp-servers",
