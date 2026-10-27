@@ -54,6 +54,8 @@ from piloop.plugins.host import (
     refs,
 )
 from piloop.plugins.metric import Direction
+from piloop.plugins.notifier.contract import NOTIFIERS
+from piloop.plugins.notifier.slack import Slack
 from piloop.plugins.role.contract import ROLES
 from piloop.plugins.runtime.contract import RUNTIMES, RuntimeName
 from piloop.plugins.runtime.subprocess import Subprocess
@@ -110,7 +112,10 @@ def test_the_runtimes_of_config_toml_hold_every_runtime_with_its_settings(
     tables = RUNTIMES.instances(plugins)
     assert tables == {'subprocess': Subprocess(), 'nice': Nice(niceness=5)}, 'every runtime, over its defaults'
     assert HOME_PLUGINS.validate_python(plugins) == plugins
-    assert HOME_PLUGINS.dump_python(plugins) == {'runtime': {'subprocess': {}, 'nice': {'niceness': 5}}}
+    assert HOME_PLUGINS.dump_python(plugins) == {
+        'runtime': {'subprocess': {}, 'nice': {'niceness': 5}},
+        'notifier': {'slack': {}},
+    }
     home = Settings(home=tmp_path, plugins={'runtime': {'fast': {'provider': 'nice', 'niceness': 1}}})
     assert runtimes(home)['fast'] == Nice(niceness=1), 'a table with a new name and a provider'
     fast = make_runtime('fast', home)
@@ -233,7 +238,7 @@ def test_a_broken_package_of_a_capability_that_nothing_binds_is_a_warning(
     found = next(c for c in doctor.checks(home) if c.name == 'plugins')
     assert found.fix is None
     assert found.found == (
-        '1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 3 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 21 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in; warning: nothing selects a extra, and they do not load:'
+        '1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 3 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 1 notifier, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 21 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in; warning: nothing selects a extra, and they do not load:'
         ' entry point gone = tests.fixtures.no_such_module:Gone in piloop.example.extras does not load: ModuleNotFoundError:'
         " No module named 'tests.fixtures.no_such_module'"
     )
@@ -555,6 +560,7 @@ def test_a_capability_selects_the_table_of_its_file_else_its_default_else_nothin
     assert HOME_PLUGINS.validate_python({'executor': workers}) == {
         'executor': workers,
         'runtime': Instances(RUNTIMES, (), {'subprocess': Subprocess()}),
+        'notifier': Instances(NOTIFIERS, (), {'slack': Slack()}),
     }, 'a capability of several instances has those of its providers that need no keys, and no use in config.toml'
     with pytest.raises(ValidationError, match=r'\[plugins\] is a table of tables'):
         HOME_PLUGINS.validate_python(1)

@@ -151,7 +151,7 @@ def plugins_section(scope: Scope, level: str) -> str:
                 out += _providers(capability, level + '#')
             case Many(scope=found, use=use):
                 if use is not None and use.scope is scope:
-                    out += _use(capability, use.pick, level)
+                    out += _use(capability, use.pick, scope, level)
                 if found is scope:
                     out += _instances(capability, scope, level)
             case _:
@@ -159,13 +159,17 @@ def plugins_section(scope: Scope, level: str) -> str:
     return out
 
 
-def _use(capability: Capability[Parameters], pick: Pick, level: str) -> str:
+USERS = {Scope.CAMPAIGN: 'the campaign', Scope.HOME: 'the daemon'}
+"""Who uses the instances that ``use`` of the file of each scope names."""
+
+
+def _use(capability: Capability[Parameters], pick: Pick, scope: Scope, level: str) -> str:
     """Return ``use`` of ``[plugins.<name>]``: what it names, and its default."""
     each = capability.name.replace('_', ' ')
-    used = ', '.join(f'`{name}`' for name in capability.used({}))
+    used = ', '.join(f'`{name}`' for name in capability.used({})) or 'none'
     what = {
-        Pick.ONE: f'the {each} instance that the campaign uses, by name',
-        Pick.ORDERED: f'the {each} instances that the campaign uses, by name, in order',
+        Pick.ONE: f'the {each} instance that {USERS[scope]} uses, by name',
+        Pick.ORDERED: f'the {each} instances that {USERS[scope]} uses, by name, in order',
     }[pick]
     return f'\n{level}# `[plugins.{capability.name}] use`\n\n{what.capitalize()}. Unset: {used}.\n'
 
@@ -175,7 +179,8 @@ def _instances(capability: Capability[Parameters], scope: Scope, level: str) -> 
     each = capability.name.replace('_', ' ')
     out = f'\n{level}# `[plugins.{capability.name}.<name>]`\n\nEach {each} by name.\n'
     contract = capability.contract.__name__
-    if json_schema(capability.contract).get('properties'):  # keys that every provider shares: one section below
+    # keys that every provider shares: one section below, which only piloop.toml's models have
+    if scope is Scope.CAMPAIGN and json_schema(capability.contract).get('properties'):
         return out + f'\nEach table takes the keys of [{contract}](#{contract.lower()}), and those of its provider.\n'
     return out + _providers(capability, level + '#')
 

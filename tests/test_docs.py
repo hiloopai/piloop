@@ -104,16 +104,24 @@ GLOBAL_TABLES = ('storage', 'plugins')
 """The tables of ``$PILOOP_HOME/config.toml``, the global settings file. Every other TOML block is ``piloop.toml``.
 
 ``[plugins]`` is in both files: a block whose ``[plugins.<name>]`` are all capabilities of the home is ``config.toml``,
-unless one sets ``use``, which ``piloop.toml`` holds."""
+unless one sets a ``use`` that ``piloop.toml`` holds."""
 
 
 def is_global(data: dict[str, object]) -> bool:
     """Whether a TOML block holds tables of ``config.toml`` only."""
     plugins = data.get('plugins', {})
     of_home = {c.name for c in host.declared() if c.table is not None and c.table.scope is host.Scope.HOME}
+    used_at_home = {
+        c.name
+        for c in host.declared()
+        if isinstance(c.table, host.Many) and c.table.use and c.table.use.scope is host.Scope.HOME
+    }
     if not (bool(data) and data.keys() <= set(GLOBAL_TABLES) and isinstance(plugins, dict)):
         return False
-    return all(name in of_home and not (isinstance(t, dict) and host.USE in t) for name, t in plugins.items())
+    return all(
+        name in of_home and (name in used_at_home or not (isinstance(t, dict) and host.USE in t))
+        for name, t in plugins.items()
+    )
 
 
 PYPROJECT_MARKS = ('[project', '[build-system]', 'entry-points')

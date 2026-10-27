@@ -39,7 +39,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource
 from piloop.plugins.harness.contract import HARNESSES, Harness
-from piloop.plugins.host import Capability, Instances, Many, Naming, Plugins, PluginTables, Reach, Scope, refs
+from piloop.plugins.host import Plugins, PluginTables, Scope, Unreached, refs, unknown, unreached
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer, env_names
 from piloop.plugins.role.contract import ROLES, ImplementerRole, RoleConfig, SweepRole
 from piloop.plugins.runtime.contract import RUNTIMES
@@ -68,18 +68,6 @@ class AgentTimings(BaseModel):
     def over(self, home: AgentSettings) -> AgentSettings:
         """The home's settings, with the timings that the campaign sets."""
         return home.model_copy(update=self.model_dump(exclude_none=True))
-
-
-@dataclass(frozen=True)
-class Unreached:
-    """An instance that a table configures and that no name puts in use: ``where`` to add it."""
-
-    capability: str
-    name: str
-    where: str
-
-    def __str__(self) -> str:
-        return f'[plugins.{self.capability}.{self.name}] is configured, and nothing uses it: add it to {self.where}'
 
 
 @dataclass(frozen=True)
@@ -293,15 +281,8 @@ class CampaignConfig(BaseModel):
         Raises:
             ValueError: A name names no instance. The message lists the instances.
         """
-        for ref in refs(self):
-            if (table := ref.capability.table) is None or table.scope is not scope:
-                continue
-            if ref.name not in (found := ref.capability.instances(plugins)):
-                where = ''.join(f'[{k}]' if isinstance(k, int) else f'.{k}' for k in ref.at).lstrip('.')
-                raise ValueError(
-                    f'{where} = {ref.name!r}: no [plugins.{ref.capability.name}.{ref.name}]; there are'
-                    f' {", ".join(found)}'
-                )
+        if found := unknown(refs(self), plugins, scope):
+            raise ValueError(found[0])
 
     def unreached(self) -> list[Unreached]:
         """The instances that a table configures and that no name puts in use, of a capability that only names reach.
@@ -309,16 +290,7 @@ class CampaignConfig(BaseModel):
         ``load_campaign_config`` refuses them, not the validation: a stored config of an older piloop could hold a table
         that nothing uses, such as an MCP server, and must still load. ``piloop init`` then says what to fix.
         """
-        named = {(ref.capability.name, ref.name) for ref in refs(self) if ref.naming is Naming.USES}
-        found: list[Unreached] = []
-        for capability, table in self.plugins.items():
-            match table:
-                case Instances(capability=Capability(table=Many(reach=Reach.NAMED, use=use)), configured=configured):
-                    where = f'[plugins.{capability}] use' if use is not None else 'a list that names it'
-                    found += [Unreached(capability, n, where) for n in configured if (capability, n) not in named]
-                case _:
-                    pass
-        return found
+        return unreached(self.plugins, refs(self))
 
     def check_home(self, home: Plugins) -> None:
         """Check the names of instances of ``config.toml`` (``home``, its ``[plugins]``), such as a runtime.

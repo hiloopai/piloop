@@ -21,7 +21,7 @@ from fastapi import APIRouter
 from pydantic import TypeAdapter, ValidationError
 
 from piloop.daemon.loop import Consumer
-from piloop.plugins.host import PluginError, Scope, Slot, declared
+from piloop.plugins.host import PluginError, Plugins, Scope, Slot, declared
 from piloop.settings import AgentSettings, DaemonSettings
 
 if TYPE_CHECKING:  # the run controller and the database import the contracts that import this module
@@ -77,6 +77,8 @@ class DaemonHost:
     """Each installed campaign type at work in this daemon, by its name (``campaigns.type``)."""
     thread: Callable[[Callable[[], None]], Future[None]]
     """Runs a body in a thread of the daemon."""
+    plugins: Plugins
+    """The home's ``[plugins]`` (``config.toml``), validated: the instances of a capability of the home."""
 
 
 @dataclass(frozen=True)

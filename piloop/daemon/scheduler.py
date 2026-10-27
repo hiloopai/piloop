@@ -22,6 +22,7 @@ from piloop.plugins.archive.contract import Archiver
 from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES, CAMPAIGNS, TypeHost
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.contribution import DaemonHost, Leaving, collect, contributions_of, installed, machinery
+from piloop.plugins.host import Plugins
 from piloop.runtime.factory import RuntimeFactory, make_runtime
 from piloop.settings import AgentSettings, DaemonSettings
 
@@ -40,12 +41,13 @@ class Scheduler:
         now: Callable[[], datetime] = utcnow,
         daemon: DaemonSettings | None = None,
         agents: AgentSettings | None = None,
+        plugins: Plugins | None = None,
     ) -> None:
         """Collect the daemon's jobs.
 
         ``archiver``: the home's archive provider, opened, which the daemon always passes. A test without one archives
         nothing. ``now``: the clock. ``daemon`` and ``agents``: the home's timings, ``[daemon]`` and ``[agents]`` in its
-        ``config.toml``, by default their defaults.
+        ``config.toml``, by default their defaults. ``plugins``: its ``[plugins]``, validated, by default none.
         """
         self._db, self._now, self._tracer, self._controller = db, now, tracer, controller
         daemon = daemon if daemon is not None else DaemonSettings()
@@ -72,6 +74,7 @@ class Scheduler:
             agents if agents is not None else AgentSettings(),
             self._planners,
             self._thread,
+            plugins if plugins is not None else {},
         )
         opened = (controller.executor,) if archiver is None else (controller.executor, archiver)
         self.contributions = collect([*contributions_of(opened), *machinery(host), *contributions_of(installed())], [])

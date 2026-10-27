@@ -39,6 +39,7 @@
           "guides/running-for-days",
           "guides/inference-optimization",
           "guides/secrets",
+          "guides/notifications",
           "guides/workers",
           "guides/mcp-servers",
           "guides/upgrading",

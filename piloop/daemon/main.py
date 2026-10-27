@@ -171,6 +171,7 @@ class Daemon:
             runtime_factory=opened,
             daemon=cfg.daemon,
             agents=cfg.agents,
+            plugins=cfg.providers,
         )
         self._restart = False
 

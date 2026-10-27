@@ -671,6 +671,37 @@ A caller whose claims have these values gets `access`.
 | `access` | `read` \| `act` \| `admin` \| `worker` | required | What the caller may do: `read`, `act`, `admin`, or `worker` for the workers' credential. |
 | `caller` | `person` \| `service` | `"person"` | What the caller is: a `person`, who signs as `human:<name>`, or a `service`, such as a service account's key, which signs as `service:<name>`. |
 
+#### `[plugins.notifier] use`
+
+The notifier instances that the daemon uses, by name, in order. Unset: none.
+
+#### `[plugins.notifier.<name>]`
+
+Each notifier by name.
+
+With `provider = "slack"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `link` | string \| null | `null` | The page of an item, such as `https://piloop.example.com/inbox/{comment}`. `{comment}` is the item's id and `{campaign}` its campaign's name. Unset: a message names the command that shows the item. |
+| `remind_every` | duration \| string | `"P1D"` | How long after a send an item that nobody acknowledged is sent again. `"never"`: once. |
+| `retry` | duration | `"PT1M"` | How long after a failed send the next try comes. It doubles with each failure in a row, up to `retry_max`. |
+| `retry_max` | duration | `"PT1H"` | The longest wait between two tries. |
+| `webhook` | [SecretRef](#secretref) | `{}` | The secret that holds the webhook's URL: `SLACK_WEBHOOK_URL` unless set (`piloop secret set`). |
+| `mentions` | dict\[string, string\] | `{}` | A person's name, as the server names them, to their Slack member id: a message mentions a campaign's owner. |
+| `timeout` | duration | `"PT10S"` | How long a post may take. The daemon's loop waits for it. |
+| `max_items` | integer | `20` | How many items one message shows. It names how many more there are. |
+| `body_chars` | integer | `300` | How much of an item's text a message shows, in whole lines. |
+| `template` | string | `"{mark} *{campaign}* \u00b7 {kind} comment#{comment} \u00b7 P{priority} \u00b7 from {author}{mention}\n{body}\n{link}"` | How the message shows one item. Each `{name}` is filled in: `{mark}` is `:rotating_light:`, or `:alarm_clock: reminder ·` for a reminder; `{campaign}` the campaign's name; `{kind}` the item's kind; `{comment}` its id; `{priority}` 0 to 4; `{author}` who wrote it; `{mention}` ` · <@member>` for an owner in `mentions`, else nothing; `{body}` its text, up to `body_chars`; `{link}` its `link`, else the command that shows it. Write `{{` and `}}` for a brace. |
+
+#### SecretRef
+
+`{ secret = "NAME" }`: the value of the secret `NAME` (`piloop secret set`), in place of a literal.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `secret` | string | required | The name of the secret. |
+
 #### `[plugins.runtime.<name>]`
 
 Each runtime by name.

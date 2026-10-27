@@ -71,7 +71,17 @@ def test_the_executor_s_upkeep_and_the_archiver_run_after_limits_and_before_the_
     controller = RunController(db, Tracer(None), tmp_path, executor=Workers())
     archiver = LocalArchive().open(ArchiveHost(db, disk(tmp_path), tmp_path, 0, Tracer(None), idle_wake))
     names = [c.name for c in Scheduler(db, controller, Tracer(None), tmp_path, archiver=archiver).consumers()]
-    assert names == ['limits', 'executor', 'archiver', 'evaluations', 'prompts', 'wind_down', 'facts', 'campaigns']
+    assert names == [
+        'limits',
+        'executor',
+        'archiver',
+        'notify',
+        'evaluations',
+        'prompts',
+        'wind_down',
+        'facts',
+        'campaigns',
+    ]
 
 
 def test_a_consumer_name_that_the_daemon_or_another_contribution_has_is_refused() -> None:
@@ -96,6 +106,7 @@ def test_the_machinery_of_a_capability_adds_no_routes(db: Database, tmp_path: Pa
         AgentSettings(),
         {},
         idle_thread,
+        {},
     )
     mocker.patch.object(CONTRIBUTORS, 'loaded', return_value={'routed': lambda _: Contribution(router=APIRouter())})
     with pytest.raises(PluginError, match='the machinery of routed adds routes: only a provider adds routes'):

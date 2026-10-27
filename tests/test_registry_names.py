@@ -119,6 +119,7 @@ HOST_CONTRACTS = {
     'memory provider': 'owns tables of the database, which the daemon migrates',
     'archive provider': 'owns tables of the database, which the daemon migrates',
     'lineage provider': 'graph(s, campaign) reads the database through a Session',
+    'notifier': "reads the home's secrets, and posts to a service",
 }
 """The capabilities whose contract passes live objects of the host, and why. Every other one is pure."""
 

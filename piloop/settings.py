@@ -29,7 +29,7 @@ from pydantic_settings import (
 
 from piloop import deprecated
 from piloop.actor import Actor, System
-from piloop.plugins.host import Plugins, PluginTables, Scope
+from piloop.plugins.host import Plugins, PluginTables, Scope, refs, unknown, unreached
 
 DEFAULT_HOME = Path.home() / '.piloop'
 REAL_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
@@ -300,8 +300,13 @@ class Settings(BaseSettings):
         Raises:
             ValidationError: A table names no capability of the home, no provider of it, or parameters that the
                 provider refuses.
+            ValueError: A ``use`` names no instance, or a table configures an instance that no ``use`` names.
         """
-        return HOME_PLUGINS.validate_python(self.plugins)
+        found = HOME_PLUGINS.validate_python(self.plugins)
+        named = refs(found)
+        if problems := [*unknown(named, found, Scope.HOME), *map(str, unreached(found, named))]:
+            raise ValueError(f'{self.home / CONFIG_FILE}: {"; ".join(problems)}')
+        return found
 
     @property
     def database_url(self) -> str:

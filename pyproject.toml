@@ -110,6 +110,7 @@ archive = "piloop.plugins.archive.contract:ARCHIVES"
 harness = "piloop.plugins.harness.contract:HARNESSES"
 mcp_server = "piloop.plugins.mcp_server.contract:MCP_SERVERS"
 lineage = "piloop.plugins.lineage.contract:LINEAGE"
+notifier = "piloop.plugins.notifier.contract:NOTIFIERS"
 
 # What runs in the daemon for a capability, or for a provider that needs the daemon, by its name
 # (piloop.plugins.contribution.CONTRIBUTORS).
@@ -119,6 +120,7 @@ fact_source = "piloop.plugins.fact_source.consumers:contribution"
 optimization = "piloop.plugins.campaign_type.optimization.consumers:contribution"
 role = "piloop.plugins.role.consumers:contribution"
 campaign_type = "piloop.plugins.campaign_type.consumers:contribution"
+notifier = "piloop.plugins.notifier.consumers:contribution"
 
 [project.entry-points."piloop.runtimes"]
 subprocess = "piloop.plugins.runtime.subprocess:Subprocess"
@@ -168,6 +170,9 @@ git = "piloop.plugins.vcs.git:Git"
 
 [project.entry-points."piloop.secrets"]
 local = "piloop.plugins.secrets.local:LocalSecrets"
+
+[project.entry-points."piloop.notifiers"]
+slack = "piloop.plugins.notifier.slack:Slack"
 
 [project.entry-points."piloop.sections"]
 headline = "piloop.plugins.campaign_type.kit.verdicts.section.headline:Headline"

@@ -39,7 +39,7 @@ import graphlib
 import inspect
 import json
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -863,6 +863,56 @@ class Reference:
     at: tuple[str | int, ...]
     """The keys and list indexes from the model to the name, as in a validation error."""
     naming: Naming = Naming.USES
+
+
+@dataclass(frozen=True)
+class Unreached:
+    """An instance that a table configures and that no name puts in use: ``where`` to add it."""
+
+    capability: str
+    name: str
+    where: str
+
+    def __str__(self) -> str:
+        return f'[plugins.{self.capability}.{self.name}] is configured, and nothing uses it: add it to {self.where}'
+
+
+def unknown(named: Sequence[Reference], plugins: Plugins, scope: Scope) -> list[str]:
+    """Each name of ``named`` of a capability of ``scope`` that names no instance of ``plugins``, as an error.
+
+    ``plugins`` is the ``[plugins]`` of the file of ``scope``, validated (``PluginTables``).
+    """
+    found: list[str] = []
+    for ref in named:
+        if (table := ref.capability.table) is None or table.scope is not scope:
+            continue
+        if ref.name not in (instances := ref.capability.instances(plugins)):
+            where = ''.join(f'[{k}]' if isinstance(k, int) else f'.{k}' for k in ref.at).lstrip('.')
+            found.append(
+                f'{where} = {ref.name!r}: no [plugins.{ref.capability.name}.{ref.name}]; there are'
+                f' {", ".join(instances)}'
+            )
+    return found
+
+
+def unreached(plugins: Plugins, named: Sequence[Reference]) -> list[Unreached]:
+    """The instances that a table of ``plugins`` configures and that no name of ``named`` puts in use.
+
+    Only of a capability that only names reach (``Reach.NAMED``), and whose ``use``, if any, is in the same file: a
+    runtime of ``config.toml`` is used by ``piloop.toml``, which this file does not see.
+    """
+    uses = {(ref.capability.name, ref.name) for ref in named if ref.naming is Naming.USES}
+    found: list[Unreached] = []
+    for capability, table in plugins.items():
+        match table:
+            case Instances(
+                capability=Capability(table=Many(scope=scope, reach=Reach.NAMED, use=use)), configured=configured
+            ) if use is None or use.scope is scope:
+                where = f'[plugins.{capability}] use' if use is not None else 'a list that names it'
+                found += [Unreached(capability, n, where) for n in configured if (capability, n) not in uses]
+            case _:
+                pass
+    return found
 
 
 def refs(value: object, annotation: object = None, at: tuple[str | int, ...] = ()) -> list[Reference]:

@@ -13,6 +13,7 @@ import ContractProvisioner from '/snippets/generated/contract-provisioner.mdx';
 import ContractCas from '/snippets/generated/contract-cas.mdx';
 import ContractVcs from '/snippets/generated/contract-vcs.mdx';
 import ContractSecrets from '/snippets/generated/contract-secrets.mdx';
+import ContractNotifier from '/snippets/generated/contract-notifier.mdx';
 import ContractArchive from '/snippets/generated/contract-archive.mdx';
 import ContractMemory from '/snippets/generated/contract-memory.mdx';
 
@@ -313,6 +314,41 @@ env_fallback = "my_package:EnvFallback"
 ```
 
 <ContractSecrets />
+
+## Notifiers
+
+A **notifier** sends the inbox items that need a human to a service outside piloop. `[plugins.notifier.<name>]` in
+`config.toml` configures one, and `[plugins.notifier] use` names those in use. `slack`, built in, posts to an incoming
+webhook. [Notifications](/guides/notifications) shows its keys. A notifier sends every notice in one message, or raises
+`NotDelivered`: piloop records which items it sent, retries, and reminds.
+
+```python
+from collections.abc import Sequence
+from urllib.error import URLError
+from urllib.request import urlopen
+
+from piloop.capabilities import HomeSecrets, NotDelivered, Notice, Notifier
+
+
+class Ntfy(Notifier):
+    """``ntfy``: one push to an ntfy.sh topic."""
+
+    topic: str
+
+    def send(self, notices: Sequence[Notice], secrets: HomeSecrets) -> None:
+        text = '\n'.join(f'{n.campaign}: {n.comment_kind} comment#{n.comment}' for n in notices)
+        try:
+            urlopen(f'https://ntfy.sh/{self.topic}', data=text.encode(), timeout=10).close()
+        except URLError as e:
+            raise NotDelivered(str(e)) from e
+```
+
+```toml
+[project.entry-points."piloop.notifiers"]
+ntfy = "my_package:Ntfy"
+```
+
+<ContractNotifier />
 
 ## Archive
 

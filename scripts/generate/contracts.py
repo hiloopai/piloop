@@ -36,6 +36,7 @@ from piloop.plugins.harness.contract import Harness
 from piloop.plugins.lineage.contract import Graph, LineageNode, LineageProvider, NodeStatus, SeriesPoint, SessionLink
 from piloop.plugins.memory.contract import MemoryProvider
 from piloop.plugins.network.contract import Network, NetworkConfig
+from piloop.plugins.notifier.contract import Notice, Notifier
 from piloop.plugins.provisioner.contract import ProvisionerConfig, Provisioning
 from piloop.plugins.secrets.contract import SecretsProvider
 from piloop.plugins.section.contract import Rendering, Section
@@ -78,6 +79,7 @@ CONTRACTS: dict[str, Contract] = {
     'archive': Contract((ArchiveConfig, Archiver), '`piloop/plugins/archive/contract.py`'),
     'vcs': Contract((Vcs, Repository), '`piloop/plugins/vcs/contract.py`'),
     'secrets': Contract((SecretsProvider,), '`piloop/plugins/secrets/contract.py`'),
+    'notifier': Contract((Notifier, Notice), '`piloop/plugins/notifier/contract.py`'),
     'provisioner': Contract((ProvisionerConfig, Provisioning), '`piloop/plugins/provisioner/contract.py`'),
 }
 """Each contract snippet by the end of its name: ``contract-<name>.mdx``."""

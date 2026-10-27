@@ -51,6 +51,7 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.StartRefused,
     capabilities.check_provisioning,
     capabilities.McpError,  # what a harness's MCP renderer raises
+    capabilities.NotDelivered,  # what a notifier's send raises
     capabilities.UsageError,  # what a harness's usage reader raises
     capabilities.JsonlSessions,  # the kit: a JSONL session file that a harness provider may read
     capabilities.Counts,
