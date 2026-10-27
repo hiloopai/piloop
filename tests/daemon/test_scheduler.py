@@ -63,6 +63,7 @@ from piloop.db.triggers.changelog import IdeaStatusChanged
 from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
+from piloop.plugins.campaign_type.kit.backlog.ideas import waiting
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
@@ -744,6 +745,19 @@ def test_low_water_does_not_count_blocked_ideas_as_backlog(
             '1 free implementer slots without a runnable idea; 0 of 3 runnable ideas',
         ), 'one ready idea exists, but it cannot run: the backlog is empty for the research role'
         assert s.scalars(select(Run)).all() == []
+
+
+def test_an_idea_waits_through_a_chain_of_ideas_that_run_without_a_sweep(db: Database, campaign: Campaign) -> None:
+    """Behind a scheduled idea, a ready one waits, and so does each one after it. Behind a proposed one, none does:
+    it needs a human first, so the chain is no backlog."""
+    (running,) = add_ideas(db, campaign, 'running', status=IdeaStatus.SCHEDULED)
+    (second,) = add_ideas(db, campaign, 'second', after=(running,))
+    add_ideas(db, campaign, 'third', after=(second,))
+    (gate,) = add_ideas(db, campaign, 'gate', status=IdeaStatus.PROPOSED)
+    (behind,) = add_ideas(db, campaign, 'behind the gate', after=(gate,))
+    add_ideas(db, campaign, 'further behind', after=(behind, second))
+    with db.session() as s:
+        assert set(s.scalars(select(Idea.title).where(waiting()))) == {'second', 'third'}
 
 
 def test_a_superseded_idea_that_never_ran_is_rejected_on_tick_and_one_that_ran_is_left_alone(

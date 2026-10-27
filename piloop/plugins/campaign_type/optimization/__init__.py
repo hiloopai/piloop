@@ -25,3 +25,9 @@ class Optimization(CampaignType):
         from piloop.plugins.campaign_type.kit.verdicts.judge import checkout_candidate
 
         return checkout_candidate(s, source).revision
+
+    def check_config(self, s: Session, campaign: Campaign) -> None:
+        """Every idea's track stays (``check_tracks``)."""
+        from piloop.plugins.campaign_type.kit.backlog.ideas import check_tracks
+
+        check_tracks(s, campaign)

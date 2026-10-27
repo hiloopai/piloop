@@ -17,13 +17,16 @@ This is how piloop measures the work of a research sweep.
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Final
 
-from sqlalchemy import ColumnElement, case, distinct, exists, func, select
+from sqlalchemy import CTE, ColumnElement, case, distinct, exists, func, select
 from sqlalchemy.orm import Session, aliased
 
 from piloop.api.views import IdeaView
+from piloop.config import CONFIG_FILE, ConfigError
 from piloop.db.events import has
-from piloop.db.models import Comment, Event
+from piloop.db.models import Campaign, Comment, Event
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import IdeaStatusChanged
 from piloop.ids import CampaignId, CommentKind, TargetKind, TargetRef
@@ -31,6 +34,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, Lin
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import NEVER_RAN
 
@@ -49,14 +53,29 @@ def runnable() -> ColumnElement[bool]:
     return (Idea.status == IdeaStatus.READY) & unblocked()
 
 
-def waiting() -> ColumnElement[bool]:
-    """Select the ``ready`` ideas that are blocked only by ``scheduled`` prerequisites.
+RUN_ON: Final = (IdeaStatus.DONE, IdeaStatus.SCHEDULED, IdeaStatus.READY)
+"""The statuses of the prerequisites that settle without anyone: done, or one that runs and then is done."""
 
-    They become runnable when those prerequisites finish. ``low_water`` counts them as backlog, together with the
-    runnable ideas, because no research sweep is needed before they run. Without this, a long run with many ideas
-    ``after`` it starts a sweep on every pass.
+
+def waiting() -> ColumnElement[bool]:
+    """Select the ``ready`` ideas that are blocked only by prerequisites that settle on their own, through any chain.
+
+    A prerequisite settles on its own when it is ``scheduled``, or ``ready`` and itself waits on no other kind. So the
+    ideas become runnable as runs finish. ``low_water`` counts them as backlog, together with the runnable ideas,
+    because no research sweep is needed before they run. Without this, a long run with many ideas ``after`` it starts
+    a sweep on every pass.
     """
-    return (Idea.status == IdeaStatus.READY) & ~unblocked() & ~_blocked_by(IdeaStatus.DONE, IdeaStatus.SCHEDULED)
+    return (Idea.status == IdeaStatus.READY) & ~unblocked() & Idea.id.not_in(select(_held().c.id))
+
+
+def _held() -> CTE:
+    """The ideas that do not settle on their own: each in no status of ``RUN_ON``, and each after one, at any depth.
+
+    The links have no cycles (``ops.link`` refuses one).
+    """
+    link = aliased(IdeaLink)
+    roots = select(Idea.id).where(Idea.status.not_in(RUN_ON)).cte('held', recursive=True)
+    return roots.union(select(link.idea_id).where(link.kind == LinkKind.AFTER, link.target_id == roots.c.id))
 
 
 def _blocked_by(*settled: IdeaStatus) -> ColumnElement[bool]:
@@ -67,6 +86,33 @@ def _blocked_by(*settled: IdeaStatus) -> ColumnElement[bool]:
         link.kind == LinkKind.AFTER,
         target.id == link.target_id,
         target.status.not_in(settled),
+    )
+
+
+def check_tracks(s: Session, campaign: Campaign) -> None:
+    """Refuse the campaign's new config when it drops a track that ideas of the campaign are on.
+
+    An idea's runs are judged on its track, so an idea on a track that is gone fails a run that finishes, and a
+    remeasure of its candidates cannot judge them. A track is named after its primary unless the primary says
+    ``track``, so a new primary drops the old one's track.
+
+    Raises:
+        ConfigError: one line for each dropped track, with the ideas on it and how to keep it.
+    """
+    kept = {t.name for t in campaign.config.all_tracks}
+    stranded: dict[TrackName, list[IdeaId]] = {}
+    for idea_id, track in s.execute(select(Idea.id, Idea.track).where(Idea.campaign_id == campaign.id)):
+        if track not in kept:
+            stranded.setdefault(track, []).append(idea_id)
+    if not stranded:
+        return
+    bad = [
+        f'  track {track!r} is gone, and idea(s) {", ".join(f"#{i}" for i in ids)} are on it: keep its name with'
+        f' `track = "{track}"` on the primary that replaces it, or move them first with `piloop idea track`'
+        for track, ids in stranded.items()
+    ]
+    raise ConfigError(
+        '\n'.join([f'{Path(campaign.path) / CONFIG_FILE} drops the track of ideas ({len(bad)} problem(s)):', *bad])
     )
 
 

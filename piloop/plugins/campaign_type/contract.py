@@ -136,6 +136,16 @@ class CampaignType(Parameters, ABC):
     def fork_point(self, s: Session, source: Campaign) -> Revision:
         """The version that a fork of ``source`` starts from when the fork names none (``piloop campaign fork``)."""
 
+    @abstractmethod
+    def check_config(self, s: Session, campaign: Campaign) -> None:
+        """Refuse the campaign's new config when the campaign's rows cannot run on it (``piloop init``).
+
+        The new config is ``campaign.config``, set in ``s`` and not committed: a refusal rolls it back.
+
+        Raises:
+            ConfigError: what the rows need that the config lacks, and how to fix it.
+        """
+
 
 CAMPAIGN_TYPES = Capability('campaign_type', CampaignType, noun='campaign type')
 """Every campaign type by name. No key selects one: each campaign names its own."""

@@ -5,6 +5,7 @@ from typing import get_args, get_origin
 
 import pytest
 from git import Repo
+from inline_snapshot import snapshot
 from pydantic import BaseModel, RootModel, ValidationError
 from pytest_mock import MockerFixture
 from sqlalchemy import select
@@ -20,6 +21,9 @@ from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.models import Campaign
 from piloop.db.session import Database
 from piloop.ids import CampaignStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.host import Many, One, Scope, declared
 from tests.conftest import store_config
 
@@ -274,3 +278,36 @@ def test_init_replaces_a_stored_config_that_no_longer_validates_and_a_stopped_ca
         assert (row.status, row.stopped_reason) == (CampaignStatus.STOPPED, 'target: score 3.0000 ≥ 3'), (
             'an old [stop] that no longer loads is not a changed one'
         )
+
+
+def test_init_refuses_a_config_that_drops_a_track_that_ideas_are_on_and_keeps_the_name_when_told(
+    db: Database, campaign: Campaign
+) -> None:
+    """The one track is named after its primary. A new primary would strand every idea of the old one: a run that
+    finishes on it fails, and a remeasure of its candidates never judges them. ``track =`` keeps the name."""
+    toml = Path(campaign.path) / 'piloop.toml'
+    with db.session() as s:
+        s.add_all(
+            Idea(
+                campaign_id=campaign.id, track=TrackName('score'), title=t, hypothesis='h', created_by='test', status=st
+            )
+            for t, st in (('queued', IdeaStatus.READY), ('ran', IdeaStatus.DONE))
+        )
+        s.commit()
+    renamed = toml.read_text().replace(
+        '[[metrics]]\nname = "score"\ndirection = "higher"\nrole = "primary"\n',
+        '[[metrics]]\nname = "score2"\ndirection = "higher"\nrole = "primary"\n\n'
+        '[[metrics]]\nname = "score"\ndirection = "higher"\n',
+    )
+    toml.write_text(renamed)
+    with db.session() as s, pytest.raises(ConfigError) as refused:
+        sync(s, s.get_one(Campaign, campaign.id))
+    assert str(refused.value).replace(campaign.path, '<repo>') == snapshot("""\
+<repo>/piloop.toml drops the track of ideas (1 problem(s)):
+  track 'score' is gone, and idea(s) #1, #2 are on it: keep its name with `track = "score"` on the primary that replaces it, or move them first with `piloop idea track`\
+""")
+    toml.write_text(renamed.replace('name = "score2"\n', 'name = "score2"\ntrack = "score"\n'))
+    with db.session() as s:
+        cfg = sync(s, s.get_one(Campaign, campaign.id))
+        s.commit()
+    assert cfg.track(TrackName('score')).primary.name == 'score2'
