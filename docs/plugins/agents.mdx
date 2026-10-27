@@ -1,5 +1,5 @@
 ---
-title: Harnesses, MCP servers, runtimes, roles, triggers and sections
+title: Harnesses, MCP servers, runtimes, roles, triggers, sections and lineage
 sidebarTitle: Agents and sections
 description: Plugins that start the agents, define what they do and when, and show a campaign.
 ---
@@ -9,10 +9,11 @@ import RuntimeProtocol from '/snippets/generated/runtime-protocol.mdx';
 import Roles from '/snippets/generated/roles.mdx';
 import ContractTrigger from '/snippets/generated/contract-trigger.mdx';
 import ContractSection from '/snippets/generated/contract-section.mdx';
+import ContractLineage from '/snippets/generated/contract-lineage.mdx';
 import ContractHarness from '/snippets/generated/contract-harness.mdx';
 
 A harness is the coding agent CLI that an agent runs in, and an MCP server gives it tools. A runtime starts and steers the agents. A role says what an agent does, and its triggers say when it starts. A section
-is one part of what `piloop status`, a brief or a UI shows. [Agents and roles](/concepts/roles) describes them as a
+is one part of what `piloop status`, a brief or a UI shows. A lineage is the graph of a campaign that a UI draws. [Agents and roles](/concepts/roles) describes them as a
 user sees them.
 
 ## Harnesses
@@ -246,3 +247,60 @@ block is one of four kinds: `Text`, `Lines`, `Figures` (named values, a number w
 ### Built in
 
 [Sections](/concepts/roles#sections) lists the built-in sections.
+
+## Lineage
+
+A **lineage** is a campaign as a graph that a UI draws without knowing the campaign's type. Its provider makes the
+graph that `GET /v1/campaigns/{campaign}/lineage` answers ([the event feed](/reference/event-feed#the-lineage) shows
+one). This provider calls the built-in `optimization` and keeps only the spine:
+
+```python
+from sqlalchemy.orm import Session
+
+from piloop.capabilities import Graph, OptimizationLineage
+from piloop.db.models import Campaign
+
+
+class SpineOnly(OptimizationLineage):
+    """``spine_only``: ``optimization``, with only the nodes of the spine, for a small screen."""
+
+    def graph(self, s: Session, campaign: Campaign) -> Graph:
+        full = super().graph(s, campaign)
+        spine = set(full.spine)
+        return Graph(**(dict(full) | {'nodes': [n for n in full.nodes if n.id in spine]}))
+```
+
+```toml
+[project.entry-points."piloop.lineages"]
+spine_only = "my_package:SpineOnly"
+```
+
+```text
+[plugins.lineage]
+use = "spine_only"
+```
+
+### The contract
+
+A provider returns a `Graph`. The graph declares its own vocabulary: the kinds and the statuses of its nodes, each
+with a label, and the tracks of its scores. A status also has a `Tone`, which colours it. Every node names an entry of
+each, so a provider adds its own words with no new protocol. piloop checks the graph when the provider makes it:
+every name has an entry, every parent comes before its child, and the spine and the series are paths of the graph.
+
+`[plugins.lineage] use` names the one instance of a campaign, `optimization` when it is unset. Every provider shares
+the route.
+
+<ContractLineage />
+
+### Built in
+
+`optimization` has one node per candidate, with the candidate's parent:
+
+| What | `optimization` |
+|---|---|
+| Kinds | The candidate's origin: `baseline`, `candidate`, `reference`, `recovered`, `skipped`. |
+| Statuses | The verdict: `kept`, `interesting`, `discarded`, `crashed`. Else `pending`, or `unjudged` for an origin that piloop never judges. |
+| Scores | The primary metric of each track, under the current evaluator. |
+| Spine | The head's ancestry, from the baseline. |
+| Series | The trunk's keeps on the spine, each when it was last judged. |
+| Links | The candidate, its idea, its run and the run's agent sessions. |

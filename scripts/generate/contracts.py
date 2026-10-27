@@ -33,6 +33,7 @@ from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.contract import FactSource
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.harness.contract import Harness
+from piloop.plugins.lineage.contract import Graph, LineageNode, LineageProvider, NodeStatus, SeriesPoint, SessionLink
 from piloop.plugins.memory.contract import MemoryProvider
 from piloop.plugins.network.contract import Network, NetworkConfig
 from piloop.plugins.provisioner.contract import ProvisionerConfig, Provisioning
@@ -70,6 +71,10 @@ CONTRACTS: dict[str, Contract] = {
     ),
     'harness': Contract((Harness,), '`piloop/plugins/harness/contract.py`'),
     'memory': Contract((MemoryProvider,), '`piloop/plugins/memory/contract.py`'),
+    'lineage': Contract(
+        (LineageProvider, Graph, LineageNode, NodeStatus, SessionLink, SeriesPoint),
+        '`piloop/plugins/lineage/contract.py`',
+    ),
     'archive': Contract((ArchiveConfig, Archiver), '`piloop/plugins/archive/contract.py`'),
     'vcs': Contract((Vcs, Repository), '`piloop/plugins/vcs/contract.py`'),
     'secrets': Contract((SecretsProvider,), '`piloop/plugins/secrets/contract.py`'),

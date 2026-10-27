@@ -109,6 +109,7 @@ memory = "piloop.plugins.memory.contract:MEMORY"
 archive = "piloop.plugins.archive.contract:ARCHIVES"
 harness = "piloop.plugins.harness.contract:HARNESSES"
 mcp_server = "piloop.plugins.mcp_server.contract:MCP_SERVERS"
+lineage = "piloop.plugins.lineage.contract:LINEAGE"
 
 # What runs in the daemon for a capability, or for a provider that needs the daemon, by its name
 # (piloop.plugins.contribution.CONTRIBUTORS).
@@ -198,6 +199,9 @@ command = "piloop.plugins.fact_source.command:Command"
 
 [project.entry-points."piloop.campaign_types"]
 optimization = "piloop.plugins.campaign_type.optimization:Optimization"
+
+[project.entry-points."piloop.lineages"]
+optimization = "piloop.plugins.campaign_type.optimization.lineage.optimization:OptimizationLineage"
 
 [project.entry-points."piloop.memory"]
 local = "piloop.plugins.memory.local:LocalMemory"

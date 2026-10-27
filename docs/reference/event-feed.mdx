@@ -82,6 +82,112 @@ the `tokens` spent. It covers the campaigns that `piloop status` would show.
 A program can also call the daemon's HTTP API, which answers the same documents without `protocol`: see
 [the API](/reference/cli#the-api).
 
+## The lineage
+
+`GET /v1/campaigns/<campaign>/lineage` answers the campaign as a graph, for a UI that draws its history. This is a
+campaign with a baseline, a keep and a discard:
+
+```bash
+curl --unix-socket ~/.piloop/piloop.sock http://piloop/v1/campaigns/demo/lineage
+```
+
+```json
+{
+  "cursor": 41,
+  "provider": "optimization",
+  "graph": {
+    "kinds": [
+      {"name": "baseline", "label": "Baseline"},
+      {"name": "candidate", "label": "Candidate"},
+      {"name": "reference", "label": "Reference"},
+      {"name": "recovered", "label": "Recovered"},
+      {"name": "skipped", "label": "Skipped"}
+    ],
+    "statuses": [
+      {"name": "kept", "label": "Kept", "tone": "success"},
+      {"name": "interesting", "label": "Interesting", "tone": "attention"},
+      {"name": "discarded", "label": "Discarded", "tone": "neutral"},
+      {"name": "crashed", "label": "Crashed", "tone": "danger"},
+      {"name": "pending", "label": "Pending", "tone": "accent"},
+      {"name": "unjudged", "label": "Not judged", "tone": "neutral"}
+    ],
+    "tracks": [
+      {"name": "lines", "metric": "lines", "direction": "higher"}
+    ],
+    "evaluator": "evaluator#1",
+    "nodes": [
+      {
+        "id": "candidate#1",
+        "kind": "baseline",
+        "status": "kept",
+        "label": "piloop init: .gitignore",
+        "parents": [],
+        "created": "2026-10-27T19:23:07.195095Z",
+        "judged": {"by": "daemon", "reason": null},
+        "scores": {"lines": 1.0},
+        "links": [
+          {"kind": "candidate", "id": 1, "label": null}
+        ],
+        "summary": "piloop init: .gitignore"
+      },
+      {
+        "id": "candidate#2",
+        "kind": "candidate",
+        "status": "kept",
+        "label": "Add a line",
+        "parents": ["candidate#1"],
+        "created": "2026-10-27T19:23:13.307221Z",
+        "judged": {"by": "daemon", "reason": "against candidate#1: lines 2 vs 1 (+1; aggregate: no per-unit results)"},
+        "scores": {"lines": 2.0},
+        "links": [
+          {"kind": "candidate", "id": 2, "label": null},
+          {"kind": "idea", "id": 1, "label": "Add a line"},
+          {"kind": "run", "id": 1, "label": null},
+          {"kind": "agent_session", "id": 1, "harness": "script", "session_id": null, "label": "implementer#1"}
+        ],
+        "summary": "add a line to solve.txt"
+      },
+      {
+        "id": "candidate#3",
+        "kind": "candidate",
+        "status": "discarded",
+        "label": "Start from an empty file",
+        "parents": ["candidate#2"],
+        "created": "2026-10-27T19:23:18.636943Z",
+        "judged": {"by": "daemon", "reason": "against candidate#2: lines 0 vs 2 (-2; aggregate: no per-unit results)"},
+        "scores": {"lines": 0.0},
+        "links": [
+          {"kind": "candidate", "id": 3, "label": null},
+          {"kind": "idea", "id": 2, "label": "Start from an empty file"},
+          {"kind": "run", "id": 2, "label": null},
+          {"kind": "agent_session", "id": 2, "harness": "script", "session_id": null, "label": "implementer#2"}
+        ],
+        "summary": "empty solve.txt"
+      }
+    ],
+    "spine": ["candidate#1", "candidate#2"],
+    "series": [
+      {"node": "candidate#1", "at": "2026-10-27T19:23:07.195095Z"},
+      {"node": "candidate#2", "at": "2026-10-27T19:23:13.903374Z"}
+    ]
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `cursor` | The newest event that the graph includes. Read `/v1/events?after=<cursor>&campaign=<campaign>`, and read the lineage again after an event. |
+| `provider` | The instance that drew the graph: `[plugins.lineage] use`, `optimization` by default. |
+| `kinds`, `statuses`, `tracks` | The graph's vocabulary. Every node's `kind` and `status`, and every key of its `scores`, names one entry. Colour a status by its `tone`: `neutral`, `accent`, `success`, `attention` or `danger`. |
+| `evaluator` | What measured every score. A new one means that the scores were measured again. |
+| `nodes` | Each parent before its children. A node with no `parents` is a root. A tree takes the first parent. |
+| `links` | What to open from a node: a row by its `kind` and `id`, or an `agent_session` with its `harness` and `session_id`. |
+| `spine` | The path from a root to the node that the campaign builds on now: the head. |
+| `series` | The nodes of the spine that moved it forward, and when: a chart of the scores over time. |
+
+The shape is the same for every provider: [Lineage](/plugins/agents#lineage) shows how a plugin draws its own. The
+OpenAPI document (`GET /v1/openapi.json`) has every field.
+
 ## The event envelope
 
 Every event has the same fields, whatever its kind.

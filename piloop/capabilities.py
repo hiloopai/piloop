@@ -133,6 +133,11 @@ from piloop.plugins.campaign_type.contract import (
 )
 from piloop.plugins.campaign_type.optimization import Optimization
 
+from piloop.plugins.lineage.contract import LINEAGE, LineageProvider, Graph, LineageNode, NodeKind, NodeStatus
+from piloop.plugins.lineage.contract import ScoreTrack, Judged, RowLink, SessionLink, NodeLink, SeriesPoint, Tone
+from piloop.plugins.lineage.contract import NodeId, KindName, StatusName, TrackKey
+from piloop.plugins.campaign_type.optimization.lineage.optimization import OptimizationLineage
+
 from piloop.plugins.memory.contract import MEMORY, MemoryProvider, Synced
 from piloop.plugins.memory.local import LocalMemory
 

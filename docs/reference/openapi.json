@@ -3228,6 +3228,68 @@
         }
       }
     },
+    "/v1/campaigns/{campaign}/lineage": {
+      "get": {
+        "summary": "Lineage",
+        "description": "The campaign as a graph of its nodes and their parents, from the instance of its ``[plugins.lineage] use``.\n\nRefuses a campaign whose stored config no longer validates.",
+        "operationId": "lineage",
+        "parameters": [
+          {
+            "name": "campaign",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The campaign's name, or its id.",
+              "title": "Campaign"
+            },
+            "description": "The campaign's name, or its id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Lineage"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/campaigns/{campaign}/journal": {
       "post": {
         "summary": "Journal",
@@ -4340,6 +4402,15 @@
         "title": "DevelopBody",
         "description": "What makes a seed a defined idea: each field that the implementer needs."
       },
+      "Direction": {
+        "type": "string",
+        "enum": [
+          "higher",
+          "lower"
+        ],
+        "title": "Direction",
+        "description": "Whether a larger or a smaller value of a metric is better."
+      },
       "Ending": {
         "type": "string",
         "enum": [
@@ -4544,6 +4615,82 @@
         ],
         "title": "Fork",
         "description": "A new campaign that starts from a version of another one, in a clone of that one's checkout."
+      },
+      "Graph": {
+        "properties": {
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/NodeKind"
+            },
+            "type": "array",
+            "title": "Kinds",
+            "description": "Every kind that a node may have, in the order of a legend."
+          },
+          "statuses": {
+            "items": {
+              "$ref": "#/components/schemas/NodeStatus"
+            },
+            "type": "array",
+            "title": "Statuses",
+            "description": "Every status that a node may have, in the order of a legend."
+          },
+          "tracks": {
+            "items": {
+              "$ref": "#/components/schemas/ScoreTrack"
+            },
+            "type": "array",
+            "title": "Tracks",
+            "description": "The axes of the scores. Empty when nothing is scored."
+          },
+          "evaluator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluator",
+            "description": "What measured every score, in the provider's words, such as ``evaluator#3``. A new one means the scores were\nmeasured again. Null when there is none yet."
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/LineageNode"
+            },
+            "type": "array",
+            "title": "Nodes",
+            "description": "Each parent before its children, such as oldest first."
+          },
+          "spine": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Spine",
+            "description": "A path from a root to the node that the campaign builds on now: each node is a child of the one before. Empty\nwhen there is none yet."
+          },
+          "series": {
+            "items": {
+              "$ref": "#/components/schemas/SeriesPoint"
+            },
+            "type": "array",
+            "title": "Series",
+            "description": "The nodes of the spine that moved it forward, in the order of the spine."
+          }
+        },
+        "type": "object",
+        "required": [
+          "kinds",
+          "statuses",
+          "tracks",
+          "evaluator",
+          "nodes",
+          "spine",
+          "series"
+        ],
+        "title": "Graph",
+        "description": "A campaign as its provider sees it: the vocabulary, the nodes, the spine and its steps.\n\nIt is checked when it is made: every name refers to an entry, every parent comes before its child, and the spine\nand the series are paths of the graph. A graph that breaks a rule is a provider's bug."
       },
       "HTTPValidationError": {
         "properties": {
@@ -5034,6 +5181,33 @@
         "description": "A line appended to the orchestrator's journal, read at ``cursor``."
       },
       "JsonValue": {},
+      "Judged": {
+        "properties": {
+          "by": {
+            "type": "string",
+            "title": "By",
+            "description": "The actor's signature, such as ``daemon`` or ``orchestrator``."
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "by",
+          "reason"
+        ],
+        "title": "Judged",
+        "description": "Who judged a node, and why. The node's status says what the judgement is."
+      },
       "KeyOrigin": {
         "type": "string",
         "enum": [
@@ -5104,6 +5278,123 @@
         ],
         "title": "LimitBody",
         "description": "A value for a live key, with why: it shows next to the value."
+      },
+      "Lineage": {
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor",
+            "description": "The id of the newest event that the graph includes."
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider",
+            "description": "The instance that answered: ``[plugins.lineage] use``."
+          },
+          "graph": {
+            "$ref": "#/components/schemas/Graph"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cursor",
+          "provider",
+          "graph"
+        ],
+        "title": "Lineage",
+        "description": "``GET /v1/campaigns/{campaign}/lineage``: the campaign's graph, at a cursor of the event feed.\n\nFollow ``/v1/events?after=<cursor>&campaign=<campaign>``, and read the lineage again after an event."
+      },
+      "LineageNode": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "Unique in the graph, and the same in every read of it."
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "The ``name`` of an entry of ``Graph.kinds``."
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "The ``name`` of an entry of ``Graph.statuses``."
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "One line, such as the title of the idea that made it."
+          },
+          "parents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Parents",
+            "description": "The nodes that it derives from, each earlier in ``Graph.nodes``. Empty for a root. A client that draws a tree\ntakes the first."
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created",
+            "description": "When the node was made."
+          },
+          "judged": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Judged"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who judged it and why, once a judgement exists."
+          },
+          "scores": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Scores",
+            "description": "Its score on each track that has one. A track without a score is left out."
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/NodeLink"
+            },
+            "type": "array",
+            "title": "Links",
+            "description": "What a client opens from it: rows of piloop, and agent sessions."
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary",
+            "description": "More than the label, such as the first line of its commit."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "label",
+          "parents",
+          "created",
+          "judged",
+          "scores",
+          "links",
+          "summary"
+        ],
+        "title": "LineageNode",
+        "description": "One node of the graph."
       },
       "Lines": {
         "properties": {
@@ -5518,6 +5809,74 @@
             "verdict": "#/components/schemas/VerdictNews"
           }
         }
+      },
+      "NodeKind": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "What a node's ``kind`` says, such as ``baseline``."
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "How a legend names it, such as ``Baseline``."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label"
+        ],
+        "title": "NodeKind",
+        "description": "What a node is, in the provider's words."
+      },
+      "NodeLink": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RowLink"
+          },
+          {
+            "$ref": "#/components/schemas/SessionLink"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "agent_session": "#/components/schemas/SessionLink",
+            "candidate": "#/components/schemas/RowLink",
+            "comment": "#/components/schemas/RowLink",
+            "idea": "#/components/schemas/RowLink",
+            "measurement": "#/components/schemas/RowLink",
+            "run": "#/components/schemas/RowLink"
+          }
+        }
+      },
+      "NodeStatus": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "What a node's ``status`` says, such as ``kept``."
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "How a legend names it, such as ``Kept``."
+          },
+          "tone": {
+            "$ref": "#/components/schemas/Tone",
+            "description": "How a client colours it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label",
+          "tone"
+        ],
+        "title": "NodeStatus",
+        "description": "Where a node is, in the provider's words."
       },
       "NoteBody": {
         "properties": {
@@ -6154,6 +6513,47 @@
         "title": "RoleView",
         "description": "A sweeping role of a campaign, as a console shows it: off, idle, starting or running."
       },
+      "RowLink": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "idea",
+              "run",
+              "candidate",
+              "measurement",
+              "comment"
+            ],
+            "title": "Kind",
+            "description": "The table of the row: ``idea``, ``run``, ``candidate``, ``measurement`` or ``comment``."
+          },
+          "id": {
+            "type": "integer",
+            "title": "Id",
+            "description": "The row's id in its table."
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label",
+            "description": "One line about the row, such as an idea's title."
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "label"
+        ],
+        "title": "RowLink",
+        "description": "A row of piloop that a client opens from a node, with the API's route for its kind."
+      },
       "RunAnswer": {
         "properties": {
           "cursor": {
@@ -6193,6 +6593,32 @@
         ],
         "title": "RunningSince",
         "description": "An evaluation that has a slot of the executor."
+      },
+      "ScoreTrack": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "What a key of a node's ``scores`` says."
+          },
+          "metric": {
+            "type": "string",
+            "title": "Metric",
+            "description": "The metric that gives the score."
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction",
+            "description": "Whether a higher or a lower score is better."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "metric",
+          "direction"
+        ],
+        "title": "ScoreTrack",
+        "description": "One axis of the scores: a node's score on it is the value of one metric."
       },
       "SecretBody": {
         "properties": {
@@ -6418,6 +6844,89 @@
         ],
         "title": "SeedNews",
         "description": "A seed that someone else filed."
+      },
+      "SeriesPoint": {
+        "properties": {
+          "node": {
+            "type": "string",
+            "title": "Node",
+            "description": "A node of the spine."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At",
+            "description": "When it moved the spine forward."
+          }
+        },
+        "type": "object",
+        "required": [
+          "node",
+          "at"
+        ],
+        "title": "SeriesPoint",
+        "description": "A node that moved the spine forward, and when: a chart of the spine plots the node's scores at ``at``."
+      },
+      "SessionLink": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "agent_session",
+            "title": "Kind",
+            "description": "Always ``agent_session``."
+          },
+          "id": {
+            "type": "integer",
+            "title": "Id",
+            "description": "The agent session's id (``agent_sessions.id``)."
+          },
+          "harness": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness",
+            "description": "The ``[plugins.harness.<name>]`` that ran it. Null when its row has none."
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id",
+            "description": "The harness's own session id. Null until piloop knows it (``agent_session.identified``)."
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label",
+            "description": "Who it is, such as ``implementer#12``."
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "harness",
+          "session_id",
+          "label"
+        ],
+        "title": "SessionLink",
+        "description": "An agent session that worked on a node, with the harness's own session id, so that a trace link is exact."
       },
       "Status": {
         "properties": {
@@ -6789,6 +7298,18 @@
         ],
         "title": "TokenView",
         "description": "A bearer token of the server, never its secret."
+      },
+      "Tone": {
+        "type": "string",
+        "enum": [
+          "neutral",
+          "accent",
+          "success",
+          "attention",
+          "danger"
+        ],
+        "title": "Tone",
+        "description": "How a client colours a status: the functional colour roles of GitHub's Primer design system."
       },
       "TrackBody": {
         "properties": {

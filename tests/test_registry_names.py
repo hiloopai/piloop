@@ -118,6 +118,7 @@ HOST_CONTRACTS = {
     'campaign type': 'owns tables of the database, which the daemon migrates',
     'memory provider': 'owns tables of the database, which the daemon migrates',
     'archive provider': 'owns tables of the database, which the daemon migrates',
+    'lineage provider': 'graph(s, campaign) reads the database through a Session',
 }
 """The capabilities whose contract passes live objects of the host, and why. Every other one is pure."""
 

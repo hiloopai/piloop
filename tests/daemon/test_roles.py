@@ -40,6 +40,7 @@ from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.contract import HARNESSES
 from piloop.plugins.host import PluginError, compose
+from piloop.plugins.lineage.contract import LINEAGE
 from piloop.plugins.role.contract import ROLES
 from piloop.plugins.runtime.contract import RUNTIMES, Runtime
 from piloop.plugins.section.contract import SECTIONS
@@ -693,6 +694,8 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
             f'  demo: harness provider {h}, from {HARNESSES.sources()[h].release} ({research_model})'
             for h in ('claude', 'codex')
         ),
+        f'  demo: lineage provider optimization, from {LINEAGE.sources()["optimization"].release} ([plugins.lineage]'
+        f' use, {stored})',
         f'  demo: {nice} ([plugins.runtime] use, {stored})',
         f'  demo: {nice} ([plugins.role.watchdog] runtime, {stored})',
         f'  demo: {nice} ([plugins.role.fast] runtime, {stored})',

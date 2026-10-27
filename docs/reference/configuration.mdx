@@ -28,7 +28,7 @@ section.
 | `link` | list\[string\] | `[]` | Repo-relative paths, ignored by git, that piloop puts into every worktree read-only, for example data or virtual environments. Each job gets them as they are when it is made. |
 | `context` | list\[string\] | `[]` | Repo-relative files or globs (for example `docs/error-analysis-*.md`) that hold the campaign's analysis: error analyses, comparisons with a reference, evaluation reports. The research pack lists each one with its outline, newest first, so that every sweep that reads the pack reads them before it proposes work. |
 | `agents` | [AgentTimings](#agenttimings) | `{}` | `[agents]`: how long the campaign's agents get to wrap up and to leave after their finding. |
-| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "optimization": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "mcp_server": {}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "scout": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "cost": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "lessons": {}, "pack": {}, "queue": {}, "reported": {}, "runs": {}, "same_as_parent": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "candidates", "same_as_parent", "reported", "inbox", "events"]}, "trigger": {"cron": {}, "dead_at_startup": {}, "leaking_funnel": {}, "low_water": {}, "news": {}, "run_failed": {}, "seed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
+| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "optimization": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "scout": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "cost": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "lessons": {}, "pack": {}, "queue": {}, "reported": {}, "runs": {}, "same_as_parent": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "candidates", "same_as_parent", "reported", "inbox", "events"]}, "trigger": {"cron": {}, "dead_at_startup": {}, "leaking_funnel": {}, "low_water": {}, "news": {}, "run_failed": {}, "seed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
 
 ## Tolerance
 
@@ -145,6 +145,16 @@ The harness instances that the campaign uses, by name, in order. Unset: `pi`.
 Each harness by name.
 
 Each table takes the keys of [Harness](#harness), and those of its provider.
+
+### `[plugins.lineage] use`
+
+The lineage instance that the campaign uses, by name. Unset: `optimization`.
+
+### `[plugins.lineage.<name>]`
+
+Each lineage by name.
+
+With `provider = "optimization"`, the table has no other key.
 
 ### `[plugins.mcp_server.<name>]`
 

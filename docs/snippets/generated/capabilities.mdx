@@ -8,6 +8,7 @@
 | executor: `EXECUTORS` (`piloop.executors`) | host | `[plugins.executor] provider` in `config.toml` | `workers`: `Workers` |
 | fact source: `FACT_SOURCES` (`piloop.fact_sources`) | host | `[plugins.fact_source.<name>]` | `campaign`: `CampaignFacts`<br/>`command`: `Command`<br/>`optimization`: `OptimizationFacts` |
 | harness: `HARNESSES` (`piloop.harnesses`) | host | `[plugins.harness.<name>]` | `claude`: `Claude`<br/>`codex`: `Codex`<br/>`pi`: `Pi` |
+| lineage: `LINEAGE` (`piloop.lineages`) | host | `[plugins.lineage.<name>]` | `optimization`: `OptimizationLineage` |
 | mcp server: `MCP_SERVERS` (`piloop.mcp_servers`) | host | `[plugins.mcp_server.<name>]` | `http`: `HttpServer`<br/>`stdio`: `StdioServer` |
 | memory: `MEMORY` (`piloop.memory`) | host | `[plugins.memory] provider` | `local`: `LocalMemory` |
 | network: `NETWORKS` (`piloop.networks`) | host | `[plugins.network] provider` in `config.toml` | `https`: `Https`<br/>`proxy`: `Proxy` |

@@ -1,0 +1,34 @@
+{/* WARNING: This file is auto-generated (uv run -m scripts.generate_all). Update the docstrings in `piloop/plugins/lineage/contract.py` if you want to change anything here. */}
+
+| Member | What it is |
+|---|---|
+| `LineageProvider.DEFAULT: ClassVar[bool]` | Whether a campaign that does not set `[plugins.lineage] use` uses this provider. One installed provider is. Only the class that sets it is a default: a subclass is not (`is_default`). |
+| `LineageProvider.graph(s: Session, campaign: Campaign) -> Graph` | The graph of `campaign` now, read with `s` in the transaction of the answer's cursor. It never writes. |
+| `LineageProvider.contribution() -> Contribution` | The capability's route, which every provider shares: the server mounts it once. |
+| `Graph.kinds: list[NodeKind]` | Every kind that a node may have, in the order of a legend. |
+| `Graph.statuses: list[NodeStatus]` | Every status that a node may have, in the order of a legend. |
+| `Graph.tracks: list[ScoreTrack]` | The axes of the scores. Empty when nothing is scored. |
+| `Graph.evaluator: str \| None` | What measured every score, in the provider's words, such as `evaluator#3`. A new one means the scores were measured again. Null when there is none yet. |
+| `Graph.nodes: list[LineageNode]` | Each parent before its children, such as oldest first. |
+| `Graph.spine: list[NodeId]` | A path from a root to the node that the campaign builds on now: each node is a child of the one before. Empty when there is none yet. |
+| `Graph.series: list[SeriesPoint]` | The nodes of the spine that moved it forward, in the order of the spine. |
+| `LineageNode.id: NodeId` | Unique in the graph, and the same in every read of it. |
+| `LineageNode.kind: KindName` | The `name` of an entry of `Graph.kinds`. |
+| `LineageNode.status: StatusName` | The `name` of an entry of `Graph.statuses`. |
+| `LineageNode.label: str` | One line, such as the title of the idea that made it. |
+| `LineageNode.parents: list[NodeId]` | The nodes that it derives from, each earlier in `Graph.nodes`. Empty for a root. A client that draws a tree takes the first. |
+| `LineageNode.created: AwareDatetime` | When the node was made. |
+| `LineageNode.judged: Judged \| None` | Who judged it and why, once a judgement exists. |
+| `LineageNode.scores: dict[TrackKey, float]` | Its score on each track that has one. A track without a score is left out. |
+| `LineageNode.links: list[NodeLink]` | What a client opens from it: rows of piloop, and agent sessions. |
+| `LineageNode.summary: str \| None` | More than the label, such as the first line of its commit. |
+| `NodeStatus.name: StatusName` | What a node's `status` says, such as `kept`. |
+| `NodeStatus.label: str` | How a legend names it, such as `Kept`. |
+| `NodeStatus.tone: Tone` | How a client colours it. |
+| `SessionLink.kind: Literal[TargetKind.AGENT_SESSION]` | Always `agent_session`. |
+| `SessionLink.id: AgentSessionId` | The agent session's id (`agent_sessions.id`). |
+| `SessionLink.harness: str \| None` | The `[plugins.harness.<name>]` that ran it. Null when its row has none. |
+| `SessionLink.session_id: str \| None` | The harness's own session id. Null until piloop knows it (`agent_session.identified`). |
+| `SessionLink.label: str \| None` | Who it is, such as `implementer#12`. |
+| `SeriesPoint.node: NodeId` | A node of the spine. |
+| `SeriesPoint.at: AwareDatetime` | When it moved the spine forward. |

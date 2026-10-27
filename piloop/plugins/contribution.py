@@ -154,6 +154,8 @@ def contributions_of(providers: Sequence[Contributes]) -> list[tuple[str, Contri
 def collect(contributions: Sequence[tuple[str, Contribution]], taken: Sequence[str]) -> Contributions:
     """Join ``contributions``, by their owners' names, and refuse a consumer name that ``taken`` or another has.
 
+    A router that several contribute, such as a capability's route that its providers share, is joined once.
+
     Raises:
         PluginError: Two consumers have one name, or a capability's machinery adds routes. The message names both sides.
     """
@@ -162,7 +164,8 @@ def collect(contributions: Sequence[tuple[str, Contribution]], taken: Sequence[s
     routers: list[APIRouter] = []
     lifecycles: list[Lifecycle] = []
     for owner, contribution in contributions:
-        routers += [contribution.router] if contribution.router is not None else []
+        if (router := contribution.router) is not None and router not in routers:
+            routers.append(router)
         lifecycles += [contribution.lifecycle] if contribution.lifecycle is not None else []
         for consumer in contribution.consumers:
             if (other := owners.get(consumer.name)) is not None:

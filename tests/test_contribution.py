@@ -37,6 +37,7 @@ from piloop.plugins.contribution import CONTRIBUTORS, Contribution, DaemonHost, 
 from piloop.plugins.executor.contract import JOB_KINDS, AgentFinished, AgentJob, JobKind
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.host import PluginError
+from piloop.plugins.lineage import api as lineage_api
 from piloop.plugins.memory.contract import MEMORY, MemoryProvider, Synced
 from piloop.plugins.memory.local import api as local_api
 from piloop.plugins.network.contract import NetworkHost
@@ -169,7 +170,9 @@ def test_each_installed_provider_that_a_campaign_may_choose_serves_and_documents
     installed(monkeypatch, [EntryPoint('notes', f'{__name__}:Notes', MEMORY.group)])
     controller = RunController(db, Tracer(None), tmp_path, executor=Workers())
     routers = Scheduler(db, controller, Tracer(None), tmp_path).contributions.routers
-    assert routers[1:] == (local_api.router, NOTES), "after the executor's, the memory providers', in registry order"
+    assert routers[1:] == (lineage_api.router, local_api.router, NOTES), (
+        "after the executor's, the lineage's, which its providers share, and the memory providers', in registry order"
+    )
     tokens = Tokens(db)
     network = Https().open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))
     assert app(tokens, network, routers).url_path_for('notes') == '/v1/notes'
