@@ -59,7 +59,6 @@ from piloop.plugins.memory.local import LocalMemory
 from piloop.plugins.role.research import ResearchRole
 from piloop.plugins.role.scout import ScoutRole
 from piloop.plugins.role.watchdog import WatchdogRole
-from piloop.plugins.trigger.contract import TRIGGERS
 from piloop.plugins.trigger.low_water import LowWaterTrigger
 from piloop.plugins.trigger.seed import SeedTrigger
 from piloop.store.chunks import read
@@ -935,13 +934,13 @@ def test_0011_makes_scout_sweeps_scout_rows_and_stored_configs_valid_and_downgra
             1200,
             'research.md',
         ), 'the keys of research that the scout used'
-        assert role_of(p, ResearchRole).triggers == [LowWaterTrigger(buffer=5), SeedTrigger()], (
+        assert p.triggers_of('research') == [LowWaterTrigger(buffer=5), SeedTrigger()], (
             'the scout trigger leaves, and the buffer moves into low_water'
         )
         assert role_of(p, ResearchRole).max_ideas == 2
         assert p.context == ['docs/analysis-*.md'], 'research context is the project context'
         assert isinstance(p.harness['mine'], Claude), "its usage read Claude's files: it is the claude harness"
-        assert [TRIGGERS.name_of(t) for t in role_of(p, WatchdogRole).triggers] == [
+        assert role_of(p, WatchdogRole).triggers == [
             'run_failed',
             'dead_at_startup',
             'cron',
@@ -966,8 +965,8 @@ def test_0011_makes_scout_sweeps_scout_rows_and_stored_configs_valid_and_downgra
 def upgraded(config: dict[str, object]) -> object:
     """``config`` as revisions 0018 (``roles.implementer``), 0034 (no herdr), 0035 (no ``workdir``), 0036 (no Entire),
     0038 (a trigger's ``provider``), 0039 (the rules' limits), 0055 (the incident triggers), 0056 (``[[facts]]``),
-    0057 (an inherited ``mcp``), 0061 (``plugins.memory``), 0063 (a harness's ``provider``) and 0065 (the harnesses and
-    roles under ``plugins``) store it, so that today's piloop reads it."""
+    0057 (an inherited ``mcp``), 0061 (``plugins.memory``), 0063 (a harness's ``provider``), 0065 (the harnesses and
+    roles under ``plugins``) and 0066 (lists of names) store it, so that today's piloop reads it."""
     roles = config.get('roles')
     if isinstance(roles, dict) and 'worker' in roles:
         roles['implementer'] = roles.pop('worker')
@@ -982,7 +981,8 @@ def upgraded(config: dict[str, object]) -> object:
     config = revisions.get_revision('0057').module.upgraded(config)
     config = revisions.get_revision('0061').module.upgraded(config)
     config = revisions.get_revision('0063').module.upgraded(config)
-    return revisions.get_revision('0065').module.moved(config)
+    config = revisions.get_revision('0065').module.moved(config)
+    return revisions.get_revision('0066').module.upgraded(config)
 
 
 def test_0012_leaves_the_cached_input_out_of_the_input_of_codex_rows_and_downgrades(tmp_path: Path) -> None:
@@ -2793,3 +2793,56 @@ def test_0065_moves_the_harnesses_their_models_and_caps_the_roles_and_what_they_
         assert [loads(c) for (c,) in con.execute(stored)] == [old, {}], 'each key back where it was'
         with pytest.raises(sqlite3.IntegrityError, match='a key of roles in its config'):
             con.execute("INSERT INTO agent_sessions (kind, campaign_id) VALUES ('janitor', 1)")
+
+
+def test_0066_names_the_instances_of_the_lists_of_triggers_sections_and_facts_and_downgrades(tmp_path: Path) -> None:
+    """The stored config's lists become names as ``piloop.deprecated`` rewrites the file's, and come back."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0065')
+    old = {
+        'facts': [{'provider': 'campaign'}, {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}],
+        'status': {'sections': [{'provider': 'headline'}, {'provider': 'lessons', 'budget': 9}]},
+        'plugins': {
+            'role': {
+                'research': {'triggers': [{'provider': 'low_water', 'buffer': 4}, {'provider': 'seed'}]},
+                'watchdog': {'sections': [{'provider': 'goal'}]},
+                'scout': {},
+            }
+        },
+    }
+    unset = {'facts': None, 'status': {'sections': None}, 'plugins': {'role': {'scout': {}}}}
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for n, config in enumerate((old, unset)):
+            con.execute(
+                'INSERT INTO campaigns (name, path, config) VALUES (?, ?, ?)', (f'c{n}', f'/c{n}', dumps(config))
+            )
+    stored = 'SELECT config FROM campaigns ORDER BY id'
+    command.upgrade(cfg, '0066')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == [
+            {
+                'plugins': {
+                    'role': {
+                        'research': {'triggers': ['research_low_water', 'seed']},
+                        'watchdog': {'sections': ['goal']},
+                        'scout': {},
+                    },
+                    'trigger': {'research_low_water': {'provider': 'low_water', 'buffer': 4}},
+                    'section': {
+                        'use': ['headline', 'status_lessons'],
+                        'status_lessons': {'provider': 'lessons', 'budget': 9},
+                    },
+                    'fact_source': {
+                        'use': ['campaign', 'command'],
+                        'command': {'command': ['true'], 'metrics': ['spend']},
+                    },
+                }
+            },
+            {'plugins': {'role': {'scout': {}}}},
+        ]
+    command.downgrade(cfg, '0065')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == [old, {'plugins': {'role': {'scout': {}}}}], (
+            'each list back as entries, the tables gone; a list that was not set stays unset'
+        )

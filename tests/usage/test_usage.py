@@ -186,9 +186,9 @@ def test_a_campaign_moves_the_session_files_with_the_home_and_names_a_provider_f
 ) -> None:
     toml = campaign_path / 'piloop.toml'
     toml.write_text(
-        toml.read_text()
-        + '\n[plugins.harness.claude]\nhome = "~/claude-work"\n'
-        + '\n[plugins.harness.local]\nprovider = "pi"\nexecutable = "local-agent"\nhome = "~/.local-agent"\n'
+        toml.read_text().replace('use = ["script"]', 'use = ["script", "claude", "local"]', 1)
+        + '\n[plugins.harness.claude]\nmodel = "c"\nhome = "~/claude-work"\n'
+        + '\n[plugins.harness.local]\nprovider = "pi"\nmodel = "l"\nexecutable = "local-agent"\nhome = "~/.local-agent"\n'
     )
     cfg = load_campaign_config(campaign_path)
     moved = reader_of(cfg.harness_for('claude'))

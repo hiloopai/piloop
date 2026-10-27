@@ -5,7 +5,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from piloop.mcp import McpServer
 from piloop.plugins.harness.contract import EFFORT, MCP, PROMPT, SESSION_ID, Harness, McpArgs, McpLaunch
 from piloop.plugins.harness.kit.jsonl import (
     Counts,
@@ -17,6 +16,10 @@ from piloop.plugins.harness.kit.jsonl import (
     texts,
     zero,
 )
+from piloop.plugins.host import ContractBroken
+from piloop.plugins.mcp_server.contract import McpServer
+from piloop.plugins.mcp_server.http import HttpServer
+from piloop.plugins.mcp_server.stdio import StdioServer
 from piloop.settings import Settings, expand_env
 
 TAKE_MESSAGES = 'if [ -s "$PILOOP_MESSAGES" ]; then exec "$PILOOP_BIN" agent messages --harness claude; fi'
@@ -64,12 +67,17 @@ def argv(session: str) -> list[str]:
 
 def server(s: McpServer) -> dict[str, object]:
     """One entry of ``mcpServers``."""
-    if s.url is not None:
-        headers = s.expanded_headers()
-        return {'type': 'http', 'url': s.url, **({'headers': headers} if headers else {})}
-    assert s.command is not None, 'a stdio server'
-    env = s.expanded_env()
-    return {'type': 'stdio', 'command': s.command[0], 'args': s.command[1:], **({'env': env} if env else {})}
+    match s:
+        case HttpServer(url=url):
+            headers = s.expanded_headers()
+            return {'type': 'http', 'url': url, **({'headers': headers} if headers else {})}
+        case StdioServer(command=[executable, *args]):
+            env = s.expanded_env()
+            return {'type': 'stdio', 'command': executable, 'args': args, **({'env': env} if env else {})}
+        case _:
+            raise ContractBroken(
+                f'{type(s).__qualname__} is neither HttpServer nor StdioServer: the transports that Claude takes'
+            )
 
 
 @dataclass(frozen=True)

@@ -49,6 +49,7 @@ from piloop.plugins.harness.contract import HARNESSES
 from piloop.plugins.host import PluginError, compose
 from piloop.plugins.role.contract import ROLES
 from piloop.plugins.runtime.contract import RUNTIMES, Runtime
+from piloop.plugins.section.contract import SECTIONS
 from piloop.plugins.trigger.contract import TRIGGERS, Quiet
 from piloop.runtime.factory import RuntimeFactory
 from piloop.settings import Settings
@@ -93,10 +94,22 @@ def scheduler(db: Database, make: RuntimeFactory, tmp_path: Path) -> Scheduler:
     return Scheduler(db, serving(RunController(db, tracer, tmp_path, make, executor=Workers())), tracer, tmp_path, make)
 
 
-def configure(db: Database, campaign: Campaign, harness_body: str, **roles: dict[str, object]) -> None:
+REVIEWED: dict[str, object] = {'reviewed': {'provider': 'sql', 'when': REVIEW}}
+"""``[plugins.trigger.reviewed]``: a ``sql`` trigger on a new decision (``REVIEW``)."""
+
+
+def configure(
+    db: Database,
+    campaign: Campaign,
+    harness_body: str,
+    *,
+    trigger: dict[str, object] | None = None,
+    **roles: dict[str, object],
+) -> None:
+    """Rewrite the campaign's harness script, role settings and ``trigger`` tables (merged over the test toml)."""
     write_toml(Path(campaign.path), harness_body)
     with db.session() as s:
-        cfg = load_campaign_config(Path(campaign.path), plugins={'role': roles})
+        cfg = load_campaign_config(Path(campaign.path), plugins={'role': roles, 'trigger': trigger or {}})
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
 
@@ -127,12 +140,12 @@ def test_a_role_that_piloop_toml_defines_runs_on_its_sql_trigger_with_its_prompt
     harness = f'#!/bin/sh\npwd > {tmp_path}/cwd.txt\n' + BLOCKING.format(release=release).removeprefix('#!/bin/sh\n')
     reviewer: dict[str, object] = {
         'prompt': 'reviewer.md',
-        'triggers': [{'provider': 'sql', 'when': REVIEW}],
+        'triggers': ['reviewed'],
         'runtime': 'typed',
         'harnesses': ['script'],
         'max_concurrent': 1,
     }
-    configure(db, campaign, harness, reviewer=reviewer)
+    configure(db, campaign, harness, reviewer=reviewer, trigger=REVIEWED)
     kinds: list[str] = []
     sched = scheduler(db, recording(runtime, kinds), tmp_path)
     assert run_all(sched) == [], 'no decision yet: the query returns no row'
@@ -178,7 +191,7 @@ def test_a_role_adds_its_incident_prompt_to_an_incident_sweep_and_its_routine_pr
         (repo / name).write_text(text + '\n')
     triage: dict[str, object] = {
         'prompt': 'triage.md',
-        'triggers': [{'provider': 'run_failed'}],
+        'triggers': ['run_failed'],
         'incident_prompt': 'incident.md',
         'routine_prompt': 'routine.md',
     }
@@ -207,11 +220,19 @@ def test_a_role_that_defines_ideas_is_told_how_many_its_sweep_may_add(
     (Path(campaign.path) / 'ideator.md').write_text('# Ideate\n')
     ideator: dict[str, object] = {
         'prompt': 'ideator.md',
-        'triggers': [{'provider': 'low_water', 'buffer': 1}],
+        'triggers': ['ideator_low_water'],
         'files': 'ideas',
         'max_ideas': 2,
     }
-    configure(db, campaign, '#!/bin/sh\ntrue\n', ideator=ideator, research={'triggers': []}, watchdog={'triggers': []})
+    configure(
+        db,
+        campaign,
+        '#!/bin/sh\ntrue\n',
+        ideator=ideator,
+        research={'triggers': []},
+        watchdog={'triggers': []},
+        trigger={'ideator_low_water': {'provider': 'low_water', 'buffer': 1}},
+    )
     sched = scheduler(db, recording(runtime, []), tmp_path)
     assert run_all(sched) == [1], 'no runnable idea: the backlog is short'
     sched.wait(SETTLE)
@@ -330,8 +351,9 @@ def test_a_built_in_role_takes_other_triggers(
         db,
         campaign,
         '#!/bin/sh\ntrue\n',
-        watchdog={'triggers': [{'provider': 'cron'}], 'interval': 30},
-        research={'triggers': [{'provider': 'sql', 'when': REVIEW}]},
+        watchdog={'triggers': ['cron'], 'interval': 30},
+        research={'triggers': ['reviewed']},
+        trigger=REVIEWED,
     )
     sched = scheduler(db, recording(runtime, []), tmp_path)
     fail_a_run(db, campaign, 'broken')
@@ -466,7 +488,7 @@ def test_a_package_adds_a_role_and_triggers_through_entry_points(
     """
     cfg = load_campaign_config(Path(campaign.path))
     auditor = cfg.roles.sweeping()[RoleName('auditor')]
-    assert (auditor.timeout, TRIGGERS.name_of(auditor.triggers[0])) == (5, 'every_pass')
+    assert (auditor.timeout, auditor.triggers) == (5, ['every_pass'])
     toml = Path(campaign.path) / 'piloop.toml'
     toml.write_text(toml.read_text() + '\n[plugins.role.auditor]\ntimeout = 9\n')
     assert load_campaign_config(Path(campaign.path)).roles.sweeping()[RoleName('auditor')].timeout == 9, (
@@ -476,7 +498,7 @@ def test_a_package_adds_a_role_and_triggers_through_entry_points(
         db,
         campaign,
         '#!/bin/sh\ntrue\n',
-        auditor={'triggers': [{'provider': 'broken'}, {'provider': 'every_pass'}]},
+        auditor={'triggers': ['broken', 'every_pass']},
     )
     sched = scheduler(db, recording(runtime, []), tmp_path)
     assert run_all(sched) == [1]
@@ -492,9 +514,7 @@ def test_a_package_adds_a_role_and_triggers_through_entry_points(
 def test_only_a_trigger_that_names_the_quiet_phase_fires_and_launches_while_its_campaign_is_paused_or_stopped(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, plugins: None
 ) -> None:
-    configure(
-        db, campaign, '#!/bin/sh\ntrue\n', auditor={'triggers': [{'provider': 'every_pass'}, {'provider': 'awake'}]}
-    )
+    configure(db, campaign, '#!/bin/sh\ntrue\n', auditor={'triggers': ['every_pass', 'awake']})
     with db.session() as s:
         ops.pause(s, campaign.id, evals=False, reason='a person reads the results')
         s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='by hand'))
@@ -665,7 +685,16 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
     stored = f'in the config of demo that the last `piloop init` stored from {toml}'
     nice = 'runtime nice, from piloop-nice 0.1.0'
     research_model = f'[plugins.role.research] model, {stored}'
-    assert lines[lines.index('selected:') + 1 :] == [
+    selected = lines[lines.index('selected:') + 1 :]
+    by_list = ('  demo: section ', '  demo: trigger ', '  demo: fact source ')
+    assert (
+        f'  demo: trigger cron, from {TRIGGERS.sources()["cron"].release} ([plugins.role.watchdog] triggers, {stored})'
+        in selected
+    )
+    assert (
+        f'  demo: section goal, from {SECTIONS.sources()["goal"].release} ([plugins.section] use, {stored})' in selected
+    )
+    assert [line for line in selected if not line.startswith(by_list)] == [
         f'  {store}',
         *(
             f'  demo: harness provider {h}, from {HARNESSES.sources()[h].release} ({research_model})'

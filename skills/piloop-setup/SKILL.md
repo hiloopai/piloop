@@ -128,17 +128,17 @@ Map each answer to its keys:
   current system loses to a reference). Every sweep that reads the research pack starts from them.
 - **Outside techniques → `[plugins.role.scout]`**, only when the human wants them.
   - Set `interval` in seconds. The default, 0, keeps the scout off.
-  - The X search needs an `[mcp.xai]` table that runs `scripts/xai_search_mcp.py`
-    (https://piloop.autoresearch.inc/guides/mcp-servers), `"xai"` in `[plugins.role.scout] mcp`, and `XAI_API_KEY` in the
-    daemon's environment.
+  - The X search needs a `[plugins.mcp_server.xai]` table with `provider = "stdio"` that runs
+    `scripts/xai_search_mcp.py` (https://piloop.autoresearch.inc/guides/mcp-servers), `"xai"` in
+    `[plugins.role.scout] mcp`, and `XAI_API_KEY` in the daemon's environment.
 - **Harnesses → `[plugins.harness] use`, and `model` in each `[plugins.harness.<name>]`.** Remove the harnesses that the human does
   not have.
 - **`link`:** gitignored data or virtualenvs that the evaluate command needs inside a worktree.
 - **Objective target and budget → `[plugins.stop_rule]`:** `target`, `max_runs`, `max_hours`, `max_tokens`, and
   `plateau` when the human wants the campaign to end by itself. Leave them out only if the human explicitly wants an
   open-ended campaign. Never write `[stop]`: it is deprecated.
-- **Money spent outside piloop (a GPU cloud, a paid API) → a `[[facts]]` source, `provider = "command"`, after
-  `{ provider = "campaign" }` and `{ provider = "optimization" }`:**
+- **Money spent outside piloop (a GPU cloud, a paid API) → a `[plugins.fact_source.spend]` table with
+  `provider = "command"`, and `[plugins.fact_source] use = ["campaign", "optimization", "spend"]`:**
   - `command` writes `{"metrics": {"spend": <usd>}}` to `$PILOOP_RESULT_FILE`, as the evaluate command does;
     `metrics = ["spend"]` names it. GPU hours or any other budget is one more name.
   - `notices = { spend = [...] }` are thresholds that post a note.

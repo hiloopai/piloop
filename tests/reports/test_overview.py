@@ -195,7 +195,7 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
         s.commit()
 
 
-SWEEP = [*defaults(Surface.STATUS), SECTIONS.validated({'provider': 'tools'})]
+SWEEP = [SECTIONS.validated({'provider': name}) for name in [*defaults(Surface.STATUS), 'tools']]
 """A sweep's sections without the lessons and the pack."""
 
 

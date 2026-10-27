@@ -887,10 +887,10 @@ def test_a_brief_past_the_limit_of_one_argument_reaches_the_agent_as_a_file(
 
 
 def give_watchdog_servers(db: Database, campaign: Campaign, servers: dict[str, object]) -> None:
-    """``[mcp.*]`` tables in the stored config, all listed by ``[plugins.role.watchdog] mcp``."""
+    """``[plugins.mcp_server.*]`` tables in the stored config, all listed by ``[plugins.role.watchdog] mcp``."""
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        p.config = reconfigured(p.config, mcp=servers, plugins={'role': {WATCHDOG: {'mcp': list(servers)}}})
+        p.config = reconfigured(p.config, plugins={'mcp_server': servers, 'role': {WATCHDOG: {'mcp': list(servers)}}})
         s.commit()
 
 
@@ -908,7 +908,7 @@ def test_the_mcp_element_expands_to_the_roles_servers_and_their_env_reaches_the_
         headless=['--no-extensions', MCP, '{prompt}'],
         session_id_pattern='(never)',
     )
-    give_watchdog_servers(db, campaign, {'probe': {'command': ['cat'], 'env': ['PROBE_KEY']}})
+    give_watchdog_servers(db, campaign, {'probe': {'provider': 'stdio', 'command': ['cat'], 'env': ['PROBE_KEY']}})
     monkeypatch.delenv('PROBE_KEY', raising=False)
     put_secret(db, None, 'PROBE_KEY', 'probe-value')
     specs: list[AgentSpec] = []
@@ -952,7 +952,9 @@ def test_a_secret_that_the_home_lacks_fails_the_launch_naming_it_and_until_0_5_c
         headless=['--no-extensions', MCP, '{prompt}'],
         session_id_pattern='(never)',
     )
-    give_watchdog_servers(db, campaign, {'probe': {'url': 'https://x', 'bearer_token_env': 'PROBE_TOKEN'}})
+    give_watchdog_servers(
+        db, campaign, {'probe': {'provider': 'http', 'url': 'https://x', 'bearer_token_env': 'PROBE_TOKEN'}}
+    )
     monkeypatch.delenv('PROBE_TOKEN', raising=False)
     agent_session_id = request(db, campaign)
     launch(db, runtime, tmp_path, agent_session_id)
@@ -994,7 +996,7 @@ def test_servers_that_cannot_be_rendered_fail_the_launch_on_the_row(
     campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     use_harness(db, campaign, RECORDS_ARGV_AND_ENV, provider='codex', headless=[MCP, '{prompt}'], resume=[])
-    give_watchdog_servers(db, campaign, {'probe': {'command': ['cat']}})
+    give_watchdog_servers(db, campaign, {'probe': {'provider': 'stdio', 'command': ['cat']}})
     agent_session_id = request(db, campaign)
     launch(db, runtime, tmp_path, agent_session_id)
     w = agent_session(db, agent_session_id)

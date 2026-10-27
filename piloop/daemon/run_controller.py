@@ -82,6 +82,7 @@ from piloop.ids import (
     IdeaId,
     IdeaStatus,
     Revision,
+    RoleName,
     RunId,
     TargetKind,
     TargetRef,
@@ -1253,7 +1254,7 @@ class RunController:
         if comments:
             lines += ['', '## Comments on this idea and its runs', *(_comment_line(c) for c in comments)]
         rendering = Rendering(s, utcnow(), idea.campaign, workspace_dir(self._home, idea.campaign.id), self.cas)
-        return '\n'.join([*lines, '', markdown(cfg.role(run.role).shown(), rendering)])
+        return '\n'.join([*lines, '', markdown(cfg.sections_of(RoleName(run.role)), rendering)])
 
 
 @dataclass(frozen=True)

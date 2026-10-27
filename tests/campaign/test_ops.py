@@ -437,11 +437,8 @@ def test_a_measurement_by_hand_says_when_the_daemon_judges_again_and_waits_for_a
         )
         ops.resume(s, CampaignId(1))
         source = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
-        p.config = reconfigured(
-            p.config,
-            facts=[{'provider': 'campaign'}, {'provider': 'optimization'}, source],
-            plugins={'stop_rule': {'hold_at': {'spend': 10.0}}},
-        )
+        sources = {'use': ['campaign', 'optimization', 'spend'], 'spend': source}
+        p.config = reconfigured(p.config, plugins={'stop_rule': {'hold_at': {'spend': 10.0}}, 'fact_source': sources})
         assert ops.add_measurement(s, crashed, report, actor=ACTOR).effect.endswith(
             'once the stop rule no longer holds it (spend not known)'
         )

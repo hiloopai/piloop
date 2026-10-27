@@ -6,6 +6,7 @@ At the limit it tells a human once; a source tells a human once when its reading
 a human raises the limit or the source works again.
 """
 
+import re
 from datetime import timedelta
 from importlib.metadata import EntryPoint
 from pathlib import Path
@@ -33,21 +34,20 @@ from tests.conftest import SETTLE, WATCHDOG, ScriptRuntime, run_all, write_toml
 from tests.daemon.test_roles import PLUGIN, installed
 from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_watchdog, set_config, stop_campaign
 
-OWN = [{'provider': 'campaign'}, {'provider': 'optimization'}]
-"""piloop's own sources, which a list of ``[[facts]]`` lists too."""
+COMMAND = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
 
 
 def spending(**source: object) -> dict[str, object]:
-    """``[[facts]]`` with piloop's own sources and a ``command`` source that reads ``spend``, with ``source`` over its keys."""
-    return {'facts': [*OWN, {'provider': 'command', 'command': ['true'], 'metrics': ['spend']} | source]}
+    """``[plugins.fact_source]`` with piloop's own sources and ``spend``, a ``command`` source, with ``source`` over it."""
+    return {'use': ['campaign', 'optimization', 'spend'], 'spend': COMMAND | source}
 
 
 def limited(limit: float, while_held: str | None = None, **source: object) -> dict[str, object]:
-    """``spending``, and the stop rule's hold at ``limit`` of the spend, with its ``while_held``."""
+    """``spending``, and the stop rule's hold at ``limit`` of the spend, with its ``while_held``: a ``[plugins]``."""
     rule: dict[str, object] = {'hold_at': {'spend': limit}}
     if while_held is not None:
         rule['while_held'] = while_held
-    return spending(**source) | {'plugins': {'stop_rule': rule}}
+    return {'fact_source': spending(**source), 'stop_rule': rule}
 
 
 def report(line: str) -> list[str]:
@@ -68,17 +68,20 @@ def test_a_hold_on_a_fact_needs_a_source_of_it_and_a_source_keeps_its_own_facts(
     refused = "the stop rule 'limits' reads spend, which no fact source of this campaign supplies"
     with pytest.raises(ConfigError, match=refused):
         load_campaign_config(Path(campaign.path), plugins={'stop_rule': {'hold_at': {'spend': 100}}})
-    cfg = load_campaign_config(Path(campaign.path), **spending(notices={'spend': [50]}))
+    cfg = load_campaign_config(Path(campaign.path), plugins={'fact_source': spending(notices={'spend': [50]})})
     assert [type(source).__name__ for source in cfg.fact_sources()] == ['CampaignFacts', 'OptimizationFacts', 'Command']
     with pytest.raises(ConfigError, match='notices for gpu_hours, which the source does not read'):
-        load_campaign_config(Path(campaign.path), **spending(notices={'gpu_hours': [5]}))
-    command = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
+        load_campaign_config(Path(campaign.path), plugins={'fact_source': spending(notices={'gpu_hours': [5]})})
+    twice = {'use': ['campaign', 'optimization', 'spend', 'again'], 'spend': COMMAND, 'again': COMMAND}
     with pytest.raises(
-        ConfigError, match=r"the fact 'spend' comes from two sources of \[\[facts\]\]: command and command"
+        ConfigError,
+        match=r"the fact 'spend' comes from two sources of \[plugins.fact_source\] use: command and command",
     ):
-        load_campaign_config(Path(campaign.path), facts=[*OWN, command, command])
+        load_campaign_config(Path(campaign.path), plugins={'fact_source': twice})
     with pytest.raises(ConfigError, match='reads runs, hours, which no fact source'):
-        load_campaign_config(Path(campaign.path), facts=[command])
+        load_campaign_config(Path(campaign.path), plugins={'fact_source': {'use': ['spend'], 'spend': COMMAND}})
+    with pytest.raises(ConfigError, match=re.escape('[plugins.fact_source.spend] is configured, and nothing uses it')):
+        load_campaign_config(Path(campaign.path), plugins={'fact_source': {'spend': COMMAND}})
 
 
 @pytest.mark.parametrize(
@@ -124,7 +127,7 @@ def test_metric_lines_are_read_until_0_4_0(tmp_path: Path) -> None:
 
 
 def test_each_reading_is_a_fact_read_event_and_the_events_are_the_one_record(db: Database, campaign: Campaign) -> None:
-    set_config(db, campaign, **spending())
+    set_config(db, campaign, plugins={'fact_source': spending()})
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         [_, _, source] = p.config.fact_sources()
@@ -147,7 +150,7 @@ def test_each_reading_is_a_fact_read_event_and_the_events_are_the_one_record(db:
 
 def test_since_keep_is_the_growth_of_a_value_since_the_latest_keep(db: Database, campaign: Campaign) -> None:
     """Before the first keep it is all of the value; after it, the value less its reading by the end of the keep's run."""
-    set_config(db, campaign, **spending())
+    set_config(db, campaign, plugins={'fact_source': spending()})
     wanted = [reading('spend'), since_keep('spend'), KEEPS]
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
@@ -194,7 +197,7 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
         Path(campaign.path),
         f'#!/bin/sh\nwhile [ -f {hold} ]; do sleep 0.05; done\necho line >> solve.txt\ngit commit -qam "add a line"\n',
     )
-    set_config(db, campaign, **limited(300, command=billing(file), notices={'spend': [100, 200]}))
+    set_config(db, campaign, plugins=limited(300, command=billing(file), notices={'spend': [100, 200]}))
     first, second = add_ideas(db, campaign, 'first', 'second')
     scheduler = make_scheduler(db, runtime, tmp_path)
 
@@ -232,8 +235,9 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
 
     (Path(campaign.path) / 'piloop.toml').write_text(
         (Path(campaign.path) / 'piloop.toml').read_text()
-        + f'\n[[facts]]\nprovider = "campaign"\n\n[[facts]]\nprovider = "optimization"\n\n[[facts]]\nprovider = "command"\ncommand = ["cat", "{file}"]\n'
-        'metrics = ["spend"]\n\n[plugins.stop_rule]\nhold_at = { spend = 2000 }\n'
+        + '\n[plugins.fact_source]\nuse = ["campaign", "optimization", "spend"]\n\n[plugins.fact_source.spend]\n'
+        f'provider = "command"\ncommand = ["cat", "{file}"]\nmetrics = ["spend"]\n\n'
+        '[plugins.stop_rule]\nhold_at = { spend = 2000 }\n'
     )
     with db.session() as s:
         sync(s, s.get_one(Campaign, campaign.id))  # This is what `piloop init` does.
@@ -253,8 +257,9 @@ def test_a_source_that_a_sync_adds_is_read_on_the_next_turn_without_a_restart(
     toml = Path(campaign.path) / 'piloop.toml'
     toml.write_text(
         toml.read_text()
-        + f'\n[[facts]]\nprovider = "campaign"\n\n[[facts]]\nprovider = "optimization"\n\n[[facts]]\nprovider = "command"\n'
-        f'command = ["cat", "{file}"]\nmetrics = ["spend"]\n\n[plugins.stop_rule]\nhold_at = {{ spend = 1000 }}\n'
+        + '\n[plugins.fact_source]\nuse = ["campaign", "optimization", "spend"]\n\n[plugins.fact_source.spend]\n'
+        f'provider = "command"\ncommand = ["cat", "{file}"]\nmetrics = ["spend"]\n\n'
+        '[plugins.stop_rule]\nhold_at = { spend = 1000 }\n'
     )
     with db.session() as s:
         sync(s, s.get_one(Campaign, campaign.id))  # This is what `piloop init` does.
@@ -270,7 +275,7 @@ def test_a_failing_source_holds_launches_and_escalates_once_for_each_series_of_f
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     file = tmp_path / 'bill'
-    set_config(db, campaign, **limited(300, command=billing(file)))
+    set_config(db, campaign, plugins=limited(300, command=billing(file)))
     add_ideas(db, campaign, 'idea')
     scheduler = make_scheduler(db, runtime, tmp_path)
 
@@ -299,7 +304,7 @@ def test_progress_says_when_a_campaign_has_no_reading_yet(db: Database, campaign
         p = s.get_one(Campaign, campaign.id)
         line = progress(s, p, CampaignConfig.model_validate(p.config), p.created_at)
     assert 'spend' not in line and 'held' not in line, 'no hold on the spend: nothing to show'
-    set_config(db, campaign, **limited(10))
+    set_config(db, campaign, plugins=limited(10))
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         assert progress(s, p, CampaignConfig.model_validate(p.config), p.created_at).endswith(
@@ -309,7 +314,7 @@ def test_progress_says_when_a_campaign_has_no_reading_yet(db: Database, campaign
 
 def test_a_stopped_campaign_is_held_only_while_its_closing_review_waits(db: Database, campaign: Campaign) -> None:
     """piloop asks the stop rule about a stopped campaign only while its review waits for the hold (``wait``)."""
-    set_config(db, campaign, **limited(10, while_held='wait'))
+    set_config(db, campaign, plugins=limited(10, while_held='wait'))
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         cfg = CampaignConfig.model_validate(p.config)
@@ -327,7 +332,7 @@ def test_a_closing_review_waits_only_on_a_stopped_campaign_with_wait_and_a_reque
     db: Database, campaign: Campaign
 ) -> None:
     def waits(while_held: str | None = None) -> bool:
-        set_config(db, campaign, **limited(10, while_held))
+        set_config(db, campaign, plugins=limited(10, while_held))
         with db.session() as s:
             p = s.get_one(Campaign, campaign.id)
             return review_waits(s, p, CampaignConfig.model_validate(p.config))
@@ -354,7 +359,7 @@ def test_the_progress_line_is_what_the_stop_rule_describes(
     )
 
     def line(provider: str) -> str:
-        set_config(db, campaign, **spending(), plugins={'stop_rule': {'provider': provider}})
+        set_config(db, campaign, plugins={'fact_source': spending(), 'stop_rule': {'provider': provider}})
         with db.session() as s:
             p = s.get_one(Campaign, campaign.id)
             return progress(s, p, CampaignConfig.model_validate(p.config), p.created_at)

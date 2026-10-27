@@ -116,6 +116,7 @@ from piloop.ids import (
     CampaignStatus,
     CandidateId,
     CommentId,
+    EnvName,
     IdeaId,
     KeyOrigin,
     LinkKind,
@@ -123,7 +124,6 @@ from piloop.ids import (
     TargetKind,
     TargetRef,
 )
-from piloop.mcp import EnvName
 from piloop.net import Refusal, tokens
 from piloop.net.acting import MayNotAct, acts_as
 from piloop.net.server import App, asked, authorized, changed, served
@@ -338,7 +338,7 @@ def status(api: Api, s: Reading, me: Acting, campaigns: Selected) -> Status:
 
 @router.get('/overview', operation_id='overview')
 def overview(api: Api, s: Reading, campaigns: Selected) -> Overview:
-    """The sections of each campaign's ``[status] sections``, and the live keys that config.toml or a limit sets."""
+    """The sections of each campaign's ``[plugins.section] use``, and the live keys that config.toml or a limit sets."""
     now = utcnow()
     shown: list[CampaignOverview | InvalidConfig] = []
     for c in campaigns:
@@ -347,7 +347,7 @@ def overview(api: Api, s: Reading, campaigns: Selected) -> Overview:
                 shown.append(invalid)
             case cfg:
                 rendering = Rendering(s, now, c, workspace_dir(api.cfg.home, c.id), api.cas)
-                sections = rendered(cfg.status.shown(), rendering)
+                sections = rendered(cfg.status_sections(), rendering)
                 shown.append(
                     CampaignOverview(id=c.id, name=c.name, path=c.path, parent=feed.parent_of(s, c), sections=sections)
                 )

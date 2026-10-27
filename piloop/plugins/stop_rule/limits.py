@@ -79,7 +79,7 @@ class Limits(StopRule):
     hold_at: dict[str, Annotated[float, Field(gt=0)]] = {}
     """Hold the campaign while a fact that a source reads, by its name, is at this value or above, and while it is
     unknown: the daemon launches no agent and starts no evaluation. Work that already runs finishes and is scored.
-    Example: ``{ spend = 1000 }``, with a source in ``[[facts]]`` that reads ``spend``. To resume, raise it and run
+    Example: ``{ spend = 1000 }``, with a source in ``[plugins.fact_source] use`` that reads ``spend``. To resume, raise it and run
     ``piloop init``."""
 
     def limits(self) -> dict[Fact[FactValue], float]:

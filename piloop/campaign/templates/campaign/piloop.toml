@@ -33,10 +33,14 @@ model = "gpt-6.1-sol"
 # executable = "my-agent"                 # keys: executable, headless, resume, session_id_pattern,
 # headless = ["--model", "{model}", "{prompt}"]  # home, session_env; see the reference
 
-# [mcp.exa]                               # an MCP server that a role can list in its `mcp` key; see the MCP servers guide
-# url = "https://mcp.exa.ai/mcp"          # a streamable HTTP server (keys: url, headers_env, bearer_token_env)
+# [plugins.mcp_server.exa]                # an MCP server that a role can list in its `mcp` key; see the MCP servers guide
+# provider = "http"                       # a streamable HTTP server (keys: url, headers_env, bearer_token_env)
+# url = "https://mcp.exa.ai/mcp"
 # headers_env = { "x-api-key" = "EXA_API_KEY" }  # the header gets the value of this variable from the daemon's environment
-# command = ["python3", "server.py"]      # or a stdio server (keys: command, env)
+
+# [plugins.mcp_server.xai]
+# provider = "stdio"                      # a server that the harness starts (keys: command, env)
+# command = ["python3", "server.py"]
 # env = ["XAI_API_KEY"]                   # the variables that a stdio server reads
 
 [plugins.role.implementer]                # an implementer tries one idea in a new worktree; its commits are scored
@@ -46,12 +50,12 @@ runs = true                               # its agents do runs; a sweeping role 
 # model = { pi = "..." }                  # over the model of each [plugins.harness.<name>]
 # effort = "high"                         # how hard its agents think, as the harness names it
 # addendum = "briefs/implementer.md"           # a file appended to brief.md in this role's briefs only
-# mcp = ["exa"]                           # the [mcp.<name>] servers that this role's agents get; none by default
+# mcp = ["exa"]                           # the [plugins.mcp_server.<name>] servers that this role's agents get; none by default
 # prompt = "briefs/my-implementer.md"          # a file that replaces the built-in start of this role's brief
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["commits"]                    # what the brief says the role may write; default: what piloop expects of it
 # files = "nothing"                       # what its agents may file with `piloop idea`: nothing, seeds or ideas
-# sections = [{ provider = "lessons", budget = 400 }, …]  # if not set: the installed sections of its briefs; see the sections
+# sections = ["lessons", "goal", …]      # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
 timeout = 1800                            # seconds one implementer may run
 max_concurrent = 4                        # the most runs at the same time, on all workers together
 explore_every = 4                         # at least 1 run in 4 starts from a pinned idea, when one is ready; 0 = off
@@ -62,14 +66,14 @@ recovery_requeues = 2                     # times an idea is requeued from the l
 # model = { pi = "..." }                  # over the model of each [plugins.harness.<name>]
 # effort = "high"                         # how hard its agents think, as the harness names it
 # addendum = "briefs/watchdog.md"         # a file appended to brief.md in this role's briefs only
-# mcp = []                                # the [mcp.<name>] servers that this role's agents get; none by default
+# mcp = []                                # the [plugins.mcp_server.<name>] servers that this role's agents get; none by default
 # prompt = "briefs/my-watchdog.md"        # a file that replaces the built-in start of this role's brief
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["comments(finding)"]          # what the brief says the role may write; default: what piloop expects of it
 # files = "seeds"                         # what its agents may file with `piloop idea`: nothing, seeds or ideas
 runs = false                              # a sweeping role: its triggers start it and nothing it commits is scored
-triggers = [{ provider = "run_failed" }, { provider = "dead_at_startup" }, { provider = "leaking_funnel" }, { provider = "cron" }, { provider = "stopped" }]  # incidents, the timer below, the stop
-# sections = [{ provider = "lessons", budget = 400 }, …]  # if not set: the installed sections of its briefs; see the sections
+triggers = ["run_failed", "dead_at_startup", "leaking_funnel", "cron", "stopped"]  # names of [plugins.trigger.<name>]: incidents, the timer below, the stop
+# sections = ["lessons", "goal", …]      # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
 interval = 1800                           # seconds between two progress reviews of the cron trigger; 0 turns it off
 # continuity = "fresh"                   # or "resume": each sweep continues the last sweep's harness session
 # incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies; default: watchdog_incident.md
@@ -83,15 +87,15 @@ max_concurrent = 1
 # model = { claude = "claude-opus-5-5", codex = "gpt-6.1-sol" }  # over the harnesses' model; a table replaces it
 # effort = "high"                         # how hard its agents think, as the harness names it
 # addendum = "briefs/research.md"         # a file appended to brief.md in this role's briefs only
-# mcp = ["exa"]                           # the [mcp.<name>] servers that this role's agents get; none by default
+# mcp = ["exa"]                           # the [plugins.mcp_server.<name>] servers that this role's agents get; none by default
 # prompt = "briefs/my-research.md"        # a file that replaces the built-in start of this role's brief
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["ideas via idea add"]         # what the brief says the role may write; default: what piloop expects of it
 # files = "ideas"                         # what its agents may file with `piloop idea`: nothing, seeds or ideas
 runs = false                              # a sweeping role
-triggers = [{ provider = "low_water", buffer = 2 }, { provider = "seed" }, { provider = "stalled" }]  # a short backlog (buffer: ideas beyond one per run slot), a new seed, a stall
+triggers = ["low_water", "seed", "stalled"]  # a short backlog (see [plugins.trigger.low_water] below), a new seed, a stall
 # interval = 0                            # seconds between two sweeps of a cron trigger, if you add one
-# sections = [{ provider = "lessons", budget = 400 }, …]  # if not set: the installed sections of its briefs; see the sections
+# sections = ["lessons", "goal", …]      # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
 # continuity = "fresh"                   # or "resume": each sweep continues the last sweep's harness session
 # incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies, if you add that trigger
 # routine_prompt = "briefs/routine.md"    # follows the prompt in every other sweep; none by default
@@ -110,13 +114,13 @@ max_concurrent = 1                        # sweeps at the same time; more than o
 # writes = ["seeds via idea seed"]        # what the brief says the role may write; default: what piloop expects of it
 # files = "seeds"                         # what its agents may file with `piloop idea`: nothing, seeds or ideas
 runs = false                              # a sweeping role
-triggers = [{ provider = "cron" }]            # the timer below
+triggers = ["cron"]                       # the timer below
 interval = 0                              # seconds between two scout sweeps; 0 (the default) turns the scout off
 # continuity = "fresh"                   # or "resume": each sweep continues the last sweep's harness session
 # incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies, if you add that trigger
 # routine_prompt = "briefs/routine.md"    # follows the prompt in every other sweep; none by default
 seeds = 3                                 # the most seeds one scout sweep may file
-# sections = [{ provider = "lessons", budget = 400 }, …]  # if not set: the installed sections of its briefs; see the sections
+# sections = ["lessons", "goal", …]      # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
 max_ideas = 1                             # new ideas per sweep for a low_water trigger; the scout files only seeds
 timeout = 900
 max_concurrent = 1
@@ -126,16 +130,16 @@ max_concurrent = 1
 # model = { claude = "claude-opus-5-5" }  # over the model of each [plugins.harness.<name>]
 # effort = "high"                         # how hard its agents think, as the harness names it
 # addendum = "briefs/orchestrator.md"     # a file appended to brief.md in this role's briefs only
-# mcp = ["exa"]                           # the [mcp.<name>] servers that this role's agents get; none by default
+# mcp = ["exa"]                           # the [plugins.mcp_server.<name>] servers that this role's agents get; none by default
 # prompt = "briefs/my-orchestrator.md"    # a file that replaces the built-in start of this role's brief
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["decisions"]                  # what the brief says the role may write; default: what piloop expects of it
 # files = "ideas"                         # what its agents may file with `piloop idea`: nothing, seeds or ideas
 runs = false                              # a sweeping role
-triggers = []                             # off: you run your own orchestrator; [{ provider = "news" }] turns it on
+triggers = []                             # off: you run your own orchestrator; ["news"] turns it on
 # continuity = "resume"                   # each agent resumes the last one's session; "fresh" starts each anew
 # interval = 0                            # seconds between two sweeps of a cron trigger, if you add one
-# sections = [{ provider = "inbox" }, …]  # if not set: a lean status after the news
+# sections = ["inbox", …]                # if not set: a lean status after the news
 # incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies, if you add that trigger
 # routine_prompt = "briefs/routine.md"    # follows the prompt in every other sweep; none by default
 # max_ideas = 1                           # new ideas per sweep for a low_water trigger, if you add one
@@ -144,7 +148,7 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 
 # [plugins.role.reviewer]                 # a role of your own: any new name; it needs a prompt and triggers
 # prompt = "briefs/reviewer.md"           # the file that starts its brief
-# triggers = [{ provider = "sql", when = "SELECT 1 FROM candidates WHERE campaign_id = :campaign AND verdict = 'keep' AND created_at > :since" }]
+# triggers = ["new_keep"]                # names of [plugins.trigger.<name>], such as the one below
 # max_concurrent = 1                      # it takes every key of [plugins.role.watchdog] except its defaults
 
 # [plugins.role.quick]                    # a role of your own that does runs: any new name with runs = true
@@ -157,8 +161,19 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # wrap_up_grace = 600                     # seconds to save their work after a stop or a cancel with --wrap-up
 # finding_grace = 60                      # seconds after its finding before an implementer is ended
 
-# [status]                                # what `piloop status`, the API and a UI show
-# sections = [{ provider = "headline" }, { provider = "goal" }, …]  # if not set: the installed sections of status; see the sections
+# [plugins.trigger.new_keep]             # a trigger with parameters, which a role names in its triggers
+# provider = "sql"                        # a new name needs its provider; a built-in name, such as low_water, is that one
+# when = "SELECT 1 FROM candidates WHERE campaign_id = :campaign AND verdict = 'keep' AND created_at > :since"
+
+# [plugins.trigger.low_water]             # a built-in trigger's table changes its parameters for every role that names it
+# buffer = 2                              # ideas to keep ready beyond one per run slot
+
+# [plugins.section]                       # what `piloop status`, the API and a UI show
+# use = ["headline", "goal", …]           # if not set: the installed sections of status; see the sections
+
+# [plugins.section.research_lessons]      # a section with parameters, which a list of sections names
+# provider = "lessons"
+# budget = 800
 
 # [plugins.<name>]                        # the provider of a capability that a plugin package adds, by its name
 # provider = "<name>"                     # the other keys of the table are its parameters; `piloop plugins` lists them
@@ -173,14 +188,13 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # max_hours = 12                          # hours since the campaign's first run started
 # max_tokens = 50000000                   # tokens that all the agents of the campaign spent together
 # plateau = 50                            # runs counted as for max_runs, since the last keep or reactivation
-# hold_at = { spend = 1000 }              # facts of [[facts]] at which nothing starts; raise one, then `piloop init` again
+# hold_at = { spend = 1000 }              # facts of the fact sources at which nothing starts; raise one, then `piloop init` again
 # while_held = "run"                      # the closing review of a stop while held: run | skip | wait (until the hold ends)
 
-# [[facts]]                               # where the facts of the stop rule and the sections come from; default: these two
-# provider = "campaign"                   # the hours and the tokens of any campaign
-# [[facts]]
-# provider = "optimization"               # the research: head, runs, keeps, evaluations, the funnel
-# [[facts]]                               # a list that adds a source lists campaign and optimization too
+# [plugins.fact_source]                   # where the facts of the stop rule and the sections come from
+# use = ["campaign", "optimization", "spend"]  # if not set: campaign (hours, tokens) and optimization (the research)
+#                                         # a source with a table must be in use; a list lists campaign and optimization too
+# [plugins.fact_source.spend]             # a source with parameters
 # provider = "command"                    # a command that writes {"metrics": …} to $PILOOP_RESULT_FILE, as the evaluate command does
 # command = ["uv", "run", "scripts/spend.py"]  # runs at the repo root; it gets secrets from the daemon's environment
 # metrics = ["spend"]                     # the names that it prints, each a fact of the campaign

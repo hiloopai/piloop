@@ -4,7 +4,7 @@ A plugin that adds a [stop rule](https://piloop.autoresearch.inc/plugins/rules#s
 compares the fact that `spend` names, since the latest keep, with its value per keep so far. Past `escalate_at` times,
 it asks a human once for each keep, and the campaign goes on. Past `stop_at` times, it stops the campaign. It is the
 built-in rule `limits` with these two lines, so `max_hours`, `hold_at` and the other limits still apply. It needs a
-source in `[[facts]]` that reads `spend`.
+source in `[plugins.fact_source] use` that reads `spend`.
 
 ```bash
 uv tool install piloop --with ./examples/plugins/keep-cost   # or: uv pip install ./examples/plugins/keep-cost
@@ -14,13 +14,10 @@ piloop plugins                                               # lists `keep_cost 
 Select it in `piloop.toml`, then `piloop init .`:
 
 ```toml
-[[facts]]
-provider = "campaign"
+[plugins.fact_source]
+use = ["campaign", "optimization", "spend"]
 
-[[facts]]
-provider = "optimization"
-
-[[facts]]
+[plugins.fact_source.spend]
 provider = "command"
 command = ["uv", "run", "scripts/spend.py"]   # reports {"metrics": {"spend": <usd>}}
 metrics = ["spend"]

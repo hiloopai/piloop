@@ -8,9 +8,12 @@ import re
 from enum import StrEnum
 from typing import Annotated, Final, NewType
 
-from pydantic import AfterValidator, BeforeValidator, PlainSerializer, PositiveInt
+from pydantic import AfterValidator, BeforeValidator, PlainSerializer, PositiveInt, StringConstraints
 from pydantic.dataclasses import dataclass
 
+type EnvName = Annotated[str, StringConstraints(pattern=r'^[A-Za-z_][A-Za-z0-9_]*$')]
+"""A POSIX environment variable name: a secret's, or one that an agent or a server reads. Every harness's ``${NAME}``
+expansion accepts it."""
 CampaignId = NewType('CampaignId', int)
 IdeaId = NewType('IdeaId', int)
 RunId = NewType('RunId', int)

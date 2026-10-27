@@ -20,7 +20,7 @@ from piloop.otel import Tracer
 from piloop.plugins.executor.workers import Workers
 from piloop.settings import Settings
 from tests.conftest import RESEARCH, SETTLE, ScriptRuntime, factory, run_all, serving, serving_api
-from tests.daemon.test_triggers import add_ideas, configure, finish_a_run, last_reason, low_water, occupy
+from tests.daemon.test_triggers import LOW_WATER, add_ideas, configure, finish_a_run, last_reason, low_water, occupy
 
 PYTHON = shlex.quote(sys.executable)
 FAKE_RESEARCHER = f"""#!/bin/sh
@@ -127,7 +127,8 @@ def test_a_seed_sweep_develops_one_seed_and_rejects_the_other_however_full_the_b
         campaign,
         FAKE_DEVELOPER,
         implementer={'max_concurrent': 1},
-        research={'triggers': [*low_water(0), {'provider': 'stalled'}], 'max_ideas': 2},
+        research={'triggers': [*LOW_WATER, 'stalled'], 'max_ideas': 2},
+        trigger=low_water(0),
     )
     with db.session() as s:
         for title, by, pointers in (

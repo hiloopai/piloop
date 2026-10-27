@@ -41,7 +41,7 @@ from pydantic import BaseModel, ConfigDict, SecretStr, model_validator
 
 from piloop.actor import Actor, CallerKind
 from piloop.api.contract import Access
-from piloop.mcp import EnvName
+from piloop.ids import EnvName
 from piloop.net.tokens import Caller
 from piloop.plugins.network.contract import (
     Enrollment,

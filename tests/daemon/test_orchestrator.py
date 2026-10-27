@@ -63,9 +63,10 @@ def turn_on(db: Database, campaign: Campaign, body: str) -> None:
     write_toml(Path(campaign.path), body)
     path = Path(campaign.path)
     script = {**load_campaign_config(path).harness['script'].model_dump(mode='json', exclude_unset=True), **HARNESS}
-    news = {'triggers': [{'provider': 'news', 'quiet_seconds': 0, 'routine_every': 3600}]}
+    news = {'news': {'quiet_seconds': 0, 'routine_every': 3600}}
+    plugins = {'role': {'orchestrator': {'triggers': ['news']}}, 'trigger': news, 'harness': {'script': script}}
     with db.session() as s:
-        cfg = load_campaign_config(path, plugins={'role': {'orchestrator': news}, 'harness': {'script': script}})
+        cfg = load_campaign_config(path, plugins=plugins)
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
 

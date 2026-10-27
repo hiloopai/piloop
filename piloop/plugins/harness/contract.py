@@ -19,8 +19,9 @@ from typing import Annotated, ClassVar, Protocol, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from piloop import deprecated
-from piloop.mcp import EnvName, McpServer
+from piloop.ids import EnvName
 from piloop.plugins.host import Capability, Many, Parameters, Pick, Scope, Use
+from piloop.plugins.mcp_server.contract import McpServer
 from piloop.settings import Settings
 from piloop.usage import Usage
 
@@ -278,7 +279,9 @@ HARNESSES = Capability(
 """Every harness provider by name: ``pi``, ``claude``, ``codex``, and those that packages add."""
 
 HarnessName = Annotated[str, HARNESSES.ref]
-"""The name of a harness of the campaign: ``[plugins.harness.<name>]``, or a provider."""
+"""The name of a harness of the campaign in a rotation: ``[plugins.harness.<name>]``, or a provider."""
+HarnessKey = Annotated[str, HARNESSES.key]
+"""The name of a harness of the campaign as a key, such as of a role's ``model``: it does not put it in a rotation."""
 
 
 def of_provider(harness: Harness) -> Harness | None:

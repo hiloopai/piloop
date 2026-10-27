@@ -60,8 +60,10 @@ A table selects a provider: `provider` is its name, and the other keys are its p
 - A capability with one provider per file has its own table, `[plugins.<capability>]`. The table is in `piloop.toml`
   for a campaign's choice, such as the verdict rule, and in `$PILOOP_HOME/config.toml` for the home's, such as the
   executor.
-- A provider in a list, such as a trigger, is an entry of that list: `{ provider = "<name>", <parameter> = <value> }`.
-- A key that only names a provider, such as `runtime`, takes its name.
+- A capability with several instances has a table for each, `[plugins.<capability>.<name>]`: `provider` is the one
+  called `<name>` when the table has none. `[plugins.<capability>] use` names the instances in use, and a list of a
+  role, such as its `triggers`, names those that it uses.
+- A provider that is a parameter of another, such as the `remote` of a CAS, is a table: `{ provider = "<name>", … }`.
 
 piloop validates each table into the provider's class when it loads the file. An unknown name is an error that lists
 the names that exist.

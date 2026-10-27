@@ -210,19 +210,16 @@ GPU hours or anything else would be. The built-in `command` source writes `{"met
 
 | Before 0.4.0 | Since 0.4.0 |
 |---|---|
-| `[spend] command` (prints one number) | a `[[facts]]` entry with `provider = "command"` and `metrics = ["spend"]`, whose command reports `{"metrics": {"spend": <number>}}` |
+| `[spend] command` (prints one number) | a fact source with `provider = "command"` and `metrics = ["spend"]`, whose command reports `{"metrics": {"spend": <number>}}` |
 | `[spend] notices`, `interval` | `notices = { spend = [...] }` and `interval` of that entry |
 | `[spend] closing_review` | `[plugins.stop_rule] while_held` |
 | `[plugins.stop_rule] max_spend` | `[plugins.stop_rule] hold_at = { spend = ... }` |
 
 ```toml
-[[facts]]
-provider = "campaign"
+[plugins.fact_source]
+use = ["campaign", "optimization", "spend"]
 
-[[facts]]
-provider = "optimization"
-
-[[facts]]
+[plugins.fact_source.spend]
 provider = "command"
 command = ["uv", "run", "scripts/spend.py"]   # reports {"metrics": {"spend": 412.3}}
 metrics = ["spend"]
@@ -251,8 +248,8 @@ The stall mark is `every` of the `stalled` trigger. When it is not set, it is tw
 `plateau` set, which made it half of `plateau` before. To keep that mark, set it:
 
 ```toml
-[plugins.role.research]
-triggers = [{ provider = "low_water" }, { provider = "seed" }, { provider = "stalled", every = 15 }]
+[plugins.trigger.stalled]
+every = 15
 ```
 
 ### piloop's own commits
@@ -307,7 +304,8 @@ same way. Upgrade `piloop worker` on every machine with the server: the server r
 ### Plugin tables
 
 A plugin's keys are under `[plugins]`. A capability of one instance has `[plugins.<capability>]`, as before, and one of
-several has `[plugins.<capability>.<name>]`. The harnesses, the roles and the runtimes are of several:
+several has `[plugins.<capability>.<name>]`. The harnesses, the roles, the runtimes, the triggers, the sections, the
+fact sources and the MCP servers are of several, and a list names them:
 
 | Before 0.4.0 | Since 0.4.0 |
 |---|---|
@@ -319,6 +317,11 @@ several has `[plugins.<capability>.<name>]`. The harnesses, the roles and the ru
 | `harnesses = ["claude", "codex"]` | `use = ["claude", "codex"]` in `[plugins.harness]` |
 | `runtime = "nice"` | `use = "nice"` in `[plugins.runtime]` |
 | `[runtimes.<name>]` in `config.toml` | `[plugins.runtime.<name>]` |
+| `triggers = [{ provider = "low_water", buffer = 4 }]` | `triggers = ["research_low_water"]`, and `[plugins.trigger.research_low_water]` with `provider = "low_water"` and `buffer = 4` |
+| `sections = [{ provider = "goal" }]` of a role | `sections = ["goal"]` |
+| `[status] sections` | `use` in `[plugins.section]` |
+| `[[facts]]` | `use` in `[plugins.fact_source]`, and `[plugins.fact_source.<name>]` for a source with keys |
+| `[mcp.<name>]` with `url` or `command` | `[plugins.mcp_server.<name>]` with `provider = "http"` or `provider = "stdio"` |
 
 ```toml
 [plugins.harness]
@@ -336,6 +339,9 @@ max_concurrent = 4
 ```
 
 A capability's own settings are in its table, next to its instances: `use` names the instances that the campaign uses.
+An instance with a table of its own must be in a list, or piloop refuses the file. A 0.3 file that sets a `model` for a
+harness outside its rotation, or an `[mcp.<name>]` that no role lists, only gets a warning until 0.5.0: add the harness
+to `[plugins.harness] use`, or delete what nothing uses.
 A role's `harnesses`, `runtime` and `model = { <harness> = "…" }` keep their place: they name instances. The old keys
 still work until 0.5.0, with a warning, and the upgrade rewrites the stored configs the same way. A runtime's `open`
 takes the name of its instance. Upgrade `piloop worker` on every machine with the server: the server refuses a worker

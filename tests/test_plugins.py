@@ -44,7 +44,7 @@ from piloop.plugins.host import (
     refs,
 )
 from piloop.plugins.metric import Direction
-from piloop.plugins.role.contract import ROLES, SweepRole
+from piloop.plugins.role.contract import ROLES
 from piloop.plugins.runtime.contract import RUNTIMES, RuntimeName
 from piloop.plugins.runtime.subprocess import Subprocess
 from piloop.plugins.trigger.contract import TRIGGERS
@@ -54,7 +54,7 @@ from piloop.runtime.factory import make_runtime, runtimes
 from piloop.settings import HOME_PLUGINS, Settings
 from tests.conftest import example, package
 from tests.daemon.test_roles import PLUGIN, forget_loaded, installed
-from tests.fixtures.plugin import Checked, EveryPass, Needy, NoUnitRegression, Typed
+from tests.fixtures.plugin import Checked, Needy, NoUnitRegression, Typed
 from tests.test_docs import BASE_CONFIG
 
 
@@ -225,7 +225,7 @@ def test_a_broken_package_of_a_capability_that_nothing_binds_is_a_warning(
     found = next(c for c in doctor.checks(home) if c.name == 'plugins')
     assert found.fix is None
     assert found.found == (
-        '1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 3 fact sources, 3 harness providers, 1 memory provider, 2 networks, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 21 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in; warning: nothing selects a extra, and they do not load:'
+        '1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 3 fact sources, 3 harness providers, 2 MCP server providers, 1 memory provider, 2 networks, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 21 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in; warning: nothing selects a extra, and they do not load:'
         ' entry point gone = tests.fixtures.no_such_module:Gone in piloop.example.extras does not load: ModuleNotFoundError:'
         " No module named 'tests.fixtures.no_such_module'"
     )
@@ -349,7 +349,7 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
         ({'verdict_rule': {'provider': 'min_gain'}}, 'min_gain: Field required'),
         (
             {'planner': {'provider': 'min_gain'}},
-            'plugins.planner: no capability has that name; there is harness, memory, role, runtime, stop_rule, vcs, verdict_rule',
+            'plugins.planner: no capability has that name; there is fact_source, harness, mcp_server, memory, role, runtime, section, stop_rule, trigger, vcs, verdict_rule',
         ),
         (
             {'verdict_rule': {'provider': 'bootstrap', 'min_gain': 2}},
@@ -551,10 +551,6 @@ def test_a_capability_selects_the_table_of_its_file_else_its_default_else_nothin
         chosen.selected({})
     with pytest.raises(ValueError, match='^provider: missing; registered odds: $'):
         chosen.validated({})
-
-
-def test_a_role_takes_trigger_objects_as_its_defaults_do() -> None:
-    assert SweepRole(prompt='p.md', triggers=[EveryPass()]).triggers == [EveryPass()]
 
 
 def test_only_the_class_that_sets_default_is_a_default_and_a_campaign_has_one_default_runtime(

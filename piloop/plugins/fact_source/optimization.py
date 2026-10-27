@@ -138,7 +138,7 @@ GATHERERS: dict[Fact[FactValue], Gatherer] = {
 class OptimizationFacts(FactSource):
     """``optimization``: the research of the campaign: its head, runs, keeps, evaluations and funnel.
 
-    It is on by default (``DEFAULT``). A campaign that lists its ``[[facts]]`` lists it too, to keep these facts.
+    It is on by default (``DEFAULT``). A campaign that sets ``[plugins.fact_source] use`` lists it too, to keep these facts.
     """
 
     DEFAULT = True

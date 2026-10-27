@@ -154,13 +154,18 @@ def unnamed_keys(template: str) -> list[str]:
                 for model in models:
                     missing += walk(model, re.escape(table), table, sections.get(table, ''))
             case Many(scope=Scope.CAMPAIGN):
-                # the keys of the contract in any table of an instance; those that a provider adds, in its own
+                # the keys of the contract in any table of an instance; those that its provider adds, in each table
+                # that the template shows, whose provider is its ``provider``, else the one of its name
+                instances = {n: t for n, t in sections.items() if re.fullmatch(rf'{re.escape(table)}\.[^.<]+', n)}
                 every = ''.join(t for n, t in sections.items() if n.startswith(f'{table}.'))
                 missing += walk(capability.contract, rf'{re.escape(table)}\.[^.]+', f'{table}.<name>', every)
                 common = capability.contract.model_fields.keys()
-                for name, model in capability.builtins().items():
-                    own = f'{table}.{name}'
-                    missing += walk(model, re.escape(own), own, sections.get(own, ''), skip=common)
+                for own, text in instances.items():
+                    named = re.search(r'^#?\s*provider\s*=\s*"([^"]+)"', text, re.MULTILINE)
+                    provider = named.group(1) if named is not None else own.rpartition('.')[2]
+                    if provider in capability.builtins():
+                        model = capability.builtins()[provider]
+                        missing += walk(model, re.escape(own), own, text, skip=common)
             case _:
                 pass
     return missing
@@ -175,7 +180,7 @@ def test_the_campaign_template_names_every_key_of_the_config() -> None:
     for old, new in gaps.items():
         without = without.replace(old, new)
     assert unnamed_keys(without) == [
-        'mcp.<name>.bearer_token_env',
+        'plugins.mcp_server.exa.bearer_token_env',
         'plugins.role.implementer.explore_every',
         'plugins.stop_rule.plateau',
     ], 'the check finds a key missing from a table, and from a keys: comment'

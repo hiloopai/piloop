@@ -108,6 +108,7 @@ campaign_type = "piloop.plugins.campaign_type.contract:CAMPAIGN_TYPES"
 memory = "piloop.plugins.memory.contract:MEMORY"
 archive = "piloop.plugins.archive.contract:ARCHIVES"
 harness = "piloop.plugins.harness.contract:HARNESSES"
+mcp_server = "piloop.plugins.mcp_server.contract:MCP_SERVERS"
 
 # What runs in the daemon for a capability, or for a provider that needs the daemon, by its name
 # (piloop.plugins.contribution.CONTRIBUTORS).
@@ -203,6 +204,10 @@ local = "piloop.plugins.memory.local:LocalMemory"
 
 [project.entry-points."piloop.archives"]
 local = "piloop.plugins.archive.local:LocalArchive"
+
+[project.entry-points."piloop.mcp_servers"]
+http = "piloop.plugins.mcp_server.http:HttpServer"
+stdio = "piloop.plugins.mcp_server.stdio:StdioServer"
 
 # The tables of each plugin that has its own, by schema name (piloop.db.schema.SCHEMAS); the others are core's.
 [project.entry-points."piloop.schemas"]

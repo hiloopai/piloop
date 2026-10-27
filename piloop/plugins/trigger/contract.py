@@ -1,6 +1,7 @@
 """The triggers of the roles: the conditions that make the daemon request an agent (https://piloop.autoresearch.inc/concepts/roles#triggers).
 
-A trigger is a provider of ``TRIGGERS``: its fields are its parameters, from its entry in ``[plugins.role.<name>] triggers``. On each
+A trigger is a provider of ``TRIGGERS``: its fields are its parameters, from ``[plugins.trigger.<name>]``. A role names
+its triggers in ``[plugins.role.<name>] triggers``. On each
 **pass** over the campaigns, for each campaign and each sweeping role without a pending request, the scheduler calls
 ``Trigger.fire`` of each trigger of the role, in the order of the list. Once a stopped campaign's last runs are judged,
 it calls only the triggers with ``ON_STOP``, and while the campaign runs, only the others. A package adds a trigger with
@@ -16,7 +17,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated, ClassVar, Protocol
 
-from piloop.plugins.host import Capability, Parameters
+from piloop.plugins.host import Capability, Many, Parameters, Scope
 
 if TYPE_CHECKING:  # piloop.db.models types campaigns.config with the triggers: only the annotations name the rows
     from sqlalchemy.orm import Session
@@ -236,9 +237,9 @@ class Steer:
 
 
 class Trigger(Parameters, ABC):
-    """One entry of ``[plugins.role.<name>] triggers``: ``{ provider = "<trigger>", <parameter> = <value> }``.
+    """``[plugins.trigger.<name>]``: a trigger, which a role names in its ``triggers``.
 
-    The daemon checks the entries in the order of the list.
+    The daemon checks a role's triggers in the order of its list.
     """
 
     ON_STOP: ClassVar[bool] = False
@@ -268,8 +269,8 @@ class Trigger(Parameters, ABC):
         """
 
 
-TRIGGERS = Capability('trigger', Trigger)
-"""Every trigger by name. The roles name their triggers in their entries, so no single key selects one."""
+TRIGGERS = Capability('trigger', Trigger, table=Many(Scope.CAMPAIGN))
+"""Every trigger by name: ``[plugins.trigger.<name>]``, and each provider that needs no keys."""
 
-TriggerEntry = Annotated[Trigger, TRIGGERS.entry]
-"""The type of one ``triggers`` entry: the trigger that its ``provider`` names, with its parameters."""
+TriggerName = Annotated[str, TRIGGERS.ref]
+"""The name of a trigger of the campaign, in a role's ``triggers``."""

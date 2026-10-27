@@ -1,7 +1,7 @@
 """Facts: what a campaign knows about where it is, as typed keys that its fact sources supply.
 
 A ``Fact`` is a typed key, as a ``contextvars.ContextVar`` is: its name, and the type of its value in its parameter.
-The campaign's fact sources (``[[facts]]``, ``piloop.plugins.fact_source.contract``) supply them. A stop rule or a
+The campaign's fact sources (``[plugins.fact_source] use``, ``piloop.plugins.fact_source.contract``) supply them. A stop rule or a
 section names the facts it reads and gets ``Facts``: those values, and None for one that its source does not know yet.
 
 This module imports only the Python standard library, so a pure provider can import it. It also has the keys of

@@ -30,8 +30,7 @@ from pydantic import SecretStr
 
 from piloop import deprecated
 from piloop.config import BRIEF_FILE, TRANSCRIPT, Rung
-from piloop.ids import CommentId
-from piloop.mcp import EnvName
+from piloop.ids import CommentId, EnvName
 from piloop.otel import Span
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import (

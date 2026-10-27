@@ -61,12 +61,9 @@ PLUGINS: dict[str, object] = {
         'implementer': {'timeout': ROLE_TIMEOUT, 'max_concurrent': 2},
         'research': {'triggers': [], 'max_ideas': 0},
         'watchdog': {'triggers': [], 'interval': 0},
-        'orchestrator': {
-            'triggers': [{'provider': 'news', 'quiet_seconds': 5, 'routine_every': 86_400}],
-            'addendum': 'orchestrator.md',
-            'timeout': ROLE_TIMEOUT,
-        },
+        'orchestrator': {'triggers': ['news'], 'addendum': 'orchestrator.md', 'timeout': ROLE_TIMEOUT},
     },
+    'trigger': {'news': {'quiet_seconds': 5, 'routine_every': 86_400}},
     'stop_rule': {'max_runs': 3, 'max_tokens': 4_000_000, 'hold_at': {'tokens': 3_000_000}},
 }
 CONFIG = {

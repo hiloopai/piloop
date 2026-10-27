@@ -27,9 +27,10 @@ from piloop.plugins.fact_source.optimization import OptimizationFacts
 from piloop.plugins.harness.codex import Codex
 from piloop.plugins.harness.contract import each_provider
 from piloop.plugins.harness.pi import Pi
+from piloop.plugins.mcp_server.http import HttpServer
+from piloop.plugins.mcp_server.stdio import StdioServer
 from piloop.plugins.memory.contract import MEMORY
 from piloop.plugins.memory.local import LocalMemory
-from piloop.plugins.role.research import ResearchRole
 from piloop.plugins.role.watchdog import WatchdogRole
 from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.stop_rule.contract import STOP_RULES, WhileHeld
@@ -138,11 +139,12 @@ def test_kind_in_a_trigger_entry_is_provider_and_warns_at_the_line_of_its_role(c
     toml.write_text(
         text.replace('[plugins.role.watchdog]\n', '[plugins.role.watchdog]\ntriggers = [{ provider = "cron" }]\n')
     )
-    with pytest.warns(PiloopDeprecationWarning, match='kind in a trigger is deprecated') as record:
+    with pytest.warns(PiloopDeprecationWarning) as record:
         cfg = load_campaign_config(campaign_path)
-    assert [TRIGGERS.name_of(t) for t in role_of(cfg, ResearchRole).triggers] == ['low_water', 'seed']
+    assert [TRIGGERS.name_of(t) for t in cfg.triggers_of('research')] == ['low_water', 'seed']
     lines = toml.read_text().splitlines()
-    assert [w.lineno for w in record] == [lines.index('[plugins.role.research]') + 2], 'research, not the watchdog'
+    kinds = [w.lineno for w in record if 'kind in a trigger' in str(w.message)]
+    assert kinds == [lines.index('[plugins.role.research]') + 2], 'research, not the watchdog'
 
 
 def test_wake_budget_is_the_budget_of_the_lessons_section_of_each_role(campaign_path: Path) -> None:
@@ -152,10 +154,10 @@ def test_wake_budget_is_the_budget_of_the_lessons_section_of_each_role(campaign_
     toml.write_text(text + '\n[memory]\nwake_budget = 200\n')
     with pytest.warns(PiloopDeprecationWarning, match='wake_budget is deprecated') as record:
         cfg = load_campaign_config(campaign_path)
-    assert len(record) == 2
+    assert len([w for w in record if 'wake_budget' in str(w.message)]) == 2
     lessons = {
-        name: next((s.budget for s in role.shown() if isinstance(s, Lessons)), None)
-        for name, role in cfg.roles.all().items()
+        name: next((s.budget for s in cfg.sections_of(name) if isinstance(s, Lessons)), None)
+        for name in cfg.roles.all()
     }
     assert lessons == {'implementer': 200, 'orchestrator': None, 'watchdog': 400, 'research': None, 'scout': 200}, (
         "[memory]'s budget for every role but the watchdog, whose old default was its own; 0 leaves them out"
@@ -186,13 +188,17 @@ def test_the_mcp_and_usage_of_a_harness_table_are_its_provider(campaign_path: Pa
     toml = campaign_path / 'piloop.toml'
     toml.write_text(
         toml.read_text()
-        + '\n[plugins.harness.claude]\nmcp = "claude"\n[plugins.harness.claude.usage]\nfile = "{env:CLAUDE_CONFIG_DIR:~/.claude}/x"\n'
-        + '\n[plugins.harness.local]\nexecutable = "local"\nheadless = ["--id", "{session_id}", "{mcp}", "{prompt}"]\n'
+        + '\n[plugins.harness.claude]\nmodel = "c"\nmcp = "claude"\n'
+        + '[plugins.harness.claude.usage]\nfile = "{env:CLAUDE_CONFIG_DIR:~/.claude}/x"\n'
+        + '\n[plugins.harness.local]\nmodel = "l"\nexecutable = "local"\nheadless = ["--id", "{session_id}", "{mcp}", "{prompt}"]\n'
         + 'mcp = "codex"\n[plugins.harness.local.usage]\ntally = "pi"\n'
     )
+    toml.write_text(toml.read_text().replace('use = ["script"]', 'use = ["script", "claude", "local"]', 1))
     with pytest.warns(PiloopDeprecationWarning) as record:
         cfg = load_campaign_config(campaign_path)
-    assert cfg.harness_for('claude') == each_provider()['claude'], 'a built-in table drops them'
+    assert cfg.harness_for('claude') == each_provider()['claude'].model_copy(update={'model': 'c'}), (
+        'a built-in table drops them'
+    )
     assert isinstance(cfg.harness_for('local'), Pi), "a new name takes its tally's provider"
     assert [str(w.message).partition(';')[0] for w in record] == [
         'mcp and usage of [plugins.harness.claude] are deprecated: the harness renders its servers and reads its usage itself,'
@@ -206,10 +212,13 @@ def test_the_anomaly_trigger_is_the_two_incident_triggers_in_its_place(campaign_
     toml = campaign_path / 'piloop.toml'
     old = 'triggers = [{ provider = "cron" }, { provider = "anomaly" }]\n'
     toml.write_text(toml.read_text().replace('[plugins.role.watchdog]\n', f'[plugins.role.watchdog]\n{old}'))
-    with pytest.warns(PiloopDeprecationWarning, match='the anomaly trigger is deprecated'):
+    with pytest.warns(PiloopDeprecationWarning) as record:
         cfg = load_campaign_config(campaign_path)
-    triggers = [TRIGGERS.name_of(t) for t in role_of(cfg, WatchdogRole).triggers]
-    assert triggers == ['cron', 'run_failed', 'dead_at_startup']
+    assert [str(w.message).partition(';')[0] for w in record] == [
+        'the anomaly trigger is deprecated',
+        '`plugins.role.<name>.triggers` of inline entries is deprecated',
+    ]
+    assert role_of(cfg, WatchdogRole).triggers == ['cron', 'run_failed', 'dead_at_startup']
 
 
 OLD_SHAPE = """
@@ -233,6 +242,7 @@ max_concurrent = 3
 
 [plugins.role.research]
 max_ideas = 0
+harnesses = ["script", "pi"]
 """
 """A piloop.toml of 0.3: the harnesses, their models and caps, and the roles at the top. Research is in its new table."""
 NEW_SHAPE = """
@@ -261,6 +271,7 @@ max_concurrent = 3
 
 [plugins.role.research]
 max_ideas = 0
+harnesses = ["script", "pi"]
 """
 
 
@@ -337,6 +348,163 @@ def test_the_harness_and_role_tables_of_0_3_are_their_plugin_tables_with_a_warni
     assert cfg.roles.doing_runs()[IMPLEMENTER].max_concurrent == 7, 'the old variable wins over the file'
 
 
+def test_entries_name_their_instances_and_an_entry_with_parameters_gets_a_table_of_its_own() -> None:
+    triggers = deprecated.Entries('plugins.role.*.triggers', 'plugins.role.*.triggers', 'plugins.trigger', '*')
+    research = [{'provider': 'low_water', 'buffer': 4}, {'provider': 'seed'}, 'stalled', 3]
+    raw: dict[str, object] = {
+        'plugins': {
+            'role': {'research': {'triggers': research}, 'scout': {'triggers': ['cron']}},
+            'trigger': {'research_low_water': {'provider': 'low_water', 'buffer': 9}},
+        }
+    }
+    assert triggers.apply(raw) == ['plugins.role.research.triggers'], 'a list of names is new already'
+    assert raw == {
+        'plugins': {
+            'role': {
+                'research': {'triggers': ['research_low_water_2', 'seed', 'stalled', 3]},
+                'scout': {'triggers': ['cron']},
+            },
+            'trigger': {
+                'research_low_water': {'provider': 'low_water', 'buffer': 9},
+                'research_low_water_2': {'provider': 'low_water', 'buffer': 4},
+            },
+        }
+    }, 'a name that a table with other keys took gets _2; a name or anything else that is no entry stays'
+    facts = deprecated.Entries('facts', 'plugins.fact_source.use', 'plugins.fact_source', None)
+    spend = {'provider': 'command', 'command': ['true']}
+    listed: dict[str, object] = {'facts': [{'provider': 'campaign'}, spend, dict(spend)]}
+    assert facts.apply(listed) == ['facts']
+    assert listed == {
+        'plugins': {'fact_source': {'command': {'command': ['true']}, 'use': ['campaign', 'command', 'command']}}
+    }, 'without a prefix, the provider names the table, and an entry like one before shares it'
+    unset: dict[str, object] = {'facts': None, 'status': {'sections': None}}
+    status = deprecated.Entries('status.sections', 'plugins.section.use', 'plugins.section', 'status')
+    assert (facts.apply(unset), status.apply(unset)) == (['facts'], ['status.sections'])
+    assert unset == {}, 'a list that is not set goes, and its table with it'
+    tables = listed['plugins']
+    assert isinstance(tables, dict)
+    back: dict[str, object] = {'plugins': {**tables, 'role': {'scout': {'triggers': ['seed', 'nope']}}}}
+    for each in (facts, triggers):
+        each.inverse().apply(back)
+    assert back == {
+        'facts': [{'provider': 'campaign'}, spend, spend],
+        'plugins': {
+            'fact_source': {'command': {'command': ['true']}},
+            'role': {
+                'scout': {
+                    'triggers': [
+                        {'provider': 'seed'},
+                        {'provider': 'nope'},
+                    ]
+                }
+            },
+        },
+    }, 'each name is its entry again: its table with its provider, else the provider of its name; the tables stay'
+    odd: dict[str, object] = {'plugins': {'fact_source': {'use': 'campaign'}}}
+    assert facts.inverse().apply(odd) == ['plugins.fact_source.use']
+    assert odd == {}, 'a use that is no list goes, and writes no facts: the validation would have refused it'
+
+
+LISTS_0_3 = """
+name = "demo"
+evaluate = ["true"]
+
+[plugins.harness]
+use = ["script"]
+
+[plugins.harness.script]
+model = "m"
+executable = "agent"
+headless = ["{prompt}"]
+
+[[metrics]]
+name = "score"
+direction = "higher"
+role = "primary"
+
+[[facts]]
+provider = "campaign"
+
+[[facts]]
+provider = "optimization"
+
+[[facts]]
+provider = "command"
+command = ["true"]
+metrics = ["spend"]
+
+[status]
+sections = [{ provider = "headline" }, { provider = "lessons", budget = 900 }]
+
+[roles.research]
+triggers = [{ provider = "low_water", buffer = 4 }, { provider = "seed" }]
+sections = [{ provider = "goal" }]
+"""
+"""A piloop.toml of 0.3.1 with lists of inline entries: the facts, the status's sections, research's triggers and
+sections."""
+LISTS_0_4 = """
+name = "demo"
+evaluate = ["true"]
+
+[plugins.harness]
+use = ["script"]
+
+[plugins.harness.script]
+model = "m"
+executable = "agent"
+headless = ["{prompt}"]
+
+[[metrics]]
+name = "score"
+direction = "higher"
+role = "primary"
+
+[plugins.fact_source]
+use = ["campaign", "optimization", "command"]
+
+[plugins.fact_source.command]
+command = ["true"]
+metrics = ["spend"]
+
+[plugins.section]
+use = ["headline", "status_lessons"]
+
+[plugins.section.status_lessons]
+provider = "lessons"
+budget = 900
+
+[plugins.role.research]
+triggers = ["research_low_water", "seed"]
+sections = ["goal"]
+
+[plugins.trigger.research_low_water]
+provider = "low_water"
+buffer = 4
+"""
+
+
+def test_the_lists_of_0_3_name_instances_with_a_warning_at_each_list_that_the_file_writes(tmp_path: Path) -> None:
+    toml = tmp_path / 'piloop.toml'
+    toml.write_text(LISTS_0_4)
+    new = load_campaign_config(tmp_path)
+    toml.write_text(LISTS_0_3)
+    with pytest.warns(PiloopDeprecationWarning) as record:
+        old = load_campaign_config(tmp_path)
+    assert old == new
+    lines = LISTS_0_3.splitlines()
+    assert [(str(w.message).partition(' of ')[0], w.lineno) for w in record if 'inline entries' in str(w.message)] == [
+        (
+            '`plugins.role.<name>.triggers`',
+            lines.index('triggers = [{ provider = "low_water", buffer = 4 }, { provider = "seed" }]') + 1,
+        ),
+        # a dotted key warns at the first line that sets its last part: here, that of [status]
+        ('`plugins.role.<name>.sections`', lines.index('[status]') + 2),
+        ('`status.sections`', lines.index('[status]') + 2),
+        ('`facts`', lines.index('[[facts]]') + 1),
+    ]
+    assert [type(s).__name__ for s in old.status_sections()] == ['Headline', 'Lessons']
+
+
 def test_the_runtimes_of_config_toml_are_its_runtime_plugin_tables(tmp_path: Path) -> None:
     (tmp_path / 'config.toml').write_text('[runtimes.subprocess]\n')
     with pytest.warns(
@@ -344,6 +512,88 @@ def test_the_runtimes_of_config_toml_are_its_runtime_plugin_tables(tmp_path: Pat
     ):
         raw = config_file(tmp_path)
     assert raw == {'plugins': {'runtime': {'subprocess': {}}}}
+
+
+def test_a_tag_gives_each_table_the_value_of_its_first_marker_unless_it_sets_the_key() -> None:
+    tag = deprecated.Tag('plugins.mcp_server.*', 'provider', (('url', 'http'), ('command', 'stdio')))
+    raw: dict[str, object] = {
+        'plugins': {
+            'mcp_server': {
+                'exa': {'url': 'https://x'},
+                'xai': {'command': ['x']},
+                'mine': {'provider': 'search', 'url': 'https://y'},
+                'odd': {'env': []},
+                'scalar': 3,
+            }
+        }
+    }
+    assert tag.apply(raw) == ['plugins.mcp_server.exa', 'plugins.mcp_server.xai']
+    assert raw['plugins'] == {
+        'mcp_server': {
+            'exa': {'url': 'https://x', 'provider': 'http'},
+            'xai': {'command': ['x'], 'provider': 'stdio'},
+            'mine': {'provider': 'search', 'url': 'https://y'},
+            'odd': {'env': []},
+            'scalar': 3,
+        }
+    }, 'a table that sets the key keeps it, one without a marker and a value that is no table are left'
+    assert tag.inverse().apply(raw) == ['plugins.mcp_server.exa', 'plugins.mcp_server.xai']
+    assert raw['plugins'] == {
+        'mcp_server': {
+            'exa': {'url': 'https://x'},
+            'xai': {'command': ['x']},
+            'mine': {'provider': 'search', 'url': 'https://y'},
+            'odd': {'env': []},
+            'scalar': 3,
+        }
+    }, 'the inverse drops only the values that the tag sets'
+
+
+def test_a_prune_drops_the_keys_that_hold_nothing_and_has_nothing_to_undo() -> None:
+    """A stored config of 0.3 dumped every key of a server, those of the other transport empty."""
+    prune = deprecated.Prune('plugins.mcp_server.*')
+    raw: dict[str, object] = {
+        'plugins': {
+            'mcp_server': {
+                'xai': {'url': None, 'headers_env': {}, 'bearer_token_env': None, 'command': ['x'], 'env': []},
+                'exa': {'url': 'https://x'},
+                'scalar': 3,
+            }
+        }
+    }
+    assert prune.apply(raw) == ['plugins.mcp_server.xai']
+    assert raw['plugins'] == {'mcp_server': {'xai': {'command': ['x']}, 'exa': {'url': 'https://x'}, 'scalar': 3}}
+    assert prune.inverse() is None, 'each key that it dropped is a default'
+    stored: dict[str, object] = {
+        'mcp': {'xai': {'url': None, 'headers_env': {}, 'bearer_token_env': None, 'command': ['x'], 'env': []}}
+    }
+    for step in deprecated.MCP_TABLES:
+        step.apply(stored)
+    assert stored == {'plugins': {'mcp_server': {'xai': {'command': ['x'], 'provider': 'stdio'}}}}
+
+
+def test_an_mcp_table_of_0_3_is_its_mcp_server_plugin_table_with_the_provider_of_its_keys(
+    campaign_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    toml = campaign_path / 'piloop.toml'
+    scout = '\n[plugins.role.scout]\nharnesses = ["claude"]\nmodel = { claude = "m" }\nmcp = ["exa", "xai"]\n'
+    text = toml.read_text() + scout
+    new = (
+        '\n[plugins.mcp_server.exa]\nprovider = "http"\nurl = "https://mcp.exa.ai/mcp"\n'
+        '\n[plugins.mcp_server.xai]\nprovider = "stdio"\ncommand = ["xai"]\nenv = ["XAI_API_KEY"]\n'
+    )
+    toml.write_text(text + new)
+    expected = load_campaign_config(campaign_path)
+    old = '\n[mcp.exa]\nurl = "https://mcp.exa.ai/mcp"\n\n[mcp.xai]\ncommand = ["xai"]\nenv = ["XAI_API_KEY"]\n'
+    toml.write_text(text + old)
+    with pytest.warns(PiloopDeprecationWarning) as record:
+        assert load_campaign_config(campaign_path) == expected
+    assert [str(w.message).partition(';')[0] for w in record] == ['`mcp.<name>` is deprecated']
+    toml.write_text(text + new)
+    monkeypatch.setenv('PILOOP_CAMPAIGN_MCP__EXA__URL', 'https://other.example/mcp')
+    with pytest.warns(PiloopDeprecationWarning, match='PILOOP_CAMPAIGN_MCP__EXA__URL is deprecated'):
+        server = load_campaign_config(campaign_path).mcp_servers['exa']
+    assert server == expected.mcp_servers['exa'].model_copy(update={'url': 'https://other.example/mcp'})
 
 
 @dataclass(frozen=True)
@@ -595,7 +845,9 @@ def test_spend_is_a_command_source_that_reads_spend_and_closing_review_is_while_
         campaign_path,
         f'[spend]\ncommand = ["cat", "{tmp_path / "bill"}"]\nnotices = [50]\ninterval = 60\nclosing_review = "wait"\n',
     )
-    with pytest.warns(PiloopDeprecationWarning, match=r'\[spend\] is deprecated; write a \[\[facts\]\] source'):
+    with pytest.warns(
+        PiloopDeprecationWarning, match=r'\[spend\] is deprecated; write a \[plugins.fact_source.<name>\] source'
+    ):
         cfg = load_campaign_config(campaign_path)
     [campaign, optimization, spend] = cfg.fact_sources()
     command = [*deprecated.SPEND_COMMAND, 'cat', str(tmp_path / 'bill')]
@@ -614,8 +866,8 @@ def test_spend_is_a_command_source_that_reads_spend_and_closing_review_is_while_
 def test_max_spend_is_hold_at_of_the_spend(campaign_path: Path) -> None:
     deprecated_config(
         campaign_path,
-        '[[facts]]\nprovider = "campaign"\n\n[[facts]]\nprovider = "optimization"\n\n[[facts]]\nprovider = "command"\ncommand = ["true"]\nmetrics = ["spend"]\n\n'
-        '[plugins.stop_rule]\nmax_spend = 300\n',
+        '[plugins.fact_source]\nuse = ["campaign", "optimization", "spend"]\n\n[plugins.fact_source.spend]\n'
+        'provider = "command"\ncommand = ["true"]\nmetrics = ["spend"]\n\n[plugins.stop_rule]\nmax_spend = 300\n',
     )
     with pytest.warns(PiloopDeprecationWarning, match=r'max_spend is deprecated; write hold_at = \{ spend = \.\.\. \}'):
         cfg = load_campaign_config(campaign_path)
@@ -658,3 +910,39 @@ def test_a_job_that_a_0_3_daemon_queued_names_its_harness_by_its_renderer_or_tal
     assert isinstance(AgentJob.model_validate(old | {'mcp': 'claude', 'usage': usage}).harness, Codex)
     assert isinstance(AgentJob.model_validate(old | {'mcp': 'pi', 'usage': None}).harness, Pi)
     assert AgentJob.model_validate(old | {'mcp': None, 'usage': None}).harness is None, 'a harness of no provider'
+    exa = {'url': 'https://x', 'headers_env': {}, 'bearer_token_env': None, 'command': None, 'env': []}
+    xai = {'url': None, 'headers_env': {}, 'bearer_token_env': None, 'command': ['x'], 'env': ['K']}
+    job = AgentJob.model_validate(old | {'servers': {'exa': exa, 'xai': xai}})
+    assert job.servers == {'exa': HttpServer(url='https://x'), 'xai': StdioServer(command=['x'], env=['K'])}, (
+        'the servers of a job of protocol 13 get the provider of their keys'
+    )
+    assert AgentJob.model_validate(old | {'servers': {'exa': {'provider': 'http', 'url': 'https://x'}}}).servers == {
+        'exa': HttpServer(url='https://x')
+    }
+
+
+def test_a_harness_or_a_server_of_0_3_that_nothing_uses_warns_until_0_5_0_and_one_of_the_new_shape_is_refused(
+    campaign_path: Path,
+) -> None:
+    """A 0.3 file set a model for a harness that only ideas pinned: it loads, and says to add it to ``use``."""
+    toml = campaign_path / 'piloop.toml'
+    base = 'name = "demo"\nevaluate = ["true"]\n\n[[metrics]]\nname = "s"\ndirection = "higher"\nrole = "primary"\n'
+    toml.write_text(
+        'harnesses = ["pi"]\nmodel = { pi = "p", codex = "x" }\n' + base + '\n[mcp.exa]\nurl = "https://e"\n'
+    )
+    with pytest.warns(PiloopDeprecationWarning) as record:
+        cfg = load_campaign_config(campaign_path)
+    assert cfg.harnesses == ['pi'] and cfg.harness['codex'].model == 'x'
+    unused = sorted(str(w.message) for w in record if 'nothing uses it' in str(w.message))
+    assert unused == [
+        '[plugins.harness.codex] is configured, and nothing uses it: add it to [plugins.harness] use; a file of 0.3 only'
+        ' gets this warning; removed in piloop 0.5.0',
+        '[plugins.mcp_server.exa] is configured, and nothing uses it: add it to a list that names it; a file of 0.3 only'
+        ' gets this warning; removed in piloop 0.5.0',
+    ]
+    toml.write_text(
+        base
+        + '\n[plugins.harness]\nuse = ["pi"]\n\n[plugins.harness.pi]\nmodel = "p"\n\n[plugins.harness.codex]\nmodel = "x"\n'
+    )
+    with pytest.raises(ConfigError, match=re.escape('[plugins.harness.codex] is configured, and nothing uses it')):
+        load_campaign_config(campaign_path)

@@ -33,14 +33,14 @@ from piloop.api.contract import Revealed
 from piloop.config import Rung
 from piloop.db.models import AgentSession, EventModel
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CampaignId, CandidateId, CommentId, Revision, RungName, RunId
-from piloop.mcp import EnvName, McpServer
+from piloop.ids import AgentSessionId, CampaignId, CandidateId, CommentId, EnvName, Revision, RungName, RunId
 from piloop.net.tokens import mint_agent
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.contribution import Contributes
 from piloop.plugins.harness.contract import HARNESSES, Harness
 from piloop.plugins.host import Capability, One, Parameters, Scope, Slot
+from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer
 from piloop.plugins.network.contract import Network
 from piloop.plugins.runtime.contract import AgentExit, AgentStart
 from piloop.plugins.secrets.contract import SecretsProvider, values
@@ -167,7 +167,7 @@ class AgentJob(BaseModel):
     harness: Annotated[Harness, HARNESSES.entry] | None = None
     """The agent's harness, which renders its MCP servers (``{mcp}``) and reads its session file on the worker. None
     for a harness of no provider (``Custom``), which does neither."""
-    servers: dict[str, McpServer] = Field(default_factory=dict)
+    servers: dict[str, Annotated[McpServer, MCP_SERVERS.entry]] = Field(default_factory=dict)
     """The MCP servers of the agent's role, which name their variables, never their values."""
     secrets: dict[EnvName, EnvName] = Field(default_factory=dict)
     """The variables of the agent's environment that take a secret, with the secret's name: the harness's references
@@ -197,6 +197,20 @@ class AgentJob(BaseModel):
         named = (usage.get('tally') if isinstance(usage, dict) else None) or data.get('mcp')
         rest = {k: v for k, v in data.items() if k not in ('mcp', 'usage')}
         return {**rest, 'harness': {'provider': named}} if named is not None else rest
+
+    @model_validator(mode='before')
+    @classmethod
+    def _servers(cls, data: object) -> object:
+        """A job that a daemon of protocol 13 queued carries its servers without their provider."""
+        if not isinstance(data, dict) or not isinstance(servers := data.get('servers'), dict):
+            return data
+        if all(isinstance(t, dict) and 'provider' in t for t in servers.values()):
+            return data
+        deprecated.until('0.5.0', 'the servers of a job of protocol 13 have no provider: delete AgentJob._servers')
+        tables = {name: dict(t) if isinstance(t, dict) else t for name, t in servers.items()}
+        for step in deprecated.MCP_PROVIDERS:
+            step.apply({'plugins': {'mcp_server': tables}})
+        return {**data, 'servers': tables}
 
 
 def job_secrets(s: Session, secrets: SecretsProvider, job: AgentJob) -> JobSecrets:

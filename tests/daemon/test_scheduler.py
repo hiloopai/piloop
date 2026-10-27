@@ -134,7 +134,7 @@ from tests.conftest import (
     write_toml,
 )
 from tests.daemon.test_run_controller import reload_campaign
-from tests.daemon.test_triggers import low_water
+from tests.daemon.test_triggers import LOW_WATER, low_water
 from tests.test_actor import ACTORS
 from tests.usage.test_usage import PI_ID, store
 
@@ -448,7 +448,7 @@ def test_a_queued_run_whose_harness_left_the_rotation_launches_on_the_new_one_un
         db,
         campaign,
         plugins={
-            'harness': {'use': ['script'], 'script': {'model': 'm'}, 'pi': {'model': 'p'}},
+            'harness': {'use': ['script'], 'script': {'model': 'm'}},
             'role': {'implementer': {'max_concurrent': 3}},
         },
     )
@@ -2687,10 +2687,9 @@ def test_the_triggers_that_read_no_time_ask_for_no_pass_of_their_own(
 def test_low_water_counts_each_track_short_of_its_share_whatever_the_others_hold(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    research = {'triggers': low_water(0), 'max_ideas': 1}
-    set_config(
-        db, campaign, plugins={'role': {'implementer': {'max_concurrent': 4}, 'research': research}}, **TWO_TRACKS
-    )
+    research = {'triggers': LOW_WATER, 'max_ideas': 1}
+    roles = {'implementer': {'max_concurrent': 4}, 'research': research}
+    set_config(db, campaign, plugins={'role': roles, 'trigger': low_water(0)}, **TWO_TRACKS)
     add_ideas(db, campaign, *(f'a{i}' for i in range(6)), track='accuracy')
     scheduler = make_scheduler(db, runtime, tmp_path)
     with db.session() as s:

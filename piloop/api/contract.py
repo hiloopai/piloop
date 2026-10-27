@@ -31,12 +31,12 @@ from piloop.ids import (
     CommentId,
     CommentKind,
     Ending,
+    EnvName,
     IdeaId,
     IdeaStatus,
     RoleName,
     TrackName,
 )
-from piloop.mcp import EnvName
 
 MAX_POLL_SECONDS = 25
 """The longest that the server holds a long-poll (``Polled.wait``), as the GitHub Actions runner's."""

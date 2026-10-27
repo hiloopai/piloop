@@ -57,7 +57,7 @@ def status(
 ) -> None:
     """Print the state of the daemon and the live keys that `config.toml` or a limit sets, then each campaign.
 
-    Each campaign shows the sections of its [status] sections: by default the head, the goal and the progress against
+    Each campaign shows the sections of its [plugins.section] use: by default the head, the goal and the progress against
     the stop rule, the tracks, the trajectory, the open runs, the queue, the live agents with their last line, the
     evaluations, the recent candidates, the incidents that agents got, the inbox and the recent events. Without a campaign, it uses
     the campaign that the current directory is in, else the only active campaign, else every campaign but the retired

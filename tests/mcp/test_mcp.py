@@ -7,25 +7,38 @@ import sys
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
+from types import ModuleType
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from piloop.config import CampaignConfig
 from piloop.ids import IMPLEMENTER
-from piloop.mcp import McpServer, env_names
-from piloop.plugins.harness import codex
+from piloop.plugins.executor.contract import AgentJob
+from piloop.plugins.harness import claude, codex, pi
 from piloop.plugins.harness.claude import ClaudeMcp
 from piloop.plugins.harness.codex import CodexMcp
 from piloop.plugins.harness.contract import MCP, Custom, McpArgs, McpError, McpLaunch, each_provider, expand
 from piloop.plugins.harness.pi import PiMcp
+from piloop.plugins.host import ContractBroken
+from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer, env_names
+from piloop.plugins.mcp_server.http import HttpServer
+from piloop.plugins.mcp_server.stdio import StdioServer
 from tests.conftest import RESEARCH, write_script
 
-EXA = McpServer(url='https://mcp.exa.ai/mcp', headers_env={'x-api-key': 'EXA_API_KEY'})
-FIRECRAWL = McpServer(url='https://mcp.firecrawl.dev/v2/mcp', bearer_token_env='FIRECRAWL_API_KEY')
-OPEN = McpServer(url='https://open.example/mcp')
-XAI = McpServer(command=['python3', 'xai.py', 'grok'], env=['XAI_API_KEY', 'EXA_API_KEY'])
-PLAIN = McpServer(command=['cat'])
+EXA = HttpServer(url='https://mcp.exa.ai/mcp', headers_env={'x-api-key': 'EXA_API_KEY'})
+FIRECRAWL = HttpServer(url='https://mcp.firecrawl.dev/v2/mcp', bearer_token_env='FIRECRAWL_API_KEY')
+OPEN = HttpServer(url='https://open.example/mcp')
+XAI = StdioServer(command=['python3', 'xai.py', 'grok'], env=['XAI_API_KEY', 'EXA_API_KEY'])
+PLAIN = StdioServer(command=['cat'])
+
+
+class Pipe(McpServer):
+    """A server of neither transport, which no harness renders."""
+
+    @property
+    def env_names(self) -> list[str]:
+        return []
 
 
 def launch(tmp_path: Path, servers: dict[str, McpServer], executable: str = 'codex') -> McpLaunch:
@@ -35,21 +48,43 @@ def launch(tmp_path: Path, servers: dict[str, McpServer], executable: str = 'cod
 @pytest.mark.parametrize(
     ('table', 'error'),
     [
-        ({}, 'either url (streamable HTTP) or command (stdio)'),
-        ({'url': 'https://x', 'command': ['x']}, 'either url'),
-        ({'command': ['x'], 'headers_env': {'a': 'B'}}, 'headers_env and bearer_token_env apply to a url server only'),
-        ({'command': ['x'], 'bearer_token_env': 'B'}, 'apply to a url server only'),
-        ({'url': 'https://x', 'env': ['A']}, 'env applies to a command server only'),
-        ({'command': []}, 'at least 1 item'),
-        ({'url': 'https://x', 'bearer_token_env': 'B', 'headers_env': {'AUTHORIZATION': 'C'}}, 'drop it from'),
-        ({'url': 'https://x', 'headers_env': {'a': 'not a name'}}, 'String should match pattern'),
-        ({'command': ['x'], 'env': ['1X']}, 'String should match pattern'),
-        ({'url': 'https://x', 'headers': {'a': 'b'}}, 'Extra inputs are not permitted'),
+        ({}, 'provider: missing; registered MCP server providers: http, stdio'),
+        ({'provider': 'http'}, 'url\n  Field required'),
+        ({'provider': 'http', 'url': 'https://x', 'command': ['x']}, 'command\n  Extra inputs are not permitted'),
+        ({'provider': 'stdio', 'command': ['x'], 'headers_env': {'a': 'B'}}, 'headers_env\n  Extra inputs'),
+        ({'provider': 'stdio', 'command': ['x'], 'bearer_token_env': 'B'}, 'bearer_token_env\n  Extra inputs'),
+        ({'provider': 'http', 'url': 'https://x', 'env': ['A']}, 'env\n  Extra inputs are not permitted'),
+        ({'provider': 'stdio', 'command': []}, 'at least 1 item'),
+        (
+            {'provider': 'http', 'url': 'https://x', 'bearer_token_env': 'B', 'headers_env': {'AUTHORIZATION': 'C'}},
+            'drop it from',
+        ),
+        ({'provider': 'http', 'url': 'https://x', 'headers_env': {'a': 'not a name'}}, 'String should match pattern'),
+        ({'provider': 'stdio', 'command': ['x'], 'env': ['1X']}, 'String should match pattern'),
     ],
 )
 def test_a_server_is_http_or_stdio_and_names_variables_where_they_belong(table: dict[str, object], error: str) -> None:
-    with pytest.raises(ValidationError, match=re.escape(error)):
-        McpServer.model_validate(table)
+    """The transports are two providers, so a stdio server cannot set a header, nor an HTTP one a variable."""
+    with pytest.raises(ValueError, match=re.escape(error)):
+        MCP_SERVERS.validated(table)
+
+
+def test_a_job_carries_its_servers_with_their_provider() -> None:
+    """``AgentJob.servers`` is the role's servers by name, each with its ``provider``, as a worker reads them back."""
+    wire = TypeAdapter(AgentJob.model_fields['servers'].rebuild_annotation())
+    servers = {'exa': EXA, 'xai': XAI}
+    dumped = wire.dump_python(servers, mode='json')
+    assert dumped == {
+        'exa': {'provider': 'http', 'url': 'https://mcp.exa.ai/mcp', 'headers_env': {'x-api-key': 'EXA_API_KEY'}},
+        'xai': {'provider': 'stdio', 'command': ['python3', 'xai.py', 'grok'], 'env': ['XAI_API_KEY', 'EXA_API_KEY']},
+    }
+    assert wire.validate_python(dumped) == servers
+
+
+@pytest.mark.parametrize('harness', [claude, codex, pi])
+def test_a_harness_renders_the_two_transports_and_refuses_another(harness: ModuleType) -> None:
+    with pytest.raises(ContractBroken, match='^Pipe is neither HttpServer nor StdioServer'):
+        harness.server(Pipe())
 
 
 def test_the_variables_that_servers_need_are_named_each_once() -> None:
@@ -151,7 +186,7 @@ def overrides(args: list[str]) -> dict[str, object]:
 def test_codex_turns_off_every_server_codex_would_load_then_adds_the_roles(tmp_path: Path, fake_codex: Path) -> None:
     render = CodexMcp().render
     listed = json.dumps({'node_repl': True, 'computer-use': False})
-    servers = {'exa': EXA, 'fc': FIRECRAWL, 'xai': XAI, 'open': OPEN}
+    servers: dict[str, McpServer] = {'exa': EXA, 'fc': FIRECRAWL, 'xai': XAI, 'open': OPEN}
     rendered = render(codex_launch(tmp_path, fake_codex, servers, listed=listed))
     parsed = overrides(rendered.args)
     assert parsed == {
@@ -261,6 +296,7 @@ def test_pi_refuses_an_argv_that_keeps_its_extensions_on() -> None:
 
 
 MODELS = {'claude': {'model': 'c'}, 'codex': {'model': 'x'}, 'pi': {'model': 'p'}}
+SERVERS = {'exa': MCP_SERVERS.dumped(EXA, 'python'), 'xai': MCP_SERVERS.dumped(XAI, 'python')}
 
 
 def config(**extra: object) -> dict[str, object]:
@@ -269,32 +305,39 @@ def config(**extra: object) -> dict[str, object]:
         'name': 'demo',
         'evaluate': ['true'],
         'metrics': [{'name': 's', 'direction': 'higher', 'role': 'primary'}],
-        'mcp': {'exa': EXA.model_dump(), 'xai': XAI.model_dump()},
-        'plugins': {'harness': {'use': ['claude', 'codex', 'pi'], **MODELS}, 'runtime': {'use': 'subprocess'}},
+        'plugins': {
+            'harness': {'use': ['claude', 'codex', 'pi'], **MODELS},
+            'runtime': {'use': 'subprocess'},
+            'mcp_server': SERVERS,
+        },
     }
     return base | extra
 
 
 def test_a_role_lists_servers_by_table_and_gets_exactly_those() -> None:
     cfg = CampaignConfig.model_validate(
-        config(plugins={'harness': MODELS, 'role': {'research': {'mcp': ['xai', 'exa']}}})
+        config(plugins={'harness': MODELS, 'mcp_server': SERVERS, 'role': {'research': {'mcp': ['xai', 'exa']}}})
     )
     assert cfg.role_servers(RESEARCH) == {'xai': XAI, 'exa': EXA}
     assert cfg.role_servers(IMPLEMENTER) == {}, 'a role lists none by default'
     with pytest.raises(
-        ValidationError, match=re.escape("plugins.role.implementer.mcp: no [mcp.<name>] table for ['nope']")
+        ValidationError, match=re.escape("plugins.role.implementer.mcp[1] = 'nope': no [plugins.mcp_server.nope]")
     ):
         CampaignConfig.model_validate(
-            config(plugins={'harness': MODELS, 'role': {'implementer': {'mcp': ['exa', 'nope']}}})
+            config(
+                plugins={'harness': MODELS, 'mcp_server': SERVERS, 'role': {'implementer': {'mcp': ['exa', 'nope']}}}
+            )
         )
     with pytest.raises(ValidationError, match='String should match pattern'):
-        CampaignConfig.model_validate(config(mcp={'a.b': OPEN.model_dump()}))
+        CampaignConfig.model_validate(
+            config(plugins={'harness': MODELS, 'mcp_server': SERVERS, 'role': {'implementer': {'mcp': ['a.b']}}})
+        )
 
 
 def test_every_harness_a_role_with_servers_may_run_must_carry_them() -> None:
     def with_plain(plain: Mapping[str, object], **role: object) -> dict[str, object]:
         harness = {'use': ['claude', 'plain'], 'claude': {'model': 'c'}, 'plain': {'model': 'p', **plain}}
-        return config(plugins={'harness': harness, 'role': {'watchdog': role}})
+        return config(plugins={'harness': harness, 'mcp_server': SERVERS, 'role': {'watchdog': role}})
 
     plain = {'executable': 'x', 'headless': ['{prompt}']}
     custom = with_plain(plain)

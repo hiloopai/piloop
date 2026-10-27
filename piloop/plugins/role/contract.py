@@ -16,11 +16,12 @@ from pydantic import Field, model_validator
 
 from piloop import deprecated
 from piloop.ids import ROLE_NAME, CommentKind
-from piloop.plugins.harness.contract import HarnessName
-from piloop.plugins.host import Capability, Many, Parameters, Scope
+from piloop.plugins.harness.contract import HarnessKey, HarnessName
+from piloop.plugins.host import Capability, Many, Parameters, Reach, Scope
+from piloop.plugins.mcp_server.contract import McpServerName
 from piloop.plugins.runtime.contract import RuntimeName
-from piloop.plugins.section.contract import Section, SectionEntry, Surface, chosen
-from piloop.plugins.trigger.contract import Pass, TriggerEntry
+from piloop.plugins.section.contract import SectionName, Surface, defaults
+from piloop.plugins.trigger.contract import Pass, TriggerName
 
 if TYPE_CHECKING:  # piloop.db.models types campaigns.config with the roles: only the annotations name the rows
     from piloop.db.models import AgentSession
@@ -98,7 +99,7 @@ class RoleConfig(Parameters):
     """Where the agents of this role run. When unset, the role uses the campaign's, ``[plugins.runtime] use``."""
     harnesses: list[HarnessName] | None = Field(default=None, min_length=1)
     """The harness rotation of this role. When unset, the role uses the campaign's, ``[plugins.harness] use``."""
-    model: dict[HarnessName, str] | None = None
+    model: dict[HarnessKey, str] | None = None
     """The model for each harness in this role, over the ``model`` of each ``[plugins.harness.<name>]``."""
     effort: str = 'high'
     """How hard the agents of this role think, as the harness names it, for example ``high``. It fills ``{effort}`` in
@@ -111,25 +112,25 @@ class RoleConfig(Parameters):
     addendum: str | None = None
     """A repo-relative file that is appended to ``brief.md`` in the briefs of this role only. Use it for instructions
     that only this role needs, for example how the research agent searches."""
-    mcp: list[str] = []
-    """The MCP servers that the agents of this role get, by the name of their ``[mcp.<name>]`` table. Every harness in
-    the role's rotation must be able to take them in the invocation of the role's runtime (``[plugins.harness.<name>] mcp``)."""
+    mcp: list[McpServerName] = []
+    """The MCP servers that the agents of this role get, by the name of their ``[plugins.mcp_server.<name>]`` table.
+    Every harness in the role's rotation must be able to take them in the invocation of the role's runtime."""
     writes: list[str] = []
     """What the agents of this role may write, as their brief states it. Only ``files`` is enforced."""
     files: Files = Files.SEEDS
     """What the agents of this role may file with ``piloop idea``: ``nothing``, ``seeds`` or ``ideas``. The CLI
     refuses the rest."""
-    sections: list[SectionEntry] | None = None
-    """What the briefs of this role show after the role's context: a list of ``{ provider = "<section>", ... }``
-    entries, in order. When unset, every installed section that a brief of this kind of role shows by default, in
-    their order (``Section.SHOWN_IN``, ``Section.ORDER``)."""
+    sections: list[SectionName] | None = None
+    """What the briefs of this role show after the role's context: the names of sections, in order. When unset, every
+    installed section that a brief of this kind of role shows by default, in their order (``Section.SHOWN_IN``,
+    ``Section.ORDER``)."""
 
     SURFACE: ClassVar[Surface]
     """Where the briefs of this kind of role show sections: the default of ``sections``."""
 
-    def shown(self) -> list[Section]:
-        """The sections of this role's briefs: its ``sections``, else the defaults of its surface."""
-        return chosen(self.sections, self.SURFACE)
+    def shown(self) -> list[str]:
+        """The names of the sections of this role's briefs: its ``sections``, else the defaults of its surface."""
+        return defaults(self.SURFACE) if self.sections is None else self.sections
 
 
 class ImplementerRole(RoleConfig):
@@ -200,8 +201,8 @@ class SweepRole(RoleConfig):
 
     runs: Literal[False] = False
     """The agents of this role do no runs. Set ``runs = true`` in a new table to define a role that does runs."""
-    triggers: list[TriggerEntry]
-    """When the daemon requests an agent of this role: a list of ``{ provider = "<trigger>", ... }`` entries, checked in
+    triggers: list[TriggerName]
+    """When the daemon requests an agent of this role: the names of triggers (``[plugins.trigger.<name>]``), checked in
     order on each pass. A package can add triggers. An empty list means that agents start only on request
     (``piloop launch``)."""
     interval: float = Field(default=0, ge=0)
@@ -262,6 +263,6 @@ def new_role(name: str, table: Mapping[str, object]) -> type[ImplementerRole] | 
     return ImplementerRole if table.get('runs') else SweepRole
 
 
-ROLES = Capability('role', RoleConfig, table=Many(Scope.CAMPAIGN, new=new_role))
+ROLES = Capability('role', RoleConfig, table=Many(Scope.CAMPAIGN, new=new_role, reach=Reach.EVERY))
 """Every role by name, with its defaults: the built-in ones, then the ones that packages add. Each entry point of the
 group names a subclass of ``SweepRole`` or of ``ImplementerRole``, whose defaults are the role's."""

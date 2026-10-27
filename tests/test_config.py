@@ -18,11 +18,13 @@ from piloop.plugins.role.orchestrator import OrchestratorRole
 from piloop.plugins.role.research import ResearchRole
 from piloop.plugins.role.scout import ScoutRole
 from piloop.plugins.role.watchdog import WatchdogRole
+from piloop.plugins.section.goal import Goal
+from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule
 from piloop.plugins.stop_rule.limits import Limits
-from piloop.plugins.trigger.contract import TRIGGERS
 from piloop.plugins.trigger.low_water import LowWaterTrigger
 from piloop.plugins.trigger.seed import SeedTrigger
+from piloop.plugins.trigger.sql import SqlTrigger
 from piloop.plugins.trigger.stalled import StalledTrigger
 from piloop.scoring.ledger import criterion
 from tests.conftest import AGENT_TIMEOUT, RESEARCH, SCOUT, WATCHDOG, role_of
@@ -76,9 +78,12 @@ def test_a_table_of_a_built_in_harness_changes_only_its_keys_and_env_takes_value
     campaign_path: Path,
 ) -> None:
     env = {'ANTHROPIC_BASE_URL': 'https://gw.example.com', 'ANTHROPIC_API_KEY': {'secret': 'TEAM_KEY'}}
-    claude = load_campaign_config(campaign_path, plugins={'harness': {'claude': {'env': env}}}).harness_for('claude')
+    tables = {'use': ['script', 'claude'], 'claude': {'model': 'c', 'env': env}}
+    claude = load_campaign_config(campaign_path, plugins={'harness': tables}).harness_for('claude')
     built_in = each_provider()['claude']
-    assert claude.model_copy(update={'env': {}}) == built_in, 'the built-in keys that the table does not set'
+    assert claude.model_copy(update={'env': {}, 'model': None}) == built_in, (
+        'the built-in keys that the table does not set'
+    )
     assert (claude.literals, claude.secrets) == (
         {'ANTHROPIC_BASE_URL': 'https://gw.example.com'},
         {'ANTHROPIC_API_KEY': 'TEAM_KEY'},
@@ -160,7 +165,8 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
     assert (watchdog.harnesses, watchdog.model) == (None, None), 'the campaign rotation and models'
     assert (watchdog.timeout, watchdog.interval) == (600, 1800)
     assert (research.timeout, research.max_ideas) == (900, 1)
-    assert research.triggers == [LowWaterTrigger(buffer=2), SeedTrigger(), StalledTrigger()]
+    assert research.triggers == ['low_water', 'seed', 'stalled']
+    assert defaults.triggers_of(RESEARCH) == [LowWaterTrigger(buffer=2), SeedTrigger(), StalledTrigger()]
     assert research.max_concurrent == 1, 'concurrent sweeps duplicate each other and race on seeds'
 
 
@@ -511,44 +517,49 @@ def test_default_claude_takes_the_queued_messages_after_each_tool_call(tmp_path:
 def test_a_table_with_a_new_name_defines_a_role_that_needs_a_prompt_file_and_triggers(campaign_path: Path) -> None:
     (campaign_path / 'reviewer.md').write_text('# Review\n')
     when = 'SELECT 1 FROM ideas WHERE campaign_id = :campaign AND created_at > :since'
-    good = {'prompt': 'reviewer.md', 'triggers': [{'provider': 'sql', 'when': when}], 'runtime': 'subprocess'}
-    cfg = load_campaign_config(campaign_path, plugins={'role': {'reviewer': good}})
+    good = {'prompt': 'reviewer.md', 'triggers': ['new_idea'], 'runtime': 'subprocess'}
+    new_idea: dict[str, object] = {'new_idea': {'provider': 'sql', 'when': when}}
+    cfg = load_campaign_config(campaign_path, plugins={'role': {'reviewer': good}, 'trigger': new_idea})
     assert list(cfg.roles.all()) == ['implementer', 'orchestrator', 'research', 'scout', 'watchdog', 'reviewer']
     assert list(cfg.roles.sweeping()) == ['orchestrator', 'research', 'scout', 'watchdog', 'reviewer'], (
         'the implementer does runs, not sweeps'
     )
     assert cfg.role_runtime(RoleName('reviewer')) == 'subprocess'
+    assert cfg.triggers_of('reviewer') == [SqlTrigger(when=when)] and cfg.triggers_of(IMPLEMENTER) == []
     assert CampaignConfig.model_validate(cfg.model_dump(mode='json')) == cfg, 'round-trips through the campaign row'
 
-    def fails(roles: dict[str, object]) -> str:
+    def fails(roles: dict[str, object], triggers: dict[str, object] = new_idea) -> str:
         with pytest.raises(ConfigError) as e:
-            load_campaign_config(campaign_path, plugins={'role': roles})
+            load_campaign_config(campaign_path, plugins={'role': roles, 'trigger': triggers})
         return str(e.value).split('\n', 1)[1]
 
     def reviewer(**keys: object) -> dict[str, object]:
         return {'reviewer': {**good, **keys}}
 
-    assert fails({'reviewer': {'triggers': []}}) == snapshot(
+    assert fails({'reviewer': {'triggers': []}}, {}) == snapshot(
         '  plugins.role.reviewer: a new role needs a prompt: the file that starts its brief. Fix:'
         ' https://piloop.autoresearch.inc/reference/configuration describes the key'
     )
-    assert fails({'reviewer': {'prompt': 'reviewer.md'}}) == snapshot(
+    assert fails({'reviewer': {'prompt': 'reviewer.md'}}, {}) == snapshot(
         '  plugins.role.reviewer.triggers: Field required. Fix: add the key; https://piloop.autoresearch.inc/reference/configuration says what it takes'
     )
     assert "plugins.role.reviewer.prompt = 'missing.md': no such file" in fails(reviewer(prompt='missing.md'))
-    assert (
-        "plugins.role.reviewer.triggers[0]: provider = 'nope': unknown trigger 'nope'; registered triggers:"
-        f' {", ".join(TRIGGERS.providers())}' in fails(reviewer(triggers=[{'provider': 'nope'}]))
+    assert "plugins.role.reviewer.triggers[0] = 'nope': no [plugins.trigger.nope]; there are" in fails(
+        reviewer(triggers=['nope'])
     )
-    assert 'plugins.role.reviewer.triggers[0].every = 3: Extra inputs are not permitted' in fails(
-        reviewer(triggers=[{'provider': 'cron', 'every': 3}])
+    assert 'plugins.trigger.timer.every = 3: Extra inputs are not permitted' in fails(
+        reviewer(triggers=['timer']), {'timer': {'provider': 'cron', 'every': 3}}
+    )
+    assert '[plugins.trigger.new_idea] is configured, and nothing uses it: add it to a list that names it' in fails(
+        reviewer(triggers=['seed'])
     )
     filler = load_campaign_config(
-        campaign_path, plugins={'role': reviewer(triggers=[{'provider': 'low_water', 'buffer': 1}], files='ideas')}
+        campaign_path,
+        plugins={'role': reviewer(triggers=['low_water'], files='ideas'), 'trigger': {'low_water': {'buffer': 1}}},
     )
     assert cfg.roles.sweeping()[RoleName('reviewer')].max_ideas == 1, 'any sweeping role can fill the backlog'
-    assert filler.roles.sweeping()[RoleName('reviewer')].triggers == [LowWaterTrigger(buffer=1)]
-    assert fails({'worker': {'max_concurrent': 2}}) == snapshot(
+    assert filler.triggers_of('reviewer') == [LowWaterTrigger(buffer=1)]
+    assert fails({'worker': {'max_concurrent': 2}}, {}) == snapshot(
         '  plugins.role.worker: [roles.worker] is removed in piloop 0.3.0: rename the table [roles.implementer] (https://piloop.autoresearch.inc/guides/upgrading#removed-keys). Fix: https://piloop.autoresearch.inc/reference/configuration describes the key'
     ), 'not a new sweeping role named worker'
     for workdir in ('repo', 'head'):
@@ -562,7 +573,7 @@ def test_a_table_with_a_new_name_defines_a_role_that_needs_a_prompt_file_and_tri
         'SELECT 1; SELECT 2': 'You can only execute one statement at a time',
     }.items():
         assert f'the query does not run on the piloop database: {error}' in fails(
-            reviewer(triggers=[{'provider': 'sql', 'when': query}])
+            reviewer(), {'new_idea': {'provider': 'sql', 'when': query}}
         ), query
     for name in ('run', 'Review Bot'):
         assert f'{name!r} is not a role name: use lowercase letters, digits, _ and -' in fails({name: good})
@@ -671,3 +682,31 @@ def test_a_capability_s_own_settings_are_in_its_table_and_use_names_the_instance
     assert (bare.harnesses, bare.runtime) == (['pi'], 'subprocess'), 'the providers that are on by default'
     monkeypatch.setenv('PILOOP_CAMPAIGN_PLUGINS__HARNESS__USE', '["script"]')
     assert load_campaign_config(campaign_path).harnesses == ['script'], 'a variable holds a JSON list'
+
+
+def test_an_instance_with_a_table_of_its_own_that_no_name_puts_in_use_is_refused(
+    campaign_path: Path,
+) -> None:
+    """A table that nothing uses is a mistake, such as a source left out of ``use``: piloop says where to add it."""
+    lessons = {'provider': 'lessons', 'budget': 800}
+    with pytest.raises(ConfigError, match=re.escape('[plugins.section.short] is configured, and nothing uses it: add')):
+        load_campaign_config(campaign_path, plugins={'section': {'short': lessons}})
+    with pytest.raises(ConfigError, match=re.escape('add it to [plugins.section] use')):
+        load_campaign_config(campaign_path, plugins={'section': {'short': lessons}})
+    used = load_campaign_config(
+        campaign_path, plugins={'section': {'short': lessons}, 'role': {'research': {'sections': ['short', 'goal']}}}
+    )
+    assert [type(s).__name__ for s in used.sections_of(RESEARCH)] == ['Lessons', 'Goal'], 'a role names it'
+    assert used.sections_of(WATCHDOG)[0] == Lessons(), "the watchdog's own lessons are the built-in one"
+    with pytest.raises(
+        ConfigError, match=re.escape('[plugins.harness.codex] is configured, and nothing uses it: add it')
+    ):
+        load_campaign_config(campaign_path, plugins={'harness': {'codex': {'model': 'x'}}})
+    keyed = {'harness': {'codex': {'model': 'x'}}, 'role': {'research': {'model': {'codex': 'y'}}}}
+    with pytest.raises(ConfigError, match=re.escape('add it to [plugins.harness] use')):
+        load_campaign_config(campaign_path, plugins=keyed)  # a key of a role's model puts no harness in use
+    rotated = {'harness': {'codex': {'model': 'x'}}, 'role': {'research': {'harnesses': ['codex']}}}
+    assert load_campaign_config(campaign_path, plugins=rotated).role_harnesses(RESEARCH) == ['codex']
+    assert load_campaign_config(campaign_path, plugins={'section': {'goal': {}}}).status_sections()[1] == Goal(), (
+        'an empty table changes nothing, and configures nothing'
+    )

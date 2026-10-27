@@ -107,6 +107,7 @@ HOST_CONTRACTS = {
     'secrets provider': "stores values in the session of the operation that calls it, or in a platform's store",
     'fact source': 'gathers facts through a Session, and a source that reads does I/O at the repo root',
     'harness provider': 'renders MCP servers by running its CLI, and reads its session files',
+    'MCP server provider': 'looks the program of a stdio server up on PATH',
     'campaign type': 'owns tables of the database, which the daemon migrates',
     'memory provider': 'owns tables of the database, which the daemon migrates',
     'archive provider': 'owns tables of the database, which the daemon migrates',

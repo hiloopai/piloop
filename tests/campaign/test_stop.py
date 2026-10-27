@@ -673,14 +673,8 @@ def stop_while_held(db: Database, campaign: Campaign, hold: str, review: str | N
     configure(db, campaign)
     if hold == 'spend':
         bill = str(Path(campaign.path).parent / 'bill')
-        source = {'provider': 'command', 'command': ['cat', bill], 'metrics': ['spend']}
         rule = {'hold_at': {'spend': 10}} | ({'while_held': review} if review else {})
-        set_config(
-            db,
-            campaign,
-            facts=[{'provider': 'campaign'}, {'provider': 'optimization'}, source],
-            plugins={'stop_rule': rule},
-        )
+        set_config(db, campaign, plugins={'stop_rule': rule, 'fact_source': with_spend(command=['cat', bill])})
     (idea,) = add_ideas(db, campaign, 'queued before the stop')
     with db.session() as s:
         s.get_one(Idea, idea).status = IdeaStatus.SCHEDULED
@@ -817,7 +811,7 @@ def test_the_closing_sweep_is_each_stopped_trigger_and_none_without_one(
 ) -> None:
     """``[plugins.role.watchdog] triggers = []`` drops the closing review; a ``stopped`` trigger of another role fires once."""
     (Path(campaign.path) / 'closer.md').write_text('# Close\n')
-    closer = {'prompt': 'closer.md', 'triggers': [{'provider': 'stopped'}]}
+    closer = {'prompt': 'closer.md', 'triggers': ['stopped']}
     configure(db, campaign, harness=HARNESS_WORSE, roles={'watchdog': {'triggers': []}, 'closer': closer}, max_runs=1)
     add_ideas(db, campaign, 'a')
     sched = make_scheduler(db, runtime, tmp_path)
@@ -1051,8 +1045,10 @@ def test_a_rule_that_reads_a_fact_needs_a_source_of_it_and_a_source_alone_only_p
     """A rule that reads a fact without a source of it would hold forever."""
     installed(monkeypatch, [EntryPoint('goes_on', f'{PLUGIN}:GoesOn', STOP_RULES.group)])
     try:
-        source = {**SOURCE, 'notices': {'spend': [10]}}
-        load_campaign_config(Path(campaign.path), facts=[*OWN, source], plugins={'stop_rule': {'provider': 'goes_on'}})
+        sources = with_spend(notices={'spend': [10]})
+        load_campaign_config(
+            Path(campaign.path), plugins={'stop_rule': {'provider': 'goes_on'}, 'fact_source': sources}
+        )
         refused = "the stop rule 'limits' reads spend, which no fact source of this campaign supplies"
         with pytest.raises(ConfigError, match=re.escape(refused)):
             load_campaign_config(Path(campaign.path), plugins={'stop_rule': {'hold_at': {'spend': 10}}})
@@ -1133,7 +1129,7 @@ def test_an_agent_may_run_its_role_timeout_cut_at_the_time_that_the_campaign_sto
         )
         assert seconds(stop) == 0, 'and one that runs has no time left'
         hold = {'max_hours': 3, 'hold_at': {'spend': 300}}
-        held = load_campaign_config(Path(campaign.path), facts=[*OWN, SOURCE], plugins={'stop_rule': hold})
+        held = load_campaign_config(Path(campaign.path), plugins={'stop_rule': hold, 'fact_source': with_spend()})
         assert agent_timeout(s, row, held, 1800, utcnow()) == 1800, 'a hold leaves no budget: nothing launches then'
 
 
@@ -1166,15 +1162,19 @@ def test_the_ratios_are_defined_once_and_take_the_facts_a_rule_names() -> None:
 
 
 COST = {'name': 'eval_cost_usd', 'direction': 'lower'}
-OWN = [{'provider': 'campaign'}, {'provider': 'optimization'}]
-SOURCE = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
+
+
+def with_spend(**keys: object) -> dict[str, object]:
+    """``[plugins.fact_source]`` with piloop's own sources and ``spend``, a ``command`` source, with ``keys`` over it."""
+    source = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']} | keys
+    return {'use': ['campaign', 'optimization', 'spend'], 'spend': source}
 
 
 def test_the_campaign_facts_sum_every_evaluation_count_the_attempts_and_a_reading_grows_since_the_latest_keep(
     db: Database, campaign: Campaign
 ) -> None:
     metrics = [{'name': 'score', 'direction': 'higher', 'role': 'primary'}, {'name': 'size', 'direction': 'lower'}]
-    set_config(db, campaign, metrics=[*metrics, COST], facts=[*OWN, SOURCE])
+    set_config(db, campaign, metrics=[*metrics, COST], plugins={'fact_source': with_spend()})
     measured = add_run(db, campaign)
     add_run(db, campaign, status=RunStatus.FAILED, end=RunEnd.CANCELLED, measured=False)
     add_run(db, campaign, status=RunStatus.RUNNING)
@@ -1283,7 +1283,8 @@ def test_a_rule_that_reads_the_spend_since_a_keep_needs_a_source_of_it(
         refused = "the stop rule 'keep_cost' reads spend, spend_since_keep, which no fact source of this campaign"
         with pytest.raises(ConfigError, match=re.escape(refused)):
             load_campaign_config(Path(campaign.path), plugins={'stop_rule': {'provider': 'keep_cost'}})
-        rule = {'stop_rule': {'provider': 'keep_cost'}}
-        load_campaign_config(Path(campaign.path), facts=[*OWN, SOURCE], plugins=rule)
+        load_campaign_config(
+            Path(campaign.path), plugins={'stop_rule': {'provider': 'keep_cost'}, 'fact_source': with_spend()}
+        )
     finally:
         host.close()

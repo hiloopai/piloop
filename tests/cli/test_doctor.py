@@ -69,7 +69,7 @@ def test_a_healthy_install_passes_every_check(
         f'ok    cli: {installed()}; not checked for a newer one: installed from file:///src/piloop: update that checkout',
         'ok    daemon: not running',
         f'ok    database: {tmp_path}/piloop.db at schema {HEADS}, current',
-        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 3 fact sources, 3 harness providers, 1 memory provider, 2 networks, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 21 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
+        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 3 fact sources, 3 harness providers, 2 MCP server providers, 1 memory provider, 2 networks, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 21 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
         'ok    secrets: from `piloop secret set` (PILOOP_SECRETS_COMMAND unset)',
         f'ok    campaign demo: {campaign.path}/piloop.toml loads',
         f'ok    skills (pi): current in {cfg.agent_skills_dir}',
@@ -253,8 +253,8 @@ def test_mcp_servers_are_checked_for_their_commands_and_their_secrets_by_name_on
     cfg: Settings, db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     servers = {
-        'exa': {'url': 'https://mcp.exa.ai/mcp', 'headers_env': {'x-api-key': 'EXA_API_KEY'}},
-        'xai': {'command': ['xai-server'], 'env': ['XAI_API_KEY', 'EXA_API_KEY']},
+        'exa': {'provider': 'http', 'url': 'https://mcp.exa.ai/mcp', 'headers_env': {'x-api-key': 'EXA_API_KEY'}},
+        'xai': {'provider': 'stdio', 'command': ['xai-server'], 'env': ['XAI_API_KEY', 'EXA_API_KEY']},
     }
     give_watchdog(
         db, campaign, servers, {'GATEWAY_URL': 'https://gw.example.com', 'GATEWAY_KEY': {'secret': 'TEAM_KEY'}}
@@ -263,7 +263,7 @@ def test_mcp_servers_are_checked_for_their_commands_and_their_secrets_by_name_on
         monkeypatch.delenv(name, raising=False)
     assert 'mcp demo' not in by_name(Settings(home=tmp_path / 'empty')), 'no campaigns, nothing to check'
     assert by_name(cfg)['mcp demo'] == Check(
-        'mcp demo', 'not on PATH: xai-server', 'install them, or fix the [mcp.*] tables'
+        'mcp demo', 'not on PATH: xai-server', 'install them, or fix the [plugins.mcp_server.*] tables'
     )
     on_path(tmp_path, 'xai-server')
     assert by_name(cfg)['mcp demo'] == Check('mcp demo', '2 server(s) (watchdog: exa, xai)')
@@ -298,7 +298,9 @@ def test_mcp_servers_are_checked_for_their_commands_and_their_secrets_by_name_on
 def test_the_secrets_command_is_deprecated_and_doctor_runs_it_reporting_names_only(
     cfg: Settings, db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    give_watchdog(db, campaign, {'xai': {'command': ['sh'], 'env': ['XAI_API_KEY', 'EXA_API_KEY']}})
+    give_watchdog(
+        db, campaign, {'xai': {'provider': 'stdio', 'command': ['sh'], 'env': ['XAI_API_KEY', 'EXA_API_KEY']}}
+    )
     for name in ('EXA_API_KEY', 'XAI_API_KEY'):
         monkeypatch.delenv(name, raising=False)
     shell = Settings(home=cfg.home, secrets_command="printf 'XAI_API_KEY=%s%s' xai value")
@@ -332,8 +334,11 @@ def give_watchdog(
         row = s.get_one(Campaign, campaign.id)
         row.config = reconfigured(
             row.config,
-            mcp=dict(servers),
-            plugins={'harness': {'script': script}, 'role': {'watchdog': {'mcp': list(servers)}}},
+            plugins={
+                'harness': {'script': script},
+                'mcp_server': dict(servers),
+                'role': {'watchdog': {'mcp': list(servers)}},
+            },
         )
         s.commit()
 

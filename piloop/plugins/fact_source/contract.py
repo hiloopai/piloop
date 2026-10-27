@@ -1,24 +1,23 @@
-"""The fact sources: where a campaign's facts come from (``[[facts]]``).
+"""The fact sources: where a campaign's facts come from (``[plugins.fact_source]``).
 
-A source is a provider of ``FACT_SOURCES``: its fields are its parameters, from its entry in ``[[facts]]``. It names
+A source is a provider of ``FACT_SOURCES``: its fields are its parameters, from ``[plugins.fact_source.<name>]``. It names
 the facts that it supplies (``supplies``), and gathers the values of those that a reader asks for (``gather``). A
 stop rule or a section reads the facts of every source of the campaign by name (``piloop.plugins.fact_source.facts``):
 piloop gives no fact a meaning of its own, a cost or a spend among them.
 
-A list that is not set is every installed source that is on by default (``DEFAULT``): ``campaign`` and
-``optimization``. A source may also read on its own: the daemon calls its ``read`` when it is ``due``, outside
+The campaign's sources are ``[plugins.fact_source] use``: unset, every installed source that is on by default
+(``DEFAULT``), ``campaign`` and ``optimization``. A source may also read on its own: the daemon calls its ``read`` when it is ``due``, outside
 any transaction, and then its ``record``. ``kit.readings.Readings`` does that for a source of named values, and
 ``command``, which runs a command that reports its values as the evaluate command does, is one.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from piloop.plugins.fact_source.facts import Fact, FactValue
-from piloop.plugins.host import Capability, Parameters, is_default
+from piloop.plugins.host import Capability, Many, Parameters, Pick, Scope, Use
 
 if TYPE_CHECKING:  # piloop.config imports this module, and the database imports piloop.config
     from sqlalchemy.orm import Session
@@ -31,10 +30,10 @@ class FactReadError(Exception):
 
 
 class FactSource(Parameters, ABC):
-    """One entry of ``[[facts]]``: ``{ provider = "<source>", <parameter> = <value> }``."""
+    """``[plugins.fact_source.<name>]``: a source of facts, which ``[plugins.fact_source] use`` names."""
 
     DEFAULT: ClassVar[bool] = False
-    """Whether a campaign that does not list its ``[[facts]]`` has this source, with its defaults. Only the class that
+    """Whether a campaign that does not set ``[plugins.fact_source] use`` has this source. Only the class that
     sets it is a default: a subclass is not (``is_default``)."""
     CHANGES: ClassVar[frozenset[type[EventModel]]] = frozenset()
     """The events that ``record`` writes, which wake the campaigns' pass: its stop rule reads the new values. A source
@@ -72,18 +71,12 @@ class FactSource(Parameters, ABC):
         """Record what ``read`` returned or raised. The caller commits. By default, nothing."""
 
 
-FACT_SOURCES = Capability('fact_source', FactSource, group='piloop.fact_sources', noun='fact source')
-"""Every fact source by name. ``[[facts]]`` lists a campaign's sources."""
-
-FactSourceEntry = Annotated[FactSource, FACT_SOURCES.entry]
-"""The type of an entry of ``[[facts]]``."""
-
-
-def on_by_default() -> list[FactSource]:
-    """The sources of a campaign that does not list its ``[[facts]]``: every installed source that is on by default."""
-    return [p.model() for _, p in sorted(FACT_SOURCES.providers().items()) if is_default(p.model)]
-
-
-def sources(listed: Sequence[FactSource] | None) -> list[FactSource]:
-    """The sources of a campaign: those that it lists, else ``on_by_default``."""
-    return on_by_default() if listed is None else list(listed)
+FACT_SOURCES = Capability(
+    'fact_source',
+    FactSource,
+    table=Many(Scope.CAMPAIGN, use=Use(Scope.CAMPAIGN, Pick.ORDERED)),
+    group='piloop.fact_sources',
+    noun='fact source',
+)
+"""Every fact source by name: ``[plugins.fact_source.<name>]``, and each provider that needs no keys. ``[plugins.
+fact_source] use`` lists the campaign's: unset, those that are ``DEFAULT``."""

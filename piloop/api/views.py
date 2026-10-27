@@ -388,7 +388,7 @@ class Rendered(View):
 
 
 class CampaignOverview(View):
-    """A campaign's overview: the sections of its ``[status] sections``, in order."""
+    """A campaign's overview: the sections of its ``[plugins.section] use``, in order."""
 
     kind: Literal['overview'] = 'overview'
     id: CampaignId

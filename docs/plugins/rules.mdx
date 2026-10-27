@@ -169,23 +169,19 @@ billing = "my_package:Billing"
 ```
 
 ```text
-[[facts]]
-provider = "campaign"
+[plugins.fact_source]
+use = ["campaign", "optimization", "billing"]
 
-[[facts]]
-provider = "optimization"
-
-[[facts]]
-provider = "billing"
+[plugins.fact_source.billing]
 url = "https://billing.example.com/campaigns/enwik8"
 ```
 
 `hold_at = { spend = 1000 }` then holds the campaign at that spend.
 
-A fact source is a provider of `FACT_SOURCES`, a subclass of `FactSource`. `[[facts]]` lists a campaign's sources; a
-campaign that does not list them has every installed source that is on by default (`DEFAULT`): `campaign`, the
-hours and tokens of any campaign, and `optimization`, its research. A list that adds a source lists those too. Two
-sources never supply the same fact.
+A fact source is a provider of `FACT_SOURCES`, a subclass of `FactSource`. `[plugins.fact_source] use` lists a
+campaign's sources; a campaign that does not set it has every installed source that is on by default (`DEFAULT`):
+`campaign`, the hours and tokens of any campaign, and `optimization`, its research. A list that adds a source lists
+those too, and a source with a table of its own must be in it. Two sources never supply the same fact.
 
 A `Readings` source (`piloop.plugins.fact_source.kit.readings`) is one that the daemon reads every `interval` seconds,
 outside any transaction. It implements `names` and `read`, and piloop does the rest: each reading is a `fact.read`

@@ -16,7 +16,7 @@ from piloop.api.client import Client
 from piloop.api.contract import Located, SecretBody
 from piloop.cli import common
 from piloop.cli.client import cwd, daemon_http
-from piloop.mcp import EnvName
+from piloop.ids import EnvName
 
 app = cyclopts.App(name='secret', help='The secrets that agents get in their environment. No command shows a value.')
 

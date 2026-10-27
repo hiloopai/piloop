@@ -195,14 +195,27 @@ class Pick(StrEnum):
 class Use:
     """``[plugins.<name>] use`` in the file of ``scope``: the instances that the campaign uses.
 
-    Unset, it is the providers that are ``DEFAULT`` (``is_default``): all of them for ``ORDERED``, and the one for
-    ``ONE``. The instances may be in another file: the runtimes are in ``config.toml``, and ``piloop.toml`` uses one.
+    Unset, it is ``defaults``, else the providers that are ``DEFAULT`` (``is_default``): all of them for ``ORDERED``,
+    and the one for ``ONE``. The instances may be in another file: the runtimes are in ``config.toml``, and ``piloop.toml`` uses one.
     """
 
     scope: Scope
     pick: Pick
     refuses: Callable[[str], str | None] | None = None
     """Why a name is refused before it is looked up, such as a provider that a release removed. None: none is."""
+    defaults: Callable[[], list[str]] | None = None
+    """The instances in use when ``use`` is unset, when a flag of a provider cannot say it, such as the sections of
+    ``piloop status`` in their order. None: the providers that are ``DEFAULT``."""
+
+
+class Reach(StrEnum):
+    """How the campaign reaches an instance with a table of its own, which ``CampaignConfig`` checks."""
+
+    NAMED = 'named'
+    """Only through a name that puts it in use (``Naming.USES``): ``use``, or a list of a role. A table that no such name
+    reaches is an error."""
+    EVERY = 'every'
+    """Every instance is in use, such as the roles: no name needs to reach one."""
 
 
 @dataclass(frozen=True)
@@ -220,6 +233,7 @@ class Many[P: Parameters]:
     None: such a table is refused."""
     use: Use | None = None
     """Whether ``[plugins.<name>] use`` picks the instances that the campaign uses, and where."""
+    reach: Reach = Reach.NAMED
 
 
 USE = 'use'
@@ -235,6 +249,9 @@ class Instances[P: Parameters]:
     """The instances in use, in order. Empty when the file of this table does not hold ``use``."""
     instances: dict[str, P]
     """The instances by name. Empty when the file of this table does not hold them."""
+    configured: tuple[str, ...] = ()
+    """The instances that a table of the file sets keys of: those that ``Reach`` checks. Not a provider that is an
+    instance only by its name."""
 
 
 @dataclass(frozen=True)
@@ -305,7 +322,9 @@ class Capability[P: Parameters]:
         self.entry = Entry(self)
         """``Annotated[P, CAP.entry]``: a table ``{ provider = "<name>", <its parameters> }``."""
         self.ref = Ref(self)
-        """``Annotated[str, CAP.ref]``: the name of an instance, which ``refs`` finds."""
+        """``Annotated[str, CAP.ref]``: the name of an instance that puts it in use, which ``refs`` finds."""
+        self.key = Ref(self, Naming.KEYS)
+        """``Annotated[str, CAP.key]``: the name of an instance as a key of a map over instances, which ``refs`` finds."""
         self._providers: dict[str, Provider[P]] | None = None
         self.activating = False
         """Whether its providers are being loaded now."""
@@ -482,7 +501,10 @@ class Capability[P: Parameters]:
         except ValueError as e:
             error = InitErrorDetails(type='value_error', loc=(USE,), input=value.get(USE), ctx={'error': e})
             raise ValidationError.from_exception_data(self.name, [error]) from e
-        return Instances(self, use, self.validated_instances(tables) if many.scope is scope else {})
+        if many.scope is not scope:
+            return Instances(self, use, {})
+        configured = tuple(name for name, table in tables.items() if table)
+        return Instances(self, use, self.validated_instances(tables), configured)
 
     def _used(self, value: object) -> tuple[str, ...]:
         """``use`` as the names it picks, else the providers that are ``DEFAULT``.
@@ -493,7 +515,10 @@ class Capability[P: Parameters]:
         """
         many = self._many()
         assert many.use is not None  # validated_table asks only a capability that declares it
-        defaults = [name for name, p in self.providers().items() if is_default(p.model)]
+        if many.use.defaults is not None:
+            defaults = many.use.defaults()
+        else:
+            defaults = [name for name, p in self.providers().items() if is_default(p.model)]
         match many.use.pick:
             case Pick.ONE if value is None:
                 if len(defaults) != 1:
@@ -807,6 +832,16 @@ class Entry[P: Parameters]:
         return self.capability.dumped(provider, info.mode)
 
 
+class Naming(StrEnum):
+    """What a name of an instance does with it."""
+
+    USES = 'uses'
+    """It puts the instance in use: ``use``, a role's rotation or list. Such a name reaches the instance (``Reach``)."""
+    KEYS = 'keys'
+    """It is a key of a map over instances, such as a role's ``model`` for each harness: the instance must exist, and the
+    name does not put it in use."""
+
+
 @dataclass(frozen=True)
 class Ref[P: Parameters]:
     """``Annotated[str, CAP.ref]``: the name of an instance of ``capability``, in the file of its scope.
@@ -816,6 +851,7 @@ class Ref[P: Parameters]:
     """
 
     capability: Capability[P]
+    naming: Naming = Naming.USES
 
 
 @dataclass(frozen=True)
@@ -826,6 +862,7 @@ class Reference:
     name: str
     at: tuple[str | int, ...]
     """The keys and list indexes from the model to the name, as in a validation error."""
+    naming: Naming = Naming.USES
 
 
 def refs(value: object, annotation: object = None, at: tuple[str | int, ...] = ()) -> list[Reference]:
@@ -838,7 +875,11 @@ def refs(value: object, annotation: object = None, at: tuple[str | int, ...] = (
         return [r for name, field in fields for r in refs(getattr(value, name), field, (*at, name))]
     origin, args = get_origin(annotation), get_args(annotation)
     if origin is Annotated:
-        marks = [Reference(m.capability, value, at) for m in args[1:] if isinstance(m, Ref) and isinstance(value, str)]
+        marks = [
+            Reference(m.capability, value, at, m.naming)
+            for m in args[1:]
+            if isinstance(m, Ref) and isinstance(value, str)
+        ]
         return [*marks, *refs(value, args[0], at)]
     if origin in (Union, UnionType):  # the value fits one arm: the first that finds references is it
         return next((found for arg in args if (found := refs(value, arg, at))), [])

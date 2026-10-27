@@ -1,7 +1,7 @@
 """``[plugins.role.orchestrator]``: piloop launches the campaign's orchestrator when news arrives for it.
 
 Off by default: with ``triggers = []``, the person runs an orchestrator of their own (the ``piloop-operate`` skill), and
-piloop launches none. ``triggers = [{ provider = "news" }]`` turns it on. Each agent of the role resumes the session of
+piloop launches none. ``triggers = ["news"]`` turns it on. Each agent of the role resumes the session of
 the one before (``continuity = "resume"``). The news comes in notes on its row (the ``news`` trigger).
 """
 
@@ -11,8 +11,8 @@ from typing import ClassVar
 from pydantic import Field
 
 from piloop.plugins.role.contract import Continuity, Files, SweepRole, Verb
-from piloop.plugins.section.contract import SectionEntry
-from piloop.plugins.trigger.contract import TriggerEntry
+from piloop.plugins.section.contract import SectionName
+from piloop.plugins.trigger.contract import TriggerName
 
 
 class OrchestratorRole(SweepRole):
@@ -55,8 +55,8 @@ class OrchestratorRole(SweepRole):
         }
     )
 
-    triggers: list[TriggerEntry] = []
-    """Off by default. ``[{ provider = "news" }]``: an agent starts when news arrives for the orchestrator."""
+    triggers: list[TriggerName] = []
+    """Off by default. ``["news"]``: an agent starts when news arrives for the orchestrator."""
     continuity: Continuity = Continuity.RESUME
     files: Files = Files.IDEAS
     timeout: float = 900
@@ -68,15 +68,5 @@ class OrchestratorRole(SweepRole):
         'journal lines',
         'ideas, seeds, verdicts and the campaign changes of the piloop commands in this brief',
     ]
-    sections: list[SectionEntry] | None = Field(
-        default=[
-            {'provider': 'headline'},
-            {'provider': 'trajectory'},
-            {'provider': 'runs'},
-            {'provider': 'queue'},
-            {'provider': 'agents'},
-            {'provider': 'candidates'},
-        ],
-        validate_default=True,
-    )
+    sections: list[SectionName] | None = ['headline', 'trajectory', 'runs', 'queue', 'agents', 'candidates']
     """The status that each brief shows after the news: lean, because each one stays in the resumed session."""

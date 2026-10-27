@@ -61,11 +61,13 @@ and once when the campaign stops:
 
 ```toml
 [plugins.role.watchdog]
-triggers = [{ provider = "cron" }, { provider = "stopped" }]
+triggers = ["cron", "stopped"]
 interval = 3600
 ```
 
-An empty list turns a role's triggers off. These are built in:
+A role names its triggers. A trigger with parameters has a table, `[plugins.trigger.<name>]`: a built-in name, such as
+`low_water`, changes that trigger for every role that names it, and a new name needs its `provider`. An empty list
+turns a role's triggers off. These are built in:
 
 <Triggers />
 
@@ -77,13 +79,15 @@ reviewer reads each new keep:
 ```toml
 [plugins.role.reviewer]
 prompt = "briefs/reviewer.md"
-triggers = [
-  { provider = "sql", when = "SELECT id FROM candidates WHERE campaign_id = :campaign AND verdict = 'keep' AND created_at > :since" },
-]
+triggers = ["new_keep"]
 max_concurrent = 1
 timeout = 900
 files = "seeds"
 writes = ["comments(finding) on a candidate", "seeds via idea seed"]
+
+[plugins.trigger.new_keep]
+provider = "sql"
+when = "SELECT id FROM candidates WHERE campaign_id = :campaign AND verdict = 'keep' AND created_at > :since"
 ```
 
 `:campaign` is the campaign's id, and `:since` is when the role's last agent started.
@@ -102,15 +106,20 @@ Your roles take their ideas first, and the implementer takes the rest. A keep of
 
 ## Sections
 
-A **section** is one part of what `piloop status` or a brief shows, such as `## Goal` or `## Queue`. Without
-`sections`, each shows every section that declares it. Set the list to choose and order them:
+A **section** is one part of what `piloop status` or a brief shows, such as `## Goal` or `## Queue`. Without a list,
+each shows every section that declares it. `[plugins.section] use` lists those of `piloop status`, and a role's
+`sections` those of its briefs, in order. A section with parameters has a table:
 
 ```toml
-[plugins.role.research]
-sections = [{ provider = "lessons", budget = 800 }, { provider = "goal" }, { provider = "queue" }, { provider = "pack" }]
+[plugins.section]
+use = ["headline", "trajectory", "runs"]
 
-[status]
-sections = [{ provider = "headline" }, { provider = "trajectory" }, { provider = "runs" }]
+[plugins.role.research]
+sections = ["research_lessons", "goal", "queue", "pack"]
+
+[plugins.section.research_lessons]
+provider = "lessons"
+budget = 800
 ```
 
 <Sections />
@@ -144,6 +153,9 @@ headless = ["--model", "{model}", "{prompt}"]
 | A built-in name, such as `[plugins.harness.claude]` | That harness, with the keys that the table changes. |
 | A new name with `provider`, such as `gateway` | That provider over its defaults: Claude Code through a gateway. |
 | A new name without `provider`, such as `mycli` | Its argv and nothing else: it takes no MCP servers, and records no tokens. |
+
+A harness with a table of its own is in `use`, or in a role's `harnesses`: piloop refuses a table that no rotation
+names.
 
 A campaign without `use` uses the ones on by default:
 

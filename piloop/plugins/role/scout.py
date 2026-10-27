@@ -25,7 +25,7 @@ from piloop.db.models import AgentSession, Candidate, Event, EventModel, Idea, R
 from piloop.db.triggers.changelog import IdeaStatusChanged
 from piloop.ids import AgentSessionId, CampaignId, IdeaStatus, RoleName, TargetKind
 from piloop.plugins.role.contract import Sweep, SweepRole
-from piloop.plugins.trigger.contract import TriggerEntry
+from piloop.plugins.trigger.contract import TriggerName
 from piloop.plugins.verdict_rule.contract import Outcome
 from piloop.text import cell
 
@@ -151,7 +151,7 @@ class ScoutRole(SweepRole):
         " '<your signature>')` into `{piloop} sql -`."
     )
 
-    triggers: list[TriggerEntry] = Field(default=[{'provider': 'cron'}], validate_default=True)
+    triggers: list[TriggerName] = ['cron']
     """The timer: a scout sweep every ``interval`` seconds."""
     interval: float = Field(default=0, ge=0)
     """The number of seconds between two scout sweeps, counted from the start of the last one. The first sweep counts

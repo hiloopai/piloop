@@ -308,7 +308,7 @@ def escalated(
 def gather(
     s: Session, campaign: Campaign, cfg: CampaignConfig, reads: Collection[Fact[FactValue]], now: datetime
 ) -> Facts:
-    """Gather the facts in ``reads`` from the campaign's fact sources (``[[facts]]``), as of ``now``. Most cost queries."""
+    """Gather the facts in ``reads`` from the campaign's fact sources (``[plugins.fact_source] use``), as of ``now``. Most cost queries."""
     wanted = frozenset(reads)
     values: dict[str, FactValue] = {}
     for source in cfg.fact_sources():

@@ -30,7 +30,7 @@ needs to keep a session open:
 
 ```toml
 [plugins.role.orchestrator]
-triggers = [{ provider = "news" }]
+triggers = ["news"]
 ```
 
 - A message, an escalation or the stop launches it within `quiet_seconds` (30). Other news, such as a verdict, launches

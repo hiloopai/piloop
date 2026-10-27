@@ -3,7 +3,7 @@ from importlib.resources import files
 from pydantic import Field
 
 from piloop.plugins.role.contract import SweepRole
-from piloop.plugins.trigger.contract import TriggerEntry
+from piloop.plugins.trigger.contract import TriggerName
 
 
 class WatchdogRole(SweepRole):
@@ -13,16 +13,7 @@ class WatchdogRole(SweepRole):
     INCIDENT_PROMPT = files(__package__) / 'prompts' / 'watchdog_incident.md'
     ROUTINE_PROMPT = files(__package__) / 'prompts' / 'watchdog_progress.md'
 
-    triggers: list[TriggerEntry] = Field(
-        default=[
-            {'provider': 'run_failed'},
-            {'provider': 'dead_at_startup'},
-            {'provider': 'leaking_funnel'},
-            {'provider': 'cron'},
-            {'provider': 'stopped'},
-        ],
-        validate_default=True,
-    )
+    triggers: list[TriggerName] = ['run_failed', 'dead_at_startup', 'leaking_funnel', 'cron', 'stopped']
     """A failed run, an agent dead at startup or a leaking funnel requests an incident sweep, the timer requests a progress review, and the campaign's stop requests
     the closing review."""
     interval: float = Field(default=1800, ge=0)

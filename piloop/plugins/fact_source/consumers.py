@@ -16,7 +16,7 @@ from piloop.plugins.contribution import Contribution, DaemonHost
 from piloop.plugins.fact_source.contract import FactReadError, FactSource
 
 FACTS: Kinds = frozenset({CampaignAdded, CampaignConfigChanged, CampaignStatusChanged})
-"""What wakes the facts' reading: a campaign, its ``[[facts]]`` or its status may make a source due."""
+"""What wakes the facts' reading: a campaign, its fact sources or its status may make a source due."""
 
 
 def contribution(host: DaemonHost) -> Contribution:

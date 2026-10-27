@@ -536,7 +536,8 @@ class Campaigns:
         p = self._pass(s, campaign, cfg, name, role, now, left, quiet)
         fires: list[Fire] = []
         steers: list[Steer] = []
-        for trigger in (t for t in role.triggers if t.ON_STOP is stopping and (quiet is None or quiet in t.WHILE)):
+        triggers = cfg.triggers_of(name)
+        for trigger in (t for t in triggers if t.ON_STOP is stopping and (quiet is None or quiet in t.WHILE)):
             try:
                 fire = trigger.fire(p)
                 due = trigger.due_in(p) if fire is None else None
@@ -855,7 +856,7 @@ class Campaigns:
                 *(['', '# Notes', *(f'{n.body}\n' for n in notes)] if notes else []),
                 f'- Sweep started at: {now:%Y-%m-%d %H:%M:%S} (UTC; the sections below are as of then).',
                 '',
-                markdown(table.shown(), rendering),
+                markdown(cfg.sections_of(agent_session.kind), rendering),
             ]
             agent = Agent(role=agent_session.kind, session=agent_session_id)
             reason, context = agent_session.reason or 'requested', '\n'.join(lines)
@@ -1009,9 +1010,7 @@ def awake_roles(cfg: CampaignConfig, phase: Quiet | None) -> frozenset[RoleName]
     """The sweeping roles with a trigger that names ``phase`` (``Trigger.WHILE``). None of them while the campaign runs."""
     if phase is None:
         return frozenset()
-    return frozenset(
-        name for name, role in cfg.roles.sweeping().items() if any(phase in t.WHILE for t in role.triggers)
-    )
+    return frozenset(name for name in cfg.roles.sweeping() if any(phase in t.WHILE for t in cfg.triggers_of(name)))
 
 
 def launches(campaign: Campaign, cfg: CampaignConfig, held: str | None) -> bool:

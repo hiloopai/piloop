@@ -1168,9 +1168,9 @@ def test_an_implementer_brief_names_its_checkout_as_the_place_to_work_and_the_ca
     assert git_words(brief) == []
 
 
-@pytest.mark.parametrize('sections', [[{'provider': 'lessons'}, {'provider': 'history'}], [{'provider': 'history'}]])
+@pytest.mark.parametrize('sections', [['lessons', 'history'], ['history']])
 def test_an_implementer_brief_ends_with_its_roles_sections(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, sections: list[dict[str, str]]
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, sections: list[str]
 ) -> None:
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)

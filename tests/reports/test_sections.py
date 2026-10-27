@@ -8,12 +8,12 @@ import pytest
 from inline_snapshot import snapshot
 
 from piloop.api.views import CampaignOverview, Figure, Figures, Lines, Rendered, Table, Text
-from piloop.config import StatusConfig
 from piloop.db.models import Campaign, Pause, RunEnd, RunStatus
 from piloop.db.session import Database
 from piloop.ids import CampaignStatus
 from piloop.plugins import host
 from piloop.plugins.fact_source.kit.readings import Readings
+from piloop.plugins.host import Scope
 from piloop.plugins.role.contract import ImplementerRole
 from piloop.plugins.section.contract import SECTIONS, Rendering, Section, Surface, defaults, markdown
 from piloop.plugins.stop_rule.contract import STOP_RULES
@@ -100,20 +100,20 @@ def names(sections: list[Section]) -> list[str]:
 
 @pytest.mark.usefixtures('keep_rate')
 def test_an_installed_section_shows_where_it_declares_in_its_order_unless_a_list_is_set() -> None:
-    status = names(StatusConfig().shown())
+    status = SECTIONS.used({})
     assert status[status.index('evaluations') + 1] == 'keep_rate', 'ORDER 172: between the evaluations and the funnel'
-    assert 'keep_rate' not in names(defaults(Surface.SWEEP)), 'only where it declares'
-    listed = StatusConfig.model_validate({'sections': [{'provider': 'goal'}]})
-    assert names(listed.shown()) == ['goal'], 'a list in the configuration replaces the defaults'
+    assert 'keep_rate' not in defaults(Surface.SWEEP), 'only where it declares'
+    listed = SECTIONS.validated_table({'use': ['goal']}, Scope.CAMPAIGN)
+    assert SECTIONS.used({'section': listed}) == ('goal',), 'a list in the configuration replaces the defaults'
 
 
 def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     overview = ['headline', 'goal', 'tracks', 'trajectory', 'runs', 'queue', 'idle_queue', 'agents', 'evaluations']
     overview += ['funnel', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
-    assert names(defaults(Surface.STATUS)) == overview
-    assert names(defaults(Surface.SWEEP)) == ['lessons', 'incidents', *overview, 'tools', 'pack']
-    assert names(defaults(Surface.RUN)) == ['lessons', 'history']
-    assert names(ImplementerRole().shown()) == ['lessons', 'history']
+    assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
+    assert defaults(Surface.SWEEP) == ['lessons', 'incidents', *overview, 'tools', 'pack']
+    assert defaults(Surface.RUN) == ['lessons', 'history']
+    assert ImplementerRole().shown() == ['lessons', 'history']
 
 
 def test_the_funnel_shows_how_far_the_attempts_got_and_where_the_others_ended(db: Database, campaign: Campaign) -> None:
@@ -141,7 +141,7 @@ def test_the_funnel_shows_nothing_without_the_source_of_its_fact(
 ) -> None:
     installed(monkeypatch, [EntryPoint('goes_on', f'{PLUGIN}:GoesOn', STOP_RULES.group)])
     try:
-        set_config(db, campaign, facts=[{'provider': 'campaign'}], plugins={'stop_rule': {'provider': 'goes_on'}})
+        set_config(db, campaign, plugins={'stop_rule': {'provider': 'goes_on'}, 'fact_source': {'use': ['campaign']}})
         with db.session() as s:
             p = s.get_one(Campaign, campaign.id)
             assert markdown(sections('funnel'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s))) == ''
@@ -158,8 +158,8 @@ def test_cost_reads_the_metric_it_names_and_shows_nothing_without_a_spend_or_a_m
         assert markdown(sections('cost'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s))) == '', (
             'nothing to show'
         )
-    source = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
-    set_config(db, campaign, facts=[{'provider': 'campaign'}, {'provider': 'optimization'}, source])
+    spend = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
+    set_config(db, campaign, plugins={'fact_source': {'use': ['campaign', 'optimization', 'spend'], 'spend': spend}})
     add_run(db, campaign, keep_score=4)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)

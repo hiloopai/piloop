@@ -23,6 +23,7 @@ import re
 import warnings
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import count
 from pathlib import Path
 from typing import Literal, Protocol, assert_never
 
@@ -132,23 +133,214 @@ class Move:
         return Move(self.new, self.old)
 
 
-def moved(toml: Path, raw: dict[str, object], moves: Sequence[Move], env: str, removed_in: Version) -> None:
-    """Apply ``moves`` to the parsed file, and to the variables of its keys (``<env><KEY>__<KEY>``), with a warning.
+@dataclass(frozen=True)
+class Tag:
+    """A key that a moved table gains: ``key`` on each table at ``path``, by the first marker of ``by`` that it sets.
 
-    A variable of an old key sets the new key, over the file, as the variable of the new key would.
+    ``Tag('plugins.mcp_server.*', 'provider', (('url', 'http'), ('command', 'stdio')))`` gives a server of 0.3 the
+    provider that its keys say. A table that sets ``key`` already keeps it.
     """
-    for move in moves:
-        if found := move.apply(raw):
-            parts = found[0].split('.')
-            # an inline table sets none of its keys on a line of its own: warn at the key that holds it
-            key = next((k for n in range(len(parts), 0, -1) if _lines(toml, k := '.'.join(parts[:n]))), found[0])
-            warn(toml, key, f'{_written(move.old)} is deprecated; write {_written(move.new)}', removed_in=removed_in)
-        for name, value in sorted(os.environ.items()):
-            if not name.upper().startswith(env) or (path := move.rebased(name[len(env) :].lower().split('__'))) is None:
+
+    path: str
+    key: str
+    by: tuple[tuple[str, str], ...]
+    """Each marker key, and the value of ``key`` for a table that sets it, in order."""
+
+    def apply(self, raw: dict[str, object]) -> list[str]:
+        """Set ``key`` on each table at ``path`` that has a marker and no ``key``. Return their paths, dotted."""
+        tagged: list[str] = []
+        for names in list(_matches(raw, self.path.split('.'), ())):
+            path = _filled(self.path, names)
+            table = _value(raw, path)
+            if not isinstance(table, dict) or self.key in table:
                 continue
-            _put(raw, path, value, wins=True)
-            new = env + '__'.join(path).upper()
-            warn(toml, name, f'{name} is deprecated; set {new}', removed_in=removed_in)
+            if (value := next((v for marker, v in self.by if marker in table), None)) is not None:
+                table[self.key] = value
+                tagged.append('.'.join(path))
+        return tagged
+
+    def inverse(self) -> Untag:
+        """The step back, for a downgrade."""
+        return Untag(self.path, self.key, tuple(v for _, v in self.by))
+
+
+@dataclass(frozen=True)
+class Untag:
+    """The inverse of a ``Tag``: ``key`` leaves each table at ``path`` where it has one of ``values``."""
+
+    path: str
+    key: str
+    values: tuple[str, ...]
+
+    def apply(self, raw: dict[str, object]) -> list[str]:
+        """Drop ``key`` where its value is one of ``values``. Return the paths of the tables, dotted."""
+        untagged: list[str] = []
+        for names in list(_matches(raw, self.path.split('.'), ())):
+            path = _filled(self.path, names)
+            table = _value(raw, path)
+            if isinstance(table, dict) and table.get(self.key) in self.values:
+                del table[self.key]
+                untagged.append('.'.join(path))
+        return untagged
+
+
+@dataclass(frozen=True)
+class Prune:
+    """The keys of each table at ``path`` that hold nothing: null, or an empty list or table.
+
+    A stored config dumped every key of a model, its defaults included, where a file sets only some. A table of a
+    model that a release split into providers (an MCP server into ``http`` and ``stdio``) then holds the keys of the
+    other one, empty. Dropping them changes no value: an empty key is its default.
+    """
+
+    path: str
+
+    def apply(self, raw: dict[str, object]) -> list[str]:
+        """Drop the keys that hold nothing. Return the paths of the tables that lost one, dotted."""
+        pruned: list[str] = []
+        for names in list(_matches(raw, self.path.split('.'), ())):
+            path = _filled(self.path, names)
+            table = _value(raw, path)
+            if isinstance(table, dict) and (empty := [k for k, v in table.items() if v in (None, [], {})]):
+                for key in empty:
+                    del table[key]
+                pruned.append('.'.join(path))
+        return pruned
+
+    def inverse(self) -> None:
+        """Nothing to undo: each key that it dropped is the default of its model."""
+        return None
+
+
+type Step = Move | Prune | Tag
+"""One rewrite of a bridge's data: a key that moved, keys that hold nothing, or a key that a moved table gains."""
+
+
+def moved(toml: Path, raw: dict[str, object], steps: Sequence[Step], env: str, removed_in: Version) -> None:
+    """Apply ``steps`` to the parsed file, and to the variables of its keys (``<env><KEY>__<KEY>``), with a warning.
+
+    A variable of an old key sets the new key, over the file, as the variable of the new key would. A ``Tag`` and a
+    ``Prune`` only complete what a ``Move`` before them warned about, and warn of nothing themselves.
+    """
+    for step in steps:
+        match step:
+            case Tag() | Prune():
+                step.apply(raw)
+            case _:  # a Move
+                _move(toml, raw, step, env, removed_in)
+
+
+def _move(toml: Path, raw: dict[str, object], move: Move, env: str, removed_in: Version) -> None:
+    """Apply ``move`` to the parsed file and to the variables of its keys, and warn at the first old key it moved."""
+    if found := move.apply(raw):
+        parts = found[0].split('.')
+        # an inline table sets none of its keys on a line of its own: warn at the key that holds it
+        key = next((k for n in range(len(parts), 0, -1) if _lines(toml, k := '.'.join(parts[:n]))), found[0])
+        warn(toml, key, f'{_written(move.old)} is deprecated; write {_written(move.new)}', removed_in=removed_in)
+    for name, value in sorted(os.environ.items()):
+        if not name.upper().startswith(env) or (path := move.rebased(name[len(env) :].lower().split('__'))) is None:
+            continue
+        _put(raw, path, value, wins=True)
+        new = env + '__'.join(path).upper()
+        warn(toml, name, f'{name} is deprecated; set {new}', removed_in=removed_in)
+
+
+@dataclass(frozen=True)
+class Entries:
+    """A list of inline ``{ provider = "…", … }`` entries at ``old`` is a list of names at ``new`` now.
+
+    An entry without parameters is the name of its provider. One with parameters becomes an instance table at
+    ``tables``: named after the provider, after the name of the list's owner first when ``prefix`` gives one (``*``,
+    the name that the wildcard of ``old`` stands for, such as a role's), with ``_2`` and on when that name is taken.
+    ``Entries('plugins.role.*.triggers', 'plugins.role.*.triggers', 'plugins.trigger', '*')`` turns research's
+    ``[{ provider = "low_water", buffer = 4 }]`` into ``["research_low_water"]`` and its table.
+    """
+
+    old: str
+    new: str
+    tables: str
+    prefix: str | None
+
+    def apply(self, raw: dict[str, object]) -> list[str]:
+        """Turn each list that ``old`` matches into names at ``new``, in place. Return the old keys, dotted.
+
+        A list that is not set (null) goes, and sets nothing.
+        """
+        found = [names for names in _matches(raw, self.old.split('.'), ()) if self._old(raw, names)]
+        for names in found:
+            listed = _pop(raw, _filled(self.old, names))
+            if isinstance(listed, list):
+                owner = names[0] if self.prefix == '*' and names else self.prefix
+                _put(raw, _filled(self.new, names), [self._named(raw, e, owner) for e in listed], wins=True)
+        return ['.'.join(_filled(self.old, names)) for names in found]
+
+    def _old(self, raw: dict[str, object], names: tuple[str, ...]) -> bool:
+        """Whether the list at ``old`` is of the old form: at a key that moved, or with an entry that is a table."""
+        listed = _value(raw, _filled(self.old, names))
+        return self.old != self.new or (isinstance(listed, list) and any(isinstance(e, dict) for e in listed))
+
+    def _named(self, raw: dict[str, object], entry: object, owner: str | None) -> object:
+        """The name of ``entry``, after its parameters went to a table of their own. Not an entry: as it is."""
+        if not isinstance(entry, dict) or not isinstance(provider := entry.get('provider'), str):
+            return entry
+        params = {k: v for k, v in entry.items() if k != 'provider'}
+        if not params:
+            return provider
+        taken = _table(raw, *self.tables.split('.')) or {}
+        base = f'{owner}_{provider}' if owner else provider
+        table = params if base == provider else {'provider': provider, **params}
+        name = next(n for i in count(1) if taken.get(n := base if i == 1 else f'{base}_{i}', table) == table)
+        _put(raw, [*self.tables.split('.'), name], table, wins=True)
+        return name
+
+    def inverse(self) -> Listed:
+        """The way back, for a downgrade: each name at ``new`` is an entry at ``old`` again."""
+        return Listed(self)
+
+
+@dataclass(frozen=True)
+class Listed:
+    """The inverse of ``Entries``: a list of names is a list of inline entries again.
+
+    The tables stay: two lists can name one, such as a section of a role and of ``[status]``. A downgrade drops them.
+    """
+
+    entries: Entries
+
+    def apply(self, raw: dict[str, object]) -> list[str]:
+        """Turn each list at ``new`` back into entries at ``old``, in place. Return the new keys, dotted."""
+        e = self.entries
+        known = _table(raw, *e.tables.split('.')) or {}
+        found = list(_matches(raw, e.new.split('.'), ()))
+        for names in found:
+            listed = _pop(raw, _filled(e.new, names))
+            if isinstance(listed, list):
+                _put(raw, _filled(e.old, names), [_entry(n, known) for n in listed], wins=True)
+        return ['.'.join(_filled(e.new, names)) for names in found]
+
+
+def _entry(name: object, tables: Mapping[str, object]) -> object:
+    """The inline entry of the instance ``name``: its table, with its ``provider``, else the provider of its name."""
+    table = tables.get(name) if isinstance(name, str) else None
+    if not isinstance(table, dict):
+        return {'provider': name} if isinstance(name, str) else name
+    return {'provider': table.get('provider', name), **{k: v for k, v in table.items() if k != 'provider'}}
+
+
+def entries(toml: Path, raw: dict[str, object], lists: Sequence[Entries], removed_in: Version) -> None:
+    """Apply ``lists`` to the parsed file, with a warning for each that a list of the file matched.
+
+    A list that an earlier bridge wrote, such as the ``[[facts]]`` of a ``[spend]``, gets that bridge's warning only.
+    """
+    for listed in lists:
+        if written := [key for key in listed.apply(raw) if _lines(toml, key)]:
+            where = 'a list of the names of [' + listed.tables + '.<name>] tables'
+            warn(
+                toml,
+                written[0],
+                f'{_written(listed.old)} of inline entries is deprecated; write {where}',
+                removed_in=removed_in,
+            )
 
 
 def _written(path: str) -> str:
@@ -260,6 +452,25 @@ def plugin_tables(toml: Path, raw: dict[str, object], removed_in: Version) -> No
     moved(toml, raw, PLUGIN_TABLES, 'PILOOP_CAMPAIGN_', removed_in)
 
 
+MCP_PROVIDERS: tuple[Step, ...] = (
+    Prune('plugins.mcp_server.*'),
+    Tag('plugins.mcp_server.*', 'provider', (('url', 'http'), ('command', 'stdio'))),
+)
+"""Each MCP server of 0.3 under ``[plugins.mcp_server]`` gets the provider that its keys say, without the other's."""
+MCP_TABLES: tuple[Step, ...] = (Move('mcp.*', 'plugins.mcp_server.*'), *MCP_PROVIDERS)
+"""The MCP servers, as ``[plugins.mcp_server.<name>]`` with the provider that their keys say."""
+
+
+@bridge('0.5.0', '[mcp.<name>] is [plugins.mcp_server.<name>]: delete mcp_tables and MCP_TABLES')
+def mcp_tables(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """``[mcp.<name>]`` is ``[plugins.mcp_server.<name>]``, with the provider that its keys say.
+
+    ``provider = "http"`` with ``url``, ``provider = "stdio"`` with ``command``. Its
+    ``PILOOP_CAMPAIGN_MCP__<NAME>__<KEY>`` variables move with it.
+    """
+    moved(toml, raw, MCP_TABLES, 'PILOOP_CAMPAIGN_', removed_in)
+
+
 def _roles(raw: dict[str, object]) -> dict[str, object] | None:
     """``[plugins.role]`` of the parsed file, added when it is missing. None when a value on its way is not a table."""
     plugins = raw.setdefault('plugins', {})
@@ -286,7 +497,7 @@ def trigger_kind(toml: Path, raw: dict[str, object], removed_in: Version) -> Non
         warn(
             toml,
             f'plugins.role.{name}.triggers',
-            'kind in a trigger is deprecated; write { provider = "<trigger>", … }',
+            'kind in a trigger is deprecated; name the trigger, and set its keys in [plugins.trigger.<name>]',
             removed_in=removed_in,
             nth=_nth(toml, f'plugins.role.{name}', 'triggers'),
         )
@@ -357,7 +568,8 @@ def spend_table(toml: Path, raw: dict[str, object], removed_in: Version) -> None
     warn(
         toml,
         'spend',
-        '[spend] is deprecated; write a [[facts]] source with provider = "command" whose command reports spend',
+        '[spend] is deprecated; write a [plugins.fact_source.<name>] source with provider = "command" whose command'
+        ' reports spend, and name it in [plugins.fact_source] use',
         removed_in=removed_in,
     )
 
@@ -438,7 +650,7 @@ def anomaly_trigger(toml: Path, raw: dict[str, object], removed_in: Version) -> 
         warn(
             toml,
             f'plugins.role.{name}.triggers',
-            'the anomaly trigger is deprecated; write { provider = "run_failed" }, { provider = "dead_at_startup" }',
+            'the anomaly trigger is deprecated; write "run_failed", "dead_at_startup"',
             removed_in=removed_in,
             nth=_nth(toml, f'plugins.role.{name}', 'triggers'),
         )
@@ -475,7 +687,7 @@ def wake_budget(toml: Path, raw: dict[str, object], removed_in: Version) -> None
     keeps them. The watchdog's old default was 0: it now reads the lessons too.
     """
     from piloop.plugins.role.contract import ROLES, new_role  # here: the roles import this module
-    from piloop.plugins.section.contract import SECTIONS, defaults  # here: the sections import this module
+    from piloop.plugins.section.contract import defaults  # here: the sections import this module
 
     shared = _popped(raw, 'memory', 'wake_budget')
     if (roles := _roles(raw)) is None:
@@ -500,12 +712,12 @@ def wake_budget(toml: Path, raw: dict[str, object], removed_in: Version) -> None
         # a role of its own sections, which wake_budget never sized
         if model.model_fields['sections'].default is not None:
             continue
-        listed = [SECTIONS.dumped(s, 'python') for s in defaults(model.SURFACE)]
+        listed = [{'provider': name} for name in defaults(model.SURFACE)]
         others = [e for e in listed if e['provider'] != LESSONS]
         table['sections'] = [{'provider': LESSONS, 'budget': budget}, *others] if budget else others
 
 
-_MOVED = "wake_budget is deprecated; set budget in the lessons entry of the role's sections"
+_MOVED = "wake_budget is deprecated; set budget in a [plugins.section.<name>] of lessons, in the role's sections"
 
 
 @bridge('0.4.0', '[memory] documents is [plugins.memory] documents: delete the memory_documents bridge')
@@ -563,6 +775,27 @@ def harness_providers(toml: Path, raw: dict[str, object], removed_in: Version) -
             table['provider'] = named = tally or mcp
             message = f'mcp and usage of [plugins.harness.{name}] are deprecated; write provider = "{named}"'
         warn(toml, f'plugins.harness.{name}', message, removed_in=removed_in)
+
+
+PLUGIN_LISTS = (
+    Entries('plugins.role.*.triggers', 'plugins.role.*.triggers', 'plugins.trigger', '*'),
+    Entries('plugins.role.*.sections', 'plugins.role.*.sections', 'plugins.section', '*'),
+    Entries('status.sections', 'plugins.section.use', 'plugins.section', 'status'),
+    Entries('facts', 'plugins.fact_source.use', 'plugins.fact_source', None),
+)
+"""The lists of inline entries of the triggers, the sections and the fact sources, as lists of names."""
+
+
+@bridge('0.5.0', 'the lists of triggers, sections and facts name their instances: delete plugin_lists and PLUGIN_LISTS')
+def plugin_lists(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """A list of ``{ provider = "…", … }`` entries names instances: ``[plugins.<capability>.<name>]`` tables.
+
+    ``[plugins.role.<name>] triggers`` and ``sections`` name ``[plugins.trigger.<name>]`` and
+    ``[plugins.section.<name>]``. ``[status] sections`` is ``[plugins.section] use``, and ``[[facts]]`` is
+    ``[plugins.fact_source] use`` with a table for each source. An entry without parameters is the name of its provider.
+    One with parameters gets a table, named after its role (``research_low_water``) or ``status`` first.
+    """
+    entries(toml, raw, PLUGIN_LISTS, removed_in)
 
 
 @bridge(
@@ -799,6 +1032,36 @@ def removed_env(environ: Mapping[str, str]) -> str | None:
     return f'{renamed}: PILOOP_PROJECT_<KEY> is removed in piloop 0.3.0; rename or unset it ({REMOVED_KEYS})'
 
 
+OLD_INSTANCES = {'harness': 'harness', 'model': 'harness', 'max_concurrent': 'harness', 'mcp': 'mcp_server'}
+"""The keys of a 0.3.1 file that configured instances, and their capability now."""
+
+
+@until(
+    '0.5.0', 'a 0.3.1 table that nothing uses warns: delete old_instances, OLD_INSTANCES, unused_instance, their calls'
+)
+def old_instances(raw: Mapping[str, object]) -> frozenset[tuple[str, str]]:
+    """The instances, by capability and name, that a file configures in the keys of 0.3.1, before the bridges run.
+
+    A 0.3.1 file set a model for a harness that only ideas pinned, and could define an MCP server that no role listed.
+    Such a table that nothing uses only warns (``unused_instance``), where a table of the new shape is refused.
+    """
+    return frozenset(
+        (capability, str(name))
+        for key, capability in OLD_INSTANCES.items()
+        if isinstance(table := raw.get(key), dict)
+        for name in table
+    )
+
+
+def unused_instance(toml: Path, name: str, message: str) -> None:
+    """Warn that a table of 0.3.1 that nothing uses, the instance ``name``, is refused from 0.5.0, as a new one is."""
+    warn(toml, name, f'{message}; a file of 0.3 only gets this warning', removed_in=UNUSED_UNTIL)
+
+
+UNUSED_UNTIL = Version.parse('0.5.0')
+"""The release from which a table of 0.3.1 that nothing uses is refused, as any other."""
+
+
 def show_in_cli() -> None:
     """Show each deprecation once. By default, Python hides a ``DeprecationWarning`` outside ``__main__``."""
     warnings.simplefilter('default', PiloopDeprecationWarning)
@@ -817,12 +1080,15 @@ def warn(toml: Path, key: str, message: str, *, removed_in: Version, nth: int = 
 
 
 def _lines(toml: Path, key: str) -> list[int]:
-    """The numbers of the lines of ``toml`` that set the dotted ``key``: its table header, or its last part."""
+    """The numbers of the lines of ``toml`` that set the dotted ``key``: its table header, or its last part.
+
+    The header of an array of tables (``[[facts]]``) sets it too.
+    """
     last = key.rpartition('.')[2]
     return [
         n
         for n, line in enumerate(toml.read_text().splitlines(), 1)
-        if line.strip() == f'[{key}]' or line.partition('=')[0].strip() == last
+        if line.strip() in (f'[{key}]', f'[[{key}]]') or line.partition('=')[0].strip() == last
     ]
 
 

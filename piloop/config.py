@@ -34,16 +34,17 @@ from pydantic_settings import (
 )
 
 from piloop import deprecated
-from piloop.ids import IMPLEMENTER, RoleName, RungName, TrackName
-from piloop.mcp import EnvName, McpServer, ServerName, env_names
-from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource, FactSourceEntry, sources
+from piloop.ids import IMPLEMENTER, EnvName, RoleName, RungName, TrackName
+from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource
 from piloop.plugins.harness.contract import HARNESSES, Harness
-from piloop.plugins.host import Plugins, PluginTables, Scope, refs
+from piloop.plugins.host import Capability, Instances, Many, Naming, Plugins, PluginTables, Reach, Scope, refs
+from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer, env_names
 from piloop.plugins.metric import Direction
 from piloop.plugins.role.contract import ROLES, ImplementerRole, RoleConfig, SweepRole
 from piloop.plugins.runtime.contract import RUNTIMES
-from piloop.plugins.section.contract import Section, SectionEntry, Surface, chosen
+from piloop.plugins.section.contract import SECTIONS, Section
 from piloop.plugins.stop_rule.contract import STOP_RULES, Shape
+from piloop.plugins.trigger.contract import TRIGGERS, Trigger
 from piloop.settings import AgentSettings, settings
 
 CONFIG_FILE = 'piloop.toml'
@@ -252,19 +253,16 @@ class AgentTimings(BaseModel):
         return home.model_copy(update=self.model_dump(exclude_none=True))
 
 
-class StatusConfig(BaseModel):
-    """``[status]``: what ``piloop status``, the API and a UI show of the campaign."""
+@dataclass(frozen=True)
+class Unreached:
+    """An instance that a table configures and that no name puts in use: ``where`` to add it."""
 
-    model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
+    capability: str
+    name: str
+    where: str
 
-    sections: list[SectionEntry] | None = None
-    """The sections, in order: a list of ``{ provider = "<section>", ... }`` entries. When unset, every installed
-    section that status shows by default, in their order (``Section.SHOWN_IN``, ``Section.ORDER``): the campaign
-    overview."""
-
-    def shown(self) -> list[Section]:
-        """The sections that status shows: ``sections``, else the defaults of status."""
-        return chosen(self.sections, Surface.STATUS)
+    def __str__(self) -> str:
+        return f'[plugins.{self.capability}.{self.name}] is configured, and nothing uses it: add it to {self.where}'
 
 
 @dataclass(frozen=True)
@@ -325,17 +323,8 @@ class CampaignConfig(BaseModel):
     """Repo-relative files or globs (for example ``docs/error-analysis-*.md``) that hold the campaign's analysis:
     error analyses, comparisons with a reference, evaluation reports. The research pack lists each one with its
     outline, newest first, so that every sweep that reads the pack reads them before it proposes work."""
-    mcp: dict[ServerName, McpServer] = {}
-    """``[mcp.<name>]``: the MCP servers that a role can list in ``[plugins.role.<name>] mcp``."""
-    status: StatusConfig = StatusConfig()
-    """``[status]``: the sections that ``piloop status``, the API and a UI show."""
     agents: AgentTimings = AgentTimings()
     """``[agents]``: how long the campaign's agents get to wrap up and to leave after their finding."""
-    facts: list[FactSourceEntry] | None = None
-    """``[[facts]]``: where the campaign's facts come from, which its stop rule and its sections read: a list of
-    ``{ provider = "<source>", ... }`` entries. When unset, every installed source that is on by default: ``campaign``,
-    the hours and tokens of any campaign, and ``optimization``, its research. A list that adds a source lists those
-    too, to keep their facts."""
     plugins: Annotated[Plugins, PluginTables(Scope.CAMPAIGN)] = Field(default={}, validate_default=True)
     """``[plugins]``: the campaign's plugins, a table for each capability (``PluginTables``)."""
 
@@ -415,7 +404,7 @@ class CampaignConfig(BaseModel):
         if missing := [fact.name for fact in rule.reads() if fact not in supplied]:
             raise ValueError(
                 f'the stop rule {name!r} reads {", ".join(missing)}, which no fact source of this campaign supplies: add'
-                ' one to [[facts]] that does'
+                ' one to [plugins.fact_source] use that does'
             )
 
     def _check_facts(self) -> None:
@@ -425,11 +414,33 @@ class CampaignConfig(BaseModel):
             for fact in source.supplies():
                 if (other := seen.setdefault(fact.name, source)) is not source:
                     names = f'{FACT_SOURCES.name_of(other)} and {FACT_SOURCES.name_of(source)}'
-                    raise ValueError(f'the fact {fact.name!r} comes from two sources of [[facts]]: {names}')
+                    raise ValueError(
+                        f'the fact {fact.name!r} comes from two sources of [plugins.fact_source] use: {names}'
+                    )
 
     def fact_sources(self) -> list[FactSource]:
-        """The campaign's fact sources: ``facts``, else every installed source that is on by default."""
-        return sources(self.facts)
+        """The campaign's fact sources: ``[plugins.fact_source] use``, else every installed source on by default."""
+        found = FACT_SOURCES.instances(self.plugins)
+        return [found[name] for name in FACT_SOURCES.used(self.plugins)]
+
+    def status_sections(self) -> list[Section]:
+        """What ``piloop status``, the API and a UI show: ``[plugins.section] use``, else the defaults of status."""
+        found = SECTIONS.instances(self.plugins)
+        return [found[name] for name in SECTIONS.used(self.plugins)]
+
+    def sections_of(self, name: RoleName) -> list[Section]:
+        """What the briefs of a role show after its context: its ``sections``, else the defaults of its kind."""
+        found = SECTIONS.instances(self.plugins)
+        return [found[section] for section in self.role(name).shown()]
+
+    def triggers_of(self, name: str) -> list[Trigger]:
+        """The triggers of a sweeping role, in order: those that its ``triggers`` names. None for a role of runs."""
+        match self.roles.all().get(RoleName(name)):
+            case SweepRole(triggers=names):
+                found = TRIGGERS.instances(self.plugins)
+                return [found[trigger] for trigger in names]
+            case _:
+                return []
 
     def _check_tracks(self) -> None:
         """Check that each track has one primary.
@@ -475,6 +486,23 @@ class CampaignConfig(BaseModel):
                     f' {", ".join(found)}'
                 )
 
+    def unreached(self) -> list[Unreached]:
+        """The instances that a table configures and that no name puts in use, of a capability that only names reach.
+
+        ``load_campaign_config`` refuses them, not the validation: a stored config of an older piloop could hold a table
+        that nothing uses, such as an MCP server, and must still load. ``piloop init`` then says what to fix.
+        """
+        named = {(ref.capability.name, ref.name) for ref in refs(self) if ref.naming is Naming.USES}
+        found: list[Unreached] = []
+        for capability, table in self.plugins.items():
+            match table:
+                case Instances(capability=Capability(table=Many(reach=Reach.NAMED, use=use)), configured=configured):
+                    where = f'[plugins.{capability}] use' if use is not None else 'a list that names it'
+                    found += [Unreached(capability, n, where) for n in configured if (capability, n) not in named]
+                case _:
+                    pass
+        return found
+
     def check_home(self, home: Plugins) -> None:
         """Check the names of instances of ``config.toml`` (``home``, its ``[plugins]``), such as a runtime.
 
@@ -484,10 +512,7 @@ class CampaignConfig(BaseModel):
         self._check_refs(Scope.HOME, home)
 
     def _check_mcp(self, name: RoleName, role: RoleConfig, rotation: list[Harness]) -> None:
-        """Every server the role lists exists, and every harness the role may run can take them in its argv."""
-        unknown = [n for n in role.mcp if n not in self.mcp]
-        if unknown:
-            raise ValueError(f'plugins.role.{name}.mcp: no [mcp.<name>] table for {unknown}')
+        """Every harness that the role may run can take its servers in its argv. ``_check_refs`` checks the names."""
         if not role.mcp:
             return
         for harness_name, harness in zip(role.harnesses or self.harnesses, rotation, strict=True):
@@ -496,9 +521,15 @@ class CampaignConfig(BaseModel):
                     f'plugins.role.{name}.mcp: harness {harness_name!r}: {why}; or take it out of the rotation'
                 )
 
+    @property
+    def mcp_servers(self) -> dict[str, McpServer]:
+        """The MCP servers of the campaign, by name: ``[plugins.mcp_server.<name>]``."""
+        return MCP_SERVERS.instances(self.plugins)
+
     def role_servers(self, name: RoleName) -> dict[str, McpServer]:
         """The MCP servers that the agents of a role get, by name."""
-        return {server: self.mcp[server] for server in self.role(name).mcp}
+        servers = self.mcp_servers
+        return {server: servers[server] for server in self.role(name).mcp}
 
     def role_secrets(self, name: RoleName, harness: str) -> dict[EnvName, EnvName]:
         """The variables of an agent of a role on ``harness`` that take a secret, with the secret's name.
@@ -686,6 +717,7 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
         raise ConfigError(f'{toml} is not valid TOML: {e}') from e
     if (removed := deprecated.removed_env(os.environ)) is not None:
         raise ConfigError(f'{toml} is not loaded: {removed}')
+    old = deprecated.old_instances(raw)
     deprecated.apply(toml, raw)
 
     class _Loader(BaseSettings, CampaignConfig):
@@ -708,6 +740,11 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
         cfg = CampaignConfig.model_validate(_Loader(**kwargs).model_dump())
     except ValidationError as e:
         raise ConfigError(explain(toml, e)) from e
+    for lost in cfg.unreached():
+        if (lost.capability, lost.name) in old:
+            deprecated.unused_instance(toml, lost.name, str(lost))
+            continue
+        raise ConfigError(f'{toml} is not a valid piloop config (1 problem(s)):\n  {lost}')
     try:
         cfg.check_home(settings.providers)
     except ValueError as e:

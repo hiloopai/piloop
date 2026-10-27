@@ -2,10 +2,23 @@
 
 # ruff: noqa: F401  # this module only re-exports: every import is unused here
 
-from piloop.plugins.host import Capability, Tier, Parameters, One, Many, Use, Pick, Instances, Scope, Check, Severity
+from piloop.plugins.host import (
+    Capability,
+    Tier,
+    Parameters,
+    One,
+    Many,
+    Use,
+    Pick,
+    Reach,
+    Instances,
+    Scope,
+    Check,
+    Severity,
+)
 from piloop.plugins.host import MissingProvider, Provider, PythonSource, ContractBroken
 from piloop.plugins.host import Live
-from piloop.plugins.host import Entry, Ref
+from piloop.plugins.host import Entry, Ref, Naming
 from piloop.plugins.contribution import Contribution, Contributes, Lifecycle, Leaving
 from piloop.daemon.loop import Consumer, Phase, Turn
 
@@ -20,6 +33,9 @@ from piloop.plugins.harness.contract import HARNESSES, Harness, SecretRef, Usage
 from piloop.settings import Settings, StorageSettings, TracingSettings, EvaluationSettings
 from piloop.settings import DaemonSettings, AgentSettings
 from piloop.plugins.harness.contract import McpLaunch, McpArgs, McpError, McpRenderer
+from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer
+from piloop.plugins.mcp_server.http import HttpServer
+from piloop.plugins.mcp_server.stdio import StdioServer
 from piloop.plugins.harness.kit.jsonl import JsonlSessions, Counts, Record, Tally, Said
 from piloop.plugins.harness.pi import Pi
 from piloop.plugins.harness.claude import Claude
@@ -36,7 +52,7 @@ from piloop.plugins.cas.s3 import S3
 from piloop.plugins.cas.gcs import Gcs
 from piloop.plugins.cas.http import Http
 
-from piloop.plugins.trigger.contract import TRIGGERS, Trigger, TriggerEntry, Pass, Fire, Steer, Quiet
+from piloop.plugins.trigger.contract import TRIGGERS, Trigger, TriggerName, Pass, Fire, Steer, Quiet
 from piloop.plugins.trigger.contract import Backlog, TrackBacklog
 from piloop.plugins.trigger.run_failed import RunFailed
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
@@ -49,7 +65,7 @@ from piloop.plugins.trigger.stalled import StalledTrigger
 from piloop.plugins.trigger.stopped import StoppedTrigger
 from piloop.plugins.trigger.news import NewsTrigger
 
-from piloop.plugins.section.contract import SECTIONS, Section, SectionEntry, Rendering, Surface
+from piloop.plugins.section.contract import SECTIONS, Section, SectionName, Rendering, Surface
 from piloop.api.views import Rendered, Block, Text, Lines, Figures, Figure, Table, Value
 from piloop.plugins.section.headline import Headline
 from piloop.plugins.section.goal import Goal
@@ -91,7 +107,7 @@ from piloop.plugins.metric import number
 from piloop.plugins.verdict_rule.bootstrap import Bootstrap
 
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule, StopCase, Shape, WhileHeld
-from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource, FactSourceEntry, FactReadError
+from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource, FactReadError
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.fact_source.facts import Fact, Facts, FactValue, Funnel
 from piloop.plugins.fact_source.facts import HEAD, RUNS, UNSETTLED, HOURS, TOKENS, WITHOUT_KEEP, KEEPS, EVALUATIONS
@@ -144,7 +160,6 @@ from piloop.proc import Channel, kill_group
 from piloop.plugins.executor.workers import Workers, WorkersExecutor
 from piloop.otel import Tracer, Span, ConsoleProcessor
 from piloop.runtime.factory import RuntimeFactory
-from piloop.mcp import McpServer
 from piloop.usage import Usage, UsageError
 from piloop.net import Route
 from piloop.net.server import executor_router

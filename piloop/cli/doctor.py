@@ -85,7 +85,11 @@ def checks(cfg: Settings) -> list[Check]:
             *first,
             *map(_campaign, campaigns),
             *(_digits(c) for c in campaigns if c.name.isdigit()),
-            *(_mcp(c.name, c.config) for c in campaigns if isinstance(c.config, CampaignConfig) and c.config.mcp),
+            *(
+                _mcp(c.name, c.config)
+                for c in campaigns
+                if isinstance(c.config, CampaignConfig) and c.config.mcp_servers
+            ),
             *(
                 _secrets_of(c, needed, held, env)
                 for c in campaigns
@@ -251,14 +255,15 @@ def _secrets(whose: str, command: str | None) -> tuple[Check, set[str]]:
 def _mcp(name: str, config: CampaignConfig) -> Check:
     """Check that the commands of the campaign's MCP servers are on PATH. ``_secrets_of`` checks their keys."""
     what = f'mcp {name}'
-    servers = config.mcp.values()
-    missing_exe = sorted({s.command[0] for s in servers if s.command and shutil.which(s.command[0]) is None})
-    if missing_exe:
-        return Check(what, f'not on PATH: {", ".join(missing_exe)}', 'install them, or fix the [mcp.*] tables')
+    servers = config.mcp_servers.values()
+    if missing := sorted({found for s in servers if (found := s.missing()) is not None}):
+        return Check(
+            what, f'not on PATH: {", ".join(missing)}', 'install them, or fix the [plugins.mcp_server.*] tables'
+        )
     roles = '; '.join(
         f'{kind}: {", ".join(listed)}' for kind, role in config.roles.all().items() if (listed := role.mcp)
     )
-    return Check(what, f'{len(config.mcp)} server(s) ({roles or "no role lists one"})')
+    return Check(what, f'{len(config.mcp_servers)} server(s) ({roles or "no role lists one"})')
 
 
 def _needed(config: CampaignConfig) -> list[str]:

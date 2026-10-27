@@ -1,5 +1,5 @@
 ---
-title: Harnesses, runtimes, roles, triggers and sections
+title: Harnesses, MCP servers, runtimes, roles, triggers and sections
 sidebarTitle: Agents and sections
 description: Plugins that start the agents, define what they do and when, and show a campaign.
 ---
@@ -11,7 +11,7 @@ import ContractTrigger from '/snippets/generated/contract-trigger.mdx';
 import ContractSection from '/snippets/generated/contract-section.mdx';
 import ContractHarness from '/snippets/generated/contract-harness.mdx';
 
-A harness is the coding agent CLI that an agent runs in. A runtime starts and steers the agents. A role says what an agent does, and its triggers say when it starts. A section
+A harness is the coding agent CLI that an agent runs in, and an MCP server gives it tools. A runtime starts and steers the agents. A role says what an agent does, and its triggers say when it starts. A section
 is one part of what `piloop status`, a brief or a UI shows. [Agents and roles](/concepts/roles) describes them as a
 user sees them.
 
@@ -50,6 +50,29 @@ it reads user skills.
 A table with a new name and `provider = "<harness>"` is that harness over its defaults. A table with a new name and no
 `provider` runs its argv and does nothing else: it takes no MCP servers, and records no tokens.
 [Harnesses](/concepts/roles#harnesses) lists the built-in ones.
+
+## MCP servers
+
+A package can ship an MCP server, so that a campaign names it without its command. The harnesses know two transports,
+so the server subclasses one of them, `HttpServer` or `StdioServer`, and gives its keys their defaults:
+
+```python
+from piloop.capabilities import StdioServer
+
+
+class XSearch(StdioServer):
+    """``x_search``: an X search, from this package."""
+
+    command: list[str] = ['x-search-mcp', '--max-usd', '1']
+    env: list[str] = ['XAI_API_KEY']
+```
+
+```toml
+[project.entry-points."piloop.mcp_servers"]
+x_search = "my_package:XSearch"
+```
+
+A campaign then lists `"x_search"` in a role's `mcp`: a provider that needs no keys is an instance of its own name.
 
 ## Runtimes
 
@@ -100,7 +123,7 @@ from importlib.resources import files
 
 from sqlalchemy import func, select
 
-from piloop.capabilities import Fire, Outcome, Pass, SweepRole, Trigger, TriggerEntry
+from piloop.capabilities import Fire, Outcome, Pass, SweepRole, Trigger, TriggerName
 from piloop.db.models import Candidate
 
 
@@ -128,7 +151,7 @@ class Auditor(SweepRole):
     """``auditor``: the role's defaults are its fields' defaults."""
 
     PROMPT = files(__package__) / 'auditor.md'  # ships in the package
-    triggers: list[TriggerEntry] = [NoKeep()]
+    triggers: list[TriggerName] = ["no_keep"]
     timeout: float = 1800
 ```
 
@@ -140,8 +163,9 @@ no_keep = "my_package:NoKeep"
 auditor = "my_package:Auditor"
 ```
 
-Any campaign can then use `{ provider = "no_keep", hours = 12 }` in the triggers of a role, and gets the `auditor` role,
-with its table in `piloop.toml` over the package's defaults, at its next `piloop init`.
+Any campaign can then name `no_keep` in the triggers of a role, with `[plugins.trigger.no_keep] hours = 12` to change
+its parameter, and gets the `auditor` role, with its table in `piloop.toml` over the package's defaults, at its next
+`piloop init`.
 
 ### The contract
 
@@ -165,8 +189,8 @@ A `sql` trigger needs no code: its query fires the role when it returns a row, a
 
 ### The contract
 
-A trigger is an entry of `[plugins.role.<name>] triggers`: `{ provider = "<trigger>", <parameter> = <value> }`. A plugin's
-trigger is a subclass of `Trigger`: its fields are its parameters. On each pass, for each sweeping role
+A trigger is an instance that a role names in `[plugins.role.<name>] triggers`, with its parameters in
+`[plugins.trigger.<name>]`. A plugin's trigger is a subclass of `Trigger`: its fields are its parameters. On each pass, for each sweeping role
 without a pending request, the daemon calls `fire(p)` of each trigger of the role in order. A pass comes when
 something changes in the campaign, or in what a trigger names in `WAKES_ON`, and when the time that a trigger's
 `due_in` returns comes. A trigger that compares a time returns when the comparison turns: there is no pass on a timer.
@@ -206,11 +230,12 @@ class KeepRate(Section):
 ```
 
 Declare it with an entry point in `piloop.sections`. `piloop status` then shows it after the evaluations, wherever
-`[status] sections` is not set.
+`[plugins.section] use` is not set.
 
 ### The contract
 
-A section is an entry of a list of sections: `{ provider = "<section>", <parameter> = <value> }`. A plugin's section is
+A section is an instance that a list of sections names, with its parameters in `[plugins.section.<name>]`. A plugin's
+section is
 a subclass of `Section`: its fields are its parameters. Its `render` returns a `Rendered`, a title and its blocks. A
 block is one of four kinds: `Text`, `Lines`, `Figures` (named values, a number with its unit) and `Table`.
 `piloop status`, a brief, the API and a UI render each kind their own way, so a section never formats for one reader.

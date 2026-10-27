@@ -11,7 +11,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from piloop.db.models import Secret
-from piloop.mcp import EnvName
+from piloop.ids import EnvName
 from piloop.plugins.secrets.contract import Owner, SecretKey, SecretsProvider
 
 

@@ -321,7 +321,7 @@ class HotPaths:
             'stop.check': each(lambda p, _cfg: check(s, p, stopping)),
             'status.sections': each(
                 lambda p, cfg: rendered(
-                    cfg.status.shown(),
+                    cfg.status_sections(),
                     Rendering(s, utcnow(), p, workspace_dir(self._home, p.id), self._scheduler._controller.cas),
                 )
             ),

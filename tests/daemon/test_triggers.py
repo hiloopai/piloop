@@ -62,16 +62,27 @@ def scheduler(db: Database, runtime: ScriptRuntime, tmp_path: Path) -> Scheduler
     return Scheduler(db, controller, Tracer(None), tmp_path, factory(runtime))
 
 
-def low_water(buffer: int) -> list[dict[str, object]]:
-    """Research's ``low_water`` trigger, with ``buffer``, and its ``seed`` trigger."""
-    return [{'provider': 'low_water', 'buffer': buffer}, {'provider': 'seed'}]
+LOW_WATER = ['low_water', 'seed']
+"""Research's ``low_water`` trigger, and its ``seed`` trigger."""
 
 
-def configure(db: Database, campaign: Campaign, harness_body: str = HARNESS_NOOP, **roles: dict[str, object]) -> None:
-    """Rewrite the campaign's harness script and role settings (merged over the test toml)."""
+def low_water(buffer: int) -> dict[str, object]:
+    """The table of the ``low_water`` trigger, with ``buffer``: ``[plugins.trigger.low_water]``."""
+    return {'low_water': {'buffer': buffer}}
+
+
+def configure(
+    db: Database,
+    campaign: Campaign,
+    harness_body: str = HARNESS_NOOP,
+    *,
+    trigger: dict[str, object] | None = None,
+    **roles: dict[str, object],
+) -> None:
+    """Rewrite the campaign's harness script, role settings and ``trigger`` tables (merged over the test toml)."""
     write_toml(Path(campaign.path), harness_body)
     with db.session() as s:
-        cfg = load_campaign_config(Path(campaign.path), plugins={'role': roles})
+        cfg = load_campaign_config(Path(campaign.path), plugins={'role': roles, 'trigger': trigger or {}})
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
 
@@ -325,7 +336,7 @@ def test_low_water_keeps_a_slot_s_worth_plus_the_buffer_and_tops_it_up_on_new_re
     Below that target a sweep starts. Each sweep that defined no idea doubles the number of finished runs the next
     sweep waits for. A sweep that defined an idea resets the wait.
     """
-    configure(db, campaign, research={'max_ideas': 1, 'triggers': low_water(2)})
+    configure(db, campaign, research={'max_ideas': 1, 'triggers': LOW_WATER}, trigger=low_water(2))
     sched = scheduler(db, runtime, tmp_path)
     occupy(db, campaign)
     first, *_ = add_ideas(db, campaign, 3)
@@ -365,7 +376,7 @@ def test_low_water_keeps_sweeping_a_short_backlog_though_every_slot_is_busy_rest
     A sweep that defined an idea is followed at once. A sweep that defined no idea is followed by a rest as long as
     the sweep took.
     """
-    configure(db, campaign, research={'max_ideas': 1, 'triggers': low_water(2)})
+    configure(db, campaign, research={'max_ideas': 1, 'triggers': LOW_WATER}, trigger=low_water(2))
     sched = scheduler(db, runtime, tmp_path)
     occupy(db, campaign)
     assert run_all(sched) == [1]
@@ -417,8 +428,14 @@ def test_stalled_sweeps_on_new_results_however_full_the_backlog(
 
     The next sweep waits for the next stall step, and for the new results that the back-off of empty sweeps wants.
     """
-    triggers = [*low_water(0), {'provider': 'stalled'}]
-    configure(db, campaign, implementer={'max_concurrent': 1}, research={'max_ideas': 1, 'triggers': triggers})
+    triggers = [*LOW_WATER, 'stalled']
+    configure(
+        db,
+        campaign,
+        implementer={'max_concurrent': 1},
+        research={'max_ideas': 1, 'triggers': triggers},
+        trigger=low_water(0),
+    )
     sched = scheduler(db, runtime, tmp_path)
     occupy(db, campaign)
     add_ideas(db, campaign, 2)
@@ -446,7 +463,7 @@ def test_a_long_stall_gets_one_stalled_sweep_per_stall_step_and_a_keep_ends_it(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """A stall of N runs gets N / mark sweeps of ``stalled``, not N: one at each mark of runs without a keep."""
-    triggers = [{'provider': 'stalled'}]
+    triggers = ['stalled']
     configure(db, campaign, implementer={'max_concurrent': 2}, research={'max_ideas': 1, 'triggers': triggers})
     sched = scheduler(db, runtime, tmp_path)  # The stall mark is two rounds of 2 run slots: 4 runs.
     for n in range(12):
@@ -560,9 +577,10 @@ def test_low_water_sizes_the_batch_to_the_shortfall_net_of_the_sweeps_in_flight(
                     'model': {'b': 'mb', 'c': 'mc'},
                     'max_concurrent': 4,
                     'max_ideas': 2,
-                    'triggers': low_water(1),
+                    'triggers': LOW_WATER,
                 },
             },
+            'trigger': low_water(1),
         },
     )
     with db.session() as s:
@@ -604,7 +622,8 @@ def test_low_water_counts_ideas_waiting_only_on_a_prerequisite_in_flight_as_back
         db,
         campaign,
         implementer={'max_concurrent': 2},
-        research={'max_ideas': 1, 'max_concurrent': 1, 'triggers': low_water(1)},
+        research={'max_ideas': 1, 'max_concurrent': 1, 'triggers': LOW_WATER},
+        trigger=low_water(1),
     )
     sched = scheduler(db, runtime, tmp_path)
     with db.session() as s:
@@ -789,7 +808,8 @@ def test_a_cancelled_sweep_is_not_retried_and_its_row_says_who_cancelled_it(
         db,
         campaign,
         BLOCKING.format(release=tmp_path / 'never'),
-        research={'max_ideas': 1, 'max_concurrent': 1, 'triggers': low_water(0)},
+        research={'max_ideas': 1, 'max_concurrent': 1, 'triggers': LOW_WATER},
+        trigger=low_water(0),
     )
     sched = scheduler(db, runtime, tmp_path)
     assert run_all(sched) == [1]
@@ -891,7 +911,7 @@ def test_no_research_sweep_while_the_queue_holds_its_runnable_ideas_for_the_head
 
     Nothing a sweep adds could run sooner. ``low_water`` waits until the head has a score from the current evaluator.
     """
-    configure(db, campaign, research={'max_ideas': 1, 'triggers': low_water(2)})
+    configure(db, campaign, research={'max_ideas': 1, 'triggers': LOW_WATER}, trigger=low_water(2))
     sched = scheduler(db, runtime, tmp_path)
     occupy(db, campaign)
     add_ideas(db, campaign, 1)

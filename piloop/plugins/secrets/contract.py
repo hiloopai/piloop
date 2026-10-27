@@ -2,11 +2,11 @@
 
 A **secret** is a name and a value. Its name is an environment variable's (``EnvName``). It belongs to the home, for
 every campaign, or to one campaign, whose secret wins over the home's of the same name: a GitHub repository's secret
-wins over its organization's. Config names a secret, never its value: ``{ secret = "NAME" }`` in ``[plugins.harness.<name>]
-env`` (``piloop.plugins.harness.contract.SecretRef``), and each variable of an ``[mcp.<name>]`` server, which is the name of a
-secret. An agent's job
-names the secrets that it needs (``AgentJob.secrets``), and its worker gets their values when it starts the job. No
-listing, event, span or job holds a value.
+wins over its organization's. Config names a secret, never its value: ``{ secret = "NAME" }`` in
+``[plugins.harness.<name>] env`` (``piloop.plugins.harness.contract.SecretRef``), and each variable of a
+``[plugins.mcp_server.<name>]`` server, which is the name of a secret. An agent's job names the secrets that it needs
+(``AgentJob.secrets``), and its worker gets their values when it starts the job. No listing, event, span or job holds
+a value.
 
 Host tier: a provider stores values. ``[plugins.secrets] provider`` in ``config.toml`` selects one (``local`` by
 default). Its methods are the contract, and each takes the session of the operation that calls it. The operations here
@@ -27,8 +27,7 @@ from piloop.actor import ACTORS, Actor
 from piloop.db.events import emit, has, latest
 from piloop.db.models import AgentSession, Event, EventModel, ReadBy
 from piloop.db.session import Database
-from piloop.ids import HOME, AgentSessionId, CampaignId, TargetKind, TargetRef
-from piloop.mcp import EnvName
+from piloop.ids import HOME, AgentSessionId, CampaignId, EnvName, TargetKind, TargetRef
 from piloop.plugins.host import Capability, One, Parameters, Scope
 
 type Owner = CampaignId | None

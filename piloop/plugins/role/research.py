@@ -5,9 +5,9 @@ from sqlalchemy import select
 
 from piloop.db.models import Idea, count
 from piloop.ids import IdeaStatus
-from piloop.plugins.harness.contract import HarnessName
+from piloop.plugins.harness.contract import HarnessKey
 from piloop.plugins.role.contract import Files, Sweep, SweepRole
-from piloop.plugins.trigger.contract import TriggerEntry
+from piloop.plugins.trigger.contract import TriggerName
 from piloop.plugins.trigger.low_water import LowWaterTrigger
 from piloop.plugins.trigger.stalled import StalledTrigger
 
@@ -17,9 +17,7 @@ class ResearchRole(SweepRole):
 
     PROMPT = files(__package__) / 'prompts' / 'research.md'
 
-    triggers: list[TriggerEntry] = Field(
-        default=[{'provider': 'low_water'}, {'provider': 'seed'}, {'provider': 'stalled'}], validate_default=True
-    )
+    triggers: list[TriggerName] = ['low_water', 'seed', 'stalled']
     """A short backlog, a new seed, and a stall."""
     writes: list[str] = [
         'seeds via idea develop, or their status to rejected with a note',
@@ -28,7 +26,7 @@ class ResearchRole(SweepRole):
         'comments(note) on an idea',
     ]
     """What a research sweep may write, as its brief states it."""
-    model: dict[HarnessName, str] | None = {'claude': 'claude-opus-5-5', 'codex': 'gpt-6.1-sol'}
+    model: dict[HarnessKey, str] | None = {'claude': 'claude-opus-5-5', 'codex': 'gpt-6.1-sol'}
     """The model for each harness in this role, over the harness's ``model``. A table that you set replaces
     this one."""
     files: Files = Files.IDEAS
@@ -46,10 +44,11 @@ class ResearchRole(SweepRole):
         The backlog's target has the ``buffer`` of the role's first ``low_water`` trigger, or none without one. The
         stall mark is that of its first ``stalled`` trigger: without one, the role has no stall.
         """
-        buffer = next((t.buffer for t in self.triggers if isinstance(t, LowWaterTrigger)), 0)
+        triggers = sweep.campaign.config.triggers_of(sweep.role)
+        buffer = next((t.buffer for t in triggers if isinstance(t, LowWaterTrigger)), 0)
         backlog = sweep.backlog(buffer)
         most = self.max_ideas
-        mark = next((t.mark(sweep.campaign.config) for t in self.triggers if isinstance(t, StalledTrigger)), None)
+        mark = next((t.mark(sweep.campaign.config) for t in triggers if isinstance(t, StalledTrigger)), None)
         runs = sweep.without_keep(None)
         stalled = mark is not None and runs >= mark.every
         pivot = min(most, 1) if stalled else 0  # A stall gets its pivot whatever the backlog holds.

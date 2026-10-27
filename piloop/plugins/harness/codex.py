@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from shlex import join
 
-from piloop.mcp import McpServer, env_names
 from piloop.plugins.harness.contract import EFFORT, MCP, PROMPT, SESSION_ID, Harness, McpArgs, McpError, McpLaunch
 from piloop.plugins.harness.kit.jsonl import (
     Counts,
@@ -21,6 +20,10 @@ from piloop.plugins.harness.kit.jsonl import (
     texts,
     zero,
 )
+from piloop.plugins.host import ContractBroken
+from piloop.plugins.mcp_server.contract import McpServer, env_names
+from piloop.plugins.mcp_server.http import HttpServer
+from piloop.plugins.mcp_server.stdio import StdioServer
 from piloop.settings import expand_env
 
 NO_MEMORY = 'features.memories=false'
@@ -82,12 +85,17 @@ def _key(key: str) -> str:
 
 def server(s: McpServer) -> dict[str, object]:
     """One ``mcp_servers.<name>`` table."""
-    if s.url is not None:
-        headers = {'env_http_headers': s.headers_env} if s.headers_env else {}
-        bearer = {'bearer_token_env_var': s.bearer_token_env} if s.bearer_token_env else {}
-        return {'url': s.url, **headers, **bearer}
-    assert s.command is not None, 'a stdio server'
-    return {'command': s.command[0], 'args': s.command[1:], **({'env_vars': s.env} if s.env else {})}
+    match s:
+        case HttpServer(url=url, headers_env=headers_env, bearer_token_env=bearer_token_env):
+            headers = {'env_http_headers': headers_env} if headers_env else {}
+            bearer = {'bearer_token_env_var': bearer_token_env} if bearer_token_env else {}
+            return {'url': url, **headers, **bearer}
+        case StdioServer(command=[executable, *args], env=env):
+            return {'command': executable, 'args': args, **({'env_vars': env} if env else {})}
+        case _:
+            raise ContractBroken(
+                f'{type(s).__qualname__} is neither HttpServer nor StdioServer: the transports that Codex takes'
+            )
 
 
 def config_flags(argv: list[str]) -> list[str]:
@@ -148,8 +156,8 @@ class CodexMcp:
         clash = sorted(theirs.keys() & launch.servers.keys())
         if clash:
             raise McpError(
-                f"Codex's own config defines MCP servers {clash}, which piloop's [mcp.*] tables also name, and Codex"
-                ' would merge the two tables: rename the piloop server or the Codex one (`codex mcp list` shows where)'
+                f"Codex's own config defines MCP servers {clash}, which piloop's [plugins.mcp_server.*] tables also name,"
+                ' and Codex would merge the two tables: rename the piloop server or the Codex one (`codex mcp list` shows where)'
             )
         off = [a for name in theirs for a in ('-c', f'mcp_servers.{name}.enabled=false')]
         mine = [a for name, s in launch.servers.items() for a in ('-c', f'mcp_servers.{name}={toml(server(s))}')]

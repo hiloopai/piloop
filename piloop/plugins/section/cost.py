@@ -18,7 +18,7 @@ from piloop.plugins.section.contract import Rendering, Section
 class Cost(Section):
     """What the campaign spent: per keep, since the latest keep, and with ``metric`` per evaluation and per attempt.
 
-    ``spend`` names the fact of what the campaign spent so far, which a source of ``[[facts]]`` reads. ``metric`` names
+    ``spend`` names the fact of what the campaign spent so far, which a source of ``[plugins.fact_source] use`` reads. ``metric`` names
     the metric that the evaluate command prints as what one evaluation costs, for example ``eval_cost_usd``. piloop
     knows no cost: the section names both. With no spend read and no ``metric``, there is nothing to show.
     """

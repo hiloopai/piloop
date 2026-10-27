@@ -4,8 +4,8 @@ Run it with the xAI key in the environment::
 
     XAI_API_KEY=… python3 scripts/xai_search_mcp.py <model> [--max-usd 1] [--max-tool-calls 10]
 
-In ``piloop.toml``, mount it as an ``[mcp.xai]`` table with ``env = ["XAI_API_KEY"]``. The server wraps the
-server-side ``x_search`` tool of ``POST /v1/responses`` (https://docs.x.ai/developers/tools/x-search). It uses only
+In ``piloop.toml``, mount it as a ``[plugins.mcp_server.xai]`` table with ``provider = "stdio"`` and
+``env = ["XAI_API_KEY"]``. The server wraps the server-side ``x_search`` tool of ``POST /v1/responses`` (https://docs.x.ai/developers/tools/x-search). It uses only
 the standard library.
 
 Each call costs money: xAI charges for the model's tokens and for each post that the call fetches. The server caps

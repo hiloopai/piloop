@@ -28,7 +28,7 @@ class KeepCost(Limits):
     """The cost since the latest keep against the cost per keep: escalate at ``escalate_at``×, stop at ``stop_at``×."""
 
     spend: str = 'spend'
-    """The fact that is what the campaign spent so far, which a source of ``[[facts]]`` reads."""
+    """The fact that is what the campaign spent so far, which a source of ``[plugins.fact_source] use`` reads."""
     escalate_at: float = Field(default=2, gt=0)
     """Ask a human once the cost since the latest keep is this many times the cost per keep."""
     stop_at: float = Field(default=4, gt=0)

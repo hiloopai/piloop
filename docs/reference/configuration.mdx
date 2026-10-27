@@ -27,11 +27,8 @@ section.
 | `ladder` | list\[[Rung](#rung)\] | `[]` | `[[ladder]]`: the rungs that a run's evaluation of its own version climbs before the full panel, cheapest first. The climb stops at the first rung whose `stop` holds. A baseline, a head, a bar, a reference and a remeasure climb every rung and never stop. |
 | `link` | list\[string\] | `[]` | Repo-relative paths, ignored by git, that piloop puts into every worktree read-only, for example data or virtual environments. Each job gets them as they are when it is made. |
 | `context` | list\[string\] | `[]` | Repo-relative files or globs (for example `docs/error-analysis-*.md`) that hold the campaign's analysis: error analyses, comparisons with a reference, evaluation reports. The research pack lists each one with its outline, newest first, so that every sweep that reads the pack reads them before it proposes work. |
-| `mcp` | dict\[string, [McpServer](#mcpserver)\] | `{}` | `[mcp.<name>]`: the MCP servers that a role can list in `[plugins.role.<name>] mcp`. |
-| `status` | [StatusConfig](#statusconfig) | `{}` | `[status]`: the sections that `piloop status`, the API and a UI show. |
 | `agents` | [AgentTimings](#agenttimings) | `{}` | `[agents]`: how long the campaign's agents get to wrap up and to leave after their finding. |
-| `facts` | list\[object\] \| null | `null` | `[[facts]]`: where the campaign's facts come from, which its stop rule and its sections read: a list of `{ provider = "<source>", ... }` entries. When unset, every installed source that is on by default: `campaign`, the hours and tokens of any campaign, and `optimization`, its research. A list that adds a source lists those too, to keep their facts. |
-| `plugins` | dict\[string, object\] | `{"harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "scout": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
+| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "optimization": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "mcp_server": {}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "scout": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "cost": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "lessons": {}, "pack": {}, "queue": {}, "reported": {}, "runs": {}, "same_as_parent": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "candidates", "same_as_parent", "reported", "inbox", "events"]}, "trigger": {"cron": {}, "dead_at_startup": {}, "leaking_funnel": {}, "low_water": {}, "news": {}, "run_failed": {}, "seed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
 
 ## Tolerance
 
@@ -105,40 +102,6 @@ climb of a run's own version stops when `stop` says so, and piloop ends the eval
 | `stop` | dict\[string, [Tolerance](#tolerance)\] | required | When the climb stops at this rung, by metric of `[[metrics]]`. Example: `{ accuracy = { margin = 0.03 }, latency_ms = { fraction = 0.1 } }`. |
 | `evaluate` | list\[string\] \| null | `null` | Optional. A command (argv) of its own, which runs before the evaluate command and reports this rung alone. The rungs that have one come first in `[[ladder]]`. |
 
-## McpServer
-
-`[mcp.<name>]`: one MCP server, either streamable HTTP (`url`) or stdio (`command`).
-
-Do not write API keys here. Name the environment variables that hold them: each is the name of a secret
-(`piloop secret set`). piloop puts the secrets in the agent's environment, and the harness puts their values into
-the header or the server's environment.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `url` | string \| null | `null` | The URL of a streamable HTTP server. SSE is not supported, because Codex and pi reject it. |
-| `headers_env` | dict\[string, string\] | `{}` | HTTP only. Maps each header name to the environment variable whose value is sent in it, for example `{ "x-api-key" = "EXA_API_KEY" }`. |
-| `bearer_token_env` | string \| null | `null` | HTTP only. The environment variable whose value is sent as `Authorization: Bearer <value>`. |
-| `command` | list\[string\] \| null | `null` | The command (argv) of a stdio server, for example `["python3", "/path/to/server.py"]`. |
-| `env` | list\[string\] | `[]` | stdio only. The environment variables that the server reads, for example `["XAI_API_KEY"]`. |
-
-## StatusConfig
-
-`[status]`: what `piloop status`, the API and a UI show of the campaign.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `sections` | list\[object\] \| null | `null` | The sections, in order: a list of `{ provider = "<section>", ... }` entries. When unset, every installed section that status shows by default, in their order (`Section.SHOWN_IN`, `Section.ORDER`): the campaign overview. Built in: `agents`, `candidates`, `cost`, `evaluations`, `events`, `funnel`, `goal`, `headline`, `history`, `idle_queue`, `inbox`, `incidents`, `lessons`, `pack`, `queue`, `reported`, `runs`, `same_as_parent`, `tools`, `tracks`, `trajectory`. |
-
-## Section
-
-One entry of a list of sections: `{ provider = "<section>", <parameter> = <value> }`.
-
-A section declares where it is shown by default and in what order, so that installing a package adds it there,
-and a list in the configuration replaces those defaults.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-
 ## AgentTimings
 
 `[agents]`: how long the campaign's agents get to finish, over the home's `[agents]` in its `config.toml`.
@@ -148,16 +111,30 @@ and a list in the configuration replaces those defaults.
 | `wrap_up_grace` | duration \| null | `null` | How long an agent that was told to wrap up, because the campaign stopped or someone cancelled it, has to save its work before the daemon ends it. Unset: the home's. Seconds, or an ISO 8601 duration such as `PT20M`. |
 | `finding_grace` | duration \| null | `null` | How long after its finding the daemon ends an implementer, and every process that it left. Unset: the home's. |
 
-## FactSource
-
-One entry of `[[facts]]`: `{ provider = "<source>", <parameter> = <value> }`.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-
 ## `[plugins]`
 
 `[plugins]` of `piloop.toml` holds the plugins of the campaign. A capability that has one instance takes `[plugins.<capability>]`: `provider`, the name of its entry point (the default without it), and the keys of that provider. One that has several takes `[plugins.<capability>.<name>]` for each: its `provider` is the one called `<name>` when the table has none, and each provider that needs no keys is an instance of its own name with its defaults. `[plugins.<capability>]` itself holds the settings of such a capability: `use` names the instances that the campaign uses, and is unset for the providers that are on by default (`DEFAULT`). No instance is called `use`.
+
+### `[plugins.fact_source] use`
+
+The fact source instances that the campaign uses, by name, in order. Unset: `campaign`, `optimization`.
+
+### `[plugins.fact_source.<name>]`
+
+Each fact source by name.
+
+With `provider = "campaign"`, the table has no other key.
+
+With `provider = "command"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `interval` | number | `300` | The number of seconds between two readings. |
+| `notices` | dict\[string, list\[number\]\] | `{}` | Values by the name that it reads. When a value passes one, the daemon posts one note to the inbox, at priority 1. |
+| `command` | list\[string\] | required | The command (argv). Example: `["uv", "run", "scripts/spend.py"]`. |
+| `metrics` | list\[string\] | required | The names that it reports, each a fact of the campaign. Example: `["spend"]`. |
+
+With `provider = "optimization"`, the table has no other key.
 
 ### `[plugins.harness] use`
 
@@ -168,6 +145,25 @@ The harness instances that the campaign uses, by name, in order. Unset: `pi`.
 Each harness by name.
 
 Each table takes the keys of [Harness](#harness), and those of its provider.
+
+### `[plugins.mcp_server.<name>]`
+
+Each mcp server by name.
+
+With `provider = "http"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `url` | string | required | The URL of the server. |
+| `headers_env` | dict\[string, string\] | `{}` | Maps each header name to the environment variable whose value is sent in it, for example `{ "x-api-key" = "EXA_API_KEY" }`. |
+| `bearer_token_env` | string \| null | `null` | The environment variable whose value is sent as `Authorization: Bearer <value>`. |
+
+With `provider = "stdio"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `command` | list\[string\] | required | The command (argv), for example `["python3", "/path/to/server.py"]`. |
+| `env` | list\[string\] | `[]` | The environment variables that the server reads, for example `["XAI_API_KEY"]`. |
 
 ### `[plugins.memory]`
 
@@ -189,6 +185,65 @@ Each table takes the keys of [RoleConfig](#roleconfig), and those of its provide
 
 The runtime instance that the campaign uses, by name. Unset: `subprocess`.
 
+### `[plugins.section] use`
+
+The section instances that the campaign uses, by name, in order. Unset: `headline`, `goal`, `tracks`, `trajectory`, `runs`, `queue`, `idle_queue`, `agents`, `evaluations`, `funnel`, `candidates`, `same_as_parent`, `reported`, `inbox`, `events`.
+
+### `[plugins.section.<name>]`
+
+Each section by name.
+
+With `provider = "agents"`, the table has no other key.
+
+With `provider = "candidates"`, the table has no other key.
+
+With `provider = "cost"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `spend` | string | `"spend"` | The fact of what the campaign spent so far. |
+| `metric` | string \| null | `null` | The metric that is what one evaluation costs. |
+
+With `provider = "evaluations"`, the table has no other key.
+
+With `provider = "events"`, the table has no other key.
+
+With `provider = "funnel"`, the table has no other key.
+
+With `provider = "goal"`, the table has no other key.
+
+With `provider = "headline"`, the table has no other key.
+
+With `provider = "history"`, the table has no other key.
+
+With `provider = "idle_queue"`, the table has no other key.
+
+With `provider = "inbox"`, the table has no other key.
+
+With `provider = "incidents"`, the table has no other key.
+
+With `provider = "lessons"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `budget` | integer | `400` | The size of the section in tokens, its title and introduction included, at about 4 characters each. A line that does not fit gives way to one that counts the rest and says how to read them. |
+
+With `provider = "pack"`, the table has no other key.
+
+With `provider = "queue"`, the table has no other key.
+
+With `provider = "reported"`, the table has no other key.
+
+With `provider = "runs"`, the table has no other key.
+
+With `provider = "same_as_parent"`, the table has no other key.
+
+With `provider = "tools"`, the table has no other key.
+
+With `provider = "tracks"`, the table has no other key.
+
+With `provider = "trajectory"`, the table has no other key.
+
 ### `[plugins.stop_rule]`
 
 The stop rule. Without a table: `limits`.
@@ -203,7 +258,53 @@ With `provider = "limits"`:
 | `max_hours` | number \| null | `null` | Stop after this many hours of wall-clock time since the first run of the campaign started. The time that the campaign was paused (`piloop pause`) does not count. An agent's timeout ends at the stop too. |
 | `max_tokens` | integer \| null | `null` | Stop when all the agents of the campaign together spent this many tokens (the `total` of `agent_sessions.usage`), summed over the agents that ended. |
 | `plateau` | integer \| null | `null` | Stop after this many finished runs that reached the evaluator without a new `keep` candidate. The count starts again at each keep, and when the campaign is set `active` after a stop (`piloop init`, or an UPDATE of `campaigns.status`), so a reactivated campaign gets this many runs again. A new evaluator alone does not reset it. |
-| `hold_at` | dict\[string, number\] | `{}` | Hold the campaign while a fact that a source reads, by its name, is at this value or above, and while it is unknown: the daemon launches no agent and starts no evaluation. Work that already runs finishes and is scored. Example: `{ spend = 1000 }`, with a source in `[[facts]]` that reads `spend`. To resume, raise it and run `piloop init`. |
+| `hold_at` | dict\[string, number\] | `{}` | Hold the campaign while a fact that a source reads, by its name, is at this value or above, and while it is unknown: the daemon launches no agent and starts no evaluation. Work that already runs finishes and is scored. Example: `{ spend = 1000 }`, with a source in `[plugins.fact_source] use` that reads `spend`. To resume, raise it and run `piloop init`. |
+
+### `[plugins.trigger.<name>]`
+
+Each trigger by name.
+
+With `provider = "cron"`, the table has no other key.
+
+With `provider = "dead_at_startup"`, the table has no other key.
+
+With `provider = "leaking_funnel"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `window` | integer | `10` | How many of the latest finished attempts it looks at. |
+| `measured` | integer | `5` | It fires when fewer of them than this reached a measurement under the current evaluator. |
+
+With `provider = "low_water"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `buffer` | integer | `2` | The number of ready ideas to keep in addition to one for each run slot (the `max_concurrent` of every role that does runs). With this backlog, a free slot finds an idea at once and does not wait for a sweep. A larger value makes implementers wait less for the role, but the ideas they run are older. |
+
+With `provider = "news"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `quiet_seconds` | number | `30` | How long the role waits after the first news to launch an agent, so that one agent takes a burst of it. |
+| `routine_every` | number | `900` | The fewest seconds between two agents that only routine news wakes: verdicts, seeds and anomalies. |
+
+With `provider = "run_failed"`, the table has no other key.
+
+With `provider = "seed"`, the table has no other key.
+
+With `provider = "sql"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `when` | string | required | The query, for example `SELECT 1 FROM candidates WHERE campaign_id = :campaign AND verdict = 'keep' AND created_at > :since`. |
+
+With `provider = "stalled"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `every` | integer \| null | `null` | The runs without a keep that mark a stall. When unset, two rounds of the run slots: twice the sum of the `max_concurrent` of the roles that do runs. |
+
+With `provider = "stopped"`, the table has no other key.
 
 ### `[plugins.vcs]`
 
@@ -266,10 +367,10 @@ The keys that every `[plugins.role.<name>]` table accepts. Each role's table bel
 | `timeout` | number | `600` | The number of seconds one agent may run before it is stopped. |
 | `max_concurrent` | integer | `1` | The maximum number of agents of this role that run at the same time. More requests stay `requested` until a slot is free. |
 | `addendum` | string \| null | `null` | A repo-relative file that is appended to `brief.md` in the briefs of this role only. Use it for instructions that only this role needs, for example how the research agent searches. |
-| `mcp` | list\[string\] | `[]` | The MCP servers that the agents of this role get, by the name of their `[mcp.<name>]` table. Every harness in the role's rotation must be able to take them in the invocation of the role's runtime (`[plugins.harness.<name>] mcp`). |
+| `mcp` | list\[string\] | `[]` | The MCP servers that the agents of this role get, by the name of their `[plugins.mcp_server.<name>]` table. Every harness in the role's rotation must be able to take them in the invocation of the role's runtime. |
 | `writes` | list\[string\] | `[]` | What the agents of this role may write, as their brief states it. Only `files` is enforced. |
 | `files` | `nothing` \| `seeds` \| `ideas` | `"seeds"` | What the agents of this role may file with `piloop idea`: `nothing`, `seeds` or `ideas`. The CLI refuses the rest. |
-| `sections` | list\[object\] \| null | `null` | What the briefs of this role show after the role's context: a list of `{ provider = "<section>", ... }` entries, in order. When unset, every installed section that a brief of this kind of role shows by default, in their order (`Section.SHOWN_IN`, `Section.ORDER`). Built in: `agents`, `candidates`, `cost`, `evaluations`, `events`, `funnel`, `goal`, `headline`, `history`, `idle_queue`, `inbox`, `incidents`, `lessons`, `pack`, `queue`, `reported`, `runs`, `same_as_parent`, `tools`, `tracks`, `trajectory`. |
+| `sections` | list\[string\] \| null | `null` | What the briefs of this role show after the role's context: the names of sections, in order. When unset, every installed section that a brief of this kind of role shows by default, in their order (`Section.SHOWN_IN`, `Section.ORDER`). Built in: `agents`, `candidates`, `cost`, `evaluations`, `events`, `funnel`, `goal`, `headline`, `history`, `idle_queue`, `inbox`, `incidents`, `lessons`, `pack`, `queue`, `reported`, `runs`, `same_as_parent`, `tools`, `tracks`, `trajectory`. |
 
 ## ImplementerRole
 
@@ -299,7 +400,7 @@ name defines a new role, and needs `prompt` and `triggers`.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `runs` | boolean | `false` | The agents of this role do no runs. Set `runs = true` in a new table to define a role that does runs. |
-| `triggers` | list\[object\] | required | When the daemon requests an agent of this role: a list of `{ provider = "<trigger>", ... }` entries, checked in order on each pass. A package can add triggers. An empty list means that agents start only on request (`piloop launch`). Built in: `cron`, `dead_at_startup`, `leaking_funnel`, `low_water`, `news`, `run_failed`, `seed`, `sql`, `stalled`, `stopped`. |
+| `triggers` | list\[string\] | required | When the daemon requests an agent of this role: the names of triggers (`[plugins.trigger.<name>]`), checked in order on each pass. A package can add triggers. An empty list means that agents start only on request (`piloop launch`). Built in: `cron`, `dead_at_startup`, `leaking_funnel`, `low_water`, `news`, `run_failed`, `seed`, `sql`, `stalled`, `stopped`. |
 | `interval` | number | `0` | The number of seconds between two routine sweeps of the `cron` trigger, counted from the start of the last one. A sweep that investigates an anomaly is not a routine sweep. 0 turns the timer off. |
 | `max_ideas` | integer | `1` | The maximum number of new ideas one sweep may insert, as its brief states it. The seeds it develops do not count. `low_water` requests enough sweeps to fill the backlog at this many ideas each. 0 pauses the role's new ideas: `low_water` is off, and an idea that a sweep of the role adds (`piloop idea add`) is `proposed`, so it waits for a review, also from a sweep that started before the change. |
 | `continuity` | `fresh` \| `resume` | `"fresh"` | `fresh`: each agent starts a new harness session. `resume`: each agent continues the session of the role's last agent, written back from the CAS, so it remembers what the agents before it did. The harness needs `resume`, and a provider that restores its session files (`Harness.restore`): `claude` and `codex`. |
@@ -316,8 +417,8 @@ name defines a new role, and needs `prompt` and `triggers`.
 | `max_concurrent` | integer | `1` | One orchestrator at a time: two would answer the same news twice. |
 | `writes` | list\[string\] | `["comments(decision) addressed to the human, with a priority", "answers to messages via inbox reply", "journal lines", "ideas, seeds, verdicts and the campaign changes of the piloop commands in this brief"]` |  |
 | `files` | `nothing` \| `seeds` \| `ideas` | `"ideas"` |  |
-| `sections` | list\[object\] \| null | `[{"provider": "headline"}, {"provider": "trajectory"}, {"provider": "runs"}, {"provider": "queue"}, {"provider": "agents"}, {"provider": "candidates"}]` | The status that each brief shows after the news: lean, because each one stays in the resumed session. |
-| `triggers` | list\[object\] | `[]` | Off by default. `[{ provider = "news" }]`: an agent starts when news arrives for the orchestrator. |
+| `sections` | list\[string\] \| null | `["headline", "trajectory", "runs", "queue", "agents", "candidates"]` | The status that each brief shows after the news: lean, because each one stays in the resumed session. |
+| `triggers` | list\[string\] | `[]` | Off by default. `["news"]`: an agent starts when news arrives for the orchestrator. |
 | `continuity` | `fresh` \| `resume` | `"resume"` |  |
 
 ## ResearchRole
@@ -331,7 +432,7 @@ name defines a new role, and needs `prompt` and `triggers`.
 | `max_concurrent` | integer | `1` | The maximum number of sweeps that run at the same time, each on the next harness of the rotation. The default is 1: sweeps that run at the same time read the same evidence and often duplicate each other, and two of them can race to develop the same seed. |
 | `writes` | list\[string\] | `["seeds via idea develop, or their status to rejected with a note", "ideas via idea add", "comments(finding, escalation) on the campaign", "comments(note) on an idea"]` | What a research sweep may write, as its brief states it. |
 | `files` | `nothing` \| `seeds` \| `ideas` | `"ideas"` | Research develops seeds into ideas and adds ideas of its own. |
-| `triggers` | list\[object\] | `[{"provider": "low_water"}, {"provider": "seed"}, {"provider": "stalled"}]` | A short backlog, a new seed, and a stall. |
+| `triggers` | list\[string\] | `["low_water", "seed", "stalled"]` | A short backlog, a new seed, and a stall. |
 
 ## ScoutRole
 
@@ -348,7 +449,7 @@ Experimental: the scout.
 |---|---|---|---|
 | `timeout` | number | `900` | The number of seconds one sweep may run before it is stopped. |
 | `writes` | list\[string\] | `["seeds via idea seed (at most the count under Context)", "techniques (the library), by INSERT", "one comments(finding) on the campaign"]` | What a scout sweep may write, as its brief states it. |
-| `triggers` | list\[object\] | `[{"provider": "cron"}]` | The timer: a scout sweep every `interval` seconds. |
+| `triggers` | list\[string\] | `["cron"]` | The timer: a scout sweep every `interval` seconds. |
 | `interval` | number | `0` | The number of seconds between two scout sweeps, counted from the start of the last one. The first sweep counts from the registration of the campaign. 0 (the default) turns the scout off. |
 | `seeds` | integer | `3` | The maximum number of seeds one scout sweep may file. The other techniques it finds go to the library. |
 
@@ -359,152 +460,8 @@ Experimental: the scout.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `writes` | list\[string\] | `["comments(escalation, finding, note)", "lessons on the campaign once it stopped", "seeds via idea seed"]` | What a watchdog may write, as its brief states it. |
-| `triggers` | list\[object\] | `[{"provider": "run_failed"}, {"provider": "dead_at_startup"}, {"provider": "leaking_funnel"}, {"provider": "cron"}, {"provider": "stopped"}]` | A failed run, an agent dead at startup or a leaking funnel requests an incident sweep, the timer requests a progress review, and the campaign's stop requests the closing review. |
+| `triggers` | list\[string\] | `["run_failed", "dead_at_startup", "leaking_funnel", "cron", "stopped"]` | A failed run, an agent dead at startup or a leaking funnel requests an incident sweep, the timer requests a progress review, and the campaign's stop requests the closing review. |
 | `interval` | number | `1800` | The number of seconds between two progress reviews, counted from the last review. A sweep that investigates an anomaly is not a review. 0 turns the reviews off. |
-
-## Trigger
-
-One entry of `[plugins.role.<name>] triggers`: `{ provider = "<trigger>", <parameter> = <value> }`.
-
-The daemon checks the entries in the order of the list.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-
-## CronTrigger
-
-The role's `interval` passed since the start of its last routine agent, one that got no anomaly.
-
-The first one counts from the registration of the campaign. An `interval` of 0 turns it off.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-
-## DeadAtStartup
-
-An agent of the campaign did not start to work, and no agent got it yet. The agent gets it to investigate.
-
-An agent of a role with a trigger that investigates (`INVESTIGATES`) is left out: the agent that it would request
-could die the same way, and so on. The startup breaker of the daemon pauses the launches instead.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-
-## LeakingFunnel
-
-Fewer than `measured` of the last `window` attempts under the current evaluator reached a measurement.
-
-A gate that most runs cannot pass shows on the first day, not after days: the agent gets it to investigate. It
-fires once for each evaluator. An attempt that is still open does not count.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `window` | integer | `10` | How many of the latest finished attempts it looks at. |
-| `measured` | integer | `5` | It fires when fewer of them than this reached a measurement under the current evaluator. |
-
-## LowWaterTrigger
-
-The backlog of runnable ideas is shorter than its target, and there is a reason to sweep now.
-
-The target is one idea per run slot plus `buffer`. So ideas exist before slots free up, and a free slot does not
-wait a whole sweep for an idea. The ideas that the role's sweeps in flight can insert already count as backlog.
-Nothing is requested while every slot of the role is busy. Runnable ideas count. Ideas blocked only by
-prerequisites in flight also count, because they run when those finish. An idea blocked by a prerequisite that is
-not running does not count. Below the target, a sweep fires for one of these reasons:
-
-- The campaign has no sweep yet, so there is nothing to wait for.
-- The last batch was killed. Lost prompts, timeouts or a daemon stop say nothing about the backlog, so the batch
-  is retried once. A sweep that someone cancelled is not retried: after it, only new results start the next one. This applies to a streak of killed rows no longer than one batch (`max_concurrent`). A second
-  killed batch is a systemic fault and counts as a normal last sweep.
-- New results: runs finished since the role's latest row started, which that sweep could not read. A sweep with
-  nothing new to read reads the same history and proposes nothing. So each consecutive sweep that defined no idea
-  doubles the number of finished runs the next sweep waits for. A sweep that defines an idea resets this. The
-  wait is never longer than what can still come: with no run in flight, the finished runs are all there is.
-- The backlog is low. The role keeps sweeping while the backlog is short, not only when results come in or a slot
-  is idle. A sweep that defined an idea is followed at once. After empty sweeps, the role rests 2**n − 1 times as
-  long as its latest ended sweep took. n is the number of consecutive ended sweeps, killed ones included, that
-  defined no idea. An empty queue never deadlocks, and a role that keeps finding nothing uses at most 1/2**n of
-  the wall-clock time.
-
-It requests enough sweeps to fill the shortfall at the role's `max_ideas` each, within the role's free slots.
-Nothing is requested while the queue holds runnable ideas for the head to be measured again (`Backlog.on_hold`):
-no idea that a sweep adds could run sooner.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `buffer` | integer | `2` | The number of ready ideas to keep in addition to one for each run slot (the `max_concurrent` of every role that does runs). With this backlog, a free slot finds an idea at once and does not wait for a sweep. A larger value makes implementers wait less for the role, but the ideas they run are older. |
-
-## NewsTrigger
-
-New inbox items for the role's party, seeds, anomalies, verdicts and the stop: `piloop inbox wait`'s news.
-
-Messages, escalations and the stop wake the role `quiet_seconds` after the first news, also while the campaign is
-paused, held or stopped. The rest wakes it at most once in `routine_every`, and only while the campaign runs.
-An agent of the role that is open already gets the news at once, in a note.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `quiet_seconds` | number | `30` | How long the role waits after the first news to launch an agent, so that one agent takes a burst of it. |
-| `routine_every` | number | `900` | The fewest seconds between two agents that only routine news wakes: verdicts, seeds and anomalies. |
-
-## RunFailed
-
-A run failed or timed out, and no agent of the campaign got it yet. The agent gets it to investigate.
-
-The row gets one `anomaly.reported` event for each such run. For the watchdog, that makes it an incident sweep.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-
-## SeedTrigger
-
-A seed was filed after the role's latest agent started, and a slot of the role is free.
-
-It fires however full the backlog is. If the latest row got the seed but was killed, the seed is retried, once per
-batch, as `low_water` retries, unless someone cancelled that row. A seed that a sweep read and did not develop is in the next sweep's brief,
-whatever trigger fires it. Gotcha: a sweep's brief is read a moment before its row's `started_at` is set, so a
-seed filed in that moment waits for the next sweep.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-
-## SqlTrigger
-
-A query on the piloop database returns at least one row.
-
-The query may use two parameters: `:campaign`, the campaign's id, and `:since`, when the role's latest row
-started (or when the campaign was registered), as UTC text (`2026-01-31 12:00:00.000000`). Compare `:since` with
-a `created_at` column to fire only on what is new. The query is checked when `piloop.toml` loads: it must be
-one statement that only reads.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `when` | string | required | The query, for example `SELECT 1 FROM candidates WHERE campaign_id = :campaign AND verdict = 'keep' AND created_at > :since`. |
-
-## StalledTrigger
-
-The campaign reached a new stall step, and no sweep of the role started in it, however full the backlog is.
-
-The campaign has stalled when the runs since the last keep reach the stall mark, `every`. Each further mark of
-runs without a keep is a new step, and a keep ends the stall. The backlog may hold no idea that pivots, and the
-brief of a sweep on a stall allows one idea of the role's own. So a stall of N runs gets about N / mark sweeps, not
-one per result. The back-off of `low_water` for new results still applies, and a killed sweep is retried at the
-next step. As with `low_water`, nothing is requested while every slot of the role is busy, while its
-`max_ideas` is 0, or while the queue holds its ideas for the head (`Backlog.on_hold`).
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `every` | integer \| null | `null` | The runs without a keep that mark a stall. When unset, two rounds of the run slots: twice the sum of the `max_concurrent` of the roles that do runs. |
-
-## StoppedTrigger
-
-The campaign stopped. It fires once, when the runs that the stop wound down are judged.
-
-The stop came from its stop rule or a request. So the closing review sees the final head. The watchdog's closing review is this trigger. The reason is ``campaign
-stopped: <the condition>``.
-
-| Key | Type | Default | Description |
-|---|---|---|---|
 
 ## Global settings: `config.toml`
 
@@ -720,6 +677,7 @@ With `provider = "local"`, the table has no other key.
 These keys still work. Each one shows a `PiloopDeprecationWarning` that names the file, the key, its replacement and the release that removes it. The changelog lists them too.
 
 - The tables of the harnesses and the roles are under `[plugins]`, with the keys of each harness. `[harness.<name>]` is `[plugins.harness.<name>]`. `model = { <name> = "…" }` and `max_concurrent = { <name> = n }` are `model` and `max_concurrent` of `[plugins.harness.<name>]`. `[roles.<name>]` is `[plugins.role.<name>]`. `harnesses` is `[plugins.harness] use`, and `runtime` is `[plugins.runtime] use`. Their `PILOOP_CAMPAIGN_*` variables move with them. A key that the new table sets too keeps its value there.
+- `[mcp.<name>]` is `[plugins.mcp_server.<name>]`, with the provider that its keys say. `provider = "http"` with `url`, `provider = "stdio"` with `command`. Its `PILOOP_CAMPAIGN_MCP__<NAME>__<KEY>` variables move with it.
 - `kind` in an entry of `[plugins.role.<name>] triggers` is `provider`: `{ provider = "cron" }`.
 - `[stop] <key>` is `[plugins.stop_rule] <key>`, a limit of the stop rule. A rule without that key refuses it. A key that `[plugins.stop_rule]` sets too keeps its value there.
 - `[spend] limit` is `[plugins.stop_rule] hold_at = { spend = <value> }`. A value that it sets too wins.
@@ -731,6 +689,7 @@ These keys still work. Each one shows a `PiloopDeprecationWarning` that names th
 - `[memory] wake_budget` and `[plugins.role.<name>] wake_budget` are the `budget` of the `lessons` section. A role's own value wins over `[memory]`'s. A budget that differs from the role's old default sets the role's `sections` to its defaults with the lessons at that budget, or without them at 0. A role that sets `sections` keeps them. The watchdog's old default was 0: it now reads the lessons too.
 - `[memory] documents` is `documents` in `[plugins.memory]`, of the `local` provider. A value that `[plugins.memory]` sets too wins.
 - `mcp` and `[plugins.harness.<name>.usage]` are the harness's provider: it renders the servers, reads usage. A table named after a built-in harness drops them: the provider's own come from `home`. A table with a new name gets `provider`: its usage's `tally`, else its `mcp`. A table that sets neither runs its argv and does nothing else, as before.
+- A list of `{ provider = "…", … }` entries names instances: `[plugins.<capability>.<name>]` tables. `[plugins.role.<name>] triggers` and `sections` name `[plugins.trigger.<name>]` and `[plugins.section.<name>]`. `[status] sections` is `[plugins.section] use`, and `[[facts]]` is `[plugins.fact_source] use` with a table for each source. An entry without parameters is the name of its provider. One with parameters gets a table, named after its role (`research_low_water`) or `status` first.
 - In `config.toml`, `[storage.backend]` is the `remote` of `[plugins.cas] provider = "cached"`. Its `kind` is the remote's `provider`. `evict_after_days` and `local_max_gb` of `[storage]` move with it. A `[plugins.cas]` table of the file wins: the old keys then go, with the warning, and change nothing.
 - In `config.toml`, `max_evaluations` is `evaluations` in `[plugins.executor.pools.serve]`. A value that `[plugins.executor.pools.serve]` sets too wins.
 - In `config.toml`, `[runtimes.<name>]` is `[plugins.runtime.<name>]`. `PILOOP_RUNTIMES__<NAME>__<KEY>` is `PILOOP_PLUGINS__RUNTIME__<NAME>__<KEY>`.

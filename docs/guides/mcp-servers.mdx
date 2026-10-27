@@ -10,18 +10,21 @@ in the roles that need it. piloop gives the servers to each harness in that harn
 
 ## Define a server
 
-A server is either streamable HTTP (`url`) or stdio (`command`):
+A server is either streamable HTTP (`provider = "http"`) or stdio (`provider = "stdio"`):
 
 ```toml
-[mcp.exa]
+[plugins.mcp_server.exa]
+provider = "http"
 url = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa"
 headers_env = { "x-api-key" = "EXA_API_KEY" }
 
-[mcp.firecrawl]
+[plugins.mcp_server.firecrawl]
+provider = "http"
 url = "https://mcp.firecrawl.dev/v2/mcp"
 bearer_token_env = "FIRECRAWL_API_KEY"
 
-[mcp.xai]
+[plugins.mcp_server.xai]
+provider = "stdio"
 command = ["python3", "/path/to/piloop/scripts/xai_search_mcp.py", "grok-4.7", "--max-usd", "1"]
 env = ["XAI_API_KEY"]
 
@@ -36,7 +39,8 @@ Whether a harness takes servers can depend on the runtime of the role. See
 [what each harness gets](#what-each-harness-gets).
 
 A role gets no servers unless its `mcp` key lists them. The [configuration
-reference](/reference/configuration#mcpserver) has every key.
+reference](/reference/configuration) has every key. A package can ship a server of its own, with its defaults, as a
+provider of `mcp_server`.
 
 ## Keys stay out of the file
 

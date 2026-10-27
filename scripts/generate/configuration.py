@@ -10,7 +10,6 @@ from piloop.deprecated import BRIDGES, CONFIG_BRIDGES
 from piloop.plugins.harness.contract import HARNESSES
 from piloop.plugins.host import Capability, Many, One, Parameters, Pick, Scope, declared
 from piloop.plugins.role.contract import ROLES
-from piloop.plugins.trigger.contract import TRIGGERS
 from piloop.settings import Settings
 from scripts.generate import ROOT, header
 from scripts.generate.markdown import JsonSchema, json_schema, mdx, table
@@ -92,7 +91,7 @@ def generate() -> str:
     for model in _nested(CampaignConfig, []):
         out += show(model)
     out += plugins_section(Scope.CAMPAIGN, '##')
-    for model in [HARNESSES.contract, *ROLES.builtins().values(), *TRIGGERS.builtins().values()]:
+    for model in [HARNESSES.contract, *ROLES.builtins().values()]:
         out += show(model)
     return out + global_section() + deprecated_section()
 
@@ -176,7 +175,7 @@ def _instances(capability: Capability[Parameters], scope: Scope, level: str) -> 
     each = capability.name.replace('_', ' ')
     out = f'\n{level}# `[plugins.{capability.name}.<name>]`\n\nEach {each} by name.\n'
     contract = capability.contract.__name__
-    if scope is Scope.CAMPAIGN:
+    if json_schema(capability.contract).get('properties'):  # keys that every provider shares: one section below
         return out + f'\nEach table takes the keys of [{contract}](#{contract.lower()}), and those of its provider.\n'
     return out + _providers(capability, level + '#')
 

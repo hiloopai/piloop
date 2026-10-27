@@ -14,7 +14,7 @@ from piloop.plugins.role.contract import ImplementerRole, SweepRole
 from piloop.plugins.runtime.contract import Handle, RuntimeName
 from piloop.plugins.runtime.subprocess import Subprocess, SubprocessRuntime
 from piloop.plugins.stop_rule.contract import GO, Escalate, Go, Hold, Stop, StopCase, StopRule
-from piloop.plugins.trigger.contract import Fire, Pass, Quiet, Trigger, TriggerEntry
+from piloop.plugins.trigger.contract import Fire, Pass, Quiet, Trigger, TriggerName
 from piloop.plugins.verdict_rule.bootstrap import Bootstrap
 from piloop.plugins.verdict_rule.contract import (
     Case,
@@ -122,7 +122,7 @@ class Auditor(SweepRole):
     """``auditor``: a sweep on every pass."""
 
     PROMPT = files(__package__) / 'auditor.md'
-    triggers: list[TriggerEntry] = [EveryPass(label='audit')]
+    triggers: list[TriggerName] = ['every_pass']
     timeout: float = 5
 
 

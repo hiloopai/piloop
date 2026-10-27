@@ -22,8 +22,8 @@ class DeadAtStartup(Trigger):
     INVESTIGATES: ClassVar[bool] = True
 
     def fire(self, p: Pass) -> Fire | None:
-        roles = p.campaign.config.roles.sweeping().items()
-        investigators = {name for name, role in roles if any(t.INVESTIGATES for t in role.triggers)}
+        cfg = p.campaign.config
+        investigators = {name for name in cfg.roles.sweeping() if any(t.INVESTIGATES for t in cfg.triggers_of(name))}
         events = in_order(
             p.s,
             StartupAnomaly,

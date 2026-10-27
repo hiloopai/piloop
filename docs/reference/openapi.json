@@ -113,7 +113,7 @@
     "/v1/overview": {
       "get": {
         "summary": "Overview",
-        "description": "The sections of each campaign's ``[status] sections``, and the live keys that config.toml or a limit sets.",
+        "description": "The sections of each campaign's ``[plugins.section] use``, and the live keys that config.toml or a limit sets.",
         "operationId": "overview",
         "parameters": [
           {
@@ -3539,7 +3539,7 @@
           "sections"
         ],
         "title": "CampaignOverview",
-        "description": "A campaign's overview: the sections of its ``[status] sections``, in order."
+        "description": "A campaign's overview: the sections of its ``[plugins.section] use``, in order."
       },
       "CampaignState": {
         "properties": {

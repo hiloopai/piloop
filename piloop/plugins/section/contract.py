@@ -1,7 +1,7 @@
 """The sections: the titled blocks that a campaign's readers see (https://piloop.autoresearch.inc/concepts/roles#sections).
 
-A section is a provider of ``SECTIONS``: its fields are its parameters, from its entry in a list of sections. ``piloop
-status``, the API and a UI show the campaign's ``[status] sections``. A brief shows its role's
+A section is a provider of ``SECTIONS``: its fields are its parameters, from ``[plugins.section.<name>]``. ``piloop
+status``, the API and a UI show the sections of ``[plugins.section] use``. A brief shows its role's
 ``[plugins.role.<name>] sections``. A list that is not set shows the installed sections that declare its surface
 (``Section.SHOWN_IN``), in their ``ORDER``. Each reader gets the sections in the order of the list, and leaves out a
 section with nothing to show. A package adds a section with an entry point in the group of ``SECTIONS``: nothing in
@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Annotated, ClassVar
 
 from piloop.api.views import Rendered
 from piloop.plugins.cas.contract import Cas
-from piloop.plugins.host import Capability, Parameters
+from piloop.plugins.host import Capability, Many, Parameters, Pick, Scope, Use
 
 if TYPE_CHECKING:  # piloop.db.models types campaigns.config with the sections: only the annotations name the rows
     from sqlalchemy.orm import Session
@@ -55,7 +55,7 @@ class Surface(StrEnum):
     """Where sections are shown. A list that is not set shows the sections that name its surface."""
 
     STATUS = 'status'
-    """``piloop status``, the API's overview and a UI: ``[status] sections``."""
+    """``piloop status``, the API's overview and a UI: ``[plugins.section] use``."""
     SWEEP = 'sweep'
     """The brief of a sweeping role: ``[plugins.role.<name>] sections``."""
     RUN = 'run'
@@ -63,7 +63,7 @@ class Surface(StrEnum):
 
 
 class Section(Parameters, ABC):
-    """One entry of a list of sections: ``{ provider = "<section>", <parameter> = <value> }``.
+    """``[plugins.section.<name>]``: a section, which a list of sections names.
 
     A section declares where it is shown by default and in what order, so that installing a package adds it there,
     and a list in the configuration replaces those defaults.
@@ -81,25 +81,28 @@ class Section(Parameters, ABC):
         """Return the section now, or None when it has nothing to show: then the reader leaves it out."""
 
 
-SECTIONS = Capability('section', Section)
-"""Every section by name. The lists of sections name them in their entries, so no single key selects one."""
-
-SectionEntry = Annotated[Section, SECTIONS.entry]
-"""The type of one entry of a list of sections: the section that its ``provider`` names, with its parameters."""
-
-
-def defaults(surface: Surface) -> list[Section]:
+def defaults(surface: Surface) -> list[str]:
     """The sections that ``surface`` shows when its list is not set, by ``ORDER`` and then by name.
 
-    They are every installed section with ``surface`` in its ``SHOWN_IN``, with its defaults.
+    They are every installed section with ``surface`` in its ``SHOWN_IN``.
     """
-    shown = [(p.model.ORDER, name, p.model) for name, p in SECTIONS.providers().items() if surface in p.model.SHOWN_IN]
-    return [model() for _, _, model in sorted(shown, key=lambda found: found[:2])]
+    shown = [(p.model.ORDER, name) for name, p in SECTIONS.providers().items() if surface in p.model.SHOWN_IN]
+    return [name for _, name in sorted(shown)]
 
 
-def chosen(listed: Sequence[Section] | None, surface: Surface) -> list[Section]:
-    """The sections that a list shows: the ones that it sets, else the defaults of ``surface``."""
-    return defaults(surface) if listed is None else list(listed)
+def of_status() -> list[str]:
+    """The sections of ``piloop status`` when ``[plugins.section] use`` is not set."""
+    return defaults(Surface.STATUS)
+
+
+SECTIONS = Capability(
+    'section', Section, table=Many(Scope.CAMPAIGN, use=Use(Scope.CAMPAIGN, Pick.ORDERED, defaults=of_status))
+)
+"""Every section by name: ``[plugins.section.<name>]``, and each provider that needs no keys. ``[plugins.section]
+use`` lists those of ``piloop status``, and a role's ``sections`` those of its briefs."""
+
+SectionName = Annotated[str, SECTIONS.ref]
+"""The name of a section of the campaign, in a list of sections."""
 
 
 def rendered(sections: Sequence[Section], r: Rendering) -> list[Rendered]:

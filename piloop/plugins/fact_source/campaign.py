@@ -14,7 +14,7 @@ from piloop.usage.totals import campaign_tokens
 class CampaignFacts(FactSource):
     """``campaign``: the hours that the campaign ran and the tokens that its agents spent.
 
-    It is on by default (``DEFAULT``). A campaign that lists its ``[[facts]]`` lists it too, to keep these facts.
+    It is on by default (``DEFAULT``). A campaign that sets ``[plugins.fact_source] use`` lists it too, to keep these facts.
     """
 
     DEFAULT = True
