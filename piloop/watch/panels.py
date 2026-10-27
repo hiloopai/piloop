@@ -26,8 +26,10 @@ from piloop.plugins.campaign_type.kit.backlog.ideas import links, superseded_by
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
+from piloop.plugins.campaign_type.kit.candidates.references import references
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ledger import metrics, references, score, track_of, trunk_keeps
+from piloop.plugins.campaign_type.kit.evaluation.measure import metrics, score
+from piloop.plugins.campaign_type.kit.verdicts.judge import track_of, trunk_keeps
 from piloop.plugins.campaign_type.kit.verdicts.verdict import label
 from piloop.plugins.cas.contract import Cas
 from piloop.reports.overview import (

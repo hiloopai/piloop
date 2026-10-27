@@ -69,14 +69,9 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
 from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.references import import_reference
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ledger import (
-    current_evaluator,
-    due,
-    head,
-    import_reference,
-    request_remeasure,
-)
+from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, request_remeasure
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController, wrap_up_lead
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
@@ -84,6 +79,7 @@ from piloop.plugins.campaign_type.kit.runs.stop import runs
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
+from piloop.plugins.campaign_type.kit.verdicts.judge import due, head
 from piloop.plugins.campaign_type.optimization.planner import RunQueued, RunRerouted
 from piloop.plugins.executor.contract import AgentKey, Capacity, Prompt
 from piloop.plugins.executor.kit.capacity import Pool

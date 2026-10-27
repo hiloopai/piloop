@@ -22,7 +22,7 @@ from piloop.db.models import NOT_RETIRED, Campaign
 from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import ledger
+from piloop.plugins.campaign_type.kit.evaluation import measure as ledger
 from piloop.plugins.campaign_type.kit.evaluation.api import (
     CancelledBy,
     EvaluationQueue,
@@ -32,8 +32,8 @@ from piloop.plugins.campaign_type.kit.evaluation.api import (
     WaitingSince,
 )
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.ledger import head
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
+from piloop.plugins.campaign_type.kit.verdicts.judge import head
 
 CANCELLED = 'evaluation cancelled by {actor}'
 """The error of the crashed measurement that ``cancel`` records."""

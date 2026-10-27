@@ -19,7 +19,7 @@ from piloop.db.events import has, latest, payload_of
 from piloop.db.models import Campaign, Comment, Event, EventModel
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import CommentKind, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.evaluation.ledger import last_keep_at
+from piloop.plugins.campaign_type.kit.verdicts.judge import last_keep_at
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactReadError, FactSource
 from piloop.plugins.fact_source.facts import Fact, FactValue, reading, since_keep
 

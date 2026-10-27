@@ -29,9 +29,9 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import ledger
+from piloop.plugins.campaign_type.kit.evaluation import measure as ledger
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId
-from piloop.plugins.campaign_type.kit.evaluation.ledger import save_units
+from piloop.plugins.campaign_type.kit.evaluation.measure import save_units
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run

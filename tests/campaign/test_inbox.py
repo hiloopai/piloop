@@ -21,9 +21,9 @@ from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, Targe
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
-from piloop.plugins.campaign_type.kit.evaluation.ledger import CandidateJudged
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from tests.conftest import WATCHDOG
 from tests.reports.test_history import idea
 from tests.reports.test_overview import render

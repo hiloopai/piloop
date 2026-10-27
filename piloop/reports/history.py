@@ -27,17 +27,13 @@ from piloop.db.models import Campaign, Comment, count
 from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import links, superseded_by
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.references import references
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.ledger import (
-    fallback_track,
-    keeps,
-    references,
-    score,
-    session_tokens,
-    track_of,
-)
+from piloop.plugins.campaign_type.kit.evaluation.measure import score
+from piloop.plugins.campaign_type.kit.runs.sessions import session_tokens
+from piloop.plugins.campaign_type.kit.verdicts.judge import fallback_track, keeps, track_of
 from piloop.plugins.campaign_type.kit.verdicts.verdict import label
 from piloop.text import NONE, cell, metric
 from piloop.usage import human

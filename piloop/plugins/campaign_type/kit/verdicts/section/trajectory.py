@@ -9,10 +9,11 @@ from piloop.db.models import Campaign, count
 from piloop.plugins.campaign_type.kit.candidates.ids import Cause
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.ledger import baseline, lineages, score, track_of, trunk_keeps
+from piloop.plugins.campaign_type.kit.evaluation.measure import score
 from piloop.plugins.campaign_type.kit.runs.ids import FINISHED_RUNS
 from piloop.plugins.campaign_type.kit.runs.stop import attempt
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.campaign_type.kit.verdicts.judge import baseline, lineages, track_of, trunk_keeps
 from piloop.plugins.campaign_type.kit.verdicts.verdict import label
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Branch, Trunk
 from piloop.plugins.section.contract import Rendering, Section, Surface

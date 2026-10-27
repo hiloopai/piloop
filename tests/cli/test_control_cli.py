@@ -21,9 +21,9 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ledger import RejudgeRequested
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.verdicts.judge import RejudgeRequested
 from piloop.settings import Settings
 from tests.cli.test_cli import research_files, run_cli
 from tests.conftest import at_head, bare_config, launched

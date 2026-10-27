@@ -32,7 +32,7 @@ from pydantic import BaseModel, ConfigDict
 
 from piloop.db.models import NoLease
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.evaluation.ledger import evaluator_runners
+from piloop.plugins.campaign_type.kit.evaluation.measure import evaluator_runners
 from piloop.plugins.executor.contract import (
     AgentJob,
     AgentReport,

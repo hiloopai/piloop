@@ -68,8 +68,9 @@ from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by, runnable
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.references import CandidateImported
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ledger import CandidateImported, RemeasureRequested
+from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRequested
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run

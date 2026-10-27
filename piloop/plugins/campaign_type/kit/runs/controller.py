@@ -40,7 +40,6 @@ from piloop.campaign.campaigns import (
     campaign_dir,
     checkout_of,
     record_of,
-    repository,
     vcs_of,
     workspace_dir,
 )
@@ -68,38 +67,40 @@ from piloop.plugins import limits
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.config import Track
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
-from piloop.plugins.campaign_type.kit.evaluation.ledger import (
-    MOVED,
-    CandidateJudged,
-    RejudgeFailed,
-    answer_rejudge,
-    bar_of,
-    criterion,
+from piloop.plugins.campaign_type.kit.evaluation.measure import (
     current_evaluator,
-    head,
-    judge,
+    gate_of,
     measured,
-    node,
-    on_moved,
     remeasure_asked,
-    reproposed,
-    resolve,
-    rungs,
     score,
-    side,
-    unjudged,
-    verdict_rule,
 )
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import attempts, park_cancelled
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.verdicts.judge import (
+    MOVED,
+    CandidateJudged,
+    RejudgeFailed,
+    answer_rejudge,
+    bar_of,
+    branches,
+    criterion,
+    head,
+    judge,
+    node,
+    on_moved,
+    reproposed,
+    side,
+    unjudged,
+    verdict_rule,
+)
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     UNMEASURED,
     judgeable,
@@ -1442,26 +1443,6 @@ def _requeue(s: Session, run: Run, last: Candidate, end: RunEnd) -> None:
         ' from its last one to finish the work'
     )
     s.add(Comment(target=TargetRef(TargetKind.IDEA, idea.id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
-
-
-def branches(s: Session, campaign: Campaign, pinned: Candidate | None, computed: Candidate | None) -> bool:
-    """Return True if a run on ``pinned`` is a branch run: the pinned base's bar is not the current head.
-
-    A pin whose bar is the head, such as a non-keep on top of it, is not a branch. Its run is judged against the head
-    (``ledger.bar_of``). Nor is a pin whose version has the head's (``Repository.contains``), such as a compose that
-    cherry-picked it: a keep of it builds on the head.
-    """
-    if pinned is None or computed is None:
-        return pinned is not None
-    if bar_of(s, pinned).id == computed.id:
-        return False
-    with closing(repository(campaign)) as repo:
-        return not repo.contains(pinned.revision, computed.revision)
-
-
-def gate_of(bar: Candidate, evaluator_id: EvaluatorId, cfg: CampaignConfig) -> Gate:
-    """What the ladder's stops compare with: ``bar``'s means at each rung, and the metrics' directions."""
-    return Gate(bar=rungs(bar, evaluator_id), directions={m.name: m.direction for m in cfg.metrics})
 
 
 def unmeasured_of(version: Version) -> Unmeasured | None:

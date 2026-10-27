@@ -16,11 +16,11 @@ from piloop.actor import System
 from piloop.config import CampaignConfig
 from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import ledger
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole, Track, TrackConfig
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Units
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName, TrackName
-from piloop.plugins.campaign_type.kit.evaluation.ledger import criterion
+from piloop.plugins.campaign_type.kit.verdicts import judge
+from piloop.plugins.campaign_type.kit.verdicts.judge import criterion
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     PENDING,
     Refusal,
@@ -51,7 +51,7 @@ def decide(
     bar: str,
 ) -> tuple[Outcome, str]:
     """The built-in rule's verdict on a candidate of ``track`` against ``bar``, as the daemon asks for it."""
-    return ledger.decide(
+    return judge.decide(
         Bootstrap(confidence=confidence), track, Side('candidate#74', mine, mine_units), Side(bar, theirs, theirs_units)
     )
 
@@ -157,13 +157,13 @@ def test_a_climb_that_stopped_at_a_rung_is_a_discard_and_a_full_panel_outranks_i
     track, confidence = rule(config())
     stopped = Stopped(RungName('screen'), 'accuracy 0.6 vs 0.7 (-0.1; margin 0.05)')
     bar = Side(BAR, {'accuracy': 0.7}, {})
-    assert ledger.decide(Bootstrap(confidence=confidence), track, Side('c', {}, {}, stopped=stopped), bar) == (
+    assert judge.decide(Bootstrap(confidence=confidence), track, Side('c', {}, {}, stopped=stopped), bar) == (
         Outcome.DISCARD,
         'stopped at screen: accuracy 0.6 vs 0.7 (-0.1; margin 0.05)',
     )
     remeasured = Side('c', {'accuracy': 0.6}, {}, stopped=stopped)
-    assert ledger.decide(Bootstrap(confidence=confidence), track, remeasured, bar)[0] is Outcome.DISCARD
-    assert 'stopped' not in ledger.decide(Bootstrap(confidence=confidence), track, remeasured, bar)[1]
+    assert judge.decide(Bootstrap(confidence=confidence), track, remeasured, bar)[0] is Outcome.DISCARD
+    assert 'stopped' not in judge.decide(Bootstrap(confidence=confidence), track, remeasured, bar)[1]
 
 
 COVERAGE = Metric(name='coverage', direction=Direction.HIGHER, role=MetricRole.GUARDRAIL, margin=10, floor=1000)
@@ -259,11 +259,11 @@ def test_pairs_judge_a_metric_without_units_on_the_worst_case_of_the_mean_pair_d
         {'accuracy': [1.0, 1.0, 1.0], 'seconds': [6.5, 5.5, 6.4]},
     )
     track, confidence = rule(config(SECONDS))
-    unpaired = ledger.decide(
+    unpaired = judge.decide(
         Bootstrap(confidence=confidence), track, Side('candidate#74', stale[0], {}), Side(BAR, stale[1], {})
     )
     assert unpaired[0] is Outcome.INTERESTING
-    paired = ledger.decide(
+    paired = judge.decide(
         Bootstrap(confidence=confidence),
         track,
         Side('candidate#74', stale[0], {}, pairs[0]),
@@ -282,7 +282,7 @@ def test_units_decide_a_metric_that_has_them_also_when_it_has_pairs() -> None:
     units, so a gain that three units carry is still not significant."""
     mine, theirs, mine_units, theirs_units = scored(*records(CONCENTRATED))
     samples = ({'accuracy': [mine['accuracy']] * 3}, {'accuracy': [theirs['accuracy']] * 3})
-    verdict, reason = ledger.decide(
+    verdict, reason = judge.decide(
         Bootstrap(),
         rule(config())[0],
         Side('candidate#74', mine, mine_units, samples[0]),
@@ -298,7 +298,7 @@ def test_units_decide_a_metric_that_has_them_also_when_it_has_pairs() -> None:
 
 def test_samples_of_one_side_only_are_no_pairs() -> None:
     track, confidence = rule(config())
-    only = ledger.decide(
+    only = judge.decide(
         Bootstrap(confidence=confidence),
         track,
         Side('candidate#74', {'accuracy': 2}, {}, {'accuracy': [2.0, 2.0]}),
@@ -348,7 +348,7 @@ def test_a_lower_is_better_metric_that_did_not_move_reads_plus_zero() -> None:
 def same(track: Track, mine: dict[str, float], parent: dict[str, float]) -> bool:
     """Whether the built-in rule's reason says that the candidate is a no-op on its ``parent``, the bar too here."""
     sides = Side('candidate#74', mine, {}), Side(BAR, parent, {})
-    reason = ledger.decide(Bootstrap(), track, *sides, parent=Side('candidate#70', parent, {}))[1]
+    reason = judge.decide(Bootstrap(), track, *sides, parent=Side('candidate#70', parent, {}))[1]
     return reason.startswith('no-op: ')
 
 
@@ -479,7 +479,7 @@ def test_the_example_rule_min_gain_delegates_to_bootstrap_and_holds_back_a_small
     track = rule(config(COVERAGE))[0]
 
     def judged(mine: dict[str, float], theirs: dict[str, float], with_rule: VerdictRule) -> tuple[Outcome, str]:
-        return ledger.decide(with_rule, track, Side('candidate#74', mine, {}), Side(BAR, theirs, {}))
+        return judge.decide(with_rule, track, Side('candidate#74', mine, {}), Side(BAR, theirs, {}))
 
     bar = {'accuracy': 10.0, 'coverage': 1000.0}
     for mine, theirs in [

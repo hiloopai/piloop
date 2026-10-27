@@ -91,7 +91,7 @@ from piloop.plugins.campaign_type.kit.evaluation.api import (
     RunningSince,
     ScoringClient,
 )
-from piloop.plugins.campaign_type.kit.evaluation.ledger import MeasurementRecorded
+from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.contribution import collect, contributions_of, installed

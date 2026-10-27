@@ -1,43 +1,60 @@
-"""What the ledger means: the current evaluator, a candidate's score under it, the head, the verdict and the rebase.
+"""Judging: a measured candidate against its bar, the head and the keeps of each track, lineage and rebases."""
 
-All code that reads candidates and measurements to answer "how good is this" uses this module. So the CLI, the
-scheduler, the run controller and the history block agree.
-"""
-
-import json
 import re
 from collections.abc import Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from statistics import fmean
 from typing import ClassVar, Literal, assert_never
 
-from pydantic import BaseModel, Field, TypeAdapter
-from sqlalchemy import ColumnElement, Select, func, literal, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import Select, func, literal, select
 from sqlalchemy.orm import Session
 
-from piloop import deprecated
 from piloop.actor import Actor, System
+from piloop.campaign.campaigns import (
+    repository,
+)
 from piloop.config import CampaignConfig
 from piloop.db import requests
-from piloop.db.events import emit, has, latest
-from piloop.db.models import PROCESS, AgentSession, Campaign, Comment, Event, EventModel, ReadBy, latest_agent_session
-from piloop.ids import CampaignId, CampaignStatus, CommentKind, TargetKind, TargetRef
+from piloop.db.events import emit
+from piloop.db.models import (
+    Campaign,
+    Event,
+    EventModel,
+    ReadBy,
+)
+from piloop.ids import CampaignStatus, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import config
-from piloop.plugins.campaign_type.kit.evaluation.api import REPEATS
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, Track
-from piloop.plugins.campaign_type.kit.evaluation.evaluate import UNITS, Units
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, RungName, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.measure import (
+    Samples,
+    candidates_of,
+    derive,
+    full_clause,
+    means,
+    measured,
+    metrics,
+    pairs,
+    ratios,
+    requested,
+    rungs,
+    units,
+)
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RunId
+from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.verdicts.verdict import judgeable, label, pending, pending_clause
+from piloop.plugins.campaign_type.kit.verdicts.verdict import (
+    judgeable,
+    label,
+    pending,
+    pending_clause,
+)
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
     VERDICT_RULES,
     Branch,
@@ -60,123 +77,9 @@ from piloop.plugins.host import ContractBroken
 from piloop.plugins.vcs.contract import (
     Conflicts,
     RebaseVersion,
-    ReferenceVersion,
     Repository,
-    Revision,
-    UnknownRevision,
-    Version,
 )
 from piloop.text import metric
-
-type Samples = dict[str, list[float]]
-"""The samples of a paired evaluation: metric name → the value of each sample, in the order of the pairs."""
-
-
-def current_evaluator(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Evaluator:
-    """Return the evaluator row that ``cfg`` describes, and make it the campaign's current one. Create it if needed.
-
-    Raises:
-        ValueError: the evaluator has a runner that is not installed (``evaluator_runners``).
-    """
-    key = cfg.evaluator_key
-    evaluator = s.scalar(select(Evaluator).where(Evaluator.campaign_id == campaign.id, Evaluator.key == key))
-    if evaluator is None:
-        evaluator = Evaluator(campaign_id=campaign.id, key=key, definition=cfg.evaluator_definition)
-        s.add(evaluator)
-        s.flush()
-    if evaluator.runner not in (installed := evaluator_runners()):
-        raise ValueError(
-            f'evaluator#{evaluator.id} of {campaign.name} has the evaluator runner {evaluator.runner!r}, which is not'
-            f' installed: {", ".join(installed)}'
-        )
-    if campaign.evaluator_id != evaluator.id:
-        campaign.evaluator_id = evaluator.id
-        s.flush()
-    return evaluator
-
-
-def evaluator_runners() -> tuple[str, ...]:
-    """Return the names of the installed evaluator runners: the built-in ``process`` for now.
-
-    TODO: add the evaluator-runner plugins from the plugin registry when it lands; nothing else changes here.
-    """
-    return (PROCESS,)
-
-
-def full(m: Measurement) -> bool:
-    """Whether ``m`` scores: it measured the full panel, and succeeded. A rung of the ladder never scores."""
-    return m.error is None and m.rung is None
-
-
-def full_clause() -> ColumnElement[bool]:
-    """Select the measurements that ``full`` is true of."""
-    return Measurement.error.is_(None) & Measurement.rung.is_(None)
-
-
-class _Judged(BaseModel):
-    """A judging metric as an evaluator's ``definition`` stores it: its name, and its parts if piloop computes it."""
-
-    name: str
-    ratio: config.Ratio | None = None
-
-
-JUDGED = TypeAdapter(list[_Judged])
-
-
-def ratios(evaluator: Evaluator | None) -> dict[str, config.Ratio]:
-    """The ratio metrics of ``evaluator``, by name: piloop computes them from what it measured (``derive``)."""
-    if evaluator is None:
-        return {}
-    return {j.name: j.ratio for j in JUDGED.validate_python(evaluator.definition.get('judging', [])) if j.ratio}
-
-
-def derive(values: dict[str, float], found: dict[str, config.Ratio]) -> dict[str, float]:
-    """``values`` with each ratio of ``found`` whose parts it has, and whose denominator is not 0."""
-    return values | {
-        name: values[r.numerator] / values[r.denominator]
-        for name, r in found.items()
-        if r.numerator in values and values.get(r.denominator)
-    }
-
-
-def metrics(candidate: Candidate, evaluator_id: EvaluatorId | None) -> dict[str, float]:
-    """Return the mean of each metric over the candidate's ``full`` measurements under ``evaluator_id``.
-
-    A ratio is the ratio of the means of its parts (``derive``).
-    """
-    rows = [m for m in candidate.measurements if m.evaluator_id == evaluator_id and full(m)]
-    return derive(means([m.metrics for m in rows]), ratios(rows[0].evaluator) if rows else {})
-
-
-def rungs(candidate: Candidate, evaluator_id: EvaluatorId | None) -> dict[RungName, dict[str, float]]:
-    """Return the mean of each metric at each rung of the ladder, over the candidate's measurements of the rung."""
-    found: dict[RungName, list[dict[str, float]]] = {}
-    for m in candidate.measurements:
-        if m.evaluator_id == evaluator_id and m.error is None and m.rung is not None:
-            found.setdefault(m.rung, []).append(m.metrics)
-    return {rung: means(rows) for rung, rows in found.items()}
-
-
-def means(rows: Sequence[dict[str, float]]) -> dict[str, float]:
-    """Return the mean of each metric over ``rows``, the metrics of measurements."""
-    names = {name for row in rows for name in row}
-    return {name: fmean(values) for name in names if (values := [r[name] for r in rows if name in r])}
-
-
-def score(candidate: Candidate, evaluator_id: EvaluatorId | None, primary: Metric) -> float | None:
-    """Return the primary metric under ``evaluator_id``, or None when no successful measurement has it."""
-    return metrics(candidate, evaluator_id).get(primary.name)
-
-
-def measured(candidate: Candidate, evaluator_id: EvaluatorId | None) -> bool:
-    """Return whether the candidate needs no evaluation under ``evaluator_id``: a ``full`` measurement, or a crash.
-
-    A climb that stopped at a rung does not count, so what needs a score, a head or a bar, is measured in full, and a
-    run that reaches the tree again climbs again.
-    """
-    return any(
-        m.evaluator_id == evaluator_id and (m.rung is None or m.error is not None) for m in candidate.measurements
-    )
 
 
 def head(s: Session, campaign: Campaign, *, excluding: Candidate | None = None) -> Candidate | None:
@@ -348,127 +251,6 @@ def head_unmeasured(s: Session, campaign: Campaign) -> bool:
     return trunk is not None and not measured(trunk, campaign.evaluator_id)
 
 
-class RemeasureRequested(EventModel):
-    """Someone asked the daemon to measure a candidate again (``request_remeasure``)."""
-
-    kind: Literal['candidate.remeasure_requested'] = 'candidate.remeasure_requested'
-    repeats: int = Field(default=REPEATS, ge=1)
-    """How many samples of the candidate, each next to one of its bar."""
-
-
-class RemeasureRefused(Exception):
-    """``request_remeasure`` cannot ask for the candidate. The message says why."""
-
-
-def request_remeasure(s: Session, candidate: Candidate, actor: Actor, repeats: int = REPEATS) -> None:
-    """Ask the daemon to measure ``candidate`` again with the current evaluator, next to its bar. The caller commits.
-
-    Use it for a measurement that a fault of the host spoiled (a full disk, a lost GPU), or that load made noisy. The
-    request (``RemeasureRequested``) is pending until a measurement of the candidate under the campaign's current
-    evaluator is recorded (``record``). The daemon runs ``repeats`` pairs of the candidate and its bar (``bar_of`` its
-    parent), then judges it again when it is ``rejudgeable`` (``RunController.remeasure``). A candidate without a
-    parent, the baseline or a reference, gets ``repeats`` samples alone. A commit that the daemon never measured
-    (``skipped`` or ``recovered``) gets its first measurement, to isolate a regression to it, say.
-
-    Raises:
-        RemeasureRefused: the candidate is pending: its run measures and judges it.
-    """
-    if pending(candidate):
-        raise RemeasureRefused(f'candidate#{candidate.id} is pending: the daemon measures and judges it already')
-    emit(s, RemeasureRequested(repeats=repeats), TargetRef(TargetKind.CANDIDATE, candidate.id), actor)
-
-
-def remeasure_asked(s: Session, candidate: Candidate) -> RemeasureRequested | None:
-    """Return the pending request to measure ``candidate`` again, or None."""
-    found = requests.pending(s, RemeasureRequested, Event.target == TargetRef(TargetKind.CANDIDATE, candidate.id))
-    return found[0][1] if found else None
-
-
-def candidates_of(campaign: Campaign) -> ColumnElement[bool]:
-    """Select the events on the candidates of ``campaign``."""
-    of_campaign = select(Candidate.id).where(Candidate.campaign_id == campaign.id)
-    return (Event.target_kind == TargetKind.CANDIDATE) & Event.target_id.in_(of_campaign)
-
-
-def requested(s: Session, campaign: Campaign) -> list[tuple[Candidate, Event]]:
-    """Return the candidates of ``campaign`` that someone asked to measure again, with the open requests, oldest first."""
-    return [
-        (s.get_one(Candidate, asked.target_id), asked)
-        for asked, _ in requests.pending(s, RemeasureRequested, candidates_of(campaign))
-    ]
-
-
-def record(
-    s: Session,
-    candidate: Candidate,
-    evaluator_id: EvaluatorId,
-    actor: Actor,
-    *,
-    metrics: dict[str, float],
-    error: str | None,
-    seconds: float | None,
-    run: RunId | None = None,
-    pair: MeasurementId | None = None,
-    rung: RungName | None = None,
-    stopped: str | None = None,
-) -> Measurement:
-    """Store a measurement of ``candidate``, with ``MeasurementRecorded``. The caller commits.
-
-    The one writer of measurements. ``run`` is the run that the daemon measured it for, ``pair`` the bar's
-    measurement that ran next to it in a paired evaluation, ``rung`` the rung of the ladder that it measured, and
-    ``stopped`` why the climb stopped there. A measurement of the full panel under the campaign's current evaluator
-    answers the pending request to measure the candidate again (``request_remeasure``). A rung does not: the request
-    waits for the full panel.
-    """
-    measurement = Measurement(
-        candidate=candidate,
-        evaluator_id=evaluator_id,
-        metrics=metrics,
-        error=error,
-        seconds=seconds,
-        pair_id=pair,
-        rung=rung,
-        stopped=stopped,
-    )
-    s.add(measurement)
-    s.flush()
-    recorded = MeasurementRecorded(
-        candidate=candidate.id, metrics=metrics, error=error, run=run, pair=pair, rung=rung, stopped=stopped
-    )
-    emit(s, recorded, TargetRef(TargetKind.MEASUREMENT, measurement.id), actor)
-    if rung is None and evaluator_id == s.get_one(Campaign, candidate.campaign_id).evaluator_id:
-        for asked, _ in requests.pending(
-            s, RemeasureRequested, Event.target == TargetRef(TargetKind.CANDIDATE, candidate.id)
-        ):
-            requests.answer(s, asked)
-    return measurement
-
-
-@deprecated.until(
-    '0.4.0', 'METRIC lines on stdout: delete MetricLinesNoted and note_metric_lines, and retire evaluator.metric_lines'
-)
-class MetricLinesNoted(EventModel):
-    """The daemon told the human that an evaluator reports through ``METRIC`` lines, which 0.4.0 removes."""
-
-    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
-    kind: Literal['evaluator.metric_lines'] = 'evaluator.metric_lines'
-    evaluator: EvaluatorId
-
-
-@deprecated.until('0.4.0', 'METRIC lines on stdout: delete note_metric_lines and its call')
-def note_metric_lines(s: Session, campaign_id: CampaignId, evaluator_id: EvaluatorId) -> None:
-    """Post one inbox note for each evaluator that still reports through ``METRIC`` lines. The caller commits."""
-    on = TargetRef(TargetKind.CAMPAIGN, campaign_id)
-    if latest(s, MetricLinesNoted, Event.target == on, has(MetricLinesNoted, evaluator=evaluator_id)) is not None:
-        return
-    emit(s, MetricLinesNoted(evaluator=evaluator_id), on, System.DAEMON)
-    body = (
-        'The evaluate command prints METRIC lines, which piloop reads until 0.4.0. Write one JSON line to '
-        '$PILOOP_RESULT_FILE instead: https://piloop.autoresearch.inc/concepts/campaigns#the-evaluate-command'
-    )
-    s.add(Comment(target=on, author=System.DAEMON, kind=CommentKind.NOTE, priority=1, body=body))
-
-
 class RejudgeRequested(EventModel):
     """Someone measured a candidate by hand (``piloop measurement add``): the daemon judges it again."""
 
@@ -491,23 +273,6 @@ class CandidateJudged(EventModel):
     verdict: Outcome
     score: float | None
     reason: str | None
-
-
-class MeasurementRecorded(EventModel):
-    """A measurement of a candidate was recorded: by the daemon, or by hand (``piloop measurement add``)."""
-
-    kind: Literal['measurement.recorded'] = 'measurement.recorded'
-    candidate: CandidateId
-    metrics: dict[str, float]
-    error: str | None
-    run: RunId | None
-    """The run that the daemon measured it for. None for a measurement by hand or a cancelled evaluation."""
-    pair: MeasurementId | None = None
-    """The bar's measurement that ran next to it in a paired evaluation."""
-    rung: RungName | None = None
-    """The rung of the ladder that it measured. None for the full panel."""
-    stopped: str | None = None
-    """Why the climb stopped at ``rung``. None when it went on."""
 
 
 def unjudged(candidate: Candidate) -> bool:
@@ -539,12 +304,6 @@ def answer_rejudge(s: Session, candidate_id: CandidateId) -> None:
         requests.answer(s, asked)
 
 
-def references(s: Session, campaign: Campaign) -> list[Candidate]:
-    """Return the campaign's imported starting points (``piloop candidate import``), oldest first."""
-    query = select(Candidate).where(Candidate.campaign_id == campaign.id, Candidate.origin == Origin.REFERENCE)
-    return list(s.scalars(query.order_by(Candidate.id)))
-
-
 def keeps(campaign: Campaign) -> Select[Candidate]:
     """Select the campaign's kept candidates. The baseline is one while its verdict is ``keep``."""
     return select(Candidate).where(Candidate.campaign_id == campaign.id, Candidate.verdict == Outcome.KEEP)
@@ -562,69 +321,12 @@ def checkout_candidate(s: Session, campaign: Campaign) -> Candidate:
     return head(s, campaign) or baseline(s, campaign)
 
 
-def units_file(units_dir: Path, measurement_id: MeasurementId) -> Path:
-    """Return the path of a measurement's per-unit results, under ``PILOOP_HOME``.
-
-    The file is outside every worktree and the database. The results are not a column, because every agent can read
-    every table through ``piloop sql``, and an implementer must not tune against per-unit results. A file is not a sandbox,
-    because an agent's shell can read ``PILOOP_HOME``. But the file is not in the schema, the briefs or any renderer.
-    """
-    return units_dir / f'{measurement_id}.json'
-
-
-def save_units(units_dir: Path, measurement_id: MeasurementId, units: Units) -> None:
-    """Store a measurement's per-unit results. With none, remove any old file that a reused id could find."""
-    path = units_file(units_dir, measurement_id)
-    if not units:
-        path.unlink(missing_ok=True)
-        return
-    units_dir.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(units))
-
-
 def stop_of(candidate: Candidate, evaluator_id: EvaluatorId) -> Stopped | None:
     """Where the candidate's latest climb under ``evaluator_id`` stopped, as a verdict rule reads it, or None."""
     for m in reversed(candidate.measurements):
         if m.evaluator_id == evaluator_id and m.rung is not None and m.stopped is not None:
             return Stopped(m.rung, m.stopped)
     return None
-
-
-def pairs(candidate: Candidate, bar: Candidate, evaluator_id: EvaluatorId) -> tuple[Samples, Samples]:
-    """Return the samples that ``candidate`` and ``bar`` measured next to each other under ``evaluator_id``.
-
-    The i-th sample of a metric of the candidate and the i-th of the bar are one pair (``Measurement.pair``). A pair
-    counts when both of its measurements are ``full``.
-    """
-    mine: Samples = {}
-    theirs: Samples = {}
-    for m in candidate.measurements:
-        other = m.pair
-        if m.evaluator_id != evaluator_id or not full(m) or other is None:
-            continue
-        if other.candidate_id != bar.id or not full(other):
-            continue
-        found = ratios(m.evaluator)
-        ours, its = derive(m.metrics, found), derive(other.metrics, found)
-        for name in ours.keys() & its.keys():
-            mine.setdefault(name, []).append(ours[name])
-            theirs.setdefault(name, []).append(its[name])
-    return mine, theirs
-
-
-def units(candidate: Candidate, evaluator_id: EvaluatorId, units_dir: Path) -> Units:
-    """Return the candidate's per-unit results under ``evaluator_id``: each unit's mean over its measurements."""
-    rows = [
-        UNITS.validate_json(path.read_bytes())
-        for m in candidate.measurements
-        if m.evaluator_id == evaluator_id and full(m) and (path := units_file(units_dir, m.id)).is_file()
-    ]
-    per_metric: dict[str, dict[str, list[float]]] = {}
-    for row in rows:
-        for name, values in row.items():
-            for unit, value in values.items():
-                per_metric.setdefault(name, {}).setdefault(unit, []).append(value)
-    return {name: {unit: fmean(v) for unit, v in values.items()} for name, values in per_metric.items()}
 
 
 def judge(
@@ -719,17 +421,11 @@ class Rebased(EventModel):
     """The paths that conflict."""
 
 
-class CandidateImported(EventModel):
-    """A reference candidate was imported (``piloop candidate import``)."""
-
-    kind: Literal['candidate.imported'] = 'candidate.imported'
-    ref: str
-    revision: Revision
-
-
 REBASED_SUFFIX = re.compile(r' \(rebased onto candidate#\d+\)$')
 """How the subject of a merge commit ends. A merge that is rebased again keeps the run commit's subject, with the
 new head."""
+
+
 MOVED = 'keeps against its own bar, but the head moved on to candidate#{head}: '
 """How the reason of a candidate to rebase starts. The candidate is ``interesting`` (``Cause.MOVED``), never a keep off
 the trunk."""
@@ -862,79 +558,6 @@ def reproposed(candidate: Candidate, run: Run) -> bool:
     return other is not None and other.id != run.id and other.branch == run.branch and judgeable(candidate)
 
 
-def resolve(
-    s: Session,
-    campaign_id: CampaignId,
-    version: Version,
-    *,
-    parent: Candidate | None,
-    run_id: RunId | None,
-    origin: Origin,
-) -> tuple[Candidate, bool]:
-    """Return the candidate for the tree of ``version``: the existing one, or a new row of ``origin`` under ``parent``.
-
-    Returns ``(candidate, created)``. An existing candidate is returned unchanged: a version that reverts to a known
-    state is that state, whatever run or version reached it. Two runs that reach one new tree at once share it: the
-    insert that loses the race on ``UNIQUE(campaign_id, tree_sha)`` returns the winner's row.
-    """
-    known = select(Candidate).where(Candidate.campaign_id == campaign_id, Candidate.tree_sha == version.tree)
-    found = s.scalar(known)
-    if found is not None:
-        return found, False
-    candidate = Candidate(
-        campaign_id=campaign_id,
-        run_id=run_id,
-        parent_id=parent.id if parent else None,
-        tree_sha=version.tree,
-        revision=version.revision,
-        summary=version.summary,
-        origin=origin,
-    )
-    try:
-        with s.begin_nested():
-            s.add(candidate)
-    except IntegrityError:
-        return s.scalars(known).one(), False
-    return candidate, True
-
-
-class ImportRefused(Exception):
-    """``import_reference`` cannot register the commit. The message says why."""
-
-
-def import_reference(
-    s: Session,
-    campaign: Campaign,
-    repo: Repository,
-    ref: str,
-    *,
-    summary: str | None,
-    actor: Actor,
-) -> Candidate:
-    """Register the tree of ``ref`` (a version of the campaign's repo, in its vcs's terms) as a ``reference`` candidate.
-
-    Like the baseline, it has no run and no parent. The version is kept (``ReferenceVersion``), so it outlives what named it.
-    The daemon measures it under the current evaluator (``due``).
-
-    Raises:
-        ImportRefused: ``ref`` names no version, or its tree is already a candidate of the campaign.
-    """
-    try:
-        version = repo.version(ref)
-    except UnknownRevision as e:
-        raise ImportRefused(str(e)) from e
-    revision = version.revision
-    candidate, created = resolve(s, campaign.id, version, parent=None, run_id=None, origin=Origin.REFERENCE)
-    if not created:
-        raise ImportRefused(f'the tree of {ref!r} already is candidate#{candidate.id} ({label(candidate)})')
-    candidate.summary = summary or candidate.summary
-    candidate.verdict_reason = f'imported from {ref} ({revision[:7]})'
-    repo.keep(revision, ReferenceVersion(campaign.name, candidate.id))
-    imported = CandidateImported(ref=ref, revision=revision)
-    emit(s, imported, TargetRef(TargetKind.CANDIDATE, candidate.id), actor)
-    return candidate
-
-
 def follow_up(
     s: Session,
     candidate: Candidate,
@@ -1014,12 +637,16 @@ def lineages(s: Session, campaign: Campaign) -> list[Line]:
     return sorted(found.values(), key=lambda line: (isinstance(line.lineage, Branch), -line.latest.id))
 
 
-def session_agent_session(s: Session, candidate: Candidate) -> AgentSession | None:
-    """Return the implementer whose session made ``candidate`` (through ``agent_sessions.run_id``). None for the baseline."""
-    return latest_agent_session(s, candidate.run_id) if candidate.run_id is not None else None
+def branches(s: Session, campaign: Campaign, pinned: Candidate | None, computed: Candidate | None) -> bool:
+    """Return True if a run on ``pinned`` is a branch run: the pinned base's bar is not the current head.
 
-
-def session_tokens(s: Session, candidate: Candidate) -> int | None:
-    """Return the tokens that the session that made ``candidate`` spent (``agent_sessions.usage`` total). None when unknown."""
-    agent_session = session_agent_session(s, candidate)
-    return agent_session.usage.total if agent_session is not None and agent_session.usage else None
+    A pin whose bar is the head, such as a non-keep on top of it, is not a branch. Its run is judged against the head
+    (``ledger.bar_of``). Nor is a pin whose version has the head's (``Repository.contains``), such as a compose that
+    cherry-picked it: a keep of it builds on the head.
+    """
+    if pinned is None or computed is None:
+        return pinned is not None
+    if bar_of(s, pinned).id == computed.id:
+        return False
+    with closing(repository(campaign)) as repo:
+        return not repo.contains(pinned.revision, computed.revision)

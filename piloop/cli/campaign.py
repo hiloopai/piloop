@@ -30,7 +30,7 @@ from piloop.db.models import EVENT
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
 from piloop.ids import CampaignStatus, checked_campaign_name
-from piloop.plugins.campaign_type.kit.evaluation.ledger import MeasurementRecorded
+from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.reports.pack import renderables as pack_renderables
 from piloop.text import metric
 from piloop.watch.app import Watch

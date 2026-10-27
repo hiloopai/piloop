@@ -51,9 +51,9 @@ from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Ev
 from piloop.ids import CampaignId, CommentKind, RoleName
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.evaluation.ledger import keeps
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.campaign_type.kit.verdicts.judge import keeps
 from piloop.reports.overview import head_scores, live_agent_sessions, produced, queued_ideas
 from piloop.text import iso
 from piloop.usage.totals import campaign_tokens

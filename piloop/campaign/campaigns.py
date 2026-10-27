@@ -38,8 +38,9 @@ from piloop.ids import (
 )
 from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ledger import current_evaluator, resolve
+from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import RepoId, Source, Workspace
 from piloop.plugins.role.contract import ideas_taken

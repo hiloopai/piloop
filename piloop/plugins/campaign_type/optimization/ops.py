@@ -12,10 +12,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
-from piloop.plugins.campaign_type.kit.evaluation.ledger import (
-    follow_up,
-    track_of,
-)
+from piloop.plugins.campaign_type.kit.verdicts.judge import follow_up, track_of
 from piloop.plugins.campaign_type.kit.verdicts.ops import set_verdict
 
 

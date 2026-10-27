@@ -9,7 +9,7 @@ from inline_snapshot import snapshot
 from piloop.config import ConfigError, load_campaign_config
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.evaluation.config import Ratio
-from piloop.plugins.campaign_type.kit.evaluation.ledger import derive
+from piloop.plugins.campaign_type.kit.evaluation.measure import derive
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule import bootstrap
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap, ratio_bound
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Case, Criterion, Ratio as Parts, Side

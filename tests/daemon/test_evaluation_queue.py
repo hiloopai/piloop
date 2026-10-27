@@ -15,7 +15,7 @@ from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
-from piloop.plugins.campaign_type.kit.evaluation.ledger import measured, request_remeasure
+from piloop.plugins.campaign_type.kit.evaluation.measure import measured, request_remeasure
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus

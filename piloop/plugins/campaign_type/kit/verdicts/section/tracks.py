@@ -5,9 +5,10 @@ from sqlalchemy import select
 from piloop.api.views import Lines, Rendered
 from piloop.plugins.campaign_type.kit.backlog.ideas import runnable
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.evaluation.ledger import baseline, head, score, track_of, trunk_keeps
+from piloop.plugins.campaign_type.kit.evaluation.measure import score
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.campaign_type.kit.verdicts.judge import baseline, head, track_of, trunk_keeps
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.reports.overview import known, num
 from piloop.text import age, metric

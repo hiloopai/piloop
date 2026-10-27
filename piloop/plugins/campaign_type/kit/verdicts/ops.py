@@ -12,14 +12,7 @@ from piloop.campaign.ops import Refused, _get, _reason
 from piloop.db.models import Campaign
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ledger import (
-    MOVED,
-    Rebased,
-    head,
-    node,
-    on_moved,
-    verdict_rule,
-)
+from piloop.plugins.campaign_type.kit.verdicts.judge import MOVED, Rebased, head, node, on_moved, verdict_rule
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     Refusal,
     label,

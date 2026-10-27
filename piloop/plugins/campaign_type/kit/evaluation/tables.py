@@ -49,7 +49,7 @@ class Evaluator(Base):
     runner: Mapped[str] = mapped_column(default=PROCESS, server_default=PROCESS)
     """The evaluator runner, by name: how piloop runs the evaluator to measure a candidate. ``process``, built in, runs
     the evaluate command as a process in a clean worktree of the candidate, and is the runner of every evaluator for
-    now. ``piloop.plugins.campaign_type.kit.evaluation.ledger.current_evaluator`` refuses a name that no installed runner has. It is not part of
+    now. ``piloop.plugins.campaign_type.kit.evaluation.measure.current_evaluator`` refuses a name that no installed runner has. It is not part of
     ``key`` yet: with one runner, every evaluator has it."""
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 

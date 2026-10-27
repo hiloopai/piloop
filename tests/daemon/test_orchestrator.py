@@ -20,7 +20,7 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment,
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
-from piloop.plugins.campaign_type.kit.evaluation.ledger import CandidateJudged
+from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.plugins.trigger.news import NewsTaken, Urgency, urgency
 from tests.agents.test_resume import HARNESS, SESSION
 from tests.conftest import SETTLE, ScriptRuntime, run_all, wait_until, write_toml

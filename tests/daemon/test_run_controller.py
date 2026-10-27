@@ -50,25 +50,18 @@ from piloop.plugins.campaign_type.kit.backlog.ideas import park_stranded, runnab
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.references import import_reference, resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.api import Report
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import CHANGED_INPUTS
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.ledger import (
-    CandidateJudged,
+from piloop.plugins.campaign_type.kit.evaluation.measure import (
     MeasurementRecorded,
-    Rebased,
     current_evaluator,
-    due,
-    head,
-    import_reference,
-    lineages,
     pairs as ledger_pairs,
     request_remeasure,
     requested,
-    resolve,
     save_units,
-    supersede_composed,
     units,
 )
 from piloop.plugins.campaign_type.kit.evaluation.ops import add_measurement
@@ -88,6 +81,14 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
 )
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.verdicts.judge import (
+    CandidateJudged,
+    Rebased,
+    due,
+    head,
+    lineages,
+    supersede_composed,
+)
 from piloop.plugins.campaign_type.kit.verdicts.ops import Overridden, set_verdict
 from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label, pending
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, Branch, Trunk

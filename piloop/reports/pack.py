@@ -42,7 +42,8 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import MetricRole
-from piloop.plugins.campaign_type.kit.evaluation.ledger import head, metrics
+from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
+from piloop.plugins.campaign_type.kit.verdicts.judge import head
 from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
 from piloop.reports.history import BRIEF_WIDTH, comment_line, renderables as history, text_row, titled_table

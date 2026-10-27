@@ -17,10 +17,10 @@ from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterT
 from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
-from piloop.plugins.campaign_type.kit.evaluation.ledger import criterion
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
+from piloop.plugins.campaign_type.kit.verdicts.judge import criterion
 from piloop.plugins.harness.contract import Harness, each_provider
 from piloop.plugins.metric import Direction
 from piloop.plugins.role.contract import Files, ImplementerRole

@@ -15,11 +15,9 @@ from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.api import Report
-from piloop.plugins.campaign_type.kit.evaluation.ledger import (
-    RejudgeRequested,
-    record,
-)
+from piloop.plugins.campaign_type.kit.evaluation.measure import record
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.verdicts.judge import RejudgeRequested
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     label,
     pending,

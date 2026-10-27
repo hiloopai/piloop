@@ -21,9 +21,9 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ledger import bar_of, baseline, head, trunk_keeps
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
+from piloop.plugins.campaign_type.kit.verdicts.judge import bar_of, baseline, head, trunk_keeps
 from piloop.plugins.campaign_type.kit.verdicts.ops import missing_head
 from piloop.plugins.host import ContractBroken
 from tests.campaign.test_ops import ACTOR, commit_on, run_candidate

@@ -12,10 +12,11 @@ from piloop.db.models import Campaign, count
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ledger import head, score
+from piloop.plugins.campaign_type.kit.evaluation.measure import score
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.stop import attempt, kept, runs, runs_without_keep, scored, unsettled
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.campaign_type.kit.verdicts.judge import head
 from piloop.plugins.fact_source.contract import FactSource
 from piloop.plugins.fact_source.facts import (
     ATTEMPTS,

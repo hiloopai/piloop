@@ -47,7 +47,7 @@ from piloop.plugins.campaign_type.consumers import Campaigns
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Measured, run_evaluate
-from piloop.plugins.campaign_type.kit.evaluation.ledger import current_evaluator
+from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus

@@ -4,7 +4,7 @@ from datetime import datetime
 
 from piloop.daemon.loop import Consumer, Kinds, Phase, Turn
 from piloop.db.triggers.changelog import EvaluationCancelled
-from piloop.plugins.campaign_type.kit.evaluation.ledger import MeasurementRecorded
+from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.plugins.contribution import Contribution, DaemonHost
 from piloop.plugins.executor.consumers import LIMITS
 

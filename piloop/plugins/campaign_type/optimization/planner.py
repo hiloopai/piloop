@@ -30,22 +30,11 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
-from piloop.plugins.campaign_type.kit.evaluation.ledger import (
-    due,
-    head,
-    head_unmeasured,
-    rejudges,
-)
-from piloop.plugins.campaign_type.kit.runs.controller import (
-    RUNS,
-    branches,
-    close_run,
-    finding_of,
-    handed_off,
-)
+from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, finding_of, handed_off
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import attempts, park_cancelled
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.campaign_type.kit.verdicts.judge import branches, due, head, head_unmeasured, rejudges
 from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.facts import Facts
 from piloop.plugins.role.contract import ImplementerRole, ideas_taken

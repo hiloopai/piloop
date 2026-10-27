@@ -22,6 +22,6 @@ class Optimization(CampaignType):
 
     def fork_point(self, s: Session, source: Campaign) -> Revision:
         """The head, as a sweeping agent gets it checked out: the baseline when nothing is kept."""
-        from piloop.plugins.campaign_type.kit.evaluation.ledger import checkout_candidate  # config imports this module
+        from piloop.plugins.campaign_type.kit.verdicts.judge import checkout_candidate
 
         return checkout_candidate(s, source).revision

@@ -36,18 +36,12 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, 
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import api as evaluation_api, ops as evaluation_ops
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
-from piloop.plugins.campaign_type.kit.evaluation.ledger import (
-    MeasurementRecorded,
-    RejudgeRequested,
-    answer_rejudge,
-    head,
-    rejudges,
-    unjudged,
-)
+from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
+from piloop.plugins.campaign_type.kit.verdicts.judge import RejudgeRequested, answer_rejudge, head, rejudges, unjudged
 from piloop.plugins.campaign_type.kit.verdicts.verdict import pending
 from tests.conftest import end_of, reconfigured
 

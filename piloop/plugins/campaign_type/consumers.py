@@ -90,16 +90,8 @@ from piloop.db.triggers.changelog import (
 from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CAMPAIGNS, CannotLaunch, Planner, Take
 from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by
-from piloop.plugins.campaign_type.kit.evaluation.ledger import (
-    CandidateImported,
-    CandidateJudged,
-    MeasurementRecorded,
-    Rebased,
-    RejudgeRequested,
-    RemeasureRequested,
-    checkout_candidate,
-    score,
-)
+from piloop.plugins.campaign_type.kit.candidates.references import CandidateImported
+from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded, RemeasureRequested, score
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from piloop.plugins.campaign_type.kit.runs.controller import (
     RUNS,
@@ -109,6 +101,12 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import runs_without_keep, settled
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.verdicts.judge import (
+    CandidateJudged,
+    Rebased,
+    RejudgeRequested,
+    checkout_candidate,
+)
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving
 from piloop.plugins.executor.consumers import LIMITS
 from piloop.plugins.executor.contract import AgentKey, LeftJob

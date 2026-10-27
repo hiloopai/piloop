@@ -28,7 +28,7 @@ from piloop.ids import AgentSessionId, CampaignId, CommentId
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ledger import request_remeasure
+from piloop.plugins.campaign_type.kit.evaluation.measure import request_remeasure
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd

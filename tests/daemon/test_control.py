@@ -18,17 +18,13 @@ from piloop.db.session import Database
 from piloop.ids import CampaignId, CampaignStatus, TargetKind
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.references import import_reference
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import api as evaluation_api, ops as evaluation_ops
-from piloop.plugins.campaign_type.kit.evaluation.ledger import (
-    RejudgeFailed,
-    head,
-    import_reference,
-    rejudges,
-    request_remeasure,
-)
+from piloop.plugins.campaign_type.kit.evaluation.measure import request_remeasure
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
+from piloop.plugins.campaign_type.kit.verdicts.judge import RejudgeFailed, head, rejudges
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
 from piloop.plugins.vcs.git import PILOOP, GitRepository
 from tests.conftest import HARNESS_WORSE, SETTLE, Gate, ScriptRuntime, run_all, write_script
