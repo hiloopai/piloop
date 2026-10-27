@@ -3,7 +3,7 @@
 The orchestrator role's trigger. The news goes to the role's agent in notes (``Steer``): in its brief when the note
 is written before it starts, else as it works. Each note takes the news up to a cursor (``NewsTaken``), and the next one
 takes what came after it. A row that failed did not take its news, and an agent that ended did not take a note that it
-did not get: the next note takes them again.
+did not get: the next note takes them again. A cancelled row took the news that its notes held when it was cancelled.
 """
 
 from collections.abc import Sequence
@@ -12,11 +12,12 @@ from enum import StrEnum
 from typing import ClassVar, Literal
 
 from pydantic import Field
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 
 from piloop.agents.results import PromptOutcome
 from piloop.api.views import CommentNews, News, NewsItem, StoppedNews
 from piloop.campaign import inbox
+from piloop.campaign.stop import CancelRequested
 from piloop.db import feed as db_feed
 from piloop.db.events import has, latest
 from piloop.db.models import OPEN, AgentSession, AgentSessionState, Comment, Event, EventModel, ReadBy
@@ -60,8 +61,9 @@ def taken(p: Pass) -> tuple[int, datetime | None]:
     """The cursor up to which the role's agents took the news, and when the last one took it. ``(0, None)``: never.
 
     A note's ``NewsTaken`` counts while its row is open, and after that only if the row exited cleanly and the agent got
-    the note (``comment.delivered``): in its brief, or as it worked. An agent gets its notes in order, so the latest one
-    that counts covers those before it.
+    the note (``comment.delivered``): in its brief, or as it worked. A cancel (``piloop agent cancel``) takes the news
+    of the notes written before it: nobody wants that news handled, so it wakes no other agent. An agent gets its notes
+    in order, so the latest one that counts covers those before it.
     """
     mine = select(AgentSession.id).where(AgentSession.campaign_id == p.campaign.id, AgentSession.kind == p.role)
     clean = mine.where((AgentSession.state == AgentSessionState.EXITED) & AgentSession.error.is_(None))
@@ -77,7 +79,20 @@ def taken(p: Pass) -> tuple[int, datetime | None]:
     on_open = select(Comment.id).where(
         Comment.target_kind == TargetKind.AGENT_SESSION, Comment.target_id.in_(mine.where(AgentSession.state.in_(OPEN)))
     )
-    last = latest(p.s, NewsTaken, Event.target_kind == TargetKind.COMMENT, Event.target_id.in_(on_open.union(got)))
+    cancels = (
+        select(Event.target_id.label('agent_session'), func.min(Event.id).label('at'))
+        .where(has(CancelRequested), Event.target_kind == TargetKind.AGENT_SESSION, Event.target_id.in_(mine))
+        .group_by(Event.target_id)
+        .subquery()
+    )
+    before_cancel = exists().where(  # the outer NewsTaken came before the cancel of its note's row
+        Comment.id == Event.target_id,
+        Comment.target_kind == TargetKind.AGENT_SESSION,
+        Comment.target_id == cancels.c.agent_session,
+        cancels.c.at > Event.id,
+    )
+    on_note = Event.target_kind == TargetKind.COMMENT
+    last = latest(p.s, NewsTaken, on_note, Event.target_id.in_(on_open.union(got)) | before_cancel)
     return (0, None) if last is None else (last[1].upto, last[0].at)
 
 

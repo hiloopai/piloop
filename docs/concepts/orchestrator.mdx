@@ -37,6 +37,8 @@ triggers = ["news"]
   it at most once in `routine_every` seconds (900).
 - While an orchestrator works, new news goes to it as a note, at once. Claude Code reads it after its current tool
   call. Codex and pi read it when their turn ends.
+- `piloop agent cancel` on an orchestrator drops the news it was launched for: no other one starts for it. News that
+  arrives after the cancel launches the next one.
 - While the campaign is paused or held, only a message or an escalation launches it.
 - Each orchestrator resumes the session of the one before, so it remembers what it decided. When it cannot, it starts
   from its whole brief, and `agent_session.not_resumed` says why.

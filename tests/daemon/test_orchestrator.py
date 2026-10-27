@@ -13,10 +13,12 @@ from piloop.actor import Agent, Person, System
 from piloop.agents.results import PromptOutcome, SessionNotResumed, Unresumed
 from piloop.api.views import CommentNews, CommentView, StoppedNews, VerdictNews
 from piloop.campaign import inbox, ops
+from piloop.campaign.stop import request_cancel
 from piloop.config import load_campaign_config
 from piloop.daemon.scheduler import Scheduler
+from piloop.db import feed as db_feed
 from piloop.db.events import emit, in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
+from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
@@ -260,6 +262,41 @@ def test_a_failed_orchestrator_leaves_its_news_to_the_next_and_off_is_the_defaul
     configure(db, campaign, harness(tmp_path))
     message(db, campaign, 'anyone?')
     assert wake(db, runtime, tmp_path) == [], 'without triggers, piloop launches no orchestrator'
+
+
+def test_a_cancelled_wake_takes_its_news_and_news_after_the_cancel_goes_to_the_next(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, on: None
+) -> None:
+    hold, started = tmp_path / 'hold', tmp_path / 'started'
+    hold.touch()
+    turn_on(db, campaign, harness(tmp_path, f'touch {started}; while [ -e {hold} ]; do sleep 0.05; done'))
+    message(db, campaign, 'how is it going?')
+    sched = scheduler(db, recording(runtime, []), tmp_path)
+    [wanted] = run_all(sched)
+    wait_until(started.exists, 'the wake')
+    with db.session() as s:
+        request_cancel(s, s.get_one(AgentSession, wanted), ANA, ending=Ending.NOW)
+        s.commit()
+    assert run_all(sched) == []
+    wait_until(lambda: agent_sessions(db, ORCHESTRATOR)[0][1] in ENDED, 'its end')
+    sched.wait(SETTLE)
+    assert run_all(sched) == [], 'nobody wants that wake: its news does not wake another'
+    sched.stop(timeout=5)
+    assert [(i, state) for i, state, _ in agent_sessions(db, ORCHESTRATOR)] == [(wanted, AgentSessionState.KILLED)]
+
+    message(db, campaign, 'are you there?')
+    cancelled = taken(db, wanted).upto
+    with db.session() as s:  # as if it came while the cancelled wake still ran
+        late = Comment(
+            target=TargetRef(TargetKind.AGENT_SESSION, wanted), author='daemon', kind=CommentKind.NOTE, body=''
+        )
+        s.add(late)
+        s.flush()
+        took = NewsTaken(after=cancelled, upto=db_feed.newest(s))
+        emit(s, took, TargetRef(TargetKind.COMMENT, late.id), System.DAEMON)
+        s.commit()
+    [next_one] = wake(db, runtime, tmp_path)
+    assert 'are you there?' in brief(tmp_path, next_one), 'a note written after the cancel is not taken by it'
 
 
 def test_one_launched_by_hand_gets_no_notes_and_a_live_one_that_ends_before_it_reads_its_note_leaves_the_news_to_the_next(
