@@ -118,6 +118,7 @@ def test_notify_wakes_a_waiter_to_check_its_give_up(db: Database) -> None:
 
 
 def test_a_closed_database_makes_its_waiters_give_up(db: Database) -> None:
+    asyncio.run(ringing(db))  # the doorbell holds its connection when the close comes
     seen: list[bool] = []
     waiting = threading.Thread(target=lambda: seen.append(db.wait_until(lambda _s: False)))
     waiting.start()

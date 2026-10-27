@@ -64,8 +64,8 @@ def store(tmp_path: Path) -> Cas:
     return disk(tmp_path / 'shared')
 
 
-def transfers(db: Database, store: Cas, record: Repository) -> FirstTransfers:
-    return FirstTransfers(db, store, lambda repo: record, Tracer(None))
+def transfers(db: Database, store: Cas, record: Repository, deadline: float = 60) -> FirstTransfers:
+    return FirstTransfers(db, store, lambda repo: record, Tracer(None), deadline)
 
 
 def answered(send: Callable[[], list[Cid] | None]) -> list[Cid]:
@@ -85,6 +85,11 @@ def answered(send: Callable[[], list[Cid] | None]) -> list[Cid]:
 def fetched(first: FirstTransfers, repo: RepoId, revisions: Sequence[Revision], have: Sequence[Revision]) -> list[Cid]:
     """A worker's ``Fetch`` through ``first``."""
     return answered(partial(first.send, repo, revisions, have))
+
+
+def built(db: Database, repo: RepoId) -> bool:
+    with db.session() as s:
+        return s.get(FirstTransfer, repo) is not None
 
 
 def commit(path: Path, name: str) -> Revision:
@@ -134,6 +139,26 @@ def test_a_failed_build_is_raised_once_and_the_next_request_builds_again(
     assert isinstance(raised.value.__cause__, OSError)
     record.fail = None
     assert answered(partial(first.send, repo, [head], [])) and record.full == 2
+
+
+def test_a_build_past_its_deadline_fails_its_clones_and_none_starts_until_it_ends(
+    db: Database, campaign: Campaign, store: Cas, record: Counted
+) -> None:
+    """A build that hangs, a ``git pack-objects`` that never returns say, fails each empty clone once it is past its
+    deadline, so their jobs fail instead of holding their slots. No second build joins the one that hangs."""
+    repo, head = RepoId(campaign.id), Revision(record.repo.head.commit.hexsha)
+    first = transfers(db, store, record, deadline=0.2)
+    record.hold.clear()
+    with pytest.raises(
+        NotSent, match=r'^the first transfer of repo \d+ has built for longer than its deadline of 0.2 s'
+    ):
+        answered(partial(first.send, repo, [head], []))
+    with pytest.raises(NotSent):
+        first.send(repo, [head], [])
+    assert record.full == 1, 'the hung build is the only one'
+    record.hold.set()
+    wait_until(lambda: built(db, repo))
+    assert answered(partial(first.send, repo, [head], [])) and record.full == 1, 'it ended, and its clones take it'
 
 
 def test_a_first_transfer_that_the_cas_lost_is_built_again(

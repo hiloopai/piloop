@@ -191,6 +191,8 @@ class Worker:
         self._handover = False
         self._heard = time.monotonic()
         """When the last heartbeat that came back was sent. The worker stops its jobs ``Timing.self_stop`` after it."""
+        self._answered = self._heard
+        """When the last answer of its server came: ``orphan_exit`` counts the silence from it. A slow answer is one."""
         self._ended = threading.Event()
         """Set once the worker stops or hands over: its silence guard ends (``_guard_silence``)."""
         self._failures = 0
@@ -432,7 +434,7 @@ class Worker:
                     if self._stopping and not self._threads:
                         return
                     # its server is gone: an instance must not outlive it, nor wait to send what it would refuse
-                    orphaned = self.orphan_exit is not None and time.monotonic() - self._heard >= self.orphan_exit
+                    orphaned = self.orphan_exit is not None and time.monotonic() - self._answered >= self.orphan_exit
                     drained = not self._threads and (orphaned or self._draining and not self.spool.leases())
                 if drained:  # a drained instance has no next process to send what is left
                     self._tracer.event('worker.drained', worker=self.id)
@@ -472,7 +474,7 @@ class Worker:
             answers = self.client.heartbeat(sessions, host)
             # the renewal is stamped inside the call, after ``sent``: a call that waited for the write lock must not
             # move the worker's own deadline past the lease's
-            self._heard = sent
+            self._heard, self._answered = sent, time.monotonic()
         except Dismissed:  # an answer, and the end of this worker: not a partition
             raise
         except Exception as e:  # a partition: the control plane does not answer; ``_guard_silence`` stops the jobs

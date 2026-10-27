@@ -75,6 +75,9 @@ class Workers(ExecutorConfig):
     """The silence after which its leases expire and their jobs are queued again with a larger fencing token. The
     worker stops its own jobs two heartbeats before. Kubernetes: the ``tolerationSeconds`` of 300 that the
     ``DefaultTolerationSeconds`` admission plugin gives a pod for the unreachable taint."""
+    first_transfer_seconds: float = Field(default=1800, gt=0)
+    """How long the server may build a repo's first transfer, which every new worker's empty clone starts from. Past
+    it, the jobs that wait on the build fail, and no other build starts until it ends."""
 
     @field_validator('pools', mode='after')
     @classmethod
@@ -99,7 +102,7 @@ class WorkersExecutor:
         self.leases = Leases(host.db, host.results, host.cas, timing, config.pools, host.secrets)
         self._changed = host.db.changed
         self._cas = host.cas
-        self._send = FirstTransfers(host.db, host.cas, host.records, host.tracer)
+        self._send = FirstTransfers(host.db, host.cas, host.records, host.tracer, config.first_transfer_seconds)
         """What the ``send`` route does: versions from the repo of record, into the CAS."""
         self._cli = Runner(host.db, host.home, host.repos)
         """What the ``cli`` route does: an agent's relayed call, run here."""

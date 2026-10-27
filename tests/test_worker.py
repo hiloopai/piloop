@@ -1362,6 +1362,29 @@ def test_a_worker_with_an_orphan_exit_stays_while_its_server_answers_and_ends_on
     assert 0.3 <= time.monotonic() - began < FAST.self_stop
 
 
+class SlowServer(Local):
+    """``Local``, whose every answer takes longer than the worker's orphan exit, as on a loaded server."""
+
+    def heartbeat(self, leases: Mapping[int, HarnessSession], sample: HostSample) -> dict[int, Answer]:
+        time.sleep(0.4)
+        return super().heartbeat(leases, sample)
+
+
+def test_a_worker_whose_server_answers_slowly_is_no_orphan(db: Database, tmp_path: Path) -> None:
+    """The orphan exit counts the silence since the last answer came, not since its heartbeat was sent."""
+    leases = Leases(
+        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
+    )
+    site = local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0)
+    slow = Worker(SlowServer(leases, SERVE), Tracer(None), site, runners=('process',), orphan_exit=0.3)
+    slow.start()
+    assert slow._loop is not None
+    slow._loop.join(1.5)
+    assert slow._loop.is_alive(), 'each answer came, late'
+    slow.stop()
+    slow.wait()
+
+
 def test_a_worker_whose_cas_lacks_the_job_loses_its_lease_with_why(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:

@@ -34,7 +34,7 @@ from piloop.plugins.host import Check, PluginError, Severity, declared
 from piloop.plugins.secrets.contract import SECRETS, SecretKey
 from piloop.plugins.vcs.contract import VCS
 from piloop.proc import child_env, environment
-from piloop.settings import Settings
+from piloop.settings import Settings, config_file
 from piloop.text import age
 from piloop.version import code_digest, direct_url, installed
 
@@ -220,7 +220,8 @@ def _daemon_env(cfg: Settings) -> tuple[str, set[str], str | None]:
 
     It is the environment of the running daemon. Without a daemon, or when its environment cannot be read, it is the
     environment of this shell, which a ``piloop serve`` started here inherits. It never returns values. The daemon's
-    environment is the one it was exec'd with, so after a first start it lacks what the secrets command printed.
+    environment is the one it was exec'd with, so after a first start it lacks what the secrets command printed. The
+    daemon's secrets command is that of its environment, else that of ``config.toml``, as for any setting.
     """
     shell = 'this shell', set(child_env()), cfg.secrets_command
     pid = running_pid(cfg)
@@ -229,25 +230,35 @@ def _daemon_env(cfg: Settings) -> tuple[str, set[str], str | None]:
     env = environment(pid)
     if env is None:  # the daemon ended a moment ago
         return shell
-    return f'the daemon (pid {pid})', set(env), env.get(SECRETS_COMMAND_ENV)
+    return f'the daemon (pid {pid})', set(env), env.get(SECRETS_COMMAND_ENV, _configured(cfg))
+
+
+def _configured(cfg: Settings) -> str | None:
+    """The ``secrets_command`` of the home's ``config.toml``."""
+    match config_file(cfg.home).get('secrets_command'):
+        case str() as command:
+            return command
+        case _:
+            return None
 
 
 def _secrets(whose: str, command: str | None) -> tuple[Check, set[str]]:
     """Check the deprecated secrets command. Run it here for the names; never show values."""
     if command is None:
-        return Check('secrets', f'from `piloop secret set` ({SECRETS_COMMAND_ENV} unset)'), set()
+        return Check('secrets', 'from `piloop secret set` (no secrets_command)'), set()
     try:
         names = set(secrets(command))
     except SecretsError as e:
         return Check(
             'secrets',
-            f'{SECRETS_COMMAND_ENV} of {whose} ({command}) failed: {e}',
+            f'secrets_command of {whose} ({command}) failed: {e}',
             'fix the command; `piloop serve` refuses to start while it fails',
         ), set()
     return Check(
         'secrets',
-        f'{SECRETS_COMMAND_ENV} of {whose} ({command}) prints {", ".join(sorted(names))}',
-        f'`piloop secret set` each of them, then unset {SECRETS_COMMAND_ENV}: piloop 0.5.0 removes it',
+        f'secrets_command of {whose} ({command}) prints {", ".join(sorted(names))}',
+        f'`piloop secret set` each of them, then remove secrets_command ({SECRETS_COMMAND_ENV} or config.toml):'
+        ' piloop 0.5.0 removes it',
         Severity.WARN,
     ), names
 
