@@ -184,12 +184,13 @@ class _Job:
 
     def started(self, handle: Handle, session_id: str | None) -> bool:
         assert isinstance(self.key, AgentKey)
+        if self.runtime is not None:  # before the row says running: a prompt can come as soon as it does
+            self.steer = partial(self.runtime.prompt, handle)
         try:
             self._executor.host.results.started(self.key, handle.data, session_id)
         except Settled:  # its row closed meanwhile: nothing waits for the agent
+            self.steer = None
             return False
-        if self.runtime is not None:
-            self.steer = partial(self.runtime.prompt, handle)
         return True
 
     def running(self, kill: Callable[[], None] | None) -> None:
