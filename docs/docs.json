@@ -38,6 +38,7 @@
         "pages": [
           "guides/running-for-days",
           "guides/inference-optimization",
+          "guides/remote-server",
           "guides/secrets",
           "guides/notifications",
           "guides/workers",

@@ -91,7 +91,7 @@ every route. With `--listen`, other machines call the same routes with a token o
 (`read`, `act` or `admin`). On such a machine, `PILOOP_SERVER=<url>` makes the commands that call the API, such as
 `status`, `inbox`, `message` and `secret`, ask that server, with the network's credential, such as
 `PILOOP_HTTPS_TOKEN`. The commands that read the database of the home, such as `history`, `attach`, `sql` and
-`worker list`, then refuse: run them on the server.
+`worker list`, then refuse: run them on the server. See [Run piloop on a server](/guides/remote-server).
 
 ```bash
 curl --unix-socket ~/.piloop/piloop.sock 'http://piloop/v1/status?campaign=enwik8'

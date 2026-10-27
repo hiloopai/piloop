@@ -1,0 +1,177 @@
+---
+title: Run piloop on a server
+sidebarTitle: On a server
+description: Run the daemon on a server, and drive its campaigns from your laptop with the piloop CLI.
+---
+
+One daemon on a server runs the campaigns. You drive it from any machine with the same `piloop` CLI.
+
+## Start the daemon
+
+On the server, in `$PILOOP_HOME/config.toml`:
+
+```toml
+[plugins.network]
+listen = "0.0.0.0:8443"
+tls = "proxy"
+```
+
+```bash
+piloop serve --detach
+piloop status
+```
+
+```text
+daemon: pid 396206, up 0:00:05, listening on http://0.0.0.0:8443
+```
+
+`tls = "proxy"` says that a reverse proxy or an SSH tunnel ends TLS in front of the daemon. To end it in the daemon,
+name a certificate: `tls = { cert = "<cert.pem>", key = "<key.pem>" }`. Only a loopback address may go without `tls`. To
+keep the daemon running, install its [service unit](/guides/running-for-days#under-a-service-manager).
+
+## Give each caller a token
+
+```bash
+piloop token create laptop --access act
+```
+
+```text
+plt_zBvB6lzUJxSHmM4h7YKCmH_NxMjPUndxOPb3Yi5VzNU
+```
+
+The token prints once. `read` reads, `act` also acts on campaigns and sets their secrets, and `admin` also sets the
+home's secrets and tokens.
+`worker` is for [workers](/guides/workers). `piloop token revoke laptop` ends a token.
+
+## Point the CLI at the server
+
+On your laptop:
+
+```bash
+export PILOOP_SERVER=https://piloop.example.com:8443
+export PILOOP_HTTPS_TOKEN=<token>
+piloop status
+```
+
+```text
+daemon: pid 396206, up 0:00:20, listening on http://0.0.0.0:8443
+```
+
+Each command that calls the API now asks the server: `status`, `inbox`, `idea`, `message`, `pause`, `secret` and
+the others. Commands that open the database, such as `piloop sql`, `history`, `attach` and `worker list`, refuse:
+run them on the server. For a certificate that your system does not trust, set
+`SSL_CERT_FILE`.
+
+## Register a repo by its URL
+
+The server clones the repo, registers it, and measures `HEAD` as the baseline:
+
+```bash
+curl -X POST "$PILOOP_SERVER/v1/campaigns" -H "Authorization: Bearer $PILOOP_HTTPS_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"clone": {"url": "https://github.com/acme/enwik8.git"}}'
+```
+
+```bash
+piloop status enwik8
+```
+
+```text
+head: candidate#1 · bytes: 3688775 · kept: 1 · candidates: 1 · evaluator: #1, 14s old
+```
+
+`"name"` next to `"clone"` registers it under another name. For a private repo, store a token that the host accepts
+as a secret of the home, with an `admin` token, and name it:
+
+```bash
+printf %s "$GITHUB_TOKEN" | piloop secret set GITHUB_TOKEN
+```
+
+```json
+{"clone": {"url": "https://github.com/acme/enwik8.git", "secret": "GITHUB_TOKEN"}}
+```
+
+## Give agents their model credentials
+
+An agent on the server has no login of yours. Store the key as a [secret](/guides/secrets) of the campaign:
+
+```bash
+printf %s "$ANTHROPIC_API_KEY" | piloop secret set ANTHROPIC_API_KEY --campaign enwik8
+```
+
+Then name it in the campaign's `piloop.toml`:
+
+```toml
+[plugins.harness.claude.env]
+ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" }
+```
+
+For a Claude subscription, `claude setup-token` prints a token: store it as `CLAUDE_CODE_OAUTH_TOKEN` instead. For a
+model gateway, see [Model access](/guides/secrets#model-access).
+
+## Run the orchestrator on the server
+
+Let piloop launch the [orchestrator](/concepts/orchestrator#let-piloop-launch-it) on news, in `piloop.toml`:
+
+```toml
+[plugins.role.orchestrator]
+triggers = ["news"]
+```
+
+Then talk to it from your laptop:
+
+```bash
+piloop message enwik8 "Try a larger dictionary next"
+```
+
+```text
+comment#1 message on campaign#1
+```
+
+The message launches it on a worker, like any agent. Its answer is in `piloop inbox`.
+
+## Run agents on more machines
+
+A worker on another machine takes the jobs of its pool. Give the pool its slots, and serve the CAS:
+
+```toml
+[plugins.executor.pools.gpu]
+agents = 2
+evaluations = 1
+```
+
+```bash
+piloop cas serve --listen 0.0.0.0:7701
+piloop token create gpu1
+```
+
+On the worker:
+
+```bash
+PILOOP_HTTPS_TOKEN=<token> piloop worker --server https://piloop.example.com:8443 --pool gpu
+```
+
+To have the server start and stop workers itself, on Modal or your own platform, give the pool a
+[provisioner](/guides/workers#workers-that-the-server-starts). [Workers](/guides/workers) has the worker's
+`config.toml`, capacity and faults.
+
+## Behind an authenticating proxy
+
+When a proxy already checks every caller, such as Envoy's `ext_authz` or an oauth2-proxy, let it be the only check:
+
+```toml
+[plugins.network]
+provider = "proxy"
+listen = "0.0.0.0:8443"
+url = "https://piloop.example.com"
+claims = { org = "x-org-id", user = "x-user-id" }
+name_claims = ["user"]
+rules = [{ when = { org = "acme" }, access = "act" }]
+```
+
+piloop then reads who the caller is from the headers that the proxy stamps, and refuses its own tokens. On your
+laptop, set `PILOOP_HTTPS_TOKEN` to the credential that the proxy accepts. Workers need a rule of their own:
+[Behind an authenticating proxy](/guides/workers#behind-an-authenticating-proxy).
+
+<Warning>
+  Whoever reaches `listen` directly can claim any identity. Let only the proxy reach it.
+</Warning>
