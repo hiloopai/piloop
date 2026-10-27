@@ -313,6 +313,47 @@ def test_default_harnesses_take_the_roles_effort_in_every_argv() -> None:
         assert all(flags in ' '.join(argv) for argv in (h.headless, h.resume)), name
 
 
+def test_the_codex_config_table_is_a_c_flag_for_each_key_before_piloop_s_own_so_they_win(
+    campaign_path: Path,
+) -> None:
+    """A gateway for Codex: ``model_provider`` and its ``model_providers`` table, as Codex's own ``-c`` takes them."""
+    gateway = {'name': 'gateway', 'base_url': 'https://gw.example.com/v1', 'env_key': 'GATEWAY_KEY', 'retries': 2}
+    config = {'model_provider': 'gateway', 'model_providers': {'gateway': gateway}, 'web_search': False, 'p': 0.5}
+    cfg = load_campaign_config(
+        campaign_path, plugins={'harness': {'use': ['codex'], 'codex': {'model': 'gpt-6', 'config': config}}}
+    )
+    codex = cfg.harness_for('codex')
+    flags = [
+        '-c',
+        'model_provider="gateway"',
+        '-c',
+        'model_providers={gateway = {name = "gateway", base_url = "https://gw.example.com/v1", env_key = "GATEWAY_KEY",'
+        ' retries = 2}}',
+        '-c',
+        'web_search=false',
+        '-c',
+        'p=0.5',
+    ]
+    for argv in (codex.headless, codex.resume):
+        args = codex.expanded(argv)
+        at = args.index('{model}') + 1
+        assert args[at : at + len(flags)] == flags
+        assert args[at + len(flags) :][:2] == ['-c', 'model_reasoning_effort="{effort}"'], "piloop's own come last"
+    assert each_provider()['codex'].expanded(['exec', '{config}']) == ['exec'], 'no table, no flag'
+    assert Harness(executable='x', headless=['{config}']).expanded(['{config}']) == ['{config}'], 'a Codex element'
+    with pytest.raises(ValueError, match=r'config: a value of no TOML type: None'):
+        load_campaign_config(
+            campaign_path, plugins={'harness': {'use': ['codex'], 'codex': {'model': 'x', 'config': {'a': None}}}}
+        )
+    with pytest.raises(ValueError, match=r'config needs \{config\} in headless and resume'):
+        load_campaign_config(
+            campaign_path,
+            plugins={
+                'harness': {'use': ['codex'], 'codex': {'model': 'x', 'headless': ['{prompt}'], 'config': config}}
+            },
+        )
+
+
 def test_metric_roles_are_validated(campaign_path: Path) -> None:
     primary = {'name': 'score', 'direction': 'higher', 'role': 'primary'}
     guard = {'name': 'size', 'direction': 'lower', 'role': 'guardrail', 'margin': 3, 'floor': 10}

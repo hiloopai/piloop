@@ -66,9 +66,12 @@ def test_a_secret_is_set_from_stdin_listed_by_name_and_deleted_and_no_output_sho
         piped(monkeypatch, ['set', 'A'], '\n')
 
 
-def test_an_agent_sets_no_secret(out, db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Its token has ``act`` access, and secrets are the home's settings."""
+def test_an_agent_sets_and_removes_only_its_own_campaign_s_secrets(
+    out, db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its token has ``act`` access, which writes a campaign's secrets, and an agent acts on its own campaign only."""
     with db.session() as s:
+        s.add(Campaign(name='other', path=str(tmp_path / 'other'), config=campaign.config))
         session = AgentSession(kind='watchdog', campaign_id=campaign.id, state=AgentSessionState.RUNNING)
         s.add(session)
         s.flush()
@@ -76,6 +79,12 @@ def test_an_agent_sets_no_secret(out, db: Database, campaign: Campaign, monkeypa
         token = mint_agent(s, agent)
         s.commit()
     monkeypatch.setattr(common, 'settings', common.settings.model_copy(update={'actor': agent, 'agent_token': token}))
-    for argv in (['set', 'KEY', '--campaign', 'demo'], ['set', 'KEY']):
-        with pytest.raises(SystemExit, match='watchdog#1 has act access, and this route needs admin'):
+    piped(monkeypatch, ['set', 'KEY', '--campaign', 'demo'], 'v')
+    assert out().strip() == 'KEY set for campaign demo'
+    run_cli(['secret', 'rm', 'KEY', '--campaign', 'demo'])
+    assert out().strip() == 'KEY of campaign demo deleted'
+    for argv in (['set', 'KEY', '--campaign', 'other'], ['set', 'KEY']):
+        with pytest.raises(SystemExit, match='^watchdog#1 writes only the secrets of its own campaign$'):
             piped(monkeypatch, argv, 'v')
+    with pytest.raises(SystemExit, match='^watchdog#1 writes only the secrets of its own campaign$'):
+        run_cli(['secret', 'rm', 'KEY'])

@@ -10,12 +10,13 @@ a value.
 
 Host tier: a provider stores values. ``[plugins.secrets] provider`` in ``config.toml`` selects one (``local`` by
 default). Its methods are the contract, and each takes the session of the operation that calls it. The operations here
-check who writes, and record who set a secret and when in its events (``SecretSet``), in that transaction. A provider
+record who set a secret and when in its events (``SecretSet``), in that transaction. The API checks who writes
+(``piloop.daemon.api.secret_owner``): a campaign's secret needs ``act``, the home's ``admin``. A provider
 that seals values wraps ``local``: its ``put`` seals, its ``get`` opens.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import ClassVar, Literal
@@ -142,6 +143,14 @@ def listed(s: Session, provider: SecretsProvider) -> list[Listed]:
             case _:
                 found.append(Listed(secret, None, None))
     return found
+
+
+def hidden(text: str, found: Mapping[EnvName, SecretStr]) -> str:
+    """``text`` with each value of ``found`` in it written as the secret's name, ``[secret NAME]``, the longest first."""
+    for name, value in sorted(found.items(), key=lambda item: -len(item[1].get_secret_value())):
+        if secret := value.get_secret_value():
+            text = text.replace(secret, f'[secret {name}]')
+    return text
 
 
 def values(

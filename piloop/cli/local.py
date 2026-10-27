@@ -27,6 +27,20 @@ from piloop.db.session import (
 from piloop.plugins.cas.contract import CAS, Cas
 
 
+def home() -> Path:
+    """The home on this machine, whose database this command opens.
+
+    Raises:
+        SystemExit: ``PILOOP_SERVER`` names a server: its database is not this home's.
+    """
+    if (server := common.settings.server) is not None:
+        raise SystemExit(
+            f'this command reads the database of the home on this machine, not the server of PILOOP_SERVER ({server}):'
+            ' run it on the server, or unset PILOOP_SERVER'
+        )
+    return common.settings.home
+
+
 @contextmanager
 def database() -> Generator[Database]:
     """Open the database, which must be at the schema of this piloop (``refuse_other_schema``), until the block ends."""
@@ -55,7 +69,7 @@ def campaign(s: Session, ref: str) -> Campaign:
 
 def known(ref: str) -> None:
     """Exit unless the home has a campaign that ``ref`` names. Reads the database read-only; check its schema first."""
-    engine = create_engine(f'sqlite:///file:{common.settings.home / "piloop.db"}?mode=ro&uri=true')
+    engine = create_engine(f'sqlite:///file:{home() / "piloop.db"}?mode=ro&uri=true')
     try:
         with Session(engine) as s:
             found = find(s, ref)
@@ -79,15 +93,13 @@ def cas() -> Cas:
 
 
 def refuse_other_schema() -> None:
-    """Exit, without a change, unless the database exists and is at the schema of this piloop.
+    """Exit, without a change, unless the database of this machine's ``home`` exists, at the schema of this piloop.
 
     Only ``piloop serve``, which ``piloop init`` starts, ``piloop migrate`` and ``piloop upgrade`` migrate
     (``migrate``). Every other command calls this before it opens the database. The message names the revision found,
     the one this piloop knows, and what to run.
     """
-    if (
-        e := schema_mismatch(common.settings.home / 'piloop.db', running_pid(common.settings), common.settings.actor)
-    ) is not None:
+    if (e := schema_mismatch(home() / 'piloop.db', running_pid(common.settings), common.settings.actor)) is not None:
         raise SystemExit(str(e)) from e
 
 

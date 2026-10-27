@@ -7,6 +7,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from shlex import join
+from typing import Self
+
+from pydantic import JsonValue, model_validator
 
 from piloop.plugins.harness.contract import EFFORT, MCP, PROMPT, SESSION_ID, Harness, McpArgs, McpError, McpLaunch
 from piloop.plugins.harness.kit.jsonl import (
@@ -46,12 +49,16 @@ TOOL_ENV = [
 ``PILOOP_AGENT_TOKEN`` signs the agent's writes. ``inherit = "core"`` or an ``include_only`` would drop them, and the
 default excludes (``*KEY*``, ``*SECRET*``, ``*TOKEN*``) other variables that Claude and pi pass on. The MCP renderer's
 ``shell_environment_policy.exclude`` keeps the role's API keys out."""
+CONFIG = '{config}'
+"""The argv element that ``Codex.config`` expands to: a ``-c key=value`` pair for each key. It comes before piloop's own
+``-c`` flags, and Codex applies the last value of a key, so piloop's own win."""
 FLAGS = [
     '--json',
     '--dangerously-bypass-approvals-and-sandbox',
     '--skip-git-repo-check',
     '--model',
     '{model}',
+    CONFIG,
     '-c',
     f'model_reasoning_effort="{EFFORT}"',
     '-c',
@@ -71,12 +78,16 @@ def toml(value: object) -> str:
     match value:
         case str():
             return json.dumps(value, ensure_ascii=False).replace('\x7f', '\\u007f')
+        case bool():
+            return 'true' if value else 'false'
+        case int() | float():
+            return repr(value)
         case list():
             return '[' + ', '.join(toml(v) for v in value) + ']'
         case dict():
             return '{' + ', '.join(f'{_key(str(k))} = {toml(v)}' for k, v in value.items()) + '}'
         case _:
-            raise TypeError(f'no TOML rendering for {type(value).__name__}')
+            raise TypeError(f'a value of no TOML type: {value!r}')
 
 
 def _key(key: str) -> str:
@@ -228,9 +239,30 @@ class Codex(Harness):
     resume: list[str] = ['exec', 'resume', *FLAGS, SESSION_ID, PROMPT]
     session_id_pattern: str | None = r'"thread_id":"([0-9a-f-]{36})"'
     home: str = '{env:CODEX_HOME:~/.codex}'
+    config: dict[str, JsonValue] = {}
+    """Keys of Codex's own ``config.toml`` for its agents, each a ``-c key=value`` flag where ``{config}`` is in the
+    argv. For example a model provider, ``{ model_provider = "gateway", model_providers.gateway = { name = "gateway",
+    base_url = "https://gw.example.com/v1", env_key = "GATEWAY_KEY", wire_api = "responses" } }``."""
 
     def mcp(self) -> CodexMcp:
         return CodexMcp()
+
+    def expanded(self, argv: list[str]) -> list[str]:
+        """``argv`` with its ``{config}`` element replaced by a ``-c key=value`` pair for each key of ``config``."""
+        flags = [a for key, value in self.config.items() for a in ('-c', f'{key}={toml(value)}')]
+        return [a for item in argv for a in (flags if item == CONFIG else [item])]
+
+    @model_validator(mode='after')
+    def _config(self) -> Self:
+        try:
+            toml(self.config)
+        except TypeError as e:
+            raise ValueError(f'config: {e}') from e
+        if self.config and (
+            missing := [n for n, a in (('headless', self.headless), ('resume', self.resume)) if a and CONFIG not in a]
+        ):
+            raise ValueError(f'config needs {CONFIG} in headless and resume: add it to {" and ".join(missing)}')
+        return self
 
     def sessions(self) -> JsonlSessions:
         return JsonlSessions(f'{self.home}/sessions/*/*/*/rollout-*-{{session_id}}.jsonl', no_cwd, tally, said)

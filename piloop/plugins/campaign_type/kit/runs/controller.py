@@ -234,8 +234,16 @@ class RunController:
         """The executor's ``[plugins.executor]``, as ``config.toml`` has it."""
         self._limits: tuple[tuple[str, str, datetime], ...] = ()
         """The limits that the executor has, as read: ``configure`` hands it the parameters when they change."""
-        results = CampaignResults(db, tracer, home, self.cas, lambda: self.launcher.cancelled.is_set())
         secrets = secrets if secrets is not None else SECRETS.selected({})
+        results = CampaignResults(
+            db,
+            tracer,
+            home,
+            self.cas,
+            lambda: self.launcher.cancelled.is_set(),
+            secrets=secrets,
+            exit_output_chars=self._agents.exit_output_chars,
+        )
         if network is None:
             network = NETWORKS.selected({}).open(NetworkHost(Tokens(db), HomeSecrets(db, secrets)))
         host = Host(

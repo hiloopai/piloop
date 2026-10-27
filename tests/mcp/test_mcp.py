@@ -258,11 +258,17 @@ def test_codex_list_has_a_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         CodexMcp().render(launch(tmp_path, {}, str(slow)))
 
 
-def test_codex_toml_round_trips_what_a_server_holds() -> None:
-    value = {'plain': 'a', 'needs quotes': 'quote " back \\ newline \n del \x7f é', 'list': ['x', 'y'], 'nested': {}}
+def test_codex_toml_round_trips_what_a_server_or_a_config_key_holds() -> None:
+    value = {
+        'plain': 'a',
+        'needs quotes': 'quote " back \\ newline \n del \x7f é',
+        'list': ['x', 'y'],
+        'nested': {},
+        'scalars': [True, False, 2, 0.5],
+    }
     assert tomllib.loads(f'v = {codex.toml(value)}')['v'] == value
-    with pytest.raises(TypeError, match='no TOML rendering for int'):
-        codex.toml(1)
+    with pytest.raises(TypeError, match='a value of no TOML type: None'):
+        codex.toml(None)
 
 
 def test_pi_writes_the_servers_to_the_log_dir_and_loads_the_adapter_on_them_alone(tmp_path: Path) -> None:

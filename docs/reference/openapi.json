@@ -1571,7 +1571,7 @@
     "/v1/secrets/{name}": {
       "put": {
         "summary": "Set Secret",
-        "description": "Set a secret of the home, or of the campaign named, in place of any. Agents get it from their next start.",
+        "description": "Set a secret of the home, or of the campaign named, in place of any. Agents get it from their next start.\n\nA campaign's secret needs ``act`` access, and the home's ``admin``. An agent sets only its own campaign's.",
         "operationId": "set_secret",
         "parameters": [
           {
@@ -1676,7 +1676,7 @@
       },
       "delete": {
         "summary": "Remove Secret",
-        "description": "Delete a secret of the home, or of the campaign named. An agent that starts after it no longer gets it.",
+        "description": "Delete a secret of the home, or of the campaign named. An agent that starts after it no longer gets it.\n\nA campaign's secret needs ``act`` access, and the home's ``admin``. An agent deletes only its own campaign's.",
         "operationId": "remove_secret",
         "parameters": [
           {

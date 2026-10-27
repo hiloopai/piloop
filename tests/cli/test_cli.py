@@ -1697,6 +1697,40 @@ def test_migrate_reports_the_schema_change_and_a_newer_database_is_refused(out) 
     assert running_pid(common.settings) is None, 'the daemon refused before taking the pid file'
 
 
+@pytest.mark.parametrize(
+    'argv',
+    [
+        ['history'],
+        ['attach', '1'],
+        ['worker', 'list'],
+        ['sql', 'SELECT 1'],
+        ['campaign', 'tree'],
+        ['campaign', 'parent', 'demo', '--clear'],
+        ['wake'],
+        ['migrate'],
+        ['store', 'status'],
+        ['service-unit'],
+        ['cas', 'serve', '--listen', '127.0.0.1:0'],
+    ],
+    ids=lambda argv: ' '.join(argv),
+)
+def test_a_command_that_reads_the_home_s_database_refuses_while_piloop_server_names_another(
+    argv: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It would show this machine's home as if it were the server's: it says so, and opens nothing."""
+    server = 'https://piloop.example.com'
+    monkeypatch.setattr(common, 'settings', common.settings.model_copy(update={'server': server}))
+    database = common.settings.home / 'piloop.db'
+    before = database.stat().st_mtime_ns
+    refused = (
+        f'this command reads the database of the home on this machine, not the server of PILOOP_SERVER ({server}):'
+        ' run it on the server, or unset PILOOP_SERVER'
+    )
+    with pytest.raises(SystemExit, match=f'^{re.escape(refused)}$'):
+        run_cli(argv)
+    assert database.stat().st_mtime_ns == before
+
+
 def test_migrate_backs_up_the_database_first_and_says_where(out, monkeypatch: pytest.MonkeyPatch) -> None:
     """``piloop migrate`` names the copy it wrote before it migrated, and the newest one when there is nothing to do.
     ``migration_backups`` in config.toml (here its variable) sets how many it keeps."""

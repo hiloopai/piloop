@@ -21,9 +21,10 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from piloop.actor import ACTORS, Actor
+from piloop.actor import ACTORS, Actor, Agent
 from piloop.agents.results import PromptOutcome, queue_prompt
 from piloop.api.contract import (
+    GRANTS,
     Access,
     AckBody,
     BaseBody,
@@ -783,25 +784,54 @@ def list_secrets(api: Api, s: Reading) -> SecretList:
     )
 
 
-@router.put('/secrets/{name}', operation_id='set_secret', dependencies=[Depends(admin_access)])
-def set_secret(api: Api, s: Writing, me: Acting, name: EnvName, campaign: Narrowed, body: SecretBody) -> SecretChanged:
-    """Set a secret of the home, or of the campaign named, in place of any. Agents get it from their next start."""
-    secrets.set_secret(s, _secrets(api), me, campaign, name, body.value)
+def secret_owner(s: Reading, caller: Annotated[Caller, Depends(actor_access)], campaign: Narrowed) -> secrets.Owner:
+    """Whose secret a write changes: the campaign named, with ``act``, else the home's, with ``admin``.
+
+    A launched agent's token writes the secrets of its own campaign only.
+    """
+    match caller.identity, campaign:
+        case Agent(session=session) as agent, owner if (
+            owner is None or owner != s.get_one(AgentSession, session).campaign_id
+        ):
+            raise Refusal(
+                HTTPStatus.FORBIDDEN, Problem.FORBIDDEN, f'{agent} writes only the secrets of its own campaign'
+            )
+        case _, None if Access.ADMIN not in GRANTS[caller.access]:
+            raise HTTPException(
+                HTTPStatus.FORBIDDEN, f"{caller.name} has {caller.access} access, and the home's secrets need admin"
+            )
+        case _:
+            return campaign
+
+
+SecretOwner = Annotated[secrets.Owner, Depends(secret_owner)]
+
+
+@router.put('/secrets/{name}', operation_id='set_secret')
+def set_secret(api: Api, s: Writing, me: Acting, name: EnvName, owner: SecretOwner, body: SecretBody) -> SecretChanged:
+    """Set a secret of the home, or of the campaign named, in place of any. Agents get it from their next start.
+
+    A campaign's secret needs ``act`` access, and the home's ``admin``. An agent sets only its own campaign's.
+    """
+    secrets.set_secret(s, _secrets(api), me, owner, name, body.value)
     s.commit()
-    return _secret_changed(s, name, campaign)
+    return _secret_changed(s, name, owner)
 
 
-@router.delete('/secrets/{name}', operation_id='remove_secret', dependencies=[Depends(admin_access)])
-def remove_secret(api: Api, s: Writing, me: Acting, name: EnvName, campaign: Narrowed) -> SecretChanged:
-    """Delete a secret of the home, or of the campaign named. An agent that starts after it no longer gets it."""
-    if not secrets.remove_secret(s, _secrets(api), me, campaign, name):
+@router.delete('/secrets/{name}', operation_id='remove_secret')
+def remove_secret(api: Api, s: Writing, me: Acting, name: EnvName, owner: SecretOwner) -> SecretChanged:
+    """Delete a secret of the home, or of the campaign named. An agent that starts after it no longer gets it.
+
+    A campaign's secret needs ``act`` access, and the home's ``admin``. An agent deletes only its own campaign's.
+    """
+    if not secrets.remove_secret(s, _secrets(api), me, owner, name):
         raise Refusal(
             HTTPStatus.NOT_FOUND,
             Problem.UNKNOWN_SECRET,
-            f'{_whose(s, campaign)} has no secret {name}: see `piloop secret list`',
+            f'{_whose(s, owner)} has no secret {name}: see `piloop secret list`',
         )
     s.commit()
-    return _secret_changed(s, name, campaign)
+    return _secret_changed(s, name, owner)
 
 
 def _secrets(api: Handlers) -> secrets.SecretsProvider:

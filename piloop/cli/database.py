@@ -112,9 +112,9 @@ def migrate_cmd() -> None:
     daemon of an older piloop, and refuses an agent that the daemon launched.
     """
     common.refuse_agent('migrate')
+    old = stamps(local.home() / 'piloop.db')
     db = Database(common.settings.database_url, actor=common.settings.actor)
     try:
-        old = stamps(common.settings.home / 'piloop.db')
         backup = local.migrate(db)
         _print_schema(old, stamps(common.settings.home / 'piloop.db'), backup)
         try:

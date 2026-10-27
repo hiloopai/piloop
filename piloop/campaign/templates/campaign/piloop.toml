@@ -27,6 +27,8 @@ model = "claude-opus-5-5"
 
 [plugins.harness.codex]
 model = "gpt-6.1-sol"
+# config = { model_provider = "gateway", model_providers.gateway = { name = "gateway", base_url = "https://gw.example.com/v1", env_key = "GATEWAY_KEY", wire_api = "responses" } }
+#                                         # keys of Codex's config.toml, as -c flags: here a gateway
 
 # [plugins.harness.<name>]                # a harness of your own
 # provider = "claude"                     # that harness over its defaults; without it, the argv only

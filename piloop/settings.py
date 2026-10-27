@@ -135,6 +135,10 @@ class AgentSettings(BaseModel):
     steer_line_chars: int = Field(default=200, gt=1)
     """How many characters of a comment's first line a running agent gets, in the one line that the daemon sends it
     for the comment. The agent can read the rest with SQL."""
+    exit_output_chars: int = Field(default=500, ge=0)
+    """How many characters of its last output lines an agent that exits non-zero leaves in its error, which
+    ``piloop status`` and the escalation of paused launches show. The values of its secrets read as their names. 0
+    leaves none."""
 
 
 SUN_PATH = 104 if sys.platform == 'darwin' else 108

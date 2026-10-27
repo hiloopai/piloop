@@ -188,6 +188,13 @@ class Harness(Parameters):
         """How it takes the MCP servers of a role. None, by default: it takes none."""
         return None
 
+    def expanded(self, argv: list[str]) -> list[str]:
+        """``argv``, its ``headless`` or ``resume``, with the elements that only this provider knows expanded.
+
+        piloop then fills the placeholders. By default, ``argv`` as it is.
+        """
+        return argv
+
     def sessions(self) -> UsageReader | None:
         """How to read the session files that its CLI leaves. None, by default: it leaves none that piloop reads."""
         return None

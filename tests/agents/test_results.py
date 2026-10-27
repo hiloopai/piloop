@@ -7,11 +7,19 @@ from pathlib import Path
 import pytest
 from covalence import Cid
 from git import Repo
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import System
-from piloop.agents.results import AgentSessionFinished, CampaignResults, Identified, WorkspaceConflict, learn
+from piloop.agents.results import (
+    AgentSessionFinished,
+    CampaignResults,
+    Identified,
+    WorkspaceConflict,
+    explained,
+    learn,
+)
 from piloop.db.events import in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
@@ -474,3 +482,22 @@ def test_two_agents_that_change_one_workspace_file_keep_the_first_ones_and_the_s
             (fourth, WorkspaceConflict(kept=['NOTES.md'])),
         ]
     assert not list((tmp_path / 'tmp').iterdir()), 'every staged blob was moved into place or removed'
+
+
+@pytest.mark.parametrize(
+    ('error', 'output', 'chars', 'expected'),
+    [
+        ('agent exit 1', 'a\n\n  b  \n', 10, 'agent exit 1: a | b'),
+        (None, 'boom', 10, 'boom'),
+        ('agent exit 1', '\n \n', 10, 'agent exit 1'),
+        ('agent exit 1', 'said sk-1 and sk-12', 0, 'agent exit 1'),
+        ('agent exit 1', 'said sk-1 and sk-12', 30, 'agent exit 1: said [secret A] and [secret B]'),
+    ],
+    ids=['joined', 'no-error', 'blank', 'none-wanted', 'longest-secret-first'],
+)
+def test_an_exit_says_the_end_of_its_output_in_one_line_with_each_secret_as_its_name(
+    error: str | None, output: str, chars: int, expected: str
+) -> None:
+    process = AgentExit(ExitStatus.EXITED, 1.0, 1, error)
+    found = {'A': SecretStr('sk-1'), 'B': SecretStr('sk-12'), 'EMPTY': SecretStr('')}
+    assert explained(process, output, found, chars).error == expected

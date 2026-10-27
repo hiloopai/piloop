@@ -88,8 +88,10 @@ The daemon serves an HTTP API, `/v1`, on the Unix socket `$PILOOP_HOME/piloop.so
 When that path is too long for a socket (104 bytes on macOS, 108 on Linux), the socket is
 `/tmp/piloop-<uid>/<hash>.sock`, a hash of the home. A call there needs no token. `GET /v1/openapi.json` describes
 every route. With `--listen`, other machines call the same routes with a token of `piloop token` whose access reads
-(`read`, `act` or `admin`). On such a machine, `PILOOP_SERVER=<url>` makes `status`, `inbox` and `events` ask that
-server, with the network's credential, such as `PILOOP_HTTPS_TOKEN`.
+(`read`, `act` or `admin`). On such a machine, `PILOOP_SERVER=<url>` makes the commands that call the API, such as
+`status`, `inbox`, `message` and `secret`, ask that server, with the network's credential, such as
+`PILOOP_HTTPS_TOKEN`. The commands that read the database of the home, such as `history`, `attach`, `sql` and
+`worker list`, then refuse: run them on the server.
 
 ```bash
 curl --unix-socket ~/.piloop/piloop.sock 'http://piloop/v1/status?campaign=enwik8'

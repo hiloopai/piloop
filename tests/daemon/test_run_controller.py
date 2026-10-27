@@ -1827,8 +1827,8 @@ def test_an_implementer_that_left_its_finding_has_finished_its_run_however_its_p
     with db.session() as s:
         assert s.get_one(Idea, idea_id).status is IdeaStatus.DONE, 'not retried'
         assert s.get_one(AgentSession, agent_session_id).error == (
-            'agent timeout after 0.5s' if timed_out else 'agent exit 1'
-        )
+            'agent timeout after 0.5s' if timed_out else 'agent exit 1: 1 row(s) changed, last insert id 1'
+        ), 'an exit says its last output'
         assert [c.verdict for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [Outcome.KEEP]
 
 

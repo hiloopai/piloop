@@ -7,6 +7,7 @@ import threading
 import time
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from http import HTTPStatus
 from pathlib import Path
 from types import UnionType
@@ -297,11 +298,14 @@ def _path_params(dependant: Dependant) -> set[str]:
 
 def _queries(route: APIRoute) -> set[type]:
     """The query models that the route and its dependencies take."""
-    found: set[type] = set()
-    for call in (route.endpoint, *(d.call for d in route.dependant.dependencies if d.call is not None)):
-        for hint in get_type_hints(call, include_extras=True).values():
-            found.update(model for model in _models(hint) if issubclass(model, Params))
-    return found
+    return _taken(route.dependant)
+
+
+def _taken(dependant: Dependant) -> set[type]:
+    """The query models that ``dependant``'s call and its dependencies, at any depth, take."""
+    hints = get_type_hints(dependant.call, include_extras=True).values() if dependant.call is not None else ()
+    found = {model for hint in hints for model in _models(hint) if issubclass(model, Params)}
+    return found.union(*(_taken(d) for d in dependant.dependencies))
 
 
 def _models(hint: object) -> list[type[BaseModel]]:
@@ -717,6 +721,31 @@ def test_an_admin_sets_lists_and_removes_secrets(
         actor = {'Authorization': f'Bearer {token(db, "ana", Access.ACT)}'}
         refused = httpx.get(tcp.url + '/v1/secrets', headers=actor)
     assert refused.json() == {'detail': 'ana has act access, and this route needs admin'}
+
+
+def test_act_sets_and_removes_a_campaign_s_secrets_and_only_admin_the_home_s(
+    db: Database, campaign: Campaign, cfg: Settings
+) -> None:
+    """A person with ``act`` stores a model key for a campaign without ``admin``. The home's secrets stay ``admin``'s."""
+    with serving_api(cfg, listen='127.0.0.1:0') as [_, tcp], Client.on(cfg.socket_file, System.HUMAN) as admin:
+        bearer = {'Authorization': f'Bearer {token(db, "ana", Access.ACT)}'}
+        with Client.connect(httpx.Client(base_url=tcp.url, headers=bearer)) as ana:
+            body = SecretBody(value=SecretStr('hil_key'))
+            assert ana.set_secret('REVOLVER_TOKEN', Located(campaign='demo'), body).campaign == 'demo'
+            assert ana.remove_secret('REVOLVER_TOKEN', Located(campaign='demo')).campaign == 'demo'
+            for write in (
+                partial(ana.set_secret, 'KEY', Located(), body),
+                partial(ana.remove_secret, 'KEY', Located()),
+            ):
+                with pytest.raises(Refused, match=r"^ana has act access, and the home's secrets need admin$"):
+                    write()
+        admin.set_secret('REVOLVER_TOKEN', Located(campaign='demo'), body)
+        assert [(f.name, f.campaign, f.set_by) for f in admin.list_secrets().secrets] == [
+            ('REVOLVER_TOKEN', 'demo', 'human')
+        ], 'the home has no secret: the refused writes changed nothing'
+    with db.session() as s:
+        set_by = s.scalars(select(Event.actor).where(Event.kind == 'secret.set').order_by(Event.id)).all()
+    assert set_by[0] == 'human:ana'
 
 
 def bare(checkout: Path, at: Path) -> str:

@@ -195,14 +195,10 @@ class Launcher:
                 **dict.fromkeys(cleared_env() | {*definition.session_env}, ''),
             }
             # {cwd} and {log_dir} stay for the worker, which makes them (``AgentStart.at``)
-            argv = [
-                fill(a, model=model, effort=effort, prompt=prompt, session_id=session_id or '')
-                for a in definition.headless
-            ]
+            headless, resumed = definition.expanded(definition.headless), definition.expanded(definition.resume)
+            argv = [fill(a, model=model, effort=effort, prompt=prompt, session_id=session_id or '') for a in headless]
             # {prompt} stays for the queued messages, and {session_id} for the id that a harness reports while it runs
-            resume = [
-                fill(a, model=model, effort=effort, session_id=session_id or SESSION_ID) for a in definition.resume
-            ]
+            resume = [fill(a, model=model, effort=effort, session_id=session_id or SESSION_ID) for a in resumed]
             spec = AgentStart(
                 executable=definition.executable,
                 args=argv,
@@ -218,7 +214,7 @@ class Launcher:
                     brief=resumed_brief,
                     args=[
                         fill(a, model=model, effort=effort, prompt=prompt, session_id=source.session_id)
-                        for a in definition.resume
+                        for a in resumed
                     ],
                 )
             job = AgentJob(

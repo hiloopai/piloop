@@ -57,7 +57,7 @@ from piloop.plugins.runtime.contract import AgentExit, AgentSpec, ExitStatus
 from piloop.plugins.secrets.contract import SECRETS, set_secret
 from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import Git
-from piloop.settings import Settings
+from piloop.settings import AgentSettings, Settings
 from piloop.store.chunks import read
 from piloop.usage import Usage
 from tests.conftest import (
@@ -103,9 +103,17 @@ def request(db: Database, campaign: Campaign, kind: RoleName = WATCHDOG, **field
         return agent_session.id
 
 
-def controller(db: Database, runtime: ScriptRuntime, tmp_path: Path, tracer: Tracer | None = None) -> RunController:
+def controller(
+    db: Database,
+    runtime: ScriptRuntime,
+    tmp_path: Path,
+    tracer: Tracer | None = None,
+    agents: AgentSettings | None = None,
+) -> RunController:
     """The launcher and the in-process worker that takes its leases, as the daemon makes them."""
-    return serving(RunController(db, tracer or Tracer(None), tmp_path, factory(runtime), executor=Workers()))
+    return serving(
+        RunController(db, tracer or Tracer(None), tmp_path, factory(runtime), executor=Workers(), agents=agents)
+    )
 
 
 def launcher(db: Database, runtime: ScriptRuntime, tmp_path: Path, tracer: Tracer | None = None) -> Launcher:
@@ -113,14 +121,19 @@ def launcher(db: Database, runtime: ScriptRuntime, tmp_path: Path, tracer: Trace
 
 
 def launch(
-    db: Database, runtime: ScriptRuntime, tmp_path: Path, agent_session_id: AgentSessionId, tracer: Tracer | None = None
+    db: Database,
+    runtime: ScriptRuntime,
+    tmp_path: Path,
+    agent_session_id: AgentSessionId,
+    tracer: Tracer | None = None,
+    agents: AgentSettings | None = None,
 ):
     with db.session() as s:
         campaign = s.get_one(Campaign, s.get_one(AgentSession, agent_session_id).campaign_id)
         brief = compose_brief(
             role_in(campaign), campaign, Agent(role='watchdog', session=agent_session_id), reason='test', context=''
         )
-    ctl = controller(db, runtime, tmp_path, tracer)
+    ctl = controller(db, runtime, tmp_path, tracer, agents)
     ended = ctl.launcher.launch(
         agent_session_id,
         brief=ctl.cas.put(brief.encode()),
@@ -399,6 +412,26 @@ def test_harness_exit_code_is_recorded_not_raised(
         AgentSessionState.EXITED,
         'agent exit 3',
     )
+
+
+def test_an_agent_that_exits_non_zero_says_its_last_output_bounded_and_without_a_secret_value(
+    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A harness that dies says why on its last lines: the row's error, and so the escalation of a pause, carries them."""
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    dies = '#!/bin/sh\necho starting\necho\necho "401 Unauthorized: key $GATEWAY_KEY rejected"\necho "check the key"\nexit 1\n'
+    counted = {'headless': ['--session-id', '{session_id}', '{prompt}'], **READS_PI}
+    use_harness(db, campaign, dies, env={'GATEWAY_KEY': {'secret': 'TEAM_KEY'}}, **counted)
+    put_secret(db, campaign.id, 'TEAM_KEY', 'sk-live-123')
+    agent_session_id = request(db, campaign)
+    ended = launch(db, runtime, tmp_path, agent_session_id, agents=AgentSettings(exit_output_chars=60))
+    said = '…Unauthorized: key [secret TEAM_KEY] rejected | check the key'
+    assert (ended, agent_session(db, agent_session_id).error) == (
+        NotStarted(f'agent exit 1: {said}'),
+        f'agent exit 1: {said}',
+    )
+    assert [a.error for _, a in anomalies(db)] == [f'agent exit 1: {said}'], 'what the escalation of a pause lists'
+    assert 'sk-live-123' in (tmp_path / 'w' / 'transcript.txt').read_text(), 'the transcript keeps what it printed'
 
 
 def test_timeout_kills_and_records(campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path) -> None:
@@ -991,6 +1024,29 @@ def test_a_harness_env_gives_values_and_secrets_and_a_campaigns_secret_wins_over
         job = read_job(CAS.selected({}).open(tmp_path), *s.execute(select(Lease.id, Lease.job_cid)).one())
     assert isinstance(job, AgentJob) and job.secrets == {'GATEWAY_KEY': 'TEAM_KEY'}
     assert 'campaign-key' not in job.model_dump_json(), 'the job in the CAS names secrets, never their values'
+
+
+def test_a_harness_expands_its_own_elements_of_the_argv_before_the_launch(
+    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """Codex's ``config`` table: each key is a ``-c`` flag where its argv has ``{config}``."""
+    config = {'model_provider': 'gateway', 'model_providers': {'gateway': {'base_url': 'https://gw.example.com/v1'}}}
+    use_harness(
+        db,
+        campaign,
+        RECORDS_ARGV_AND_ENV,
+        provider='codex',
+        headless=['{config}', '{prompt}'],
+        resume=[],
+        config=config,
+    )
+    launch(db, runtime, tmp_path, request(db, campaign))
+    assert (tmp_path / 'w' / 'argv.txt').read_text().splitlines()[:4] == [
+        '-c',
+        'model_provider="gateway"',
+        '-c',
+        'model_providers={gateway = {base_url = "https://gw.example.com/v1"}}',
+    ]
 
 
 def test_servers_that_cannot_be_rendered_fail_the_launch_on_the_row(

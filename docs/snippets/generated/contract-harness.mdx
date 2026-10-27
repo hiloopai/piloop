@@ -13,6 +13,7 @@
 | `Harness.session_env: list[str]` | The variables the agent sets for the processes of its session. piloop clears them for every agent, so an agent started from inside such a session is not its child. |
 | `Harness.env: dict[EnvName, str \| SecretRef]` | Variables of the agent's environment: a value, or a secret, `{ secret = "NAME" }`. For example a model gateway, `{ ANTHROPIC_BASE_URL = "https://gw.example.com", ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" } }`. When unset, the agent uses the login of the machine that runs it. |
 | `Harness.mcp() -> McpRenderer \| None` | How it takes the MCP servers of a role. None, by default: it takes none. |
+| `Harness.expanded(argv: list[str]) -> list[str]` | `argv`, its `headless` or `resume`, with the elements that only this provider knows expanded. |
 | `Harness.sessions() -> UsageReader \| None` | How to read the session files that its CLI leaves. None, by default: it leaves none that piloop reads. |
 | `Harness.usage() -> UsageReader \| None` | How to read the tokens of an agent that ended: its `sessions`, when the session id can be known. |
 | `Harness.restore(session_id: str, cwd: Path) -> Path \| None` | Where to write a session file back from the CAS, so that `resume` continues it in `cwd` on any machine. |

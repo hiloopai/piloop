@@ -527,6 +527,7 @@ A campaign's `[agents]` in its `piloop.toml` can set `wrap_up_grace` and `findin
 | `finding_grace` | duration | `"PT1M"` | How long after its finding the daemon ends an implementer, and every process that it left: a last commit takes seconds. |
 | `wrap_up_lead` | duration | `"PT10M"` | How long before its role timeout the daemon tells an implementer to wrap up, at most a quarter of the timeout. |
 | `steer_line_chars` | integer | `200` | How many characters of a comment's first line a running agent gets, in the one line that the daemon sends it for the comment. The agent can read the rest with SQL. |
+| `exit_output_chars` | integer | `500` | How many characters of its last output lines an agent that exits non-zero leaves in its error, which `piloop status` and the escalation of paused launches show. The values of its secrets read as their names. 0 leaves none. |
 
 ### `[plugins]`
 

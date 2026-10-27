@@ -7,23 +7,24 @@ the agent reads it there (``Launcher.launch``), whichever process applied it.
 """
 
 import tempfile
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, ClassVar, Literal, assert_never
 
 from covalence import Cid
-from pydantic import Field, TypeAdapter, ValidationError
+from pydantic import Field, SecretStr, TypeAdapter, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, SignedAgent, System
 from piloop.agents.roles import harness_of
+from piloop.config import TRANSCRIPT
 from piloop.db.events import emit, has, latest
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Comment, Event, EventModel, ReadBy, utcnow
 from piloop.db.session import Database, write_transaction
-from piloop.ids import AgentSessionId, CommentId, CommentKind, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CommentId, CommentKind, EnvName, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -54,9 +55,10 @@ from piloop.plugins.executor.contract import (
     Workspace,
 )
 from piloop.plugins.runtime.contract import AgentExit, ExitStatus
+from piloop.plugins.secrets.contract import SECRETS, SecretsProvider, hidden, values
 from piloop.plugins.vcs.contract import Transfer
 from piloop.proc import Channel
-from piloop.settings import TMP_DIR, UNITS_DIR
+from piloop.settings import TMP_DIR, UNITS_DIR, AgentSettings
 from piloop.store.tree import Manifest, Staged, merge, stage, write_files
 
 STARTUP_SECONDS = 120
@@ -342,13 +344,40 @@ SIGNED: TypeAdapter[SignedAgent] = TypeAdapter(SignedAgent)
 """Reads an agent from its signature, such as an ``ideas.created_by``."""
 
 
+OUTPUT_SEPARATOR = ' | '
+"""What joins the last lines of an agent's output in its error, which stays one line."""
+
+
+def explained(process: AgentExit, output: str, found: Mapping[EnvName, SecretStr], chars: int) -> AgentExit:
+    """``process`` with the last ``chars`` characters of the lines of its ``output`` after its error.
+
+    Each value of the agent's secrets (``found``) reads as its name. Its token needs no hiding: it ends with the agent.
+    """
+    lines = OUTPUT_SEPARATOR.join(stripped for line in output.splitlines() if (stripped := line.strip()))
+    said = hidden(lines, found)
+    if not said or chars == 0:
+        return process
+    tail = said if len(said) <= chars else f'…{said[-chars:]}'
+    return replace(process, error=tail if process.error is None else f'{process.error}: {tail}')
+
+
 class CampaignResults:
     """``Results``: what an agent's or an evaluation's end changes in the campaign's rows.
 
     A job's files come back in ``cas``, and go into its place under ``home``, where the readers of logs look.
     """
 
-    def __init__(self, db: Database, tracer: Tracer, home: Path, cas: Cas, stopping: Callable[[], bool]) -> None:
+    def __init__(
+        self,
+        db: Database,
+        tracer: Tracer,
+        home: Path,
+        cas: Cas,
+        stopping: Callable[[], bool],
+        *,
+        secrets: SecretsProvider | None = None,
+        exit_output_chars: int = AgentSettings().exit_output_chars,
+    ) -> None:
         self._db = db
         self._tracer = tracer
         self._home = home
@@ -357,6 +386,9 @@ class CampaignResults:
         self._stopping = stopping
         """Whether the daemon stops: an agent that ends then closes as killed by the stop, and a measurement is not
         recorded (the next daemon measures it again)."""
+        self._secrets = secrets if secrets is not None else SECRETS.selected({})
+        self._exit_output_chars = exit_output_chars
+        """``[agents] exit_output_chars``: how much of its last output an agent that exits non-zero leaves in its error."""
 
     def _apply(self, guard: Guard | None, change: Callable[[Session], None]) -> None:
         """Run ``guard``, then ``change``, in one write transaction, and commit. Nothing changes when one raises."""
@@ -409,13 +441,14 @@ class CampaignResults:
         changed = report.workspace if isinstance(report, AgentFinished) and workspace is not None else {}
         # read from the CAS before the write lock: a workspace file can be large, and a remote CAS slow
         base = Manifest.get(self._cas, workspace.manifest) if workspace is not None and changed else None
+        output = self._failed_output(report)
         with tempfile.TemporaryDirectory(dir=self._scratch()) as scratch:
             staged = stage(self._cas, changed, Path(scratch))
 
             def change(s: Session) -> None:
                 if isinstance(job, AgentJob):
                     assert isinstance(report, AgentFinished | AgentNotStarted)
-                    self._agent(s, job, report)
+                    self._agent(s, job, report, output)
                     if workspace is not None and base is not None:
                         self._workspace(s, job, workspace, base, staged, changed)
                 else:
@@ -455,12 +488,25 @@ class CampaignResults:
         self._apply(None, lambda s: _record(s, key.agent_session, outcome))
         self._tracer.event(outcome.kind, comment=prompt, agent_session=key.agent_session, error=error)
 
-    def _agent(self, s: Session, job: AgentJob, report: AgentReport) -> None:
+    def _failed_output(self, report: AgentReport | EvaluationReport) -> str | None:
+        """The transcript of an agent that exited non-zero, from the CAS, or None. Read it before the write lock."""
+        match report:
+            case AgentFinished(process=AgentExit(exit_code=int(code)), files=files) if (
+                code != 0 and TRANSCRIPT in files
+            ):
+                data = self._cas.get(files[TRANSCRIPT])
+                assert data is not None  # finished checked that the CAS holds every file of the report
+                return data.decode(errors='replace')
+            case _:
+                return None
+
+    def _agent(self, s: Session, job: AgentJob, report: AgentReport, output: str | None = None) -> None:
         """Close the row from the report, and emit ``AgentSessionFinished``, ``JobEnded`` and ``StartupAnomaly``.
 
         The anomaly only when the agent did not start to work (``NotStarted``): its job did not start, or it ended
         within ``STARTUP_SECONDS`` and left nothing (``_never_worked``), unless the daemon told it to stop or ended it.
         While the daemon stops, the row closes as killed by the stop (``RunEnd.DAEMON_STOPPED``), with the usage that was read.
+        The ``output`` of an agent that exited non-zero ends its error (``explained``).
         """
         w = _open(s, AgentKey(job.agent_session))
         w.ended_at = utcnow()
@@ -472,6 +518,9 @@ class CampaignResults:
                 w.state, w.error = AgentSessionState.KILLED, reason
                 ended: Ran | NotStarted = NotStarted(reason)
             case AgentFinished(process=process):
+                if output is not None:
+                    found = values(s, self._secrets, job.agent_session, job.secrets.values())
+                    process = explained(process, output, found, self._exit_output_chars)
                 if report.unrestored is not None:
                     unrestored = SessionNotResumed(reason=Unresumed.UNRESTORED, detail=report.unrestored)
                     emit(s, unrestored, TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
