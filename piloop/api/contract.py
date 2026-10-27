@@ -19,9 +19,11 @@ from pydantic import (
     PlainSerializer,
     SecretStr,
     Tag,
+    model_validator,
 )
 from pydantic_core import PydanticCustomError
 
+from piloop import deprecated
 from piloop.actor import CALLER_NAME
 from piloop.ids import LISTED, CampaignName, CampaignStatus, CommentId, CommentKind, Ending, EnvName, RoleName
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
@@ -357,14 +359,65 @@ class Checkout(Params):
     """The campaign's name. None: the ``name`` of its ``piloop.toml``."""
 
 
+class SecretCredential(Params):
+    """The home's secret that holds the credential, read when the call uses it."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    secret: EnvName
+
+
+class TokenCredential(Params):
+    """A credential that the call carries, such as a short-lived token: its git command uses it, and nothing keeps it."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    token: Revealed
+
+
+def _credential_kind(value: object) -> str | None:
+    """Which of a ``Credential``'s models a body is, by its key. Both keys are neither."""
+    match value:
+        case {'secret': _, 'token': _}:
+            return None
+        case SecretCredential() | {'secret': _}:
+            return 'secret'
+        case TokenCredential() | {'token': _}:
+            return 'token'
+        case _:
+            return None
+
+
+type Credential = Annotated[
+    Annotated[SecretCredential, Tag('secret')] | Annotated[TokenCredential, Tag('token')],
+    Discriminator(_credential_kind),
+]
+"""What the host of a repository asks for: exactly one of ``{"secret": "<home secret>"}`` and ``{"token": "..."}``."""
+
+
+@deprecated.until('0.4.0', 'the secret of a clone is its credential: delete secret_is_credential and its validator')
+def secret_is_credential(data: object) -> object:
+    """Return ``data``, a body, with its ``secret`` as its ``credential``. A body that has both keeps both: it is refused."""
+    match data:
+        case {'secret': secret, **rest} if 'credential' not in rest:
+            return {**rest, 'credential': {'secret': secret}}
+        case _:
+            return data
+
+
 class Remote(Params):
-    """A repository to clone, and the home's secret that its host asks for."""
+    """A repository to clone, and the credential that its host asks for."""
 
     model_config = ConfigDict(extra='forbid')
 
     url: str
-    secret: EnvName | None = None
-    """The name of the home's secret that holds the credential, such as a token. None: the host asks for none."""
+    credential: Credential | None = None
+    """What the host of ``url`` asks for: a home secret, or a token for this clone alone. None: nothing."""
+
+    @model_validator(mode='before')
+    @classmethod
+    def _secret(cls, data: object) -> object:
+        return secret_is_credential(data)
 
 
 class Clone(Params):

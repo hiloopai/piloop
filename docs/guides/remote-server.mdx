@@ -79,15 +79,21 @@ piloop status enwik8
 head: candidate#1 · bytes: 3688775 · kept: 1 · candidates: 1 · evaluator: #1, 14s old
 ```
 
-`"name"` next to `"clone"` registers it under another name. For a private repo, store a token that the host accepts
-as a secret of the home, with an `admin` token, and name it:
+`"name"` next to `"clone"` registers it under another name. For a private repo, send a token that the host accepts.
+The clone uses it, and the server keeps it nowhere:
+
+```json
+{"clone": {"url": "https://github.com/acme/enwik8.git", "credential": {"token": "<token>"}}}
+```
+
+Or store the token as a secret of the home, with an `admin` token, and name it:
 
 ```bash
 printf %s "$GITHUB_TOKEN" | piloop secret set GITHUB_TOKEN
 ```
 
 ```json
-{"clone": {"url": "https://github.com/acme/enwik8.git", "secret": "GITHUB_TOKEN"}}
+{"clone": {"url": "https://github.com/acme/enwik8.git", "credential": {"secret": "GITHUB_TOKEN"}}}
 ```
 
 ## Give agents their model credentials

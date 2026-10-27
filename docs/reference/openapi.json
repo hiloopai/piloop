@@ -4184,6 +4184,16 @@
         "title": "CommentView",
         "description": "A comment, as ``piloop inbox show`` shows it."
       },
+      "Credential": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SecretCredential"
+          },
+          {
+            "$ref": "#/components/schemas/TokenCredential"
+          }
+        ]
+      },
       "DaemonState": {
         "properties": {
           "pid": {
@@ -6316,16 +6326,16 @@
             "type": "string",
             "title": "Url"
           },
-          "secret": {
+          "credential": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/EnvName"
+                "$ref": "#/components/schemas/Credential"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "The name of the home's secret that holds the credential, such as a token. None: the host asks for none."
+            "description": "What the host of ``url`` asks for: a home secret, or a token for this clone alone. None: nothing."
           }
         },
         "additionalProperties": false,
@@ -6334,7 +6344,7 @@
           "url"
         ],
         "title": "Remote",
-        "description": "A repository to clone, and the home's secret that its host asks for."
+        "description": "A repository to clone, and the credential that its host asks for."
       },
       "Rendered": {
         "properties": {
@@ -6664,6 +6674,20 @@
         ],
         "title": "SecretChanged",
         "description": "A secret that a change set or deleted, read at ``cursor``: never its value."
+      },
+      "SecretCredential": {
+        "properties": {
+          "secret": {
+            "$ref": "#/components/schemas/EnvName"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "secret"
+        ],
+        "title": "SecretCredential",
+        "description": "The home's secret that holds the credential, read when the call uses it."
       },
       "SecretList": {
         "properties": {
@@ -7227,6 +7251,20 @@
         ],
         "title": "TokenBody",
         "description": "A bearer token to make for a caller."
+      },
+      "TokenCredential": {
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/Revealed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "TokenCredential",
+        "description": "A credential that the call carries, such as a short-lived token: its git command uses it, and nothing keeps it."
       },
       "TokenList": {
         "properties": {

@@ -1,6 +1,7 @@
 """The API: who may call it on each listener, what it answers, how its long-poll waits, and its OpenAPI document."""
 
 import errno
+import logging
 import os
 import subprocess
 import threading
@@ -52,10 +53,12 @@ from piloop.api.contract import (
     ReplyBody,
     RetireBody,
     SecretBody,
+    SecretCredential,
     Selection,
     StatusBody,
     StopBody,
     TokenBody,
+    TokenCredential,
     defaulted,
 )
 from piloop.api.views import AckOutcome, CampaignState, InvalidConfig, Pending, Queued, Relation, Status, thread_lines
@@ -108,6 +111,7 @@ from piloop.settings import Settings
 from piloop.watch.panels import Context, InboxPanel
 from tests.campaign.test_stop import add_run
 from tests.conftest import disk, home_cas, measuring, serving_api, store_config
+from tests.test_git import Basic, basic_server
 
 
 @pytest.fixture
@@ -955,10 +959,10 @@ def test_a_git_url_is_cloned_under_the_home_with_the_home_s_secret_and_then_regi
     cloned = mocker.spy(Git, 'clone')
     with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
         with pytest.raises(Refused, match=r'^the home has no secret TOKEN: see `piloop secret list`$') as unknown:
-            client.register_campaign(Clone(clone=Remote(url=url, secret='TOKEN')))
+            client.register_campaign(Clone(clone=Remote(url=url, credential=SecretCredential(secret='TOKEN'))))
         assert unknown.value.error == Problem.REFUSED and not (cfg.home / 'repos').exists()
         client.set_secret('TOKEN', Located(), SecretBody(value=SecretStr('tok')))
-        added = client.register_campaign(Clone(clone=Remote(url=url, secret='TOKEN')))
+        added = client.register_campaign(Clone(clone=Remote(url=url, credential=SecretCredential(secret='TOKEN'))))
         assert added.campaign.path == str(cfg.home / 'repos' / str(added.campaign.id))
         [(_, _, path, credential)] = [c.args for c in cloned.call_args_list]
         assert (path.parent, credential.get_secret_value()) == (cfg.home / 'repos', 'tok')
@@ -971,6 +975,68 @@ def test_a_git_url_is_cloned_under_the_home_with_the_home_s_secret_and_then_regi
             client.register_campaign(Clone(clone=Remote(url=url), name='third'))
         assert e.value.error == Problem.REFUSED
     assert sorted(p.name for p in (cfg.home / 'repos').iterdir()) == ['1', '2', '3'], 'the refused clone is gone'
+
+
+def test_a_clone_with_a_token_uses_it_for_that_clone_and_no_file_of_the_home_or_answer_keeps_it(
+    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A token that the call carries opens a private repo, and is gone with the call: on disk, in logs and in answers."""
+    origin = tmp_path / 'origin.git'
+    subprocess.run(['git', 'clone', '-q', '--bare', str(campaign_path), str(origin)], check=True)
+    token = Basic.password
+    caplog.set_level(logging.DEBUG)
+    with basic_server(origin) as url, serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+        with pytest.raises(Refused, match=f'^git clone of {url} failed: ') as refused:
+            client.register_campaign(Clone(clone=Remote(url=url, credential=TokenCredential(token=SecretStr('wrong')))))
+        assert refused.value.error == Problem.REFUSED
+        added = client.register_campaign(
+            Clone(clone=Remote(url=url, credential=TokenCredential(token=SecretStr(token))))
+        )
+        assert added.campaign.path == str(cfg.home / 'repos' / str(added.campaign.id))
+        transport = httpx.HTTPTransport(uds=str(cfg.socket_file))
+        with httpx.Client(transport=transport, base_url='http://piloop') as raw:
+            for invalid in (
+                {'clone': {'url': url, 'credential': {'token': token, 'secret': 'TOKEN'}}},
+                {'clone': {'url': url, 'credential': {'token': token}, 'secret': 'TOKEN'}},
+                {'clone': {'url': url, 'credential': {'token': token}}, 'name': 'not a name'},
+                {'clone': {'url': url, 'credential': {}}},
+            ):
+                answer = raw.post('/v1/campaigns', json=invalid)
+                assert answer.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, invalid
+                assert token not in answer.text, 'a refusal does not send the token back'
+        with db.session() as s:
+            assert not [e for e in s.scalars(select(Event)) if token in e.payload.model_dump_json()]
+    kept = [p for p in cfg.home.rglob('*') if p.is_file() and token.encode() in p.read_bytes()]
+    assert kept == [], 'no file of the home holds it: not the database, its WAL, the CAS or the clone'
+    assert token not in caplog.text
+
+
+def test_a_validation_refusal_says_where_and_why_and_never_echoes_what_was_sent(db: Database, cfg: Settings) -> None:
+    sent = 'sent-value'
+    with (
+        serving_api(cfg),
+        httpx.Client(transport=httpx.HTTPTransport(uds=str(cfg.socket_file)), base_url='http://piloop') as raw,
+    ):
+        answer = raw.post('/v1/campaigns', json={'clone': {'url': [sent]}})
+    assert answer.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    [error] = answer.json()['detail']
+    assert (error['loc'][-1], error['msg']) == ('url', 'Input should be a valid string')
+    assert 'input' not in error and sent not in answer.text
+
+
+def test_the_secret_of_a_clone_until_0_4_0_is_its_credential(
+    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    url = bare(campaign_path, tmp_path / 'demo.git')
+    cloned = mocker.spy(Git, 'clone')
+    assert Remote.model_validate({'url': url, 'secret': 'TOKEN'}).credential == SecretCredential(secret='TOKEN')
+    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+        client.set_secret('TOKEN', Located(), SecretBody(value=SecretStr('tok')))
+        transport = httpx.HTTPTransport(uds=str(cfg.socket_file))
+        with httpx.Client(transport=transport, base_url='http://piloop') as raw:
+            assert raw.post('/v1/campaigns', json={'clone': {'url': url, 'secret': 'TOKEN'}}).status_code == 200
+    [(_, _, _, credential)] = [c.args for c in cloned.call_args_list]
+    assert credential.get_secret_value() == 'tok'
 
 
 def test_a_clone_that_fails_or_does_not_register_leaves_nothing_under_the_home(

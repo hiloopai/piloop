@@ -5,7 +5,7 @@ import os
 import socket
 import subprocess
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from datetime import timedelta
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -265,10 +265,9 @@ SECRET = SecretStr('s3cret-token')
 
 @pytest.fixture
 def bare(campaign_path: Path, tmp_path: Path) -> Path:
-    """A bare clone of the campaign repo, which a dumb HTTP server can serve as files."""
+    """A bare clone of the campaign repo."""
     path = tmp_path / 'origin.git'
     subprocess.run(['git', 'clone', '-q', '--bare', str(campaign_path), str(path)], check=True)
-    subprocess.run(['git', 'update-server-info'], cwd=path, check=True)
     return path
 
 
@@ -318,18 +317,28 @@ class Basic(SimpleHTTPRequestHandler):
         pass
 
 
-@pytest.fixture
-def served(bare: Path) -> Iterator[str]:
-    """The URL of ``bare`` over HTTP, behind basic authentication."""
+@contextlib.contextmanager
+def basic_server(bare: Path) -> Generator[str]:
+    """Serve ``bare`` over HTTP behind basic authentication (``Basic``), and yield its URL."""
+    subprocess.run(['git', 'update-server-info'], cwd=bare, check=True)
     Basic.sent.clear()
     Basic.argv.clear()
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(Basic, directory=str(bare.parent)))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    yield f'http://127.0.0.1:{server.server_address[1]}/{bare.name}'
-    server.shutdown()
-    server.server_close()
-    thread.join()
+    try:
+        yield f'http://127.0.0.1:{server.server_address[1]}/{bare.name}'
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+@pytest.fixture
+def served(bare: Path) -> Iterator[str]:
+    """The URL of ``bare`` over HTTP, behind basic authentication."""
+    with basic_server(bare) as url:
+        yield url
 
 
 def test_a_clone_over_http_answers_the_servers_challenge_with_the_credential(served: str, tmp_path: Path) -> None:

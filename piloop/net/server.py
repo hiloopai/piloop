@@ -12,12 +12,14 @@ import ssl
 import threading
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from http import HTTPStatus
 from pathlib import Path
 from typing import Annotated
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -94,7 +96,8 @@ def _peer(request: Request) -> Peer:
 class App(FastAPI):
     """FastAPI that knows who may call it, with the event that its ``Server`` sets when it shuts down.
 
-    One ``Server`` serves one ``App``. A route's ``Refusal`` answers its status with ``{"error", "detail"}``.
+    One ``Server`` serves one ``App``. A route's ``Refusal`` answers its status with ``{"error", "detail"}``, and a body
+    that its model refuses answers 422 with where and why, never with the value that was sent.
     """
 
     def __init__(self, tokens: Tokens, network: Network, *, openapi_url: str | None = None) -> None:
@@ -109,6 +112,12 @@ class App(FastAPI):
         @self.exception_handler(Refusal)
         def refused(request: Request, e: Refusal) -> Response:
             return JSONResponse({'error': e.error, 'detail': str(e)}, status_code=e.status)
+
+        @self.exception_handler(RequestValidationError)
+        def invalid(request: Request, e: RequestValidationError) -> Response:
+            # FastAPI's own answer carries each refused value as ``input``: a token or a secret would come back.
+            errors = [{k: v for k, v in error.items() if k != 'input'} for error in e.errors()]
+            return JSONResponse({'detail': jsonable_encoder(errors)}, status_code=HTTPStatus.UNPROCESSABLE_ENTITY)
 
     def mount_router(self, router: APIRouter) -> None:
         """Include ``router``, unless one of its routes has the method and path of one that is mounted.

@@ -31,6 +31,7 @@ from piloop.api.contract import (
     CancelBody,
     Checkout,
     Clone,
+    Credential,
     DevelopBody,
     EventsQuery,
     Fork,
@@ -50,11 +51,13 @@ from piloop.api.contract import (
     ReplyBody,
     RetireBody,
     SecretBody,
+    SecretCredential,
     SeedBody,
     Selection,
     StatusBody,
     StopBody,
     TokenBody,
+    TokenCredential,
     TrackBody,
 )
 from piloop.api.views import (
@@ -431,7 +434,7 @@ def _registered(api: Handlers, s: Session, me: Actor, body: Registration) -> tup
         case Checkout():
             return register(s, FilePath(body.path), me, body.name)
         case Clone(clone=remote):
-            vcs, credential = VCS.selected(api.cfg.providers), _credential(api, remote.secret)
+            vcs, credential = VCS.selected(api.cfg.providers), _credential(api, remote.credential)
             return register_clone(s, api.cfg.home, vcs, remote.url, credential, me, body.name)
         case Fork():
             if (source := referenced(s, body.fork)) is None:
@@ -441,15 +444,21 @@ def _registered(api: Handlers, s: Session, me: Actor, body: Registration) -> tup
             assert_never(body)
 
 
-def _credential(api: Handlers, secret: EnvName | None) -> SecretStr | None:
-    """The value of the home's secret ``secret``. Refuses a name that the home has no secret of."""
-    if secret is None:
-        return None
-    if (value := secrets.HomeSecrets(api.db, _secrets(api)).get(secret)) is None:
-        raise Refusal(
-            HTTPStatus.CONFLICT, Problem.REFUSED, f'the home has no secret {secret}: see `piloop secret list`'
-        )
-    return value
+def _credential(api: Handlers, credential: Credential | None) -> SecretStr | None:
+    """The value that ``credential`` gives: its token, or the home's secret that it names. Refuses an unknown secret."""
+    match credential:
+        case None:
+            return None
+        case TokenCredential(token=token):
+            return token
+        case SecretCredential(secret=name):
+            if (value := secrets.HomeSecrets(api.db, _secrets(api)).get(name)) is None:
+                raise Refusal(
+                    HTTPStatus.CONFLICT, Problem.REFUSED, f'the home has no secret {name}: see `piloop secret list`'
+                )
+            return value
+        case _:
+            assert_never(credential)
 
 
 @router.post('/campaigns/{campaign}/sync', operation_id='sync_campaign', dependencies=[Depends(actor_access)])
