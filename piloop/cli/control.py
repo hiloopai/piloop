@@ -1,11 +1,11 @@
-"""The commands that steer a campaign as a whole, clients of the API: pause, resume, and stop and retire it."""
+"""The commands that steer a campaign as a whole, clients of the API: pause, resume, stop, reopen and retire."""
 
 from typing import Annotated, assert_never
 
 import cyclopts
 
 from piloop.api.client import Client
-from piloop.api.contract import PauseBody, RetireBody, StopBody
+from piloop.api.contract import PauseBody, ReopenBody, RetireBody, StopBody
 from piloop.api.views import CampaignState, InvalidConfig
 from piloop.cli import common
 from piloop.cli.client import campaign_name, daemon_http
@@ -84,3 +84,15 @@ def retire(ref: CampaignRef, /, *, reason: Annotated[str, cyclopts.Parameter(hel
     with Client.connect(daemon_http()) as client:
         state = client.retire(campaign_name(client, ref), RetireBody(reason=reason)).campaign
     common.console.print(f'campaign {state.name} #{state.id} retired: its name is free', markup=False)
+
+
+def reopen(ref: CampaignRef, /, *, reason: Annotated[str, cyclopts.Parameter(help='Why, with ids.')]) -> None:
+    """Set a stopped campaign active again, once its closing review and its runs are over.
+
+    The runs, hours and tokens that its stop rule limits count again from now, so it gets each of them again. A rule
+    that would stop it at once, a target that it reached say, refuses: change the rule in piloop.toml and run
+    `piloop init` instead. A retired campaign does not reopen: fork it.
+    """
+    with Client.connect(daemon_http()) as client:
+        state = client.reopen(campaign_name(client, ref), ReopenBody(reason=reason)).campaign
+    common.console.print(f'campaign {state.name} #{state.id} reopened: its limits count from now', markup=False)

@@ -6,8 +6,8 @@
 The server is any ``piloop serve --listen`` that this machine reaches with a bearer token in ``PILOOP_HTTPS_TOKEN``, of
 ``act`` access. A person registers a toy repository by its URL, files a seed and writes to the orchestrator. piloop
 launches the orchestrator on the server's workers, and it answers the message. The tests also act as an orchestrator from
-the CLI (``PILOOP_SERVER``): they add an idea, develop the seed, pause, resume and stop the campaign. Two implementers run
-on the server's workers, and their candidates are judged.
+the CLI (``PILOOP_SERVER``): they add an idea, develop the seed, pause, resume and stop the campaign, fork it, and reopen
+it. Two implementers run on the server's workers, and their candidates are judged.
 
 The toy is published as a secret gist (``gh``, logged in with the ``gist`` scope), which the server clones: the server
 needs to reach github.com. Its ``piloop.toml`` gives the harness each ``--e2e-secret`` from the server's secret of that
@@ -154,6 +154,8 @@ class Server:
     """The campaign's id, once it registered: its name may name another campaign once it is retired."""
     again: CampaignId | None = None
     """The id of the campaign that registers the URL again, under the same name."""
+    forked: CampaignId | None = None
+    """The id of the campaign that forks this one."""
     cursor: int = 0
     """The feed is read after it."""
     events: list[Envelope] = field(default_factory=list)
@@ -283,7 +285,7 @@ def server(request: pytest.FixtureRequest) -> Iterator[Server]:
                 retire(api, str(left.id), 'e2e: an earlier run left it')
             found = Server(url, name, f'{gist}.git', api, env)
             yield found
-            for campaign in (found.id, found.again):
+            for campaign in (found.id, found.forked, found.again):
                 if campaign and api.status(Selection(campaign=str(campaign))).campaigns[0].status != 'retired':
                     retire(api, str(campaign), 'e2e: the scenario ended')
     finally:
@@ -502,6 +504,42 @@ def test_stop(server: Server) -> None:
     orchestrator = state.roles[RoleName('orchestrator')]
     assert (orchestrator.requested, orchestrator.live) == (0, 0), orchestrator
     print(f'{server.name}: {state.tokens} tokens, head {state.head}; orchestrator#{report} reported the stop')
+
+
+@needs(test_stop)
+def test_fork(server: Server) -> None:
+    """``piloop campaign fork``: a new campaign starts from the stopped one's head, under it, with the same repo."""
+    head = server.state().head
+    assert head is not None
+    out = server.piloop('campaign', 'fork', server.name)
+    print(out.strip())
+    [forked] = server.api.status(Selection(campaign=f'{server.name}-2')).campaigns
+    assert isinstance(forked, CampaignState), forked
+    server.forked = forked.id
+    assert (forked.status, forked.parent and forked.parent.id) == ('active', server.id), forked
+
+
+@needs(test_stop)
+def test_reopen(server: Server) -> None:
+    """``piloop campaign reopen``: the stopped campaign is active again; a second stop closes it again."""
+    server.piloop('campaign', 'reopen', server.name, '--reason', 'e2e: one more round')
+    server.seen(lambda e: e.kind == 'campaign.reopened', 'the reopen', 60)
+    assert server.state().status == 'active'
+    stop = server.cursor
+    server.api.stop(str(server.id), StopBody(reason='e2e: stop again', ending=Ending.NOW))
+    server.seen(lambda e: e.id > stop and e.kind == 'campaign.closed', 'the second close', ROLE_TIMEOUT + 300)
+
+    def woken(e: Envelope) -> bool:
+        return e.id > stop and e.kind == 'agent_session.requested' and payload(e)['role'] == 'orchestrator'
+
+    agent = server.seen(woken, 'the orchestrator woken by the second stop', 300).subject.id
+    cancel(server.api, AgentSessionId(agent))  # nobody reads its report
+    deadline = time.monotonic() + ROLE_TIMEOUT
+    while (orchestrator := server.state().roles[RoleName('orchestrator')]).requested or orchestrator.live:
+        assert time.monotonic() < deadline, f'agent_session#{agent} is still open: {orchestrator}'
+        batch = server.api.events(EventsQuery(campaign=str(server.id), after=server.cursor, wait=MAX_POLL_SECONDS))
+        server.events, server.cursor = [*server.events, *batch.events], batch.next
+    assert server.state().status == 'stopped'
 
 
 @needs(test_stop)

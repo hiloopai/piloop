@@ -4,7 +4,7 @@
 |---|---|
 | `Vcs.init(path: Path, summary: str, owned: Sequence[str], ignore: Sequence[str]) -> list[str]` | Make `path` a repository if it is not one, and save its files for `piloop init`. |
 | `Vcs.open(path: Path) -> Repository` | The repository of the checkout at `path`. The caller closes it. |
-| `Vcs.clone(url: str, path: Path, credential: SecretStr \| None) -> Repository` | Clone the repository at `url` into `path`, and return it. The caller closes it. |
+| `Vcs.clone(url: str, path: Path, credential: SecretStr \| None) -> Repository` | Clone the repository at `url` into `path`, with every version that piloop keeps there, and return it. |
 | `Vcs.replica(path: Path) -> Repository` | A worker's replica of a repo of record at `path`, made empty if none is there: `Repository.fetch` fills it. |
 | `Vcs.agent_env(agent: Agent) -> dict[str, str]` | The variables of `agent`'s job that the provider sets: who the versions that it saves are by. Empty: none. |
 | `Vcs.identity(path: Path) -> str` | The project that the checkout at `path` is, the same for each clone of it: `campaigns.repo`. |

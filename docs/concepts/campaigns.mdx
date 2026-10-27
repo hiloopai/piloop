@@ -233,7 +233,25 @@ piloop candidate remeasure 2
 
 A change to a margin, a floor or a watch metric makes no new evaluator.
 
-## Retire a campaign
+## Reopen, fork and retire
+
+A stopped campaign can go on, start a new campaign, or end for good:
+
+```bash
+piloop campaign reopen enwik8 --reason "one more round of runs"
+piloop campaign fork enwik8 --name enwik8-lzma
+piloop campaign retire enwik8 --reason "tried every idea"
+```
+
+**Reopen** sets a stopped campaign active again, with its stop rule as it is. The runs, hours and tokens that the rule
+limits count from the reopen, so the campaign gets each of them again. A rule that would stop it at once, a `target`
+that it reached say, refuses the reopen: change the rule in `piloop.toml` and run `piloop init` instead.
+
+**Fork** makes a new campaign that starts from the head of another one, in any state. `--at` names another version.
+The fork takes its source's stored `piloop.toml`, and shares the [memory](/concepts/research-memory) of its repo. It
+starts with no ideas and an empty workspace. Without `--name`, it is `enwik8-2`.
+
+### Retire a campaign
 
 A **retired** campaign is stopped for good, and its name is free for a new one:
 
@@ -246,9 +264,9 @@ piloop campaign retire enwik8 --reason "tried every idea"
 campaign enwik8 #3 retired: its name is free
 ```
 
-`retire` waits until the closing review and the runs of the stop are over. Its rows, events and archived workspace
-stay, and its id still names it: `piloop status 3`. `piloop status` leaves it out unless you ask with
-`--status retired`.
+`retire`, like `reopen`, waits until the closing review and the runs of the stop are over. Its rows, events and archived
+workspace stay, and its id still names it: `piloop status 3`. `piloop status` leaves it out unless you ask with
+`--status retired`. A retired campaign never reopens: fork it.
 
 ## Files
 

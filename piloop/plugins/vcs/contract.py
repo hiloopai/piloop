@@ -284,7 +284,10 @@ class Vcs(Parameters, ABC):
 
     @abstractmethod
     def clone(self, url: str, path: Path, credential: SecretStr | None) -> Repository:
-        """Clone the repository at ``url`` into ``path``, and return it. The caller closes it.
+        """Clone the repository at ``url`` into ``path``, with every version that piloop keeps there, and return it.
+
+        A fork clones its source's checkout, so a version that only piloop keeps, such as a run's, must come too. The
+        caller closes the repository.
 
         ``credential`` is a token that the host of ``url`` asks for. No argv, log or error holds it.
 

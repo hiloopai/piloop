@@ -34,6 +34,8 @@ HELPER = f'!f() {{ test "$1" = get && echo username=x-access-token && echo "pass
 the variable, never its value. GitHub and GitLab take a token as the password of any user."""
 
 
+KEPT: Final = 'refs/piloop/'
+"""Where piloop keeps the versions that it needs: a clone brings them too."""
 CLONE_TIMEOUT: Final = timedelta(minutes=10)
 """The longest that ``clone`` waits for git, so that a remote that stalls ends the clone instead of holding its thread."""
 
@@ -58,7 +60,10 @@ def commit_env(author: Identity, committer: Identity) -> dict[str, str]:
 
 
 def clone(url: str, path: Path, credential: SecretStr | None) -> None:
-    """``git clone`` of ``url`` into ``path``, with no prompt, in at most ``CLONE_TIMEOUT``.
+    """``git clone`` of ``url`` into ``path``, with no prompt, in at most ``CLONE_TIMEOUT``, with piloop's refs.
+
+    The refs under ``refs/piloop/`` come too: a clone of a campaign's checkout, for a fork, has every version that
+    piloop kept there.
 
     With a credential, the helpers of the user's config are cleared first: none of them gets the credential to store.
     An empty credential is none. A clone that takes longer is killed with the processes that git started. A clone that
@@ -72,7 +77,7 @@ def clone(url: str, path: Path, credential: SecretStr | None) -> None:
             config, env = [], {}
     path.mkdir(parents=True)
     git = subprocess.Popen(
-        ['git', *config, 'clone', '--quiet', '--', url, str(path)],
+        ['git', *config, 'clone', '--quiet', '--config', f'remote.origin.fetch=+{KEPT}*:{KEPT}*', '--', url, str(path)],
         env={**os.environ, 'GIT_TERMINAL_PROMPT': '0', **env},
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import ClassVar, Literal, assert_never
 
 from sqlalchemy import ColumnElement, exists, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from piloop.actor import Actor
 from piloop.config import CampaignConfig
@@ -57,6 +57,23 @@ class StopRequested(EventModel):
     reason: str
     """Why, or empty."""
     ending: Ending
+
+
+class CampaignReopened(EventModel):
+    """Someone set a stopped campaign active again (``piloop campaign reopen``).
+
+    The runs, hours and tokens that the stop rule limits count from the latest reopen (``reopened_at``).
+    """
+
+    kind: Literal['campaign.reopened'] = 'campaign.reopened'
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS  # its ``campaign.status`` wakes the consumers
+    reason: str
+
+
+def reopened_at(s: Session, campaign: Campaign) -> datetime | None:
+    """When the campaign was last reopened (``CampaignReopened``), or None if it never was."""
+    on_campaign = Event.target == TargetRef(TargetKind.CAMPAIGN, campaign.id)
+    return s.scalar(select(func.max(Event.at)).where(has(CampaignReopened), on_campaign))
 
 
 class CancelRequested(EventModel):
@@ -419,12 +436,21 @@ def _over_runs[T](s: Session, campaign: Campaign, aggregate: ColumnElement[T], *
 
 
 def runs(s: Session, campaign: Campaign) -> int:
-    """Count the campaign's runs, of every role, that hold a place under ``max_runs``.
+    """Count the campaign's runs, of every role, that hold a place under ``max_runs``, since the latest reopen.
 
     These are the runs that count (``counted``) and the unsettled attempts, which may still count. So the queue never
     starts more runs than ``max_runs``.
     """
-    return _over_runs(s, campaign, func.count(Run.id), counted() | (attempt() & unsettled())) or 0
+    holding = counted() | (attempt() & unsettled())
+    return _over_runs(s, campaign, func.count(Run.id), holding, *_since_reopen(s, campaign, Run.created_at)) or 0
+
+
+def _since_reopen(
+    s: Session, campaign: Campaign, at: InstrumentedAttribute[datetime] | InstrumentedAttribute[datetime | None]
+) -> tuple[ColumnElement[bool], ...]:
+    """The condition that ``at`` comes after the campaign's latest reopen (``reopened_at``): none if it never was."""
+    since = reopened_at(s, campaign)
+    return () if since is None else (at > since,)
 
 
 def hours_due(campaign: Campaign, answer: Go | Hold | Stop | Escalate, now: datetime) -> datetime | None:
@@ -442,9 +468,10 @@ def hours(s: Session, campaign: Campaign, now: datetime) -> float | None:
     """Return the hours from the start of the campaign's first run to ``now``, or None if no run started.
 
     The time that the campaign was paused (``piloop pause``) does not count, so a pause does not use up ``max_hours``.
-    The pauses are the ``campaign.paused`` events of the change log.
+    The pauses are the ``campaign.paused`` events of the change log. A reopened campaign counts from its first run
+    since the latest reopen.
     """
-    first = _over_runs(s, campaign, func.min(Run.started_at))
+    first = _over_runs(s, campaign, func.min(Run.started_at), *_since_reopen(s, campaign, Run.started_at))
     return None if first is None else (now - first - paused_for(s, campaign, first, now)) / timedelta(hours=1)
 
 

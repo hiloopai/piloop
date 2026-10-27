@@ -9,7 +9,7 @@ from rich import box
 from rich.console import Group
 
 from piloop.api.client import Client, answers
-from piloop.api.contract import MAX_POLL_SECONDS, Checkout, EventsQuery, Selection
+from piloop.api.contract import MAX_POLL_SECONDS, Checkout, EventsQuery, Fork, Selection
 from piloop.api.views import Registered
 from piloop.campaign import ops
 from piloop.campaign.campaigns import (
@@ -24,7 +24,7 @@ from piloop.campaign.campaigns import (
     workspace_dir,
 )
 from piloop.cli import common, daemon, local
-from piloop.cli.client import daemon_http
+from piloop.cli.client import cwd, daemon_http
 from piloop.cli.common import CampaignRef
 from piloop.db.models import EVENT
 from piloop.db.session import Database
@@ -134,6 +134,37 @@ def _measured(client: Client, added: Registered) -> dict[str, float]:
                 case _:
                     pass  # a failed measurement: its pause follows
         cursor = batch.next
+
+
+def fork(
+    ref: CampaignRef,
+    /,
+    *,
+    at: Annotated[
+        str | None,
+        cyclopts.Parameter(help="The version to start from, as the source's vcs names one. Default: its head."),
+    ] = None,
+    name: Annotated[str | None, cyclopts.Parameter(help="The new campaign's name. Default: <source>-<n>.")] = None,
+) -> None:
+    """Make a new campaign that starts from a version of another one, by default its head, in a clone of its checkout.
+
+    The source may be in any state, retired too, and goes on as it is. The fork takes its stored config and shares the
+    memory of its repo: its lessons, ideas and documents. It starts with no ideas of its own and an empty workspace.
+    The daemon measures its starting version as its baseline.
+    """
+    try:
+        named = None if name is None else checked_campaign_name(name)
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
+    with Client.connect(daemon_http()) as client:
+        [source] = client.status(Selection(campaign=ref, cwd=cwd())).campaigns
+        added = client.register_campaign(Fork(fork=str(source.id), at=at, name=named))
+    campaign = added.campaign
+    common.console.print(
+        f'campaign {campaign.name} #{campaign.id} forked from {source.name} #{source.id}; baseline'
+        f' candidate#{added.baseline}: the daemon measures it',
+        markup=False,
+    )
 
 
 def history(ref: CampaignRef | None = None, /) -> None:

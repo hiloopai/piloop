@@ -1,11 +1,13 @@
 """Create and register campaign repos: ``piloop init``, ``piloop campaign add`` and the bundled examples."""
 
+import itertools
 import os
 import re
 import shutil
 import subprocess
 from collections.abc import Collection
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -35,11 +37,12 @@ from piloop.ids import (
     TargetRef,
     checked_campaign_name,
 )
+from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import RepoId, Source, Workspace
 from piloop.plugins.role.contract import ideas_taken
 from piloop.plugins.stop_rule.contract import STOP_RULES
-from piloop.plugins.vcs.contract import VCS, Repository, Vcs
+from piloop.plugins.vcs.contract import VCS, Repository, UnknownRevision, Vcs, Version
 from piloop.plugins.verdict_rule.contract import Outcome
 from piloop.proc import child_env
 from piloop.scoring.ledger import current_evaluator, resolve
@@ -170,6 +173,7 @@ def register_clone(
     credential: SecretStr | None,
     actor: Actor,
     name: CampaignName | None = None,
+    fork: ForkOf | None = None,
 ) -> tuple[Campaign, Candidate]:
     """Clone ``url`` into the home's ``REPOS``, register the clone (``register``), and return what that returns.
 
@@ -185,7 +189,7 @@ def register_clone(
     cloning = home / REPOS / f'.cloning-{uuid4().hex}'
     try:
         vcs.clone(url, cloning, credential).close()
-        campaign, baseline = register(s, cloning, actor, name)
+        campaign, baseline = register(s, cloning, actor, name, fork)
         checkout = home / REPOS / str(campaign.id)
         if checkout.exists():
             raise CampaignError(f'{checkout} exists: move it away, then register again')
@@ -228,17 +232,33 @@ def check_takes(path: Path, cfg: CampaignConfig) -> None:
         )
 
 
-def register(s: Session, path: Path, actor: Actor, name: CampaignName | None = None) -> tuple[Campaign, Candidate]:
+@dataclass(frozen=True)
+class ForkOf:
+    """What a fork takes of its source campaign: its stored config, its repo, and the version to start from."""
+
+    source: Campaign
+    at: str | None
+    """A version as the source's vcs names one: a revision, or under ``git`` a branch or tag. None: the version that
+    the source's campaign type picks (``CampaignType.fork_point``)."""
+
+
+def register(
+    s: Session, path: Path, actor: Actor, name: CampaignName | None = None, fork: ForkOf | None = None
+) -> tuple[Campaign, Candidate]:
     """Insert the campaign of the checkout at ``path``, its evaluator and the baseline candidate of its head version.
 
     The campaign is called ``name``, else the ``name`` of its ``piloop.toml``. The baseline is a keep by the daemon,
     which measures it next (``ledger.due``: the head first). ``actor`` signs the ``campaign.added`` event. The caller
     commits.
 
+    A ``fork`` takes its source's stored config, not the file, its repo, so the memory of the repo is shared, and its
+    source as its parent. Its baseline is the version that the fork starts from.
+
     Raises:
-        CampaignError: The name is no ``CampaignName``, or another campaign has it or the checkout.
+        CampaignError: The name is no ``CampaignName``, another campaign has it or the checkout, or the fork's version
+            is unknown.
     """
-    cfg = load_campaign_config(path)
+    cfg = load_campaign_config(path) if fork is None else fork.source.config
     check_takes(path, cfg)
     if name is None:
         try:
@@ -256,8 +276,10 @@ def register(s: Session, path: Path, actor: Actor, name: CampaignName | None = N
         )
     vcs = VCS.selected(cfg.plugins)
     with closing(vcs.open(path)) as repo:
-        version = repo.head()
+        version = repo.head() if fork is None else _fork_version(s, repo, fork)
     campaign = Campaign(name=name, path=str(path.resolve()), repo=vcs.identity(path), config=cfg)
+    if fork is not None:
+        campaign.repo, campaign.parent_id = fork.source.repo, fork.source.id
     s.add(campaign)
     s.flush()
     current_evaluator(s, campaign, cfg)
@@ -265,6 +287,33 @@ def register(s: Session, path: Path, actor: Actor, name: CampaignName | None = N
     baseline.verdict, baseline.verdict_by = Outcome.KEEP, System.DAEMON.signature
     emit(s, CampaignAdded(baseline=baseline.id), TargetRef(TargetKind.CAMPAIGN, campaign.id), actor)
     return campaign, baseline
+
+
+def _fork_version(s: Session, repo: Repository, fork: ForkOf) -> Version:
+    """The version of the fork's clone that it starts from: ``fork.at``, else its source's type's ``fork_point``."""
+    at = fork.at if fork.at is not None else CAMPAIGN_TYPES.model_of(fork.source.type)().fork_point(s, fork.source)
+    try:
+        return repo.version(at)
+    except UnknownRevision as e:
+        raise CampaignError(f'{fork.source.name} has no version {at!r} to fork from: {e}') from e
+
+
+def fork(
+    s: Session, home: Path, source: Campaign, actor: Actor, *, at: str | None, name: CampaignName | None
+) -> tuple[Campaign, Candidate]:
+    """Register a new campaign that starts from a version of ``source``, in a clone of its checkout (``ForkOf``).
+
+    ``source`` may be in any state, retired too, and goes on as it is. Without ``name``, the fork is
+    ``<source>-<n>``, with the lowest ``n`` from 2 that no campaign that is not retired has. The caller commits.
+
+    Raises:
+        CampaignError: As ``register_clone``.
+        CloneFailed: The clone of the source's checkout failed.
+    """
+    if name is None:
+        taken = set(s.scalars(select(Campaign.name).where(NOT_RETIRED)))
+        name = next(n for i in itertools.count(2) if (n := f'{source.name}-{i}') not in taken)
+    return register_clone(s, home, vcs_of(source), source.path, None, actor, name, ForkOf(source, at))
 
 
 def referenced(s: Session, ref: str) -> Campaign | None:

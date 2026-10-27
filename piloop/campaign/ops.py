@@ -24,7 +24,7 @@ from piloop.actor import Actor
 from piloop.agents.roles import files_of
 from piloop.campaign.campaigns import repository
 from piloop.campaign.ideas import Definition, NotASeed, develop
-from piloop.campaign.stop import held, request_stop, settled, unclosed
+from piloop.campaign.stop import CampaignReopened, acted, check, held, request_stop, settled, unclosed
 from piloop.config import CampaignConfig
 from piloop.db.events import emit
 from piloop.db.models import (
@@ -60,6 +60,7 @@ from piloop.ids import (
     TrackName,
 )
 from piloop.plugins.role.contract import Files
+from piloop.plugins.stop_rule.contract import Go, Hold, Stop
 from piloop.plugins.vcs.contract import VcsError
 from piloop.plugins.verdict_rule.contract import Outcome, Trunk
 from piloop.scoring.api import Report
@@ -165,37 +166,41 @@ def stop(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str, endi
 
 
 class StillStopping(Refused):
-    """``retire`` refused a campaign whose stop is not over: ``agents`` are its open agents, by id."""
+    """``retire`` or ``reopen`` refused a campaign whose stop is not over: ``agents`` are its open agents, by id."""
 
     def __init__(self, campaign: Campaign, agents: Sequence[AgentSessionId]) -> None:
         self.agents = tuple(agents)
         named = f'; agents {", ".join(f"#{i}" for i in agents)} are not over' if agents else ''
         super().__init__(
-            f'{campaign.name} is still stopping{named}: retire it once its closing review and runs are over'
+            f'{campaign.name} is still stopping{named}: try again once its closing review and runs are over'
         )
 
 
-def retire(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str) -> Campaign:
-    """Retire a stopped campaign for good: it changes no more, and another campaign may take its name.
+def _stopped(s: Session, campaign_id: CampaignId, verb: str) -> Campaign:
+    """The stopped campaign ``campaign_id``, read under the write lock, once its stop is over: what ``verb`` changes.
 
-    Its rows, events and archives stay, and it is found by its id. Listings leave it out unless asked. The reason goes
-    into a note on the campaign. It takes the write lock before it checks, so no agent is requested or launched between
-    the check and the change: the session must have no open transaction.
+    The write lock comes first, so no agent is requested or launched between this check and the caller's change: the
+    session must have no open transaction.
 
     Raises:
-        Refused: the reason is blank, or the campaign is not stopped, or is retired already.
+        Refused: the campaign is active, or retired.
         StillStopping: the stop is not over: the closing review has not started, a run is not scored, or an agent of
             the campaign is open (requested, starting, running or ending).
     """
-    why = _reason(reason)
     write_transaction(s)
     s.expire_all()  # read inside the lock what an earlier read of this session may have cached
     campaign = _get(s, Campaign, campaign_id, 'campaign')
     match campaign.status:
         case CampaignStatus.ACTIVE:
-            raise Refused(f'{campaign.name} is active: stop it first, with `piloop campaign stop {campaign.name}`')
+            raise Refused(
+                f'{campaign.name} is active: only a stopped campaign {verb}s; stop it first, with'
+                f' `piloop campaign stop {campaign.name}`'
+            )
         case CampaignStatus.RETIRED:
-            raise Refused(f'campaign #{campaign.id} ({campaign.name}) is retired already')
+            raise Refused(
+                f'campaign #{campaign.id} ({campaign.name}) is retired, for good: fork it instead, with'
+                f' `piloop campaign fork {campaign.id}`'
+            )
         case CampaignStatus.STOPPED:
             pass
         case never:
@@ -205,10 +210,48 @@ def retire(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str) ->
     ).all()
     if unclosed(s, campaign) or not settled(s, campaign) or open_:
         raise StillStopping(campaign, open_)
+    return campaign
+
+
+def retire(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str) -> Campaign:
+    """Retire a stopped campaign for good, once its stop is over: it changes no more, and another may take its name.
+
+    Its rows, events and archives stay, and it is found by its id. Listings leave it out unless asked. The reason goes
+    into a note on the campaign. A retired campaign never comes back: a fork of it is a new campaign.
+
+    Raises:
+        Refused: the reason is blank, or the campaign is not stopped (``_stopped``).
+        StillStopping: the stop is not over.
+    """
+    why = _reason(reason)
+    campaign = _stopped(s, campaign_id, 'retire')
     campaign.status = CampaignStatus.RETIRED
     target = TargetRef(TargetKind.CAMPAIGN, campaign.id)
     s.add(Comment(target=target, author=actor.signature, kind=CommentKind.NOTE, body=f'retired: {why}'))
     return campaign
+
+
+def reopen(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str) -> Campaign:
+    """Set a stopped campaign active again, once its stop is over, with the limits of its stop rule as they are.
+
+    The runs, hours and tokens that the rule limits count from the reopen (``CampaignReopened``), so the campaign gets
+    each of them again. A rule that would stop it again at once, a target that it reached say, refuses the reopen.
+
+    Raises:
+        Refused: the reason is blank, the campaign is not stopped (``_stopped``), or its stop rule stops it at once.
+        StillStopping: the stop is not over.
+    """
+    why = _reason(reason)
+    campaign = _stopped(s, campaign_id, 'reopen')
+    campaign.status, campaign.stopped_reason = CampaignStatus.ACTIVE, None
+    emit(s, CampaignReopened(reason=why), TargetRef(TargetKind.CAMPAIGN, campaign.id), actor)
+    match acted(check(s, campaign, campaign.config)):
+        case Stop(reason=stops):
+            raise Refused(f'{campaign.name} would stop again at once ({stops}): change its stop rule first')
+        case Go() | Hold():
+            return campaign
+        case never:
+            assert_never(never)
 
 
 def request_agent(

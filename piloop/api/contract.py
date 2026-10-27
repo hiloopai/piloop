@@ -186,6 +186,13 @@ class StopBody(Params):
     """How the running implementers end. ``now`` also ends those of a stopped campaign that still wind down."""
 
 
+class ReopenBody(Params):
+    """Why a stopped campaign is set active again."""
+
+    reason: str
+    """Why, with ids: it goes into the ``campaign.reopened`` event."""
+
+
 class RetireBody(Params):
     """Why a campaign is retired."""
 
@@ -380,6 +387,19 @@ class Clone(Params):
     """The campaign's name. None: the ``name`` of its ``piloop.toml``."""
 
 
+class Fork(Params):
+    """A new campaign that starts from a version of another one, in a clone of that one's checkout."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    fork: str
+    """The source campaign, in any state: its name, or its id."""
+    at: str | None = None
+    """The version to start from, as the source's vcs names one: a revision, a branch, a tag. None: its head."""
+    name: CampaignName | None = None
+    """The new campaign's name. None: ``<source>-<n>``, with the lowest ``n`` from 2 that is free."""
+
+
 def _source(value: object) -> str | None:
     """Which of a ``Registration``'s models a body is, by its key."""
     match value:
@@ -387,9 +407,14 @@ def _source(value: object) -> str | None:
             return 'path'
         case Clone() | {'clone': _}:
             return 'clone'
+        case Fork() | {'fork': _}:
+            return 'fork'
         case _:
             return None
 
 
-type Registration = Annotated[Annotated[Checkout, Tag('path')] | Annotated[Clone, Tag('clone')], Discriminator(_source)]
-"""What to register as a campaign: exactly one of ``{"path": ...}`` and ``{"clone": {...}}``."""
+type Registration = Annotated[
+    Annotated[Checkout, Tag('path')] | Annotated[Clone, Tag('clone')] | Annotated[Fork, Tag('fork')],
+    Discriminator(_source),
+]
+"""What to register as a campaign: exactly one of ``{"path": ...}``, ``{"clone": {...}}`` and ``{"fork": ...}``."""

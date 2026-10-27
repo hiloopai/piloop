@@ -16,6 +16,7 @@ import httpx2 as httpx
 import pytest
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute
+from git import Repo
 from pydantic import BaseModel, SecretStr
 from pytest_mock import MockerFixture
 from rich.console import Console
@@ -33,6 +34,7 @@ from piloop.api.contract import (
     Checkout,
     Clone,
     EventsQuery,
+    Fork,
     IdeaBody,
     InboxQuery,
     LaunchBody,
@@ -66,6 +68,7 @@ from piloop.db.models import (
     AgentSession,
     AgentSessionState,
     Campaign,
+    Candidate,
     Comment,
     Evaluation,
     Event,
@@ -779,6 +782,40 @@ def test_a_checkout_registers_at_once_the_daemon_measures_its_baseline_and_its_p
         )
 
 
+def test_a_fork_starts_from_a_version_of_its_source_in_a_clone_with_its_config_and_repo(
+    db: Database, campaign_path: Path, cfg: Settings
+) -> None:
+    repo = Repo(campaign_path)
+    base = repo.head.commit.hexsha
+    (campaign_path / 'solve.txt').write_text('a run of the source\n')
+    repo.git.commit('-qam', 'a run')
+    kept = repo.head.commit.hexsha
+    repo.git.update_ref('refs/piloop/demo/r9/0', kept)
+    repo.git.reset('-q', '--hard', base)  # only piloop's ref keeps the run's commit
+    repo.close()
+    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+        source = client.register_campaign(Checkout(path=str(campaign_path))).campaign
+        with pytest.raises(Refused, match="^no campaign 'nope'") as unknown:
+            client.register_campaign(Fork(fork='nope'))
+        assert unknown.value.error == Problem.UNKNOWN_CAMPAIGN
+        with pytest.raises(Refused, match="^demo has no version 'nowhere' to fork from: ") as no_version:
+            client.register_campaign(Fork(fork='demo', at='nowhere'))
+        assert no_version.value.error == Problem.REFUSED
+        at_head = client.register_campaign(Fork(fork='demo'))
+        at_run = client.register_campaign(Fork(fork=str(source.id), at=kept, name='from-the-run'))
+    with db.session() as s:
+        first, second = s.get_one(Campaign, at_head.campaign.id), s.get_one(Campaign, at_run.campaign.id)
+        assert (first.name, first.parent_id, first.repo, first.path) == (
+            'demo-2',
+            source.id,
+            s.get_one(Campaign, source.id).repo,
+            str(cfg.home / 'repos' / str(first.id)),
+        ), 'the memory of the repo is shared'
+        assert first.config == s.get_one(Campaign, source.id).config, "the source's stored config"
+        assert s.get_one(Candidate, at_head.baseline).revision == base, "the source's head is its baseline"
+        assert (second.name, s.get_one(Candidate, at_run.baseline).revision) == ('from-the-run', kept)
+
+
 def test_a_registration_names_the_campaign_and_its_git_refs_carry_that_name(
     db: Database, campaign_path: Path, cfg: Settings
 ) -> None:
@@ -806,7 +843,10 @@ def test_a_stopped_campaign_retires_once_its_stop_is_over_and_its_name_registers
     db: Database, campaign: Campaign, campaign_path: Path, cfg: Settings
 ) -> None:
     with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
-        with pytest.raises(Refused, match=r'^demo is active: stop it first, with `piloop campaign stop demo`$') as e:
+        with pytest.raises(
+            Refused,
+            match=r'^demo is active: only a stopped campaign retires; stop it first, with `piloop campaign stop demo`$',
+        ) as e:
             client.retire('demo', RetireBody(reason='done'))
         assert e.value.error == Problem.REFUSED
         with db.session() as s:
@@ -822,14 +862,14 @@ def test_a_stopped_campaign_retires_once_its_stop_is_over_and_its_name_registers
                 )
             )
             s.commit()
-        with pytest.raises(Refused, match=r'^demo is still stopping; agents #1 are not over: retire it once its') as e:
+        with pytest.raises(Refused, match=r'^demo is still stopping; agents #1 are not over: try again once its') as e:
             client.retire('demo', RetireBody(reason='done'))
         assert e.value.error == Problem.STILL_STOPPING
         with db.session() as s:
             s.execute(update(AgentSession).values(state=AgentSessionState.EXITED))
             s.commit()
         with pytest.raises(
-            Refused, match=r'^demo is still stopping: retire it once its closing review and runs are over'
+            Refused, match=r'^demo is still stopping: try again once its closing review and runs are over'
         ):
             client.retire('demo', RetireBody(reason='done'))
         with db.session() as s:
@@ -861,7 +901,9 @@ def test_a_stopped_campaign_retires_once_its_stop_is_over_and_its_name_registers
         retirements = s.scalars(select(Event.payload).where(Event.kind == 'campaign.status')).all()
         assert notes == ['retired: the e2e ended']
         assert [p.new for p in retirements if isinstance(p, CampaignStatusChanged)][-1] is CampaignStatus.RETIRED
-        with pytest.raises(ops.Refused, match=f'^campaign #{campaign.id} \\(demo\\) is retired already$'):
+        with pytest.raises(
+            ops.Refused, match=f'^campaign #{campaign.id} \\(demo\\) is retired, for good: fork it instead'
+        ):
             ops.retire(s, campaign.id, System.HUMAN, reason='twice')
 
 

@@ -36,7 +36,8 @@ committed. `wrap_up_grace` in `[agents]` of `piloop.toml` or of the home's `conf
 | `piloop pause enwik8 --reason "<why>"` | New launches of one campaign, until `piloop resume enwik8`. |
 | `piloop stop` | The daemon, not the campaigns: the next `piloop serve` continues them. |
 
-To resume a stopped campaign, raise its limits and run `piloop init`.
+To resume a stopped campaign, reopen it (`piloop campaign reopen`): its runs, hours and tokens count from the reopen.
+Or raise its limits and run `piloop init`. See [Reopen, fork and retire](/concepts/campaigns#reopen-fork-and-retire).
 
 ## Tokens
 

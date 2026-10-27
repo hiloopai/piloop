@@ -4,7 +4,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from piloop.campaign.stop import hours
+from piloop.campaign.stop import hours, reopened_at
 from piloop.db.models import Campaign
 from piloop.plugins.fact_source.contract import FactSource
 from piloop.plugins.fact_source.facts import CAMPAIGN, HOURS, TOKENS, Fact, FactValue
@@ -29,6 +29,6 @@ class CampaignFacts(FactSource):
         """``HOURS`` and ``TOKENS``, those of them in ``wanted``."""
         found: dict[Fact[FactValue], FactValue] = {
             HOURS: hours(s, campaign, now),
-            TOKENS: campaign_tokens(s, campaign.id),
+            TOKENS: campaign_tokens(s, campaign.id, reopened_at(s, campaign)),
         }
         return {fact: value for fact, value in found.items() if fact in wanted}

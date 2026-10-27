@@ -15,8 +15,11 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
-from piloop.campaign.ops import pause
+from piloop.campaign import ops
+from piloop.campaign.ops import Refused, pause
 from piloop.campaign.stop import (
+    CampaignClosed,
+    CampaignReopened,
     StopRequested,
     check as check_campaign,
     gather,
@@ -31,7 +34,7 @@ from piloop.campaign.stop import (
 )
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.daemon.run_controller import NO_CHANGES, SKIPPED_REASON, RunFinished
-from piloop.db.events import has, in_order
+from piloop.db.events import emit, has, in_order
 from piloop.db.models import (
     AgentSession,
     AgentSessionState,
@@ -1288,3 +1291,58 @@ def test_a_rule_that_reads_the_spend_since_a_keep_needs_a_source_of_it(
         )
     finally:
         host.close()
+
+
+def test_a_reopened_campaign_gets_its_runs_hours_and_tokens_again(db: Database, campaign: Campaign) -> None:
+    configure(db, campaign, max_runs=1, max_hours=1, max_tokens=100)
+    add_run(db, campaign, started_at=timedelta(hours=2), finished_at=timedelta(hours=1))
+    with db.session() as s:
+        ended = dict(state=AgentSessionState.EXITED, ended_at=utcnow())
+        s.add(AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, usage=spent(500), **ended))
+        stopped_and_closed(s, campaign)
+        s.commit()
+    assert reason(db, campaign) == 'max_runs: 1 runs'
+    with db.session() as s:
+        with pytest.raises(Refused, match='^a reason is required'):
+            ops.reopen(s, campaign.id, System.HUMAN, reason=' ')
+        ops.reopen(s, campaign.id, System.HUMAN, reason='one more round')
+        s.commit()
+    assert reason(db, campaign) is None, 'the run, the hours and the tokens before the reopen do not count'
+    with db.session() as s:
+        row = s.get_one(Campaign, campaign.id)
+        assert (row.status, row.stopped_reason) == (CampaignStatus.ACTIVE, None)
+        [(_, reopened)] = in_order(s, CampaignReopened, Event.target == TargetRef(TargetKind.CAMPAIGN, campaign.id))
+        assert reopened == CampaignReopened(reason='one more round')
+        with pytest.raises(Refused, match='^demo is active: only a stopped campaign reopens; stop it first'):
+            ops.reopen(s, campaign.id, System.HUMAN, reason='twice')
+    add_run(db, campaign)
+    assert reason(db, campaign) == 'max_runs: 1 runs', 'a run since the reopen counts'
+
+
+def test_a_reopen_refuses_a_campaign_that_its_rule_would_stop_at_once_or_that_is_retired(
+    db: Database, campaign: Campaign
+) -> None:
+    write_toml(Path(campaign.path), HARNESS_NOOP)
+    with db.session() as s:
+        row = s.get_one(Campaign, campaign.id)
+        row.config = load_campaign_config(Path(campaign.path), plugins={'stop_rule': {'target': 0.5}})
+        stopped_and_closed(s, campaign)
+        s.commit()
+    with db.session() as s:
+        with pytest.raises(
+            Refused, match=r'^demo would stop again at once \(target: .*\): change its stop rule first$'
+        ):
+            ops.reopen(s, campaign.id, System.HUMAN, reason='go on')
+        s.rollback()
+        assert s.get_one(Campaign, campaign.id).status is CampaignStatus.STOPPED
+        s.get_one(Campaign, campaign.id).status = CampaignStatus.RETIRED
+        s.commit()
+    retired = rf'^campaign #{campaign.id} \(demo\) is retired, for good: fork it instead'
+    with db.session() as s, pytest.raises(Refused, match=retired):
+        ops.reopen(s, campaign.id, System.HUMAN, reason='go on')
+
+
+def stopped_and_closed(s: Session, campaign: Campaign) -> None:
+    """Stop ``campaign`` as the daemon does, with its closing review over."""
+    s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+    emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)

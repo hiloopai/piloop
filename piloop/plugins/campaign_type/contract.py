@@ -21,7 +21,7 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
 
     from piloop.daemon.run_controller import RunController
     from piloop.db.models import AgentSession, Campaign, RunEnd
-    from piloop.ids import AgentSessionId, RoleName, TargetRef
+    from piloop.ids import AgentSessionId, Revision, RoleName, TargetRef
     from piloop.otel import Tracer
     from piloop.plugins.fact_source.facts import Facts
     from piloop.plugins.trigger.contract import Backlog
@@ -130,6 +130,10 @@ class CampaignType(Parameters, ABC):
     @abstractmethod
     def planner(self, host: TypeHost) -> Planner:
         """The type at work in the daemon process that ``host`` serves. The daemon asks once."""
+
+    @abstractmethod
+    def fork_point(self, s: Session, source: Campaign) -> Revision:
+        """The version that a fork of ``source`` starts from when the fork names none (``piloop campaign fork``)."""
 
 
 CAMPAIGN_TYPES = Capability('campaign_type', CampaignType, noun='campaign type')

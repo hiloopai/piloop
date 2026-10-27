@@ -227,6 +227,24 @@ paused or held one. With `--kill`, the implementers are ended at once, without t
 commits are still scored. On a stopped campaign, `--kill` ends the implementers that are still winding down.
 `--reason` goes into `stopped_reason`.
 
+### piloop campaign reopen
+
+```text
+piloop campaign reopen REF --reason TEXT
+```
+
+Sets a stopped campaign active again, once its closing review and its runs are over. Its limits count from the reopen.
+See [Reopen, fork and retire](/concepts/campaigns#reopen-fork-and-retire).
+
+### piloop campaign fork
+
+```text
+piloop campaign fork REF [--at VERSION] [--name NAME]
+```
+
+Makes a new campaign that starts from `VERSION` of another one, by default its head. See
+[Reopen, fork and retire](/concepts/campaigns#reopen-fork-and-retire).
+
 ### piloop campaign retire
 
 ```text

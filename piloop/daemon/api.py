@@ -32,6 +32,7 @@ from piloop.api.contract import (
     Clone,
     DevelopBody,
     EventsQuery,
+    Fork,
     IdeaBody,
     InboxQuery,
     LaunchBody,
@@ -44,6 +45,7 @@ from piloop.api.contract import (
     PromptBody,
     Reasoned,
     Registration,
+    ReopenBody,
     ReplyBody,
     RetireBody,
     SecretBody,
@@ -94,6 +96,7 @@ from piloop.campaign import inbox as inbox_module, ops
 from piloop.campaign.campaigns import (
     CampaignError,
     UnknownCampaign,
+    fork,
     named,
     referenced,
     register,
@@ -406,9 +409,10 @@ def thread(s: Reading, comment: CommentId) -> Thread:
 
 @router.post('/campaigns', operation_id='register_campaign', dependencies=[Depends(actor_access)])
 def register_campaign(api: Api, s: Writing, me: Acting, body: Registration) -> Registered:
-    """Register a campaign: a checkout where it is, or a repository that the daemon clones under its home first.
+    """Register a campaign: a checkout where it is, a repository that the daemon clones under its home first, or a fork.
 
-    Each registration of a URL clones it again, into a directory named after the new campaign's id.
+    Each registration of a URL clones it again, into a directory named after the new campaign's id. A fork clones the
+    checkout of its source, a campaign in any state, and starts from a version of it: by default its head.
 
     It adds the campaign with its head version as the baseline candidate, and syncs its documents into its memory. The
     daemon then measures the baseline: its ``measurement.recorded`` event comes after the answer's cursor, and a
@@ -430,6 +434,10 @@ def _registered(api: Handlers, s: Session, me: Actor, body: Registration) -> tup
         case Clone(clone=remote):
             vcs, credential = VCS.selected(api.cfg.providers), _credential(api, remote.secret)
             return register_clone(s, api.cfg.home, vcs, remote.url, credential, me, body.name)
+        case Fork():
+            if (source := referenced(s, body.fork)) is None:
+                raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_CAMPAIGN, str(UnknownCampaign(body.fork)))
+            return fork(s, api.cfg.home, source, me, at=body.at, name=body.name)
         case _:
             assert_never(body)
 
@@ -490,6 +498,18 @@ def resume(s: Writing, me: Acting, campaign: Addressed) -> CampaignAnswer:
 def stop(s: Writing, me: Acting, campaign: Addressed, body: StopBody) -> CampaignAnswer:
     """Stop a campaign at once, as when a ``[stop]`` condition holds. The daemon ends its agents as ``ending`` says."""
     ops.stop(s, campaign.id, me, reason=body.reason, ending=body.ending)
+    s.commit()
+    return _campaign_answer(s, campaign, me)
+
+
+@router.post('/campaigns/{campaign}/reopen', operation_id='reopen', dependencies=[Depends(actor_access)])
+def reopen(s: Writing, me: Acting, campaign: Addressed, body: ReopenBody) -> CampaignAnswer:
+    """Set a stopped campaign active again, once its stop is over.
+
+    The runs, hours and tokens that its stop rule limits count again from now. A rule that would stop it at once
+    refuses.
+    """
+    ops.reopen(s, campaign.id, me, reason=body.reason)
     s.commit()
     return _campaign_answer(s, campaign, me)
 

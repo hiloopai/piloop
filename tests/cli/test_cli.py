@@ -1397,14 +1397,21 @@ def test_campaign_stop_and_cancels_are_requests_that_the_daemon_acts_on(campaign
 
 
 @pytest.mark.usefixtures('api')
-def test_campaign_retire_hides_a_stopped_campaign_which_changes_no_more(campaign_path: Path, out) -> None:
+def test_campaign_reopen_and_retire_a_stopped_campaign(campaign_path: Path, out) -> None:
     run_cli(['init', str(campaign_path)])
     db = Database(common.settings.database_url, actor=common.settings.actor)
-    with db.session() as s:
-        s.get_one(Campaign, 1).status, s.get_one(Campaign, 1).stopped_reason = CampaignStatus.STOPPED, 'by hand'
-        s.commit()
-    db.close()
+
+    def stop_by_hand() -> None:
+        with db.session() as s:
+            s.get_one(Campaign, 1).status, s.get_one(Campaign, 1).stopped_reason = CampaignStatus.STOPPED, 'by hand'
+            s.commit()
+
+    stop_by_hand()
     out()
+    run_cli(['campaign', 'reopen', 'demo', '--reason', 'one more round'])
+    assert out() == 'campaign demo #1 reopened: its limits count from now\n'
+    stop_by_hand()
+    db.close()
     run_cli(['campaign', 'retire', 'demo', '--reason', 'tried enough'])
     assert out() == 'campaign demo #1 retired: its name is free\n'
     run_cli(['status', '--json'])
@@ -1413,6 +1420,18 @@ def test_campaign_retire_hides_a_stopped_campaign_which_changes_no_more(campaign
     assert ' demo #1 ' in out()
     with pytest.raises(SystemExit, match=r'^campaign #1 \(demo\) is retired$'):
         run_cli(['pause', '1', '--reason', 'no'])
+
+
+@pytest.mark.usefixtures('api')
+def test_campaign_fork_makes_a_campaign_from_the_head_of_another(campaign_path: Path, out) -> None:
+    run_cli(['init', str(campaign_path)])
+    out()
+    with pytest.raises(SystemExit, match="^'7' is no campaign name"):
+        run_cli(['campaign', 'fork', 'demo', '--name', '7'])
+    run_cli(['campaign', 'fork', 'demo'])
+    assert (
+        out().splitlines()[-1] == 'campaign demo-2 #2 forked from demo #1; baseline candidate#2: the daemon measures it'
+    )
 
 
 @pytest.mark.usefixtures('api')

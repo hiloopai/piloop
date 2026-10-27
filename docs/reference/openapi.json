@@ -655,7 +655,7 @@
     "/v1/campaigns": {
       "post": {
         "summary": "Register Campaign",
-        "description": "Register a campaign: a checkout where it is, or a repository that the daemon clones under its home first.\n\nEach registration of a URL clones it again, into a directory named after the new campaign's id.\n\nIt adds the campaign with its head version as the baseline candidate, and syncs its documents into its memory. The\ndaemon then measures the baseline: its ``measurement.recorded`` event comes after the answer's cursor, and a\nbaseline that fails pauses the campaign. A clone that does not register is deleted.",
+        "description": "Register a campaign: a checkout where it is, a repository that the daemon clones under its home first, or a fork.\n\nEach registration of a URL clones it again, into a directory named after the new campaign's id. A fork clones the\ncheckout of its source, a campaign in any state, and starts from a version of it: by default its head.\n\nIt adds the campaign with its head version as the baseline candidate, and syncs its documents into its memory. The\ndaemon then measures the baseline: its ``measurement.recorded`` event comes after the answer's cursor, and a\nbaseline that fails pauses the campaign. A clone that does not register is deleted.",
         "operationId": "register_campaign",
         "requestBody": {
           "content": {
@@ -667,6 +667,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/Clone"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Fork"
                   }
                 ],
                 "title": "Body"
@@ -1011,6 +1014,78 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/StopBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignAnswer"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/campaigns/{campaign}/reopen": {
+      "post": {
+        "summary": "Reopen",
+        "description": "Set a stopped campaign active again, once its stop is over.\n\nThe runs, hours and tokens that its stop rule limits count again from now. A rule that would stop it at once\nrefuses.",
+        "operationId": "reopen",
+        "parameters": [
+          {
+            "name": "campaign",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The campaign's name, or its id.",
+              "title": "Campaign"
+            },
+            "description": "The campaign's name, or its id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReopenBody"
               }
             }
           }
@@ -4431,6 +4506,45 @@
         "title": "Figures",
         "description": "Named values, in order."
       },
+      "Fork": {
+        "properties": {
+          "fork": {
+            "type": "string",
+            "title": "Fork",
+            "description": "The source campaign, in any state: its name, or its id."
+          },
+          "at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At",
+            "description": "The version to start from, as the source's vcs names one: a revision, a branch, a tag. None: its head."
+          },
+          "name": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CampaignName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The new campaign's name. None: ``<source>-<n>``, with the lowest ``n`` from 2 that is free."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fork"
+        ],
+        "title": "Fork",
+        "description": "A new campaign that starts from a version of another one, in a clone of that one's checkout."
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -5884,6 +5998,21 @@
         ],
         "title": "Rendered",
         "description": "One section of what a reader sees: a title and its blocks (``piloop.plugins.section``).\n\nA section provider returns it, the API answers it, and ``piloop status``, a brief and a UI render it."
+      },
+      "ReopenBody": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "description": "Why, with ids: it goes into the ``campaign.reopened`` event."
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "ReopenBody",
+        "description": "Why a stopped campaign is set active again."
       },
       "Replied": {
         "properties": {

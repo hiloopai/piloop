@@ -252,6 +252,12 @@ The stall mark is `every` of the `stalled` trigger. When it is not set, it is tw
 every = 15
 ```
 
+### A reopened campaign's limits
+
+`piloop campaign reopen` sets a stopped campaign active again. Its `max_runs`, `max_hours` and `max_tokens` then count
+from the reopen, so a reopened campaign gets each of them again. A stopped campaign that `piloop init` sets active
+again, after a change to its stop rule, still counts from its start: raise the limit to its new total.
+
 ### piloop's own commits
 
 piloop's own commits are by `piloop <piloop@localhost>`, whatever git's config says: merges, `piloop init`'s, and the

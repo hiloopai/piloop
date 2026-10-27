@@ -57,11 +57,21 @@ class Facts:
 
 HEAD = Fact[float]('head', 'The primary metric of the first track at the head, under the current evaluator.')
 RUNS = Fact[int](
-    'runs', 'The runs that hold a place under a limit on runs: those that count, and the attempts that may still count.'
+    'runs',
+    'The runs that hold a place under a limit on runs: those that count, and the attempts that may still count. A'
+    ' reopened campaign counts those since the latest reopen.',
 )
 UNSETTLED = Fact[int]('unsettled', 'The attempts whose outcome can still change: queued, running, or being scored.')
-HOURS = Fact[float]('hours', 'The hours since the first run started, without the time that the campaign was paused.')
-TOKENS = Fact[int]('tokens', 'The tokens that the agents of the campaign spent, summed over the agents that ended.')
+HOURS = Fact[float](
+    'hours',
+    'The hours since the first run started, without the time that the campaign was paused. A reopened campaign counts'
+    ' from its first run since the latest reopen.',
+)
+TOKENS = Fact[int](
+    'tokens',
+    'The tokens that the agents of the campaign spent, summed over the agents that ended. A reopened campaign counts'
+    ' the agents since the latest reopen.',
+)
 WITHOUT_KEEP = Fact[int](
     'without_keep',
     'The finished runs that count since the latest keep, or since the campaign was last set active again.',
