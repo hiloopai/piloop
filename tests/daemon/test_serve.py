@@ -119,6 +119,8 @@ def test_sigterm_kills_implementers_and_exits(campaign_path: Path, tmp_path: Pat
     with (tmp_path / 'daemon.log').open('w') as log:
         daemon = subprocess.Popen(SERVE_ARGV, stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env_for(cfg.home))
     try:
+        # the start imports piloop: seconds of CPU, which a loaded host stretches past the handle's wait
+        wait_until(cfg.pid_file.is_file, 'the daemon to start', timeout=float(LOADED))
         handle = wait_for_agent_session_handle(db)
         child_pid_file = cfg.home / 'runs' / '1' / 'child.pid'
         wait_until(child_pid_file.is_file)

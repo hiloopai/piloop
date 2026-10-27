@@ -531,9 +531,6 @@ def test_a_stale_evaluation_never_touches_the_files_of_the_lease_that_replaced_i
         assert (measurement.candidate_id, measurement.error) == (candidate, None)
 
 
-FAST = Timing(renew=0.1, grace=0.3, toleration=1.0)
-
-
 def renewed_while(ex: RunController, db: Database, agent_session_id: AgentSessionId, seconds: float) -> None:
     """Tick the scheduler's expiry for ``seconds``, and check that the agent's lease stays live meanwhile."""
     deadline = time.monotonic() + seconds
