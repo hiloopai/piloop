@@ -25,27 +25,17 @@ from sqlalchemy.exc import OperationalError
 from piloop.actor import System
 from piloop.agents.results import CampaignResults, DaemonStopped, Ended, Lost, NotStarted, PromptOutcome, Ran
 from piloop.campaign.campaigns import checkout_of, record_of
-from piloop.daemon.run_controller import RunController
 from piloop.db import feed
 from piloop.db.events import emit, in_order
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Evaluation,
-    Event,
-    Lease,
-    LeaseState,
-    LeaseWorker,
-    Measurement,
-    Run,
-    RunStatus,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event, Lease, LeaseState, LeaseWorker, utcnow
 from piloop.db.session import Database
-from piloop.ids import IMPLEMENTER, AgentSessionId, CommentId, RunId, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.executor.contract import (
     AgentJob,
     AgentKey,

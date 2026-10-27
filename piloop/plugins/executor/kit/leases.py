@@ -58,8 +58,6 @@ from piloop.db.models import (
     OPEN_LEASES,
     AgentSession,
     AgentSessionState,
-    Evaluation,
-    Evaluator,
     Event,
     EventModel,
     Lease,
@@ -72,6 +70,7 @@ from piloop.db.models import (
 )
 from piloop.db.session import Database, read_transaction, write_transaction
 from piloop.ids import HOME, AgentSessionId, CommentId, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.executor.contract import (
     JOB,

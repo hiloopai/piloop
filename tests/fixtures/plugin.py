@@ -7,7 +7,18 @@ from datetime import timedelta
 from importlib.resources import files
 from typing import Annotated
 
-from piloop.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
+    Case,
+    Judgement,
+    Leave,
+    Lineage,
+    Moved,
+    Node,
+    Rebase,
+    VerdictRule,
+)
 from piloop.plugins.fact_source.facts import ATTEMPTS, EVALUATIONS, FUNNEL, Fact, FactValue, since_keep
 from piloop.plugins.host import Capability, Parameters, Tier
 from piloop.plugins.role.contract import ImplementerRole, SweepRole
@@ -15,18 +26,6 @@ from piloop.plugins.runtime.contract import Handle, RuntimeName
 from piloop.plugins.runtime.subprocess import Subprocess, SubprocessRuntime
 from piloop.plugins.stop_rule.contract import GO, Escalate, Go, Hold, Stop, StopCase, StopRule
 from piloop.plugins.trigger.contract import Fire, Pass, Quiet, Trigger, TriggerName
-from piloop.plugins.verdict_rule.bootstrap import Bootstrap
-from piloop.plugins.verdict_rule.contract import (
-    Case,
-    Judgement,
-    Leave,
-    Lineage,
-    Moved,
-    Node,
-    Outcome,
-    Rebase,
-    VerdictRule,
-)
 
 
 class EveryPass(Trigger):

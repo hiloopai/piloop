@@ -16,16 +16,18 @@ from sqlalchemy import select, text
 import piloop
 from piloop.actor import System
 from piloop.daemon.loop import Consumer, Loop, Phase, Turn, routes
-from piloop.daemon.run_controller import RunController
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import emit
-from piloop.db.models import AgentSession, Campaign, EventModel, Idea, ReadBy, Run, utcnow
+from piloop.db.models import AgentSession, Campaign, EventModel, ReadBy, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import IdeaCreated, LimitSet
 from piloop.ids import TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.archive.contract import ArchiveHost
 from piloop.plugins.archive.local import LocalArchive
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.executor.workers import Workers
 from tests.conftest import ScriptRuntime, at_head, disk, factory, register, run_all, trace
 

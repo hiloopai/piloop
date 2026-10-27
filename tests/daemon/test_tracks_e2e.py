@@ -11,10 +11,12 @@ from sqlalchemy import select
 
 from piloop.daemon.main import Daemon
 from piloop.db.events import in_order
-from piloop.db.models import Campaign, Candidate, Idea
+from piloop.db.models import Campaign
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ledger import Rebased, head
 from piloop.plugins.campaign_type.optimization.planner import RunQueued
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring.ledger import Rebased, head
 from piloop.settings import Settings
 from tests.conftest import SETTLE, ScriptRuntime, factory, register, run_all, workers_of, write_script
 

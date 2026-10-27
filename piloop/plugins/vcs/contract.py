@@ -24,7 +24,9 @@ from pydantic import BaseModel, ConfigDict, SecretStr
 
 from piloop import deprecated
 from piloop.actor import Agent
-from piloop.ids import CandidateId, Revision, RunId
+from piloop.ids import Revision
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.host import Capability, Check, One, Parameters, Scope
 

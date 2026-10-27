@@ -17,7 +17,8 @@ from pathlib import Path
 
 from covalence import Cid
 
-from piloop.ids import Revision, RunId
+from piloop.ids import Revision
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import RepoId, Source
 from piloop.plugins.vcs.contract import Captured, Repository, Vcs

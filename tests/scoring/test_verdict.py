@@ -13,18 +13,29 @@ from piloop_min_gain import MinGain
 from sqlalchemy import Enum
 
 from piloop.actor import System
-from piloop.config import CampaignConfig, Metric, MetricRole, Track, TrackConfig
-from piloop.db.models import Candidate, Origin
-from piloop.ids import Cause, RungName, TrackName
+from piloop.config import CampaignConfig
+from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation import ledger
+from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole, Track, TrackConfig
+from piloop.plugins.campaign_type.kit.evaluation.evaluate import Units
+from piloop.plugins.campaign_type.kit.evaluation.ids import RungName, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ledger import criterion
+from piloop.plugins.campaign_type.kit.verdicts.verdict import (
+    PENDING,
+    Refusal,
+    daemon_owned,
+    judgeable,
+    label,
+    override,
+    refusal,
+    write,
+)
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule import bootstrap as verdict_module
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap, compare, lower_bound
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, Side, Stopped, VerdictRule
 from piloop.plugins.host import data_errors
 from piloop.plugins.metric import Direction
-from piloop.plugins.verdict_rule import bootstrap as verdict_module
-from piloop.plugins.verdict_rule.bootstrap import Bootstrap, compare, lower_bound
-from piloop.plugins.verdict_rule.contract import VERDICT_RULES, Outcome, Side, Stopped, VerdictRule
-from piloop.scoring import ledger
-from piloop.scoring.evaluate import Units
-from piloop.scoring.ledger import criterion
-from piloop.scoring.verdict import PENDING, Refusal, daemon_owned, judgeable, label, override, refusal, write
 
 BAR = 'candidate#73'
 
@@ -456,7 +467,11 @@ def test_the_built_in_rule_imports_only_the_standard_library_pydantic_its_contra
         n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module is not None
     }
     outside = {m for m in imported if m.split('.')[0] not in sys.stdlib_module_names}
-    assert outside == {'piloop.plugins.verdict_rule.contract', 'piloop.plugins.metric', 'pydantic'}
+    assert outside == {
+        'piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract',
+        'piloop.plugins.metric',
+        'pydantic',
+    }
 
 
 def test_the_example_rule_min_gain_delegates_to_bootstrap_and_holds_back_a_small_gain() -> None:

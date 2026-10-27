@@ -27,7 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from piloop.actor import System
 from piloop.config import CampaignConfig
 from piloop.db import session
-from piloop.db.models import Campaign, Idea
+from piloop.db.models import Campaign
 from piloop.db.session import (
     CAS_ATTRIBUTE,
     MIGRATIONS,
@@ -52,15 +52,16 @@ from piloop.db.session import (
 )
 from piloop.db.triggers import PERSISTENT, campaigns, legacy
 from piloop.db.triggers.roles import known_role
+from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
+from piloop.plugins.campaign_type.kit.backlog.role.scout import ScoutRole
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
+from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
+from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.harness.claude import Claude
 from piloop.plugins.harness.codex import CodexMcp
 from piloop.plugins.memory.contract import MEMORY
 from piloop.plugins.memory.local import LocalMemory
-from piloop.plugins.role.research import ResearchRole
-from piloop.plugins.role.scout import ScoutRole
-from piloop.plugins.role.watchdog import WatchdogRole
-from piloop.plugins.trigger.low_water import LowWaterTrigger
-from piloop.plugins.trigger.seed import SeedTrigger
 from piloop.store.chunks import read
 from piloop.version import Version, installed
 from tests.conftest import bare_config, disk, reconfigured, role_of

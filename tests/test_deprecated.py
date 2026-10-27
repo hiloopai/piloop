@@ -6,6 +6,7 @@ release cannot ship until the code is deleted.
 """
 
 import ast
+import importlib
 import io
 import re
 import tokenize
@@ -18,12 +19,21 @@ import pytest
 
 from piloop import deprecated
 from piloop.config import ConfigError, load_campaign_config
+from piloop.db.models import Campaign
+from piloop.db.session import Database
 from piloop.deprecated import PiloopDeprecationWarning
-from piloop.ids import IMPLEMENTER
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.evaluation.tables import evaluator_of
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
+from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
+from piloop.plugins.campaign_type.optimization.fact_source.optimization import OptimizationFacts
 from piloop.plugins.executor.contract import AgentJob
 from piloop.plugins.fact_source.campaign import CampaignFacts
 from piloop.plugins.fact_source.command import Command
-from piloop.plugins.fact_source.optimization import OptimizationFacts
 from piloop.plugins.harness.codex import Codex
 from piloop.plugins.harness.contract import each_provider
 from piloop.plugins.harness.pi import Pi
@@ -31,13 +41,10 @@ from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.mcp_server.stdio import StdioServer
 from piloop.plugins.memory.contract import MEMORY
 from piloop.plugins.memory.local import LocalMemory
-from piloop.plugins.role.watchdog import WatchdogRole
 from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.stop_rule.contract import STOP_RULES, WhileHeld
 from piloop.plugins.stop_rule.limits import Limits
 from piloop.plugins.trigger.contract import TRIGGERS
-from piloop.plugins.verdict_rule.bootstrap import Bootstrap
-from piloop.plugins.verdict_rule.contract import VERDICT_RULES
 from piloop.settings import config_file
 from piloop.version import Version
 from tests.conftest import AGENT_TIMEOUT, HARNESS_APPEND, role_of, write_toml
@@ -946,3 +953,24 @@ def test_a_harness_or_a_server_of_0_3_that_nothing_uses_warns_until_0_5_0_and_on
     )
     with pytest.raises(ConfigError, match=re.escape('[plugins.harness.codex] is configured, and nothing uses it')):
         load_campaign_config(campaign_path)
+
+
+def test_a_table_that_moved_to_optimization_still_imports_from_db_models_with_a_warning() -> None:
+    with pytest.warns(PiloopDeprecationWarning, match=r'piloop\.db\.models\.Candidate moved'):
+        from piloop.db.models import Candidate as Old
+    assert Old is Candidate
+    with pytest.raises(ModuleNotFoundError):  # the import system asks for __path__, which is no table
+        importlib.import_module('piloop.db.models.Candidate')
+
+
+def test_a_campaign_still_reads_its_ideas_and_its_evaluator_with_a_warning(db: Database, campaign: Campaign) -> None:
+    with db.session() as s:
+        row = s.get_one(Campaign, campaign.id)
+        s.add(Idea(campaign_id=row.id, title='t', hypothesis='h', created_by='human', track=TrackName('score')))
+        s.flush()
+        with pytest.warns(PiloopDeprecationWarning, match=r'Campaign\.evaluator moved'):
+            assert row.evaluator is evaluator_of(s, row) is not None
+        with pytest.warns(PiloopDeprecationWarning, match=r'Campaign\.ideas moved'):
+            assert [i.title for i in row.ideas] == ['t']
+    with pytest.raises(ValueError, match='in no session'), pytest.warns(PiloopDeprecationWarning):
+        _ = Campaign(name='gone').ideas

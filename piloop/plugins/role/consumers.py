@@ -29,18 +29,8 @@ from piloop.campaign.stop import (
     timeout as agent_timeout,
 )
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
-from piloop.daemon.run_controller import (
-    wrap_up_lead,
-)
 from piloop.db.events import emit, has, in_order
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Comment,
-    Event,
-    RunEnd,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.requests import pending
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import (
@@ -55,6 +45,10 @@ from piloop.ids import (
     TargetRef,
 )
 from piloop.plugins.campaign_type.contract import Planner
+from piloop.plugins.campaign_type.kit.runs.controller import (
+    wrap_up_lead,
+)
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
 from piloop.plugins.contribution import Contribution, DaemonHost
 from piloop.plugins.executor.contract import AgentKey, Prompt
 from piloop.plugins.role.contract import PUSHED_KINDS

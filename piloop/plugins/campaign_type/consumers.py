@@ -34,7 +34,6 @@ from piloop.agents.results import (
 from piloop.agents.roles import compose_brief, compose_resumed, role_of
 from piloop.campaign.anomaly import AnomalyReported, assigned
 from piloop.campaign.campaigns import WORKSPACE, CampaignAdded, workspace_dir
-from piloop.campaign.ideas import defined_by
 from piloop.campaign.launches import close, free_harness, full_harnesses, remove_checkouts
 from piloop.campaign.stop import (
     CampaignClosed,
@@ -50,18 +49,11 @@ from piloop.campaign.stop import (
     left as left_now,
     requested,
     review_skipped,
-    runs_without_keep,
-    settled,
     timeout as agent_timeout,
     unclosed,
 )
 from piloop.config import CampaignConfig
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
-from piloop.daemon.run_controller import (
-    RUNS,
-    RunFinished,
-    run_place,
-)
 from piloop.db.events import emit, has, in_order
 from piloop.db.models import (
     LIVE,
@@ -71,14 +63,10 @@ from piloop.db.models import (
     AgentSessionState,
     Campaign,
     Comment,
-    Evaluation,
     Event,
     EventModel,
     Pause,
     ReadBy,
-    Run,
-    RunEnd,
-    RunStatus,
     count,
     utcnow,
 )
@@ -99,17 +87,28 @@ from piloop.db.triggers.changelog import (
     OriginChanged,
     VerdictChanged,
 )
-from piloop.ids import (
-    AgentSessionId,
-    CampaignStatus,
-    CommentId,
-    CommentKind,
-    RoleName,
-    RunId,
-    TargetKind,
-    TargetRef,
-)
+from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CAMPAIGNS, CannotLaunch, Planner, Take
+from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by
+from piloop.plugins.campaign_type.kit.evaluation.ledger import (
+    CandidateImported,
+    CandidateJudged,
+    MeasurementRecorded,
+    Rebased,
+    RejudgeRequested,
+    RemeasureRequested,
+    checkout_candidate,
+    score,
+)
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
+from piloop.plugins.campaign_type.kit.runs.controller import (
+    RUNS,
+    RunFinished,
+    run_place,
+)
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.stop import runs_without_keep, settled
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving
 from piloop.plugins.executor.consumers import LIMITS
 from piloop.plugins.executor.contract import AgentKey, LeftJob
@@ -121,16 +120,6 @@ from piloop.plugins.section.contract import Rendering, markdown
 from piloop.plugins.stop_rule.contract import GO, STOP_RULES, Go, Hold, Stop, WhileHeld
 from piloop.plugins.trigger.contract import TRIGGERS, Backlog, Fire, Quiet, Steer
 from piloop.runtime.factory import handle_for, runtime_for
-from piloop.scoring.ledger import (
-    CandidateImported,
-    CandidateJudged,
-    MeasurementRecorded,
-    Rebased,
-    RejudgeRequested,
-    RemeasureRequested,
-    checkout_candidate,
-    score,
-)
 from piloop.settings import DaemonSettings
 
 AGENT_SESSIONS = 'agent_sessions'
@@ -367,7 +356,7 @@ class Campaigns:
         Returns when a pass must come for time alone: the earliest ``due_in`` of a trigger, the end of the hours that the
         stop rule leaves or of a startup pause, or the next reading of a fact source.
 
-        Before the triggers, the pass rejects the ideas that a newer idea superseded (``piloop.campaign.ideas.supersede``),
+        Before the triggers, the pass rejects the ideas that a newer idea superseded (``piloop.plugins.campaign_type.kit.backlog.ideas.supersede``),
         and parks those after a prerequisite that ended without a keep (``park_stranded``). This also happens for a
         stopped campaign, which requests nothing and is measured again only on request (``ledger.due``). Then the pass
         asks the stop rule (``piloop.campaign.stop.check``) of each active campaign, and of each stopped one whose

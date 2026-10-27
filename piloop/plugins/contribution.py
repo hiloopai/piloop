@@ -25,10 +25,10 @@ from piloop.plugins.host import PluginError, Scope, Slot, declared
 from piloop.settings import AgentSettings, DaemonSettings
 
 if TYPE_CHECKING:  # the run controller and the database import the contracts that import this module
-    from piloop.daemon.run_controller import RunController
     from piloop.db.session import Database
     from piloop.otel import Tracer
     from piloop.plugins.campaign_type.contract import Planner
+    from piloop.plugins.campaign_type.kit.runs.controller import RunController
     from piloop.runtime.factory import RuntimeFactory
 
 

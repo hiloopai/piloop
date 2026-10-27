@@ -39,7 +39,8 @@ import tomli_w
 from covalence import Cid
 
 from piloop.api.views import CampaignState
-from piloop.db.models import EVENT, JUDGED, UnknownEvent
+from piloop.db.models import EVENT, UnknownEvent
+from piloop.plugins.campaign_type.kit.candidates.ids import JUDGED
 from piloop.plugins.runtime.kit.tags import tagged
 from piloop.store.tree import DRISL
 from tests.conftest import wait_until

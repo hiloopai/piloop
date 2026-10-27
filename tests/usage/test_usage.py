@@ -14,7 +14,7 @@ from piloop.agents.refill import usage_of
 from piloop.config import load_campaign_config
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.session import Database
-from piloop.ids import IMPLEMENTER
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.harness import pi
 from piloop.plugins.harness.contract import Custom, Harness, each_provider
 from piloop.plugins.harness.kit import jsonl as jsonl_module

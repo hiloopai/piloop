@@ -4,9 +4,9 @@ from datetime import datetime
 
 from piloop.daemon.loop import Consumer, Kinds, Phase, Turn
 from piloop.db.triggers.changelog import EvaluationCancelled
+from piloop.plugins.campaign_type.kit.evaluation.ledger import MeasurementRecorded
 from piloop.plugins.contribution import Contribution, DaemonHost
 from piloop.plugins.executor.consumers import LIMITS
-from piloop.scoring.ledger import MeasurementRecorded
 
 EVALUATIONS: Kinds = frozenset({EvaluationCancelled, MeasurementRecorded, *LIMITS})
 """What wakes the evaluation queue: a cancel to stop, a slot that an evaluation freed, or more slots. The executor's

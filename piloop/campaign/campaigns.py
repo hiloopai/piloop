@@ -23,7 +23,7 @@ from piloop import deprecated
 from piloop.actor import Actor, System
 from piloop.config import CONFIG_FILE, CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.events import emit
-from piloop.db.models import NOT_RETIRED, Campaign, Candidate, EventModel, Origin
+from piloop.db.models import NOT_RETIRED, Campaign, EventModel
 from piloop.db.session import Database
 from piloop.db.sql import sql_error
 from piloop.ids import (
@@ -31,21 +31,21 @@ from piloop.ids import (
     CampaignId,
     CampaignName,
     CampaignStatus,
-    CandidateId,
     Revision,
     TargetKind,
     TargetRef,
     checked_campaign_name,
 )
 from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ledger import current_evaluator, resolve
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import RepoId, Source, Workspace
 from piloop.plugins.role.contract import ideas_taken
 from piloop.plugins.stop_rule.contract import STOP_RULES
 from piloop.plugins.vcs.contract import VCS, Repository, UnknownRevision, Vcs, Version
-from piloop.plugins.verdict_rule.contract import Outcome
 from piloop.proc import child_env
-from piloop.scoring.ledger import current_evaluator, resolve
 from piloop.settings import settings
 from piloop.store.tree import Seen, put_tree
 

@@ -2,7 +2,7 @@
   "files": [
     { "path": "CONTRIBUTING.md", "description": "Development setup, checks, the package layering, migrations, deprecations and the release notes." },
     { "path": "docs/concepts/how-piloop-is-built.mdx", "description": "Core and plugins: what core owns, the capabilities, and what a plugin adds." },
-    { "path": "docs/concepts/verdict.mdx", "description": "How a candidate is judged: primary, guardrail and watch metrics, margins, floors, confidence.", "scope": ["piloop/scoring/**", "tests/scoring/**"] },
+    { "path": "docs/concepts/verdict.mdx", "description": "How a candidate is judged: primary, guardrail and watch metrics, margins, floors, confidence.", "scope": ["piloop/plugins/campaign_type/kit/evaluation/**", "piloop/plugins/campaign_type/kit/verdicts/**", "tests/scoring/**"] },
     { "path": "docs/concepts/roles.mdx", "description": "The roles, their triggers, working copies and permissions.", "scope": ["piloop/agents/**", "piloop/daemon/**", "piloop/plugins/role/**", "piloop/plugins/trigger/**"] },
     { "path": "docs/reference/data-model.mdx", "description": "Every table and its relationships.", "scope": ["piloop/db/**"] }
   ]

@@ -9,16 +9,19 @@ from pytest_mock import MockerFixture
 from sqlalchemy import delete, select
 
 from piloop.actor import System
-from piloop.daemon.run_controller import RunController
-from piloop.db.models import Campaign, Candidate, Evaluation, Run, RunStatus, utcnow
+from piloop.db.models import Campaign, utcnow
 from piloop.db.session import Database
-from piloop.ids import CandidateId, RunId
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation import queue
+from piloop.plugins.campaign_type.kit.evaluation.ledger import measured, request_remeasure
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import commands as git
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring import queue
-from piloop.scoring.ledger import measured, request_remeasure
 from tests.conftest import (
     SETTLE,
     ScriptRuntime,

@@ -19,10 +19,7 @@ from sqlalchemy import select
 from piloop.api.contract import Access
 from piloop.db.models import (
     Campaign,
-    Candidate,
     Comment,
-    Evaluation,
-    Evaluator,
     InstanceEnd,
     LeaseWorker,
     NoLease,
@@ -35,6 +32,8 @@ from piloop.ids import CommentKind, TargetKind
 from piloop.net.tokens import Caller, Tokens
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.executor.contract import Capacity, EvaluationJob, RepoId, Source
 from piloop.plugins.executor.kit import scaling
 from piloop.plugins.executor.kit.capacity import Pool

@@ -5,9 +5,10 @@ timestamps or statuses. ``docs/reference/schema.mdx`` (the DDL) is generated fro
 """
 
 import sys
+import warnings
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, ClassVar, Final, Literal, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, ClassVar, Literal, get_args, get_origin
 
 from covalence import Cid
 from pydantic import (
@@ -40,37 +41,35 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.engine import Dialect
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, composite, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, composite, mapped_column, object_session
 from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.types import TypeDecorator
 
+from piloop import deprecated
 from piloop.api.contract import Access
 from piloop.config import CampaignConfig
+from piloop.deprecated import PiloopDeprecationWarning
 from piloop.ids import (
-    IMPLEMENTER,
     AgentSessionId,
     CampaignId,
     CampaignStatus,
-    CandidateId,
-    Cause,
     CommentId,
     CommentKind,
-    EvaluatorId,
-    IdeaId,
-    IdeaStatus,
-    LinkKind,
-    MeasurementId,
     Revision,
     RoleName,
-    RungName,
-    RunId,
     TargetKind,
     TargetRef,
-    TrackName,
+)
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
+from piloop.plugins.campaign_type.kit.runs.ids import (
+    RunId,
 )
 from piloop.plugins.host import Slot
-from piloop.plugins.verdict_rule.contract import Outcome
 from piloop.usage import Usage
+
+if TYPE_CHECKING:  # the components' tables import this module
+    from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+    from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator
 
 
 def utcnow() -> datetime:
@@ -130,83 +129,6 @@ class Pause(StrEnum):
 
     LAUNCHES = 'launches'
     ALL = 'all'
-
-
-class RunStatus(StrEnum):
-    """The lifecycle of one attempt at an idea."""
-
-    QUEUED = 'queued'
-    RUNNING = 'running'
-    SUCCEEDED = 'succeeded'
-    FAILED = 'failed'
-    TIMED_OUT = 'timed_out'
-
-
-OPEN_RUNS = (RunStatus.QUEUED, RunStatus.RUNNING)
-FAILED_RUNS = (RunStatus.FAILED, RunStatus.TIMED_OUT)
-FINISHED_RUNS = (RunStatus.SUCCEEDED, *FAILED_RUNS)
-
-
-class RunEnd(StrEnum):
-    """How a run ended. ``runs.error`` adds the detail, when there is one.
-
-    ``finished``: its implementer left its finding, or committed and exited cleanly. ``failed``: its process failed, it
-    made no commit, or only the daemon's commit of what it left uncommitted (the error says which). ``timed_out``: its
-    role's timeout. ``awaiting_answer``: its implementer's escalation waits for an answer (the error names it).
-    ``cancelled``: someone cancelled it. ``campaign_stopped``, ``daemon_stopped``, ``stale`` (a daemon died while it
-    ran) and ``worker_lost``: something else ended it. ``role_removed``: ``piloop init`` removed its role while it was
-    queued. ``not_started``: no agent of it started to work. Only the first four are attempts at the idea.
-    """
-
-    FINISHED = 'finished'
-    FAILED = 'failed'
-    TIMED_OUT = 'timed_out'
-    AWAITING_ANSWER = 'awaiting_answer'
-    CANCELLED = 'cancelled'
-    CAMPAIGN_STOPPED = 'campaign_stopped'
-    DAEMON_STOPPED = 'daemon_stopped'
-    STALE = 'stale'
-    ROLE_REMOVED = 'role_removed'
-    NOT_STARTED = 'not_started'
-    WORKER_LOST = 'worker_lost'
-
-    @property
-    def attempt(self) -> bool:
-        """Whether a run that ended so was an attempt at its idea: it counts toward ``max_runs`` and ``plateau``."""
-        return self in ATTEMPTS
-
-    @property
-    def status(self) -> RunStatus:
-        """The ``runs.status`` of a run that ended so."""
-        return END_STATUS.get(self, RunStatus.FAILED)
-
-
-ATTEMPTS: Final = frozenset({RunEnd.FINISHED, RunEnd.FAILED, RunEnd.TIMED_OUT, RunEnd.AWAITING_ANSWER})
-"""The ends of a run that tried its idea. The others say that the run was stopped, or that no agent started to work."""
-END_STATUS: Final = {RunEnd.FINISHED: RunStatus.SUCCEEDED, RunEnd.TIMED_OUT: RunStatus.TIMED_OUT}
-"""The status of a run by its end, where it is not ``failed``."""
-
-
-class Origin(StrEnum):
-    """Where a candidate comes from. Only a candidate from the ``baseline`` or a ``run`` is judged.
-
-    ``baseline``: the repo's HEAD when the campaign was registered. ``run``: an implementer's commit. ``reference``: a
-    starting point imported with ``piloop candidate import``, measured but never the head or a bar. ``recovered``: the
-    daemon's commit of what an implementer left uncommitted when it stopped, or where a daemon stop cut its run, never
-    declared ready, so never measured; a new run of the idea starts from it. ``skipped``: a commit marked
-    ``Piloop-Eval: skip``, never measured. A ``recovered`` or ``skipped`` tree that a later commit reaches without the
-    mark is measured and judged like a new one, and becomes ``run``.
-    """
-
-    BASELINE = 'baseline'
-    RUN = 'run'
-    REFERENCE = 'reference'
-    RECOVERED = 'recovered'
-    SKIPPED = 'skipped'
-
-
-JUDGED: Final = frozenset({Origin.BASELINE, Origin.RUN})
-"""The origins of the candidates that get a verdict. ``verdict IS NULL`` on one of them means that it is pending."""
 
 
 class AgentSessionState(StrEnum):
@@ -329,12 +251,6 @@ class CommentTarget(TypeDecorator[TargetKind]):
 
     def process_result_value(self, value: str | None, dialect: Dialect) -> TargetKind | None:
         return None if value is None else TargetKind(value)
-
-
-def _end_status() -> str:
-    """``runs.status`` as a SQL expression of ``runs.end`` (``RunEnd.status``), for the CHECK that keeps them together."""
-    cases = ' '.join(f"WHEN '{end}' THEN '{status}'" for end, status in END_STATUS.items())
-    return f'CASE "end" {cases} ELSE \'{RunStatus.FAILED}\' END'
 
 
 NOW = func.now()
@@ -483,17 +399,12 @@ class Base(DeclarativeBase):
     type_annotation_map = {
         datetime: UTCDateTime,
         CampaignId: Integer,
-        IdeaId: Integer,
         RunId: Integer,
-        CandidateId: Integer,
-        MeasurementId: Integer,
         EvaluatorId: Integer,
         AgentSessionId: Integer,
         CommentId: Integer,
         RoleName: String,
-        TrackName: String,
         Revision: String,
-        RungName: String,
         dict[str, float]: JSON,
         dict[str, object]: JSON,
         Usage: PydanticJSON(TypeAdapter(Usage)),
@@ -502,13 +413,6 @@ class Base(DeclarativeBase):
         list[str]: JSON,
         CampaignStatus: by_value(CampaignStatus),
         Pause: by_value(Pause),
-        IdeaStatus: by_value(IdeaStatus),
-        LinkKind: by_value(LinkKind),
-        RunStatus: by_value(RunStatus),
-        RunEnd: by_value(RunEnd),
-        Outcome: by_value(Outcome),
-        Origin: by_value(Origin),
-        Cause: by_value(Cause),
         TargetKind: by_value(TargetKind),
         CommentKind: by_value(CommentKind),
         AgentSessionState: by_value(AgentSessionState),
@@ -599,217 +503,42 @@ class Campaign(Tracked, Base):
     children fails on the foreign key. Nothing else reads it yet: each campaign runs on its own."""
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
-    ideas: Mapped[list[Idea]] = relationship(back_populates='campaign', order_by='Idea.id')
-    evaluator: Mapped[Evaluator | None] = relationship(
-        primaryjoin='foreign(Campaign.evaluator_id) == Evaluator.id', viewonly=True
+    @property
+    @deprecated.until('0.5.0', "Campaign.ideas of 0.3: delete it, a core table's link to the backlog's ideas")
+    def ideas(self) -> list[Idea]:
+        """Its ideas by id, as in 0.3, with a warning: select the backlog's ``Idea`` by ``campaign_id`` instead."""
+        from piloop.plugins.campaign_type.kit.backlog.tables import Idea  # here: tables imports this module
+
+        _moved('Campaign.ideas', 'select(Idea).where(Idea.campaign_id == campaign.id)')
+        return list(_session_of(self).scalars(select(Idea).where(Idea.campaign_id == self.id).order_by(Idea.id)))
+
+    @property
+    @deprecated.until('0.5.0', "Campaign.evaluator of 0.3: delete it, a core table's link to the evaluation's table")
+    def evaluator(self) -> Evaluator | None:
+        """Its current evaluator, as in 0.3, with a warning: the evaluation component's ``evaluator_of``."""
+        from piloop.plugins.campaign_type.kit.evaluation.tables import evaluator_of  # here: tables imports this module
+
+        _moved('Campaign.evaluator', 'evaluator_of(s, campaign)')
+        return evaluator_of(_session_of(self), self)
+
+
+def _session_of(row: Base) -> Session:
+    """The session that ``row`` is in. Raises ``ValueError`` for a row in none."""
+    if (s := object_session(row)) is None:
+        raise ValueError(f'{row!r} is in no session')
+    return s
+
+
+def _moved(old: str, new: str) -> None:
+    warnings.warn(
+        f"{old} moved: read {new} of the campaign type kit's components",
+        PiloopDeprecationWarning,
+        stacklevel=3,
     )
 
 
 NOT_RETIRED = Campaign.status != CampaignStatus.RETIRED
 """The campaigns that hold their names, that the daemon schedules, and that a listing shows unless asked."""
-
-
-class Evaluator(Base):
-    """One version of how a campaign is scored: the evaluate command, the judging metrics and the linked inputs.
-
-    ``piloop init`` copies it from ``piloop.toml``, and a change makes a new row. A measurement points at the
-    evaluator that produced it, so a number always says what it means, and an old number is never taken for a new one.
-    """
-
-    __tablename__ = 'evaluators'
-    __table_args__ = (UniqueConstraint('campaign_id', 'key'),)
-
-    id: Mapped[EvaluatorId] = mapped_column(primary_key=True)
-    campaign_id: Mapped[CampaignId] = mapped_column(ForeignKey('campaigns.id', ondelete='CASCADE'))
-    key: Mapped[str]
-    """A short hash of ``definition``, from ``CampaignConfig.evaluator_key``."""
-    definition: Mapped[dict[str, object]]
-    """``evaluate``, ``link``, and ``judging``: the name and direction of each primary and guardrail. A watch metric is
-    not part of it, so adding one measures nothing again. An older row that no current config names has ``metrics``,
-    every metric, instead."""
-    runner: Mapped[str] = mapped_column(default=PROCESS, server_default=PROCESS)
-    """The evaluator runner, by name: how piloop runs the evaluator to measure a candidate. ``process``, built in, runs
-    the evaluate command as a process in a clean worktree of the candidate, and is the runner of every evaluator for
-    now. ``piloop.scoring.ledger.current_evaluator`` refuses a name that no installed runner has. It is not part of
-    ``key`` yet: with one runner, every evaluator has it."""
-    created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
-
-
-class Idea(Tracked, Base):
-    """Something worth trying. The scheduler turns ready ideas into runs.
-
-    Anyone can insert an idea: a human, the orchestrator or a research agent. Ideas link to ideas of the same campaign
-    through ``idea_links`` (``IdeaLink``), many-to-many in both directions.
-
-    ``after``: the idea is blocked (``ready``, but never taken) until every prerequisite is ``done``. Its run then
-    starts from the head like any other run, and the head holds every keep on the trunk that the prerequisites made.
-    An idea can pin a ``base_candidate_id`` instead, for example the branch keep of a prerequisite. A prerequisite
-    that ends without a keep (``parked``, ``rejected``, or ``done`` after runs that kept nothing) never releases its
-    dependents: the daemon parks them with an escalation, and the orchestrator or a human deletes the link or sets
-    them ready again. Cycles of prerequisites are not detected: the ideas in a cycle never run and show as blocked.
-
-    ``supersedes``: the idea is a sharper version of the targets. A research sweep uses it to refine rejected, parked
-    or done ideas instead of proposing near-duplicates. The daemon rejects a superseded idea that never ran (it has
-    no run and is still ``seed``, ``proposed`` or ``ready``). A superseded idea that ran keeps its status and results.
-    """
-
-    __tablename__ = 'ideas'
-    __table_args__ = (
-        UniqueConstraint('campaign_id', 'title'),
-        # the queue: the pass and the widget read the ``ready`` ideas of one campaign in priority order
-        Index('ix_ideas_campaign_status_priority', 'campaign_id', 'status', 'priority'),
-        *text_checks(
-            'ideas', 'title', 'hypothesis', 'created_by', 'track', nullable=('plan', 'harness', 'provenance', 'family')
-        ),
-    )
-
-    id: Mapped[IdeaId] = mapped_column(primary_key=True)
-    campaign_id: Mapped[CampaignId] = mapped_column(ForeignKey('campaigns.id', ondelete='CASCADE'))
-    title: Mapped[str]
-    """Unique in a campaign, so two research sweeps that pick the same title fail here and do not duplicate the idea."""
-    hypothesis: Mapped[str]
-    """Why this idea should improve the primary metric."""
-    track: Mapped[TrackName]
-    """The track (objective) the idea works on, by its name in ``piloop.toml``: a primary's ``track``, or else the
-    primary's name. Its runs are judged on that track's primary, with the primary of every other track as a guardrail,
-    and their brief has the track's addendum. The scheduler parks an idea whose track is not in ``piloop.toml``, with
-    a note that says why."""
-    plan: Mapped[str | None]
-    """Concrete steps for the implementer. They are appended to the brief."""
-    status: Mapped[IdeaStatus] = mapped_column(default=IdeaStatus.READY, server_default=IdeaStatus.READY.value)
-    priority: Mapped[int] = mapped_column(default=2, server_default=text('2'))
-    """0 (urgent) to 4 (someday). The scheduler takes the lowest number first."""
-    harness: Mapped[str | None]
-    """The harness for this idea. None lets the scheduler use the campaign's harnesses (``[plugins.harness] use``) in turn."""
-    base_candidate_id: Mapped[CandidateId | None]
-    """A deliberate branch: the ``candidates.id`` to start from, instead of the head at the time the run starts. NULL
-    unless the idea gives a reason for that starting point. Never pin the current head by default: when the idea
-    runs, that tree is out of date. The ``run.queued`` event of a pinned run records both bases. A plain integer, as
-    on runs."""
-    max_runs: Mapped[int] = mapped_column(default=2, server_default=text('2'))
-    """The number of attempts allowed. A crashed run is tried again until this number is reached."""
-    created_by: Mapped[str]
-    """Who proposed it: ``human``, ``orchestrator``, or the agent's signature (``research#12``, ``implementer#40``,
-    ``watchdog#7``). The part before ``#`` is the idea's source in the count of keeps by source."""
-    provenance: Mapped[str | None]
-    """The finding that led to the idea, with ids or a URL. For example ``finding comment#81: timeouts lose the last
-    rows``, ``loss table workspace/research/losses.md`` or ``arXiv 2305.11860 via exa``."""
-    family: Mapped[str | None]
-    """The mechanism family: a short lowercase name for ideas that try the same mechanism (``feature engineering``,
-    ``ensembling``, ``test-time training``). The research pack shows what each family produced."""
-    created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
-
-    campaign: Mapped[Campaign] = relationship(back_populates='ideas')
-    runs: Mapped[list[Run]] = relationship(back_populates='idea', order_by='Run.id')
-    links: Mapped[list[IdeaLink]] = relationship(
-        foreign_keys='IdeaLink.idea_id',
-        back_populates='idea',
-        order_by='IdeaLink.target_id',
-        cascade='all, delete-orphan',
-        passive_deletes=True,
-    )
-    """The links from this idea (it is the ``idea_id``). Query ``IdeaLink.target_id`` for the links to it."""
-
-    def targets(self, kind: LinkKind) -> list[Idea]:
-        """The ideas that this one links to with ``kind``, by id."""
-        return [link.target for link in self.links if link.kind is kind]
-
-    @property
-    def after(self) -> list[Idea]:
-        """The prerequisites. Each one must be ``done`` before this idea runs."""
-        return self.targets(LinkKind.AFTER)
-
-    @property
-    def supersedes(self) -> list[Idea]:
-        """The older ideas that this one is a sharper version of."""
-        return self.targets(LinkKind.SUPERSEDES)
-
-
-class IdeaLink(Base):
-    """A directed link between two ideas of one campaign: ``idea_id`` comes *after* or *supersedes* ``target_id``.
-
-    Links are many-to-many in both directions. An idea may wait for several prerequisites, several ideas may wait for
-    it, and a sharper version may replace several earlier ideas. One pair may have both kinds. Rows are inserted and
-    deleted, never updated, so they have no ``updated_at`` or ``updated_by``. A CHECK refuses a link from an idea to
-    itself, and a trigger refuses a link across campaigns. When either idea is deleted, the link is deleted too. To add
-    a kind of link, add a ``LinkKind`` member (which changes the CHECK) and a rule for it in
-    ``piloop/campaign/ideas.py``.
-    """
-
-    __tablename__ = 'idea_links'
-    __table_args__ = (
-        CheckConstraint('idea_id != target_id', name='idea_links_not_self'),
-        Index('ix_idea_links_target', 'target_id', 'kind'),
-    )
-
-    idea_id: Mapped[IdeaId] = mapped_column(ForeignKey('ideas.id', ondelete='CASCADE'), primary_key=True)
-    target_id: Mapped[IdeaId] = mapped_column(ForeignKey('ideas.id', ondelete='CASCADE'), primary_key=True)
-    kind: Mapped[LinkKind] = mapped_column(primary_key=True)
-
-    idea: Mapped[Idea] = relationship(foreign_keys=[idea_id], back_populates='links')
-    target: Mapped[Idea] = relationship(foreign_keys=[target_id])
-
-
-class Run(Tracked, Base):
-    """One attempt at an idea, by one agent of a role that does runs, with one harness and model."""
-
-    __tablename__ = 'runs'
-    __table_args__ = (
-        UniqueConstraint('idea_id', 'attempt'),
-        # what is running or queued: reap, drain and the agents' "what is running" query select by status only
-        Index('ix_runs_status', 'status'),
-        CheckConstraint(
-            f'scoring = 0 OR status IN ({", ".join(repr(s.value) for s in FINISHED_RUNS)})',
-            name='runs.scoring needs a finished status',
-        ),
-        CheckConstraint(
-            f'("end" IS NULL) = (status IN ({", ".join(repr(s.value) for s in OPEN_RUNS)}))',
-            name='runs.end is set once a run is finished',
-        ),
-        CheckConstraint(f'"end" IS NULL OR status = {_end_status()}', name='runs.status follows from runs.end'),
-    )
-
-    id: Mapped[RunId] = mapped_column(primary_key=True)
-    idea_id: Mapped[IdeaId] = mapped_column(ForeignKey('ideas.id', ondelete='CASCADE'))
-    role: Mapped[RoleName] = mapped_column(default=IMPLEMENTER, server_default=IMPLEMENTER)
-    """The role that does the run: ``implementer``, or a role of the campaign with ``runs = true``. Its agents have this
-    ``agent_sessions.kind``."""
-    attempt: Mapped[int]
-    base_candidate_id: Mapped[CandidateId]
-    """The ``candidates.id`` that the worktree started from. The run's candidates descend from it. A plain integer,
-    not a foreign key: candidates reference runs, and SQLite cannot add a foreign key for a cycle afterwards."""
-    branch: Mapped[bool] = mapped_column(default=False, server_default=text('0'))
-    """Whether the run started from an alternative starting point: its idea pinned a base other than the head when it
-    was queued (a reference, an older keep or a note). The run is judged against its own base only, so what it keeps
-    is a branch keep, which never moves the head. The scheduler sets it (``explore_every`` of the run's role)."""
-    harness: Mapped[str]
-    model: Mapped[str]
-    status: Mapped[RunStatus] = mapped_column(default=RunStatus.QUEUED, server_default=RunStatus.QUEUED.value)
-    scoring: Mapped[bool] = mapped_column(default=False, server_default=text('0'))
-    """Whether the daemon scores the run's commits now. It is set when the implementer ends and the run gets its final
-    ``status``, and cleared when the commits are judged and the idea moved on, whatever the idea's status. While it is
-    set, the run keeps its place under ``[stop] max_runs``, and a restarted daemon resumes the scoring."""
-    brief_cid: Mapped[Cid | None] = mapped_column(CidText)
-    """The exact prompt that the implementer got, a text blob in the CAS. NULL until the run starts."""
-    started_at: Mapped[datetime | None]
-    finished_at: Mapped[datetime | None]
-    end: Mapped[RunEnd | None]
-    """How the run ended. NULL while it is queued or running. ``status`` follows from it."""
-    error: Mapped[str | None]
-    """The detail of the end, for a human: the process error, the escalation that waits, or why it failed."""
-    log_dir: Mapped[str | None]
-    created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
-
-    idea: Mapped[Idea] = relationship(back_populates='runs')
-    base: Mapped[Candidate] = relationship(primaryjoin='foreign(Run.base_candidate_id) == Candidate.id', viewonly=True)
-    candidates: Mapped[list[Candidate]] = relationship(
-        back_populates='run', foreign_keys='Candidate.run_id', order_by='Candidate.id'
-    )
-
-
-def campaign_runs(campaign_id: CampaignId) -> Select[Run]:
-    """Every run of the campaign. A run has no ``campaign_id``, but its idea has one."""
-    return select(Run).join(Idea).where(Idea.campaign_id == campaign_id)
 
 
 def count[*Ts](s: Session, query: Select[*Ts]) -> int:
@@ -822,124 +551,6 @@ def latest_agent_session(s: Session, run_id: RunId) -> AgentSession | None:
     return s.scalars(
         select(AgentSession).where(AgentSession.run_id == run_id).order_by(AgentSession.id.desc()).limit(1)
     ).first()
-
-
-class Candidate(Tracked, Base):
-    """A distinct state of the campaign's code. The git tree identifies it, so equal contents are one candidate.
-
-    The baseline has no run and no parent. A reference has neither (``piloop candidate import`` makes one from the
-    tree of any commit, pinned at ``refs/piloop/<campaign>/reference/<id>``). An implementer committed every other candidate,
-    and it descends from the candidate that its run started from. When the last commit of a run reverts to its base,
-    the run produces nothing new: the commit resolves to the base candidate. Measurements score candidates, and the
-    verdict judges them against a bar.
-    """
-
-    __tablename__ = 'candidates'
-    __table_args__ = (
-        UniqueConstraint('campaign_id', 'tree_sha'),
-        Index('ix_candidates_campaign_verdict', 'campaign_id', 'verdict'),
-        # the candidates of a run (every history row), and the FK action when a run is deleted
-        Index('ix_candidates_run', 'run_id'),
-        # the FK check on every delete of a candidate (deleting a campaign deletes thousands)
-        Index('ix_candidates_parent', 'parent_id'),
-        *text_checks('candidates', nullable=('summary', 'verdict_by', 'verdict_reason')),
-        CheckConstraint(
-            f'verdict IS NULL OR origin IN ({", ".join(repr(o.value) for o in sorted(JUDGED))})',
-            name='candidates.verdict needs a judged origin',
-        ),
-        CheckConstraint(
-            f"cause IS NULL OR verdict = '{Outcome.INTERESTING}'", name='candidates.cause needs interesting'
-        ),
-    )
-
-    id: Mapped[CandidateId] = mapped_column(primary_key=True)
-    campaign_id: Mapped[CampaignId] = mapped_column(ForeignKey('campaigns.id', ondelete='CASCADE'))
-    run_id: Mapped[RunId | None] = mapped_column(ForeignKey('runs.id', ondelete='SET NULL'))
-    parent_id: Mapped[CandidateId | None] = mapped_column(ForeignKey('candidates.id'))
-    """The candidate that this one comes from."""
-    tree_sha: Mapped[str]
-    """The hash of the contents. Two commits with the same tree are the same candidate."""
-    revision: Mapped[Revision]
-    """The vcs provider's name for one version that has this tree, which it keeps (``Repository.keep``)."""
-    summary: Mapped[str | None]
-    """The first line of what the version says about itself."""
-    origin: Mapped[Origin] = mapped_column(default=Origin.RUN, server_default=Origin.RUN.value)
-    verdict: Mapped[Outcome | None]
-    """The judgement against the candidate's bar. NULL while it is pending, and on a candidate whose origin is not
-    judged."""
-    cause: Mapped[Cause | None]
-    verdict_by: Mapped[str | None]
-    verdict_reason: Mapped[str | None]
-    """The reason of the verdict, for a human."""
-    created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
-
-    run: Mapped[Run | None] = relationship(back_populates='candidates', foreign_keys=[run_id])
-    parent: Mapped[Candidate | None] = relationship(remote_side=[id], foreign_keys=[parent_id])
-    measurements: Mapped[list[Measurement]] = relationship(back_populates='candidate', order_by='Measurement.id')
-
-
-class Measurement(Base):
-    """One run of an evaluator on a candidate. A candidate can have many: repeats, or a new version of the evaluator."""
-
-    __tablename__ = 'measurements'
-    __table_args__ = (
-        Index('ix_measurements_candidate_evaluator', 'candidate_id', 'evaluator_id'),
-        CheckConstraint(
-            'stopped IS NULL OR (rung IS NOT NULL AND error IS NULL)',
-            name='measurements.a stop is at a rung, with no error',
-        ),
-        *text_checks('measurements', nullable=('rung', 'stopped')),
-    )
-
-    id: Mapped[MeasurementId] = mapped_column(primary_key=True)
-    candidate_id: Mapped[CandidateId] = mapped_column(ForeignKey('candidates.id', ondelete='CASCADE'))
-    evaluator_id: Mapped[EvaluatorId] = mapped_column(ForeignKey('evaluators.id'))
-    metrics: Mapped[dict[str, float]] = mapped_column(default=dict, server_default=EMPTY_JSON)
-    error: Mapped[str | None]
-    """Set when the evaluate command failed. ``metrics`` then has what it printed before it failed."""
-    seconds: Mapped[float | None]
-    pair_id: Mapped[MeasurementId | None] = mapped_column(ForeignKey('measurements.id', ondelete='SET NULL'))
-    """The bar's measurement that ran next to this one in a paired evaluation. NULL on any other measurement."""
-    rung: Mapped[RungName | None]
-    """The rung of the evaluation ladder that it measured (``[[ladder]]``). NULL for the full panel: only a measurement
-    of the full panel scores."""
-    stopped: Mapped[str | None]
-    """Why the climb stopped at ``rung``: the stop that held. NULL when the climb went on."""
-    created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
-
-    candidate: Mapped[Candidate] = relationship(back_populates='measurements')
-    evaluator: Mapped[Evaluator] = relationship()
-    pair: Mapped[Measurement | None] = relationship(remote_side=[id])
-
-
-class Evaluation(Base):
-    """An evaluation that the daemon needs: it waits for a slot of the executor or runs. The evaluation queue.
-
-    The daemon inserts a row when it needs a measurement, and deletes it when the measurement is recorded, so the table
-    holds only what waits or runs. A free slot goes to the campaign with the fewest running rows, and in it to its head
-    first, then to the lowest id (``piloop.scoring.queue``). The requests for one candidate under one evaluator share
-    one row: a tree is evaluated once. An id is never reused, so a request that waits for a row never mistakes a later
-    one for it. A daemon that starts deletes the rows that the previous one left, and asks again for what it still
-    needs. ``piloop eval queue`` lists the rows, and ``piloop eval cancel`` cancels one.
-    """
-
-    __tablename__ = 'evaluations'
-    __table_args__ = (
-        UniqueConstraint('candidate_id', 'evaluator_id'),
-        *text_checks('evaluations', nullable=('cancelled_by',)),
-        {'sqlite_autoincrement': True},
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    candidate_id: Mapped[CandidateId] = mapped_column(ForeignKey('candidates.id', ondelete='CASCADE'))
-    evaluator_id: Mapped[EvaluatorId] = mapped_column(ForeignKey('evaluators.id'))
-    created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
-    started_at: Mapped[datetime | None]
-    """When it got a slot. NULL while it waits."""
-    cancelled_by: Mapped[str | None]
-    """Who cancelled it while it ran. Their crashed measurement is recorded; the daemon stops the evaluator."""
-
-    candidate: Mapped[Candidate] = relationship()
 
 
 class Lease(Base):
@@ -1202,33 +813,6 @@ class Comment(Tracked, Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
 
-class Technique(Base):
-    """The technique library: outside techniques that a scout sweep found and did not file as a seed. One row per link.
-
-    A scout reads it before it searches, and checks every technique it finds against it and ``ideas_fts`` (plain
-    text, ``LIKE``), so each technique is filed once. When a later loss makes a technique relevant, it becomes a seed
-    that cites ``technique#<id>``. Agents write it with raw SQL. Rows are never updated.
-    """
-
-    __tablename__ = 'techniques'
-    __table_args__ = (
-        UniqueConstraint('campaign_id', 'url'),
-        *text_checks('techniques', 'title', 'mechanism', 'url', 'created_by'),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    campaign_id: Mapped[CampaignId] = mapped_column(ForeignKey('campaigns.id', ondelete='CASCADE'))
-    title: Mapped[str]
-    """The technique, in a few words."""
-    mechanism: Mapped[str]
-    """One line: how it works, and the evidence for it (a number, code, an ablation)."""
-    url: Mapped[str]
-    """The primary source: a post, repo or paper. Unique in a campaign, so the same link is never filed twice."""
-    created_by: Mapped[str]
-    """Who filed it: the scout (``scout#<agent session id>``) or someone else."""
-    created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
-
-
 class AgentSession(Tracked, Base):
     """An agent process in one of the roles. While ``state`` is ``requested``, the row is a request to start one.
 
@@ -1339,3 +923,23 @@ def _blob_placeholders(target: Base, _context: object) -> None:
                 f' placeholder. Repair it: UPDATE {table} SET {attr.key} = CAST({attr.key} AS TEXT) WHERE id = {row}',
                 file=sys.stderr,
             )
+
+
+type Moved = Literal['Evaluator', 'Idea', 'IdeaLink', 'Run', 'Candidate', 'Measurement', 'Evaluation', 'Technique']
+"""The tables that moved to the campaign type kit's components, which a plugin of 0.3 imported from here."""
+
+
+@deprecated.until('0.5.0', 'the research tables moved to the components: delete this __getattr__ and Moved')
+def __getattr__(name: Moved) -> type[Base]:
+    """``from piloop.db.models import Candidate`` as in 0.3, with a warning: the table is a component's now."""
+    if name not in get_args(Moved.__value__):  # the import system asks for other names too, such as __path__
+        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
+    from piloop.plugins.campaign_type.optimization import tables  # here: it imports this module; it has them all
+
+    table: type[Base] = getattr(tables, name)
+    warnings.warn(
+        f'piloop.db.models.{name} moved: import it from {table.__module__}',
+        PiloopDeprecationWarning,
+        stacklevel=2,
+    )
+    return table

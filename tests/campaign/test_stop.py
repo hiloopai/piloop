@@ -27,46 +27,28 @@ from piloop.campaign.stop import (
     hours_due,
     request_stop,
     requested,
-    runs,
-    runs_without_keep,
     seconds,
     timeout as agent_timeout,
 )
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
-from piloop.daemon.run_controller import NO_CHANGES, SKIPPED_REASON, RunFinished
 from piloop.db.events import emit, has, in_order
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Comment,
-    Event,
-    Idea,
-    Measurement,
-    Origin,
-    Pause,
-    Run,
-    RunEnd,
-    RunStatus,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Pause, utcnow
 from piloop.db.requests import RequestAnswered, pending
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
-from piloop.ids import (
-    IMPLEMENTER,
-    CampaignStatus,
-    CandidateId,
-    CommentKind,
-    Ending,
-    IdeaStatus,
-    RunId,
-    TargetKind,
-    TargetRef,
-)
+from piloop.ids import CampaignStatus, CommentKind, Ending, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins import host
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.controller import NO_CHANGES, SKIPPED_REASON, RunFinished
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.stop import runs, runs_without_keep
+from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.fact_source.contract import FactReadError
 from piloop.plugins.fact_source.facts import (
     ATTEMPTS,
@@ -99,8 +81,6 @@ from piloop.plugins.metric import Direction
 from piloop.plugins.stop_rule import limits as limits_module
 from piloop.plugins.stop_rule.contract import GO, STOP_RULES, Escalate, Go, Hold, Shape, Stop, StopCase, StopRule
 from piloop.plugins.stop_rule.limits import Limits
-from piloop.plugins.trigger.stalled import StalledTrigger
-from piloop.plugins.verdict_rule.contract import Outcome
 from piloop.reports.overview import progress
 from tests.conftest import (
     HARNESS_APPEND,

@@ -15,12 +15,12 @@ from pathlib import Path
 from queue import SimpleQueue
 
 from piloop.daemon.loop import Consumer, Loop, Turn, in_turn_order
-from piloop.daemon.run_controller import RunController
 from piloop.db.models import utcnow
 from piloop.db.session import Database
 from piloop.otel import Tracer
 from piloop.plugins.archive.contract import Archiver
 from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES, CAMPAIGNS, TypeHost
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.contribution import DaemonHost, Leaving, collect, contributions_of, installed, machinery
 from piloop.runtime.factory import RuntimeFactory, make_runtime
 from piloop.settings import AgentSettings, DaemonSettings

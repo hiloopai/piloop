@@ -19,9 +19,9 @@ from piloop.db.events import emit, in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.evaluation.ledger import CandidateJudged
 from piloop.plugins.trigger.news import NewsTaken, Urgency, urgency
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring.ledger import CandidateJudged
 from tests.agents.test_resume import HARNESS, SESSION
 from tests.conftest import SETTLE, ScriptRuntime, run_all, wait_until, write_toml
 from tests.daemon.test_roles import configure, recording, scheduler

@@ -47,8 +47,6 @@ from piloop.db.feed import Topic
 from piloop.db.models import (
     LIVE_LEASES,
     Comment,
-    Evaluation,
-    Evaluator,
     EventModel,
     InstanceEnd,
     Lease,
@@ -63,6 +61,7 @@ from piloop.db.models import (
 from piloop.db.session import Database, read_transaction, write_transaction
 from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.executor.contract import Capacity
 from piloop.plugins.executor.kit import leases
 from piloop.plugins.executor.kit.capacity import HostSample, Pool, Provisioner, add, admits, less, slots, times

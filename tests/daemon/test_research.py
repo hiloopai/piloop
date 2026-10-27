@@ -9,14 +9,17 @@ from git import Repo
 from sqlalchemy import select
 
 from piloop.agents.roles import PILOOP_HINT as PYTHON_HINT
-from piloop.campaign.ideas import defined_by
 from piloop.config import load_campaign_config
-from piloop.daemon.run_controller import RunController
 from piloop.daemon.scheduler import Scheduler
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Candidate, Comment, Idea
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database
-from piloop.ids import CommentKind, IdeaStatus, TargetKind
+from piloop.ids import CommentKind, TargetKind
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.executor.workers import Workers
 from piloop.settings import Settings
 from tests.conftest import RESEARCH, SETTLE, ScriptRuntime, factory, run_all, serving, serving_api

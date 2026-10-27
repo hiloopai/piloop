@@ -19,10 +19,12 @@ from sqlalchemy import select, text
 from piloop.api import views
 from piloop.campaign import campaigns as campaign_module, ops
 from piloop.cli import common, main as cli, views as cli_views
-from piloop.db.models import Campaign, Comment, Event, Idea
+from piloop.db.models import Campaign, Comment, Event
 from piloop.db.session import Database
-from piloop.ids import CampaignId, CommentKind, IdeaId, IdeaStatus, TargetKind, TargetRef
+from piloop.ids import CampaignId, CommentKind, TargetKind, TargetRef
 from piloop.net.server import Server
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.settings import Settings
 
 EVENT = "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('acme', 'campaign', 1, '{}')"

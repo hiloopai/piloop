@@ -35,13 +35,15 @@ from piloop.agents.results import (
 )
 from piloop.agents.roles import PILOOP_HINT, SQL_HINT, Role, compose_brief, read_brief, role
 from piloop.config import CampaignConfig, load_campaign_config
-from piloop.daemon.run_controller import RunController
 from piloop.db.events import emit, in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, LeaseKind
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import AgentSessionRequested
-from piloop.ids import IMPLEMENTER, AgentSessionId, CampaignId, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CampaignId, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
+from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.contract import AgentJob, HarnessSession, RepoId, Source
 from piloop.plugins.executor.kit import jobs, sessions
@@ -51,7 +53,6 @@ from piloop.plugins.executor.kit.sessions import SessionFile
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.contract import MCP, each_provider
 from piloop.plugins.harness.kit.jsonl import dash_separators_wrapped
-from piloop.plugins.role.watchdog import WatchdogRole
 from piloop.plugins.runtime.contract import AgentExit, AgentSpec, ExitStatus
 from piloop.plugins.secrets.contract import SECRETS, set_secret
 from piloop.plugins.vcs.contract import Part

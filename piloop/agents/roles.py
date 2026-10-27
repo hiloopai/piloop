@@ -12,9 +12,10 @@ from covalence import Cid
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, Agent
-from piloop.config import BRIEF_FILE, CampaignConfig, Track
+from piloop.config import BRIEF_FILE, CampaignConfig
 from piloop.db.models import AgentSession, Campaign
 from piloop.ids import RoleName
+from piloop.plugins.campaign_type.kit.evaluation.config import Track
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.harness.contract import Harness
 from piloop.plugins.role.contract import Files, SweepRole

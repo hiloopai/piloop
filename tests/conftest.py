@@ -34,21 +34,9 @@ from piloop.campaign.campaigns import CampaignAdded
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.api import Handlers, daemon_state, with_api
 from piloop.daemon.main import ACTOR
-from piloop.daemon.run_controller import RunController
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import in_order
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Event,
-    Measurement,
-    Origin,
-    RunEnd,
-    RunStatus,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event, utcnow
 from piloop.db.session import Database, migrate
 from piloop.ids import AgentSessionId, CampaignId, RoleName
 from piloop.net.server import Server, app, local_listener, url
@@ -56,6 +44,13 @@ from piloop.net.tokens import Tokens, mint_agent
 from piloop.otel import Tracer
 from piloop.plugins.archive.local import store as archive_module
 from piloop.plugins.campaign_type.consumers import Campaigns
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.evaluate import Measured, run_evaluate
+from piloop.plugins.campaign_type.kit.evaluation.ledger import current_evaluator
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.contribution import collect, contributions_of, installed
 from piloop.plugins.executor.kit.leases import Timing
@@ -69,10 +64,7 @@ from piloop.plugins.runtime.contract import Handle, Runtime
 from piloop.plugins.runtime.subprocess import SubprocessRuntime
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
-from piloop.plugins.verdict_rule.contract import Outcome
 from piloop.runtime.factory import RuntimeFactory, make_runtime
-from piloop.scoring.evaluate import Measured, run_evaluate
-from piloop.scoring.ledger import current_evaluator
 from piloop.settings import Settings, env_names
 from piloop.store import tree as tree_module
 from piloop.text import iso

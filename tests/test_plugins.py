@@ -23,6 +23,16 @@ from piloop.daemon.main import Daemon
 from piloop.db.models import Campaign
 from piloop.db.session import Database
 from piloop.plugins import host as plugins
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
+    VERDICT_RULES,
+    Case,
+    Criterion,
+    Judgement,
+    Side,
+    VerdictRule,
+)
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.claude import Claude
@@ -48,8 +58,6 @@ from piloop.plugins.role.contract import ROLES
 from piloop.plugins.runtime.contract import RUNTIMES, RuntimeName
 from piloop.plugins.runtime.subprocess import Subprocess
 from piloop.plugins.trigger.contract import TRIGGERS
-from piloop.plugins.verdict_rule.bootstrap import Bootstrap
-from piloop.plugins.verdict_rule.contract import VERDICT_RULES, Case, Criterion, Judgement, Outcome, Side, VerdictRule
 from piloop.runtime.factory import make_runtime, runtimes
 from piloop.settings import HOME_PLUGINS, Settings
 from tests.conftest import example, package
@@ -364,12 +372,18 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
 @pytest.mark.parametrize(
     ('value', 'error'),
     [
-        (f'{PLUGIN}:NOT_A_ROLE', 'is not a subclass of piloop.plugins.verdict_rule.contract.VerdictRule$'),
+        (
+            f'{PLUGIN}:NOT_A_ROLE',
+            'is not a subclass of piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract.VerdictRule$',
+        ),
         (
             f'{PLUGIN}:Undecided',
-            'does not implement piloop.plugins.verdict_rule.contract.VerdictRule: it has no decide$',
+            'does not implement piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract.VerdictRule: it has no decide$',
         ),
-        ('piloop.plugins.stop_rule.limits:Limits', 'is not a subclass of piloop.plugins.verdict_rule.contract'),
+        (
+            'piloop.plugins.stop_rule.limits:Limits',
+            'is not a subclass of piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract',
+        ),
     ],
 )
 def test_a_provider_is_a_class_that_implements_its_contract(

@@ -3,8 +3,8 @@ from datetime import timedelta
 from sqlalchemy import select
 
 from piloop.api.views import Lines, Rendered
-from piloop.campaign.ideas import defined_by, yields
 from piloop.db.models import ENDED, LIVE, AgentSession, AgentSessionState
+from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by, yields
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.reports.overview import agent_output, defining, on
 from piloop.text import NONE, age, cell

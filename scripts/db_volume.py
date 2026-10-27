@@ -27,12 +27,12 @@ from piloop.campaign.campaigns import BLANK, workspace_dir
 from piloop.campaign.stop import check, escalated
 from piloop.cli.database import ORCHESTRATOR_PROCEDURES
 from piloop.config import CampaignConfig, load_campaign_config
-from piloop.daemon.run_controller import RunController
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.models import Campaign, utcnow
 from piloop.db.session import Database
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.consumers import Campaigns
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.section.contract import Rendering, rendered
 from piloop.plugins.stop_rule.contract import Hold

@@ -10,20 +10,10 @@ from covalence import Cid
 from sqlalchemy import delete, select, text
 
 from piloop.campaign.campaigns import workspace_dir
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Idea, Run, RunStatus, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers import changelog
-from piloop.ids import (
-    IMPLEMENTER,
-    AgentSessionId,
-    CampaignId,
-    CampaignStatus,
-    IdeaId,
-    IdeaStatus,
-    RoleName,
-    TargetKind,
-    TargetRef,
-)
+from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, RoleName, TargetKind, TargetRef
 from piloop.plugins.archive import contract as archive_contract
 from piloop.plugins.archive.contract import CampaignArchived, Summary
 from piloop.plugins.archive.local import store as archive_module
@@ -43,6 +33,10 @@ from piloop.plugins.archive.local.store import (
     summary,
 )
 from piloop.plugins.archive.local.tables import Archive
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.cas.kit.objects import ObjectsCas, key
 from piloop.settings import INPUTS_DIR
@@ -587,4 +581,6 @@ def imported(path: Path) -> list[str]:
 def test_archive_imports_nothing_of_ideas_or_runs() -> None:
     package = Path(archive_contract.__file__).parent
     assert {str(p.relative_to(package)): imported(p) for p in package.rglob('*.py') if imported(p)} == {}
-    assert imported(Path(changelog.__file__)) == ['piloop.db.models.OPEN_RUNS'], 'the check finds such an import'
+    assert imported(Path(changelog.__file__)) == ['piloop.plugins.campaign_type.kit.runs.ids.OPEN_RUNS'], (
+        'the check finds such an import'
+    )

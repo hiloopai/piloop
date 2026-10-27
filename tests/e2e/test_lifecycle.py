@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from piloop.db.models import JUDGED
+from piloop.plugins.campaign_type.kit.candidates.ids import JUDGED
 from piloop.plugins.runtime.contract import TAG_ENV
 from piloop.plugins.runtime.kit.tags import tagged
 from tests.conftest import wait_until

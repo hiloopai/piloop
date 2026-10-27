@@ -19,9 +19,9 @@ from piloop.db.events import has, latest, payload_of
 from piloop.db.models import Campaign, Comment, Event, EventModel
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import CommentKind, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.evaluation.ledger import last_keep_at
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactReadError, FactSource
 from piloop.plugins.fact_source.facts import Fact, FactValue, reading, since_keep
-from piloop.scoring.ledger import last_keep_at
 
 NOTICE_PRIORITY = 1
 NEVER_READ = datetime.min.replace(tzinfo=UTC)

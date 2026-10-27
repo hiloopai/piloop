@@ -6,12 +6,14 @@ from pathlib import Path
 import pytest
 from inline_snapshot import snapshot
 
-from piloop.config import ConfigError, Ratio, load_campaign_config
+from piloop.config import ConfigError, load_campaign_config
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.evaluation.config import Ratio
+from piloop.plugins.campaign_type.kit.evaluation.ledger import derive
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule import bootstrap
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap, ratio_bound
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Case, Criterion, Ratio as Parts, Side
 from piloop.plugins.metric import Direction
-from piloop.plugins.verdict_rule import bootstrap
-from piloop.plugins.verdict_rule.bootstrap import Bootstrap, ratio_bound
-from piloop.plugins.verdict_rule.contract import Case, Criterion, Outcome, Ratio as Parts, Side
-from piloop.scoring.ledger import derive
 
 SOLVED = {'name': 'solved', 'direction': 'higher', 'role': 'primary'}
 COST = {'name': 'cost_usd', 'direction': 'lower'}

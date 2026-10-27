@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from piloop.actor import System
 from piloop.db import sql
-from piloop.db.models import Campaign, Evaluation, Event, EventModel, Idea, Limit
+from piloop.db.models import Campaign, Event, EventModel, Limit
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import (
     AgentSessionRequested,
@@ -20,7 +20,9 @@ from piloop.db.triggers.changelog import (
     LimitUnset,
 )
 from piloop.ids import HOME, CampaignId, RoleName, TargetKind, TargetRef
-from piloop.scoring import queue
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.evaluation import queue
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from tests.conftest import baseline
 
 

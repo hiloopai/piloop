@@ -21,9 +21,8 @@ from piloop.cli.main import COMMANDS, add_commands
 from piloop.daemon.api import Handlers, daemon_state, openapi, with_api
 from piloop.daemon.loop import Consumer, Phase, Turn
 from piloop.daemon.main import DECLARED
-from piloop.daemon.run_controller import RunController
 from piloop.daemon.scheduler import Scheduler
-from piloop.db.models import TARGET_KINDS, Campaign, Idea, utcnow
+from piloop.db.models import TARGET_KINDS, Campaign, utcnow
 from piloop.db.session import Database
 from piloop.net import Route
 from piloop.net.server import app, executor_router
@@ -32,6 +31,8 @@ from piloop.otel import Tracer
 from piloop.plugins import contribution
 from piloop.plugins.archive.contract import ArchiveHost
 from piloop.plugins.archive.local import LocalArchive
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.contribution import CONTRIBUTORS, Contribution, DaemonHost, collect, contributions_of, machinery
 from piloop.plugins.executor.contract import JOB_KINDS, AgentFinished, AgentJob, JobKind
 from piloop.plugins.executor.workers import Workers
@@ -254,9 +255,13 @@ def test_a_package_s_job_kind_is_checked_when_the_daemon_starts_and_one_of_piloo
 def test_a_package_s_target_kind_is_checked_when_the_daemon_starts_and_one_of_piloop_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    installed(monkeypatch, [EntryPoint('notion', 'piloop.db.models:Idea', TARGET_KINDS.group)])
+    installed(
+        monkeypatch, [EntryPoint('notion', 'piloop.plugins.campaign_type.kit.backlog.tables:Idea', TARGET_KINDS.group)]
+    )
     check_declared()
     assert TARGET_KINDS.loaded() == {'notion': Idea}
-    installed(monkeypatch, [EntryPoint('idea', 'piloop.db.models:Idea', TARGET_KINDS.group)])
+    installed(
+        monkeypatch, [EntryPoint('idea', 'piloop.plugins.campaign_type.kit.backlog.tables:Idea', TARGET_KINDS.group)]
+    )
     with pytest.raises(PluginError, match="piloop.target_kinds: comments and events point at 'idea' of piloop already"):
         check_declared()

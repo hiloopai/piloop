@@ -4,10 +4,12 @@ from inline_snapshot import snapshot
 
 from piloop.actor import System
 from piloop.config import CampaignConfig
-from piloop.db.models import Campaign, Candidate, Run
+from piloop.db.models import Campaign
 from piloop.db.session import Database
-from piloop.ids import TrackName
-from piloop.plugins.verdict_rule.contract import Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.reports.history import history
 from piloop.reports.pack import pack
 from piloop.watch.panels import PANELS, Context, campaigns, header

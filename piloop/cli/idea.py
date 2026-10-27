@@ -9,7 +9,9 @@ from piloop.api.contract import BaseBody, DevelopBody, IdeaBody, Reasoned, SeedB
 from piloop.cli import common
 from piloop.cli.client import campaign_name, daemon_http
 from piloop.cli.common import HARNESS_HELP, CampaignRef
-from piloop.ids import CandidateId, IdeaId, IdeaStatus, LinkKind, TrackName
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 
 app = cyclopts.App(
     name='idea', help='Propose work (a seed, a defined idea) and change an idea: its status, links, base or track.'

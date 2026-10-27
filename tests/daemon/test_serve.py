@@ -30,8 +30,11 @@ from piloop.daemon.serve import (
     secrets,
     service_unit,
 )
-from piloop.db.models import AgentSession, AgentSessionState, Idea, Run, RunEnd, RunStatus
+from piloop.db.models import AgentSession, AgentSessionState
 from piloop.db.session import Database
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.harness.contract import Custom, each_provider
 from piloop.plugins.runtime.contract import TAG_ENV
 from piloop.plugins.runtime.kit import tags

@@ -32,10 +32,13 @@ from piloop.actor import Actor
 from piloop.agents.results import queue_prompt
 from piloop.campaign import inbox, ops
 from piloop.campaign.campaigns import find
-from piloop.campaign.ideas import reprioritise
-from piloop.db.models import Idea, utcnow
+from piloop.db.models import utcnow
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CommentId, IdeaId, IdeaStatus
+from piloop.ids import AgentSessionId, CommentId
+from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
+from piloop.plugins.campaign_type.kit.backlog.ideas import reprioritise
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.cas.contract import Cas
 from piloop.watch.panels import CAMPAIGN_COLUMNS, PANELS, Cell, Context, Item, Panel, campaigns, header
 
@@ -248,7 +251,7 @@ class IdeasTable(PanelTable):
             idea = s.get_one(Idea, key)
             now = idea.status
             try:
-                ops.check_status(idea, to)
+                backlog_ops.check_status(idea, to)
             except ops.Refused as e:
                 self.campaign.say(str(e))
                 return
@@ -259,7 +262,7 @@ class IdeasTable(PanelTable):
                 return
 
             def write(s: Session) -> str:
-                old = ops.set_idea_status(s, IdeaId(key), to, reason=reason, actor=self.campaign.actor)
+                old = backlog_ops.set_idea_status(s, IdeaId(key), to, reason=reason, actor=self.campaign.actor)
                 s.commit()
                 return f'idea#{key} {old} → {to}'
 

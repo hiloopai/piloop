@@ -20,7 +20,8 @@ from pydantic import SecretStr
 
 from piloop.actor import Agent
 from piloop.api.client import CLONE_WAIT
-from piloop.ids import IMPLEMENTER, AgentSessionId, Revision, RunId
+from piloop.ids import AgentSessionId, Revision
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunId
 from piloop.plugins.vcs.contract import CloneFailed, Version
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, commands as git
 from tests.conftest import disk, git_processes

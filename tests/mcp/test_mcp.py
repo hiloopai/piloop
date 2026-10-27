@@ -13,7 +13,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from piloop.config import CampaignConfig
-from piloop.ids import IMPLEMENTER
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.executor.contract import AgentJob
 from piloop.plugins.harness import claude, codex, pi
 from piloop.plugins.harness.claude import ClaudeMcp

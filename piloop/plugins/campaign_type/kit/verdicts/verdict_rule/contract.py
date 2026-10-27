@@ -1,0 +1,248 @@
+"""The contract of a verdict rule: the types that piloop gives a rule, and the type that the rule returns.
+
+After piloop measures a candidate, it asks the verdict rule whether to keep the candidate. It calls the rule's
+``decide`` with a ``Case``: the measurements of the candidate, the measurements of its bar (the candidate that it must
+beat), and the metrics that decide. The rule returns a ``Judgement``: ``keep``, ``interesting``, ``discard`` or
+``crash``, and a reason. piloop stores both on the candidate.
+
+The rule also decides the lineage: the bar of a run (``bar``), which keeps raise it (``raises_bar``), the head
+(``head``), and what follows a keep that lacks the head (``on_moved``). Each method but ``decide`` has the built-in behaviour as
+its default.
+
+The rule reads nothing else: it is a pure provider. ``[plugins.verdict_rule] provider`` in ``piloop.toml`` selects the
+rule, and the other keys of that table are its fields. Without the table, the rule is ``bootstrap``.
+
+This module imports only the Python standard library, the plugin host, the ids and the metric types. A rule imports this
+module, and nothing else of piloop.
+"""
+
+from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import assert_never
+
+from piloop.plugins.campaign_type.kit.candidates.ids import (  # Outcome is this contract's too: a rule returns one
+    CandidateId,
+    Outcome,
+)
+from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
+from piloop.plugins.host import Capability, One, Parameters, Scope, Tier
+from piloop.plugins.metric import Direction, number
+
+
+@dataclass(frozen=True)
+class Ratio:
+    """A metric that piloop computes, ``numerator / denominator``: the parts that a rule resamples."""
+
+    numerator: str
+    denominator: str
+
+
+@dataclass(frozen=True)
+class Criterion:
+    """A metric that decides the verdict: the primary of the candidate's track, or one of its guardrails."""
+
+    name: str
+    """The metric's name, as the evaluate command reports it."""
+    direction: Direction
+    """Whether a larger or a smaller value is better."""
+    margin: float | None = None
+    """The largest regression from the bar that a guardrail may show, in the metric's units. None on a primary."""
+    floor: float | None = None
+    """The worst value that a candidate may have, whatever the bar, or None."""
+    fraction: float | None = None
+    """The largest regression from the bar that a guardrail may show, as a fraction of the bar's value. A guardrail
+    has a ``margin`` or a ``fraction``, never both."""
+    ratio: Ratio | None = None
+    """For a metric that piloop computes: its parts, whose units and samples are in each ``Side`` by their names."""
+
+    def allowed(self, bar: float) -> float:
+        """The largest regression from ``bar``, the bar's value, in the metric's units.
+
+        It is ``margin``, or ``fraction`` of ``|bar|``, or 0 without either.
+        """
+        return self.fraction * abs(bar) if self.fraction is not None else self.margin or 0.0
+
+    def limit(self) -> str:
+        """How a reason names the regression allowed: ``margin 20`` or ``fraction 0.1``."""
+        return (
+            f'fraction {number(self.fraction)}' if self.fraction is not None else f'margin {number(self.margin or 0)}'
+        )
+
+    def past_floor(self, value: float) -> bool:
+        """Whether ``value`` is past the floor, in the metric's direction."""
+        return self.floor is not None and self.direction.better(self.floor, value)
+
+
+@dataclass(frozen=True)
+class Stopped:
+    """Where a climb of the evaluation ladder stopped, before the full panel, and why: evidence, not a score."""
+
+    rung: RungName
+    """The rung of ``[[ladder]]`` where it stopped."""
+    reason: str
+    """The stop that held, such as ``accuracy 0.664 vs 0.702 (-0.038; margin 0.03)``."""
+
+
+@dataclass(frozen=True)
+class Side:
+    """One side of the case: the candidate, or the bar that it must beat."""
+
+    name: str
+    """How a reason names it: ``candidate#73``."""
+    means: dict[str, float]
+    """The mean of each metric over its successful measurements. Empty when none succeeded."""
+    units: dict[str, dict[str, float]]
+    """The per-unit results of each metric that has them: unit id → the unit's mean contribution."""
+    samples: dict[str, list[float]] = field(default_factory=dict)
+    """The samples of each metric that ran in pairs with the other side's: the i-th of the candidate and the i-th of
+    the bar ran one after the other, on one worker. Empty without pairs."""
+    stopped: Stopped | None = None
+    """Where its latest climb of the ladder stopped, if it stopped. ``means`` never include a rung."""
+    rungs: dict[RungName, dict[str, float]] = field(default_factory=dict)
+    """The mean of each metric at each rung of the ladder that it measured."""
+
+
+@dataclass(frozen=True)
+class Case:
+    """All that a rule gets to judge one candidate."""
+
+    primary: Criterion
+    """The primary metric of the candidate's track."""
+    guardrails: tuple[Criterion, ...]
+    """The campaign's guardrails, then the primary of every other track."""
+    candidate: Side
+    """The candidate that the rule judges."""
+    bar: Side
+    """What the candidate must beat: its run's bar (https://piloop.autoresearch.inc/concepts/verdict#the-words)."""
+    parent: Side | None = None
+    """The candidate's parent, which the candidate changed. None for a candidate without one."""
+
+
+@dataclass(frozen=True)
+class Judgement:
+    """What a rule returns: the verdict, and the reason that piloop stores and shows with it."""
+
+    verdict: Outcome
+    """``keep``, ``interesting``, ``discard`` or ``crash``."""
+    reason: str
+    """Why, as piloop stores and shows it with the verdict."""
+
+
+@dataclass(frozen=True)
+class Trunk:
+    """The lineage of the head: the keeps that no branch run made, from the baseline."""
+
+
+@dataclass(frozen=True)
+class Branch:
+    """A lineage that a branch run (``runs.branch``) started from ``root``."""
+
+    root: CandidateId
+    """The candidate that the branch run started from."""
+
+
+type Lineage = Trunk | Branch
+"""Where a candidate grew, or where a run keeps."""
+
+
+@dataclass(frozen=True)
+class Imported:
+    """A reference: a version that someone imported (``piloop candidate import``). It grew on no lineage."""
+
+
+@dataclass(frozen=True)
+class Node:
+    """One candidate, as the lineage methods of a rule read it."""
+
+    id: CandidateId
+    """The candidate's id."""
+    verdict: Outcome | None
+    """None while it is pending, and for a commit that is never judged."""
+    made: Lineage | Imported
+    """Where it was made: on the side of the run that made it, or imported. The baseline is on the trunk."""
+    means: dict[str, float]
+    """The mean of each metric over its successful measurements under the current evaluator."""
+
+
+@dataclass(frozen=True)
+class Moved:
+    """A keep of a trunk run that lacks the head: its bar is no longer the head, or someone kept it by hand.
+
+    piloop makes it ``interesting`` (``moved``): as a keep it would drop what the head kept since.
+    """
+
+    candidate: Node
+    """The keep that lacks the head."""
+    head: Node
+    """The head that it lacks."""
+
+
+@dataclass(frozen=True)
+class Seed:
+    """File a seed idea on the candidate's track that composes it onto the head by hand. A stopped campaign files none."""
+
+
+@dataclass(frozen=True)
+class Leave:
+    """Do nothing more: the candidate stays ``interesting``, and its change does not reach the trunk."""
+
+
+@dataclass(frozen=True)
+class Rebase:
+    """Merge the candidate onto the head. piloop measures the merge and judges it against the head."""
+
+    conflicts: Seed | Leave = Seed()
+    """What follows when the merge conflicts."""
+
+
+class VerdictRule(Parameters, ABC):
+    """A verdict rule: its fields are its parameters. A rule has no error case: it returns a verdict for every case."""
+
+    @abstractmethod
+    def decide(self, case: Case) -> Judgement:
+        """Return the verdict on ``case.candidate`` against ``case.bar``, and the reason."""
+
+    def bar(self, ancestry: Sequence[Node]) -> CandidateId:
+        """Return the bar of a run that starts from ``ancestry[0]``. The ancestry goes from it, parent by parent, to its root.
+
+        By default the bar is the nearest keep or reference, else the root. A non-keep is never a bar, pinned or not.
+        Otherwise a run pinned to an ``interesting`` candidate would be held to that candidate's numbers, which a fix to
+        it could never beat. A run pinned to a non-keep starts from its tree and must beat the latest keep of its
+        lineage.
+        """
+        found = (n.id for n in ancestry if n.verdict is Outcome.KEEP or isinstance(n.made, Imported))
+        return next(found, ancestry[-1].id)
+
+    def raises_bar(self, node: Node, lineage: Lineage) -> bool:
+        """Return whether ``node``, a commit of a run that keeps on ``lineage``, becomes the bar of the run's next commits.
+
+        The trunk's keeps are those that raise its bar. By default a keep does, and a known keep that the run reached
+        again too. On the trunk, a keep that a branch run made does not: a trunk run that merges a branch keep onto the
+        head must beat the head, so a branch's numbers are never a trunk run's bar.
+        """
+        match lineage:
+            case Branch():
+                return node.verdict is Outcome.KEEP
+            case Trunk():
+                return node.verdict is Outcome.KEEP and not isinstance(node.made, Branch)
+            case _:
+                assert_never(lineage)
+
+    def head(self, trunk: Sequence[Node]) -> CandidateId | None:
+        """Return the head among the trunk's keeps, oldest first, or None when there is none.
+
+        Every run that pins no base starts from the head. By default it is the latest trunk keep. A trunk keep lands
+        only while its bar is the head, and a candidate is always newer than its bar, so each trunk keep is newer than
+        the one before. Scores do not matter: after an evaluator change, the head stays where it was.
+        """
+        return trunk[-1].id if trunk else None
+
+    def on_moved(self, moved: Moved) -> Rebase | Leave:
+        """Return what follows a keep that lacks the head. By default its merge onto the head, and a seed on a conflict."""
+        return Rebase()
+
+
+VERDICT_RULES = Capability('verdict_rule', VerdictRule, tier=Tier.PURE, table=One(Scope.CAMPAIGN, default='bootstrap'))
+"""The verdict rule capability: every verdict rule by name. The built-in rule is ``bootstrap``
+(``piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap``)."""

@@ -19,7 +19,8 @@ from git.exc import BadName, GitCommandError, GitError, InvalidGitRepositoryErro
 from pydantic import SecretStr
 
 from piloop.actor import Agent
-from piloop.ids import Revision, RunId
+from piloop.ids import Revision
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.host import Check
 from piloop.plugins.vcs.contract import (

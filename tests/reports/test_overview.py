@@ -9,35 +9,18 @@ from sqlalchemy.orm import Session
 
 from piloop.agents.results import StartupAnomaly
 from piloop.config import CampaignConfig, load_campaign_config
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Comment,
-    Event,
-    Idea,
-    IdeaLink,
-    Measurement,
-    Run,
-    RunStatus,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
-from piloop.ids import (
-    IMPLEMENTER,
-    CampaignStatus,
-    Cause,
-    CommentKind,
-    IdeaStatus,
-    LinkKind,
-    RoleName,
-    RunId,
-    TargetKind,
-    TargetRef,
-)
+from piloop.ids import CampaignStatus, CommentKind, RoleName, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.section.queue import BLOCKED_SHOWN
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.section.contract import SECTIONS, Rendering, Surface, defaults, markdown
-from piloop.plugins.section.queue import BLOCKED_SHOWN
-from piloop.plugins.verdict_rule.contract import Outcome
 from piloop.reports import overview as overview_module
 from piloop.text import LINKED_CHARS, age, block
 from tests.conftest import RESEARCH, WATCHDOG, cas_of, end_of, home_cas, reconfigured, spent

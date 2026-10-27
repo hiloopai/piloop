@@ -14,14 +14,18 @@ from git import Repo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from piloop.campaign import ops
-from piloop.campaign.ops import missing_head
 from piloop.config import load_campaign_config
-from piloop.db.models import Campaign, Candidate, Cause, Idea, IdeaStatus, Origin, Run
+from piloop.db.models import Campaign
 from piloop.db.session import Database
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ledger import bar_of, baseline, head, trunk_keeps
+from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
+from piloop.plugins.campaign_type.kit.verdicts.ops import missing_head
 from piloop.plugins.host import ContractBroken
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring.ledger import bar_of, baseline, head, trunk_keeps
 from tests.campaign.test_ops import ACTOR, commit_on, run_candidate
 from tests.conftest import ScriptRuntime
 from tests.daemon.test_roles import PLUGIN, forget_loaded, installed
@@ -160,7 +164,7 @@ def test_a_keep_that_lacks_the_head_is_left_or_merged_without_a_seed_as_the_rule
     left = run_candidate(db, campaign, Outcome.DISCARD, by=None, commit=left_sha)
     select_rule(db, campaign, 'leaves')
     with db.session() as s:
-        kept = ops.set_verdict(s, left, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
+        kept = verdicts_ops.set_verdict(s, left, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
         c = s.get_one(Candidate, left)
         assert (kept.rebased, c.verdict, c.cause, c.verdict_reason) == (
             None,
@@ -171,7 +175,7 @@ def test_a_keep_that_lacks_the_head_is_left_or_merged_without_a_seed_as_the_rule
         s.commit()
     select_rule(db, campaign, 'no_compose')
     with db.session() as s:
-        kept = ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
+        kept = verdicts_ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
         assert kept.rebased is not None and kept.rebased.conflicts == ['x.txt']
         assert s.scalars(select(Idea).where(Idea.status == IdeaStatus.SEED)).all() == []
         assert s.get_one(Candidate, old).verdict_reason == (

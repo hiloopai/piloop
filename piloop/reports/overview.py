@@ -16,28 +16,19 @@ from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from piloop.agents.roles import harness_of
-from piloop.campaign.ideas import runnable
 from piloop.campaign.inbox import campaign_of
 from piloop.campaign.stop import describe, held
-from piloop.config import TRANSCRIPT, CampaignConfig, Metric, Track
-from piloop.db.models import (
-    LIVE,
-    AgentSession,
-    Campaign,
-    Candidate,
-    Event,
-    Idea,
-    Origin,
-    Pause,
-    Run,
-    count,
-)
-from piloop.ids import CampaignStatus, EvaluatorId, IdeaStatus
-from piloop.plugins.cas.contract import Cas
-from piloop.plugins.harness.contract import UsageReader
-from piloop.plugins.role.contract import Files
-from piloop.runtime.factory import handle_for, runtime_for
-from piloop.scoring.ledger import (
+from piloop.config import TRANSCRIPT, CampaignConfig
+from piloop.db.models import LIVE, AgentSession, Campaign, Event, Pause, count
+from piloop.ids import CampaignStatus
+from piloop.plugins.campaign_type.kit.backlog.ideas import runnable
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.config import Metric, Track
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
+from piloop.plugins.campaign_type.kit.evaluation.ledger import (
     baseline,
     full,
     head,
@@ -45,6 +36,11 @@ from piloop.scoring.ledger import (
     references,
     score,
 )
+from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.cas.contract import Cas
+from piloop.plugins.harness.contract import UsageReader
+from piloop.plugins.role.contract import Files
+from piloop.runtime.factory import handle_for, runtime_for
 from piloop.store import chunks
 from piloop.store.tree import Missing
 from piloop.text import NONE, cell, metric

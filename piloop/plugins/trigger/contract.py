@@ -32,7 +32,7 @@ class TrackBacklog:
     name: str
     runnable: int
     waiting: int
-    """Ideas that only prerequisites in flight block (``piloop.campaign.ideas.waiting``)."""
+    """Ideas that only prerequisites in flight block (``piloop.plugins.campaign_type.kit.backlog.ideas.waiting``)."""
     target: int
     """The track's share of ``Backlog.target``, rounded up. It is 0 for a track with share 0."""
 
@@ -193,7 +193,7 @@ class Pass(Protocol):
     def empty_sweeps(self, states: tuple[AgentSessionState, ...]) -> list[AgentSession]:
         """The role's latest rows in ``states``, newest first, until one that defined an idea.
 
-        A row defined an idea if it inserted one or developed a seed into one (``piloop.campaign.ideas.defined_by``).
+        A row defined an idea if it inserted one or developed a seed into one (``piloop.plugins.campaign_type.kit.backlog.ideas.defined_by``).
         """
         ...
 

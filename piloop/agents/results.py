@@ -21,37 +21,20 @@ from sqlalchemy.orm import Session
 from piloop.actor import Agent, SignedAgent, System
 from piloop.agents.roles import harness_of
 from piloop.db.events import emit, has, latest
-from piloop.db.models import (
-    LIVE,
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Comment,
-    Evaluation,
-    Event,
-    EventModel,
-    Idea,
-    ReadBy,
-    Run,
-    RunEnd,
-    utcnow,
-)
+from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Comment, Event, EventModel, ReadBy, utcnow
 from piloop.db.session import Database, write_transaction
-from piloop.ids import (
-    AgentSessionId,
-    CandidateId,
-    CommentId,
-    CommentKind,
-    EvaluatorId,
-    IdeaId,
-    MeasurementId,
-    RoleName,
-    RunId,
-    TargetKind,
-    TargetRef,
-)
+from piloop.ids import AgentSessionId, CommentId, CommentKind, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation import ledger
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId
+from piloop.plugins.campaign_type.kit.evaluation.ledger import save_units
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.executor.contract import (
     AgentFinished,
@@ -73,8 +56,6 @@ from piloop.plugins.executor.contract import (
 from piloop.plugins.runtime.contract import AgentExit, ExitStatus
 from piloop.plugins.vcs.contract import Transfer
 from piloop.proc import Channel
-from piloop.scoring import ledger
-from piloop.scoring.ledger import save_units
 from piloop.settings import TMP_DIR, UNITS_DIR
 from piloop.store.tree import Manifest, Staged, merge, stage, write_files
 

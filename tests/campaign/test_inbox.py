@@ -14,12 +14,16 @@ from piloop.campaign import inbox
 from piloop.campaign.anomaly import AnomalyReported
 from piloop.db import feed as db_feed
 from piloop.db.events import emit, in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Idea, Measurement, Run, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CommentAcked, Commented, IdeaCreated
-from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, IdeaStatus, TargetKind, TargetRef
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring.ledger import CandidateJudged
+from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.evaluation.ledger import CandidateJudged
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from tests.conftest import WATCHDOG
 from tests.reports.test_history import idea
 from tests.reports.test_overview import render

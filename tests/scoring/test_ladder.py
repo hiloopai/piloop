@@ -2,10 +2,10 @@
 
 import pytest
 
-from piloop.config import Rung, Tolerance
-from piloop.ids import RungName
+from piloop.plugins.campaign_type.kit.evaluation.config import Rung, Tolerance
+from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
+from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate, stop_reason
 from piloop.plugins.metric import Direction
-from piloop.scoring.ladder import Gate, stop_reason
 
 DIRECTIONS = {'accuracy': Direction.HIGHER, 'latency_ms': Direction.LOWER}
 SCREEN = Rung(

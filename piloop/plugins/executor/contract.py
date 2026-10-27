@@ -30,12 +30,16 @@ from sqlalchemy.orm import Session
 from piloop import deprecated
 from piloop.actor import Agent
 from piloop.api.contract import Revealed
-from piloop.config import Rung
 from piloop.db.models import AgentSession, EventModel
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CampaignId, CandidateId, CommentId, EnvName, Revision, RungName, RunId
+from piloop.ids import AgentSessionId, CampaignId, CommentId, EnvName, Revision
 from piloop.net.tokens import mint_agent
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.config import Rung
+from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
+from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.contribution import Contributes
 from piloop.plugins.harness.contract import HARNESSES, Harness
@@ -47,7 +51,6 @@ from piloop.plugins.secrets.contract import SecretsProvider, values
 from piloop.plugins.vcs.contract import VCS, Repository, Transfer, Unsaved, Vcs
 from piloop.proc import Channel
 from piloop.runtime.factory import RuntimeFactory
-from piloop.scoring.ladder import Gate
 from piloop.usage import Usage
 
 

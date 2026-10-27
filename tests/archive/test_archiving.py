@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy import select
 
 from piloop.campaign.campaigns import workspace_dir
-from piloop.daemon.run_controller import RunController
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.models import Campaign, utcnow
 from piloop.db.session import Database
@@ -17,6 +16,7 @@ from piloop.plugins.archive.contract import CONSUMER, ArchiveHost
 from piloop.plugins.archive.local import LocalArchive, archiver as archiver_module
 from piloop.plugins.archive.local.store import Pruned
 from piloop.plugins.archive.local.tables import Archive
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.workers import Workers
 from tests.archive.test_store import files

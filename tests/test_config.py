@@ -9,24 +9,27 @@ import pytest
 from inline_snapshot import snapshot
 
 from piloop.campaign.campaigns import check_takes
-from piloop.config import CampaignConfig, ConfigError, Metric, MetricRole, load_campaign_config
-from piloop.ids import IMPLEMENTER, RoleName, TrackName
+from piloop.config import CampaignConfig, ConfigError, load_campaign_config
+from piloop.ids import RoleName
+from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
+from piloop.plugins.campaign_type.kit.backlog.role.scout import ScoutRole
+from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
+from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
+from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ledger import criterion
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
+from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
+from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.harness.contract import Harness, each_provider
 from piloop.plugins.metric import Direction
 from piloop.plugins.role.contract import Files, ImplementerRole
 from piloop.plugins.role.orchestrator import OrchestratorRole
-from piloop.plugins.role.research import ResearchRole
-from piloop.plugins.role.scout import ScoutRole
-from piloop.plugins.role.watchdog import WatchdogRole
 from piloop.plugins.section.goal import Goal
 from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule
 from piloop.plugins.stop_rule.limits import Limits
-from piloop.plugins.trigger.low_water import LowWaterTrigger
-from piloop.plugins.trigger.seed import SeedTrigger
 from piloop.plugins.trigger.sql import SqlTrigger
-from piloop.plugins.trigger.stalled import StalledTrigger
-from piloop.scoring.ledger import criterion
 from tests.conftest import AGENT_TIMEOUT, RESEARCH, SCOUT, WATCHDOG, role_of
 
 

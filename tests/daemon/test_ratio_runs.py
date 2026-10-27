@@ -2,10 +2,11 @@
 
 from pathlib import Path
 
-from piloop.db.models import Campaign, Candidate
+from piloop.db.models import Campaign
 from piloop.db.session import Database
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring.ledger import metrics
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ledger import metrics
 from tests.conftest import ScriptRuntime, baseline
 from tests.daemon.test_evaluation_queue import run_candidates
 from tests.daemon.test_run_controller import controller, execute, make_run, set_config

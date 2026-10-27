@@ -8,8 +8,8 @@ from pydantic import ValidationError
 
 from piloop.cli import common
 from piloop.cli.client import daemon_http
-from piloop.ids import CandidateId
-from piloop.scoring.api import Report, ScoringClient
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.api import Report, ScoringClient
 
 app = cyclopts.App(name='measurement', help='Record a measurement made outside the daemon.')
 

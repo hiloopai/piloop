@@ -23,24 +23,16 @@ from sqlalchemy import func, select
 
 from piloop.agents.results import PromptOutcome, queue_prompt
 from piloop.api.contract import Access
-from piloop.daemon.run_controller import RunController
 from piloop.db.events import in_order
-from piloop.db.models import (
-    AgentSession,
-    Campaign,
-    Comment,
-    Event,
-    Lease,
-    LeaseKind,
-    LeaseState,
-    LeaseWorker,
-    Measurement,
-    RunStatus,
-)
+from piloop.db.models import AgentSession, Campaign, Comment, Event, Lease, LeaseKind, LeaseState, LeaseWorker
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CandidateId, CommentId, CommentKind, TargetKind
+from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind
 from piloop.net import tokens
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
 from piloop.plugins.executor.contract import AgentKey, Prompt
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.door import AgentCall, Call

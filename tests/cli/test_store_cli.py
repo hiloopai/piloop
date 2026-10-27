@@ -12,9 +12,10 @@ from piloop.campaign.campaigns import workspace_dir
 from piloop.cli import common, local
 from piloop.db.models import Campaign
 from piloop.db.session import Database
-from piloop.ids import CampaignId, IdeaStatus
+from piloop.ids import CampaignId
 from piloop.plugins.archive.local.store import Job, archive, prune
 from piloop.plugins.archive.local.tables import Archive
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.cas.kit.objects import key
 from piloop.settings import Settings
 from tests.archive.test_store import add_idea, add_run, files, ref, write

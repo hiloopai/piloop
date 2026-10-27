@@ -78,7 +78,9 @@ from piloop.api.views import (
     TokenMade,
     TrackChanged,
 )
-from piloop.ids import AgentSessionId, CommentId, IdeaId, LinkKind, RunId
+from piloop.ids import AgentSessionId, CommentId
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, LinkKind
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
 TIMEOUT_SECONDS = 30
 CLONE_WAIT: Final = timedelta(minutes=15)

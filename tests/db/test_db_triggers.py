@@ -16,11 +16,14 @@ from piloop.actor import System
 from piloop.daemon.main import ACTOR
 from piloop.db import sql, triggers
 from piloop.db.events import SubjectSettled, in_order
-from piloop.db.models import Campaign, Idea, Run, RunStatus
+from piloop.db.models import Campaign
 from piloop.db.schema import schemas, tables
 from piloop.db.session import Database, migrate
 from piloop.db.triggers import PERSISTENT, TEMP, Trigger, changelog, provenance
 from piloop.ids import TargetKind
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from tests.conftest import disk, end_of
 
 

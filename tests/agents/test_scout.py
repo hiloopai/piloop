@@ -8,26 +8,27 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from piloop.campaign.ideas import yields
 from piloop.config import load_campaign_config
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Comment,
-    Idea,
-    Run,
-    RunEnd,
-    RunStatus,
-    Technique,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, utcnow
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CommentKind, IdeaStatus
-from piloop.plugins.role.scout import MIN_WINDOW, WATCH_RUNS, WINDOW, ScoutRole, sources, watch_list, window
+from piloop.ids import AgentSessionId, CommentKind
+from piloop.plugins.campaign_type.kit.backlog.ideas import yields
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.role.scout import (
+    MIN_WINDOW,
+    WATCH_RUNS,
+    WINDOW,
+    ScoutRole,
+    sources,
+    watch_list,
+    window,
+)
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea, Technique
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.trigger.cron import CronTrigger
-from piloop.plugins.verdict_rule.contract import Outcome
 from piloop.reports.history import history
 from piloop.settings import Settings
 from tests.conftest import RESEARCH, SCOUT, SETTLE, ScriptRuntime, role_of, run_all, serving_api, write_toml

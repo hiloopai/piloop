@@ -10,7 +10,8 @@ from piloop.api.views import Delivered, Pending, Queued, Undelivered
 from piloop.cli import common
 from piloop.cli.client import campaign_name, daemon_http
 from piloop.cli.common import HARNESS_HELP, CampaignRef
-from piloop.ids import AgentSessionId, Ending, RoleName, RunId
+from piloop.ids import AgentSessionId, Ending, RoleName
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
 agent_app = cyclopts.App(name='agent', help='Act on one agent.')
 run_app = cyclopts.App(name='run', help='Act on one run.')

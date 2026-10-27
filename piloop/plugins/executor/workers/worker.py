@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict
 
 from piloop.db.models import NoLease
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.evaluation.ledger import evaluator_runners
 from piloop.plugins.executor.contract import (
     AgentJob,
     AgentReport,
@@ -65,7 +66,6 @@ from piloop.plugins.executor.kit.relay import Relay
 from piloop.plugins.runtime.contract import Handle, Runtime
 from piloop.proc import Started, alive, kill_group, started
 from piloop.runtime.factory import RuntimeFactory, make_runtime
-from piloop.scoring.ledger import evaluator_runners
 
 GONE = 'worker lost: the worker restarted and could not find its {what}'
 WORKER_ANOMALY = 'anomaly.worker'

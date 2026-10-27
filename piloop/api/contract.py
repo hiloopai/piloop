@@ -23,20 +23,10 @@ from pydantic import (
 from pydantic_core import PydanticCustomError
 
 from piloop.actor import CALLER_NAME
-from piloop.ids import (
-    LISTED,
-    CampaignName,
-    CampaignStatus,
-    CandidateId,
-    CommentId,
-    CommentKind,
-    Ending,
-    EnvName,
-    IdeaId,
-    IdeaStatus,
-    RoleName,
-    TrackName,
-)
+from piloop.ids import LISTED, CampaignName, CampaignStatus, CommentId, CommentKind, Ending, EnvName, RoleName
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 
 MAX_POLL_SECONDS = 25
 """The longest that the server holds a long-poll (``Polled.wait``), as the GitHub Actions runner's."""

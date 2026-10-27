@@ -255,22 +255,77 @@ def test_each_capability_is_a_package_of_its_contract_its_built_in_providers_and
     (pure, so that a pure provider reads them), ``consumers.py`` its machinery in the daemon (``piloop.contributors``),
     every other module is a built-in provider by the name of its entry
     point, ``kit/`` holds what any provider of the capability may use, and a directory without Python holds the
-    providers' resources (``role/prompts/``)."""
+    providers' resources (``role/prompts/``).
+
+    A campaign type's package, and each component of the campaign type kit, has the same layout for what only the
+    campaigns that use it read, in ``<package>/<capability>/``: a capability that it declares (``verdict_rule``), and
+    its own providers of the others."""
     plugins = Path(capabilities.__file__).parent / 'plugins'
+    kit = plugins / 'campaign_type' / 'kit'
+    places = {'piloop.plugins': plugins} | {
+        f'piloop.plugins.campaign_type.{p.relative_to(plugins / "campaign_type").as_posix().replace("/", ".")}': p
+        for p in (*(plugins / 'campaign_type').iterdir(), *kit.iterdir())
+        if p != kit and (p / '__init__.py').is_file()
+    }
     declared = _own(CAPABILITIES)
-    assert {p.name for p in plugins.iterdir() if p.is_dir() and p.name != '__pycache__'} == {c.name for c in declared}
+    assert {p.name for p in plugins.iterdir() if p.is_dir() and p.name != '__pycache__'} == {
+        c.name for c in declared if c.module == f'piloop.plugins.{c.name}.contract'
+    }
     for capability in declared:
-        assert capability.module == f'piloop.plugins.{capability.name}.contract'
+        assert capability.module in {f'{place}.{capability.name}.contract' for place in places}, capability.name
         providers = _own(capability.load().group)
-        assert [p.module for p in providers] == [f'piloop.plugins.{capability.name}.{p.name}' for p in providers]
-        others = {'__init__.py', '__pycache__', 'contract.py', 'consumers.py', 'facts.py', 'kit'}
-        resources = {p.name for p in (plugins / capability.name).iterdir() if p.is_dir() and not any(p.rglob('*.py'))}
-        modules = {
-            p.name.removesuffix('.py')
-            for p in (plugins / capability.name).iterdir()
-            if p.name not in others | resources
-        }
-        assert modules == {p.name for p in providers}, capability.name
+        for place, root in places.items():
+            here = [p for p in providers if p.module == f'{place}.{capability.name}.{p.name}']
+            package = root / capability.name
+            if not package.is_dir():
+                assert here == [], capability.name
+                continue
+            others = {'__init__.py', '__pycache__', 'contract.py', 'consumers.py', 'facts.py', 'kit'}
+            resources = {p.name for p in package.iterdir() if p.is_dir() and not any(p.rglob('*.py'))}
+            modules = {p.name.removesuffix('.py') for p in package.iterdir() if p.name not in others | resources}
+            assert modules == {p.name for p in here}, f'{place}.{capability.name}'
+        located = {p.name for p in providers for place in places if p.module == f'{place}.{capability.name}.{p.name}'}
+        assert located == {p.name for p in providers}, capability.name
+
+
+STILL_IMPORT_THE_TYPE_KIT = frozenset(
+    {
+        'agents/launcher.py',
+        'agents/results.py',
+        'agents/roles.py',
+        'api/client.py',
+        'api/contract.py',
+        'api/views.py',
+        'campaign/campaigns.py',
+        'campaign/inbox.py',
+        'campaign/ops.py',
+        'campaign/stop.py',
+        'cli/agents.py',
+        'cli/campaign.py',
+        'cli/candidate.py',
+        'cli/evaluation.py',
+        'cli/idea.py',
+        'cli/measurement.py',
+        'config.py',
+        'daemon/api.py',
+        'daemon/main.py',
+        'daemon/scheduler.py',
+        'db/models.py',
+        'db/triggers/changelog.py',
+        'plugins/campaign_type/contract.py',
+        'plugins/contribution.py',
+        'plugins/executor/contract.py',
+        'plugins/vcs/contract.py',
+        'reports/feed.py',
+        'reports/history.py',
+        'reports/overview.py',
+        'reports/pack.py',
+        'watch/app.py',
+        'watch/panels.py',
+    }
+)
+"""The core modules that still reach the campaign type kit's components directly. Each goes when the campaign type
+contract carries what it reads, and the list must then shrink with it."""
 
 
 def test_core_imports_no_helper_of_a_kit() -> None:
@@ -279,12 +334,17 @@ def test_core_imports_no_helper_of_a_kit() -> None:
     plugins = root / 'plugins'
     providers = [p for p in plugins.glob('*/*') if p.name not in {'__init__.py', 'contract.py'}]
     core = [p for p in root.rglob('*.py') if not any(p.is_relative_to(provider) for provider in providers)]
-    importers = [
-        p
+    importers = {
+        str(p.relative_to(root)): {m for m in _imports(p) if re.match(r'piloop\.plugins\.\w+\.kit\b', m)}
         for p in core
-        if any(re.match(r'piloop\.plugins\.\w+\.kit\b', m) for m in _imports(p)) and p.stem != 'capabilities'
-    ]
-    assert importers == []
+        if p.stem != 'capabilities'
+    }
+    found = {p for p, kits in importers.items() if kits}
+    assert {p for p in found if p not in STILL_IMPORT_THE_TYPE_KIT} == set()
+    assert {
+        p for p in found if any(not k.startswith('piloop.plugins.campaign_type.kit') for k in importers[p])
+    } == set()
+    assert found == STILL_IMPORT_THE_TYPE_KIT, 'a module no longer imports the kit: take it off the list'
 
 
 def test_the_example_plugins_import_piloop_only_from_the_module() -> None:
@@ -312,6 +372,14 @@ def test_a_pure_example_plugin_uses_only_pure_contracts_and_pure_providers() -> 
     metric types, the facts, or a pure built-in provider."""
     pure = [c for c in _declared() if c.tier is Tier.PURE]
     modules = {c.contract.__module__ for c in pure} | {p.__module__ for c in pure for p in c.builtins().values()}
+    # a pure contract re-exports data of the component that holds it, such as the verdict rule's Outcome
+    contracts = [sys.modules[c.contract.__module__] for c in pure]
+    modules |= {
+        v.__module__
+        for m in contracts
+        for v in vars(m).values()
+        if isinstance(v, type) and v.__module__.startswith('piloop.plugins.campaign_type.kit.')
+    }
     modules |= {Capability.__module__, metric.__name__, facts.__name__}
     plugins = [piloop_min_gain, piloop_stop_after_keeps, piloop_keep_cost]
     for plugin in plugins:

@@ -19,10 +19,11 @@ from piloop.plugins.host import Capability, Parameters
 if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database imports piloop.config
     from sqlalchemy.orm import Session
 
-    from piloop.daemon.run_controller import RunController
-    from piloop.db.models import AgentSession, Campaign, RunEnd
+    from piloop.db.models import AgentSession, Campaign
     from piloop.ids import AgentSessionId, Revision, RoleName, TargetRef
     from piloop.otel import Tracer
+    from piloop.plugins.campaign_type.kit.runs.controller import RunController
+    from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
     from piloop.plugins.fact_source.facts import Facts
     from piloop.plugins.trigger.contract import Backlog
 

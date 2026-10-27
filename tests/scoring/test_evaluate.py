@@ -8,11 +8,8 @@ from pathlib import Path
 import pytest
 from inline_snapshot import snapshot
 
-from piloop.config import Rung, Tolerance
-from piloop.ids import RungName
-from piloop.plugins.metric import Direction
-from piloop.proc import Channel
-from piloop.scoring.evaluate import (
+from piloop.plugins.campaign_type.kit.evaluation.config import Rung, Tolerance
+from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
     BadResult,
     Checks,
     EvalResult,
@@ -31,7 +28,10 @@ from piloop.scoring.evaluate import (
     printed,
     run_evaluate,
 )
-from piloop.scoring.ladder import Gate
+from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
+from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
+from piloop.plugins.metric import Direction
+from piloop.proc import Channel
 
 HIGHER, LOWER = Direction.HIGHER, Direction.LOWER
 

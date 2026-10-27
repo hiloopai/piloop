@@ -37,76 +37,24 @@ from piloop.agents.results import (
 from piloop.agents.roles import SQL_HINT, read_brief
 from piloop.campaign import stop
 from piloop.campaign.campaigns import sync
-from piloop.campaign.ideas import park_stranded, runnable, supersede
-from piloop.campaign.ops import Overridden, Report, add_measurement, set_verdict
 from piloop.cli.plugins import selections
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
-from piloop.daemon.run_controller import (
-    INTERRUPTED,
-    NO_CHANGES,
-    RECOVERED_REASON,
-    SKIPPED_REASON,
-    UNSAVED,
-    RecoveryRequeued,
-    RunController,
-    RunFacts,
-    RunRelaunched,
-    run_outcome,
-)
 from piloop.db.events import emit, has, in_order
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Comment,
-    Evaluator,
-    Event,
-    Idea,
-    IdeaLink,
-    Measurement,
-    Origin,
-    Run,
-    RunEnd,
-    RunStatus,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import IdeaLinked, OriginChanged
-from piloop.ids import (
-    IMPLEMENTER,
-    CampaignId,
-    CampaignStatus,
-    CandidateId,
-    Cause,
-    CommentId,
-    Ending,
-    EvaluatorId,
-    IdeaStatus,
-    LinkKind,
-    Revision,
-    RoleName,
-    RunId,
-    TargetKind,
-    TargetRef,
-)
+from piloop.ids import CampaignId, CampaignStatus, CommentId, Ending, Revision, RoleName, TargetKind, TargetRef
 from piloop.otel import Span, Tracer
 from piloop.plugins import host
-from piloop.plugins.executor.contract import Source
-from piloop.plugins.executor.kit import jobs
-from piloop.plugins.executor.kit.jobs import INPUTS_CHANGED, INPUTS_REBUILT
-from piloop.plugins.executor.workers import Workers
-from piloop.plugins.executor.workers.worker import _Control
-from piloop.plugins.harness.contract import cleared_env
-from piloop.plugins.harness.kit.jsonl import dash_separators_wrapped
-from piloop.plugins.memory.local.tables import Lesson, LessonStatus
-from piloop.plugins.runtime.contract import AgentExit, Handle
-from piloop.plugins.vcs.contract import Part
-from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, commands as git
-from piloop.plugins.vcs.git.commands import pin as git_pin
-from piloop.plugins.verdict_rule.contract import VERDICT_RULES, Branch, Outcome, Trunk
-from piloop.scoring.evaluate import CHANGED_INPUTS
-from piloop.scoring.ledger import (
+from piloop.plugins.campaign_type.kit.backlog.ideas import park_stranded, runnable, supersede
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.api import Report
+from piloop.plugins.campaign_type.kit.evaluation.evaluate import CHANGED_INPUTS
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
+from piloop.plugins.campaign_type.kit.evaluation.ledger import (
     CandidateJudged,
     MeasurementRecorded,
     Rebased,
@@ -123,7 +71,38 @@ from piloop.scoring.ledger import (
     supersede_composed,
     units,
 )
-from piloop.scoring.verdict import PENDING, label, pending
+from piloop.plugins.campaign_type.kit.evaluation.ops import add_measurement
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
+from piloop.plugins.campaign_type.kit.runs import stop as runs_stop
+from piloop.plugins.campaign_type.kit.runs.controller import (
+    INTERRUPTED,
+    NO_CHANGES,
+    RECOVERED_REASON,
+    SKIPPED_REASON,
+    UNSAVED,
+    RecoveryRequeued,
+    RunController,
+    RunFacts,
+    RunRelaunched,
+    run_outcome,
+)
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.verdicts.ops import Overridden, set_verdict
+from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label, pending
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, Branch, Trunk
+from piloop.plugins.executor.contract import Source
+from piloop.plugins.executor.kit import jobs
+from piloop.plugins.executor.kit.jobs import INPUTS_CHANGED, INPUTS_REBUILT
+from piloop.plugins.executor.workers import Workers
+from piloop.plugins.executor.workers.worker import _Control
+from piloop.plugins.harness.contract import cleared_env
+from piloop.plugins.harness.kit.jsonl import dash_separators_wrapped
+from piloop.plugins.memory.local.tables import Lesson, LessonStatus
+from piloop.plugins.runtime.contract import AgentExit, Handle
+from piloop.plugins.vcs.contract import Part
+from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, commands as git
+from piloop.plugins.vcs.git.commands import pin as git_pin
 from piloop.settings import Settings
 from piloop.store.tree import FICLONE
 from tests.conftest import (
@@ -487,14 +466,16 @@ def test_a_run_counts_toward_max_runs_from_its_close_to_its_verdict(
                 s.get_one(Run, run_id).idea.status = moved_to
                 s.commit()
             campaign_row = s.get_one(Campaign, campaign.id)
-            counted.append((stop.runs(s, campaign_row), bool(s.scalar(select(Run.id).where(stop.unsettled())))))
+            counted.append(
+                (runs_stop.runs(s, campaign_row), bool(s.scalar(select(Run.id).where(runs_stop.unsettled()))))
+            )
 
     mocker.patch.object(ex, '_close', side_effect=close_and_count)
     run_id = make_run(db, campaign)
     execute(ex, db, run_id)
     assert counted == [(1, True)], 'counted and unsettled while it is scored'
     with db.session() as s:
-        assert s.scalar(select(Run.id).where(stop.unsettled())) is None, f'run#{run_id} settled'
+        assert s.scalar(select(Run.id).where(runs_stop.unsettled())) is None, f'run#{run_id} settled'
 
 
 def test_worse_commit_is_discarded(db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path) -> None:
@@ -1443,7 +1424,7 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
             assert [w.state for w in rows] == [*[AgentSessionState.EXITED] * launches, AgentSessionState.REQUESTED]
             assert (rows[-1].harness, rows[-1].model) == ('script', 'test-model')
             assert rows[-1].reason == f'run#{run_id} relaunched: implementer#{rows[-2].id} failed to start', 'its role'
-            assert stop.runs(s, run.idea.campaign) == 1
+            assert runs_stop.runs(s, run.idea.campaign) == 1
         assert (tmp_path / 'runs' / str(run_id) / f'transcript-implementer{rows[-2].id}.txt').read_text() == 'Welcome'
     execute(ex, db, run_id)
     with db.session() as s:
@@ -1463,7 +1444,7 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
     assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.NOT_STARTED)
     with db.session() as s:
         assert [a.error for _, a in in_order(s, StartupAnomaly)] == [NEVER_WORKED] * 3, 'each says why it failed'
-        assert stop.attempts(s.get_one(Idea, run_row(db, run_id).idea_id)) == 0
+        assert runs_stop.attempts(s.get_one(Idea, run_row(db, run_id).idea_id)) == 0
 
     mocker.patch.object(runtime, 'start', side_effect=RuntimeError('no server'))
     retried = make_run(db, campaign, title='retried', max_runs=2)

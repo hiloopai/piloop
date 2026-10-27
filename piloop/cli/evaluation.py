@@ -9,8 +9,14 @@ from rich.text import Text
 
 from piloop.cli import common
 from piloop.cli.client import daemon_http
-from piloop.ids import CandidateId
-from piloop.scoring.api import CancelledBy, EvaluationState, RunningSince, ScoringClient, WaitingSince
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.api import (
+    CancelledBy,
+    EvaluationState,
+    RunningSince,
+    ScoringClient,
+    WaitingSince,
+)
 from piloop.text import age, cell
 
 app = cyclopts.App(name='eval', help='List or cancel the evaluations that the daemon runs or that wait for a slot.')

@@ -7,13 +7,14 @@ from inline_snapshot import snapshot
 from sqlalchemy.orm import Session
 
 from piloop.agents.roles import files_of
-from piloop.campaign.ideas import Yield, source, yields
 from piloop.config import CampaignConfig, load_campaign_config
-from piloop.db.models import Campaign, Comment, Origin
+from piloop.db.models import Campaign, Comment
 from piloop.db.session import Database
-from piloop.ids import CommentKind, IdeaStatus, TargetKind, TargetRef
+from piloop.ids import CommentKind, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ideas import Yield, source, yields
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.role.contract import Files
-from piloop.plugins.verdict_rule.contract import Outcome
 from piloop.reports.pack import (
     ARTIFACTS_SHOWN,
     DIGESTS_SHOWN,

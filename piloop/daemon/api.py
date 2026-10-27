@@ -106,42 +106,26 @@ from piloop.campaign.campaigns import (
     sync,
     workspace_dir,
 )
-from piloop.campaign.ideas import Definition, idea_view
 from piloop.campaign.stop import CANCELLABLE, request_cancel
 from piloop.config import ConfigError
 from piloop.db import feed as db_feed
 from piloop.db.events import has, latest
-from piloop.db.models import OPEN_RUNS, AgentSession, Campaign, Candidate, Comment, Event, Idea, Run, utcnow
+from piloop.db.models import AgentSession, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.ids import (
-    AgentSessionId,
-    CampaignId,
-    CampaignStatus,
-    CandidateId,
-    CommentId,
-    EnvName,
-    IdeaId,
-    KeyOrigin,
-    LinkKind,
-    RunId,
-    TargetKind,
-    TargetRef,
-)
+from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentId, EnvName, KeyOrigin, TargetKind, TargetRef
 from piloop.net import Refusal, tokens
 from piloop.net.acting import MayNotAct, acts_as
 from piloop.net.server import App, asked, authorized, changed, served
 from piloop.net.tokens import Caller
 from piloop.plugins import limits as limits_module
-from piloop.plugins.cas.contract import Cas
-from piloop.plugins.contribution import collect, contributions_of, installed
-from piloop.plugins.limits import live_keys
-from piloop.plugins.memory.contract import MEMORY
-from piloop.plugins.secrets import contract as secrets
-from piloop.plugins.section.contract import Rendering, rendered
-from piloop.plugins.vcs.contract import VCS, CloneFailed
-from piloop.reports import feed
-from piloop.scoring import queue
-from piloop.scoring.api import (
+from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
+from piloop.plugins.campaign_type.kit.backlog.ideas import Definition, idea_view
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, queue
+from piloop.plugins.campaign_type.kit.evaluation.api import (
     CandidateAnswer,
     EvaluationQueue,
     ImportBody,
@@ -155,8 +139,26 @@ from piloop.scoring.api import (
     VerdictBody,
     VerdictChanged,
 )
-from piloop.scoring.ledger import ImportRefused, RemeasureRefused, bar_of, import_reference, request_remeasure
-from piloop.scoring.verdict import candidate_view, rejudgeable
+from piloop.plugins.campaign_type.kit.evaluation.ledger import (
+    ImportRefused,
+    RemeasureRefused,
+    bar_of,
+    import_reference,
+    request_remeasure,
+)
+from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RunId
+from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
+from piloop.plugins.campaign_type.kit.verdicts.verdict import candidate_view, rejudgeable
+from piloop.plugins.campaign_type.optimization import ops as optimization_ops
+from piloop.plugins.cas.contract import Cas
+from piloop.plugins.contribution import collect, contributions_of, installed
+from piloop.plugins.limits import live_keys
+from piloop.plugins.memory.contract import MEMORY
+from piloop.plugins.secrets import contract as secrets
+from piloop.plugins.section.contract import Rendering, rendered
+from piloop.plugins.vcs.contract import VCS, CloneFailed
+from piloop.reports import feed
 from piloop.settings import Settings
 
 
@@ -528,7 +530,7 @@ def retire(s: Writing, me: Acting, campaign: Addressed, body: RetireBody) -> Cam
 @optimization.post('/campaigns/{campaign}/ideas', operation_id='add_idea', dependencies=[Depends(actor_access)])
 def add_idea(s: Writing, me: Acting, campaign: Addressed, body: IdeaBody) -> Defined:
     """Add a defined idea, which the daemon schedules in priority order once it is ready."""
-    idea, review = ops.add_idea(
+    idea, review = backlog_ops.add_idea(
         s,
         campaign.id,
         body.title,
@@ -553,7 +555,7 @@ def add_idea(s: Writing, me: Acting, campaign: Addressed, body: IdeaBody) -> Def
 @optimization.post('/campaigns/{campaign}/seeds', operation_id='file_seed', dependencies=[Depends(actor_access)])
 def file_seed(s: Writing, me: Acting, campaign: Addressed, body: SeedBody) -> IdeaAnswer:
     """File a seed, for research to develop into a defined idea or to reject."""
-    idea = ops.file_seed(
+    idea = backlog_ops.file_seed(
         s, campaign.id, body.hunch, actor=me, provenance=body.provenance, base=body.base, track=body.track
     )
     return _idea_answer(s, idea)
@@ -563,7 +565,7 @@ def file_seed(s: Writing, me: Acting, campaign: Addressed, body: SeedBody) -> Id
 def develop(s: Writing, me: Acting, idea: AddressedIdea, body: DevelopBody) -> Defined:
     """Develop a seed into a defined idea that the daemon can schedule."""
     definition = Definition(body.hypothesis, body.evidence, body.check, body.metric, body.effect, body.plan)
-    developed, review = ops.develop_seed(
+    developed, review = backlog_ops.develop_seed(
         s,
         idea.id,
         definition,
@@ -584,7 +586,7 @@ def develop(s: Writing, me: Acting, idea: AddressedIdea, body: DevelopBody) -> D
 @optimization.post('/ideas/{idea}/status', operation_id='set_status', dependencies=[Depends(actor_access)])
 def set_status(s: Writing, me: Acting, idea: AddressedIdea, body: StatusBody) -> StatusChanged:
     """Set an idea's status, with a note on the idea that says why."""
-    was = ops.set_idea_status(s, idea.id, body.status, reason=body.reason, actor=me)
+    was = backlog_ops.set_idea_status(s, idea.id, body.status, reason=body.reason, actor=me)
     s.commit()
     with db_feed.snapshot(s) as cursor:
         return StatusChanged(cursor=cursor, idea=idea_view(idea), was=was)
@@ -593,28 +595,28 @@ def set_status(s: Writing, me: Acting, idea: AddressedIdea, body: StatusBody) ->
 @optimization.put('/ideas/{idea}/links/{kind}/{target}', operation_id='link', dependencies=[Depends(actor_access)])
 def link(s: Writing, me: Acting, idea: AddressedIdea, kind: LinkKind, target: Target, body: Reasoned) -> IdeaAnswer:
     """Link an idea to another of its campaign: it runs after the target, or supersedes it."""
-    ops.link(s, idea.id, kind, target.id, reason=body.reason, actor=me)
+    backlog_ops.link(s, idea.id, kind, target.id, reason=body.reason, actor=me)
     return _idea_answer(s, idea)
 
 
 @optimization.delete('/ideas/{idea}/links/{kind}/{target}', operation_id='unlink', dependencies=[Depends(actor_access)])
 def unlink(s: Writing, me: Acting, idea: AddressedIdea, kind: LinkKind, target: IdeaId, body: Reasoned) -> IdeaAnswer:
     """Delete an idea's link."""
-    ops.unlink(s, idea.id, kind, target, reason=body.reason, actor=me)
+    backlog_ops.unlink(s, idea.id, kind, target, reason=body.reason, actor=me)
     return _idea_answer(s, idea)
 
 
 @optimization.post('/ideas/{idea}/base', operation_id='set_base', dependencies=[Depends(actor_access)])
 def set_base(s: Writing, me: Acting, idea: AddressedIdea, body: BaseBody) -> IdeaAnswer:
     """Set the candidate that an idea's runs start from, or clear the pin."""
-    ops.set_base(s, idea.id, body.base, reason=body.reason, actor=me)
+    backlog_ops.set_base(s, idea.id, body.base, reason=body.reason, actor=me)
     return _idea_answer(s, idea)
 
 
 @optimization.post('/ideas/{idea}/track', operation_id='set_track', dependencies=[Depends(actor_access)])
 def set_track(s: Writing, me: Acting, idea: AddressedIdea, body: TrackBody) -> TrackChanged:
     """Move an idea to another track of its campaign, with a note on the idea that says why."""
-    was = ops.set_track(s, idea.id, body.track, reason=body.reason, actor=me)
+    was = backlog_ops.set_track(s, idea.id, body.track, reason=body.reason, actor=me)
     s.commit()
     with db_feed.snapshot(s) as cursor:
         return TrackChanged(cursor=cursor, idea=idea_view(idea), was=was)
@@ -644,7 +646,7 @@ def remeasure(s: Writing, me: Acting, candidate: AddressedCandidate, body: Remea
     request_remeasure(s, candidate, me, body.repeats)
     s.commit()
     campaign = s.get_one(Campaign, candidate.campaign_id)
-    held = ops.measuring_held(s, campaign, campaign.config).strip() or None
+    held = evaluation_ops.measuring_held(s, campaign, campaign.config).strip() or None
     bar = None if candidate.parent is None else bar_of(s, candidate.parent).id
     with db_feed.snapshot(s) as cursor:
         return Remeasured(
@@ -655,7 +657,9 @@ def remeasure(s: Writing, me: Acting, candidate: AddressedCandidate, body: Remea
 @optimization.post('/candidates/{candidate}/note', operation_id='note', dependencies=[Depends(actor_access)])
 def note(s: Writing, me: Acting, candidate: AddressedCandidate, body: NoteBody) -> Noted:
     """Keep a regressed result in view as a lead, with follow-up seeds pinned to it."""
-    _, seeds = ops.note_candidate(s, candidate.id, body.reason, actor=me, follow_ups=body.follow_ups, track=body.track)
+    _, seeds = optimization_ops.note_candidate(
+        s, candidate.id, body.reason, actor=me, follow_ups=body.follow_ups, track=body.track
+    )
     s.commit()
     with db_feed.snapshot(s) as cursor:
         return Noted(cursor=cursor, candidate=candidate_view(candidate), seeds=[idea_view(i) for i in seeds])
@@ -664,7 +668,7 @@ def note(s: Writing, me: Acting, candidate: AddressedCandidate, body: NoteBody) 
 @optimization.post('/candidates/{candidate}/verdict', operation_id='set_verdict', dependencies=[Depends(actor_access)])
 def set_verdict(s: Writing, me: Acting, candidate: AddressedCandidate, body: VerdictBody) -> VerdictChanged:
     """Override a candidate's judgement, with the reason. The verdict is then the caller's."""
-    done = ops.set_verdict(s, candidate.id, body.verdict, reason=body.reason, actor=me)
+    done = verdicts_ops.set_verdict(s, candidate.id, body.verdict, reason=body.reason, actor=me)
     s.commit()
     rebased = done.rebased
     merged = None if rebased is None or rebased.rebased is None else Merge(candidate=rebased.rebased, head=rebased.head)
@@ -677,7 +681,7 @@ def set_verdict(s: Writing, me: Acting, candidate: AddressedCandidate, body: Ver
 )
 def add_measurement(s: Writing, me: Acting, candidate: AddressedCandidate, body: Report) -> MeasurementAdded:
     """Record a measurement of a candidate under the campaign's current evaluator, and have its verdict judged again."""
-    added = ops.add_measurement(s, candidate.id, body, actor=me)
+    added = evaluation_ops.add_measurement(s, candidate.id, body, actor=me)
     s.commit()
     with db_feed.snapshot(s) as cursor:
         return MeasurementAdded(
@@ -707,7 +711,7 @@ def cancel_evaluation(s: Writing, me: Acting, candidate: AddressedCandidate) -> 
             Problem.REFUSED,
             f'candidate#{candidate.id} has no evaluation that waits or runs: see `piloop eval queue`',
         )
-    ops.hold_on_failed_baseline(s, candidate, None)
+    evaluation_ops.hold_on_failed_baseline(s, candidate, None)
     s.commit()
     with db_feed.snapshot(s) as cursor:
         return CandidateAnswer(cursor=cursor, candidate=candidate_view(candidate))

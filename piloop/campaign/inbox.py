@@ -38,21 +38,15 @@ from piloop.api.views import (
 )
 from piloop.campaign.anomaly import AnomalyReported
 from piloop.db import feed as db_feed
-from piloop.db.models import (
-    NOT_RETIRED,
-    AgentSession,
-    Campaign,
-    Candidate,
-    Comment,
-    Event,
-    Idea,
-    Measurement,
-    Run,
-    utcnow,
-)
+from piloop.db.models import NOT_RETIRED, AgentSession, Campaign, Comment, Event, utcnow
 from piloop.db.triggers.changelog import CampaignStatusChanged, Commented, IdeaCreated
-from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, IdeaStatus, TargetKind, TargetRef
-from piloop.scoring.ledger import CandidateJudged
+from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ledger import CandidateJudged
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.text import iso
 
 CITATION = re.compile(r'comment#(\d+)')

@@ -9,10 +9,10 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from piloop import deprecated
+from piloop.plugins.campaign_type.kit.evaluation.evaluate import parse_metrics
 from piloop.plugins.fact_source.contract import FactReadError
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.proc import RESULT_ENV, STDERR_IN_ERROR, ResultPipe, child_env, kill_group
-from piloop.scoring.evaluate import parse_metrics
 
 TIMEOUT = 60
 """The seconds that the command can take. The daemon's reading waits for it, so a hung command fails."""

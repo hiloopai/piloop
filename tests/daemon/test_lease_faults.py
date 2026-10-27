@@ -26,30 +26,21 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from pytest_mock import MockerFixture
 from sqlalchemy import delete, func, select
 
-from piloop.campaign.stop import attempts
-from piloop.daemon.run_controller import RunController
 from piloop.daemon.scheduler import Scheduler
 from piloop.daemon.serve import SERVE_ARGV
 from piloop.db.events import has, in_order
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Evaluation,
-    Event,
-    Idea,
-    Lease,
-    LeaseState,
-    Measurement,
-    Run,
-    RunEnd,
-    RunStatus,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event, Lease, LeaseState, utcnow
 from piloop.db.session import Database
-from piloop.ids import IdeaStatus, Revision, RunId, TargetKind
+from piloop.ids import Revision, TargetKind
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.stop import attempts
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.contract import AgentFinished, AgentReport, EvaluationReport, Source
 from piloop.plugins.executor.kit.leases import NOT_TAKEN, SERVE, Leases, StaleReport, Timing

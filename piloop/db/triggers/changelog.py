@@ -14,25 +14,15 @@ from typing import Annotated, ClassVar, Literal
 from pydantic import JsonValue
 
 from piloop.db.events import SubjectSettled
-from piloop.db.models import OPEN_RUNS, EventModel, Origin, Pause, ReadBy
+from piloop.db.models import EventModel, Pause, ReadBy
 from piloop.db.triggers.ddl import Event, Trigger
 from piloop.db.triggers.provenance import DAEMON_ACTOR, NOW, SESSION_ACTOR
-from piloop.ids import (
-    HOME,
-    CampaignId,
-    CampaignStatus,
-    CandidateId,
-    CommentId,
-    CommentKind,
-    IdeaId,
-    IdeaStatus,
-    LinkKind,
-    RoleName,
-    TargetKind,
-    TrackName,
-)
+from piloop.ids import HOME, CampaignId, CampaignStatus, CommentId, CommentKind, RoleName, TargetKind
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.cas.contract import BlobAddress
-from piloop.plugins.verdict_rule.contract import Outcome
 
 type Row = Literal['NEW', 'OLD']
 

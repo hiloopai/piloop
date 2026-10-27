@@ -10,7 +10,8 @@ import pytest
 from covalence import Cid
 from git import GitCommandError, Repo
 
-from piloop.ids import CampaignId, Revision, RunId
+from piloop.ids import CampaignId, Revision
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import RepoId, Source, Workspace
 from piloop.plugins.executor.kit.clones import WORKSPACE, Clones, Fetch, of_record, own_replica

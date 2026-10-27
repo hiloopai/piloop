@@ -16,21 +16,7 @@ from piloop.actor import Agent, System
 from piloop.campaign import ops
 from piloop.config import load_campaign_config
 from piloop.db.events import in_order
-from piloop.db.models import (
-    Campaign,
-    Candidate,
-    Comment,
-    Event,
-    EventModel,
-    Idea,
-    IdeaLink,
-    Measurement,
-    Origin,
-    Pause,
-    Run,
-    RunEnd,
-    RunStatus,
-)
+from piloop.db.models import Campaign, Comment, Event, EventModel, Pause
 from piloop.db.requests import RequestAnswered
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import (
@@ -42,20 +28,15 @@ from piloop.db.triggers.changelog import (
     IdeaTrackChanged,
     VerdictChanged,
 )
-from piloop.ids import (
-    CampaignId,
-    CampaignStatus,
-    CandidateId,
-    Cause,
-    CommentKind,
-    IdeaId,
-    IdeaStatus,
-    LinkKind,
-    TargetKind,
-    TrackName,
-)
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring.ledger import (
+from piloop.ids import CampaignId, CampaignStatus, CommentKind, TargetKind
+from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation import api as evaluation_api, ops as evaluation_ops
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ledger import (
     MeasurementRecorded,
     RejudgeRequested,
     answer_rejudge,
@@ -63,7 +44,11 @@ from piloop.scoring.ledger import (
     rejudges,
     unjudged,
 )
-from piloop.scoring.verdict import pending
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
+from piloop.plugins.campaign_type.kit.verdicts.verdict import pending
 from tests.conftest import end_of, reconfigured
 
 ACTOR = System.ORCHESTRATOR
@@ -225,7 +210,10 @@ def test_only_a_sweeping_agent_files_its_ideas_for_review_while_the_campaign_is_
 def test_a_verdict_override_is_the_actors_with_the_reason_in_its_event(me: Database, campaign: Campaign) -> None:
     c = run_candidate(me, campaign, Outcome.DISCARD)
     with me.session() as s:
-        assert ops.set_verdict(s, c, Outcome.KEEP, reason=' measured by hand: +3 ', actor=ACTOR).old == Outcome.DISCARD
+        assert (
+            verdicts_ops.set_verdict(s, c, Outcome.KEEP, reason=' measured by hand: +3 ', actor=ACTOR).old
+            == Outcome.DISCARD
+        )
         s.commit()
         candidate = s.get_one(Candidate, c)
         assert (candidate.verdict, candidate.verdict_by, candidate.verdict_reason) == (
@@ -240,17 +228,17 @@ def test_a_verdict_override_is_the_actors_with_the_reason_in_its_event(me: Datab
     pending = run_candidate(me, campaign, None, by=None)
     with me.session() as s:
         with pytest.raises(ops.Refused, match=r'candidate#\d+ is keep already \(measured by hand: \+3\)'):
-            ops.set_verdict(s, c, Outcome.KEEP, reason='again', actor=ACTOR)
+            verdicts_ops.set_verdict(s, c, Outcome.KEEP, reason='again', actor=ACTOR)
         with pytest.raises(ops.Refused, match=f'candidate#{pending} is pending: the daemon judges it now'):
-            ops.set_verdict(s, pending, Outcome.KEEP, reason='why', actor=ACTOR)
+            verdicts_ops.set_verdict(s, pending, Outcome.KEEP, reason='why', actor=ACTOR)
         with pytest.raises(ops.Refused, match='a reason is required'):
-            ops.set_verdict(s, c, Outcome.CRASH, reason='', actor=ACTOR)
+            verdicts_ops.set_verdict(s, c, Outcome.CRASH, reason='', actor=ACTOR)
         with pytest.raises(ops.Refused, match='no candidate#99'):
-            ops.set_verdict(s, CandidateId(99), Outcome.CRASH, reason='why', actor=ACTOR)
+            verdicts_ops.set_verdict(s, CandidateId(99), Outcome.CRASH, reason='why', actor=ACTOR)
         for origin in (Origin.REFERENCE, Origin.RECOVERED, Origin.SKIPPED):
             s.get_one(Candidate, pending).origin = origin
             with pytest.raises(ops.Refused, match=f'candidate#{pending} is {origin}, which is never judged'):
-                ops.set_verdict(s, pending, Outcome.KEEP, reason='why', actor=ACTOR)
+                verdicts_ops.set_verdict(s, pending, Outcome.KEEP, reason='why', actor=ACTOR)
 
 
 def commit_on(campaign: Campaign, on: str, files: dict[str, str], *, merge: str | None = None) -> str:
@@ -284,7 +272,7 @@ def test_a_hand_keep_off_the_head_is_merged_onto_the_head_for_the_daemon_to_judg
     after_it = run_candidate(me, campaign, Outcome.INTERESTING, parent=on_head)
     branch = run_candidate(me, campaign, Outcome.DISCARD, branch=True)
     with me.session() as s:
-        kept = ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
+        kept = verdicts_ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
         assert kept.old == Outcome.DISCARD and kept.rebased is not None and kept.rebased.head == trunk
         merged = s.get_one(Candidate, kept.rebased.rebased)
         assert (pending(merged), merged.parent_id, merged.run_id) == (True, trunk, s.get_one(Candidate, old).run_id)
@@ -298,8 +286,8 @@ def test_a_hand_keep_off_the_head_is_merged_onto_the_head_for_the_daemon_to_judg
         run = s.get_one(Run, merged.run_id)
         run.status, run.end = RunStatus.SUCCEEDED, RunEnd.FINISHED
         assert unjudged(merged), 'the run is over: the daemon measures and judges it (ledger.due)'
-        ops.set_verdict(s, after_it, Outcome.KEEP, reason='its parent builds on the head', actor=ACTOR)
-        ops.set_verdict(s, branch, Outcome.KEEP, reason='a branch keep never moves the head', actor=ACTOR)
+        verdicts_ops.set_verdict(s, after_it, Outcome.KEEP, reason='its parent builds on the head', actor=ACTOR)
+        verdicts_ops.set_verdict(s, branch, Outcome.KEEP, reason='a branch keep never moves the head', actor=ACTOR)
         s.commit()
         now = head(s, s.get_one(Campaign, 1))
         assert now is not None and now.id == after_it, 'the newest trunk keep'
@@ -311,7 +299,7 @@ def test_a_hand_keep_off_the_head_whose_merge_conflicts_files_a_compose_seed(me:
     old = run_candidate(me, campaign, Outcome.DISCARD, commit=old_sha)
     trunk = run_candidate(me, campaign, Outcome.KEEP, commit=trunk_sha)
     with me.session() as s:
-        kept = ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
+        kept = verdicts_ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
         assert kept.rebased is not None and (kept.rebased.head, kept.rebased.conflicts) == (trunk, ['x.txt'])
         [seed] = s.scalars(select(Idea).where(Idea.status == IdeaStatus.SEED)).all()
         assert seed.title == f'Compose candidate#{old} onto the head'
@@ -331,7 +319,7 @@ def test_a_hand_keep_builds_on_the_head_by_git_where_the_parent_links_miss_it(me
     merge_sha = commit_on(campaign, trunk_sha, {}, merge=side_sha)
     merged = run_candidate(me, campaign, Outcome.DISCARD, parent=side, commit=merge_sha)
     with me.session() as s:
-        ops.set_verdict(s, merged, Outcome.KEEP, reason='its commit merges the head', actor=ACTOR)
+        verdicts_ops.set_verdict(s, merged, Outcome.KEEP, reason='its commit merges the head', actor=ACTOR)
         s.commit()
         now = head(s, s.get_one(Campaign, 1))
         assert now is not None and now.id == merged, f'a trunk keep newer than candidate#{trunk}'
@@ -339,16 +327,16 @@ def test_a_hand_keep_builds_on_the_head_by_git_where_the_parent_links_miss_it(me
         with pytest.raises(
             ops.Refused, match=f'the vcs cannot tell if candidate#{lost} builds on the head candidate#{merged}'
         ):
-            ops.set_verdict(s, lost, Outcome.KEEP, reason='its commit is gone', actor=ACTOR)
+            verdicts_ops.set_verdict(s, lost, Outcome.KEEP, reason='its commit is gone', actor=ACTOR)
 
 
 def test_a_measurement_by_hand_is_recorded_and_asks_the_daemon_to_judge_its_candidate_again(
     me: Database, campaign: Campaign
 ) -> None:
     c = run_candidate(me, campaign, Outcome.CRASH)
-    report = ops.Report(metrics={'score': 3.0, 'size': 9.0}, seconds=12.5)
+    report = evaluation_api.Report(metrics={'score': 3.0, 'size': 9.0}, seconds=12.5)
     with me.session() as s:
-        added = ops.add_measurement(s, c, report, actor=ACTOR)
+        added = evaluation_ops.add_measurement(s, c, report, actor=ACTOR)
         s.commit()
         measurement = added.measurement
         assert (added.rejudged, added.effect) == (True, 'the daemon judges it again with all its measurements')
@@ -369,7 +357,7 @@ def test_a_measurement_by_hand_is_recorded_and_asks_the_daemon_to_judge_its_cand
         assert rejudges(s, s.get_one(Campaign, 1)) == [], 'judging it again answers the request'
         [(asked, _)] = in_order(s, RejudgeRequested)
         assert [a.ask for _, a in in_order(s, RequestAnswered)] == [asked.id] and asked.actor == ACTOR.signature
-        ops.add_measurement(s, c, ops.Report(metrics={}, error='timeout'), actor=ACTOR)
+        evaluation_ops.add_measurement(s, c, evaluation_api.Report(metrics={}, error='timeout'), actor=ACTOR)
         s.commit()
         assert [x.id for x in rejudges(s, s.get_one(Campaign, 1))] == [c], 'a failed one counts too'
 
@@ -379,26 +367,37 @@ def test_a_measurement_by_hand_of_a_keep_or_of_someones_verdict_leaves_the_verdi
 ) -> None:
     mine = run_candidate(me, campaign, Outcome.DISCARD, by='human')
     with me.session() as s:
-        keep = ops.add_measurement(s, CandidateId(1), ops.Report(metrics={'score': 1.0, 'size': 5.0}), actor=ACTOR)
+        keep = evaluation_ops.add_measurement(
+            s, CandidateId(1), evaluation_api.Report(metrics={'score': 1.0, 'size': 5.0}), actor=ACTOR
+        )
         assert (keep.rejudged, keep.effect) == (
             False,
             'its keep stays; the runs that start from it must beat its new mean',
         )
-        human = ops.add_measurement(s, mine, ops.Report(metrics={'score': 1.0, 'size': 5.0}), actor=ACTOR)
+        human = evaluation_ops.add_measurement(
+            s, mine, evaluation_api.Report(metrics={'score': 1.0, 'size': 5.0}), actor=ACTOR
+        )
         assert (human.rejudged, human.effect) == (False, 'its verdict stays: discard, set by human')
         s.commit()
         assert in_order(s, RejudgeRequested) == [], 'nothing to judge again'
         with pytest.raises(ops.Refused, match='the report has no size: give every metric, or the error'):
-            ops.add_measurement(s, CandidateId(1), ops.Report(metrics={'score': 1.0}), actor=ACTOR)
+            evaluation_ops.add_measurement(
+                s, CandidateId(1), evaluation_api.Report(metrics={'score': 1.0}), actor=ACTOR
+            )
         with pytest.raises(ops.Refused, match='piloop.toml has no metric accuracy: its metrics are score, size'):
-            ops.add_measurement(
-                s, CandidateId(1), ops.Report(metrics={'score': 1.0, 'size': 5.0, 'accuracy': 1.0}), actor=ACTOR
+            evaluation_ops.add_measurement(
+                s,
+                CandidateId(1),
+                evaluation_api.Report(metrics={'score': 1.0, 'size': 5.0, 'accuracy': 1.0}),
+                actor=ACTOR,
             )
         with pytest.raises(ops.Refused, match='no candidate#99'):
-            ops.add_measurement(s, CandidateId(99), ops.Report(metrics={}), actor=ACTOR)
+            evaluation_ops.add_measurement(s, CandidateId(99), evaluation_api.Report(metrics={}), actor=ACTOR)
         s.get_one(Campaign, 1).evaluator_id = None
         with pytest.raises(ops.Refused, match='campaign demo has no evaluator yet'):
-            ops.add_measurement(s, CandidateId(1), ops.Report(metrics={'score': 1.0, 'size': 5.0}), actor=ACTOR)
+            evaluation_ops.add_measurement(
+                s, CandidateId(1), evaluation_api.Report(metrics={'score': 1.0, 'size': 5.0}), actor=ACTOR
+            )
 
 
 @pytest.mark.parametrize(
@@ -413,7 +412,7 @@ def test_a_measurement_by_hand_of_a_keep_or_of_someones_verdict_leaves_the_verdi
 )
 def test_a_report_is_validated_at_the_boundary(text: str) -> None:
     with pytest.raises(ValidationError):
-        ops.Report.model_validate_json(text)
+        evaluation_api.Report.model_validate_json(text)
 
 
 def test_a_measurement_by_hand_says_when_the_daemon_judges_again_and_waits_for_a_pending_judgement(
@@ -421,29 +420,29 @@ def test_a_measurement_by_hand_says_when_the_daemon_judges_again_and_waits_for_a
 ) -> None:
     crashed = run_candidate(me, campaign, Outcome.CRASH)
     pending = run_candidate(me, campaign, None, by=None)
-    report = ops.Report(metrics={'score': 2.0, 'size': 4.0})
+    report = evaluation_api.Report(metrics={'score': 2.0, 'size': 4.0})
     with me.session() as s:
         with pytest.raises(ops.Refused, match=f'candidate#{pending} is pending: the daemon judges it now'):
-            ops.add_measurement(s, pending, report, actor=ACTOR)
+            evaluation_ops.add_measurement(s, pending, report, actor=ACTOR)
         p = s.get_one(Campaign, 1)
         p.status, p.stopped_reason = CampaignStatus.STOPPED, 'max_runs: 3 runs'
-        assert ops.add_measurement(s, crashed, report, actor=ACTOR).effect == (
+        assert evaluation_ops.add_measurement(s, crashed, report, actor=ACTOR).effect == (
             'the daemon judges it again with all its measurements'
         ), 'a stopped campaign is still measured and judged on request'
         p.status, p.stopped_reason = CampaignStatus.ACTIVE, None
         ops.pause(s, CampaignId(1), evals=True, reason='why')
-        assert ops.add_measurement(s, crashed, report, actor=ACTOR).effect.endswith(
+        assert evaluation_ops.add_measurement(s, crashed, report, actor=ACTOR).effect.endswith(
             'once campaign demo is resumed (its evaluations are paused)'
         )
         ops.resume(s, CampaignId(1))
         source = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
         sources = {'use': ['campaign', 'optimization', 'spend'], 'spend': source}
         p.config = reconfigured(p.config, plugins={'stop_rule': {'hold_at': {'spend': 10.0}}, 'fact_source': sources})
-        assert ops.add_measurement(s, crashed, report, actor=ACTOR).effect.endswith(
+        assert evaluation_ops.add_measurement(s, crashed, report, actor=ACTOR).effect.endswith(
             'once the stop rule no longer holds it (spend not known)'
         )
         p.status = CampaignStatus.STOPPED
-        assert ops.add_measurement(s, crashed, report, actor=ACTOR).effect == (
+        assert evaluation_ops.add_measurement(s, crashed, report, actor=ACTOR).effect == (
             'the daemon judges it again with all its measurements'
         ), 'the stop rule holds an active campaign only'
 
@@ -455,11 +454,11 @@ def test_an_idea_status_takes_a_reason_in_a_note_and_refuses_what_is_not_set_by_
     seed = add_idea(me, CampaignId(1), 'a hunch', IdeaStatus.SEED)
     running = add_idea(me, CampaignId(1), 'running', IdeaStatus.SCHEDULED)
     with me.session() as s:
-        assert ops.set_idea_status(s, idea, IdeaStatus.PARKED, reason='after the v2 evaluator', actor=ACTOR) is (
-            IdeaStatus.READY
-        )
-        ops.set_idea_status(s, seed, IdeaStatus.REJECTED, reason='dup of idea#1', actor=ACTOR)
-        ops.set_idea_status(s, running, IdeaStatus.PARKED, reason='redundant', actor=ACTOR)
+        assert backlog_ops.set_idea_status(
+            s, idea, IdeaStatus.PARKED, reason='after the v2 evaluator', actor=ACTOR
+        ) is (IdeaStatus.READY)
+        backlog_ops.set_idea_status(s, seed, IdeaStatus.REJECTED, reason='dup of idea#1', actor=ACTOR)
+        backlog_ops.set_idea_status(s, running, IdeaStatus.PARKED, reason='redundant', actor=ACTOR)
         s.commit()
         notes = s.scalars(select(Comment).order_by(Comment.id)).all()
         assert [(n.target_id, n.author, n.kind, n.body) for n in notes] == [
@@ -487,18 +486,18 @@ def test_an_idea_status_takes_a_reason_in_a_note_and_refuses_what_is_not_set_by_
             (IdeaId(99), IdeaStatus.DONE, 'no idea#99'),
         ]:
             with pytest.raises(ops.Refused, match=error):
-                ops.set_idea_status(s, target, status, reason='why', actor=ACTOR)
+                backlog_ops.set_idea_status(s, target, status, reason='why', actor=ACTOR)
         with pytest.raises(ops.Refused, match='a reason is required'):
-            ops.set_idea_status(s, idea, IdeaStatus.READY, reason=' ', actor=ACTOR)
+            backlog_ops.set_idea_status(s, idea, IdeaStatus.READY, reason=' ', actor=ACTOR)
 
 
 def test_links_are_validated_kept_acyclic_and_leave_events(me: Database, campaign: Campaign, db: Database) -> None:
     a, b, c = (add_idea(me, CampaignId(1), t) for t in 'abc')
     running = add_idea(me, CampaignId(1), 'running', IdeaStatus.SCHEDULED)
     with me.session() as s:
-        ops.link(s, a, LinkKind.AFTER, b, reason='b lands the parser', actor=ACTOR)
-        ops.link(s, b, LinkKind.AFTER, c, reason='c first', actor=ACTOR)
-        ops.link(s, running, LinkKind.SUPERSEDES, c, reason='sharper', actor=ACTOR)
+        backlog_ops.link(s, a, LinkKind.AFTER, b, reason='b lands the parser', actor=ACTOR)
+        backlog_ops.link(s, b, LinkKind.AFTER, c, reason='c first', actor=ACTOR)
+        backlog_ops.link(s, running, LinkKind.SUPERSEDES, c, reason='sharper', actor=ACTOR)
         s.commit()
         links = s.scalars(select(IdeaLink).order_by(IdeaLink.idea_id)).all()
         assert [(lk.idea_id, lk.kind, lk.target_id) for lk in links] == [
@@ -528,18 +527,18 @@ def test_links_are_validated_kept_acyclic_and_leave_events(me: Database, campaig
             (a, LinkKind.AFTER, IdeaId(99), 'no idea#99'),
         ]:
             with pytest.raises(ops.Refused, match=error):
-                ops.link(s, idea, kind, target, reason='why', actor=ACTOR)
-        ops.link(s, c, LinkKind.SUPERSEDES, a, reason='another kind closes no cycle', actor=ACTOR)
+                backlog_ops.link(s, idea, kind, target, reason='why', actor=ACTOR)
+        backlog_ops.link(s, c, LinkKind.SUPERSEDES, a, reason='another kind closes no cycle', actor=ACTOR)
         with pytest.raises(ops.Refused, match='a reason is required'):
-            ops.link(s, b, LinkKind.SUPERSEDES, a, reason='', actor=ACTOR)
+            backlog_ops.link(s, b, LinkKind.SUPERSEDES, a, reason='', actor=ACTOR)
 
-        ops.unlink(s, a, LinkKind.AFTER, b, reason='b was rejected', actor=ACTOR)
+        backlog_ops.unlink(s, a, LinkKind.AFTER, b, reason='b was rejected', actor=ACTOR)
         s.commit()
         assert s.get_one(Idea, a).links == []
         with pytest.raises(ops.Refused, match=f'idea#{a} has no after link to idea#{b}'):
-            ops.unlink(s, a, LinkKind.AFTER, b, reason='again', actor=ACTOR)
+            backlog_ops.unlink(s, a, LinkKind.AFTER, b, reason='again', actor=ACTOR)
         with pytest.raises(ops.Refused, match='a reason is required'):
-            ops.unlink(s, b, LinkKind.AFTER, c, reason='', actor=ACTOR)
+            backlog_ops.unlink(s, b, LinkKind.AFTER, c, reason='', actor=ACTOR)
     assert kinds(me, TargetKind.IDEA, a)[-1] == (
         'idea.unlinked',
         ACTOR.signature,
@@ -565,20 +564,20 @@ def test_a_raw_sql_link_or_base_change_is_logged_like_the_commands(me: Database,
 def test_a_base_pins_a_candidate_of_the_campaign_or_clears_the_pin(me: Database, campaign: Campaign) -> None:
     idea = add_idea(me, CampaignId(1), 'pinned')
     with me.session() as s:
-        assert ops.set_base(s, idea, CandidateId(1), reason='from the baseline', actor=ACTOR) is None
+        assert backlog_ops.set_base(s, idea, CandidateId(1), reason='from the baseline', actor=ACTOR) is None
         s.commit()
-        assert ops.set_base(s, idea, None, reason='follow the head', actor=ACTOR) == 1
+        assert backlog_ops.set_base(s, idea, None, reason='follow the head', actor=ACTOR) == 1
         s.commit()
         assert s.get_one(Idea, idea).base_candidate_id is None
         with pytest.raises(ops.Refused, match=f'idea#{idea} starts from the head already'):
-            ops.set_base(s, idea, None, reason='again', actor=ACTOR)
-        ops.set_base(s, idea, CandidateId(1), reason='pin', actor=ACTOR)
+            backlog_ops.set_base(s, idea, None, reason='again', actor=ACTOR)
+        backlog_ops.set_base(s, idea, CandidateId(1), reason='pin', actor=ACTOR)
         with pytest.raises(ops.Refused, match=f'idea#{idea} starts from candidate#1 already'):
-            ops.set_base(s, idea, CandidateId(1), reason='again', actor=ACTOR)
+            backlog_ops.set_base(s, idea, CandidateId(1), reason='again', actor=ACTOR)
         with pytest.raises(ops.Refused, match='no candidate#99 in campaign demo'):
-            ops.set_base(s, idea, CandidateId(99), reason='why', actor=ACTOR)
+            backlog_ops.set_base(s, idea, CandidateId(99), reason='why', actor=ACTOR)
         with pytest.raises(ops.Refused, match='a reason is required'):
-            ops.set_base(s, idea, None, reason='', actor=ACTOR)
+            backlog_ops.set_base(s, idea, None, reason='', actor=ACTOR)
     assert kinds(me, TargetKind.IDEA, idea) == [
         CREATED,
         ('idea.base_candidate_id', ACTOR.signature, IdeaBaseChanged(old=None, new=CandidateId(1))),
@@ -606,7 +605,7 @@ def test_a_track_must_be_in_the_config_and_its_move_says_why(me: Database, campa
     idea = add_idea(me, CampaignId(1), 'smaller')
     running = add_idea(me, CampaignId(1), 'running', IdeaStatus.SCHEDULED)
     with me.session() as s:
-        assert ops.set_track(s, idea, TrackName('size'), reason='it shrinks the output', actor=ACTOR) == 'score'
+        assert backlog_ops.set_track(s, idea, TrackName('size'), reason='it shrinks the output', actor=ACTOR) == 'score'
         s.commit()
         [note] = s.scalars(select(Comment)).all()
         assert note.body == 'track score → size: it shrinks the output'
@@ -621,11 +620,11 @@ def test_a_track_must_be_in_the_config_and_its_move_says_why(me: Database, campa
             (IdeaId(99), TrackName('size'), 'no idea#99'),
         ]:
             with pytest.raises(ops.Refused, match=error):
-                ops.set_track(s, target, track, reason='why', actor=ACTOR)
+                backlog_ops.set_track(s, target, track, reason='why', actor=ACTOR)
         with pytest.raises(ops.Refused, match='a reason is required'):
-            ops.set_track(s, idea, TrackName('score'), reason='', actor=ACTOR)
+            backlog_ops.set_track(s, idea, TrackName('score'), reason='', actor=ACTOR)
         with pytest.raises(ops.Refused, match='demo has tracks score, size: name one with --track'):
-            ops.track_for(s.get_one(Campaign, 1), None)
+            backlog_ops.track_for(s.get_one(Campaign, 1), None)
     assert [(k, a, p) for k, a, p in kinds(me, TargetKind.IDEA, idea) if k == 'idea.track'] == [
         ('idea.track', ACTOR.signature, IdeaTrackChanged(old=TrackName('score'), new=TrackName('size')))
     ]

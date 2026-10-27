@@ -32,7 +32,6 @@ from piloop.api.client import Client, NoDaemon
 from piloop.api.contract import Selection
 from piloop.campaign import campaigns as campaign_module, inbox
 from piloop.campaign.campaigns import CampaignAdded
-from piloop.campaign.ideas import defined_by, runnable
 from piloop.campaign.stop import CancelRequested, StopRequested
 from piloop.cli import (
     agents as agents_cli,
@@ -53,17 +52,9 @@ from piloop.db.models import (
     AgentSession,
     AgentSessionState,
     Campaign,
-    Candidate,
     Comment,
-    Evaluation,
     Event,
-    Idea,
-    IdeaLink,
     InstanceEnd,
-    Measurement,
-    Origin,
-    Run,
-    RunStatus,
     WorkerInstance,
     WorkerInstanceState,
     utcnow,
@@ -71,24 +62,20 @@ from piloop.db.models import (
 from piloop.db.schema import CORE
 from piloop.db.session import Database, alembic_config, described, heads, migrate
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged
-from piloop.ids import (
-    CampaignId,
-    CampaignStatus,
-    CandidateId,
-    CommentId,
-    CommentKind,
-    Ending,
-    IdeaStatus,
-    LinkKind,
-    TargetKind,
-    TargetRef,
-)
+from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, Ending, TargetKind, TargetRef
 from piloop.plugins import host
+from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by, runnable
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ledger import CandidateImported, RemeasureRequested
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
+from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.kit.capacity import GB, HostSample
 from piloop.plugins.executor.kit.leases import Leases
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring.ledger import CandidateImported, RemeasureRequested
 from piloop.settings import Settings
 from piloop.store.chunks import Chunked
 from piloop.version import direct_url, installed

@@ -14,13 +14,16 @@ from pytest_mock import MockerFixture
 
 from piloop.actor import System
 from piloop.config import CampaignConfig
-from piloop.db.models import Campaign, Candidate
+from piloop.db.models import Campaign
 from piloop.db.session import Database
-from piloop.ids import CampaignId, CandidateId, EvaluatorId, Revision, RunId
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring import queue
-from piloop.scoring.ledger import due, request_remeasure, requested
-from piloop.scoring.verdict import write
+from piloop.ids import CampaignId, Revision
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation import queue
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
+from piloop.plugins.campaign_type.kit.evaluation.ledger import due, request_remeasure, requested
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
+from piloop.plugins.campaign_type.kit.verdicts.verdict import write
 from tests.conftest import ScriptRuntime, baseline, wait_until
 from tests.daemon.test_evaluation_queue import evaluated, in_thread, queued_executor, rows, run_candidates
 from tests.daemon.test_roles import PLUGIN, forget_loaded, installed

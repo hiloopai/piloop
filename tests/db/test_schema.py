@@ -6,10 +6,11 @@ from sqlalchemy import ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from piloop.db import schema as schema_module
-from piloop.db.models import Base, Idea
+from piloop.db.models import Base
 from piloop.db.schema import CORE, SCHEMAS, Schema, schemas, tables
 from piloop.db.session import Database
 from piloop.db.triggers import Trigger
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.host import PluginError
 from tests.daemon.test_roles import installed
 

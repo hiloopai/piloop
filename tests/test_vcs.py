@@ -85,10 +85,8 @@ def test_the_allowed_files_still_need_their_exception() -> None:
         assert needed, f'{rel} no longer reaches git so: change or delete it in ALLOWED'
 
 
-BUILT_IN = sorted(
-    [*PROMPTS.glob('*.md'), *(Path(piloop.__file__).parent / 'plugins' / 'role' / 'prompts').glob('*.md')]
-)
-"""The built-in prompts: the briefs' own, and those of the built-in roles."""
+BUILT_IN = sorted([*PROMPTS.glob('*.md'), *(Path(piloop.__file__).parent / 'plugins').glob('**/role/prompts/*.md')])
+"""The built-in prompts: the briefs' own, and those of the built-in roles, core's and each component's."""
 
 
 def test_every_built_in_provider_writes_every_part() -> None:

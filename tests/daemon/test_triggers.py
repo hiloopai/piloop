@@ -14,30 +14,23 @@ from piloop.campaign.anomaly import AnomalyReported
 from piloop.campaign.stop import request_cancel
 from piloop.config import load_campaign_config
 from piloop.daemon.main import ACTOR
-from piloop.daemon.run_controller import RunController
 from piloop.daemon.scheduler import Scheduler
 from piloop.db import sql
 from piloop.db.events import in_order
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Evaluator,
-    Idea,
-    IdeaLink,
-    Measurement,
-    Run,
-    RunEnd,
-    RunStatus,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.session import Database
-from piloop.ids import IMPLEMENTER, AgentSessionId, Ending, IdeaId, IdeaStatus, LinkKind, RunId, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, Ending, TargetKind, TargetRef
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization.planner import NO_RUN_ERROR
 from piloop.plugins.executor.workers import Workers
-from piloop.plugins.verdict_rule.contract import Outcome
 from tests.conftest import (
     HARNESS_NOOP,
     HARNESS_PROMPT_TO_FILE,

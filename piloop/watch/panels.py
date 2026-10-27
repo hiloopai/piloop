@@ -19,10 +19,16 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor
 from piloop.api.views import thread_lines
 from piloop.campaign import inbox
-from piloop.campaign.ideas import links, superseded_by
 from piloop.config import CampaignConfig
-from piloop.db.models import NOT_RETIRED, AgentSession, Campaign, Candidate, Comment, Idea, Origin
-from piloop.ids import CampaignStatus, IdeaStatus, TargetKind, TargetRef
+from piloop.db.models import NOT_RETIRED, AgentSession, Campaign, Comment
+from piloop.ids import CampaignStatus, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ideas import links, superseded_by
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ledger import metrics, references, score, track_of, trunk_keeps
+from piloop.plugins.campaign_type.kit.verdicts.verdict import label
 from piloop.plugins.cas.contract import Cas
 from piloop.reports.overview import (
     agent_output,
@@ -37,8 +43,6 @@ from piloop.reports.overview import (
     stopped,
     summary,
 )
-from piloop.scoring.ledger import metrics, references, score, track_of, trunk_keeps
-from piloop.scoring.verdict import label
 from piloop.text import NONE, age, cell, metric
 from piloop.usage import human
 from piloop.usage.totals import campaign_tokens

@@ -15,25 +15,16 @@ type EnvName = Annotated[str, StringConstraints(pattern=r'^[A-Za-z_][A-Za-z0-9_]
 """A POSIX environment variable name: a secret's, or one that an agent or a server reads. Every harness's ``${NAME}``
 expansion accepts it."""
 CampaignId = NewType('CampaignId', int)
-IdeaId = NewType('IdeaId', int)
-RunId = NewType('RunId', int)
-CandidateId = NewType('CandidateId', int)
-MeasurementId = NewType('MeasurementId', int)
-EvaluatorId = NewType('EvaluatorId', int)
 AgentSessionId = NewType('AgentSessionId', int)
 CommentId = NewType('CommentId', int)
 JournalId = NewType('JournalId', int)
 Revision = NewType('Revision', str)
 """The vcs provider's name for a version of a campaign's files: a commit SHA under ``git``."""
-RungName = NewType('RungName', str)
-"""The name of a rung of a campaign's evaluation ladder (``[[ladder]]``)."""
 
 ROLE_NAME = r'^[a-z][a-z0-9_-]{0,19}$'
 """A role's name, which is also its config table, CLI name, signature and pane prefix."""
 RoleName = NewType('RoleName', str)
 """A role's name: a role of a package, piloop's included, or a ``[plugins.role.<name>]`` table. It matches ``ROLE_NAME``."""
-IMPLEMENTER: Final = RoleName('implementer')
-"""The role that run slots fill last, and the role of a run whose row predates its role (``runs.role``)."""
 
 CAMPAIGN_NAME = re.compile(r'[A-Za-z0-9._-]+')
 """The characters of a campaign's name, which git refs carry."""
@@ -50,9 +41,6 @@ def checked_campaign_name(name: str) -> str:
 
 type CampaignName = Annotated[str, AfterValidator(checked_campaign_name)]
 """A campaign's name: ``CAMPAIGN_NAME``, and not all digits."""
-
-TrackName = NewType('TrackName', str)
-"""A track's name: its primary's ``track``, or else the primary's name."""
 
 
 class TargetKind(StrEnum):
@@ -136,42 +124,6 @@ class Ending(StrEnum):
     """After the wrap-up prompt and its grace period: the agent may commit first."""
     NOW = 'now'
     """At once."""
-
-
-class IdeaStatus(StrEnum):
-    """The lifecycle of an idea. The scheduler picks up ``ready`` ideas in priority order.
-
-    A ``seed`` is a rough idea with pointers. An agent whose role's ``files`` allows it files one (``piloop idea
-    seed``). Research develops it into a defined idea (``piloop idea develop``, which makes it ``ready`` or
-    ``proposed``), or rejects it.
-    A ``proposed`` idea is defined and waits for a human to approve it.
-    """
-
-    SEED = 'seed'
-    PROPOSED = 'proposed'
-    READY = 'ready'
-    SCHEDULED = 'scheduled'
-    DONE = 'done'
-    PARKED = 'parked'
-    REJECTED = 'rejected'
-
-
-class LinkKind(StrEnum):
-    """How one idea relates to another in ``idea_links``: it runs *after* the target, or it *supersedes* the target."""
-
-    AFTER = 'after'
-    SUPERSEDES = 'supersedes'
-
-
-class Cause(StrEnum):
-    """Why an ``interesting`` verdict is not the verdict rule's own.
-
-    ``note``: an agent marked a regressed result as a lead (``piloop candidate note``, the ``Piloop-Note`` trailer).
-    ``moved``: it kept against its own bar, but the head moved on, so it was merged onto the head.
-    """
-
-    NOTE = 'note'
-    MOVED = 'moved'
 
 
 class KeyOrigin(StrEnum):

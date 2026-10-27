@@ -13,21 +13,15 @@ from sqlalchemy.orm import Session
 from piloop.actor import System
 from piloop.agents.results import AgentSessionFinished, CampaignResults, Identified, WorkspaceConflict, learn
 from piloop.db.events import in_order
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Comment,
-    Evaluation,
-    Event,
-    Idea,
-    Measurement,
-    Run,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.ids import IMPLEMENTER, AgentSessionId, IdeaId, RunId
+from piloop.ids import AgentSessionId
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunId
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.executor.contract import (
     AgentFinished,
     AgentJob,

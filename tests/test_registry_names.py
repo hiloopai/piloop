@@ -25,15 +25,21 @@ NAMES = {
 LEAVES: dict[str, frozenset[str] | None] = {
     'plugins/harness/*.py': None,
     'plugins/trigger/*.py': None,
+    'plugins/campaign_type/kit/*/trigger/*.py': None,
     'db/models.py': None,
+    'plugins/campaign_type/kit/evaluation/tables.py': frozenset({'stopped'}),
     'ids.py': None,
     'db/migrations/versions/*.py': None,
     'plugins/campaign_type/*/migrations/*.py': None,
     'actor.py': frozenset({'orchestrator'}),
     'daemon/api.py': frozenset({'news'}),
-    'plugins/role/research.py': frozenset({'claude', 'codex', 'low_water', 'seed', 'stalled'}),
-    'plugins/role/watchdog.py': frozenset({'run_failed', 'dead_at_startup', 'leaking_funnel', 'cron', 'stopped'}),
-    'plugins/role/scout.py': frozenset({'cron'}),
+    'plugins/campaign_type/kit/backlog/role/research.py': frozenset(
+        {'claude', 'codex', 'low_water', 'seed', 'stalled'}
+    ),
+    'plugins/campaign_type/kit/runs/role/watchdog.py': frozenset(
+        {'run_failed', 'dead_at_startup', 'leaking_funnel', 'cron', 'stopped'}
+    ),
+    'plugins/campaign_type/kit/backlog/role/scout.py': frozenset({'cron'}),
     'deprecated.py': None,
     'cli/idea.py': frozenset({'seed'}),
     'plugins/role/contract.py': frozenset({'seed', 'sql', 'orchestrator'}),
@@ -42,14 +48,15 @@ LEAVES: dict[str, frozenset[str] | None] = {
 }
 """The files that may name entries, and which ones (None: any). The reasons:
 
-- The harnesses (``plugins/harness/``), the triggers (``plugins/trigger/``) and ``ids.py`` (the built-in roles) define
-  the entries. The migrations, core's and each campaign type's, are history.
-- ``db/models.py``: the states ``seed`` and ``stopped``, and ``measurements.stopped``, which share a name with a trigger.
+- The harnesses (``plugins/harness/``), the triggers (``plugins/trigger/`` and each component's ``trigger/``) and
+  ``ids.py`` (the built-in roles) define the entries. The migrations, core's and each campaign type's, are history.
+- ``db/models.py`` and the evaluation component's ``tables.py``: the states ``seed`` and ``stopped``, and
+  ``measurements.stopped``, which share a name with a trigger.
 - ``actor.py``: the outside orchestrator, ``orchestrator``, one party with the agents of the role.
 - ``daemon/api.py``: ``news``, the operation id of the route that ``piloop inbox wait`` reads.
-- ``plugins/role/research.py``: the default ``model`` of research.
-- ``plugins/role/``: the default ``triggers`` of the built-in roles, named by kind as in ``piloop.toml``: a class
-  would load its provider, and with it the database, when the config models load.
+- the backlog component's ``role/research.py``: the default ``model`` of research.
+- ``plugins/role/`` and each component's ``role/``: the default ``triggers`` of the built-in roles, named by kind as in
+  ``piloop.toml``: a class would load its provider, and with it the database, when the config models load.
 - ``deprecated.py``: the bridges rewrite the keys of earlier releases, which named built-in roles and triggers.
 - ``cli/idea.py``, ``plugins/role/contract.py`` and ``plugins/role/orchestrator.py``: the commands ``piloop idea seed``
   and ``piloop sql``, and ``orchestrator`` among the names that a new role may not take: the outside orchestrator signs

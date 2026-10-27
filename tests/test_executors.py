@@ -21,23 +21,17 @@ from piloop.actor import System
 from piloop.agents.results import DaemonStopped, Ended, PromptOutcome, Ran
 from piloop.campaign.campaigns import Sources, checkout_of
 from piloop.daemon.main import Daemon
-from piloop.daemon.run_controller import RunController
 from piloop.db.events import in_order
-from piloop.db.models import (
-    LIVE,
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Event,
-    Lease,
-    Measurement,
-    RunEnd,
-)
+from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, Lease
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CampaignId, CommentId
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ledger import request_remeasure
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
 from piloop.plugins.executor.contract import (
     EXECUTORS,
     JOB,
@@ -52,7 +46,6 @@ from piloop.plugins.executor.contract import (
 from piloop.plugins.executor.kit.leases import read_job
 from piloop.plugins.runtime.contract import Handle
 from piloop.plugins.vcs.git import Git
-from piloop.scoring.ledger import request_remeasure
 from piloop.settings import Settings
 from tests.conftest import (
     HARNESS_SLEEPS,

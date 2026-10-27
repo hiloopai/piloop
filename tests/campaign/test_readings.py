@@ -18,10 +18,14 @@ from piloop.campaign.campaigns import sync
 from piloop.campaign.stop import check, gather, review_waits
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.events import has, in_order
-from piloop.db.models import AgentSession, Campaign, Comment, Event, Idea, Run, RunStatus, utcnow
+from piloop.db.models import AgentSession, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.ids import CampaignStatus, IdeaStatus, TargetKind, TargetRef
+from piloop.ids import CampaignStatus, TargetKind, TargetRef
 from piloop.plugins import host
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.fact_source import command as command_module
 from piloop.plugins.fact_source.command import Command
 from piloop.plugins.fact_source.contract import FactReadError

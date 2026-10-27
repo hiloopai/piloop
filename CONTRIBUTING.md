@@ -283,6 +283,11 @@ if not handle.data.get('tag'):
     deprecated.until('0.3.0', 'a handle that 0.1.0 started has no tag: delete this branch')
 ```
 
+Pick the release by who can hit the old form. Anything that a user of the last release can hit (a key, an import, a
+column, a field of the API or of an event) stays until the second minor release after it: with 0.3.x out, mark it
+`0.5.0`, so that it still works, with a warning, all through 0.4.x. Compat code for a form that no release shipped,
+which only users of `main` hit, goes at the next minor release (`0.4.0`).
+
 Write both arguments as literal strings, and the version as `X.Y.Z`. Mark the definition of an old name or constant:
 once it is deleted, the type checker finds each use. `tests/test_deprecated.py` reads every marker in `piloop/`, also
 in a branch that never runs. It fails once the version in `pyproject.toml` reaches a
@@ -293,7 +298,8 @@ The test also fails on a malformed marker, and on a comment or docstring that sa
 ## Deprecate a configuration key
 
 To rename or remove a key of `piloop.toml`, add a bridge in `piloop/deprecated.py` and mark it. The module docstring
-explains how. The old key then keeps working, with a warning, for at least one minor release. The release notes list it
+explains how, and [Mark compat code](#mark-compat-code) says until which release. The old key keeps working, with a
+warning, until then. The release notes list it
 under `Deprecated` when the pull request title says that the key is deprecated.
 
 ## Design rules
@@ -359,12 +365,11 @@ The package has one subpackage for each concern. Imports only point down this li
 2. `mcp/`, `usage/`, and `config.py`: MCP servers, token usage, the campaign configuration.
    `net/`: the server of `piloop serve --listen` and its bearer tokens.
 3. `runtime/`: the runtime of an agent session. The runtimes themselves are plugins (`plugins/runtime/`).
-4. `scoring/`: the evaluate command, the ledger, the verdict.
-5. `agents/`: the roles and their prompts, the agent lifecycle, session capture.
-6. `campaign/`: campaigns, ideas, the inbox, stop conditions, the spend limit.
-7. `reports/`: status, history, the research pack.
-8. `daemon/`: the process, the scheduler, the run controller.
-9. `watch/` and `cli/`.
+4. `agents/`: the roles and their prompts, the agent lifecycle, session capture.
+5. `campaign/`: campaigns, the inbox, stop conditions, the spend limit.
+6. `reports/`: status, history, the research pack.
+7. `daemon/`: the process and the scheduler.
+8. `watch/` and `cli/`.
 
 The top-level modules `ids`, `actor`, `settings`, `otel`, `proc`, `text`, `version` and `deprecated` are leaves
 that every subpackage may use.
@@ -382,6 +387,14 @@ Each capability is one package, `plugins/<capability>/`, with the name of its en
   import one to call it.
 - `kit/` has helpers that any provider of the capability may use. Core imports none of them.
 - A directory without Python has resources of the providers, such as the role prompts in `role/prompts/`.
+
+A campaign type is a provider of `campaign_type`, with a package of its own: `plugins/campaign_type/<type>/`. It
+composes **components** of the campaign type's kit, `plugins/campaign_type/kit/<component>/`, which any type may use:
+`candidates`, `evaluation`, `verdicts`, `backlog` and `runs`. A component holds its ids and states (`ids.py`), its
+tables (`tables.py`) and the operations on its rows. What only the campaigns that use a component read has the
+layout of `plugins/` in `<component>/<capability>/`: a capability that it declares, such as
+`verdicts/verdict_rule/`, and its own providers of the others, such as `verdicts/section/tracks.py`. A type's own
+package holds only what spans its components, as `optimization/` does. Core imports no component.
 
 piloop declares its capabilities, and its own providers, with entry points in `pyproject.toml`, in the same groups that
 a plugin uses (`piloop.capabilities`, then each provider group). To add a capability: its package, an entry point in

@@ -10,29 +10,22 @@ from sqlalchemy.orm import Session
 from piloop.agents.results import StartupAnomaly
 from piloop.campaign.anomaly import AnomalyReported
 from piloop.config import load_campaign_config
-from piloop.db.models import (
-    AgentSessionState,
-    Campaign,
-    CampaignStatus,
-    Candidate,
-    Event,
-    IdeaStatus,
-    Measurement,
-    Pause,
-    Run,
-    RunEnd,
-    RunStatus,
-)
+from piloop.db.models import AgentSessionState, Campaign, CampaignStatus, Event, Pause
 from piloop.db.session import Database
 from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.consumers import RolePass
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement, evaluator_of
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.trigger.leaking_funnel import LeakingFunnel
+from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.section.contract import SECTIONS, Rendering, markdown
 from piloop.plugins.section.reported import REPORTED_SHOWN
 from piloop.plugins.trigger.contract import Fire
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
-from piloop.plugins.trigger.leaking_funnel import LeakingFunnel
-from piloop.plugins.trigger.run_failed import RunFailed
-from piloop.plugins.verdict_rule.contract import Outcome
 from tests.conftest import RESEARCH, WATCHDOG, cas_of
 from tests.reports.test_overview import NOW, agent, at, candidate, idea, live_campaign, run
 
@@ -202,7 +195,7 @@ def test_a_leaking_funnel_is_an_incident_once_for_each_evaluator(db: Database, c
     """Fewer than 5 of the last 10 attempts measured: a gate that most runs cannot pass."""
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        evaluator = p.evaluator
+        evaluator = evaluator_of(s, p)
         assert evaluator is not None
         evaluator.created_at = at(0)
         for n in range(9):

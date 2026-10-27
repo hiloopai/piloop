@@ -54,57 +54,57 @@ from piloop.plugins.cas.http import Http
 
 from piloop.plugins.trigger.contract import TRIGGERS, Trigger, TriggerName, Pass, Fire, Steer, Quiet
 from piloop.plugins.trigger.contract import Backlog, TrackBacklog
-from piloop.plugins.trigger.run_failed import RunFailed
+from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
-from piloop.plugins.trigger.leaking_funnel import LeakingFunnel
+from piloop.plugins.campaign_type.kit.runs.trigger.leaking_funnel import LeakingFunnel
 from piloop.plugins.trigger.cron import CronTrigger
-from piloop.plugins.trigger.seed import SeedTrigger
-from piloop.plugins.trigger.low_water import LowWaterTrigger
+from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
+from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
 from piloop.plugins.trigger.sql import SqlTrigger
-from piloop.plugins.trigger.stalled import StalledTrigger
+from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.trigger.stopped import StoppedTrigger
 from piloop.plugins.trigger.news import NewsTrigger
 
 from piloop.plugins.section.contract import SECTIONS, Section, SectionName, Rendering, Surface
 from piloop.api.views import Rendered, Block, Text, Lines, Figures, Figure, Table, Value
-from piloop.plugins.section.headline import Headline
+from piloop.plugins.campaign_type.kit.verdicts.section.headline import Headline
 from piloop.plugins.section.goal import Goal
-from piloop.plugins.section.tracks import Tracks
-from piloop.plugins.section.trajectory import Trajectory
-from piloop.plugins.section.runs import Runs
-from piloop.plugins.section.queue import Queue
+from piloop.plugins.campaign_type.kit.verdicts.section.tracks import Tracks
+from piloop.plugins.campaign_type.kit.verdicts.section.trajectory import Trajectory
+from piloop.plugins.campaign_type.kit.runs.section.runs import Runs
+from piloop.plugins.campaign_type.kit.backlog.section.queue import Queue
 from piloop.plugins.section.agents import Agents
-from piloop.plugins.section.evaluations import Evaluations
-from piloop.plugins.section.funnel import RunFunnel
+from piloop.plugins.campaign_type.kit.evaluation.section.evaluations import Evaluations
+from piloop.plugins.campaign_type.kit.evaluation.section.funnel import RunFunnel
 from piloop.plugins.section.cost import Cost
-from piloop.plugins.section.candidates import Candidates
-from piloop.plugins.section.idle_queue import IdleQueue
-from piloop.plugins.section.same_as_parent import SameAsParent
+from piloop.plugins.campaign_type.kit.verdicts.section.candidates import Candidates
+from piloop.plugins.campaign_type.kit.backlog.section.idle_queue import IdleQueue
+from piloop.plugins.campaign_type.kit.verdicts.section.same_as_parent import SameAsParent
 from piloop.plugins.section.reported import Reported
 from piloop.plugins.section.inbox import Inbox
 from piloop.plugins.section.events import Events
 from piloop.plugins.section.tools import Tools
 from piloop.plugins.section.incidents import Incidents
-from piloop.plugins.section.pack import Pack
-from piloop.plugins.section.history import History
+from piloop.plugins.campaign_type.kit.runs.section.pack import Pack
+from piloop.plugins.campaign_type.kit.runs.section.history import History
 from piloop.plugins.section.lessons import Lessons
 
 from piloop.plugins.role.contract import ROLES, ImplementerRole, SweepRole
 from piloop.plugins.role.contract import Files, Continuity
 from piloop.plugins.role.contract import RoleConfig, Sweep
-from piloop.plugins.role.research import ResearchRole
-from piloop.plugins.role.scout import ScoutRole
-from piloop.plugins.role.watchdog import WatchdogRole
+from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
+from piloop.plugins.campaign_type.kit.backlog.role.scout import ScoutRole
+from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.role.orchestrator import OrchestratorRole
 
-from piloop.plugins.verdict_rule.contract import VERDICT_RULES, VerdictRule, Case
-from piloop.plugins.verdict_rule.contract import Criterion, Ratio, Side, Stopped
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, VerdictRule, Case
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Criterion, Ratio, Side, Stopped
 from piloop.plugins.metric import Direction
-from piloop.plugins.verdict_rule.contract import Judgement, Outcome
-from piloop.plugins.verdict_rule.contract import Node, Trunk, Branch, Imported
-from piloop.plugins.verdict_rule.contract import Moved, Rebase, Seed, Leave
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Judgement, Outcome
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Node, Trunk, Branch, Imported
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Moved, Rebase, Seed, Leave
 from piloop.plugins.metric import number
-from piloop.plugins.verdict_rule.bootstrap import Bootstrap
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
 
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule, StopCase, Shape, WhileHeld
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource, FactReadError
@@ -114,7 +114,7 @@ from piloop.plugins.fact_source.facts import HEAD, RUNS, UNSETTLED, HOURS, TOKEN
 from piloop.plugins.fact_source.facts import METRIC_SUMS, ATTEMPTS, FUNNEL, CAMPAIGN, OPTIMIZATION, reading, since_keep
 from piloop.plugins.fact_source.facts import per_keep, per_evaluation, worker_spend, per_run
 from piloop.plugins.fact_source.campaign import CampaignFacts
-from piloop.plugins.fact_source.optimization import OptimizationFacts
+from piloop.plugins.campaign_type.optimization.fact_source.optimization import OptimizationFacts
 from piloop.plugins.fact_source.command import Command
 from piloop.plugins.stop_rule.contract import Go, GO, Hold, Stop, Escalate
 from piloop.plugins.stop_rule.limits import Limits
@@ -145,8 +145,8 @@ from piloop.plugins.executor.contract import EXECUTORS, Executor, ExecutorConfig
 from piloop.plugins.executor.contract import Results, Settled
 from piloop.plugins.executor.contract import AgentJob, EvaluationJob, LeftJob, Resume
 from piloop.plugins.executor.contract import AgentReport, EvaluationReport, Sample
-from piloop.config import Rung, Tolerance
-from piloop.scoring.ladder import Gate
+from piloop.plugins.campaign_type.kit.evaluation.config import Rung, Tolerance
+from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.executor.contract import AgentFinished, AgentNotStarted, HarnessSession
 from piloop.plugins.executor.contract import AgentKey, EvaluationKey, JobKey
 from piloop.plugins.executor.contract import key_of, Capacity, Prompt

@@ -7,12 +7,12 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
-from piloop.daemon.run_controller import RunController
 from piloop.db.models import Campaign, Limit
 from piloop.db.session import Database
 from piloop.ids import KeyOrigin
 from piloop.otel import Tracer
 from piloop.plugins import limits
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.executor.contract import Capacity
 from piloop.plugins.executor.kit.capacity import NoLease, Pool
 from piloop.plugins.executor.kit.client import Local

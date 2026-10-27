@@ -124,7 +124,7 @@ from importlib.resources import files
 from sqlalchemy import func, select
 
 from piloop.capabilities import Fire, Outcome, Pass, SweepRole, Trigger, TriggerName
-from piloop.db.models import Candidate
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 
 
 class NoKeep(Trigger):
@@ -194,7 +194,8 @@ A trigger is an instance that a role names in `[plugins.role.<name>] triggers`, 
 without a pending request, the daemon calls `fire(p)` of each trigger of the role in order. A pass comes when
 something changes in the campaign, or in what a trigger names in `WAKES_ON`, and when the time that a trigger's
 `due_in` returns comes. A trigger that compares a time returns when the comparison turns: there is no pass on a timer.
-The rows that it reads are the models of `piloop.db.models`, the [data model](/reference/data-model).
+The rows that it reads are the models of `piloop.db.models`, and a component's in its `tables.py`, such as
+`piloop.plugins.campaign_type.kit.candidates.tables`: the [data model](/reference/data-model).
 
 <ContractTrigger />
 
@@ -210,7 +211,7 @@ The rows that it reads are the models of `piloop.db.models`, the [data model](/r
 from sqlalchemy import func, select
 
 from piloop.capabilities import Figure, Figures, Rendered, Rendering, Section, Surface
-from piloop.db.models import Candidate
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 
 
 class KeepRate(Section):

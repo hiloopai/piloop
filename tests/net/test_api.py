@@ -68,36 +68,32 @@ from piloop.db.models import (
     AgentSession,
     AgentSessionState,
     Campaign,
-    Candidate,
     Comment,
-    Evaluation,
     Event,
     EventModel,
     Pause,
-    RunStatus,
     UnknownEvent,
     utcnow,
 )
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
-from piloop.ids import (
-    AgentSessionId,
-    CampaignStatus,
-    CandidateId,
-    CommentId,
-    CommentKind,
-    Ending,
-    IdeaId,
-    IdeaStatus,
-    LinkKind,
-    RoleName,
-    RunId,
-    TargetKind,
-    TargetRef,
-)
+from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
 from piloop.net import tokens
 from piloop.net.server import OPENAPI, Server, app, local_listener
 from piloop.net.tokens import Tokens
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.api import (
+    CancelledBy,
+    ImportBody,
+    RemeasureBody,
+    RunningSince,
+    ScoringClient,
+)
+from piloop.plugins.campaign_type.kit.evaluation.ledger import MeasurementRecorded
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
+from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.contribution import collect, contributions_of, installed
 from piloop.plugins.memory.local.api import JournalBody, Journaled
 from piloop.plugins.memory.local.tables import Journal
@@ -107,8 +103,6 @@ from piloop.plugins.network.proxy import Proxy, Rule
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.plugins.vcs.git import Git
-from piloop.scoring.api import CancelledBy, ImportBody, RemeasureBody, RunningSince, ScoringClient
-from piloop.scoring.ledger import MeasurementRecorded
 from piloop.settings import Settings
 from piloop.watch.panels import Context, InboxPanel
 from tests.campaign.test_stop import add_run

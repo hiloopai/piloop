@@ -1,5 +1,5 @@
 from piloop.api.views import Lines, Rendered
-from piloop.config import Metric
+from piloop.plugins.campaign_type.kit.evaluation.config import Metric
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.reports.overview import progress
 from piloop.text import metric

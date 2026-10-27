@@ -21,28 +21,21 @@ from piloop.cli import common, main as cli
 from piloop.cli.plugins import selections
 from piloop.config import ConfigError, load_campaign_config
 from piloop.daemon.main import Daemon
-from piloop.daemon.run_controller import RunController
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import in_order
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Comment,
-    Event,
-    Idea,
-    Measurement,
-    Run,
-    RunEnd,
-    RunStatus,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CampaignStatus, CommentKind, Ending, IdeaStatus, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CampaignStatus, CommentKind, Ending, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins_module
 from piloop.plugins.campaign_type.consumers import awake_roles, quiet_phase
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.contract import HARNESSES

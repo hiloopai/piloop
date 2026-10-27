@@ -8,10 +8,11 @@ import pytest
 from inline_snapshot import snapshot
 
 from piloop.api.views import CampaignOverview, Figure, Figures, Lines, Rendered, Table, Text
-from piloop.db.models import Campaign, Pause, RunEnd, RunStatus
+from piloop.db.models import Campaign, Pause
 from piloop.db.session import Database
 from piloop.ids import CampaignStatus
 from piloop.plugins import host
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.host import Scope
 from piloop.plugins.role.contract import ImplementerRole

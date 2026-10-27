@@ -9,7 +9,6 @@ from types import FrameType
 from piloop import deprecated
 from piloop.actor import System
 from piloop.daemon.api import Handlers, daemon_state, with_api
-from piloop.daemon.run_controller import RunController
 from piloop.daemon.scheduler import Scheduler
 from piloop.daemon.serve import (
     RESTART_SIGNAL,
@@ -29,6 +28,7 @@ from piloop.otel import Span, tracer
 from piloop.plugins import host as plugins
 from piloop.plugins.archive.contract import ARCHIVES, CONSUMER, ArchiveHost
 from piloop.plugins.archive.local.store import ManifestNotMigrated, migrate_manifests
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.cas import contract as cas
 from piloop.plugins.contribution import CONTRIBUTORS
 from piloop.plugins.executor.contract import EXECUTORS, JOB_KINDS

@@ -8,9 +8,16 @@ from cyclopts import validators
 from piloop.cli import common
 from piloop.cli.client import campaign_name, daemon_http
 from piloop.cli.common import CampaignRef
-from piloop.ids import CandidateId, TrackName
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring.api import REPEATS, ImportBody, NoteBody, RemeasureBody, ScoringClient, VerdictBody
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
+from piloop.plugins.campaign_type.kit.evaluation.api import (
+    REPEATS,
+    ImportBody,
+    NoteBody,
+    RemeasureBody,
+    ScoringClient,
+    VerdictBody,
+)
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 
 app = cyclopts.App(
     name='candidate',

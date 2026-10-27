@@ -14,20 +14,11 @@ from typing import Annotated, Literal, assert_never
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from piloop.api.contract import Access, Revealed
-from piloop.ids import (
-    AgentSessionId,
-    CampaignId,
-    CampaignStatus,
-    CandidateId,
-    CommentId,
-    EvaluatorId,
-    IdeaId,
-    IdeaStatus,
-    KeyOrigin,
-    RoleName,
-    RunId,
-    TrackName,
-)
+from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentId, KeyOrigin, RoleName
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, TrackName
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.memory.contract import Synced
 from piloop.text import CELL_CHARS, NONE, age, block, cell, metric
 

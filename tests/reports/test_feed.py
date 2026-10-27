@@ -15,21 +15,15 @@ from piloop.api.views import CampaignState
 from piloop.campaign import inbox, ops
 from piloop.db import feed as db_feed
 from piloop.db.events import emit
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Comment,
-    Event,
-    Idea,
-    Run,
-    UnknownEvent,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, UnknownEvent
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import IdeaCreated
-from piloop.ids import CampaignId, CommentKind, IdeaStatus, TargetKind, TargetRef
-from piloop.plugins.verdict_rule.contract import Outcome
+from piloop.ids import CampaignId, CommentKind, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.reports import feed
 
 RAW = (

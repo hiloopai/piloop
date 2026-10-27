@@ -12,15 +12,25 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import System
 from piloop.campaign import ops
-from piloop.daemon.run_controller import RunController
 from piloop.db.events import in_order
-from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, Candidate, Comment, Origin
+from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database
-from piloop.ids import CampaignId, CampaignStatus, IdeaStatus, TargetKind
+from piloop.ids import CampaignId, CampaignStatus, TargetKind
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation import api as evaluation_api, ops as evaluation_ops
+from piloop.plugins.campaign_type.kit.evaluation.ledger import (
+    RejudgeFailed,
+    head,
+    import_reference,
+    rejudges,
+    request_remeasure,
+)
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
 from piloop.plugins.vcs.git import PILOOP, GitRepository
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring.ledger import RejudgeFailed, head, import_reference, rejudges, request_remeasure
 from tests.conftest import HARNESS_WORSE, SETTLE, Gate, ScriptRuntime, run_all, write_script
 from tests.daemon.test_run_controller import candidates, controller, execute, keep_elsewhere, make_run
 from tests.daemon.test_scheduler import add_ideas, make_scheduler, measured_by, request_watchdog, statuses
@@ -95,8 +105,8 @@ def test_the_daemon_judges_a_discard_again_with_a_measurement_by_hand(
     [worse] = candidates(db, run_id)
     assert worse.verdict is Outcome.DISCARD
     with db.session() as s:
-        again = ops.add_measurement(
-            s, worse.id, ops.Report(metrics={'score': 5.0, 'size': 1.0}), actor=System.ORCHESTRATOR
+        again = evaluation_ops.add_measurement(
+            s, worse.id, evaluation_api.Report(metrics={'score': 5.0, 'size': 1.0}), actor=System.ORCHESTRATOR
         ).rejudged
         s.commit()
     assert again
@@ -135,8 +145,8 @@ def test_the_daemon_judges_a_skipped_commit_with_a_measurement_by_hand(
             select(Candidate.id, Candidate.origin, Candidate.verdict).where(Candidate.run_id == run_id)
         ).one()
         assert (origin, verdict) == (Origin.SKIPPED, None)
-        added = ops.add_measurement(
-            s, scaffold_id, ops.Report(metrics={'score': 5.0, 'size': 1.0}), actor=System.ORCHESTRATOR
+        added = evaluation_ops.add_measurement(
+            s, scaffold_id, evaluation_api.Report(metrics={'score': 5.0, 'size': 1.0}), actor=System.ORCHESTRATOR
         )
         s.commit()
     assert added.rejudged and 'judges it' in added.effect
@@ -184,7 +194,7 @@ def test_the_daemon_judges_the_merge_onto_the_head_of_a_hand_keep_off_the_head(
     [worse] = candidates(db, run_id)
     trunk = keep_elsewhere(db, campaign, 'notes', {'notes.txt': 'n\n'}, {'score': 0.5, 'size': 5.0})
     with db.session() as s:
-        done = ops.set_verdict(
+        done = verdicts_ops.set_verdict(
             s, worse.id, Outcome.KEEP, reason='the score misses what it fixes', actor=System.ORCHESTRATOR
         )
         s.commit()
@@ -211,7 +221,9 @@ def test_a_judgement_again_that_fails_answers_the_request_with_the_error(
     execute(ex, db, run_id)
     [worse] = candidates(db, run_id)
     with db.session() as s:
-        ops.add_measurement(s, worse.id, ops.Report(metrics={'score': 5.0, 'size': 1.0}), actor=System.ORCHESTRATOR)
+        evaluation_ops.add_measurement(
+            s, worse.id, evaluation_api.Report(metrics={'score': 5.0, 'size': 1.0}), actor=System.ORCHESTRATOR
+        )
         s.commit()
     mocker.patch('piloop.plugins.vcs.git.commands.open_repo', side_effect=OSError('the repo is gone'))
     ex.rejudge(worse.id)

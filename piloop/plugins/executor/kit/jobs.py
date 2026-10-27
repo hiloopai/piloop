@@ -29,9 +29,23 @@ from covalence import Cid
 from pydantic import SecretStr
 
 from piloop import deprecated
-from piloop.config import BRIEF_FILE, TRANSCRIPT, Rung
+from piloop.config import BRIEF_FILE, TRANSCRIPT
 from piloop.ids import CommentId, EnvName
 from piloop.otel import Span
+from piloop.plugins.campaign_type.kit.evaluation.config import Rung
+from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
+    EvalResult,
+    Failed,
+    InputsChanged,
+    Killed,
+    Measured,
+    NotRun,
+    Step,
+    StoppedAt,
+    printed,
+    run_evaluate,
+)
+from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import (
     DEADLINE_ENV,
@@ -54,19 +68,6 @@ from piloop.plugins.harness.contract import MCP, McpLaunch, expand
 from piloop.plugins.runtime.contract import AgentExit, AgentSpec, AgentStart, ExitStatus, Handle, Runtime, taken
 from piloop.plugins.vcs.contract import Repository
 from piloop.proc import AGENT_TOKEN_ENV, PILOOP_ARGV, child_env, kill_group
-from piloop.scoring.evaluate import (
-    EvalResult,
-    Failed,
-    InputsChanged,
-    Killed,
-    Measured,
-    NotRun,
-    Step,
-    StoppedAt,
-    printed,
-    run_evaluate,
-)
-from piloop.scoring.ladder import Gate
 from piloop.settings import INPUTS_DIR
 from piloop.store.chunks import read as read_chunks
 from piloop.store.tree import Materialised, Seen, evict_unlinked, put_tree

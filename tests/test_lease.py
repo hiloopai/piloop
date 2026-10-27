@@ -23,9 +23,6 @@ from piloop.db.models import (
     PROCESS,
     AgentSession,
     Campaign,
-    Candidate,
-    Evaluation,
-    Evaluator,
     Event,
     EventModel,
     Lease,
@@ -36,6 +33,8 @@ from piloop.db.models import (
 )
 from piloop.db.session import Database, write_transaction
 from piloop.ids import CommentId, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.executor.contract import (
     JOB,
     AgentFinished,

@@ -38,10 +38,9 @@ from piloop.agents.results import (
 from piloop.agents.roles import SQL_HINT, compose_brief
 from piloop.campaign import campaigns, ops
 from piloop.campaign.campaigns import sync
-from piloop.campaign.stop import left, request_cancel, request_stop, runs
+from piloop.campaign.stop import left, request_cancel, request_stop
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.loop import Turn
-from piloop.daemon.run_controller import RunController, wrap_up_lead
 from piloop.daemon.scheduler import Scheduler
 from piloop.db import sql
 from piloop.db.events import has, in_order, payload_of
@@ -49,61 +48,52 @@ from piloop.db.models import (
     AgentSession,
     AgentSessionState,
     Campaign,
-    Candidate,
     Comment,
-    Evaluation,
     Event,
     EventModel,
-    Idea,
-    IdeaLink,
     Lease,
     LeaseKind,
     LeaseState,
-    Measurement,
-    Origin,
     Pause,
-    Run,
-    RunEnd,
-    RunStatus,
     utcnow,
 )
 from piloop.db.session import Database
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import IdeaStatusChanged
-from piloop.ids import (
-    IMPLEMENTER,
-    AgentSessionId,
-    CampaignStatus,
-    CandidateId,
-    CommentId,
-    CommentKind,
-    Ending,
-    IdeaStatus,
-    LinkKind,
-    RoleName,
-    RunId,
-    TargetKind,
-    TargetRef,
-)
+from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
+from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ledger import (
+    current_evaluator,
+    due,
+    head,
+    import_reference,
+    request_remeasure,
+)
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
+from piloop.plugins.campaign_type.kit.runs.controller import RunController, wrap_up_lead
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.stop import runs
+from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
+from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.campaign_type.optimization.planner import RunQueued, RunRerouted
 from piloop.plugins.executor.contract import AgentKey, Capacity, Prompt
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.leases import SERVE
 from piloop.plugins.executor.workers import Workers
-from piloop.plugins.role.research import ResearchRole
 from piloop.plugins.runtime.contract import Handle
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
-from piloop.plugins.trigger.low_water import LowWaterTrigger
-from piloop.plugins.trigger.run_failed import RunFailed
-from piloop.plugins.trigger.seed import SeedTrigger
 from piloop.plugins.trigger.sql import SqlTrigger
-from piloop.plugins.trigger.stalled import StalledTrigger
 from piloop.plugins.trigger.stopped import StoppedTrigger
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, GitRepository, commands as git
-from piloop.plugins.verdict_rule.contract import Outcome
-from piloop.scoring.ledger import current_evaluator, due, head, import_reference, request_remeasure
 from piloop.settings import AgentSettings, DaemonSettings
 from tests.conftest import (
     EVALUATE,

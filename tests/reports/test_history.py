@@ -4,21 +4,16 @@ from inline_snapshot import snapshot
 from sqlalchemy.orm import Session
 
 from piloop.config import CampaignConfig
-from piloop.db.models import (
-    AgentSession,
-    Campaign,
-    Candidate,
-    Comment,
-    Idea,
-    IdeaLink,
-    Measurement,
-    Run,
-    RunEnd,
-    RunStatus,
-)
+from piloop.db.models import AgentSession, Campaign, Comment
 from piloop.db.session import Database
-from piloop.ids import IMPLEMENTER, CommentKind, IdeaStatus, LinkKind, Revision, TargetKind, TargetRef
-from piloop.plugins.verdict_rule.contract import Outcome
+from piloop.ids import CommentKind, Revision, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.reports.history import (
     FINDINGS_IN_HISTORY,
     FIRST_LINE_CHARS,

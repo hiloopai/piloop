@@ -34,8 +34,9 @@ from piloop.config import BRIEF_FILE, CampaignConfig
 from piloop.db.events import emit, latest
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, utcnow
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CommentId, RunId, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.otel import Span, Tracer
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.executor.contract import AgentJob, AgentKey, Executor, ExecutorConfig, LeftJob, Resume, Source
 from piloop.plugins.harness.contract import SESSION_ID, cleared_env, fill, of_provider, takes_session_id
 from piloop.plugins.role.contract import Continuity, RoleConfig, SweepRole

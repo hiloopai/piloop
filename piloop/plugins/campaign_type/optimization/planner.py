@@ -17,60 +17,39 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import System
 from piloop.agents.launcher import rotate
-from piloop.campaign.ideas import park_stranded, runnable, supersede, waiting
 from piloop.campaign.launches import free_harness, full_harnesses, remove_checkouts
-from piloop.campaign.stop import (
-    attempts,
-    park_cancelled,
-)
 from piloop.config import CampaignConfig
-from piloop.daemon.run_controller import (
+from piloop.db.events import emit
+from piloop.db.models import LIVE, AgentSession, Campaign, Comment, EventModel, ReadBy, count
+from piloop.db.triggers import DAEMON_ACTOR
+from piloop.ids import AgentSessionId, CommentKind, RoleName, TargetKind, TargetRef
+from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, TypeHost
+from piloop.plugins.campaign_type.kit.backlog.ideas import park_stranded, runnable, supersede, waiting
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ledger import (
+    due,
+    head,
+    head_unmeasured,
+    rejudges,
+)
+from piloop.plugins.campaign_type.kit.runs.controller import (
     RUNS,
     branches,
     close_run,
     finding_of,
     handed_off,
 )
-from piloop.db.events import emit
-from piloop.db.models import (
-    LIVE,
-    OPEN_RUNS,
-    AgentSession,
-    Campaign,
-    Candidate,
-    Comment,
-    EventModel,
-    Idea,
-    ReadBy,
-    Run,
-    RunEnd,
-    RunStatus,
-    campaign_runs,
-    count,
-)
-from piloop.db.triggers import DAEMON_ACTOR
-from piloop.ids import (
-    AgentSessionId,
-    CandidateId,
-    CommentKind,
-    IdeaId,
-    IdeaStatus,
-    RoleName,
-    TargetKind,
-    TargetRef,
-    TrackName,
-)
-from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, TypeHost
+from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.stop import attempts, park_cancelled
+from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
 from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.facts import Facts
 from piloop.plugins.role.contract import ImplementerRole, ideas_taken
 from piloop.plugins.trigger.contract import Backlog, TrackBacklog
-from piloop.scoring.ledger import (
-    due,
-    head,
-    head_unmeasured,
-    rejudges,
-)
 
 NO_RUN_ERROR = 'an implementer needs a run; the scheduler requests them from ready ideas'
 

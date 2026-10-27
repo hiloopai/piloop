@@ -17,11 +17,15 @@ from piloop.actor import System
 from piloop.config import load_campaign_config
 from piloop.daemon.main import ACTOR, Daemon
 from piloop.daemon.serve import RESTART_SIGNAL, SERVE_ARGV
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Candidate, Idea, Run, RunEnd, RunStatus
+from piloop.db.models import AgentSession, AgentSessionState, Campaign
 from piloop.db.session import Database, migrate
-from piloop.ids import IdeaStatus
 from piloop.plugins.archive.local.tables import Archive
-from piloop.plugins.verdict_rule.contract import Outcome
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.proc import Inherited, alive, started
 from piloop.settings import Settings
 from tests.conftest import (

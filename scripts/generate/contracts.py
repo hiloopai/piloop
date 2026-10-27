@@ -15,6 +15,17 @@ from pathlib import Path
 
 from piloop.daemon.loop import Consumer
 from piloop.plugins.archive.contract import ArchiveConfig, Archiver
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
+    Branch,
+    Case,
+    Criterion,
+    Judgement,
+    Moved,
+    Node,
+    Rebase,
+    Side,
+    VerdictRule,
+)
 from piloop.plugins.cas.contract import Cas, CasProvider, Evictable, Upkeep
 from piloop.plugins.contribution import Contributes, Contribution
 from piloop.plugins.executor.contract import Executor, ExecutorConfig
@@ -30,17 +41,6 @@ from piloop.plugins.section.contract import Rendering, Section
 from piloop.plugins.stop_rule.contract import Escalate, Go, Hold, Stop, StopCase, StopRule
 from piloop.plugins.trigger.contract import Fire, Pass, Trigger
 from piloop.plugins.vcs.contract import Repository, Vcs
-from piloop.plugins.verdict_rule.contract import (
-    Branch,
-    Case,
-    Criterion,
-    Judgement,
-    Moved,
-    Node,
-    Rebase,
-    Side,
-    VerdictRule,
-)
 from scripts.generate import SNIPPETS, header
 from scripts.generate.markdown import cell, lead
 
@@ -59,7 +59,7 @@ CONTRACTS: dict[str, Contract] = {
     'network': Contract((NetworkConfig, Network), '`piloop/plugins/network/contract.py`'),
     'verdict-rule': Contract(
         (VerdictRule, Case, Criterion, Side, Judgement, Node, Branch, Moved, Rebase),
-        '`piloop/plugins/verdict_rule/contract.py`',
+        '`piloop/plugins/campaign_type/kit/verdicts/verdict_rule/contract.py`',
     ),
     'trigger': Contract((Trigger, Pass, Fire), '`piloop/plugins/trigger/contract.py`'),
     'section': Contract((Section, Rendering), '`piloop/plugins/section/contract.py`'),

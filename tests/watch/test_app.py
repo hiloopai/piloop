@@ -23,24 +23,17 @@ from textual.widgets import HelpPanel
 from piloop.actor import Actor, System
 from piloop.campaign import ops
 from piloop.config import CampaignConfig
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Candidate,
-    Comment,
-    Event,
-    Idea,
-    Measurement,
-    Origin,
-    Run,
-    RunEnd,
-    RunStatus,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.ids import IMPLEMENTER, CampaignStatus, CommentId, CommentKind, IdeaId, IdeaStatus, TargetKind, TargetRef
-from piloop.plugins.verdict_rule.contract import Outcome
+from piloop.ids import CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.settings import Settings
 from piloop.watch.app import CampaignScreen, CampaignsScreen, CandidatesTable, Watch
 from piloop.watch.panels import PANELS, Context, kept_scores
@@ -530,7 +523,7 @@ def test_a_review_that_another_client_made_meanwhile_is_refused_with_why(db: Dat
         await pilot.press('3', 'y')
         await pilot.pause()
         with db.session() as s:
-            ops.set_idea_status(
+            backlog_ops.set_idea_status(
                 s, IdeaId(4), IdeaStatus.READY, reason='approved from the CLI', actor=System.ORCHESTRATOR
             )
             s.commit()

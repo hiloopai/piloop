@@ -4,10 +4,11 @@ from enum import StrEnum
 
 from sqlalchemy import Enum
 
-from piloop.db.models import AgentSessionState, Origin, RunEnd, RunStatus
+from piloop.db.models import AgentSessionState
 from piloop.db.schema import tables
-from piloop.ids import Cause, IdeaStatus
-from piloop.plugins.verdict_rule.contract import Outcome
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from scripts.generate import SNIPPETS, header
 
 PATH = SNIPPETS / 'states.mdx'
