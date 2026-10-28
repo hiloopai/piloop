@@ -167,7 +167,7 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
     assert (implementer.timeout, implementer.max_concurrent) == (1800, 4)
     assert (watchdog.harnesses, watchdog.model) == (None, None), 'the campaign rotation and models'
     assert (watchdog.timeout, watchdog.interval) == (600, 1800)
-    assert (research.timeout, research.max_ideas) == (900, 1)
+    assert (research.timeout, research.max_ideas) == (900, 3), 'a sweep defines a ranked few ideas'
     assert research.triggers == ['low_water', 'seed', 'stalled']
     assert defaults.triggers_of(RESEARCH) == [LowWaterTrigger(buffer=2), SeedTrigger(), StalledTrigger()]
     assert research.max_concurrent == 1, 'concurrent sweeps duplicate each other and race on seeds'

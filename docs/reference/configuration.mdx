@@ -447,6 +447,7 @@ name defines a new role, and needs `prompt` and `triggers`.
 | `writes` | list\[string\] | `["seeds via idea develop, or their status to rejected with a note", "ideas via idea add", "comments(finding, escalation) on the campaign", "comments(note) on an idea"]` | What a research sweep may write, as its brief states it. |
 | `files` | `nothing` \| `seeds` \| `ideas` | `"ideas"` | Research develops seeds into ideas and adds ideas of its own. |
 | `triggers` | list\[string\] | `["low_water", "seed", "stalled"]` | A short backlog, a new seed, and a stall. |
+| `max_ideas` | integer | `3` | The most new ideas of its own that one sweep may insert, best first. The seeds it develops do not count. 0 pauses research's new ideas: `low_water` is off, and an idea that a sweep adds is `proposed`. |
 
 ## ScoutRole
 

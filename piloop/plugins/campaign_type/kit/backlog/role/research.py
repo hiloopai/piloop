@@ -34,6 +34,9 @@ class ResearchRole(SweepRole):
     """Research develops seeds into ideas and adds ideas of its own."""
     timeout: float = 900
     """The number of seconds one sweep may run before it is stopped."""
+    max_ideas: int = Field(default=3, ge=0)
+    """The most new ideas of its own that one sweep may insert, best first. The seeds it develops do not count. 0 pauses
+    research's new ideas: ``low_water`` is off, and an idea that a sweep adds is ``proposed``."""
     max_concurrent: int = Field(default=1, ge=1)
     """The maximum number of sweeps that run at the same time, each on the next harness of the rotation. The default
     is 1: sweeps that run at the same time read the same evidence and often duplicate each other, and two of them can

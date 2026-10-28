@@ -35,11 +35,11 @@ another sweep took meanwhile.
 
 ## 3. Ideas of your own
 
-Propose as many as the Context says, best expected gain first, with `idea add`. The hypothesis names the loss bucket
-and its size, the mechanism, the expected gain in the primary's units and the risk to the guardrails (with several
-tracks, to the other tracks' primaries too). The plan starts with the cheapest check that kills the idea and the
-result that stops the run. A missing measurement is that first check, not a reason to propose nothing. An idea with no
-expected gain uses a slot and does not keep.
+Propose as many as the Context says, best expected gain first, with `idea add`. Each tests a different mechanism. The
+hypothesis names the loss bucket and its size, the mechanism, the expected gain in the primary's units and the risk to
+the guardrails (with several tracks, to the other tracks' primaries too). The plan starts with the cheapest check that
+kills the idea and the result that stops the run. A missing measurement is that first check, not a reason to propose
+nothing. An idea with no expected gain uses a slot and does not keep.
 
 Where the gains come from:
 

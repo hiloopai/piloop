@@ -101,7 +101,7 @@ triggers = ["low_water", "seed", "stalled"]  # a short backlog (see [plugins.tri
 # continuity = "fresh"                   # or "resume": each sweep continues the last sweep's harness session
 # incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies, if you add that trigger
 # routine_prompt = "briefs/routine.md"    # follows the prompt in every other sweep; none by default
-max_ideas = 1                             # new ideas per sweep, after the seeds; 0 pauses them (proposed)
+max_ideas = 3                             # new ideas per sweep, after the seeds; 0 pauses them (proposed)
 timeout = 900
 max_concurrent = 1                        # sweeps at the same time; more than one duplicate each other's work
 
