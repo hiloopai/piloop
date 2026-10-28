@@ -173,6 +173,7 @@ local = "piloop.plugins.secrets.local:LocalSecrets"
 
 [project.entry-points."piloop.notifiers"]
 slack = "piloop.plugins.notifier.slack:Slack"
+slack_app = "piloop.plugins.notifier.slack_app:SlackApp"
 
 [project.entry-points."piloop.sections"]
 headline = "piloop.plugins.campaign_type.kit.verdicts.section.headline:Headline"
@@ -255,6 +256,7 @@ default-groups = ["dev", "lint"]
 [project.optional-dependencies]
 gcs = ["google-cloud-storage>=3.0"]
 modal = ["modal>=1.6"]
+slack = ["slack-sdk>=3.36"]
 
 [dependency-groups]
 dev = [
@@ -264,6 +266,7 @@ dev = [
     "google-cloud-storage>=3.0",
     "inline-snapshot>=0.23",
     "modal>=1.6",
+    "slack-sdk>=3.36",
     "moto[s3]>=5.2.4",
     "pytest>=8.4",
     "pytest-cov>=7.1.0",

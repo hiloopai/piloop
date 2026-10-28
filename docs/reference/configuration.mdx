@@ -731,12 +731,39 @@ With `provider = "slack"`:
 | `remind_every` | duration \| string | `"P1D"` | How long after a send an item that nobody acknowledged is sent again. `"never"`: once. |
 | `retry` | duration | `"PT1M"` | How long after a failed send the next try comes. It doubles with each failure in a row, up to `retry_max`. |
 | `retry_max` | duration | `"PT1H"` | The longest wait between two tries. |
-| `webhook` | [SecretRef](#secretref) | `{}` | The secret that holds the webhook's URL: `SLACK_WEBHOOK_URL` unless set (`piloop secret set`). |
-| `mentions` | dict\[string, string\] | `{}` | A person's name, as the server names them, to their Slack member id: a message mentions a campaign's owner. |
+| `people` | dict\[string, string\] | `{}` | A person's name, as the server names them, to their Slack member id. A message mentions a campaign's owner, and only these people can answer a notifier that listens, signed as themselves. |
 | `timeout` | duration | `"PT10S"` | How long a post may take. The daemon's loop waits for it. |
 | `max_items` | integer | `20` | How many items one message shows. It names how many more there are. |
 | `body_chars` | integer | `300` | How much of an item's text a message shows, in whole lines. |
-| `template` | string | `"{mark} *{campaign}* \u00b7 {kind} comment#{comment} \u00b7 P{priority} \u00b7 from {author}{mention}\n{body}\n{link}"` | How the message shows one item. Each `{name}` is filled in: `{mark}` is `:rotating_light:`, or `:alarm_clock: reminder ·` for a reminder; `{campaign}` the campaign's name; `{kind}` the item's kind; `{comment}` its id; `{priority}` 0 to 4; `{author}` who wrote it; `{mention}` ` · <@member>` for an owner in `mentions`, else nothing; `{body}` its text, up to `body_chars`; `{link}` its `link`, else the command that shows it. Write `{{` and `}}` for a brace. |
+| `template` | string | `"{mark} *{campaign}* \u00b7 {kind} comment#{comment} \u00b7 P{priority} \u00b7 from {author}{mention}\n{body}\n{link}"` | How the message shows one item. Each `{name}` is filled in: `{mark}` is `:rotating_light:`, or `:alarm_clock: reminder ·` for a reminder, or `:speech_balloon:` for an answer in a thread; `{campaign}` the campaign's name; `{kind}` the item's kind; `{comment}` its id; `{priority}` 0 to 4, or `–`; `{author}` who wrote it; `{mention}` ` · <@member>` for an owner in `people`, else nothing; `{body}` its text, up to `body_chars`; `{link}` its `link`, else the command that shows it. Write `{{` and `}}` for a brace. |
+| `webhook` | [SecretRef](#secretref) | `{}` | The secret that holds the webhook's URL: `SLACK_WEBHOOK_URL` unless set (`piloop secret set`). |
+
+#### SecretRef
+
+`{ secret = "NAME" }`: the value of the secret `NAME` (`piloop secret set`), in place of a literal.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `secret` | string | required | The name of the secret. |
+
+With `provider = "slack_app"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `link` | string \| null | `null` | The page of an item, such as `https://piloop.example.com/inbox/{comment}`. `{comment}` is the item's id and `{campaign}` its campaign's name. Unset: a message names the command that shows the item. |
+| `remind_every` | duration \| string | `"P1D"` | How long after a send an item that nobody acknowledged is sent again. `"never"`: once. |
+| `retry` | duration | `"PT1M"` | How long after a failed send the next try comes. It doubles with each failure in a row, up to `retry_max`. |
+| `retry_max` | duration | `"PT1H"` | The longest wait between two tries. |
+| `people` | dict\[string, string\] | `{}` | A person's name, as the server names them, to their Slack member id. A message mentions a campaign's owner, and only these people can answer a notifier that listens, signed as themselves. |
+| `timeout` | duration | `"PT10S"` | How long a post may take. The daemon's loop waits for it. |
+| `max_items` | integer | `20` | How many items one message shows. It names how many more there are. |
+| `body_chars` | integer | `300` | How much of an item's text a message shows, in whole lines. |
+| `template` | string | `"{mark} *{campaign}* \u00b7 {kind} comment#{comment} \u00b7 P{priority} \u00b7 from {author}{mention}\n{body}\n{link}"` | How the message shows one item. Each `{name}` is filled in: `{mark}` is `:rotating_light:`, or `:alarm_clock: reminder ·` for a reminder, or `:speech_balloon:` for an answer in a thread; `{campaign}` the campaign's name; `{kind}` the item's kind; `{comment}` its id; `{priority}` 0 to 4, or `–`; `{author}` who wrote it; `{mention}` ` · <@member>` for an owner in `people`, else nothing; `{body}` its text, up to `body_chars`; `{link}` its `link`, else the command that shows it. Write `{{` and `}}` for a brace. |
+| `channel` | string | required | The channel to post in, by its id (`C0123ABC`): the app's bot must be in it, or it hears no replies. |
+| `token` | [SecretRef](#secretref) | `{}` | The secret that holds the bot token (`xoxb-…`; `chat:write`, `channels:history`, `groups:history`, `reactions:read`): `SLACK_BOT_TOKEN` unless set. |
+| `app_token` | [SecretRef](#secretref) | `{}` | The secret that holds the app-level token (`xapp-…`; `connections:write`) that opens the socket: `SLACK_APP_TOKEN` unless set. |
+| `reply_priority` | integer | `2` | The priority in the inbox of a reply from Slack, as `piloop inbox reply` gives one by default. |
+| `api` | string | `"https://slack.com/api/"` | Slack's Web API: another URL only for a proxy, or a test. |
 
 #### SecretRef
 

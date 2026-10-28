@@ -319,15 +319,22 @@ env_fallback = "my_package:EnvFallback"
 
 A **notifier** sends the inbox items that need a human to a service outside piloop. `[plugins.notifier.<name>]` in
 `config.toml` configures one, and `[plugins.notifier] use` names those in use. `slack`, built in, posts to an incoming
-webhook. [Notifications](/guides/notifications) shows its keys. A notifier sends every notice in one message, or raises
-`NotDelivered`: piloop records which items it sent, retries, and reminds.
+webhook, and `slack_app` posts as an app and takes answers back. [Notifications](/guides/notifications) shows their
+keys. `send` says what each notice became: its post, or None when the service gives no id. Or it raises
+`NotDelivered`, and piloop retries. piloop records which items it sent, and reminds.
+
+A notifier that also has `listen` (`Listens`) takes answers back. `listen` returns a lifecycle that the daemon starts
+and stops. For each answer, it calls `host.received` with an `Inbound`: the post whose thread it is in, the message,
+the person, and a `Reply`, `Ack` or `FileSeed`. piloop maps the post to its item, writes what it asks as that person,
+and returns `Accepted` or `Declined`, each with what to tell the person, `Again` for a redelivery, or `Foreign` for
+a thread that is not piloop's.
 
 ```python
 from collections.abc import Sequence
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from piloop.capabilities import HomeSecrets, NotDelivered, Notice, Notifier
+from piloop.capabilities import HomeSecrets, MessageRef, NotDelivered, Notice, Notifier
 
 
 class Ntfy(Notifier):
@@ -335,12 +342,13 @@ class Ntfy(Notifier):
 
     topic: str
 
-    def send(self, notices: Sequence[Notice], secrets: HomeSecrets) -> None:
+    def send(self, notices: Sequence[Notice], secrets: HomeSecrets) -> Sequence[MessageRef | None]:
         text = '\n'.join(f'{n.campaign}: {n.comment_kind} comment#{n.comment}' for n in notices)
         try:
             urlopen(f'https://ntfy.sh/{self.topic}', data=text.encode(), timeout=10).close()
         except URLError as e:
             raise NotDelivered(str(e)) from e
+        return [None] * len(notices)
 ```
 
 ```toml

@@ -33,7 +33,7 @@ Run 41's evaluation takes 3 h, over the 1 h timeout. Raise the timeout, or drop 
 
 - An item is sent when it is an escalation or has priority 0, nobody has acknowledged it, and a person did not write
   it.
-- Each pass of the daemon sends one message with every new item.
+- Each pass of the daemon sends one message with every new item. `slack_app` posts each item on its own.
 - An item that still waits a day later is sent again as a reminder. `piloop inbox ack` ends the reminders.
 - piloop records each send as a `notification.sent` event on the item, so a restart sends nothing twice.
 
@@ -55,14 +55,41 @@ use = ["team"]
 provider = "slack"
 webhook = { secret = "TEAM_WEBHOOK" }
 link = "https://piloop.example.com/inbox/{comment}"
-mentions = { "alice@example.com" = "U0123ABC" }
+people = { "alice@example.com" = "U0123ABC" }
 remind_every = "PT12H"
 template = "{mark} *{campaign}* {kind} from {author}{mention}\n{body}\n{link}"
 ```
 
 `template` sets how the message shows each item, from a fixed set of placeholders: an unknown one is an error when
-the file loads. On a shared server, `mentions` pings the person who added the campaign, by the name that the server
+the file loads. On a shared server, `people` pings the person who added the campaign, by the name that the server
 gives them.
 The [configuration reference](/reference/configuration#plugins) lists every key of `slack`.
+
+## Answer from Slack
+
+`slack_app` posts as a Slack app, and reads the answers in the thread of each post. A reply in the thread is your
+message to the orchestrator on that item, signed as you. A :white_check_mark: on the post acknowledges the item. `idea: <hunch>` files a
+seed. An edit of your reply changes it, and the orchestrator gets the new text as news. piloop's own answers in the thread go back to it.
+
+```toml
+[plugins.notifier]
+use = ["team"]
+
+[plugins.notifier.team]
+provider = "slack_app"
+channel = "C0CCLEHFNQN"
+people = { "alice@example.com" = "U0123ABC" }
+```
+
+1. Install the extra: `uv tool install --reinstall 'piloop[slack]'`.
+2. Create a Slack app with Socket Mode on. Give its bot the scopes `chat:write`, `channels:history`, `groups:history`
+   and `reactions:read`, and subscribe it to `message.channels`, `message.groups` and `reaction_added`.
+3. Store its two tokens: `piloop secret set SLACK_BOT_TOKEN` (`xoxb-…`) and `piloop secret set SLACK_APP_TOKEN`
+   (`xapp-…`, with `connections:write`).
+4. Invite the bot to the channel: `/invite @<app>`. Slack sends it no replies from a channel it is not in.
+
+Socket Mode is a connection out from the daemon, so it needs no public URL. piloop confirms each answer to you, in a
+message that only you see: `piloop recorded this as comment#3, a reply to comment#1`. Only `people` can answer:
+piloop tells anyone else why, the same way. A reply outside a post's thread gets a hint.
 
 To write a notifier for another service, see [Infrastructure](/plugins/infrastructure#notifiers).

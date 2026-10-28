@@ -6,15 +6,16 @@
 | `Notifier.remind_every: timedelta \| Literal['never']` | How long after a send an item that nobody acknowledged is sent again. `"never"`: once. |
 | `Notifier.retry: timedelta` | How long after a failed send the next try comes. It doubles with each failure in a row, up to `retry_max`. |
 | `Notifier.retry_max: timedelta` | The longest wait between two tries. |
-| `Notifier.send(notices: Sequence[Notice], secrets: HomeSecrets) -> None` | Send `notices` in one message. `secrets` has the credentials that the notifier's keys name. |
+| `Notifier.send(notices: Sequence[Notice], secrets: HomeSecrets) -> Sequence[MessageRef \| None]` | Send `notices`, and say what each became: its post, or None when the service gives no id (a webhook). |
 | `Notifier.reminder(sent: datetime) -> datetime \| None` | When an item that was `sent` then, and that still waits, is sent again: None for `never`. |
 | `Notifier.wait(failures: int, asked: timedelta \| None) -> timedelta` | How long to wait after the `failures`-th failure in a row: what the receiver `asked`, else the backoff. |
 | `Notice.kind: NoticeKind` | Whether the notifier sends it for the first time, or again. |
 | `Notice.comment: CommentId` | The item: `piloop inbox show <comment>` shows it. |
 | `Notice.comment_kind: CommentKind` | What the item is: an `escalation`, a `decision`, … |
-| `Notice.priority: int` | 0 (urgent) to 4 (someday). |
+| `Notice.priority: int \| None` | 0 (urgent) to 4 (someday). None for a comment of the forum, such as an answer in a thread. |
 | `Notice.campaign: str \| None` | The campaign's name, or None for an item of no campaign. |
 | `Notice.author: str` | Who wrote the item: its signature, such as `implementer#12`. |
 | `Notice.body: str` | The item's text, in full. |
 | `Notice.owner: Person \| None` | Whoever added the campaign, when a person did: whom the item concerns on a shared server. |
 | `Notice.link: str \| None` | The item's page, from the notifier's `link`. None when it has none: show `piloop inbox show <comment>`. |
+| `Notice.thread: MessageRef \| None` | The post to answer under, for a `FOLLOW_UP`. None for the others: a post of its own. |

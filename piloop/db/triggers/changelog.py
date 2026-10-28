@@ -122,6 +122,12 @@ class CommentAcked(Changed[datetime]):
     acked_by: str | None
 
 
+class CommentEdited(Changed[str]):
+    """A comment's text changed: its author edited it. ``old`` keeps what readers saw, and the edit is news."""
+
+    kind: Literal['comment.body'] = 'comment.body'
+
+
 class RunBriefChanged(Changed[BlobAddress]):
     """A brief was written or replaced: a steer. ``old`` and ``new`` are the briefs' addresses: the text is in the CAS."""
 
@@ -278,10 +284,18 @@ def changed[T](model: type[Changed[T]]) -> Trigger:
         of=(column,),
         when=f'OLD.{column} IS NOT NEW.{column}',
         body=event_insert(
-            SESSION_ACTOR, f"'{subject}'", 'NEW.id', payload(model, 'NEW', old=f'OLD.{column}', new=f'NEW.{column}')
+            SESSION_ACTOR,
+            f"'{subject}'",
+            'NEW.id',
+            payload(model, 'NEW', old=_json(f'OLD.{column}'), new=_json(f'NEW.{column}')),
         ),
         temp=True,
     )
+
+
+def _json(value: str) -> str:
+    """``value``, or NULL for a BLOB, which JSON cannot hold: a raw UPDATE may write one, and must not fail on its event."""
+    return f"CASE typeof({value}) WHEN 'blob' THEN NULL ELSE {value} END"
 
 
 def tombstone(model: type[EventModel]) -> Trigger:
@@ -474,6 +488,7 @@ CHANGES = (
     changed(CampaignParentChanged),
     changed(CampaignPausedChanged),
     changed(CommentAcked),
+    changed(CommentEdited),
 )
 """The decisions that are logged. To log another column, add its ``Changed`` model here."""
 TOMBSTONES = (tombstone(IdeaDeleted), tombstone(CommentDeleted), tombstone(CandidateDeleted))

@@ -12,7 +12,7 @@
 | mcp server: `MCP_SERVERS` (`piloop.mcp_servers`) | host | `[plugins.mcp_server.<name>]` | `http`: `HttpServer`<br/>`stdio`: `StdioServer` |
 | memory: `MEMORY` (`piloop.memory`) | host | `[plugins.memory] provider` | `local`: `LocalMemory` |
 | network: `NETWORKS` (`piloop.networks`) | host | `[plugins.network] provider` in `config.toml` | `https`: `Https`<br/>`proxy`: `Proxy` |
-| notifier: `NOTIFIERS` (`piloop.notifiers`) | host | `[plugins.notifier.<name>]` in `config.toml` | `slack`: `Slack` |
+| notifier: `NOTIFIERS` (`piloop.notifiers`) | host | `[plugins.notifier.<name>]` in `config.toml` | `slack`: `Slack`<br/>`slack_app`: `SlackApp` |
 | provisioner: `PROVISIONERS` (`piloop.provisioners`) | host | its name, where the configuration uses it | `modal`: `Modal` |
 | role: `ROLES` (`piloop.roles`) | host | `[plugins.role.<name>]` | `implementer`: `ImplementerRole`<br/>`orchestrator`: `OrchestratorRole`<br/>`research`: `ResearchRole`<br/>`scout`: `ScoutRole`<br/>`watchdog`: `WatchdogRole` |
 | runtime: `RUNTIMES` (`piloop.runtimes`) | host | `[plugins.runtime.<name>]` in `config.toml` | `subprocess`: `Subprocess` |

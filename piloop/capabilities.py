@@ -209,4 +209,8 @@ from piloop.plugins.secrets.local import LocalSecrets
 
 from piloop.ids import CommentKind
 from piloop.plugins.notifier.contract import NOTIFIERS, Notifier, Notice, NoticeKind, NotDelivered
+from piloop.plugins.notifier.contract import MessageRef, Listens, ListenHost, Inbound, Receipt, Act
+from piloop.plugins.notifier.contract import Reply, Ack, FileSeed, Edit, Accepted, Again, Declined, Foreign
+from piloop.plugins.notifier.kit.slack import SlackText
 from piloop.plugins.notifier.slack import Slack
+from piloop.plugins.notifier.slack_app import SlackApp, SocketListener

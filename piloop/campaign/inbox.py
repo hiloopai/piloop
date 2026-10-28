@@ -39,7 +39,7 @@ from piloop.api.views import (
 from piloop.campaign.anomaly import AnomalyReported
 from piloop.db import feed as db_feed
 from piloop.db.models import NOT_RETIRED, AgentSession, Campaign, Comment, Event, utcnow
-from piloop.db.triggers.changelog import CampaignStatusChanged, Commented, IdeaCreated
+from piloop.db.triggers.changelog import CampaignStatusChanged, Commented, CommentEdited, IdeaCreated
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -117,7 +117,8 @@ def seed_of(idea: Idea, campaign: Campaign) -> Seed:
 
 
 WAKES: Final = tuple(
-    db_feed.Topic(m) for m in (Commented, CampaignStatusChanged, AnomalyReported, IdeaCreated, CandidateJudged)
+    db_feed.Topic(m)
+    for m in (Commented, CommentEdited, CampaignStatusChanged, AnomalyReported, IdeaCreated, CandidateJudged)
 )
 """The events that ``news`` reports: what ends ``piloop inbox wait``."""
 PAGE = 500
@@ -128,8 +129,8 @@ def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party
 
     The news reports:
 
-    - new unacknowledged inbox items that wait for ``party`` (``waiting_for``). The orchestrator's own decisions are for
-      the human.
+    - new or edited unacknowledged inbox items that wait for ``party`` (``waiting_for``). The orchestrator's own
+      decisions are for the human.
     - seeds that another party filed.
     - campaigns that the daemon stopped.
     - anomalies that the daemon gave to a watchdog.
@@ -148,7 +149,7 @@ def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party
 
 
 def _news(s: Session, events: Sequence[Event], campaign_id: CampaignId | None, party: str) -> list[NewsItem]:
-    fresh = {e.target_id for e in events if isinstance(e.payload, Commented)}
+    fresh = {e.target_id for e in events if isinstance(e.payload, (Commented, CommentEdited))}
     found: list[NewsItem] = [
         CommentNews(comment=comment_view(c), campaign_name=campaign.name if campaign else None)
         for c, campaign in waiting_for(s, party, campaign_id=campaign_id)

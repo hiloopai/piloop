@@ -9,7 +9,8 @@ from piloop.actor import Person, System
 from piloop.db.session import Database
 from piloop.ids import CommentId, CommentKind
 from piloop.plugins.notifier.contract import NotDelivered, Notice, NoticeKind
-from piloop.plugins.notifier.slack import PLACEHOLDERS, Slack
+from piloop.plugins.notifier.kit.slack import PLACEHOLDERS
+from piloop.plugins.notifier.slack import Slack
 from piloop.plugins.secrets.contract import HomeSecrets, set_secret
 from piloop.plugins.secrets.local import LocalSecrets
 from tests.fixtures.slack import FakeSlack
@@ -57,7 +58,7 @@ def test_it_posts_one_message_with_a_block_for_each_item(db: Database, slack: Fa
 
 
 def test_a_reminder_links_the_item_mentions_its_owner_and_escapes_its_text() -> None:
-    slack = Slack(mentions={'alice@example.com': 'U0123ABC'})
+    slack = Slack(people={'alice@example.com': 'U0123ABC'})
     text = slack.text(
         [
             notice(
@@ -137,9 +138,9 @@ def test_the_backoff_doubles_up_to_its_cap_and_a_receiver_s_wait_wins() -> None:
 
 
 def test_a_template_shows_each_item_from_its_placeholders() -> None:
-    slack = Slack(template='{{{kind}}} {campaign}/{comment}: {body}', mentions={'alice': 'U1'})
+    slack = Slack(template='{{{kind}}} {campaign}/{comment}: {body}', people={'alice': 'U1'})
     assert slack.text([notice(body='a < b')]) == '{escalation} enwik8/207: a &lt; b'
-    every = Slack(template=' '.join(f'{{{name}}}' for name in PLACEHOLDERS), mentions={'alice': 'U1'})
+    every = Slack(template=' '.join(f'{{{name}}}' for name in PLACEHOLDERS), people={'alice': 'U1'})
     assert every.text([notice(owner=Person(name='alice'))]) == (
         f':rotating_light: enwik8 escalation 207 1 implementer#12  · <@U1> {BODY} `piloop inbox show 207`'
     )

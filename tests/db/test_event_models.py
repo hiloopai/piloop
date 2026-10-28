@@ -108,6 +108,7 @@ def test_every_trigger_writes_an_event_that_loads_as_the_model_that_renders_it(
                 for kind in CommentKind
             ),
             "UPDATE comments SET acked_at = '2026-10-01 12:00:00', acked_by = 'human' WHERE id = 1",
+            "UPDATE comments SET body = 'y' WHERE id = 1",
             'DELETE FROM comments WHERE id = 1',
             'DELETE FROM candidates WHERE id = 2',
             'DELETE FROM ideas WHERE id = 2',

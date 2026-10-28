@@ -52,6 +52,20 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.check_provisioning,
     capabilities.McpError,  # what a harness's MCP renderer raises
     capabilities.NotDelivered,  # what a notifier's send raises
+    capabilities.Listens,  # a notifier's optional protocol, what it is given, and what it hears and answers
+    capabilities.ListenHost,
+    capabilities.Inbound,
+    capabilities.Act,
+    capabilities.Reply,
+    capabilities.Ack,
+    capabilities.FileSeed,
+    capabilities.Edit,
+    capabilities.Receipt,
+    capabilities.Accepted,
+    capabilities.Again,
+    capabilities.Declined,
+    capabilities.Foreign,
+    capabilities.SocketListener,  # what slack_app's listen returns, for a provider that extends it
     capabilities.UsageError,  # what a harness's usage reader raises
     capabilities.JsonlSessions,  # the kit: a JSONL session file that a harness provider may read
     capabilities.Counts,

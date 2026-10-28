@@ -1,7 +1,10 @@
 """The notifier capability's machinery: it sends each notifier in use the inbox items that are due for it."""
 
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import datetime
+from typing import assert_never
 
 from pydantic import ValidationError
 from sqlalchemy import func, select
@@ -9,21 +12,39 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import ACTORS, Person, System
 from piloop.campaign.campaigns import CampaignAdded
-from piloop.campaign.inbox import items, root_of
+from piloop.campaign.inbox import ack, campaign_of, items, root_of
+from piloop.campaign.ops import Refused as BacklogRefused
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
 from piloop.db.events import emit, has, in_order, latest
 from piloop.db.models import Campaign, Comment, Event
+from piloop.db.session import Database
 from piloop.db.triggers.changelog import Commented
-from piloop.ids import HOME, CommentKind, TargetKind, TargetRef
-from piloop.plugins.contribution import Contribution, DaemonHost
+from piloop.ids import HOME, CampaignId, CommentId, CommentKind, TargetKind, TargetRef
+from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.backlog.ops import file_seed
+from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, Lifecycle
 from piloop.plugins.notifier.contract import (
     NOTIFIERS,
+    Accepted,
+    Ack,
+    Again,
+    Declined,
+    Edit,
+    FileSeed,
+    Foreign,
+    Inbound,
+    ListenHost,
+    Listens,
+    MessageRef,
     NotDelivered,
     Notice,
     NoticeKind,
     NotificationFailed,
+    NotificationReceived,
     NotificationSent,
     Notifier,
+    Receipt,
+    Reply,
 )
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets
 
@@ -45,7 +66,151 @@ def contribution(host: DaemonHost) -> Contribution:
             later.add(send_due(host, secrets, name, notifier, turn.now))
         return later.at
 
-    return Contribution(consumers=(Consumer('notify', NOTIFY, notify, Phase.UPKEEP),))
+    listeners = tuple(
+        notifier.listen(ListenHost(secrets, _answering(host, name, notifier), _failing(host, name)))
+        for name, notifier in used.items()
+        if isinstance(notifier, Listens)
+    )
+    return Contribution(
+        consumers=(Consumer('notify', NOTIFY, notify, Phase.UPKEEP),),
+        lifecycle=Listeners(listeners) if listeners else None,
+    )
+
+
+@dataclass(frozen=True)
+class Listeners:
+    """The ``Lifecycle`` of every notifier in use that listens: each starts with the daemon and stops with it."""
+
+    each: tuple[Lifecycle, ...]
+
+    def start(self) -> None:
+        for listener in self.each:
+            listener.start()
+
+    def in_flight(self) -> Mapping[str, Future[None]]:
+        return {key: f for listener in self.each for key, f in listener.in_flight().items()}
+
+    def stop(self, leaving: Leaving, timeout: float) -> None:
+        for listener in self.each:
+            listener.stop(leaving, timeout)
+
+
+def _answering(host: DaemonHost, name: str, notifier: Notifier) -> Callable[[Inbound], Receipt]:
+    def answer(inbound: Inbound) -> Receipt:
+        try:
+            return received(host.db, host.tracer, name, notifier, inbound)
+        except Exception as e:  # it runs in the listener's thread, whose service library would only log what escapes
+            host.tracer.event('notification.receive_failed', notifier=name, error=f'{type(e).__name__}: {e}')
+            return Declined(f'piloop could not write this: {type(e).__name__}: {e}')
+
+    return answer
+
+
+def _failing(host: DaemonHost, name: str) -> Callable[[str], None]:
+    def failed(error: str) -> None:
+        host.tracer.event('notification.listen_failed', notifier=name, error=error)
+
+    return failed
+
+
+def received(db: Database, tracer: Tracer, name: str, notifier: Notifier, inbound: Inbound) -> Receipt:
+    """Write what a person did in the thread of a post of the notifier ``name``, signed as them, and say how it went.
+
+    The thread maps to its item through the ``notification.sent`` event that names the post. A post that the notifier
+    did not make is ``Foreign``. A redelivered post is accepted once: its ``notification.received`` is there already.
+    """
+    if isinstance(inbound.act, Edit):
+        return _edit(db, tracer, name, inbound, inbound.act)
+    with db.session() as s:
+        if _received_already(s, name, inbound.message):
+            return Again()
+        post = latest(
+            s,
+            NotificationSent,
+            has(
+                NotificationSent, notifier=name, message=inbound.thread.id, notice=(NoticeKind.NEW, NoticeKind.REMINDER)
+            ),
+        )
+        if post is None:
+            return Foreign()
+        if (person := inbound.person) is None:
+            return Declined(f'you are not in [plugins.notifier.{name}] people: ask whoever runs piloop to add you')
+        item = s.get_one(Comment, post[0].target_id)
+        match inbound.act:
+            case Reply(text=text, priority=priority):
+                answer = Comment(
+                    target=TargetRef(TargetKind.COMMENT, root_of(s, item).id),
+                    in_reply_to=item.id,
+                    author=person.signature,
+                    kind=CommentKind.MESSAGE,
+                    priority=priority,
+                    body=text,
+                )
+                s.add(answer)
+                s.flush()
+                target = TargetRef(TargetKind.COMMENT, answer.id)
+                said = f'piloop recorded this as comment#{answer.id}, a reply to comment#{item.id}'
+            case Ack():
+                ack(s, [item.id], person)
+                target = TargetRef(TargetKind.COMMENT, item.id)
+                said = f'piloop acknowledged comment#{item.id}'
+            case FileSeed(hunch=hunch):
+                campaign = _campaign(s, item.id)
+                if campaign is None or not hunch:
+                    return Declined('write the hunch after "idea:", in the thread of an item of a campaign')
+                try:
+                    seed = file_seed(s, campaign, hunch, actor=person, provenance=f'comment#{item.id}, via {name}')
+                except BacklogRefused as e:
+                    return Declined(str(e))
+                target = TargetRef(TargetKind.IDEA, seed.id)
+                said = f'piloop filed this as seed idea#{seed.id}, for research'
+            case _:
+                assert_never(inbound.act)
+        emit(s, NotificationReceived(notifier=name, message=inbound.message.id), target, person)
+        s.commit()
+    tracer.event('notification.received', notifier=name, act=type(inbound.act).__name__, target=str(target))
+    return Accepted(said)
+
+
+def _edit(db: Database, tracer: Tracer, name: str, inbound: Inbound, edit: Edit) -> Receipt:
+    """Change the text of the reply that ``inbound.message`` became, as its author, and put it back in the inbox.
+
+    ``comment.body`` keeps the old text in the feed, and is news for whoever waits for the item, as a new one is. A
+    post that became no reply is ``Foreign``: piloop took no answer from it.
+    """
+    with db.session() as s:
+        found = latest(s, NotificationReceived, has(NotificationReceived, notifier=name, message=inbound.message.id))
+        if found is None or found[0].target_kind is not TargetKind.COMMENT:
+            return Foreign()
+        if (person := inbound.person) is None:
+            return Declined(f'you are not in [plugins.notifier.{name}] people: ask whoever runs piloop to add you')
+        comment = s.get_one(Comment, found[0].target_id)
+        if comment.author != person.signature:
+            return Declined(f'comment#{comment.id} is by {comment.author}: only its author changes it')
+        if comment.body == edit.text:
+            return Again()
+        comment.body = edit.text
+        comment.acked_at, comment.acked_by = None, None  # changed, it waits to be read again
+        s.commit()
+    tracer.event('notification.received', notifier=name, act='Edit', target=f'comment#{comment.id}')
+    return Accepted(f'piloop updated comment#{comment.id}')
+
+
+def _received_already(s: Session, name: str, message: MessageRef) -> bool:
+    found = select(Event.id).where(has(NotificationReceived, notifier=name, message=message.id)).limit(1)
+    return s.scalar(found) is not None
+
+
+def _campaign_row(s: Session, comment: CommentId) -> Campaign | None:
+    """The campaign of the comment ``comment``, or None."""
+    found = _campaign(s, comment)
+    return s.get(Campaign, found) if found is not None else None
+
+
+def _campaign(s: Session, comment: CommentId) -> CampaignId | None:
+    """The campaign of the comment ``comment``, through its target (``inbox.campaign_of``)."""
+    found = s.scalar(select(campaign_of(Comment.target_kind, Comment.target_id)).where(Comment.id == comment))
+    return CampaignId(found) if found is not None else None
 
 
 @dataclass(frozen=True)
@@ -66,11 +231,13 @@ def send_due(host: DaemonHost, secrets: HomeSecrets, name: str, notifier: Notifi
         found = due(s, name, notifier, now)
     if not found.notices:
         return found.later
-    ids = [n.comment for n in found.notices]
     try:
-        notifier.send(found.notices, secrets)
+        posts = notifier.send(found.notices, secrets)
     except NotDelivered as e:
+        sent, left = found.notices[: len(e.delivered)], found.notices[len(e.delivered) :]
+        ids = [n.comment for n in left]
         with host.db.session() as s:
+            _record(s, name, sent, e.delivered)
             failed = NotificationFailed(notifier=name, error=str(e), comments=ids, retry_after=e.retry_after)
             row = emit(s, failed, HOME, System.DAEMON)
             if not found.failures:
@@ -81,22 +248,27 @@ def send_due(host: DaemonHost, secrets: HomeSecrets, name: str, notifier: Notifi
         host.tracer.event('notification.failed', notifier=name, comments=len(ids), error=str(e))
         return retry
     with host.db.session() as s:
-        rows = [
-            emit(
-                s,
-                NotificationSent(notifier=name, notice=n.kind),
-                TargetRef(TargetKind.COMMENT, n.comment),
-                System.DAEMON,
-            )
-            for n in found.notices
-        ]
-        s.flush()
-        sent_at = rows[0].at  # the earliest: each reminder counts from its own event, as ``due`` reads them
+        sent_at = _record(s, name, found.notices, posts)
         s.commit()
-    host.tracer.event('notification.sent', notifier=name, comments=len(ids))
+    host.tracer.event('notification.sent', notifier=name, comments=len(found.notices))
     later = Soonest()
-    later.add(found.later, notifier.reminder(sent_at))
+    later.add(found.later, notifier.reminder(sent_at) if sent_at is not None else None)
     return later.at
+
+
+def _record(s: Session, name: str, notices: Sequence[Notice], posts: Sequence[MessageRef | None]) -> datetime | None:
+    """Record that ``notices`` were sent as ``posts``, and return when: the earliest event, as ``due`` reads them."""
+    rows = [
+        emit(
+            s,
+            NotificationSent(notifier=name, notice=n.kind, message=post.id if post is not None else None),
+            TargetRef(TargetKind.COMMENT, n.comment),
+            System.DAEMON,
+        )
+        for n, post in zip(notices, posts, strict=True)
+    ]
+    s.flush()
+    return rows[0].at if rows else None
 
 
 def due(s: Session, name: str, notifier: Notifier, now: datetime) -> Due:
@@ -111,14 +283,21 @@ def due(s: Session, name: str, notifier: Notifier, now: datetime) -> Due:
         last_at, last = failures[-1]
         if (retry := last_at + notifier.wait(len(failures), last.retry_after)) > now:
             return Due((), len(failures), retry)
+    follow_ups = _follow_ups(s, name)
+    notices = [
+        _notice(s, notifier, NoticeKind.FOLLOW_UP, comment, _campaign_row(s, comment.id), thread)
+        for comment, thread in follow_ups
+    ]
+    threaded = {comment.id for comment, _ in follow_ups}
     wanted = [
         (comment, campaign)
         for comment, campaign in items(s)
-        if (comment.kind is CommentKind.ESCALATION or comment.priority == 0) and not _by_a_person(comment.author)
+        if (comment.kind is CommentKind.ESCALATION or comment.priority == 0)
+        and not _by_a_person(comment.author)
+        and comment.id not in threaded
     ]
     sent = _sent(s, name, [c.id for c, _ in wanted])
     later = Soonest()
-    notices: list[Notice] = []
     for comment, campaign in wanted:
         if (at := sent.get(comment.id)) is None:
             notices.append(_notice(s, notifier, NoticeKind.NEW, comment, campaign))
@@ -136,6 +315,50 @@ def _failures(s: Session, name: str) -> list[tuple[datetime, NotificationFailed]
         (e.at, failed)
         for e, failed in in_order(s, NotificationFailed, has(NotificationFailed, notifier=name), Event.id > last_sent)
     ]
+
+
+def _follow_ups(s: Session, name: str) -> list[tuple[Comment, MessageRef]]:
+    """The comments that go to a thread of the notifier ``name``, oldest first, with the post of that thread.
+
+    Each is a reply on an item that the notifier posted with an id (it listens), written after that post. It did not
+    come from that thread (``notification.received``), the daemon did not write it, and the notifier has not sent it.
+    """
+    posts: dict[int, tuple[datetime, MessageRef]] = {}
+    """Each posted item: its first post's time, and its newest post, which a reminder makes."""
+    roots = has(NotificationSent, notifier=name, notice=(NoticeKind.NEW, NoticeKind.REMINDER))
+    for event, sent in in_order(s, NotificationSent, roots):
+        if sent.message is not None:
+            first = posts.get(event.target_id, (event.at, MessageRef(sent.message)))[0]
+            posts[event.target_id] = (first, MessageRef(sent.message))
+    if not posts:
+        return []
+    replies = s.scalars(
+        select(Comment)
+        .where(
+            Comment.in_reply_to.in_(posts)
+            | ((Comment.target_kind == TargetKind.COMMENT) & Comment.target_id.in_(posts)),
+            Comment.author != System.DAEMON.signature,
+        )
+        .order_by(Comment.id)
+    ).all()
+    done = set(_sent(s, name, [c.id for c in replies])) | _received(s, name, [c.id for c in replies])
+    found: list[tuple[Comment, MessageRef]] = []
+    for reply in replies:
+        item = reply.in_reply_to if reply.in_reply_to in posts else reply.target_id
+        first, post = posts[item]
+        if reply.id not in done and reply.created_at > first:
+            found.append((reply, post))
+    return found
+
+
+def _received(s: Session, name: str, comments: list[int]) -> set[int]:
+    """Those of ``comments`` that came from a thread of the notifier ``name``."""
+    query = select(Event.target_id).where(
+        has(NotificationReceived, notifier=name),
+        Event.target_kind == TargetKind.COMMENT,
+        Event.target_id.in_(comments),
+    )
+    return set(s.scalars(query))
 
 
 def _sent(s: Session, name: str, comments: list[int]) -> dict[int, datetime]:
@@ -161,19 +384,27 @@ def _by_a_person(signature: str) -> bool:
     return isinstance(actor, Person) or actor is System.HUMAN
 
 
-def _notice(s: Session, notifier: Notifier, kind: NoticeKind, comment: Comment, campaign: Campaign | None) -> Notice:
+def _notice(
+    s: Session,
+    notifier: Notifier,
+    kind: NoticeKind,
+    comment: Comment,
+    campaign: Campaign | None,
+    thread: MessageRef | None = None,
+) -> Notice:
     name = campaign.name if campaign is not None else None
     link = notifier.link.format(comment=comment.id, campaign=name or '') if notifier.link is not None else None
     return Notice(
         kind=kind,
         comment=comment.id,
         comment_kind=comment.kind,
-        priority=comment.priority if comment.priority is not None else 0,
+        priority=comment.priority,
         campaign=name,
         author=comment.author,
         body=comment.body,
         owner=_owner(s, campaign) if campaign is not None else None,
         link=link,
+        thread=thread,
     )
 
 
