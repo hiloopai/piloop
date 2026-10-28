@@ -1,0 +1,93 @@
+---
+title: Build a UI on piloop
+description: Read a campaign, follow its events and act on it through the HTTP API, as piloop watch does.
+---
+
+A UI on piloop reads a view at a cursor, follows the event feed from that cursor, and reads the view again when an
+event touches it. This loop prints the inbox again each time a comment arrives:
+
+```python
+from piloop.actor import System
+from piloop.api.client import Client
+from piloop.api.contract import EventsQuery, InboxQuery, Selection
+from piloop.settings import Settings
+
+with Client.on(Settings().socket_file, System.HUMAN) as client:
+    cursor = client.status(Selection(campaign='enwik8')).cursor
+    while True:
+        batch = client.events(EventsQuery(campaign='enwik8', after=cursor, wait=20))
+        cursor = batch.next
+        if any(e.subject.kind == 'comment' for e in batch.events):
+            for item in client.inbox(InboxQuery(campaign='enwik8')).items:
+                print(f'p{item.priority} {item.author}: {item.body}')
+```
+
+`piloop watch` is a complete UI built this way. Its code is in
+[`piloop/watch/`](https://github.com/hiloopai/piloop/tree/main/piloop/watch). It imports only the API's clients and
+models, and a test keeps it so. The hosted piloop console is another client of the same routes, written in TypeScript
+on the [OpenAPI document](https://github.com/hiloopai/piloop/blob/main/docs/reference/openapi.json).
+
+## Connect
+
+On the machine of the daemon, call its Unix socket. The socket knows you as the owner of the home, so it needs no
+token. From another machine, call the server's URL with a token that `piloop token create` made
+(see [Run piloop on a server](/guides/remote-server)).
+
+```python
+import httpx2 as httpx
+
+from piloop.api.client import Client
+
+remote = Client(httpx.Client(base_url='https://piloop.example.com', headers={'Authorization': f'Bearer {token}'}))
+```
+
+The `x-piloop-actor` header asks to act as an actor, such as `orchestrator`. Writes sign as that actor. Without it, a
+call acts as the caller itself.
+
+Python clients use `piloop.api.client.Client` and its models. A client in another language reads the OpenAPI document,
+which the server also serves at `GET /v1/openapi.json`, and generates its types from it.
+
+## Read a view at a cursor
+
+Every view answers with a `cursor`: the id of the newest event that it includes.
+
+| Route | What it answers |
+|---|---|
+| `GET /v1/status` | The main facts of each campaign: its state, head, ideas, open runs, live agents, inbox count and tokens. |
+| `GET /v1/overview` | The sections of each campaign's `[plugins.section] use`, as blocks of text, lines, figures and tables. |
+| `GET /v1/inbox` | The inbox items that wait for you, and the seeds. |
+| `GET /v1/inbox/{comment}` | A comment's thread. |
+| `GET /v1/campaigns/{campaign}/lineage` | The campaign as a graph: nodes, parents, the spine and its steps. |
+| `GET /v1/agents/{agent}/output?lines=60` | An agent's last lines of output. |
+| `GET /v1/comments?kind=idea&id=12` | The comments on a row. |
+| `GET /v1/campaigns/{campaign}/ideas`, `GET /v1/ideas/{idea}` | The ideas, and one idea in full with its runs. |
+| `GET /v1/candidates/{candidate}` | A candidate's metrics beside its parent's. |
+
+The overview and the lineage carry their own vocabulary, so a UI draws them without knowing the campaign's type. A
+block of the overview is one of four kinds. A lineage declares the kinds, statuses and tracks of its nodes.
+
+## Follow the feed
+
+Read `GET /v1/events?after=<cursor>&wait=20` in a loop, from the cursor of the first view, then from each `next`. The
+server holds a read until an event comes, or for `wait` seconds. Then it answers with no events and a later `next`.
+[Event feed](/reference/event-feed) describes the batch.
+
+Each event names its `subject`: the kind and the id of the row that it is about, and the row's campaign. Read again
+only the views that the subject touches. `piloop watch` reads the inbox again for a comment, the ideas for an idea,
+and the lineage for a candidate or a measurement.
+
+## Act
+
+A write answers with the row that it changed, at a cursor. Its effects arrive on the feed, like any other client's.
+
+| Route | What it does |
+|---|---|
+| `POST /v1/inbox/ack` | Acknowledge inbox items. |
+| `POST /v1/inbox/{comment}/reply` | Answer an inbox item in its thread. |
+| `POST /v1/agents/{agent}/prompt` | Send a running agent a message for its next turn. |
+| `POST /v1/ideas/{idea}/status` | Approve, park or reject an idea, with a reason. |
+| `POST /v1/ideas/{idea}/priority` | Set an idea's priority. |
+| `POST /v1/candidates/{candidate}/verdict` | Overrule a candidate's verdict, with a reason. |
+
+A refused write answers 404 or 409 with a `ProblemDetail`: its `error` names the problem, and its `detail` says what to
+do. Show the detail.

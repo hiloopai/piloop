@@ -31,7 +31,7 @@ from piloop.plugins.runtime.subprocess import Subprocess, SubprocessRuntime
 
 from piloop.plugins.harness.contract import HARNESSES, Carried, Harness, SecretRef, UsageReader, UserConfig
 from piloop.settings import Settings, StorageSettings, TracingSettings, EvaluationSettings
-from piloop.settings import DaemonSettings, AgentSettings
+from piloop.settings import DaemonSettings, AgentSettings, WatchSettings
 from piloop.plugins.harness.contract import McpLaunch, McpArgs, McpError, McpRenderer
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer
 from piloop.plugins.mcp_server.http import HttpServer

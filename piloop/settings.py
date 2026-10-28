@@ -141,6 +141,25 @@ class AgentSettings(BaseModel):
     escalation. The values of its secrets read as their names. 0 leaves none."""
 
 
+class WatchSettings(BaseModel):
+    """``[watch]``: how ``piloop watch`` reads the API, and how much it shows."""
+
+    model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
+
+    wait: timedelta = Field(default=timedelta(seconds=20), gt=timedelta(0), le=timedelta(seconds=25))
+    """How long the server holds each read of the event feed while no event comes. The API holds one 25 s at most."""
+    retry: timedelta = Field(default=timedelta(seconds=2), gt=timedelta(0))
+    """How soon a read of the event feed that failed, because the server did not answer, goes again."""
+    tail: int = Field(default=500, ge=0, le=1000)
+    """How many events before the first read the campaigns screen reads, to show each campaign's last event."""
+    agent_lines: int = Field(default=60, gt=0, le=1000)
+    """How many of the selected agent's last lines of output its detail shows."""
+    candidates: int = Field(default=50, gt=0)
+    """How many of a campaign's own candidates its panel lists, newest first."""
+    spark: int = Field(default=40, gt=1)
+    """How many of the head's last steps the sparkline of the candidates panel draws."""
+
+
 SUN_PATH = 104 if sys.platform == 'darwin' else 108
 """The bytes of a Unix socket's path, its NUL included (``sockaddr_un.sun_path``): 104 on macOS, 108 on Linux."""
 SHORT_SOCKETS = Path('/tmp')
@@ -269,6 +288,9 @@ class Settings(BaseSettings):
 
     agents: AgentSettings = AgentSettings()
     """``[agents]`` in ``config.toml``: how the daemon steers and ends agents."""
+
+    watch: WatchSettings = WatchSettings()
+    """``[watch]`` in ``config.toml``: how ``piloop watch`` reads the API."""
 
     @classmethod
     def settings_customise_sources(

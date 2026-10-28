@@ -1,52 +1,67 @@
 """``piloop watch``: the campaign on one screen, with keys to act on it. A Textual app with a layout like lazygit.
 
+It is a client of the API alone, so it works on the daemon's socket and against a remote server alike, and it shows
+how to build a UI on piloop: read a view at a cursor, follow the event feed from that cursor, and read the view again
+when an event touches it.
+
 The first screen lists every campaign, one row each. ``enter`` opens a campaign, and ``piloop watch <campaign>`` starts
-there. A campaign screen has a header (head, progress against the stop rule), four numbered panels on the left
-(inbox, agents, ideas, candidates), and on the right the detail of the selected row of the focused panel. Each panel
+there. A campaign screen has a header (the first section of the campaign's overview), numbered panels on the left
+(inbox, agents, ideas, candidates, status), and on the right the detail of the selected row of the focused panel. Each panel
 has its own keys, which the key bar and ``?`` show. ``/`` filters the focused panel.
 
-A key that writes calls the same functions as the CLI (``inbox.ack``, ``inbox.reply``, ``ops.set_idea_status``,
-``ops.set_priority``, ``results.queue_prompt``). Each write is one short session signed by the watcher's actor, so
-the triggers stamp it and the events feed carries it like the write of any other client.
-
-``piloop/watch/panels.py`` gives the data. This module draws it and maps the keys. It reads again when the database
-files change (``piloop.db`` and its WAL, checked every ``POLL_SECONDS``), and at least every ``REFRESH_SECONDS``.
+A key that writes calls the route that the CLI calls (ack, reply, prompt, an idea's status or priority), signed by the watcher's actor. A ``Follower``
+thread reads the event feed with long polls (``GET /v1/events?after=&wait=``) and posts each batch to the app, which
+reads again what the batch touched (``panels.ALSO``). A read and a detail run in a worker thread, so a slow server never
+holds a key.
 """
 
+import threading
 from collections.abc import Callable
-from functools import partial
-from pathlib import Path
-from time import monotonic
-from typing import ClassVar
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from typing import ClassVar, assert_never
 
+import httpx2 as httpx
+from rich.console import RenderableType
 from rich.text import Text
-from sqlalchemy.orm import Session
 from textual.app import App, ComposeResult
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.markup import escape
+from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, HelpPanel, Input, Label, Select, Static
 
-from piloop.actor import Actor
-from piloop.agents.results import queue_prompt
-from piloop.campaign import inbox, ops
-from piloop.campaign.campaigns import find
-from piloop.db.models import utcnow
-from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CommentId
-from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
+from piloop.api.client import NoDaemon, Refused
+from piloop.api.contract import PRIORITIES, AckBody, EventsQuery, PromptBody, ReplyBody, Selection
+from piloop.api.views import Batch, CampaignState, Envelope, InvalidConfig
+from piloop.ids import AgentSessionId, CampaignId, CommentId
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.cas.contract import Cas
-from piloop.watch.panels import CAMPAIGN_COLUMNS, PANELS, Cell, Context, Item, Panel, campaigns, header
+from piloop.plugins.campaign_type.kit.backlog.wire import IdeaRow, PriorityBody, StatusBody
+from piloop.plugins.lineage.contract import NodeId
+from piloop.settings import WatchSettings
+from piloop.watch.panels import (
+    CAMPAIGN_COLUMNS,
+    AgentsPanel,
+    Api,
+    CandidatesPanel,
+    Cell,
+    Frame,
+    IdeasPanel,
+    InboxPanel,
+    Item,
+    Panel,
+    Part,
+    StatusPanel,
+    campaigns,
+    header,
+    read_frame,
+    touched,
+)
 
-POLL_SECONDS = 0.5
-"""How often to check the database files for a change."""
-REFRESH_SECONDS = 5
-"""Read again at least this often without a change, so that the ages and the agents' output stay current."""
-REPLY_PRIORITY = 2
-"""The default priority of a reply. It puts the reply in the inbox, so it wakes the orchestrator, but sends no push."""
+type Failure = Refused | NoDaemon | httpx.TransportError
+"""Why a read of the API got no answer: the server refused it, or nothing answered."""
+FAILURES = (Refused, NoDaemon, httpx.TransportError)
 CSS = """
 #header { height: 2; padding: 0 1; }
 #body { height: 1fr; }
@@ -65,6 +80,48 @@ PanelTable:focus { border: round $accent; border-title-color: $accent; }
 ModalScreen { align: center middle; }
 #dialog { width: 80%; height: auto; border: round $accent; padding: 0 1; background: $surface; }
 """
+
+
+class Fed(Message):
+    """A batch of the event feed, which the ``Follower`` read."""
+
+    def __init__(self, batch: Batch) -> None:
+        super().__init__()
+        self.batch = batch
+
+
+class Lost(Message):
+    """A read of the event feed that failed. The ``Follower`` reads again after ``WatchSettings.retry``."""
+
+    def __init__(self, failure: Failure) -> None:
+        super().__init__()
+        self.failure = failure
+
+
+class Follower(threading.Thread):
+    """Read the event feed after ``after`` until ``stop``, and post each batch to ``app``, also an empty one.
+
+    A daemon thread: the server holds each read up to ``WatchSettings.wait``, and the process may exit meanwhile.
+    """
+
+    def __init__(self, app: Watch, after: int) -> None:
+        super().__init__(daemon=True, name='piloop-watch-feed')
+        self.app, self.after, self.stop = app, after, threading.Event()
+
+    def run(self) -> None:
+        settings = self.app.settings
+        while not self.stop.is_set():
+            try:
+                batch = self.app.api.core.events(EventsQuery(after=self.after, wait=settings.wait.total_seconds()))
+            except FAILURES as e:
+                if self.stop.is_set():  # the app closed the connection on its way out
+                    return
+                self.app.post_message(Lost(e))
+                self.stop.wait(settings.retry.total_seconds())
+                continue
+            self.after = batch.next
+            if not self.stop.is_set():
+                self.app.post_message(Fed(batch))
 
 
 class Ask(ModalScreen[str | None]):
@@ -91,6 +148,10 @@ class Ask(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+DEFAULT_PRIORITY = ReplyBody.model_fields['priority'].default
+"""The priority of a reply unless the dialog changes it: the API's default, which wakes the orchestrator."""
+
+
 class ReplyBox(ModalScreen[tuple[str, int] | None]):
     """A dialog for a reply and its priority.
 
@@ -107,54 +168,83 @@ class ReplyBox(ModalScreen[tuple[str, int] | None]):
         with Vertical(id='dialog'):
             yield Label(escape(self.prompt))
             yield Input(id='text', placeholder='your reply; enter sends it')
-            yield Select([(f'p{p}', p) for p in range(5)], value=REPLY_PRIORITY, allow_blank=False, id='priority')
+            yield Select([(f'p{p}', p) for p in PRIORITIES], value=DEFAULT_PRIORITY, allow_blank=False, id='priority')
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
-        self.dismiss((text, self.query_one(Select).selection or REPLY_PRIORITY) if text else None)
+        self.dismiss((text, self.query_one(Select).selection or DEFAULT_PRIORITY) if text else None)
 
     def action_drop(self) -> None:
         self.dismiss(None)
 
 
-class PanelTable(DataTable[Text]):
-    """One numbered panel. Its rows come from ``panel``, and the cursor stays on its key when the rows change."""
+class Pane(DataTable[Text]):
+    """What the campaign screen asks of each numbered panel, whatever the type of its keys."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding('j', 'cursor_down', 'down', show=False),
         Binding('k', 'cursor_up', 'up', show=False),
     ]
 
-    def __init__(self, number: int, name: str, panel: Panel) -> None:
+    def __init__(self, name: str) -> None:
         super().__init__(cursor_type='row', show_header=False, id=name)
-        self.number, self.panel, self.query_text = number, panel, ''
+        self.query_text = ''
 
-    def fill(self, items: list[Item], title: Callable[[list[Item]], str]) -> None:
-        """Replace the rows with the ``items`` that match the filter, and title the panel by what it shows.
+    def fill(self, frame: Frame) -> None:
+        """Replace the rows with the panel's rows of ``frame``."""
+        raise NotImplementedError
+
+    def selected(self) -> str | None:
+        """The row key of the selected row; None in an empty panel."""
+        if not self.row_count:
+            return None
+        return str(self.coordinate_to_cell_key(self.cursor_coordinate).row_key.value)
+
+    def detail(self, api: Api, frame: Frame) -> RenderableType:
+        """The detail of the selected row. It may read the API: call it in a worker."""
+        raise NotImplementedError
+
+
+class PanelTable[K](Pane):
+    """One numbered panel. Its rows come from ``panel``, and the cursor stays on its key when the rows change."""
+
+    def __init__(self, number: int, name: str, panel: Panel[K]) -> None:
+        super().__init__(name)
+        self.number, self.panel = number, panel
+        self.shown: dict[str, Item[K]] = {}
+
+    def fill(self, frame: Frame) -> None:
+        """Replace the rows with the panel's rows that match the filter, and title the panel by what it shows.
 
         The cursor stays on its key, else near its index.
         """
+        items = self.panel.items(frame)
         shown = [i for i in items if self.query_text.lower() in ' '.join(map(str, i.cells)).lower()]
         current, index = self.key(), self.cursor_row
         self.clear(columns=True)
+        self.shown = {str(i.key): i for i in shown}
         if shown:
             self.add_columns(*(str(n) for n in range(len(shown[0].cells))))
             for item in shown:
                 self.add_row(*plain(item.cells), key=str(item.key))
         keys = [i.key for i in shown]
-        self.move_cursor(row=keys.index(current) if current in keys else min(index, len(keys) - 1), animate=False)
+        row = keys.index(current) if current is not None and current in keys else min(index, len(keys) - 1)
+        self.move_cursor(row=row, animate=False)
         query = f' /{self.query_text}' if self.query_text else ''
-        self.border_title = escape(f'[{self.number}] {title(shown)}{query}')
+        self.border_title = escape(f'[{self.number}] {self.panel.title(frame, shown)}{query}')
 
-    def key(self) -> int | None:
-        """The id of the selected row; None in an empty panel."""
-        if not self.row_count:
-            return None
-        return int(self.coordinate_to_cell_key(self.cursor_coordinate).row_key.value or 0)
+    def key(self) -> K | None:
+        """The key of the selected row; None in an empty panel."""
+        selected = self.selected()
+        return None if selected is None else self.shown[selected].key
 
-    def keys(self) -> list[int]:
-        """The ids of every row shown, filter applied."""
-        return [int(row.value or 0) for row in self.rows]
+    def detail(self, api: Api, frame: Frame) -> RenderableType:
+        key = self.key()
+        return Text('nothing here') if key is None else self.panel.detail(api, frame, key)
+
+    def keys(self) -> list[K]:
+        """The keys of every row shown, filter applied."""
+        return [item.key for item in self.shown.values()]
 
     @property
     def campaign(self) -> CampaignScreen:
@@ -163,7 +253,7 @@ class PanelTable(DataTable[Text]):
         return screen
 
 
-class InboxTable(PanelTable):
+class InboxTable(PanelTable[CommentId]):
     """Panel 1. ``a`` acknowledges the item, ``A`` every item shown, and ``r`` replies to its thread with a priority."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -174,15 +264,15 @@ class InboxTable(PanelTable):
 
     def action_ack(self) -> None:
         if (key := self.key()) is not None:
-            self.campaign.act(
-                lambda s: '; '.join(r.line() for r in inbox.ack(s, [CommentId(key)], self.campaign.actor))
-            )
+            self.ack([key])
 
     def action_ack_shown(self) -> None:
         if keys := self.keys():
-            self.campaign.act(
-                lambda s: '; '.join(r.line() for r in inbox.ack(s, [CommentId(k) for k in keys], self.campaign.actor))
-            )
+            self.ack(keys)
+
+    def ack(self, ids: list[CommentId]) -> None:
+        core = self.campaign.api.core
+        self.campaign.act(lambda: '; '.join(r.line() for r in core.ack(AckBody(ids=tuple(ids))).results))
 
     def action_reply(self) -> None:
         if (key := self.key()) is None:
@@ -194,16 +284,16 @@ class InboxTable(PanelTable):
                 return
             text, priority = answer
 
-            def write(s: Session) -> str:
-                sent = inbox.reply(s, CommentId(key), text, author=self.campaign.actor, priority=priority)
-                return f'sent comment#{sent.id} (p{priority}) in reply to comment#{sent.target_id}'
+            def write() -> str:
+                sent = self.campaign.api.core.reply(key, ReplyBody(body=text, priority=priority)).comment
+                return f'sent comment#{sent.id} (p{priority}) in reply to {sent.target}'
 
             self.campaign.act(write)
 
-        self.app.push_screen(ReplyBox(f'reply to comment#{key}, as {self.campaign.actor}'), send)
+        self.app.push_screen(ReplyBox(f'reply to comment#{key}, as {self.campaign.main_app.actor}'), send)
 
 
-class AgentsTable(PanelTable):
+class AgentsTable(PanelTable[AgentSessionId]):
     """Panel 2. ``s`` steers the agent with a message."""
 
     BINDINGS: ClassVar[list[BindingType]] = [Binding('s', 'steer', 'steer')]
@@ -214,24 +304,22 @@ class AgentsTable(PanelTable):
 
         def send(text: str | None) -> None:
             if text is not None:
-                self.campaign.act(lambda s: steer(s, AgentSessionId(key), text, self.campaign.actor))
+                self.campaign.act(lambda: steered(self.campaign.api, key, text))
 
         self.app.push_screen(Ask(f'steer agent_session#{key}: a message for its next turn'), send)
 
 
-def steer(s: Session, agent_session_id: AgentSessionId, text: str, actor: Actor) -> str:
+def steered(api: Api, agent: AgentSessionId, text: str) -> str:
     """Queue a message for a running agent as ``piloop prompt`` does, and return a note that says so."""
-    comment_id = queue_prompt(s, agent_session_id, text, actor.signature)
-    if comment_id is None:
-        return f'agent_session#{agent_session_id} is not running: nothing to steer'
-    s.commit()
-    return f'comment#{comment_id}: queued for agent_session#{agent_session_id}'
+    answer = api.core.prompt(agent, PromptBody(text=text))
+    return f'comment#{answer.comment}: queued for agent_session#{agent}; the daemon delivers it'
 
 
-class IdeasTable(PanelTable):
+class IdeasTable(PanelTable[IdeaId]):
     """Panel 3. ``y`` approves (to ``ready``), ``p`` parks and ``x`` rejects, each with a reason.
 
-    ``+`` and ``-`` change the priority. A seed cannot be approved here. Research develops it into a defined idea first (``piloop idea develop``).
+    ``+`` and ``-`` change the priority. A seed cannot be approved here: research develops it into a defined idea first
+    (``piloop idea develop``), and the API says so.
     """
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -242,55 +330,44 @@ class IdeasTable(PanelTable):
         Binding('minus', 'priority(1)', 'less urgent'),
     ]
 
+    def selected_idea(self) -> IdeaRow | None:
+        frame, key = self.campaign.frame, self.key()
+        return None if frame is None or key is None else next(i for i in frame.ideas.ideas if i.id == key)
+
     def action_review(self, status: str) -> None:
-        if (key := self.key()) is None:
+        if (idea := self.selected_idea()) is None:
             return
         to = IdeaStatus(status)
-        with self.campaign.db.session() as s:
-            idea = s.get_one(Idea, key)
-            now = idea.status
-            try:
-                backlog_ops.check_status(idea, to)
-            except ops.Refused as e:
-                self.campaign.say(str(e))
-                return
+        if idea.status is to:
+            self.campaign.say(f'idea#{idea.id} is {to} already')
+            return
 
         def send(reason: str | None) -> None:
             if reason is None:
-                self.campaign.say(f'idea#{key} left {now}: no reason given')
+                self.campaign.say(f'idea#{idea.id} left {idea.status}: no reason given')
                 return
 
-            def write(s: Session) -> str:
-                old = backlog_ops.set_idea_status(s, IdeaId(key), to, reason=reason, actor=self.campaign.actor)
-                s.commit()
-                return f'idea#{key} {old} → {to}'
+            def write() -> str:
+                changed = self.campaign.api.backlog.set_status(idea.id, StatusBody(status=to, reason=reason))
+                return f'idea#{idea.id} {changed.was} → {changed.idea.status}'
 
             self.campaign.act(write)
 
-        self.app.push_screen(Ask(f'idea#{key} {now} → {to}: why? (a note on the idea)'), send)
+        self.app.push_screen(Ask(f'idea#{idea.id} {idea.status} → {to}: why? (a note on the idea)'), send)
 
     def action_priority(self, by: int) -> None:
-        if (key := self.key()) is not None:
-
-            def write(s: Session) -> str:
-                now = min(max(s.get_one(Idea, key).priority + by, 0), 4)
-                backlog_ops.set_priority(s, IdeaId(key), now)
-                s.commit()
-                return f'idea#{key} priority {now}'
-
-            self.campaign.act(write)
+        if (idea := self.selected_idea()) is not None:
+            body = PriorityBody(priority=min(max(idea.priority + by, PRIORITIES.start), PRIORITIES.stop - 1))
+            backlog = self.campaign.api.backlog
+            self.campaign.act(lambda: f'idea#{idea.id} priority {backlog.set_priority(idea.id, body).idea.priority}')
 
 
-class CandidatesTable(PanelTable):
-    """Panel 4, read-only: the candidates, newest first, under the sparkline of the head of each track."""
+class CandidatesTable(PanelTable[NodeId]):
+    """Panel 4, read-only: the lineage's nodes, newest first, under the sparkline of the spine on each track."""
 
 
-TABLES: dict[str, type[PanelTable]] = {
-    'inbox': InboxTable,
-    'agents': AgentsTable,
-    'ideas': IdeasTable,
-    'candidates': CandidatesTable,
-}
+class StatusTable(PanelTable[int]):
+    """Panel 5, read-only: the sections of the campaign's overview."""
 
 
 class FilterInput(Input):
@@ -315,19 +392,31 @@ class CampaignsScreen(Screen[None]):
         yield table
         yield Footer()
 
+    @property
+    def main_app(self) -> Watch:
+        app = self.app
+        assert isinstance(app, Watch)
+        return app
+
     def on_mount(self) -> None:
         self.reload()
 
+    def fed(self, batch: Batch) -> None:
+        self.reload()
+
     def reload(self) -> None:
-        app = self.app
-        assert isinstance(app, Watch)
+        """Read the status of every campaign in a worker, then draw it."""
+        app = self.main_app
+        read(self, lambda: app.api.core.status(Selection()).campaigns, self.draw)
+
+    def draw(self, states: list[CampaignState | InvalidConfig]) -> None:
+        app = self.main_app
+        rows = campaigns(states, app.latest, app.now())
         table = self.query_one(DataTable)
-        with app.db.session() as s:
-            rows = campaigns(s, utcnow(), app.actor)
         index = table.cursor_row
         table.clear()
         for item in rows:
-            table.add_row(*plain(item.cells), key=str(item.cells[0]))
+            table.add_row(*plain(item.cells), key=item.key)
         table.move_cursor(row=min(index, len(rows) - 1), animate=False)
         self.query_one('#header', Static).update(Text(f'piloop: {len(rows)} campaign{"" if len(rows) == 1 else "s"}'))
 
@@ -338,14 +427,24 @@ class CampaignsScreen(Screen[None]):
             self.app.push_screen(CampaignScreen(str(name)))
 
 
+@dataclass(frozen=True)
+class Shown:
+    """What the main pane shows: the panel, the row, and the frame that it was read at."""
+
+    table: str | None
+    key: str | None
+    frame: Frame | None
+
+
 class CampaignScreen(Screen[None]):
-    """One campaign: the header, the four panels and the selected row's detail."""
+    """One campaign: the header, the panels and the selected row's detail."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding('1', 'panel("inbox")', 'inbox', show=False),
         Binding('2', 'panel("agents")', 'agents', show=False),
         Binding('3', 'panel("ideas")', 'ideas', show=False),
         Binding('4', 'panel("candidates")', 'candidates', show=False),
+        Binding('5', 'panel("status")', 'status', show=False),
         Binding('0', 'main', 'detail', show=False),
         Binding('slash', 'filter', 'filter'),
         Binding('escape', 'campaigns', 'campaigns'),
@@ -356,8 +455,9 @@ class CampaignScreen(Screen[None]):
         self.ref = ref
         self.note = ''
         """The last action's outcome, as the toast said it."""
-        self.shown: tuple[str | None, int | None] = (None, None)
-        """The panel and row that the main pane shows. A read that leaves the cursor there skips the pane."""
+        self.frame: Frame | None = None
+        """What the screen last read; None until the first read answers."""
+        self.shown = Shown(None, None, None)
 
     @property
     def main_app(self) -> Watch:
@@ -367,19 +467,19 @@ class CampaignScreen(Screen[None]):
         return app
 
     @property
-    def db(self) -> Database:
-        return self.main_app.db
-
-    @property
-    def actor(self) -> Actor:
-        return self.main_app.actor
+    def api(self) -> Api:
+        return self.main_app.api
 
     def compose(self) -> ComposeResult:
+        settings = self.main_app.settings
         yield Static(id='header')
         with Horizontal(id='body'):
             with Vertical(id='left'):
-                for number, (name, panel) in enumerate(PANELS.items(), start=1):
-                    yield TABLES[name](number, name, panel)
+                yield InboxTable(1, 'inbox', InboxPanel())
+                yield AgentsTable(2, 'agents', AgentsPanel(settings))
+                yield IdeasTable(3, 'ideas', IdeasPanel())
+                yield CandidatesTable(4, 'candidates', CandidatesPanel(settings))
+                yield StatusTable(5, 'status', StatusPanel())
             with VerticalScroll(id='main'):
                 yield Static(id='detail')
         yield FilterInput(id='filter', placeholder='filter the focused panel; enter applies, esc clears')
@@ -387,79 +487,101 @@ class CampaignScreen(Screen[None]):
 
     def on_mount(self) -> None:
         self.reload()
-        inbox = self.query_one(InboxTable)
-        (inbox if inbox.row_count else self.query_one(CandidatesTable)).focus()
 
-    def tables(self) -> list[PanelTable]:
-        return list(self.query(PanelTable))
+    def tables(self) -> list[Pane]:
+        return list(self.query(Pane))
 
-    def reload(self) -> None:
-        """Read the campaign, and fill every panel and the detail, in one session."""
-        with self.db.session() as s:
-            ctx = self.context(s)
-            if ctx is None:
+    def fed(self, batch: Batch) -> None:
+        """Read again what the batch touched (``touched``), else draw again: the ages move on."""
+        frame = self.frame
+        if frame is None:
+            self.reload()
+        elif (parts := touched(batch, frame.state.id)) is not None:
+            self.reload(parts)
+        else:
+            self.draw(replace(frame, now=self.main_app.now()))
+
+    def reload(self, parts: frozenset[Part] = frozenset(Part)) -> None:
+        """Read the campaign in a worker, then fill every panel and the detail."""
+        app, last = self.main_app, self.frame
+        read(self, lambda: read_frame(self.api, self.ref, app.now(), last, parts), self.drawn)
+
+    def drawn(self, frame: Frame | InvalidConfig | None) -> None:
+        match frame:
+            case None:
                 self.query_one('#header', Static).update(
                     Text(f'no campaign {self.ref!r} yet: `piloop init` registers it, and this view follows')
                 )
-                return
-            self.query_one('#header', Static).update(header(s, ctx.campaign, ctx.cfg, ctx.now))
-            for table in self.tables():
-                table.fill(table.panel.items(s, ctx), partial(table.panel.title, s, ctx))
-            self.show(s, ctx)
+            case InvalidConfig(name=name, problem=problem, fix=fix):
+                self.query_one('#header', Static).update(Text(f'{name}: {problem}; fix it with {fix}'))
+            case Frame():
+                first = self.frame is None
+                self.draw(frame)
+                if first:
+                    inbox = self.query_one(InboxTable)
+                    (inbox if inbox.row_count else self.query_one(CandidatesTable)).focus()
+            case _:
+                assert_never(frame)
 
-    def context(self, s: Session) -> Context | None:
-        campaign = find(s, self.ref)
-        if campaign is None:
-            return None
-        return Context(campaign, campaign.config, utcnow(), self.actor, self.main_app.cas)
+    def draw(self, frame: Frame) -> None:
+        self.frame = frame
+        self.query_one('#header', Static).update(header(frame))
+        for table in self.tables():
+            table.fill(frame)
+        self.show()
 
-    def focused_table(self) -> PanelTable:
+    def focused_table(self) -> Pane:
         focused = self.focused
-        return focused if isinstance(focused, PanelTable) else self.query_one(InboxTable)
+        return focused if isinstance(focused, Pane) else self.query_one(InboxTable)
 
-    def show(self, s: Session, ctx: Context) -> None:
-        """Show the selected row of the focused panel in the main pane. While the pane has focus, use the last panel."""
+    def show(self) -> None:
+        """Show the selected row of the focused panel in the main pane. While the pane has focus, use the last panel.
+
+        A detail that reads the API reads in a worker. The pane shows it if the cursor is still on that row.
+        """
+        frame = self.frame
+        if frame is None:
+            return
         table = self.focused_table() if not isinstance(self.focused, VerticalScroll) else self.shown_table
         self.shown_table = table
-        key = table.key()
-        self.shown = (table.id, key)
-        detail = self.query_one('#detail', Static)
-        detail.update(table.panel.detail(s, ctx, key) if key is not None else Text('nothing here'))
+        self.shown = Shown(table.id, table.selected(), frame)
         self.query_one('#main', VerticalScroll).border_title = escape(f'[0] {table.id}')
+        wanted = self.shown
+        read(self, lambda: table.detail(self.api, frame), lambda d: self.detailed(wanted, d), group='detail')
 
-    shown_table: PanelTable
+    shown_table: Pane
 
-    def refresh_detail(self) -> None:
-        with self.db.session() as s:
-            ctx = self.context(s)
-            if ctx is not None:
-                self.show(s, ctx)
+    def detailed(self, wanted: Shown, detail: RenderableType) -> None:
+        if wanted == self.shown:
+            self.query_one('#detail', Static).update(detail)
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         table = event.data_table
-        if table is self.focused and isinstance(table, PanelTable) and (table.id, table.key()) != self.shown:
-            self.refresh_detail()
+        if (
+            table is self.focused
+            and isinstance(table, Pane)
+            and (table.id, table.selected()) != (self.shown.table, self.shown.key)
+        ):
+            self.show()
 
     def on_descendant_focus(self) -> None:
-        if isinstance(self.focused, PanelTable):
-            self.refresh_detail()
+        if isinstance(self.focused, Pane):
+            self.show()
 
-    def act(self, write: Callable[[Session], str]) -> None:
-        """Run one write in its own session, say what it did or why it was refused, and read the screen again."""
-        with self.db.session() as s:
-            try:
-                note = write(s)
-            except ops.Refused as e:  # the row changed since the key was pressed
-                note = str(e)
+    def act(self, write: Callable[[], str]) -> None:
+        """Make one write, and say what it did or why the API refused it. The feed brings its effects."""
+        try:
+            note = write()
+        except Refused as e:  # the row changed since the key was pressed, or the caller may not
+            note = str(e)
         self.say(note)
-        self.reload()
 
     def say(self, note: str) -> None:
         self.note = note
         self.notify(note, timeout=6)
 
     def action_panel(self, name: str) -> None:
-        self.query_one(f'#{name}', PanelTable).focus()
+        self.query_one(f'#{name}', Pane).focus()
 
     def action_main(self) -> None:
         self.query_one('#main', VerticalScroll).focus()
@@ -471,20 +593,24 @@ class CampaignScreen(Screen[None]):
         box.add_class('shown')
         box.focus()
 
-    filtering: PanelTable
+    filtering: Pane
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         event.input.remove_class('shown')
         self.filtering.query_text = event.value.strip()
         self.filtering.focus()
-        self.reload()
+        if self.frame is not None:
+            self.draw(self.frame)
 
     def action_campaigns(self) -> None:
         self.app.pop_screen()
 
 
 class Watch(App[None]):
-    """The app: the campaigns screen at the bottom of the stack, and a campaign screen on top when one is open."""
+    """The app: the campaigns screen at the bottom of the stack, and a campaign screen on top when one is open.
+
+    It owns the ``Follower``, and hands each batch to the screen on top.
+    """
 
     CSS = CSS
     TITLE = 'piloop watch'
@@ -494,35 +620,51 @@ class Watch(App[None]):
         Binding('question_mark', 'keys', 'keys'),
     ]
 
-    def __init__(self, db: Database, db_file: Path, ref: str | None, actor: Actor, cas: Cas) -> None:
+    def __init__(self, api: Api, ref: str | None, actor: str, settings: WatchSettings) -> None:
         super().__init__()
-        self.db, self.db_file, self.ref, self.actor, self.cas = db, db_file, ref, actor, cas
-        self._stamp: tuple[int, ...] | None = None
-        self._read = monotonic()
+        self.api, self.ref, self.actor, self.settings = api, ref, actor, settings
+        self.latest: dict[CampaignId, Envelope] = {}
+        """The last event of each campaign that the feed brought, for the campaigns screen."""
+        self.follower: Follower | None = None
+
+    def now(self) -> datetime:
+        return datetime.now(UTC)
 
     def on_mount(self) -> None:
-        self._stamp = stamp(self.db_file)
+        read(self, self._start, self._started)
+
+    def _start(self) -> int:
+        """Read the feed's tail before the cursor of a status, for each campaign's last event, and return the cursor."""
+        cursor = self.api.core.status(Selection()).cursor
+        if tail := self.settings.tail:
+            self._seen(self.api.core.events(EventsQuery(after=max(0, cursor - tail), limit=tail)))
+        return cursor
+
+    def _started(self, cursor: int) -> None:
         self.push_screen(CampaignsScreen())
         if self.ref is not None:
             self.push_screen(CampaignScreen(self.ref))
-        self.set_interval(POLL_SECONDS, self.poll)
+        self.follower = Follower(self, cursor)
+        self.follower.start()
 
-    def poll(self) -> None:
-        """Read the top screen again when the database changed or ``REFRESH_SECONDS`` passed. Not under a dialog.
+    def on_unmount(self) -> None:
+        if self.follower is not None:
+            self.follower.stop.set()
 
-        A screen that was pushed but is not mounted yet has no widgets to fill: it reads the database when it mounts.
-        Nor has a screen that the exit is tearing down, which is detached from the app once the exit starts, or one that
-        the shutdown prunes after the app stopped running.
-        """
-        if not self.is_running:
-            return
-        now = stamp(self.db_file)
-        if now == self._stamp and monotonic() - self._read < REFRESH_SECONDS:
-            return
-        self._stamp, self._read = now, monotonic()
+    def _seen(self, batch: Batch) -> None:
+        for event in batch.events:
+            if event.subject.campaign is not None:
+                self.latest[event.subject.campaign] = event
+
+    def on_fed(self, message: Fed) -> None:
+        """Hand a batch of the feed to the screen on top. Not under a dialog: it reads when the dialog closes."""
+        self._seen(message.batch)
         screen = self.screen
-        if isinstance(screen, CampaignsScreen | CampaignScreen) and screen.is_mounted and screen.is_attached:
-            screen.reload()
+        if isinstance(screen, CampaignsScreen | CampaignScreen) and screen.is_mounted:
+            screen.fed(message.batch)
+
+    def on_lost(self, message: Lost) -> None:
+        self.notify(f'the event feed: {message.failure}; reading again soon', severity='warning', timeout=4)
 
     def action_keys(self) -> None:
         """Show or hide the keys of the focused panel beside the screen (``?``)."""
@@ -532,12 +674,25 @@ class Watch(App[None]):
             self.action_show_help_panel()
 
 
+def read[T](
+    node: Screen[None] | App[None], call: Callable[[], T], then: Callable[[T], None], group: str = 'read'
+) -> None:
+    """Make ``call`` in a worker thread of ``node``, and hand its answer to ``then`` in ``node``, or say why it failed.
+
+    A newer read of the same ``group`` replaces one that has not answered. ``node`` drops the answer once it is gone.
+    """
+
+    def work() -> None:
+        try:
+            answer = call()
+        except FAILURES as e:
+            node.call_later(node.notify, str(e), severity='error', timeout=6)
+            return
+        node.call_later(then, answer)
+
+    node.run_worker(work, thread=True, exclusive=True, group=group)
+
+
 def plain(cells: tuple[Cell, ...]) -> list[Text]:
     """Return cells as ``Text``: a ``DataTable`` reads a ``str`` as markup, and ``[wip]`` in a summary is data."""
     return [Text(c) if isinstance(c, str) else c for c in cells]
-
-
-def stamp(db_file: Path) -> tuple[int, ...]:
-    """Return the mtimes of the database and its WAL. Every write by any connection changes one of them."""
-    files = (db_file, db_file.with_name(f'{db_file.name}-wal'))
-    return tuple(f.stat().st_mtime_ns for f in files if f.exists())

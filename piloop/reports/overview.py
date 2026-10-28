@@ -1,8 +1,8 @@
 """The facts of one campaign that its views share, computed from the database.
 
-The sections (``piloop.plugins.section``), ``piloop watch`` (``piloop/watch/panels.py``), the API's status and
-``piloop wake`` read them here, so they always say the same thing: the summary line, the head's scores, the queue, the
-live agents and their output, the inbox threads, and the progress against the stop rule.
+The sections (``piloop.plugins.section``), the API's status and ``piloop wake`` read them here, so they always say the
+same thing: the summary line, the head's scores, the queue, the live agents and their output, the inbox threads, and the
+progress against the stop rule.
 """
 
 from collections.abc import Sequence
@@ -20,7 +20,6 @@ from piloop.campaign.inbox import campaign_of
 from piloop.campaign.stop import describe, held
 from piloop.config import TRANSCRIPT, CampaignConfig
 from piloop.db.models import LIVE, AgentSession, Campaign, Event, Pause
-from piloop.ids import CampaignStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.harness.contract import UsageReader
@@ -31,17 +30,6 @@ from piloop.store.tree import Missing
 from piloop.text import NONE, cell, metric
 
 DETAIL_CHARS = 160
-
-
-def stopped(campaign: Campaign) -> str:
-    """Return `` · stopped: <reason>`` if the campaign stopped, then `` · paused (<what>): <reason>`` if it is paused."""
-    stop = f' · stopped: {campaign.stopped_reason}' if campaign.status is CampaignStatus.STOPPED else ''
-    return stop + (f' · {paused(campaign)}' if campaign.paused is not None else '')
-
-
-def paused(campaign: Campaign) -> str:
-    """Return ``paused (<what it holds>): <reason>``. The campaign must be paused."""
-    return f'paused ({holds(campaign)}): {campaign.paused_reason}'
 
 
 def holds(campaign: Campaign) -> str:

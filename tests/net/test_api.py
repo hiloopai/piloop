@@ -119,9 +119,8 @@ from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.plugins.vcs.git import Git
 from piloop.settings import Settings
-from piloop.watch.panels import Context, InboxPanel
 from tests.campaign.test_stop import add_run
-from tests.conftest import EveryClient, disk, home_cas, measuring, serving_api, store_config
+from tests.conftest import EveryClient, disk, measuring, serving_api, store_config
 from tests.reports.test_history import idea
 from tests.test_git import Basic, basic_server
 
@@ -479,6 +478,7 @@ def test_a_proxy_caller_s_ack_reply_and_pause_sign_as_the_person_it_names(
             start = local.news(NewsQuery()).next
             acted = Client(asking).reply(CommentId(1), ReplyBody(body='mine')).comment
             [news] = local.news(NewsQuery(after=start)).items
+            shown = local.inbox(InboxQuery()).items
             assert orchestrator.news(NewsQuery(after=start)).items == [], (
                 'the orchestrator at the terminal is the same party as the network orchestrator: nothing waits'
             )
@@ -493,14 +493,13 @@ def test_a_proxy_caller_s_ack_reply_and_pause_sign_as_the_person_it_names(
         row = s.get_one(Campaign, campaign.id)
         assert (row.updated_by, s.get_one(Comment, 1).acked_by) == (me, me)
         signed = {(e.kind, e.actor) for e in s.scalars(select(Event).where(Event.id > 1))}
-        rows = InboxPanel().items(s, Context(row, row.config, utcnow(), System.HUMAN, home_cas(db)))
     assert signed == {
         ('campaign.paused', me),
         ('comment.acked_at', me),
         ('comment.decision', me),
         ('comment.decision', f'orchestrator via {me}'),
     }, 'the change log signs as the caller'
-    assert {r.cells[2] for r in rows} >= {me, f'orchestrator via {me}'}, 'watch shows who replied'
+    assert {i.author for i in shown} >= {me, f'orchestrator via {me}'}, 'the inbox, as watch shows it, says who replied'
 
 
 def test_behind_the_proxy_an_agent_s_token_signs_on_the_socket_and_no_piloop_token_passes_the_listener(

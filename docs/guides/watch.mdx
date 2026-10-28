@@ -3,8 +3,11 @@ title: Watching a campaign
 description: piloop watch shows the campaign on one screen, with keys to act on it.
 ---
 
-`piloop watch` is a terminal app over the database. It shows every campaign, or one campaign with
-`piloop watch <campaign>`. It reads the database again whenever the daemon or an agent writes to it.
+`piloop watch` is a terminal app over piloop's API. It shows every campaign, or one campaign with
+`piloop watch <campaign>`. It follows the [event feed](/reference/event-feed) and reads again what each event changes.
+With `PILOOP_SERVER` set, it shows the campaigns of that server (see [Run piloop on a server](/guides/remote-server)).
+It is also an example of a UI built on the API: see [Build a UI on piloop](/guides/build-a-ui). `[watch]` in
+`config.toml` sets how much it shows ([configuration](/reference/configuration#watch)).
 
 ## The screens
 
@@ -13,7 +16,7 @@ The first screen lists every campaign, the active ones first. Press `enter` to o
 It shows one row per campaign: its status, the head and its gain over the baseline, the live agents, the ready ideas, the
 inbox, the tokens and the last event.
 
-A campaign has a header, four panels on the left, and the main pane on the right, which shows the selected row in
+A campaign has a header, five panels on the left, and the main pane on the right, which shows the selected row in
 full:
 
 ![A campaign in piloop watch: the inbox, agents, ideas and candidates on the left, the selected row on the right](/images/watch-campaign.svg)
@@ -26,10 +29,9 @@ The Ideas panel, with an idea that research wrote from the losses it measured:
 
 ![The ideas panel and research's hypothesis and plan for an idea](/images/watch-ideas.svg)
 
-The header shows the head, the number of keeps and the tokens. The second line shows the progress against the stop
-rule's limits, as the rule describes them, the facts of `hold_at` among them. Its run count (`run 7/10`) counts the runs as
-`max_runs` does. With several [tracks](/concepts/tracks), one more line
-shows each track.
+The header shows the campaign's state, then the first section of its `[plugins.section] use`: by default the head, the
+number of keeps and the tokens. The Status panel lists every section, such as the goal and the progress against the
+stop rule.
 
 ## Panels and keys
 
@@ -37,7 +39,7 @@ These keys work on the screen of a campaign. `?` and `q` also work on the list o
 
 | Key | Action |
 |---|---|
-| `1` to `4`, `tab` | Move between the panels. |
+| `1` to `5`, `tab` | Move between the panels. |
 | `0` | Move into the main pane, to scroll it. |
 | `↑` `↓`, `j` `k` | Select a row. |
 | `/` | Filter the panel. `enter` applies the filter, `esc` clears it. |
@@ -50,12 +52,13 @@ These keys work on the screen of a campaign. `?` and `q` also work on the list o
 | [1] Inbox | The unacknowledged items, most urgent first, without the items that you wrote. | The item and its thread. | `a` acknowledge, `A` acknowledge every item shown, `r` reply |
 | [2] Agents | The starting and running agents. | The agent, its task, and its last 60 lines of output. | `s` steer |
 | [3] Ideas | Seeds, then proposed, ready, scheduled and parked ideas, and by priority within each status. | Hypothesis, plan, links, runs and comments. | `y` approve, `p` park, `x` reject, `+` `-` priority |
-| [4] Candidates | The candidates, newest first, then the imported references. The title shows the head after each keep as a sparkline. | Verdict and reason, metrics against the parent, summary. | none |
+| [4] Candidates | The nodes of the campaign's lineage (`GET /v1/campaigns/{campaign}/lineage`), newest first. The title shows the head after each keep as a sparkline. | Verdict and reason, links, metrics against the parent, summary. | none |
+| [5] Status | The sections of the campaign's `[plugins.section] use`. | The section. | none |
 
 ## What the keys write
 
-Each key writes as `PILOOP_ACTOR`, which is `human` unless you set it. The `events` table records the write like any
-other.
+Each key calls the route that the CLI calls, as `PILOOP_ACTOR`, which is `human` unless you set it. The `events` table
+records the write like any other.
 
 - **Acknowledge** does what `piloop inbox ack` does.
 - **Reply** asks for the text and a priority (default 2). It writes a `decision` comment that replies to the first

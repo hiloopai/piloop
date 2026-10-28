@@ -7,11 +7,10 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from piloop.api.contract import defaulted
-from piloop.campaign.campaigns import UnknownCampaign, find, named, selected
+from piloop.campaign.campaigns import UnknownCampaign, named, selected
 from piloop.campaign.ops import Refused
 from piloop.cli import common
 from piloop.daemon.serve import running_pid
@@ -65,18 +64,6 @@ def campaign(s: Session, ref: str) -> Campaign:
         return named(s, ref)
     except UnknownCampaign as e:
         raise SystemExit(str(e)) from e
-
-
-def known(ref: str) -> None:
-    """Exit unless the home has a campaign that ``ref`` names. Reads the database read-only; check its schema first."""
-    engine = create_engine(f'sqlite:///file:{home() / "piloop.db"}?mode=ro&uri=true')
-    try:
-        with Session(engine) as s:
-            found = find(s, ref)
-    finally:
-        engine.dispose()
-    if found is None:
-        raise SystemExit(str(UnknownCampaign(ref)))
 
 
 def campaigns(s: Session, ref: str | None) -> list[Campaign]:

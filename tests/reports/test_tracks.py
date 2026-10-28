@@ -1,8 +1,12 @@
 """Tests for how status, watch, the history and the research pack show a campaign with two tracks."""
 
+from pathlib import Path
+
 from inline_snapshot import snapshot
 
 from piloop.actor import System
+from piloop.api.client import socket_http
+from piloop.api.contract import Selection
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign
 from piloop.db.session import Database
@@ -11,8 +15,10 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization.pack import pack
-from piloop.watch.panels import PANELS, Context, campaigns, header
-from tests.conftest import home_cas, reconfigured
+from piloop.plugins.campaign_type.optimization.summary import summary
+from piloop.settings import Settings, WatchSettings
+from piloop.watch.panels import Api, CandidatesPanel, Frame, campaigns, read_frame
+from tests.conftest import reconfigured, serving_api
 from tests.reports.test_history import SHOWN, full
 from tests.reports.test_overview import NOW, candidate, live_campaign, render
 
@@ -132,19 +138,22 @@ def test_history_and_pack_show_each_track(db: Database, campaign: Campaign) -> N
 
 
 def test_watch_shows_the_head_per_track(db: Database, campaign: Campaign) -> None:
-    cfg = two_tracks(db, campaign)
+    two_tracks(db, campaign)
+    cfg = Settings(home=Path(str(db.engine.url.database)).parent)
+    with serving_api(cfg), socket_http(cfg.socket_file, System.ORCHESTRATOR) as http:
+        api = Api.over(http)
+        frame = read_frame(api, 'demo', NOW)
+        states = api.core.status(Selection()).campaigns
+    assert isinstance(frame, Frame)
+    [row] = campaigns(states, {}, NOW)
+    assert row.cells[2:4] == snapshot(('3 score, 8 size', '+2, -4'))
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        assert header(s, p, cfg, NOW).plain == snapshot("""\
-demo · head candidate#4: score 3 (+2), size 8 (-4) · 3 kept / 4 candidates · 4k tok
-run 3 · 1.9h · no limit stops it: open-ended\
-""")
-        [row] = campaigns(s, NOW, System.ORCHESTRATOR)
-        assert row.cells[2:4] == snapshot(('3 score, 8 size', '+2, -4'))
-        ctx = Context(p, cfg, NOW, System.ORCHESTRATOR, home_cas(db))
-        panel = PANELS['candidates']
-        items = panel.items(s, ctx)
-        assert panel.title(s, ctx, items) == snapshot('Candidates score ▁██ 1 → 3 · size █▅▁ 12 → 8')
+        assert summary(s, p, p.config) == snapshot(
+            'demo · head candidate#4: score 3 (+2), size 8 (-4) · 3 kept / 4 candidates · 4k tok'
+        ), 'piloop wake shows it'
+    panel = CandidatesPanel(WatchSettings())
+    assert panel.title(frame, panel.items(frame)) == snapshot('Candidates score ▁██ 1 → 3 · size █▅▁ 12 → 8')
 
 
 def test_lineages_show_every_track_primary_of_their_latest_keep(db: Database, campaign: Campaign) -> None:

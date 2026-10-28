@@ -2,6 +2,7 @@
 
 import json
 import shlex
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, assert_never
@@ -262,3 +263,32 @@ def clock() -> datetime:
 
 def _age(iso: str, now: datetime) -> str:
     return age(datetime.fromisoformat(iso), now)
+
+
+def watch(
+    ref: CampaignRef | None = None,
+    /,
+    *,
+    mouse: Annotated[
+        bool,
+        cyclopts.Parameter(
+            help='Take the mouse. --no-mouse leaves it to the terminal: a multiplexer can misread the mouse of the app.'
+        ),
+    ] = True,
+) -> None:
+    """Show the campaign on one screen, with keys to act on it.
+
+    It shows every campaign, or one campaign when you name it. A campaign has numbered panels (inbox, agents,
+    candidates and status) and the detail of the selected row. `?` lists the keys of the focused panel, `/` filters
+    it, esc goes back to every campaign and q quits. It reads the API, so it works with PILOOP_SERVER too. Writes are
+    signed as PILOOP_ACTOR.
+    """
+    if not sys.stdin.isatty():
+        raise SystemExit('piloop watch reads keys from a terminal; `piloop status` prints the same once')
+    from piloop.watch.app import Watch  # Textual loads only for the watch
+    from piloop.watch.panels import Api
+
+    with daemon_http() as http:
+        api = Api.over(http)
+        opened = None if ref is None else str(api.core.status(Selection(campaign=ref, cwd=cwd())).campaigns[0].id)
+        Watch(api, opened, common.settings.actor.signature, common.settings.watch).run(mouse=mouse)

@@ -27,7 +27,7 @@ from rich.table import Table
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.orm import Session
 
-from piloop.actor import Actor, System
+from piloop.actor import System
 from piloop.agents.results import PromptOutcome
 from piloop.api.client import Client, NoDaemon
 from piloop.api.contract import Selection
@@ -82,6 +82,7 @@ from piloop.plugins.executor.kit.leases import Leases
 from piloop.settings import Settings
 from piloop.store.chunks import Chunked
 from piloop.version import direct_url, installed
+from piloop.watch.app import Watch
 from tests.conftest import (
     RESEARCH,
     WATCHDOG,
@@ -2039,33 +2040,24 @@ def test_watch_needs_a_terminal_and_runs_the_app_as_the_actor(campaign_path: Pat
         SystemExit, match='piloop watch reads keys from a terminal; `piloop status` prints the same once'
     ):
         run_cli(['watch'])
-    mocker.patch('piloop.cli.campaign.sys.stdin').isatty.return_value = True
-    ran: list[tuple[str | None, Actor, Path, bool]] = []
-    mocker.patch.object(
-        campaign_cli.Watch, 'run', lambda app, *, mouse: ran.append((app.ref, app.actor, app.db_file, mouse))
-    )
+    mocker.patch('piloop.cli.views.sys.stdin').isatty.return_value = True
+    ran: list[tuple[str | None, str, bool]] = []
+    mocker.patch.object(Watch, 'run', lambda app, *, mouse: ran.append((app.ref, app.actor, mouse)))
     run_cli(['watch', 'demo'])
     run_cli(['watch', '--no-mouse'])
-    database = common.settings.home / 'piloop.db'
-    assert ran == [('demo', System.HUMAN, database, True), (None, System.HUMAN, database, False)], (
-        'without a campaign, every campaign; --no-mouse leaves the mouse to the terminal'
+    assert ran == [('1', 'human', True), (None, 'human', False)], (
+        'a campaign by its id; without one, every campaign; --no-mouse leaves the mouse to the terminal'
     )
 
 
-def test_watch_refuses_a_campaign_that_the_home_does_not_have_before_it_opens_the_database(
-    campaign_path: Path, mocker: MockerFixture
-) -> None:
-    mocker.patch('piloop.cli.campaign.sys.stdin').isatty.return_value = True
-    mocker.patch.object(campaign_cli, 'Database', side_effect=AssertionError('the database was opened for writing'))
+@pytest.mark.usefixtures('api')
+def test_watch_refuses_a_campaign_that_the_home_does_not_have(campaign_path: Path, mocker: MockerFixture) -> None:
+    mocker.patch('piloop.cli.views.sys.stdin').isatty.return_value = True
     home = re.escape(str(common.settings.home))
-    database = common.settings.home / 'piloop.db'
-    before = database.read_bytes()
     with pytest.raises(SystemExit, match=rf'^no campaign at {re.escape(str(campaign_path))} in {home}; is PILOOP_HOME'):
         run_cli(['watch', str(campaign_path)])
     with pytest.raises(SystemExit, match=rf"^no campaign 'demo' in {home}; is PILOOP_HOME right\?"):
         run_cli(['watch', 'demo'])
-    wal = database.with_name('piloop.db-wal')
-    assert database.read_bytes() == before and (not wal.exists() or wal.stat().st_size == 0), 'nothing was written'
 
 
 @pytest.mark.usefixtures('api')
@@ -2182,7 +2174,6 @@ def test_an_in_place_restart_holds_the_lock_itself_and_migrates() -> None:
 READERS = (
     ['history'],
     ['sql', 'SELECT 1'],
-    ['watch'],
     ['campaign', 'tree'],
     ['wake'],
 )
@@ -2198,12 +2189,9 @@ def refuse_each(argv_list: tuple[list[str], ...], database: Path, match: str) ->
         assert database.read_bytes() == before, f'piloop {" ".join(argv)} changed the database'
 
 
-def test_the_commands_that_read_refuse_a_database_behind_this_piloop_and_change_nothing(
-    out, mocker: MockerFixture
-) -> None:
+def test_the_commands_that_read_refuse_a_database_behind_this_piloop_and_change_nothing(out) -> None:
     database = common.settings.home / 'piloop.db'
     command.downgrade(alembic(database), '0018')
-    mocker.patch('piloop.cli.campaign.sys.stdin').isatty.return_value = True
     behind = rf'^{re.escape(str(database))} is at schema core 0018, and this piloop .* knows {HEADS}'
     refuse_each(READERS, database, rf'{behind}: run `piloop migrate`, which backs it up first$')
     for daemon in hold_lock(common.settings.pid_file):  # a daemon of the older piloop, however it was started
@@ -2240,12 +2228,11 @@ def test_an_agent_is_told_to_retry_while_the_daemon_upgrades_and_never_migrates_
     assert revision_of(database) == HEAD, 'the orchestrator is not a launched agent: it migrates'
 
 
-def test_the_commands_that_read_refuse_a_database_that_a_newer_piloop_migrated(mocker) -> None:
+def test_the_commands_that_read_refuse_a_database_that_a_newer_piloop_migrated() -> None:
     database = common.settings.home / 'piloop.db'
     with closing(sqlite3.connect(database)) as con:
         con.execute("UPDATE alembic_version SET version_num = '9999_from_the_future'")
         con.commit()
-    mocker.patch('piloop.cli.campaign.sys.stdin').isatty.return_value = True
     refuse_each(
         (*READERS, ['migrate'], ['serve']),
         database,
@@ -2273,7 +2260,7 @@ def too_old(monkeypatch: pytest.MonkeyPatch, database: Path) -> str:
 
 
 def test_every_command_refuses_a_database_older_than_the_previous_release_and_changes_nothing(
-    out, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+    out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     database = common.settings.home / 'piloop.db'
     found = too_old(monkeypatch, database)
@@ -2281,7 +2268,6 @@ def test_every_command_refuses_a_database_older_than_the_previous_release_and_ch
         r'upgrade one release at a time: install piloop 0\.2 .*, then install this piloop again and run'
         r' `piloop upgrade`'
     )
-    mocker.patch('piloop.cli.campaign.sys.stdin').isatty.return_value = True
     commands = (*READERS, ['migrate'], ['serve'])
     refuse_each(commands, database, rf'^{found}.*: {fix}$')
     refuse_each((['serve', '--check'],), database, rf'^the daemon cannot start: {found}.*: {fix}$')
@@ -2326,9 +2312,8 @@ def test_init_starts_the_daemon_which_creates_a_missing_database_and_the_readers
 ) -> None:
     database = common.settings.home / 'piloop.db'
     for argv in READERS:
-        if argv != ['watch']:  # watch first needs a terminal
-            with pytest.raises(SystemExit, match=rf'^{re.escape(str(database))} does not exist: `piloop init <repo>`'):
-                run_cli(argv)
+        with pytest.raises(SystemExit, match=rf'^{re.escape(str(database))} does not exist: `piloop init <repo>`'):
+            run_cli(argv)
     assert not database.exists(), 'no command but serve and migrate creates it'
     with ExitStack() as daemon:
 

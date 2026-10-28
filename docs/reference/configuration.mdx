@@ -625,6 +625,19 @@ A campaign's `[agents]` in its `piloop.toml` can set `wrap_up_grace` and `findin
 | `steer_line_chars` | integer | `200` | How many characters of a comment's first line a running agent gets, in the one line that the daemon sends it for the comment. The agent can read the rest with SQL. |
 | `exit_output_chars` | integer | `500` | How many characters of its last output lines an agent that exits non-zero leaves in its error, which `piloop status` and the escalation of paused launches show, and one that exits 0 early with nothing done in the escalation. The values of its secrets read as their names. 0 leaves none. |
 
+### `[watch]`
+
+`[watch]`: how `piloop watch` reads the API, and how much it shows.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `wait` | duration | `"PT20S"` | How long the server holds each read of the event feed while no event comes. The API holds one 25 s at most. |
+| `retry` | duration | `"PT2S"` | How soon a read of the event feed that failed, because the server did not answer, goes again. |
+| `tail` | integer | `500` | How many events before the first read the campaigns screen reads, to show each campaign's last event. |
+| `agent_lines` | integer | `60` | How many of the selected agent's last lines of output its detail shows. |
+| `candidates` | integer | `50` | How many of a campaign's own candidates its panel lists, newest first. |
+| `spark` | integer | `40` | How many of the head's last steps the sparkline of the candidates panel draws. |
+
 ### `[plugins]`
 
 `[plugins]` of `config.toml` holds the plugins of the home, which the daemon checks before it starts. A capability that has one instance takes `[plugins.<capability>]`: `provider`, the name of its entry point (the default without it), and the keys of that provider. One that has several takes `[plugins.<capability>.<name>]` for each: its `provider` is the one called `<name>` when the table has none, and each provider that needs no keys is an instance of its own name with its defaults. `[plugins.<capability>]` itself holds the settings of such a capability: `use` names the instances that the campaign uses, and is unset for the providers that are on by default (`DEFAULT`). No instance is called `use`.

@@ -45,6 +45,7 @@
           "guides/mcp-servers",
           "guides/upgrading",
           "guides/watch",
+        "guides/build-a-ui",
           "guides/reviewing"
         ]
       },

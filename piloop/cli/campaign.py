@@ -1,6 +1,5 @@
-"""The commands about campaigns: ``init``, and those that open the database: ``history``, ``watch``, ``campaign parent|tree``."""
+"""The commands about campaigns: ``init``, and those that open the database: ``history``, ``campaign parent|tree``."""
 
-import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -25,12 +24,10 @@ from piloop.cli.client import cwd, daemon_http
 from piloop.cli.common import CampaignRef
 from piloop.config import load_campaign_config
 from piloop.db.models import EVENT
-from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
 from piloop.ids import CampaignStatus, checked_campaign_name
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded, derive
 from piloop.text import metric
-from piloop.watch.app import Watch
 
 
 def init(
@@ -163,35 +160,6 @@ def fork(
         f' candidate#{added.baseline}: the daemon measures it',
         markup=False,
     )
-
-
-def watch_cmd(
-    ref: CampaignRef | None = None,
-    /,
-    *,
-    mouse: Annotated[
-        bool,
-        cyclopts.Parameter(
-            help='Take the mouse. --no-mouse leaves it to the terminal: a multiplexer can misread the mouse of the app.'
-        ),
-    ] = True,
-) -> None:
-    """Show the campaign on one screen, with keys to act on it.
-
-    It shows every campaign, or one campaign when you name it. A campaign has four panels (inbox, agents, ideas and
-    candidates, on the keys 1 to 4) and the detail of the selected row. `?` lists the keys of the focused panel, `/`
-    filters it, esc goes back to every campaign and q quits. Writes are signed as PILOOP_ACTOR.
-    """
-    if not sys.stdin.isatty():
-        raise SystemExit('piloop watch reads keys from a terminal; `piloop status` prints the same once')
-    local.refuse_other_schema()
-    if ref is not None:
-        local.known(ref)
-    db = Database(common.settings.database_url, actor=common.settings.actor)
-    try:
-        Watch(db, common.settings.home / 'piloop.db', ref, common.settings.actor, local.cas()).run(mouse=mouse)
-    finally:
-        db.close()
 
 
 def parent(

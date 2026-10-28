@@ -181,7 +181,9 @@ class Problem(StrEnum):
     """Another connection held the database's write lock for the whole busy timeout: send it again after Retry-After."""
 
 
-type Priority = Annotated[int, Field(ge=0, le=4)]
+PRIORITIES = range(5)
+"""The priorities, from 0 (urgent) to 4 (someday)."""
+type Priority = Annotated[int, Field(ge=PRIORITIES.start, le=PRIORITIES.stop - 1)]
 """An inbox item's or an idea's priority: from 0 (urgent) to 4 (someday)."""
 
 

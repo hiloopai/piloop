@@ -1,47 +1,47 @@
-"""What ``piloop watch`` shows, as data: the header, the campaigns, and for each panel its rows and the row detail.
+"""What ``piloop watch`` shows, as data: the campaigns, the header, and for each panel its rows and a row's detail.
 
-There are four panels (inbox, agents, ideas, candidates). Each is a ``Panel``: a title, the rows (``Item``: a key and
-the cells) and the detail of one row for the main pane. Every function reads in the session that it gets, so a frame
-is one short read. Nothing here knows Textual: ``piloop/watch/app.py`` draws it. The facts and the one-line cells come
-from ``piloop/reports/overview.py``, which ``piloop status`` prints, so the two show the same thing.
+Everything comes from the API's answers. A ``Frame`` holds what one campaign screen read: its state, its overview, its
+inbox, its ideas and its lineage. A ``Panel`` turns a frame into rows (``Item``: a key and the cells), and a row into its detail,
+which may call the API for more (``Api``). Nothing here knows Textual: ``piloop/watch/app.py`` draws it.
 """
 
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from enum import StrEnum
+from typing import Protocol, assert_never
 
+import httpx2 as httpx
 from rich.console import Group, RenderableType
+from rich.markdown import Markdown
 from rich.text import Text
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from piloop.actor import Actor
-from piloop.api.views import thread_lines
-from piloop.campaign import inbox
-from piloop.config import CampaignConfig
-from piloop.db.models import NOT_RETIRED, AgentSession, Campaign, Comment
-from piloop.ids import CampaignStatus, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ideas import links, queued_ideas, superseded_by
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import Origin
-from piloop.plugins.campaign_type.kit.candidates.references import references
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.measure import metrics, score
-from piloop.plugins.campaign_type.kit.verdicts.judge import head_scores, scored, track_of, trunk_keeps
-from piloop.plugins.campaign_type.kit.verdicts.verdict import label
-from piloop.plugins.campaign_type.optimization.summary import summary
-from piloop.plugins.cas.contract import Cas
-from piloop.reports.overview import agent_output, latest_events, live_agent_sessions, on, paused, progress, stopped
+from piloop.api.client import Client, Refused
+from piloop.api.contract import CommentsQuery, InboxQuery, OutputQuery, Problem, Selection
+from piloop.api.views import (
+    Batch,
+    CampaignOverview,
+    CampaignState,
+    Envelope,
+    Inbox,
+    InvalidConfig,
+    Item as InboxItem,
+    LiveAgent,
+    Rendered,
+    thread_lines,
+)
+from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentId, TargetKind
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient, IdeaRow, Ideas, IdeasQuery
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.wire import CandidateDetail, EvaluationClient
+from piloop.plugins.lineage.contract import Graph, Lineage, LineageNode, NodeId, NodeLink, RowLink
+from piloop.plugins.lineage.wire import LineageClient
+from piloop.settings import WatchSettings
 from piloop.text import NONE, age, cell, metric
 from piloop.usage import human
-from piloop.usage.totals import campaign_tokens
 
-AGENT_LINES = 60
-"""How many lines of the selected agent's own output its detail shows."""
-CANDIDATE_ROWS = 50
-SPARK_POINTS = 40
 SPARKS = '▁▂▃▄▅▆▇█'
 STATUS_CHARS = 40
 """How much of a stopped campaign's reason the campaigns screen shows. ``piloop status`` shows all of it."""
@@ -53,87 +53,162 @@ type Cell = str | Text
 
 
 @dataclass(frozen=True)
-class Item:
-    """One row of a panel: the id it stands for and its cells."""
+class Item[K]:
+    """One row of a panel: the key of what it stands for, and its cells."""
 
-    key: int
+    key: K
     cells: tuple[Cell, ...]
 
 
 @dataclass(frozen=True)
-class Context:
-    """What every panel of one campaign reads: the campaign, its config, the time of the frame and the watcher."""
+class Api:
+    """The clients of the API that watch calls, over one connection: core's, the lineage's, and the components'."""
 
-    campaign: Campaign
-    cfg: CampaignConfig
+    core: Client
+    lineage: LineageClient
+    backlog: BacklogClient
+    evaluation: EvaluationClient
+
+    @classmethod
+    def over(cls, http: httpx.Client) -> Api:
+        """Every client over the connection ``http``."""
+        return cls(Client(http), LineageClient(http), BacklogClient(http), EvaluationClient(http))
+
+
+@dataclass(frozen=True)
+class Frame:
+    """What one campaign screen read from the API, and when it draws it."""
+
+    state: CampaignState
+    sections: list[Rendered]
+    """The sections of the campaign's overview: its ``[plugins.section] use``."""
+    inbox: Inbox
+    ideas: Ideas
+    lineage: Lineage
     now: datetime
-    me: Actor
-    """The watcher's actor. The inbox leaves out what it wrote: a reply waits for the orchestrator, not its author."""
-    cas: Cas
-    """Where the agents' sessions are, whose last lines the agents panel shows."""
 
 
-class Panel(Protocol):
+class Part(StrEnum):
+    """A view of a campaign screen that only some events touch. Every event touches the state and the overview."""
+
+    INBOX = 'inbox'
+    IDEAS = 'ideas'
+    LINEAGE = 'lineage'
+
+
+ALSO: dict[str, frozenset[Part]] = {
+    TargetKind.CAMPAIGN: frozenset(Part),
+    TargetKind.COMMENT: frozenset({Part.INBOX}),
+    TargetKind.IDEA: frozenset({Part.IDEAS}),
+    TargetKind.CANDIDATE: frozenset({Part.LINEAGE}),
+    TargetKind.MEASUREMENT: frozenset({Part.LINEAGE}),
+}
+"""What an event about a row of each kind touches, beside the campaign's state and overview."""
+
+
+def touched(batch: Batch, campaign: CampaignId) -> frozenset[Part] | None:
+    """Return the parts of ``campaign``'s screen that the batch touches. None: no event of it, nor of the home."""
+    mine = [e for e in batch.events if e.subject.campaign in (campaign, None)]
+    if not mine:
+        return None
+    return frozenset().union(*(ALSO.get(e.subject.kind, frozenset()) for e in mine))
+
+
+def read_frame(
+    api: Api, campaign: str, now: datetime, last: Frame | None = None, parts: frozenset[Part] = frozenset(Part)
+) -> Frame | InvalidConfig | None:
+    """Read what the campaign screen of ``campaign`` shows: the parts in ``parts``, and the others from ``last``.
+
+    None: the home has no such campaign (yet).
+    """
+    try:
+        [entry] = api.core.status(Selection(campaign=campaign)).campaigns
+    except Refused as e:
+        if e.error == Problem.UNKNOWN_CAMPAIGN:
+            return None
+        raise
+    if isinstance(entry, InvalidConfig):
+        return entry
+    ref = str(entry.id)
+    [overview] = api.core.overview(Selection(campaign=ref)).campaigns
+    # a config that broke since the status read shows no sections, until the event of its fix reads again
+    sections = overview.sections if isinstance(overview, CampaignOverview) else []
+    inbox = api.core.inbox(InboxQuery(campaign=ref)) if last is None or Part.INBOX in parts else last.inbox
+    ideas = api.backlog.ideas(ref, IdeasQuery(status=IDEA_ORDER)) if last is None or Part.IDEAS in parts else last.ideas
+    lineage = api.lineage.lineage(ref) if last is None or Part.LINEAGE in parts else last.lineage
+    return Frame(entry, sections, inbox, ideas, lineage, now)
+
+
+class Panel[K](Protocol):
     """A panel's data: its title, its rows, a row's detail."""
 
-    def title(self, s: Session, ctx: Context, items: Sequence[Item]) -> str:
+    def title(self, frame: Frame, items: Sequence[Item[K]]) -> str:
         """Return the panel's name and the counts over ``items``, the rows shown."""
         ...
 
-    def items(self, s: Session, ctx: Context) -> list[Item]:
+    def items(self, frame: Frame) -> list[Item[K]]:
         """Return every row, in the panel's order."""
         ...
 
-    def detail(self, s: Session, ctx: Context, key: int) -> RenderableType:
-        """Return row ``key`` in full, for the main pane."""
+    def detail(self, api: Api, frame: Frame, key: K) -> RenderableType:
+        """Return row ``key`` in full, for the main pane. It may read more from the API."""
         ...
 
 
-def header(s: Session, campaign: Campaign, cfg: CampaignConfig, now: datetime) -> Text:
-    """Return the summary line (head, kept, stopped) and the progress line against the stop rule."""
-    text = Text(f'{summary(s, campaign, cfg)}{stopped(campaign)}\n', style='bold')
-    text.append(progress(s, campaign, cfg, now), style='dim')
+def header(frame: Frame) -> Text:
+    """Return the campaign's name and state, and the first section of its overview: the head, by default."""
+    state = frame.state
+    text = Text(f'{state.name} · {status_of(state, None)}', style='bold')
+    for first in frame.sections[:1]:
+        text.append('\n' + ' · '.join(b.markdown() for b in first.blocks), style='dim')
     return text
 
 
-def campaigns(s: Session, now: datetime, me: Actor) -> list[Item]:
-    """Return one row per campaign, active ones first: status, head, delta to baseline, agents, queue, inbox, tokens."""
-    rows = []
-    every = sorted(
-        s.scalars(select(Campaign).where(NOT_RETIRED)).all(),
-        key=lambda p: (p.status is not CampaignStatus.ACTIVE, p.id),
-    )
-    for p in every:
-        cfg = p.config
-        at = head_scores(s, p, cfg)
-        values = at[1] if at is not None else []
-        _, ready = queued_ideas(s, p)
-        spent = campaign_tokens(s, p.id)
-        latest = next(iter(latest_events(s, p, 1)), None)
-        rows.append(
-            Item(
-                p.id,
-                (
-                    p.name,
-                    cell(f'stopped: {p.stopped_reason}', STATUS_CHARS)
-                    if p.status is CampaignStatus.STOPPED
-                    else cell(paused(p), STATUS_CHARS)
-                    if p.paused is not None
-                    else str(p.status),
-                    ', '.join(f'{_four(value)} {track.primary.name}' for track, value, _ in values) or NONE,
-                    ', '.join(NONE if delta is None else metric(delta, signed=True) for _, _, delta in values) or NONE,
-                    f'{len(live_agent_sessions(s, p))} agents',
-                    f'{len(ready)} ready',
-                    f'{len(inbox.waiting_for(s, me.party, campaign_id=p.id))} inbox',
-                    f'{human(spent)} tok' if spent else NONE,
-                    NONE if latest is None else f'{latest.kind} {age(latest.at, now)} ago',
-                ),
-            )
-        )
-    return rows
+def status_of(state: CampaignState | InvalidConfig, chars: int | None) -> str:
+    """Return a campaign's state in a few words: stopped and why, paused and why, or its status."""
+    match state:
+        case CampaignState(status=CampaignStatus.STOPPED, stopped_reason=reason):
+            said = f'stopped: {reason}'
+        case CampaignState(paused=str(paused), paused_reason=reason):
+            said = f'paused ({paused}): {reason}'
+        case CampaignState(status=status) | InvalidConfig(status=status):
+            said = str(status)
+        case _:
+            assert_never(state)
+    return said if chars is None else cell(said, chars)
 
 
 CAMPAIGN_COLUMNS = ('campaign', 'status', 'head', 'vs baseline', 'agents', 'ready', 'inbox', 'tokens', 'last event')
+
+
+def campaigns(
+    states: Sequence[CampaignState | InvalidConfig], latest: Mapping[CampaignId, Envelope], now: datetime
+) -> list[Item[str]]:
+    """Return one row per campaign, active ones first: status, head, delta to baseline, agents, queue, inbox, tokens.
+
+    ``latest`` is the last event of each campaign that the feed showed, by the campaign's id.
+    """
+    rows = []
+    for c in sorted(states, key=lambda c: (c.status is not CampaignStatus.ACTIVE, c.id)):
+        last = latest.get(c.id)
+        seen = NONE if last is None or last.time is None else f'{last.kind} {age(_at(last.time), now)} ago'
+        match c:
+            case CampaignState():
+                tracks = c.head.tracks if c.head is not None else []
+                cells: tuple[Cell, ...] = (
+                    ', '.join(f'{_value(t.value)} {t.metric}' for t in tracks) or NONE,
+                    ', '.join(_value(t.delta, signed=True) for t in tracks) or NONE,
+                    f'{len(c.agents)} agents',
+                    f'{c.ideas.get("ready", 0)} ready',
+                    f'{c.inbox} inbox',
+                    f'{human(c.tokens)} tok' if c.tokens else NONE,
+                )
+            case InvalidConfig():
+                cells = (NONE,) * 6
+            case _:
+                assert_never(c)
+        rows.append(Item(c.name, (c.name, status_of(c, STATUS_CHARS), *cells, seen)))
+    return rows
 
 
 def lines(*parts: str) -> Group:
@@ -144,187 +219,222 @@ def lines(*parts: str) -> Group:
 class InboxPanel:
     """Panel 1: the unacknowledged inbox, most urgent first. The detail is the item in full, with its thread."""
 
-    def title(self, s: Session, ctx: Context, items: Sequence[Item]) -> str:
+    def title(self, frame: Frame, items: Sequence[Item[CommentId]]) -> str:
         return f'Inbox {len(items)}'
 
-    def items(self, s: Session, ctx: Context) -> list[Item]:
-        return [
-            Item(
-                c.id,
-                (f'p{c.priority}', str(c.kind), c.author, age(c.created_at, ctx.now), cell(c.body)),
-            )
-            for c, _ in inbox.waiting_for(s, ctx.me.party, campaign_id=ctx.campaign.id)
-        ]
+    def items(self, frame: Frame) -> list[Item[CommentId]]:
+        return [Item(c.id, _inbox_cells(c, frame.now)) for c in frame.inbox.items]
 
-    def detail(self, s: Session, ctx: Context, key: int) -> RenderableType:
-        comment = s.get(Comment, key)
-        if comment is None:
-            return Text(f'comment#{key} is gone')
-        title, body = thread_lines(inbox.thread_of(s, comment), ctx.now)
+    def detail(self, api: Api, frame: Frame, key: CommentId) -> RenderableType:
+        title, body = thread_lines(api.core.thread(key), frame.now)
         return Group(Text(title, style='bold'), Text(), lines(*body))
+
+
+def _inbox_cells(c: InboxItem, now: datetime) -> tuple[Cell, ...]:
+    return (f'p{c.priority}', c.kind, c.author, age(_at(c.created), now), cell(c.body))
 
 
 class AgentsPanel:
     """Panel 2: the running agents. The detail is the agent's last output."""
 
-    def title(self, s: Session, ctx: Context, items: Sequence[Item]) -> str:
+    def __init__(self, settings: WatchSettings) -> None:
+        self.settings = settings
+
+    def title(self, frame: Frame, items: Sequence[Item[AgentSessionId]]) -> str:
         return f'Agents {len(items)}'
 
-    def items(self, s: Session, ctx: Context) -> list[Item]:
+    def items(self, frame: Frame) -> list[Item[AgentSessionId]]:
         return [
-            Item(
-                w.id,
-                (
-                    f'#{w.id}',
-                    str(w.kind),
-                    str(w.state),
-                    f'{w.harness}/{w.model}' if w.harness else NONE,
-                    age(w.started_at, ctx.now),
-                    on(s, w),
-                ),
-            )
-            for w in live_agent_sessions(s, ctx.campaign)
+            Item(a.id, (f'#{a.id}', a.kind, a.state, _model(a), age(a.started, frame.now), on(frame.state, a)))
+            for a in frame.state.agents
         ]
 
-    def detail(self, s: Session, ctx: Context, key: int) -> RenderableType:
-        w = s.get_one(AgentSession, key)
-        facts = [
-            f'{w.kind}-{w.id} · {w.harness}/{w.model} · {w.state} {age(w.started_at, ctx.now)} · {w.runtime or NONE}',
-            f'on: {on(s, w)}',
-        ]
-        if w.reason:
-            facts.append(f'why: {cell(w.reason)}')
-        output = agent_output(s, w, AGENT_LINES, ctx.cas)
+    def detail(self, api: Api, frame: Frame, key: AgentSessionId) -> RenderableType:
+        agent = {a.id: a for a in frame.state.agents}[key]  # the rows and the detail read one frame
+        output = api.core.agent_output(agent.id, OutputQuery(lines=self.settings.agent_lines)).lines
         return Group(
-            Text(facts[0], style='bold'),
-            lines(*facts[1:]),
+            Text(
+                f'{agent.kind}-{agent.id} · {_model(agent)} · {agent.state} {age(agent.started, frame.now)}'
+                f' · {agent.runtime or NONE}',
+                style='bold',
+            ),
+            lines(f'on: {on(frame.state, agent)}'),
             Text(),
             Text(f'the last {len(output)} lines it wrote', style='dim'),
             lines(*output) if output else Text(NONE),
         )
 
 
+def _model(agent: LiveAgent) -> str:
+    return f'{agent.harness}/{agent.model}' if agent.harness else NONE
+
+
+def on(state: CampaignState, agent: LiveAgent) -> str:
+    """Return what the agent works on: the idea of its run, from the campaign's open runs, else why it was launched."""
+    run = next((r for r in state.runs if r.id == agent.run), None)
+    return cell(agent.reason or NONE) if run is None else f'idea#{run.idea} {cell(run.title)}'
+
+
 class IdeasPanel:
     """Panel 3: seeds, then proposed, ready, scheduled and parked ideas. The detail is the idea, runs and comments."""
 
-    def title(self, s: Session, ctx: Context, items: Sequence[Item]) -> str:
+    def title(self, frame: Frame, items: Sequence[Item[IdeaId]]) -> str:
         counts = {status: sum(1 for i in items if i.cells[1] == status) for status in IDEA_ORDER}
-        return 'Ideas ' + ' · '.join(f'{n} {status}' for status, n in counts.items() if n) if items else 'Ideas 0'
+        return 'Ideas ' + (' · '.join(f'{n} {status}' for status, n in counts.items() if n) or '0')
 
-    def items(self, s: Session, ctx: Context) -> list[Item]:
-        rank = {status: i for i, status in enumerate(IDEA_ORDER)}
-        ideas = sorted(
-            s.scalars(select(Idea).where(Idea.campaign_id == ctx.campaign.id, Idea.status.in_(IDEA_ORDER))).all(),
-            key=lambda i: (rank[i.status], i.priority, i.id),
-        )
-        newer = superseded_by(s, [i.id for i in ideas])
+    def items(self, frame: Frame) -> list[Item[IdeaId]]:
         return [
-            Item(i.id, (f'P{i.priority}', str(i.status), f'#{i.id}', cell(i.title), links(i, newer))) for i in ideas
+            Item(i.id, (f'P{i.priority}', i.status, f'#{i.id}', cell(i.title), links(i))) for i in frame.ideas.ideas
         ]
 
-    def detail(self, s: Session, ctx: Context, key: int) -> RenderableType:
-        idea = s.get_one(Idea, key)
-        comments = s.scalars(
-            select(Comment).where(Comment.target == TargetRef(TargetKind.IDEA, idea.id)).order_by(Comment.id)
-        ).all()
+    def detail(self, api: Api, frame: Frame, key: IdeaId) -> RenderableType:
+        found = api.backlog.idea(key)
+        notes = api.core.comments(CommentsQuery(kind=TargetKind.IDEA, id=key)).comments
+        idea = found.idea
         body = [
-            f'status {idea.status} · priority {idea.priority} · by {idea.created_by} {age(idea.created_at, ctx.now)} ago'
-            f' · links: {links(idea, superseded_by(s, [idea.id]))}',
+            f'status {idea.status} · priority {idea.priority} · by {idea.created_by} {age(idea.created, frame.now)} ago'
+            f' · links: {links(idea)}',
             '',
             'hypothesis:',
-            *idea.hypothesis.strip().splitlines(),
+            *found.hypothesis.strip().splitlines(),
         ]
-        if idea.plan:
-            body += ['', 'plan:', *idea.plan.strip().splitlines()]
-        body += ['', f'runs ({len(idea.runs)}):']
+        if found.plan:
+            body += ['', 'plan:', *found.plan.strip().splitlines()]
+        body += ['', f'runs ({len(found.runs)}):']
         body += [
             f'- run#{r.id} {r.end or r.status} {r.harness}/{r.model}{f": {cell(r.error)}" if r.error else ""}'
-            for r in idea.runs
+            for r in found.runs
         ]
-        body += ['', f'comments ({len(comments)}):']
-        body += [f'- comment#{c.id} {c.kind} by {c.author}: {cell(c.body)}' for c in comments]
+        body += ['', f'comments ({len(notes)}):']
+        body += [f'- comment#{c.id} {c.kind} by {c.author}: {cell(c.body)}' for c in notes]
         return Group(Text(f'idea#{idea.id} {idea.title}', style='bold'), lines(*body))
 
 
+def links(idea: IdeaRow) -> str:
+    """Return an idea's links in one cell: ``after idea#1; supersedes idea#2; superseded by idea#7``, or ``—``."""
+    parts = [
+        f'{name} {", ".join(f"idea#{i}" for i in ids)}'
+        for name, ids in (('after', idea.after), ('supersedes', idea.supersedes), ('superseded by', idea.superseded_by))
+        if ids
+    ]
+    return '; '.join(parts) or NONE
+
+
 class CandidatesPanel:
-    """Panel 4: the recent candidates, newest first, under the sparkline of each track. The detail is the verdict."""
+    """Panel 4: the lineage's nodes, newest first, under the sparkline of the spine on each track.
 
-    def title(self, s: Session, ctx: Context, items: Sequence[Item]) -> str:
-        starts = sum(1 for i in items if i.cells[1] == Origin.REFERENCE)
-        points = f' · {starts} starting point{"s" if starts != 1 else ""}' if starts else ''
-        lines = kept_scores(s, ctx.campaign, ctx.cfg)
-        if not ctx.cfg.multitrack:
-            return f'Candidates {sparkline(lines[ctx.cfg.all_tracks[0].name])}{points}'
-        return 'Candidates ' + ' · '.join(f'{name} {sparkline(values)}' for name, values in lines.items()) + points
+    The detail is the node: its judgement, its scores against its parent's, and what it links to.
+    """
 
-    def items(self, s: Session, ctx: Context) -> list[Item]:
-        """Return the campaign's own candidates, newest first, then the imported references."""
-        evaluator = ctx.campaign.evaluator_id
-        recent = s.scalars(
-            select(Candidate)
-            .where(Candidate.campaign_id == ctx.campaign.id, Candidate.origin != Origin.REFERENCE)
-            .order_by(Candidate.id.desc())
-            .limit(CANDIDATE_ROWS)
-        ).all()
-        rows = []
-        for c in [*recent, *references(s, ctx.campaign)]:
+    def __init__(self, settings: WatchSettings) -> None:
+        self.settings = settings
+
+    def title(self, frame: Frame, items: Sequence[Item[NodeId]]) -> str:
+        lines = spine_scores(frame.lineage.graph, self.settings.spark)
+        return 'Candidates ' + ' · '.join(
+            f'{name} {sparkline(values)}' if len(lines) > 1 else sparkline(values) for name, values in lines.items()
+        )
+
+    def items(self, frame: Frame) -> list[Item[NodeId]]:
+        """Return the nodes, newest first. A node of another kind than most says its kind."""
+        graph = frame.lineage.graph
+        nodes = {n.id: n for n in graph.nodes}
+        common = Counter(n.kind for n in graph.nodes).most_common(1)
+        statuses = {s.name: s.label for s in graph.statuses}
+        kinds = {k.name: k.label for k in graph.kinds}
+        newest = sorted(graph.nodes, key=lambda n: n.created, reverse=True)[: self.settings.candidates]
+        rows: list[Item[NodeId]] = []
+        for n in newest:
+            parent = nodes.get(n.parents[0]) if n.parents else None
+            status = (
+                statuses[n.status] if common and n.kind == common[0][0] else f'{kinds[n.kind]} · {statuses[n.status]}'
+            )
+            scores = [(_value(n.scores.get(t.name)), _delta(n, parent, t.name)) for t in graph.tracks]
             rows.append(
                 Item(
-                    c.id,
+                    n.id,
                     (
-                        f'#{c.id}',
-                        label(c),
-                        *scored(c, evaluator, track_of(ctx.cfg, c).primary),
-                        f'run#{c.run_id}' if c.run_id else NONE,
-                        age(c.created_at, ctx.now),
-                        cell(c.summary or NONE),
+                        n.id,
+                        status,
+                        *(part for score in scores for part in score),
+                        age(n.created, frame.now),
+                        cell(n.summary or n.label),
                     ),
                 )
             )
         return rows
 
-    def detail(self, s: Session, ctx: Context, key: int) -> RenderableType:
-        c = s.get_one(Candidate, key)
-        evaluator = ctx.campaign.evaluator_id
-        mine = metrics(c, evaluator)
-        theirs = metrics(c.parent, evaluator) if c.parent is not None else {}
+    def detail(self, api: Api, frame: Frame, key: NodeId) -> RenderableType:
+        graph = frame.lineage.graph
+        nodes = {n.id: n for n in graph.nodes}
+        node = nodes[key]  # the rows and the detail read one frame
+        parent = nodes.get(node.parents[0]) if node.parents else None
+        statuses = {s.name: s.label for s in graph.statuses}
+        judged = NONE if node.judged is None else f'by {node.judged.by}: {node.judged.reason or NONE}'
         body = [
-            f'verdict {label(c)} by {c.verdict_by or NONE}: {c.verdict_reason or NONE}',
-            f'parent {f"candidate#{c.parent_id}" if c.parent_id else NONE} · run {f"#{c.run_id}" if c.run_id else NONE}'
-            f' · revision {c.revision[:12]} · {age(c.created_at, ctx.now)} ago',
+            f'{statuses[node.status]} {judged}',
+            f'parent {parent.id if parent else NONE} · {age(node.created, frame.now)} ago',
             '',
-            f'metrics under {NONE if evaluator is None else f"evaluator#{evaluator}"} (vs parent):',
+            f'scores under {graph.evaluator or NONE} (vs parent):',
+            *(
+                f'  {t.name} ({t.metric}) {_value(node.scores.get(t.name))} ({_delta(node, parent, t.name)})'
+                for t in graph.tracks
+            ),
+            '',
+            'links:',
+            *(f'  {_link(link)}' for link in node.links),
+            '',
+            'summary:',
+            *(node.summary or NONE).strip().splitlines(),
         ]
-        for name in sorted(mine):
-            delta = f' ({metric(mine[name] - theirs[name], signed=True)})' if name in theirs else ''
-            body.append(f'  {name} {metric(mine[name])}{delta}')
-        if not mine:
-            body.append(f'  {NONE}')
-        body += ['', 'summary:', *(c.summary or NONE).strip().splitlines()]
-        return Group(Text(f'candidate#{c.id}', style='bold'), lines(*body))
+        for link in node.links:
+            if isinstance(link, RowLink) and link.kind is TargetKind.CANDIDATE:
+                body += ['', *measured(api.evaluation.candidate(CandidateId(link.id)))]
+        return Group(Text(f'{node.id} {node.label}', style='bold'), lines(*body))
 
 
-PANELS: dict[str, Panel] = {
-    'inbox': InboxPanel(),
-    'agents': AgentsPanel(),
-    'ideas': IdeasPanel(),
-    'candidates': CandidatesPanel(),
-}
-"""The four panels, in their numbered order."""
+def measured(found: CandidateDetail) -> list[str]:
+    """Return a candidate's revision, and each of its metrics beside its parent's."""
+    evaluator = NONE if found.evaluator is None else f'evaluator#{found.evaluator}'
+    rows = [
+        f'candidate#{found.candidate.id} · revision {found.revision[:12]}',
+        f'metrics under {evaluator} (vs parent):',
+    ]
+    for name, value in sorted(found.metrics.items()):
+        theirs = found.parent_metrics.get(name)
+        delta = '' if theirs is None else f' ({metric(value - theirs, signed=True)})'
+        rows.append(f'  {name} {metric(value)}{delta}')
+    return rows if found.metrics else [*rows, f'  {NONE}']
 
 
-def kept_scores(s: Session, campaign: Campaign, cfg: CampaignConfig) -> dict[str, list[float]]:
-    """Return, for each track, its primary metric at the head after each of the last ``SPARK_POINTS`` trunk keeps.
-
-    Each trunk keep was the head in turn. A branch keep never was the head, so it does not move the line.
-    """
-    kept = trunk_keeps(s, campaign)[-SPARK_POINTS:]
-    evaluator_id = campaign.evaluator_id
-    return {t.name: [v for c in kept if (v := score(c, evaluator_id, t.primary)) is not None] for t in cfg.all_tracks}
+def _link(link: NodeLink) -> str:
+    return f'{link.kind}#{link.id}' + (f' {link.label}' if link.label else '')
 
 
-def _four(value: float | None) -> str:
-    return NONE if value is None else metric(value)
+def _delta(node: LineageNode, parent: LineageNode | None, track: str) -> str:
+    mine = node.scores.get(track)
+    theirs = None if parent is None else parent.scores.get(track)
+    return NONE if mine is None or theirs is None else metric(mine - theirs, signed=True)
+
+
+class StatusPanel:
+    """Panel 5: the sections of the campaign's ``[plugins.section] use``, one row each. The detail is the section."""
+
+    def title(self, frame: Frame, items: Sequence[Item[int]]) -> str:
+        return f'Status {len(items)}'
+
+    def items(self, frame: Frame) -> list[Item[int]]:
+        return [Item(i, (s.title,)) for i, s in enumerate(frame.sections)]
+
+    def detail(self, api: Api, frame: Frame, key: int) -> RenderableType:
+        return Markdown(frame.sections[key].markdown())
+
+
+def spine_scores(graph: Graph, points: int) -> dict[str, list[float]]:
+    """Return, for each track, the score of each of the last ``points`` steps of the spine (``Graph.series``)."""
+    nodes = {n.id: n for n in graph.nodes}
+    steps = [nodes[p.node] for p in graph.series[-points:]]
+    return {t.name: [v for n in steps if (v := n.scores.get(t.name)) is not None] for t in graph.tracks}
 
 
 def sparkline(values: list[float]) -> str:
@@ -334,3 +444,11 @@ def sparkline(values: list[float]) -> str:
     low, span = min(values), (max(values) - min(values)) or 1
     marks = ''.join(SPARKS[round((v - low) / span * (len(SPARKS) - 1))] for v in values)
     return f'{marks} {metric(values[0])} → {metric(values[-1])}'
+
+
+def _value(value: float | None, *, signed: bool = False) -> str:
+    return NONE if value is None else metric(value, signed=signed)
+
+
+def _at(iso: str) -> datetime:
+    return datetime.fromisoformat(iso)

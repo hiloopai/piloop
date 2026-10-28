@@ -80,7 +80,7 @@ from piloop.plugins.vcs.contract import (
     RebaseVersion,
     Repository,
 )
-from piloop.text import NONE, metric
+from piloop.text import metric
 
 
 def head(s: Session, campaign: Campaign, *, excluding: Candidate | None = None) -> Candidate | None:
@@ -730,11 +730,3 @@ def head_scores(
         base = score(first, evaluator_id, track.primary) if first is not None and first.id != trunk.id else None
         values.append((track, value, None if value is None or base is None else value - base))
     return trunk, values
-
-
-def scored(c: Candidate, evaluator_id: EvaluatorId | None, primary: Metric) -> tuple[str, str]:
-    """Format the primary score of the candidate and its delta to its parent, each ``—`` when unknown."""
-    value = score(c, evaluator_id, primary)
-    parent = score(c.parent, evaluator_id, primary) if c.parent is not None else None
-    delta = metric(value - parent, signed=True) if value is not None and parent is not None else NONE
-    return NONE if value is None else metric(value), delta
