@@ -6,7 +6,7 @@ from typing import Annotated
 import cyclopts
 
 from piloop.api.client import Client, answers
-from piloop.api.contract import MAX_POLL_SECONDS, Checkout, EventsQuery, Fork, Selection
+from piloop.api.contract import MAX_POLL_SECONDS, Checkout, EventsQuery, Fork, SecretCredential, Selection, SyncBody
 from piloop.api.views import Registered
 from piloop.campaign import ops
 from piloop.campaign.campaigns import (
@@ -20,7 +20,7 @@ from piloop.campaign.campaigns import (
     tree as campaign_tree,
 )
 from piloop.cli import common, daemon, local
-from piloop.cli.client import cwd, daemon_http
+from piloop.cli.client import campaign_name, cwd, daemon_http
 from piloop.cli.common import CampaignRef
 from piloop.config import load_campaign_config
 from piloop.db.models import EVENT
@@ -160,6 +160,28 @@ def fork(
         f' candidate#{added.baseline}: the daemon measures it',
         markup=False,
     )
+
+
+def sync_cmd(
+    ref: CampaignRef,
+    /,
+    *,
+    secret: Annotated[
+        str | None,
+        cyclopts.Parameter(help="The name of the server's secret that the host of the campaign's repository asks for."),
+    ] = None,
+) -> None:
+    """Read a campaign's piloop.toml again. A campaign that the server cloned first takes its repository's new versions.
+
+    Its checkout moves forward to them; its candidates and head stay. New code comes in with
+    `piloop candidate import`, or a fork with `piloop campaign fork --at`. A local checkout is read where it is:
+    `piloop init <path>` does the same.
+    """
+    with Client.connect(daemon_http()) as client:
+        credential = None if secret is None else SecretCredential(secret=secret)
+        synced = client.sync_campaign(campaign_name(client, ref), SyncBody(credential=credential))
+    campaign = synced.campaign
+    common.console.print(f'campaign {campaign.name} #{campaign.id}: config re-read', markup=False)
 
 
 def parent(

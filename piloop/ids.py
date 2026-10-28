@@ -113,6 +113,17 @@ class CampaignStatus(StrEnum):
     campaign may take its name. Its rows and events stay."""
 
 
+class CampaignFiles(StrEnum):
+    """Where a campaign's files are: its checkout, if piloop cloned it, and its directory under the home."""
+
+    KEPT = 'kept'
+    """On the disk: every campaign that is not retired."""
+    PACKING = 'packing'
+    """Retired, and on their way to the CAS."""
+    FREED = 'freed'
+    """In the CAS, and off the disk (``campaign.files_freed``)."""
+
+
 LISTED: Final = (CampaignStatus.ACTIVE, CampaignStatus.STOPPED)
 """The statuses of the campaigns that a listing shows unless asked: all but ``retired``."""
 

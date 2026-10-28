@@ -247,6 +247,15 @@ piloop campaign fork REF [--at VERSION] [--name NAME]
 Makes a new campaign that starts from `VERSION` of another one, by default its head. See
 [Reopen, fork and retire](/concepts/campaigns#reopen-fork-and-retire).
 
+### piloop campaign sync
+
+```text
+piloop campaign sync REF [--secret NAME]
+```
+
+Reads a campaign's `piloop.toml` again. A campaign that the server cloned first takes its repository's new commits. See
+[Update a cloned campaign](/concepts/campaigns#update-a-cloned-campaign).
+
 ### piloop campaign retire
 
 ```text

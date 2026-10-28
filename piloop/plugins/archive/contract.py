@@ -2,7 +2,8 @@
 
 ``[plugins.archive]`` in ``config.toml`` chooses the home's provider: ``local`` by default. The daemon opens it once
 (``open``), and runs its consumer (``Archiver.contribution``). A part of a workspace is final when its subject settles
-(``piloop.db.events.SubjectSettled``), and the rest when its campaign stops.
+(``piloop.db.events.SubjectSettled``), and the rest when its campaign stops. When a campaign is retired, its files leave
+the disk for the CAS (``CampaignFilesFreed``).
 """
 
 from abc import ABC, abstractmethod
@@ -10,21 +11,49 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Final, Protocol
+from typing import ClassVar, Final, Literal, Protocol
 
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
-from piloop.db.models import Campaign
+from piloop.db.models import Campaign, EventModel, ReadBy
 from piloop.db.session import Database
-from piloop.ids import TargetRef
+from piloop.ids import Revision, TargetRef
 from piloop.otel import Tracer
-from piloop.plugins.cas.contract import Cas
+from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.contribution import Contributes, Contribution
 from piloop.plugins.host import Capability, One, Parameters, Scope
 from piloop.store.tree import Materialised
 
 CONSUMER: Final = 'archiver'
 """The name of the archiver's consumer in the daemon's loop, which ``ArchiveHost.wake`` runs."""
+
+
+class PackedCheckout(BaseModel):
+    """A checkout that piloop cloned, packed into the CAS by its vcs (``Repository.send``) before it left the disk."""
+
+    model_config = ConfigDict(frozen=True)
+
+    blob: BlobAddress
+    head: Revision
+    """The version that the checkout was at."""
+    revisions: tuple[Revision, ...]
+    """Every version that the blob holds: the head and the campaign's candidates."""
+
+
+class CampaignFilesFreed(EventModel):
+    """On a retired campaign: its files left the disk, and the CAS holds them. No row and no event of it changed.
+
+    A fork of it starts from ``checkout``. ``piloop restore`` writes ``files`` back.
+    """
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['campaign.files_freed'] = 'campaign.files_freed'
+    checkout: PackedCheckout | None
+    """None for a checkout that piloop did not clone: the user's own, which stays where it is."""
+    files: BlobAddress | None
+    """The manifest of the campaign's directory under the home: its workspace and its evaluation logs. None when it had
+    none."""
 
 
 @dataclass(frozen=True)

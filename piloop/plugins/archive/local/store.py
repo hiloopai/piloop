@@ -16,8 +16,10 @@ core's tables alone:
 """
 
 import re
+import shutil
 import threading
 from collections.abc import Collection, Iterable
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -26,19 +28,23 @@ from sqlalchemy import Select, exists, func, select
 from sqlalchemy.orm import Session
 
 from piloop import deprecated
-from piloop.campaign.campaigns import workspace_dir
-from piloop.db.events import SubjectSettled, has
+from piloop.actor import System
+from piloop.campaign.campaigns import WORKSPACE, campaign_dir, cloned, vcs_of, workspace_dir
+from piloop.db.events import SubjectSettled, emit, has, latest
 from piloop.db.models import ENDED, AgentSession, Campaign, Event, count, utcnow
 from piloop.db.session import Database
-from piloop.ids import CampaignId, CampaignStatus, TargetKind, TargetRef
-from piloop.plugins.archive.contract import CampaignArchived, Restored, Summary
+from piloop.ids import CampaignId, CampaignStatus, Revision, TargetKind, TargetRef
+from piloop.plugins.archive.contract import CampaignArchived, CampaignFilesFreed, PackedCheckout, Restored, Summary
 from piloop.plugins.archive.local.tables import Archive
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.cas.contract import Cas, Integrity, integrity
+from piloop.plugins.vcs.contract import Vcs
 from piloop.settings import INPUTS_DIR
 from piloop.store.tree import (
     DRISL,
     Entry,
     Manifest,
+    Materialised,
     Missing,
     Removed,
     Walk,
@@ -46,6 +52,7 @@ from piloop.store.tree import (
     evict_unlinked,
     free,
     materialise,
+    put_tree,
     put_walk,
     remove,
     walk,
@@ -89,6 +96,13 @@ class Job:
 
     campaign_id: CampaignId
     subject: TargetRef | None
+
+
+@dataclass(frozen=True)
+class Free:
+    """Freeing the disk of a retired campaign whose workspace is archived (``free_files``)."""
+
+    campaign_id: CampaignId
 
 
 def _due_subjects() -> Select[CampaignId, TargetKind, int]:
@@ -149,8 +163,20 @@ def _due_campaigns() -> Select[CampaignId]:
     )
 
 
-def due(s: Session) -> Job | None:
-    """The next archiving the store owes, oldest first; a campaign's own waits until its every settled subject's is.
+def _due_freeing() -> Select[CampaignId]:
+    """Every retired campaign whose files are still on the disk, once its own archiving is done, oldest first."""
+    freed = exists().where(
+        has(CampaignFilesFreed), Event.target_kind == TargetKind.CAMPAIGN, Event.target_id == Campaign.id
+    )
+    return (
+        select(Campaign.id)
+        .where(Campaign.status == CampaignStatus.RETIRED, ~freed, Campaign.id.not_in(_due_campaigns()))
+        .order_by(Campaign.id)
+    )
+
+
+def due(s: Session) -> Job | Free | None:
+    """The next job the store owes, oldest first: a subject's archiving, a campaign's, then a retired one's freeing.
 
     Computed from the database alone, so a daemon that stops in the middle of a backlog picks it up where it was: the
     job it cut is done again, and what it had stored is found by hash and not stored twice.
@@ -158,8 +184,60 @@ def due(s: Session) -> Job | None:
     subject = s.execute(_due_subjects().limit(1)).first()
     if subject is not None:
         return Job(CampaignId(subject.campaign_id), TargetRef(subject.target_kind, subject.target_id))
-    campaign = s.scalar(_due_campaigns().limit(1))
-    return None if campaign is None else Job(campaign, None)
+    if (campaign := s.scalar(_due_campaigns().limit(1))) is not None:
+        return Job(campaign, None)
+    retired = s.scalar(_due_freeing().limit(1))
+    return None if retired is None else Free(retired)
+
+
+def free_files(
+    db: Database, cas: Cas, home: Path, job: Free, stop: threading.Event | None = None
+) -> CampaignFilesFreed:
+    """Move a retired campaign's files from the disk to the CAS, record it (``CampaignFilesFreed``), then delete them.
+
+    A checkout that piloop cloned (under ``REPOS``) is packed by its vcs: its head and every candidate's version. The
+    campaign's directory, its workspace and its evaluation logs, is stored whole, its ``live`` files too. The store must
+    hold every blob before the event commits, and the files go only after it: a daemon that stops in between leaves
+    them, and nothing is lost.
+
+    Raises:
+        NotArchived: The store lacks a blob that it was just given.
+    """
+    with db.session() as s:
+        campaign = s.get_one(Campaign, job.campaign_id)
+        checkout, vcs, ours = Path(campaign.path), vcs_of(campaign), cloned(home, campaign)
+        revisions = list(
+            dict.fromkeys(s.scalars(select(Candidate.revision).where(Candidate.campaign_id == campaign.id)))
+        )
+    ours = ours and checkout.is_dir()
+    packed = _packed(cas, vcs, checkout, revisions) if ours else None
+    directory = campaign_dir(home, job.campaign_id)
+    names = sorted(entry.name for entry in directory.iterdir()) if directory.is_dir() else []
+    stored = put_tree(cas, directory, names, stop)
+    manifest = stored.manifest.put(cas) if stored.manifest.entries else None
+    blobs = [] if manifest is None else [manifest, *stored.manifest.blobs]
+    if missing := cas.missing([*blobs, *([] if packed is None else [packed.blob])]):
+        raise NotArchived(f'the store lacks {len(missing)} blobs of campaign#{job.campaign_id}, e.g. {missing[0]}')
+    freed = CampaignFilesFreed(checkout=packed, files=manifest)
+    with db.session() as s:
+        emit(s, freed, TargetRef(TargetKind.CAMPAIGN, job.campaign_id), System.DAEMON)
+        for row in s.scalars(_unpruned().where(Archive.campaign_id == job.campaign_id)):
+            row.pruned_at = utcnow()  # its workspace copies go with the directory
+        s.commit()
+    if ours:
+        shutil.rmtree(checkout)
+    if directory.is_dir():
+        shutil.rmtree(directory)
+    return freed
+
+
+def _packed(cas: Cas, vcs: Vcs, checkout: Path, revisions: list[Revision]) -> PackedCheckout:
+    with closing(vcs.open(checkout)) as repo:
+        head = repo.head().revision
+        kept = tuple(dict.fromkeys([head, *revisions]))
+        blob = repo.send(cas, kept, [])
+    assert blob is not None  # send puts nothing only for revisions that the repository lacks, and it has its head
+    return PackedCheckout(blob=blob, head=head, revisions=kept)
 
 
 def summary(s: Session) -> Summary:
@@ -370,22 +448,29 @@ def restore(s: Session, cas: Cas, home: Path, campaign: Campaign, target: Target
     A path is workspace-relative: the file itself or everything under it. When several archivings hold a path, the
     latest wins, and a newer file where an older one had a directory (or the reverse) displaces the older paths. A file
     already there with other content is kept, and listed.
+
+    The files of a retired campaign that left the disk (``CampaignFilesFreed``) come back whole from its last manifest,
+    into the campaign's directory: its evaluation logs too, with no ``target``.
     """
+    if (
+        freed := latest(s, CampaignFilesFreed, Event.target == TargetRef(TargetKind.CAMPAIGN, campaign.id))
+    ) is not None:
+        return _restore_freed(cas, home, campaign, freed[1], target)
     manifests = s.scalars(
         select(Archive.manifest)
         .where(Archive.campaign_id == campaign.id, Archive.manifest.is_not(None))
         .order_by(Archive.id)
     ).all()
-    latest: dict[str, Entry] = {}
+    newest: dict[str, Entry] = {}
     for manifest in manifests:
         assert manifest is not None  # the query has only the archivings that stored something
         newer = {e.path: e for e in Manifest.get(cas, manifest).entries}
         dirs = {parent for path in newer for parent in _parents(path)}
         # a newer file where an older path had a directory, or the reverse, displaces the older path
-        latest = {
-            path: e for path, e in latest.items() if path not in dirs and not any(p in newer for p in _parents(path))
+        newest = {
+            path: e for path, e in newest.items() if path not in dirs and not any(p in newer for p in _parents(path))
         } | newer
-    entries = list(latest.values())
+    entries = list(newest.values())
     if isinstance(target, TargetRef):  # by name alone: an archive outlives a deleted subject
         entries = [e for e in entries if subject_of(e.path.split('/', 1)[0]) == target]
     elif target is not None:
@@ -393,6 +478,28 @@ def restore(s: Session, cas: Cas, home: Path, campaign: Campaign, target: Target
         entries = [e for e in entries if e.path == prefix or e.path.startswith(f'{prefix}/')]
     done = materialise(cas, Manifest(entries=tuple(entries)), workspace_dir(home, campaign.id))
     return Restored(len(manifests), done)
+
+
+def _restore_freed(
+    cas: Cas, home: Path, campaign: Campaign, freed: CampaignFilesFreed, target: TargetRef | str | None
+) -> Restored:
+    if freed.files is None:
+        return Restored(0, Materialised())
+    entries = Manifest.get(cas, freed.files).entries
+    workspace = f'{WORKSPACE}/'
+    if isinstance(target, TargetRef):
+        entries = tuple(
+            e for e in entries if e.path.startswith(workspace) and subject_of(_top(e.path, workspace)) == target
+        )
+    elif target is not None:
+        prefix = f'{workspace}{target.strip("/")}'
+        entries = tuple(e for e in entries if e.path == prefix or e.path.startswith(f'{prefix}/'))
+    return Restored(1, materialise(cas, Manifest(entries=entries), campaign_dir(home, campaign.id)))
+
+
+def _top(path: str, workspace: str) -> str:
+    """The top-level workspace entry that a path of a campaign's directory is under."""
+    return path.removeprefix(workspace).split('/', 1)[0]
 
 
 @deprecated.until(

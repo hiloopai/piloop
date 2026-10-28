@@ -795,7 +795,7 @@
     "/v1/campaigns/{campaign}/sync": {
       "post": {
         "summary": "Sync Campaign",
-        "description": "Read the campaign's ``piloop.toml`` again, and sync its documents into its memory.\n\nA changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions\nchanged is active again.",
+        "description": "Read the campaign's ``piloop.toml`` again, and sync its documents into its memory.\n\nA campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its\ncheckout moves forward to them. Its candidates and head stay: new code comes in as a reference candidate or a fork.\nA changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions\nchanged is active again.",
         "operationId": "sync_campaign",
         "parameters": [
           {
@@ -810,6 +810,23 @@
             "description": "The campaign's name, or its id."
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SyncBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -4739,6 +4756,16 @@
           }
         }
       },
+      "CampaignFiles": {
+        "type": "string",
+        "enum": [
+          "kept",
+          "packing",
+          "freed"
+        ],
+        "title": "CampaignFiles",
+        "description": "Where a campaign's files are: its checkout, if piloop cloned it, and its directory under the home."
+      },
       "CampaignName": {
         "type": "string"
       },
@@ -4934,6 +4961,10 @@
           "tokens": {
             "type": "integer",
             "title": "Tokens"
+          },
+          "files": {
+            "$ref": "#/components/schemas/CampaignFiles",
+            "description": "Where its files are: ``packing`` from its retire until they are in the CAS and off the disk."
           }
         },
         "type": "object",
@@ -4956,7 +4987,8 @@
           "agents",
           "roles",
           "inbox",
-          "tokens"
+          "tokens",
+          "files"
         ],
         "title": "CampaignState",
         "description": "What ``piloop status`` shows of a campaign, as data."
@@ -8851,6 +8883,25 @@
         ],
         "title": "Subject",
         "description": "The row that an event is about."
+      },
+      "SyncBody": {
+        "properties": {
+          "credential": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Credential"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the host of a cloned campaign's repository asks for, as for ``Remote``. None: nothing."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SyncBody",
+        "description": "How to read a campaign's ``piloop.toml`` again."
       },
       "Synced": {
         "properties": {

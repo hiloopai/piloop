@@ -1518,6 +1518,8 @@ def test_campaign_fork_makes_a_campaign_from_the_head_of_another(campaign_path: 
     assert (
         out().splitlines()[-1] == 'campaign demo-2 #2 forked from demo #1; baseline candidate#2: the daemon measures it'
     )
+    run_cli(['campaign', 'sync', 'demo'])
+    assert out() == 'campaign demo #1: config re-read\n'
 
 
 @pytest.mark.usefixtures('api')

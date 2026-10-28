@@ -12,7 +12,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import partial
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, assert_never
 
 from piloop.actor import System
 from piloop.agents.results import AgentSessionFinished
@@ -22,7 +22,7 @@ from piloop.db.models import EventModel, ReadBy, utcnow
 from piloop.db.triggers.changelog import CampaignStatusChanged
 from piloop.ids import Ref, TargetKind, TargetRef
 from piloop.plugins.archive.contract import CONSUMER, ArchiveHost
-from piloop.plugins.archive.local.store import Job, archive, due, make_room, prune_older
+from piloop.plugins.archive.local.store import Free, Job, archive, due, free_files, make_room, prune_older
 from piloop.plugins.cas.contract import Upkeep
 from piloop.plugins.contribution import Contribution, Leaving
 from piloop.store.tree import Cancelled
@@ -44,7 +44,8 @@ class DiskAnomaly(EventModel):
 
 
 WAKES: Kinds = frozenset({SubjectSettled, CampaignStatusChanged, AgentSessionFinished})
-"""What makes a workspace due for its archiving: a subject that settles, a campaign that stops, a sweep that ends."""
+"""What makes a workspace due for its archiving, or a campaign's files for freeing: a subject that settles, a campaign
+that stops or retires, a sweep that ends."""
 
 
 SKIPPED_EVENT = 'archive.skipped'
@@ -126,10 +127,16 @@ class LocalArchiver:
             return None
         with self._db.session() as s:
             job = due(s)
-        if job is not None:
-            self._submit(partial(self._archive, job))
-            return None
-        return now + timedelta(seconds=upkeep_in)
+        match job:
+            case Job():
+                self._submit(partial(self._archive, job))
+            case Free():
+                self._submit(partial(self._free, job))
+            case None:
+                return now + timedelta(seconds=upkeep_in)
+            case _:
+                assert_never(job)
+        return None
 
     def _submit(self, body: Callable[[], None]) -> None:
         self._job = self._pool.submit(body)
@@ -188,6 +195,12 @@ class LocalArchiver:
             with self._db.session() as s:
                 emit(s, short, TargetRef(TargetKind.CAMPAIGN, job.campaign_id), System.DAEMON)
                 s.commit()
+
+    def _free(self, job: Free) -> None:
+        with self._tracer.span('piloop.archive.free', campaign=job.campaign_id) as span:
+            freed = self._guarded(span.error, lambda: free_files(self._db, self._cas, self._home, job, self._stop))
+            if freed is not None:
+                span.set(packed=freed.checkout is not None, files=None if freed.files is None else str(freed.files))
 
     def _upkeep(self) -> None:
         try:

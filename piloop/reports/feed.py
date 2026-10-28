@@ -47,8 +47,10 @@ from piloop.campaign import inbox
 from piloop.campaign.inbox import campaign_of
 from piloop.config import CampaignConfig, explain
 from piloop.db import feed as db_feed
+from piloop.db.events import latest
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, count
-from piloop.ids import CampaignId, CommentKind, RoleName
+from piloop.ids import CampaignFiles, CampaignId, CampaignStatus, CommentKind, RoleName, TargetKind, TargetRef
+from piloop.plugins.archive.contract import CampaignFilesFreed
 from piloop.plugins.campaign_type.kit.backlog.ideas import queued_ideas
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -204,7 +206,16 @@ def _state(s: Session, campaign: Campaign, cfg: CampaignConfig, me: Actor) -> Ca
         roles=roles_of(s, campaign),
         inbox=len(inbox.waiting_for(s, me.party, campaign_id=campaign.id)),
         tokens=campaign_tokens(s, campaign.id),
+        files=files_of(s, campaign),
     )
+
+
+def files_of(s: Session, campaign: Campaign) -> CampaignFiles:
+    """Where the campaign's files are (``CampaignFiles``)."""
+    if campaign.status is not CampaignStatus.RETIRED:
+        return CampaignFiles.KEPT
+    freed = latest(s, CampaignFilesFreed, Event.target == TargetRef(TargetKind.CAMPAIGN, campaign.id))
+    return CampaignFiles.PACKING if freed is None else CampaignFiles.FREED
 
 
 def roles_of(s: Session, campaign: Campaign) -> dict[RoleName, RoleView]:

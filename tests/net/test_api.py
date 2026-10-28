@@ -58,6 +58,7 @@ from piloop.api.contract import (
     SecretCredential,
     Selection,
     StopBody,
+    SyncBody,
     TokenBody,
     TokenCredential,
     defaulted,
@@ -1131,6 +1132,34 @@ def test_the_secret_of_a_clone_until_0_4_0_is_its_credential(
             assert raw.post('/v1/campaigns', json={'clone': {'url': url, 'secret': 'TOKEN'}}).status_code == 200
     [(_, _, _, credential)] = [c.args for c in cloned.call_args_list]
     assert credential.get_secret_value() == 'tok'
+
+
+def test_a_sync_of_a_cloned_campaign_takes_its_repository_s_new_versions_and_reads_its_piloop_toml_again(
+    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path
+) -> None:
+    url = bare(campaign_path, tmp_path / 'demo.git')
+    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+        added = client.register_campaign(Clone(clone=Remote(url=url)))
+        upstream = tmp_path / 'upstream'
+        subprocess.run(['git', 'clone', '-q', url, str(upstream)], check=True)
+        toml = upstream / 'piloop.toml'
+        toml.write_text(toml.read_text().replace('"sh", "-c"', '"bash", "-c"'))
+        subprocess.run(['git', 'commit', '-qam', 'evaluate with bash'], cwd=upstream, check=True)
+        subprocess.run(['git', 'push', '-q'], cwd=upstream, check=True)
+        synced = client.sync_campaign(str(added.campaign.id), SyncBody())
+        checkout = Path(added.campaign.path)
+        assert 'bash' in (checkout / 'piloop.toml').read_text(), 'the checkout moved forward'
+        with db.session() as s:
+            row = s.get_one(Campaign, added.campaign.id)
+            assert row.config.evaluate[0] == 'bash' and row.evaluator_id != 1, 'a new evaluator'
+            assert s.scalars(select(Candidate.id).where(Candidate.campaign_id == row.id)).all() == [added.baseline]
+        assert synced.campaign.status == 'active'
+        subprocess.run(['git', 'commit', '-q', '--allow-empty', '-m', 'its own way'], cwd=checkout, check=True)
+        subprocess.run(['git', 'commit', '-q', '--allow-empty', '-m', 'upstream'], cwd=upstream, check=True)
+        subprocess.run(['git', 'push', '-q'], cwd=upstream, check=True)
+        with pytest.raises(Refused, match=r'^git pull in .* failed: ') as diverged:
+            client.sync_campaign(str(added.campaign.id))
+        assert diverged.value.error == Problem.REFUSED
 
 
 def test_a_clone_that_fails_or_does_not_register_leaves_nothing_under_the_home(

@@ -113,6 +113,12 @@ class GitRepository(Repository):
             recovered=bool(git.trailers(text, RECOVERED)),
         )
 
+    def update(self, credential: SecretStr | None) -> Version:
+        """``git pull --ff-only --tags``."""
+        assert self.repo.working_tree_dir is not None  # a clone has a working tree
+        git.pull(Path(self.repo.working_tree_dir), credential)
+        return self.head()
+
     def receive(self, cas: Cas, transfer: Transfer, base: Revision) -> list[Version]:
         """Unbundle, and return the first-parent history from ``base``.
 

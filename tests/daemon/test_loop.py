@@ -137,6 +137,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'anomaly.startup': ['campaigns', 'idle_slots'],
             'campaign.added': ['facts', 'campaigns', 'idle_slots'],
             'campaign.closed': [],
+            'campaign.files_freed': [],
             'campaign.reopened': [],
             'campaign.config': ['facts', 'campaigns', 'idle_slots'],
             'campaign.parent_id': [],

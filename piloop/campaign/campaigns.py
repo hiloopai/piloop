@@ -5,11 +5,12 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from contextlib import closing
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
-from typing import Literal
+from typing import Literal, assert_never
 from uuid import uuid4
 
 import httpx2 as httpx
@@ -21,8 +22,8 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, System
 from piloop.config import CONFIG_FILE, CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
-from piloop.db.events import emit
-from piloop.db.models import NOT_RETIRED, Campaign, EventModel
+from piloop.db.events import emit, latest
+from piloop.db.models import NOT_RETIRED, Campaign, Event, EventModel
 from piloop.db.session import Database
 from piloop.db.sql import sql_error
 from piloop.ids import (
@@ -35,6 +36,7 @@ from piloop.ids import (
     TargetRef,
     checked_campaign_name,
 )
+from piloop.plugins.archive.contract import CampaignFilesFreed, PackedCheckout
 from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
@@ -167,35 +169,63 @@ def _slug(name: str) -> str:
     return f'campaign-{slug}' if slug.isdigit() else slug
 
 
+@dataclass(frozen=True)
+class FromUrl:
+    """A clone of the repository at ``url``, with the home's secret that its host asks for."""
+
+    url: str
+    credential: SecretStr | None
+
+
+@dataclass(frozen=True)
+class FromPack:
+    """A checkout made from what a retired campaign's vcs packed into the CAS when its files left the disk."""
+
+    cas: Cas
+    packed: PackedCheckout
+
+
+type CloneSource = FromUrl | FromPack
+"""Where the checkout of a campaign that piloop clones comes from."""
+
+
 def register_clone(
     s: Session,
     home: Path,
     vcs: Vcs,
-    url: str,
-    credential: SecretStr | None,
+    source: CloneSource,
     actor: Actor,
     name: CampaignName | None = None,
     fork: ForkOf | None = None,
 ) -> tuple[Campaign, Candidate]:
-    """Clone ``url`` into the home's ``REPOS``, register the clone (``register``), and return what that returns.
+    """Make a checkout under the home's ``REPOS`` from ``source``, register it (``register``), and return what it does.
 
-    The checkout is ``REPOS/<campaign id>``, so a repository registers as many campaigns as asked. It is cloned under
-    a new name first, because the id comes with the row. A clone that does not register is deleted. The caller
-    commits.
+    The checkout is ``REPOS/<campaign id>``, so a repository registers as many campaigns as asked. It is made under
+    a new name first, because the id comes with the row. A checkout that does not register is deleted. The caller
+    commits. One made from a pack holds the versions of the pack, and no files until a version is checked out.
 
     Raises:
-        CampaignError: The campaign's directory exists, the clone has no ``piloop.toml``, or ``register`` refuses it.
+        CampaignError: The campaign's directory exists, the checkout has no ``piloop.toml``, or ``register`` refuses it.
         CloneFailed: The clone failed.
     """
     (home / REPOS).mkdir(parents=True, exist_ok=True)
     cloning = home / REPOS / f'.cloning-{uuid4().hex}'
     try:
-        vcs.clone(url, cloning, credential).close()
+        match source:
+            case FromUrl(url=url, credential=credential):
+                vcs.clone(url, cloning, credential).close()
+                where = url
+            case FromPack(cas=cas, packed=packed):
+                with closing(vcs.replica(cloning)) as repo:
+                    repo.fetch(cas, packed.revisions, partial(_the_pack, packed.blob))
+                where = 'the packed checkout'
+            case _:
+                assert_never(source)
         try:
             campaign, baseline = register(s, cloning, actor, name, fork)
         except ConfigMissing as e:  # the error names the temporary clone, which the caller never sees
             raise CampaignError(
-                f'{url} has no {CONFIG_FILE} at its root: `piloop init` in a checkout makes one; commit it, then'
+                f'{where} has no {CONFIG_FILE} at its root: `piloop init` in a checkout makes one; commit it, then'
                 ' register again'
             ) from e
         checkout = home / REPOS / str(campaign.id)
@@ -208,6 +238,11 @@ def register_clone(
         raise
     campaign.path = str(checkout.resolve())
     return campaign, baseline
+
+
+def _the_pack(blob: Cid, _missing: Sequence[Revision], _have: Sequence[Revision]) -> list[Cid]:
+    """What a checkout made from a pack fetches: the pack, whatever it lacks and has."""
+    return [blob]
 
 
 def stub_untouched(path: Path) -> bool:
@@ -308,9 +343,11 @@ def _fork_version(s: Session, repo: Repository, fork: ForkOf) -> Version:
 
 
 def fork(
-    s: Session, home: Path, source: Campaign, actor: Actor, *, at: str | None, name: CampaignName | None
+    s: Session, home: Path, cas: Cas, source: Campaign, actor: Actor, *, at: str | None, name: CampaignName | None
 ) -> tuple[Campaign, Candidate]:
     """Register a new campaign that starts from a version of ``source``, in a clone of its checkout (``ForkOf``).
+
+    A retired source whose checkout left the disk forks from what its vcs packed into ``cas`` (``FromPack``).
 
     ``source`` may be in any state, retired too, and goes on as it is. Without ``name``, the fork is
     ``<source>-<n>``, with the lowest ``n`` from 2 that no campaign that is not retired has. The caller commits.
@@ -322,7 +359,10 @@ def fork(
     if name is None:
         taken = set(s.scalars(select(Campaign.name).where(NOT_RETIRED)))
         name = next(n for i in itertools.count(2) if (n := f'{source.name}-{i}') not in taken)
-    return register_clone(s, home, vcs_of(source), source.path, None, actor, name, ForkOf(source, at))
+    freed = latest(s, CampaignFilesFreed, Event.target == TargetRef(TargetKind.CAMPAIGN, source.id))
+    packed = None if freed is None else freed[1].checkout
+    origin = FromUrl(source.path, None) if packed is None else FromPack(cas, packed)
+    return register_clone(s, home, vcs_of(source), origin, actor, name, ForkOf(source, at))
 
 
 def referenced(s: Session, ref: str) -> Campaign | None:
@@ -495,6 +535,11 @@ class Sources:
             history = list(s.scalars(query))
         update = {'workspace': Workspace(place=place, manifest=manifest), 'history': history}
         return self.source(campaign, revision).model_copy(update=update)
+
+
+def cloned(home: Path, campaign: Campaign) -> bool:
+    """Whether piloop cloned the campaign's checkout (``REPOS``): it may update, pack and delete it, as its own."""
+    return Path(campaign.path).resolve().is_relative_to((home / REPOS).resolve())
 
 
 def vcs_of(campaign: Campaign) -> Vcs:

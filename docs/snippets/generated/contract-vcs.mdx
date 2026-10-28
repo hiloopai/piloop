@@ -15,6 +15,7 @@
 | `Repository.close() -> None` | Release what the open repository holds. Later calls do nothing. |
 | `Repository.head() -> Version` | The version that the checkout is at. |
 | `Repository.version(native: str) -> Version` | The version that `native` names in the provider's own terms: a revision, or under `git` a branch or tag. |
+| `Repository.update(credential: SecretStr \| None) -> Version` | Bring a clone up to the repository it was cloned from, and return the version that it is at then. |
 | `Repository.receive(cas: Cas, transfer: Transfer, base: Revision) -> list[Version]` | Take the versions of `transfer` from `cas`, and return those from `base` to its head, oldest first. |
 | `Repository.send(cas: Cas, revisions: Sequence[Revision], have: Sequence[Revision]) -> Cid \| None` | Put what `revisions` have beyond `have` into `cas`, as a `Transfer`'s blob, or None when nothing is. |
 | `Repository.fetch(cas: Cas, revisions: Sequence[Revision], ask: Fetch) -> None` | Take those of `revisions` that the repository lacks: `ask` puts them into `cas`. |

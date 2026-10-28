@@ -189,6 +189,17 @@ class Repository(Protocol):
         """
         ...
 
+    def update(self, credential: SecretStr | None) -> Version:
+        """Bring a clone up to the repository it was cloned from, and return the version that it is at then.
+
+        It takes the origin's new versions and tags, and moves the checkout forward to the origin's head when that only
+        goes forward: a checkout that went its own way does not move. ``credential`` is as for ``Vcs.clone``.
+
+        Raises:
+            VcsError: The origin is unreachable, or the checkout cannot move forward to it.
+        """
+        ...
+
     def receive(self, cas: Cas, transfer: Transfer, base: Revision) -> list[Version]:
         """Take the versions of ``transfer`` from ``cas``, and return those from ``base`` to its head, oldest first.
 

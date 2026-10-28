@@ -44,6 +44,7 @@ from piloop.api.contract import (
     SecretBody,
     Selection,
     StopBody,
+    SyncBody,
     TokenBody,
 )
 from piloop.api.views import (
@@ -143,8 +144,8 @@ class Client:
     def register_campaign(self, body: Registration) -> Registered:
         return self.post('/v1/campaigns', body, Registered)
 
-    def sync_campaign(self, campaign: str) -> CampaignSynced:
-        return self.post(f'/v1/campaigns/{segment(campaign)}/sync', None, CampaignSynced)
+    def sync_campaign(self, campaign: str, body: SyncBody | None = None) -> CampaignSynced:
+        return self.post(f'/v1/campaigns/{segment(campaign)}/sync', body, CampaignSynced)
 
     def message(self, campaign: str, body: MessageBody) -> Messaged:
         return self.post(f'/v1/campaigns/{segment(campaign)}/messages', body, Messaged)

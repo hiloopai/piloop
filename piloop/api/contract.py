@@ -365,6 +365,15 @@ class Remote(Params):
         return secret_is_credential(data)
 
 
+class SyncBody(Params):
+    """How to read a campaign's ``piloop.toml`` again."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    credential: Credential | None = None
+    """What the host of a cloned campaign's repository asks for, as for ``Remote``. None: nothing."""
+
+
 class Clone(Params):
     """A repository that the daemon clones under its home, then registers."""
 

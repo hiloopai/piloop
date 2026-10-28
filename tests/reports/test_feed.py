@@ -370,6 +370,7 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
         },
         'inbox': 1,
         'tokens': 0,
+        'files': 'kept',
     }, 'the escalation written after the cursor is not in the snapshot'
     [item] = inbox['items']
     assert inbox['cursor'] == cursor and item['kind'] == 'escalation' and item['body'] == 'look'

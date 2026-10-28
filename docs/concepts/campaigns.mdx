@@ -267,9 +267,31 @@ piloop campaign retire enwik8 --reason "tried every idea"
 campaign enwik8 #3 retired: its name is free
 ```
 
-`retire`, like `reopen`, waits until the closing review and the runs of the stop are over. Its rows, events and archived
-workspace stay, and its id still names it: `piloop status 3`. `piloop status` leaves it out unless you ask with
-`--status retired`. A retired campaign never reopens: fork it.
+`retire`, like `reopen`, waits until the closing review and the runs of the stop are over. Its rows and events stay,
+and its id still names it: `piloop status 3`. `piloop status` leaves it out unless you ask with `--status retired`. A
+retired campaign never reopens: fork it.
+
+Then its files leave the disk for the artifact store: its workspace, its evaluation logs, and its checkout if piloop
+cloned it. `piloop status --json` says where they are, as `files`: `kept`, `packing`, then `freed`. A checkout that
+you registered by its path stays where it is. `piloop restore 3` writes the files back, and a fork
+(`piloop campaign fork 3`) starts from its packed checkout.
+
+### Update a cloned campaign
+
+A server that cloned a campaign's repository takes its new commits when you sync the campaign:
+
+```bash
+piloop campaign sync enwik8
+```
+
+```text
+campaign enwik8 #3: config re-read
+```
+
+The checkout moves forward to the repository's head, and piloop reads its `piloop.toml` again. The campaign's
+candidates and head stay. To try the new code, import it as a candidate (`piloop candidate import enwik8 origin/main`),
+or fork the campaign at it (`piloop campaign fork enwik8 --at origin/main`). A repository whose host asks for a token
+takes `--secret`, the name of the server's secret that holds it.
 
 ## Files
 

@@ -14,7 +14,7 @@ from typing import Annotated, Literal, assert_never
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from piloop.api.contract import Access, Revealed
-from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentId, KeyOrigin, RoleName
+from piloop.ids import AgentSessionId, CampaignFiles, CampaignId, CampaignStatus, CommentId, KeyOrigin, RoleName
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, TrackName
@@ -175,6 +175,8 @@ class CampaignState(View):
     inbox: int
     """The unacknowledged inbox items that wait for the caller: those that it did not write."""
     tokens: int
+    files: CampaignFiles
+    """Where its files are: ``packing`` from its retire until they are in the CAS and off the disk."""
 
 
 class InvalidConfig(View):

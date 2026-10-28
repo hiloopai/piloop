@@ -1,6 +1,7 @@
 import ast
 import os
 import shutil
+import subprocess
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -9,22 +10,25 @@ import pytest
 from covalence import Cid
 from sqlalchemy import delete, select, text
 
-from piloop.campaign.campaigns import workspace_dir
+from piloop.actor import System
+from piloop.campaign.campaigns import campaign_dir, fork, workspace_dir
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers import changelog
-from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CampaignFiles, CampaignId, CampaignStatus, RoleName, TargetKind, TargetRef
 from piloop.plugins.archive import contract as archive_contract
-from piloop.plugins.archive.contract import CampaignArchived, Summary
+from piloop.plugins.archive.contract import CampaignArchived, CampaignFilesFreed, Restored, Summary
 from piloop.plugins.archive.local import store as archive_module
 from piloop.plugins.archive.local.store import (
     Archived,
+    Free,
     Job,
     NotArchived,
     Pruned,
     Short,
     archive,
     due,
+    free_files,
     make_room,
     owners,
     prune,
@@ -35,13 +39,15 @@ from piloop.plugins.archive.local.store import (
 from piloop.plugins.archive.local.tables import Archive
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.cas.kit.objects import ObjectsCas, key
+from piloop.reports.feed import files_of
 from piloop.settings import INPUTS_DIR
 from piloop.store import tree as tree_module
-from piloop.store.tree import Manifest, Removed, Stored, Walk
+from piloop.store.tree import Manifest, Materialised, Removed, Stored, Walk
 from tests.conftest import WATCHDOG, bare_config, end_of
 
 LIVE = frozenset({'NOTES.md', 'research'})
@@ -584,3 +590,89 @@ def test_archive_imports_nothing_of_ideas_or_runs() -> None:
     assert imported(Path(changelog.__file__)) == ['piloop.plugins.campaign_type.kit.runs.ids.OPEN_RUNS'], (
         'the check finds such an import'
     )
+
+
+def test_a_retired_campaign_s_files_go_to_the_cas_once_archived_and_restore_brings_them_back(
+    db: Database, campaign: Campaign, campaign_path: Path, home: Path, store: ObjectsCas
+) -> None:
+    checkout = home / 'repos' / str(campaign.id)
+    subprocess.run(['git', 'clone', '-q', str(campaign_path), str(checkout)], check=True)
+    directory = campaign_dir(home, campaign.id)
+    write(workspace_dir(home, campaign.id) / 'NOTES.md', 'what we learned')
+    write(workspace_dir(home, campaign.id) / 'idea7' / 'a.txt', 'a')
+    write(directory / 'measure' / '1-e1' / 'stdout', 'METRIC score=1')
+    with db.session() as s:
+        row = s.get_one(Campaign, campaign.id)
+        row.path, row.status = str(checkout), CampaignStatus.RETIRED
+        s.commit()
+        assert (due(s), files_of(s, row)) == (Job(campaign.id, None), CampaignFiles.PACKING), 'its archiving first'
+        head = s.scalars(select(Candidate.revision).where(Candidate.campaign_id == campaign.id)).one()
+    archive_job(db, store, home, Job(campaign.id, None))
+    with db.session() as s:
+        assert due(s) == Free(campaign.id)
+    freed = free_files(db, store, home, Free(campaign.id))
+    assert not checkout.exists() and not directory.exists()
+    assert freed.checkout is not None and (freed.checkout.head, freed.checkout.revisions) == (head, (head,))
+    assert store.has(freed.checkout.blob)
+    with db.session() as s:
+        row = s.get_one(Campaign, campaign.id)
+        assert (due(s), files_of(s, row)) == (None, CampaignFiles.FREED)
+        assert s.scalars(select(Archive.pruned_at)).all() != [None], 'its local copies went with the directory'
+        one = restore(s, store, home, row, ref(7))
+        assert files(directory) == {'workspace/idea7/a.txt': b'a'} and one.archives == 1
+        restore(s, store, home, row, 'NOTES.md')
+        assert set(files(directory)) == {'workspace/idea7/a.txt', 'workspace/NOTES.md'}, 'a workspace path'
+        restore(s, store, home, row, None)
+    assert files(directory) == {
+        'measure/1-e1/stdout': b'METRIC score=1',
+        'workspace/NOTES.md': b'what we learned',
+        'workspace/idea7/a.txt': b'a',
+    }, 'the live files and the evaluation logs too'
+
+
+def test_a_retired_campaign_s_own_checkout_stays_and_a_campaign_without_files_frees_nothing(
+    db: Database, campaign: Campaign, campaign_path: Path, home: Path, store: ObjectsCas
+) -> None:
+    with db.session() as s:
+        s.get_one(Campaign, campaign.id).status = CampaignStatus.RETIRED
+        s.commit()
+    archive_job(db, store, home, Job(campaign.id, None))
+    assert free_files(db, store, home, Free(campaign.id)) == CampaignFilesFreed(checkout=None, files=None)
+    assert (campaign_path / 'piloop.toml').is_file(), "the user's checkout is theirs"
+    with db.session() as s:
+        row = s.get_one(Campaign, campaign.id)
+        assert restore(s, store, home, row, 'anything') == Restored(0, Materialised())
+
+
+def test_a_fork_of_a_campaign_whose_checkout_left_the_disk_starts_from_what_its_vcs_packed(
+    db: Database, campaign: Campaign, campaign_path: Path, home: Path, store: ObjectsCas
+) -> None:
+    checkout = home / 'repos' / str(campaign.id)
+    subprocess.run(['git', 'clone', '-q', str(campaign_path), str(checkout)], check=True)
+    with db.session() as s:
+        row = s.get_one(Campaign, campaign.id)
+        row.path, row.status = str(checkout), CampaignStatus.RETIRED
+        s.commit()
+    archive_job(db, store, home, Job(campaign.id, None))
+    freed = free_files(db, store, home, Free(campaign.id))
+    assert freed.checkout is not None and not checkout.exists()
+    with db.session() as s:
+        forked, baseline = fork(s, home, store, s.get_one(Campaign, campaign.id), System.HUMAN, at=None, name=None)
+        s.commit()
+        assert (forked.name, forked.parent_id, baseline.revision) == ('demo-2', campaign.id, freed.checkout.head)
+        assert forked.path == str((home / 'repos' / str(forked.id)).resolve())
+
+
+def test_a_retired_campaign_s_files_stay_while_the_store_does_not_hold_every_blob(
+    db: Database, campaign: Campaign, home: Path, store: ObjectsCas, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write(campaign_dir(home, campaign.id) / 'measure' / '1-e1' / 'stdout', 'log')
+    with db.session() as s:
+        s.get_one(Campaign, campaign.id).status = CampaignStatus.RETIRED
+        s.commit()
+    monkeypatch.setattr(ObjectsCas, 'missing', lambda self, cids: [LOST])
+    with pytest.raises(NotArchived, match=f'^the store lacks 1 blobs of campaign#{campaign.id}, e.g. {LOST}$'):
+        free_files(db, store, home, Free(campaign.id))
+    assert path.exists()
+    with db.session() as s:
+        assert files_of(s, s.get_one(Campaign, campaign.id)) is CampaignFiles.PACKING, 'nothing is recorded'

@@ -15,7 +15,7 @@ from git import Repo
 from git.exc import GitCommandError, InvalidGitRepositoryError, NoSuchPathError
 from pydantic import BaseModel, ConfigDict, SecretStr
 
-from piloop.plugins.vcs.contract import CloneFailed
+from piloop.plugins.vcs.contract import CloneFailed, VcsError
 from piloop.proc import kill_group
 
 WORKTREE_LOCK = threading.Lock()
@@ -63,11 +63,35 @@ def clone(url: str, path: Path, credential: SecretStr | None) -> None:
     """``git clone`` of ``url`` into ``path``, with no prompt, in at most ``CLONE_TIMEOUT``, with piloop's refs.
 
     The refs under ``refs/piloop/`` come too: a clone of a campaign's checkout, for a fork, has every version that
-    piloop kept there.
+    piloop kept there. A clone that fails leaves no directory: ``path`` is made first, so its removal does not depend on
+    how git ended.
+    """
+    path.mkdir(parents=True)
+    argv = ['clone', '--quiet', '--config', f'remote.origin.fetch=+{KEPT}*:{KEPT}*', '--', url, str(path)]
+    try:
+        _remote(argv, None, credential, f'git clone of {url}', CloneFailed)
+    except CloneFailed:
+        shutil.rmtree(path)
+        raise
+
+
+def pull(path: Path, credential: SecretStr | None) -> None:
+    """``git pull --ff-only`` in the clone at ``path``, with its tags, as ``clone`` runs git.
+
+    Raises:
+        VcsError: The origin is unreachable, or the checkout's branch went its own way: nothing moved.
+    """
+    _remote(['pull', '--quiet', '--ff-only', '--tags'], path, credential, f'git pull in {path}', VcsError)
+
+
+def _remote(argv: list[str], cwd: Path | None, credential: SecretStr | None, what: str, failed: type[VcsError]) -> None:
+    """Run ``git <argv>``, which reaches a remote, with no prompt, in at most ``CLONE_TIMEOUT``.
 
     With a credential, the helpers of the user's config are cleared first: none of them gets the credential to store.
-    An empty credential is none. A clone that takes longer is killed with the processes that git started. A clone that
-    fails leaves no directory: ``path`` is made first, so its removal does not depend on how git ended.
+    An empty credential is none. A run that takes longer is killed with the processes that git started.
+
+    Raises:
+        VcsError: ``failed``: git failed, or took too long. The message has its error, with the credential redacted.
     """
     match credential:
         case SecretStr() if secret := credential.get_secret_value():
@@ -75,9 +99,9 @@ def clone(url: str, path: Path, credential: SecretStr | None) -> None:
             env = {CREDENTIAL: secret}
         case _:
             config, env = [], {}
-    path.mkdir(parents=True)
     git = subprocess.Popen(
-        ['git', *config, 'clone', '--quiet', '--config', f'remote.origin.fetch=+{KEPT}*:{KEPT}*', '--', url, str(path)],
+        ['git', *config, *argv],
+        cwd=cwd,
         env={**os.environ, 'GIT_TERMINAL_PROMPT': '0', **env},
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -89,11 +113,9 @@ def clone(url: str, path: Path, credential: SecretStr | None) -> None:
     except subprocess.TimeoutExpired as e:
         kill_group(git)
         git.communicate()
-        shutil.rmtree(path)
-        raise CloneFailed(_redacted(f'git clone of {url} took longer than {CLONE_TIMEOUT}: it was stopped', env)) from e
+        raise failed(_redacted(f'{what} took longer than {CLONE_TIMEOUT}: it was stopped', env)) from e
     if git.returncode:
-        shutil.rmtree(path)
-        raise CloneFailed(_redacted(f'git clone of {url} failed: {stderr.decode().strip()}', env))
+        raise failed(_redacted(f'{what} failed: {stderr.decode().strip()}', env))
 
 
 def _redacted(error: str, env: Mapping[str, str]) -> str:

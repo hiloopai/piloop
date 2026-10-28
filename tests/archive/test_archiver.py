@@ -17,9 +17,9 @@ from piloop.campaign.campaigns import workspace_dir
 from piloop.db.events import in_order
 from piloop.db.models import Campaign, Event, utcnow
 from piloop.db.session import Database
-from piloop.ids import TargetKind
+from piloop.ids import CampaignStatus, TargetKind
 from piloop.otel import Tracer
-from piloop.plugins.archive.contract import ArchiveHost
+from piloop.plugins.archive.contract import ArchiveHost, CampaignFilesFreed
 from piloop.plugins.archive.local import LocalArchive, archiver as archiver_module, store as archive_module
 from piloop.plugins.archive.local.archiver import ArchivePolicy, DiskAnomaly, LocalArchiver
 from piloop.plugins.archive.local.store import Archived, Job, Pruned, archive, due, make_room
@@ -375,3 +375,52 @@ def test_a_stopping_daemon_ends_the_upkeep_between_steps(
     store.put(b'x')
     monkeypatch.setattr(archive_module, 'free', lambda _: 0)
     assert make_room(db, store, home, reserve=1, stop=archiver._stop) == Pruned(), 'the pressure prune stops too'
+
+
+def test_a_retired_campaign_is_archived_then_its_files_are_freed_one_job_after_the_other(
+    db: Database, campaign: Campaign, home: Path, store: ObjectsCas, tracer: Tracer, spans: InMemorySpanExporter
+) -> None:
+    write(workspace_dir(home, campaign.id) / 'NOTES.md', 'n')
+    with db.session() as s:
+        s.get_one(Campaign, campaign.id).status = CampaignStatus.RETIRED
+        s.commit()
+    archiver = upkept(opened(db, store, home, tracer))
+    archiver.run(utcnow())
+    settle(archiver)
+    archiver.run(utcnow())
+    settle(archiver)
+    with db.session() as s:
+        [(_, freed)] = in_order(s, CampaignFilesFreed, Event.target_kind == TargetKind.CAMPAIGN)
+    assert freed.checkout is None and freed.files is not None, "the user's checkout stays; the directory goes"
+    assert spans_named(spans, 'piloop.archive.free') == [
+        {'campaign': campaign.id, 'packed': False, 'files': str(freed.files)}
+    ]
+    assert archiver.run(utcnow()) is not None, 'nothing due: the next upkeep'
+    archiver.stop(Leaving.STOP, 0)
+
+
+def test_a_freeing_that_fails_is_on_its_span_and_pauses_the_archiver(
+    db: Database,
+    campaign: Campaign,
+    home: Path,
+    store: ObjectsCas,
+    tracer: Tracer,
+    spans: InMemorySpanExporter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with db.session() as s:
+        s.get_one(Campaign, campaign.id).status = CampaignStatus.RETIRED
+        s.add(Archive(campaign_id=campaign.id, complete=True))
+        s.commit()
+
+    def broken(*_: object) -> None:
+        raise OSError('disk on fire')
+
+    monkeypatch.setattr(archiver_module, 'free_files', broken)
+    archiver = upkept(opened(db, store, home, tracer))
+    archiver.run(utcnow())
+    settle(archiver)
+    [span] = [s for s in spans.get_finished_spans() if s.name == 'piloop.archive.free']
+    assert span.status.description == 'OSError: disk on fire'
+    assert archiver.run(utcnow()) is not None, 'paused: the next run waits'
+    archiver.stop(Leaving.STOP, 0)

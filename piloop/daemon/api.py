@@ -8,12 +8,13 @@ lookups as dependencies (``Selected``, ``Narrowed``) over one session per reques
 import os
 import time
 from collections.abc import Generator
+from contextlib import closing
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path as FilePath
 from typing import Annotated, assert_never
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Path, Query, Request, Response
+from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import SecretStr, ValidationError
@@ -51,6 +52,7 @@ from piloop.api.contract import (
     SecretCredential,
     Selection,
     StopBody,
+    SyncBody,
     TokenBody,
     TokenCredential,
 )
@@ -90,7 +92,9 @@ from piloop.api.views import (
 from piloop.campaign import inbox as inbox_module, ops
 from piloop.campaign.campaigns import (
     CampaignError,
+    FromUrl,
     UnknownCampaign,
+    cloned,
     fork,
     named,
     referenced,
@@ -98,6 +102,7 @@ from piloop.campaign.campaigns import (
     register_clone,
     selected,
     sync,
+    vcs_of,
     workspace_dir,
 )
 from piloop.campaign.stop import CANCELLABLE, request_cancel
@@ -121,7 +126,7 @@ from piloop.plugins.limits import live_keys
 from piloop.plugins.memory.contract import MEMORY
 from piloop.plugins.secrets import contract as secrets
 from piloop.plugins.section.contract import Rendering, rendered
-from piloop.plugins.vcs.contract import VCS, CloneFailed
+from piloop.plugins.vcs.contract import VCS, VcsError
 from piloop.reports import feed, overview as reports_overview
 from piloop.settings import Settings
 
@@ -370,11 +375,11 @@ def _registered(api: Handlers, s: Session, me: Actor, body: Registration) -> tup
             return register(s, FilePath(body.path), me, body.name)
         case Clone(clone=remote):
             vcs, credential = VCS.selected(api.cfg.providers), _credential(api, remote.credential)
-            return register_clone(s, api.cfg.home, vcs, remote.url, credential, me, body.name)
+            return register_clone(s, api.cfg.home, vcs, FromUrl(remote.url, credential), me, body.name)
         case Fork():
             if (source := referenced(s, body.fork)) is None:
                 raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_CAMPAIGN, str(UnknownCampaign(body.fork)))
-            return fork(s, api.cfg.home, source, me, at=body.at, name=body.name)
+            return fork(s, api.cfg.home, api.cas, source, me, at=body.at, name=body.name)
         case _:
             assert_never(body)
 
@@ -397,12 +402,19 @@ def _credential(api: Handlers, credential: Credential | None) -> SecretStr | Non
 
 
 @router.post('/campaigns/{campaign}/sync', operation_id='sync_campaign', dependencies=[Depends(actor_access)])
-def sync_campaign(s: Writing, me: Acting, campaign: Addressed) -> CampaignSynced:
+def sync_campaign(
+    api: Api, s: Writing, me: Acting, campaign: Addressed, body: Annotated[SyncBody | None, Body()] = None
+) -> CampaignSynced:
     """Read the campaign's ``piloop.toml`` again, and sync its documents into its memory.
 
+    A campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its
+    checkout moves forward to them. Its candidates and head stay: new code comes in as a reference candidate or a fork.
     A changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions
     changed is active again.
     """
+    if cloned(api.cfg.home, campaign):
+        with closing(vcs_of(campaign).open(FilePath(campaign.path))) as repo:
+            repo.update(_credential(api, None if body is None else body.credential))
     was = campaign.status
     sync(s, campaign)
     documents = MEMORY.selected(campaign.config.plugins).sync(s, campaign, me)
@@ -749,7 +761,7 @@ REFUSALS: tuple[type[Exception], ...] = (
     tokens.NameTaken,
     CampaignError,
     ConfigError,
-    CloneFailed,
+    VcsError,
 )
 """What an operation raises when it refuses its input and changes nothing: each answers 409, ``refused``."""
 
