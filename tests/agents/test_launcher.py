@@ -213,6 +213,20 @@ def test_brief_is_role_prompt_campaign_brief_procedures_then_context(campaign: C
     )
 
 
+def test_the_example_queries_of_a_brief_read_its_own_campaign_and_primary(campaign: Campaign, db: Database) -> None:
+    with db.session() as s:
+        first = s.get_one(Campaign, campaign.id)
+        second = Campaign(name='second', path=first.path, config=first.config)
+        s.add(second)
+        s.flush()
+        brief = compose_brief(role_in(second), second, Agent(role='watchdog', session=7), reason='timer', context='')
+    assert second.id == 2
+    assert 'i.campaign_id = 2 ' in brief and 'c.campaign_id = 2 ' in brief and 'WHERE id = 2)' in brief
+    assert "json_extract(m.metrics, '$.score')" in brief, 'the primary of the campaign, not of another example'
+    procedures = brief[brief.index('# Working with the piloop database') : brief.index('# Context')]
+    assert 'campaign_id = 1' not in procedures and '<campaign id>' not in procedures, procedures
+
+
 @pytest.mark.parametrize('kind', [IMPLEMENTER, WATCHDOG, RESEARCH, SCOUT])
 @pytest.mark.parametrize('incident', [False, True])
 def test_a_brief_says_git_or_commit_only_in_the_vcs_providers_parts(

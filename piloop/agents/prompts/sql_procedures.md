@@ -3,8 +3,7 @@
 You have direct SQL access to piloop's SQLite database through `piloop sql`.
 Any statement is allowed except schema changes and transactions. Each statement is a transaction of its own.
 `PRAGMA table_info(<table>)` works.
-The database is the coordination layer: the daemon, the orchestrator, the watchdog and every implementer read and write the
-same tables.
+The database is the coordination layer: the daemon, the orchestrator and every agent read and write the same tables.
 Timestamps are UTC ISO-8601 strings.
 
 Never put your own text inside a double-quoted shell argument: pipe it in. In double quotes, the shell runs what is in
@@ -83,7 +82,7 @@ Ideas by mechanism, best match first, with the matching words marked:
 ```sql
 SELECT i.id, i.status, snippet(ideas_fts, -1, '[', ']', '…', 8) AS hit, bm25(ideas_fts) AS score
 FROM ideas_fts JOIN ideas i ON i.id = ideas_fts.rowid
-WHERE ideas_fts MATCH 'voting OR ensemble' AND i.campaign_id = 1 ORDER BY score LIMIT 10;
+WHERE ideas_fts MATCH 'voting OR ensemble' AND i.campaign_id = <campaign id> ORDER BY score LIMIT 10;
 ```
 
 Comments (findings, decisions, notes) that use a phrase, newest first:
@@ -122,7 +121,7 @@ SELECT p.name AS campaign, i.id, i.status, i.family, i.title,
   (SELECT group_concat(json_extract(m.value, '$.name')) FROM json_each(p.config, '$.metrics') m
    WHERE json_extract(m.value, '$.role') = 'primary') AS judged_on
 FROM ideas_fts JOIN ideas i ON i.id = ideas_fts.rowid JOIN campaigns p ON p.id = i.campaign_id
-WHERE ideas_fts MATCH '"sync acquisition" OR onset' AND p.repo = (SELECT repo FROM campaigns WHERE id = 1)
+WHERE ideas_fts MATCH '"sync acquisition" OR onset' AND p.repo = (SELECT repo FROM campaigns WHERE id = <campaign id>)
 ORDER BY bm25(ideas_fts) LIMIT 20;
 ```
 
@@ -140,7 +139,7 @@ The newest for each (campaign, family) is the current one. What is dead or promi
 ```sql
 SELECT p.name AS campaign, l.id, l.family, l.status, l.effect, l.metric
 FROM lessons l JOIN campaigns p ON p.id = l.campaign_id
-WHERE p.repo = (SELECT repo FROM campaigns WHERE id = 1)
+WHERE p.repo = (SELECT repo FROM campaigns WHERE id = <campaign id>)
   AND l.id = (SELECT MAX(n.id) FROM lessons n WHERE n.campaign_id = l.campaign_id AND lower(n.family) = lower(l.family))
 ORDER BY l.status, l.family;
 ```
@@ -152,7 +151,7 @@ Documents: campaign reports, logs and design notes (`[plugins.memory] documents`
 ```sql
 SELECT p.name AS campaign, d.id, d.path, snippet(documents_fts, 1, '[', ']', '…', 12) AS hit
 FROM documents_fts JOIN documents d ON d.id = documents_fts.rowid JOIN campaigns p ON p.id = d.campaign_id
-WHERE documents_fts MATCH '"clock recovery" OR acquisition' AND p.repo = (SELECT repo FROM campaigns WHERE id = 1)
+WHERE documents_fts MATCH '"clock recovery" OR acquisition' AND p.repo = (SELECT repo FROM campaigns WHERE id = <campaign id>)
 ORDER BY bm25(documents_fts) LIMIT 10;
 ```
 
@@ -233,11 +232,11 @@ Roles, tracks, margins and floors are in `campaigns.config`.
 ```sql
 -- a candidate's score under the campaign's current evaluator (mean over its full-panel measurements);
 -- a ratio metric of [[metrics]] is not stored: divide the means of its parts
-SELECT c.id, c.verdict, c.summary, AVG(json_extract(m.metrics, '$.accuracy')) AS accuracy, COUNT(m.id) AS n
+SELECT c.id, c.verdict, c.summary, AVG(json_extract(m.metrics, '$.<primary metric>')) AS score, COUNT(m.id) AS n
 FROM candidates c JOIN campaigns p ON p.id = c.campaign_id
 LEFT JOIN measurements m
   ON m.candidate_id = c.id AND m.evaluator_id = p.evaluator_id AND m.error IS NULL AND m.rung IS NULL
-WHERE c.campaign_id = 1 GROUP BY c.id ORDER BY c.id DESC LIMIT 20;
+WHERE c.campaign_id = <campaign id> GROUP BY c.id ORDER BY c.id DESC LIMIT 20;
 
 -- what is running right now
 SELECT r.id, i.title, r.harness, r.model, r.started_at FROM runs r JOIN ideas i ON i.id = r.idea_id
@@ -245,14 +244,14 @@ WHERE r.status = 'running';
 
 -- the queue: ready ideas the scheduler may take (filter by campaign, which the index serves; every 'after'
 -- prerequisite must be done)
-SELECT i.id, i.priority, i.title FROM ideas i WHERE i.campaign_id = 1 AND i.status = 'ready' AND NOT EXISTS (
+SELECT i.id, i.priority, i.title FROM ideas i WHERE i.campaign_id = <campaign id> AND i.status = 'ready' AND NOT EXISTS (
   SELECT 1 FROM idea_links l JOIN ideas p ON p.id = l.target_id
   WHERE l.idea_id = i.id AND l.kind = 'after' AND p.status != 'done') ORDER BY i.priority, i.id;
 
 -- ready ideas that wait on a prerequisite, and what state it is in
 SELECT i.id, i.title, p.id AS prerequisite, p.status AS prerequisite_status
 FROM ideas i JOIN idea_links l ON l.idea_id = i.id AND l.kind = 'after' JOIN ideas p ON p.id = l.target_id
-WHERE i.campaign_id = 1 AND i.status = 'ready' AND p.status != 'done';
+WHERE i.campaign_id = <campaign id> AND i.status = 'ready' AND p.status != 'done';
 
 -- everything said about idea 12
 SELECT author, kind, body, created_at FROM comments WHERE target_kind = 'idea' AND target_id = 12 ORDER BY id;

@@ -6,18 +6,20 @@ Work until the idea is fairly tested, then stop.
 
 ## When your run ends
 
-- Your run ends when you stop with nothing left running, or a minute after your finding.
-- A job you start in the background keeps the run open. The daemon waits while any process you started is alive.
-- After your finding, the daemon ends your session and every process you started. Leave your finding last.
-- When the last such process ends and you have not continued by yourself, the daemon prompts you.
-- Kill what you no longer need before you stop.
-- A job that runs elsewhere (a Modal app, a remote host) is not a process of yours here. Keep a local process that
-  waits for it, by following its logs or polling its status until it ends. Otherwise your run ends as soon as you go
-  idle.
-- Wait for a local job by its process id: `wait <pid>`, or `while kill -0 <pid>; do sleep 60; done`. Get the id from
-  `$!` when you start the job.
+- Your run ends when your harness exits: when you stop, or at your deadline (in the context). It also ends a minute
+  after your finding. Leave your finding last.
+- When your run ends, the daemon kills every process that you started, also one in the background, under `nohup` or
+  `setsid`. Nobody prompts you when a job ends.
+- So never stop while an experiment runs. Start a long job in the background, and wait for it in steps: check its log,
+  post a progress note when it is useful, and wait again. Keep each wait shorter than the timeout of your command tool.
+- Wait for a local job by its process id, which `$!` gives when you start it:
+  `timeout 540 sh -c 'while kill -0 <pid> 2>/dev/null; do sleep 30; done'`.
 - Never wait with `pgrep -f "<pattern>"`. The command line of the waiting shell contains the pattern, so `pgrep`
-  finds the waiter itself. The waiter never ends, and it keeps your run open.
+  finds the waiter itself, and the wait never ends.
+- A job that runs elsewhere (a Modal app, a remote host) outlives your run. Wait for it the same way, by following its
+  logs or polling its status. Stop it before you stop, when you no longer need it.
+- A job that cannot end before your deadline is lost. Run a smaller version that fits, and say in your finding what
+  the full run needs.
 
 ## Watch your experiments
 

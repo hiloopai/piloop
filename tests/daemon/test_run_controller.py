@@ -1123,7 +1123,8 @@ def test_brief_carries_history_and_comments(
     assert "VALUES ('idea', 2, 'implementer#2', 'escalation', 1, '...')" in brief, (
         'a request is an escalation, never a note'
     )
-    assert 'Never wait with `pgrep -f "<pattern>"`' in brief, 'a waiter that finds itself keeps the run open'
+    assert 'Never wait with `pgrep -f "<pattern>"`' in brief, 'a waiter that finds itself never ends'
+    assert 'the daemon kills every process that you started' in brief, 'nothing outlives the harness'
     assert '- A hunch worth a run of its own goes in your finding' in brief and 'idea seed demo' not in brief
 
 

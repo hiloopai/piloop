@@ -21,7 +21,7 @@ from sqlalchemy import Engine, event, select
 from sqlalchemy.engine import Connection
 
 from piloop.actor import System
-from piloop.agents.roles import PROCEDURES, PROMPTS
+from piloop.agents.roles import PROCEDURES, procedures
 from piloop.campaign import inbox
 from piloop.campaign.campaigns import BLANK, workspace_dir
 from piloop.campaign.stop import check, escalated
@@ -36,6 +36,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.section.contract import Rendering, rendered
 from piloop.plugins.stop_rule.contract import Hold
+from piloop.plugins.vcs.contract import VCS
 from piloop.reports import history
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -355,7 +356,7 @@ def documented_queries() -> list[tuple[str, str]]:
     """Return the SELECTs in the ``sql`` fences of the procedures, each with its origin (``sql_procedures.md #1``)."""
     queries = []
     for name in (PROCEDURES, ORCHESTRATOR_PROCEDURES):
-        fences = re.findall(r'```sql\n(.*?)```', (PROMPTS / name).read_text(), flags=re.S)
+        fences = re.findall(r'```sql\n(.*?)```', procedures(name, VCS.selected({}), '1', 'score'), flags=re.S)
         statements = (s.strip() for fence in fences for s in re.sub(r'^--.*$', '', fence, flags=re.M).split(';'))
         selects = [s for s in statements if s.upper().startswith('SELECT')]
         queries += [(f'{name} #{i}', sql) for i, sql in enumerate(selects, 1)]

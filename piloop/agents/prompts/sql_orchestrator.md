@@ -123,9 +123,9 @@ daemon never overwrites a verdict that is not its own.
 -- tokens per idea: every implementer run of it, summed (NULL usage counts nothing)
 SELECT i.id, i.title, SUM(json_extract(w.usage, '$.total')) AS tokens, COUNT(w.id) AS agents
 FROM ideas i JOIN runs r ON r.idea_id = i.id JOIN agent_sessions w ON w.run_id = r.id
-WHERE i.campaign_id = 1 GROUP BY i.id ORDER BY tokens DESC;
+WHERE i.campaign_id = <campaign id> GROUP BY i.id ORDER BY tokens DESC;
 
 -- tokens per role, every agent of the campaign that ended (filter by campaign: that is what the index serves)
 SELECT kind, SUM(json_extract(usage, '$.total')) AS tokens, COUNT(*) AS agents
-FROM agent_sessions WHERE campaign_id = 1 AND ended_at IS NOT NULL GROUP BY kind;
+FROM agent_sessions WHERE campaign_id = <campaign id> AND ended_at IS NOT NULL GROUP BY kind;
 ```

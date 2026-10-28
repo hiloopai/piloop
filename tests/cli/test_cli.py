@@ -1989,6 +1989,7 @@ def test_schema_prints_the_procedures_and_tables_pi_puts_in_its_sql_tool(out) ->
     assert (
         text.index('## Operating procedures') < text.index("## The orchestrator's procedures") < text.index('### Spend')
     )
+    assert 'i.campaign_id = <campaign id> ' in text, 'no campaign is chosen'
 
 
 @pytest.mark.usefixtures('api')

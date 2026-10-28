@@ -19,7 +19,7 @@ from piloop.plugins.campaign_type.kit.evaluation.config import Track
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.harness.contract import Harness
 from piloop.plugins.role.contract import Files, SweepRole
-from piloop.plugins.vcs.contract import VCS, prompted
+from piloop.plugins.vcs.contract import VCS, Vcs, prompted
 
 PROMPTS = Path(__file__).resolve().parent / 'prompts'
 PROCEDURES = 'sql_procedures.md'
@@ -169,10 +169,19 @@ def compose_brief(
         (repo / BRIEF_FILE).read_text().rstrip(),
         (repo / addendum).read_text().rstrip() if addendum else '',
         (repo / track.addendum).read_text().rstrip() if track is not None and track.addendum else '',
-        prompted((PROMPTS / PROCEDURES).read_text().rstrip(), vcs),
+        procedures(PROCEDURES, vcs, str(campaign.id), (track or cfg.all_tracks[0]).primary.name).rstrip(),
         _context(role, campaign, agent, reason, context, track),
     ]
     return '\n\n'.join(p for p in parts if p) + '\n'
+
+
+def procedures(name: str, vcs: Vcs, campaign_id: str, primary: str) -> str:
+    """The procedures in ``PROMPTS / name``, with ``campaign_id`` and its ``primary`` metric in their example queries.
+
+    ``piloop schema`` prints them without a campaign: the placeholders stay.
+    """
+    text = prompted((PROMPTS / name).read_text(), vcs)
+    return text.replace('<campaign id>', campaign_id).replace('<primary metric>', primary)
 
 
 def compose_resumed(role: Role, campaign: Campaign, agent: Agent, *, reason: str, context: str) -> str:
