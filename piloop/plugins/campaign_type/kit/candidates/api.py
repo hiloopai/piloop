@@ -5,6 +5,7 @@ from http import HTTPStatus
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 from piloop.api.contract import (
     Problem,
@@ -12,7 +13,7 @@ from piloop.api.contract import (
 from piloop.campaign.campaigns import (
     repository,
 )
-from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Addressed, Writing, actor_access, reader
+from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Addressed, Reading, Writing, actor_access, reader
 from piloop.db import feed as db_feed
 from piloop.net import Refusal
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
@@ -26,13 +27,23 @@ router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUS
 
 
 def candidate_addressed(s: Writing, candidate: CandidateId) -> Candidate:
-    """The candidate that the path names. Refuses one that the home does not have."""
+    """The candidate that the path names, to change. Refuses one that the home does not have."""
+    return _named(s, candidate)
+
+
+def candidate_viewed(s: Reading, candidate: CandidateId) -> Candidate:
+    """The candidate that the path names, to read. Refuses one that the home does not have."""
+    return _named(s, candidate)
+
+
+def _named(s: Session, candidate: CandidateId) -> Candidate:
     if (found := s.get(Candidate, candidate)) is None:
         raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_CANDIDATE, f'no candidate#{candidate}')
     return found
 
 
 AddressedCandidate = Annotated[Candidate, Depends(candidate_addressed)]
+ViewedCandidate = Annotated[Candidate, Depends(candidate_viewed)]
 
 
 @router.post('/campaigns/{campaign}/candidates', operation_id='import_candidate', dependencies=[Depends(actor_access)])

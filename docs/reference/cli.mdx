@@ -368,6 +368,16 @@ Each of these commands writes its reason in a note on the idea. The change log r
 `PILOOP_ACTOR`, whether a command or raw SQL made it: `idea.status`, `idea.track` and `idea.base_candidate_id` with
 the old and new value, and `idea.linked` and `idea.unlinked` with the target and the kind.
 
+### piloop candidate show
+
+```text
+piloop candidate show CANDIDATE_ID
+```
+
+Prints the candidate's verdict, its metrics beside its parent's under the current evaluator, and each
+[rung](/concepts/campaigns#the-evaluation-ladder) that it measured: its values, its time and why its climb stopped
+there. `GET /v1/candidates/{candidate}` answers the same as data.
+
 ### piloop candidate remeasure
 
 ```text

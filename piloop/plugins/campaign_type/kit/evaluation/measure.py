@@ -43,7 +43,7 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import UNITS, Units
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, RungName
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
-from piloop.plugins.campaign_type.kit.evaluation.wire import REPEATS
+from piloop.plugins.campaign_type.kit.evaluation.wire import REPEATS, RungResult
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     pending,
@@ -131,11 +131,28 @@ def metrics(candidate: Candidate, evaluator_id: EvaluatorId | None) -> dict[str,
 
 def rungs(candidate: Candidate, evaluator_id: EvaluatorId | None) -> dict[RungName, dict[str, float]]:
     """Return the mean of each metric at each rung of the ladder, over the candidate's measurements of the rung."""
-    found: dict[RungName, list[dict[str, float]]] = {}
+    return {r.rung: r.metrics for r in rung_results(candidate, evaluator_id)}
+
+
+def rung_results(candidate: Candidate, evaluator_id: EvaluatorId | None) -> list[RungResult]:
+    """Return each rung of the ladder that the candidate measured under ``evaluator_id``, in the order of its first.
+
+    Each is over the candidate's successful measurements of the rung.
+    """
+    found: dict[RungName, list[Measurement]] = {}
     for m in candidate.measurements:
         if m.evaluator_id == evaluator_id and m.error is None and m.rung is not None:
-            found.setdefault(m.rung, []).append(m.metrics)
-    return {rung: means(rows) for rung, rows in found.items()}
+            found.setdefault(m.rung, []).append(m)
+    return [
+        RungResult(
+            rung=rung,
+            metrics=means([m.metrics for m in rows]),
+            seconds=fmean(times) if (times := [m.seconds for m in rows if m.seconds is not None]) else None,
+            measurements=len(rows),
+            stopped=rows[-1].stopped,
+        )
+        for rung, rows in found.items()
+    ]
 
 
 def climb(candidate: Candidate, evaluator_id: EvaluatorId | None) -> str | None:

@@ -9,8 +9,9 @@ from piloop.api.client import Client
 from piloop.api.contract import Params
 from piloop.api.views import View
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
-from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer
-from piloop.plugins.campaign_type.kit.evaluation.ids import MeasurementId
+from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer, CandidateView
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, RungName
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
 REPEATS = 3
 """The pairs of a remeasure that asks for no number: the 95% bound of 3 pairs is near their worst pair."""
@@ -82,11 +83,43 @@ class EvaluationQueue(View):
     evaluations: list[QueuedEvaluation]
 
 
+class RungResult(View):
+    """A rung of the ladder that a candidate measured, over its successful measurements of the rung."""
+
+    rung: RungName
+    metrics: dict[str, float]
+    """The mean of each metric at the rung."""
+    seconds: float | None
+    """The mean time of the rung alone, without the rungs before it. Null when no measurement of it has a time."""
+    measurements: int
+    stopped: str | None
+    """Why the latest measurement of the rung stopped the climb there. Null when the climb went on."""
+
+
+class CandidateDetail(View):
+    """A candidate, with what its measurements under its campaign's current evaluator say."""
+
+    candidate: CandidateView
+    revision: str
+    parent: CandidateId | None
+    run: RunId | None
+    evaluator: EvaluatorId | None
+    metrics: dict[str, float]
+    """The mean of each metric over its measurements of the full panel. A ratio is computed from its parts."""
+    parent_metrics: dict[str, float]
+    """The same of its parent. Empty without a parent."""
+    rungs: list[RungResult]
+    """Each rung of the ladder that it measured, in the order that it first measured them."""
+
+
 class EvaluationClient(Client):
-    """The calls of the evaluation's routes: a measurement by hand, the queue, and an evaluation's cancel."""
+    """The calls of the evaluation's routes: a candidate, a measurement by hand, the queue, and a cancel."""
 
     def add_measurement(self, candidate: CandidateId, body: Report) -> MeasurementAdded:
         return self.post(f'/v1/candidates/{candidate}/measurements', body, MeasurementAdded)
+
+    def candidate(self, candidate: CandidateId) -> CandidateDetail:
+        return self._get(f'/v1/candidates/{candidate}', Params(), CandidateDetail)
 
     def evaluations(self) -> EvaluationQueue:
         return self._get('/v1/evaluations', Params(), EvaluationQueue)

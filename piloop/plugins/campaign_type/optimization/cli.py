@@ -11,14 +11,54 @@ from piloop.cli.common import CampaignRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidatesClient, ImportBody
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
-from piloop.plugins.campaign_type.kit.evaluation.wire import REPEATS
+from piloop.plugins.campaign_type.kit.evaluation.wire import REPEATS, EvaluationClient, RungResult
 from piloop.plugins.campaign_type.kit.verdicts.wire import RemeasureBody, VerdictBody, VerdictsClient
 from piloop.plugins.campaign_type.optimization.wire import NoteBody, OptimizationClient
+from piloop.text import NONE, metric
 
 candidate_app = cyclopts.App(
     name='candidate',
-    help='Import a starting point, measure a candidate again, keep a regressed result in view, or override a verdict.',
+    help='Show a candidate, import a starting point, measure a candidate again, keep a regressed result in view, or'
+    ' override a verdict.',
 )
+
+
+@candidate_app.command(name='show')
+def candidate_show(candidate_id: Annotated[CandidateId, cyclopts.Parameter(help='The candidate.')], /) -> None:
+    """Print a candidate: its verdict, its metrics beside its parent's, and each rung of the ladder that it measured.
+
+    The metrics are the means under the campaign's current evaluator. A rung's time is its own, without the rungs
+    before it.
+    """
+    with EvaluationClient.connect(daemon_http()) as client:
+        shown = client.candidate(candidate_id)
+    c, before = shown.candidate, shown.parent_metrics
+    full = ', '.join(
+        f'{name} {metric(value)}' + (f' ({metric(value - before[name], signed=True)})' if name in before else '')
+        for name, value in sorted(shown.metrics.items())
+    )
+    lines = [
+        f'candidate#{c.id} {c.label}: {c.verdict_reason or NONE}',
+        c.summary or NONE,
+        f'parent {f"candidate#{shown.parent}" if shown.parent else NONE} · run {f"#{shown.run}" if shown.run else NONE}'
+        f' · revision {shown.revision[:12]} · evaluator{f"#{shown.evaluator}" if shown.evaluator else f" {NONE}"}',
+        f'full panel (vs parent): {full or NONE}',
+        *(_rung_line(r) for r in shown.rungs),
+    ]
+    for line in lines:
+        common.console.print(line, markup=False, highlight=False)
+
+
+def _rung_line(r: RungResult) -> str:
+    """``rung screen: score 2, size 4 · 2.25s · 2 measurements · stopped: <why>``."""
+    values = ', '.join(f'{name} {metric(value)}' for name, value in sorted(r.metrics.items()))
+    parts = [
+        f'rung {r.rung}: {values or NONE}',
+        *([f'{metric(r.seconds)}s'] if r.seconds is not None else []),
+        *([f'{r.measurements} measurements'] if r.measurements > 1 else []),
+        *([f'stopped: {r.stopped}'] if r.stopped else []),
+    ]
+    return ' · '.join(parts)
 
 
 @candidate_app.command(name='import')

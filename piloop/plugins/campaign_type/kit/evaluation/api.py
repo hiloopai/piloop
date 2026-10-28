@@ -1,4 +1,4 @@
-"""The evaluation's routes: a measurement by hand, the evaluation queue, and an evaluation's cancel."""
+"""The evaluation's routes: a candidate, a measurement by hand, the evaluation queue, and an evaluation's cancel."""
 
 from http import HTTPStatus
 
@@ -9,15 +9,34 @@ from piloop.api.contract import (
 )
 from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Reading, Writing, actor_access, reader
 from piloop.db import feed as db_feed
+from piloop.db.models import Campaign
 from piloop.net import Refusal
-from piloop.plugins.campaign_type.kit.candidates.api import AddressedCandidate
+from piloop.plugins.campaign_type.kit.candidates.api import AddressedCandidate, ViewedCandidate
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer
 from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, queue
-from piloop.plugins.campaign_type.kit.evaluation.wire import EvaluationQueue, MeasurementAdded, Report
+from piloop.plugins.campaign_type.kit.evaluation.measure import metrics, rung_results
+from piloop.plugins.campaign_type.kit.evaluation.wire import CandidateDetail, EvaluationQueue, MeasurementAdded, Report
 from piloop.plugins.campaign_type.kit.verdicts.verdict import candidate_view
 
 router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUSALS_DOCUMENTED)
 """The evaluation's routes, beside the API's."""
+
+
+@router.get('/candidates/{candidate}', operation_id='candidate')
+def candidate(s: Reading, candidate: ViewedCandidate) -> CandidateDetail:
+    """A candidate: its verdict, its metrics beside its parent's, and each rung of the ladder that it measured."""
+    evaluator_id = s.get_one(Campaign, candidate.campaign_id).evaluator_id
+    parent = candidate.parent
+    return CandidateDetail(
+        candidate=candidate_view(candidate),
+        revision=candidate.revision,
+        parent=candidate.parent_id,
+        run=candidate.run_id,
+        evaluator=evaluator_id,
+        metrics=metrics(candidate, evaluator_id),
+        parent_metrics=metrics(parent, evaluator_id) if parent is not None else {},
+        rungs=rung_results(candidate, evaluator_id),
+    )
 
 
 @router.post(

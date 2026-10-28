@@ -3389,6 +3389,76 @@
         }
       }
     },
+    "/v1/candidates/{candidate}": {
+      "get": {
+        "summary": "Candidate",
+        "description": "A candidate: its verdict, its metrics beside its parent's, and each rung of the ladder that it measured.",
+        "operationId": "candidate",
+        "parameters": [
+          {
+            "name": "candidate",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Candidate"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/candidates/{candidate}/measurements": {
       "post": {
         "summary": "Add Measurement",
@@ -4475,6 +4545,87 @@
         ],
         "title": "CandidateAnswer",
         "description": "A candidate that a change wrote, read at ``cursor``."
+      },
+      "CandidateDetail": {
+        "properties": {
+          "candidate": {
+            "$ref": "#/components/schemas/CandidateView"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run"
+          },
+          "evaluator": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluator"
+          },
+          "metrics": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Metrics",
+            "description": "The mean of each metric over its measurements of the full panel. A ratio is computed from its parts."
+          },
+          "parent_metrics": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Parent Metrics",
+            "description": "The same of its parent. Empty without a parent."
+          },
+          "rungs": {
+            "items": {
+              "$ref": "#/components/schemas/RungResult"
+            },
+            "type": "array",
+            "title": "Rungs",
+            "description": "Each rung of the ladder that it measured, in the order that it first measured them."
+          }
+        },
+        "type": "object",
+        "required": [
+          "candidate",
+          "revision",
+          "parent",
+          "run",
+          "evaluator",
+          "metrics",
+          "parent_metrics",
+          "rungs"
+        ],
+        "title": "CandidateDetail",
+        "description": "A candidate, with what its measurements under its campaign's current evaluator say."
       },
       "CandidateView": {
         "properties": {
@@ -7131,6 +7282,60 @@
         ],
         "title": "RunAnswer",
         "description": "A run that a change asked to cancel, read at ``cursor``."
+      },
+      "RungResult": {
+        "properties": {
+          "rung": {
+            "type": "string",
+            "title": "Rung"
+          },
+          "metrics": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Metrics",
+            "description": "The mean of each metric at the rung."
+          },
+          "seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds",
+            "description": "The mean time of the rung alone, without the rungs before it. Null when no measurement of it has a time."
+          },
+          "measurements": {
+            "type": "integer",
+            "title": "Measurements"
+          },
+          "stopped": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stopped",
+            "description": "Why the latest measurement of the rung stopped the climb there. Null when the climb went on."
+          }
+        },
+        "type": "object",
+        "required": [
+          "rung",
+          "metrics",
+          "seconds",
+          "measurements",
+          "stopped"
+        ],
+        "title": "RungResult",
+        "description": "A rung of the ladder that a candidate measured, over its successful measurements of the rung."
       },
       "RunningSince": {
         "properties": {

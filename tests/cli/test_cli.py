@@ -19,6 +19,7 @@ from alembic import command
 from alembic.script import ScriptDirectory
 from covalence import Cid
 from git import Repo
+from inline_snapshot import snapshot
 from pydantic import SecretStr
 from pytest_mock import MockerFixture
 from rich.console import Console
@@ -70,6 +71,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import CandidateImported
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRequested
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
@@ -1099,6 +1101,53 @@ def test_eval_queue_lists_the_running_then_the_waiting_evaluations_and_eval_canc
     assert summary == '2 running, 2 waiting; `piloop eval cancel <candidate>`'
     with pytest.raises(SystemExit, match=r'candidate#2 has no evaluation that waits or runs'):
         run_cli(['eval', 'cancel', '2'])
+
+
+@pytest.mark.usefixtures('api')
+def test_candidate_show_prints_its_metrics_beside_its_parents_and_each_rung_of_its_climb(
+    campaign_path: Path, out
+) -> None:
+    run_cli(['init', str(campaign_path)])
+    out()
+    stop = 'score 2 vs 3 (-1; margin 0.5)'
+    with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
+        c = Candidate(campaign_id=1, parent_id=1, tree_sha='t', revision='0123456789abcdef', summary='screened')
+        c.verdict, c.verdict_by, c.verdict_reason = Outcome.DISCARD, 'daemon', f'stopped at screen: {stop}'
+        s.add(c)
+        s.flush()
+        s.add_all(
+            [
+                Measurement(candidate_id=c.id, evaluator_id=1, rung=RungName('smoke'), metrics={'score': 1.0}),
+                Measurement(
+                    candidate_id=c.id, evaluator_id=1, rung=RungName('screen'), metrics={'score': 2.0}, seconds=3.0
+                ),
+                Measurement(
+                    candidate_id=c.id,
+                    evaluator_id=1,
+                    rung=RungName('screen'),
+                    metrics={'score': 2.0, 'size': 4.0},
+                    seconds=1.5,
+                    stopped=stop,
+                ),
+                Measurement(candidate_id=c.id, evaluator_id=1, metrics={'score': 2.0, 'size': 4.0}),
+            ]
+        )
+        s.commit()
+    run_cli(['candidate', 'show', '2'])
+    assert out().splitlines() == snapshot(
+        [
+            'candidate#2 discard: stopped at screen: score 2 vs 3 (-1; margin 0.5)',
+            'screened',
+            'parent candidate#1 · run — · revision 0123456789ab · evaluator#1',
+            'full panel (vs parent): score 2 (+1), size 4 (-1)',
+            'rung smoke: score 1',
+            'rung screen: score 2, size 4 · 2.25s · 2 measurements · stopped: score 2 vs 3 (-1; margin 0.5)',
+        ]
+    )
+    run_cli(['candidate', 'show', '1'])
+    first, summary, where, full = out().splitlines()
+    assert (first, summary, full) == ('candidate#1 keep: —', 'baseline', 'full panel (vs parent): score 1, size 5')
+    assert re.fullmatch(r'parent — · run — · revision [0-9a-f]{12} · evaluator#1', where), 'no parent, no rung'
 
 
 @pytest.mark.usefixtures('api')
