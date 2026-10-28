@@ -16,6 +16,7 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import MOVED, Rebased, head
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     Refusal,
     label,
+    note,
     override,
     refusal,
     write,
@@ -50,8 +51,8 @@ def set_verdict(
     verdict rule says what follows (``ledger.on_moved``). By default its merge onto the head is a pending candidate that
     the daemon measures and judges against the head (``ledger.unjudged``), and a merge that conflicts files a seed to
     compose it. A keep of a branch run never moves the
-    head. With ``Cause.NOTE``, it keeps a regressed result in view as a lead: an ``interesting`` verdict whose reason
-    is followed by the one that it notes.
+    head. With ``Cause.NOTE``, it keeps a regressed result in view as a lead (``verdict.note``), and the verdict stays
+    whoever's it was unless the note changes it.
 
     Raises:
         Refused: the reason is blank, ``verdict.refusal`` refuses it, or it is a keep off the head of a candidate that
@@ -88,7 +89,13 @@ def set_verdict(
         campaign = s.get_one(Campaign, candidate.campaign_id)
         with closing(repository(campaign)) as repo:
             return Overridden(old, on_moved(s, campaign.config, repo, candidate, trunk))
-    override(candidate, to, cause=cause, reason=why, by=actor)
+    match cause:
+        case Cause.NOTE:
+            note(s, candidate, why, by=actor)
+        case None:
+            override(candidate, to, reason=why, by=actor)
+        case _:
+            assert_never(cause)
     return Overridden(old)
 
 

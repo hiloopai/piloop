@@ -105,7 +105,7 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     UNMEASURED,
     judgeable,
     label,
-    override,
+    note,
     pending,
     refusal,
     rejudgeable,
@@ -770,16 +770,7 @@ class RunController:
                 s.commit()
                 return
             assert candidate.parent is not None  # a run's candidate descends from the run's base
-            cfg = run.idea.campaign.config
-            scope = Scope(
-                run.id,
-                candidate.campaign_id,
-                cfg,
-                cfg.track(run.idea.track),
-                repo,
-                current_evaluator(s, run.idea.campaign, cfg).id,
-                side(run),
-            )
+            scope = Scope.now(s, run, repo)
             s.commit()
             bar_id, revision = bar_of(s, candidate.parent).id, candidate.revision
         with self._tracer.span('piloop.candidate', run=scope.run_id, revision=revision, candidate=candidate_id) as span:
@@ -796,8 +787,8 @@ class RunController:
         Return the id of the candidate of the run's last commit, unless scoring was cancelled. A tree that is already a candidate keeps that candidate, and its verdict unless another run
         proposes it again (``ledger.reproposed``).
 
-        The daemon scores with the campaign's current config, not the config at launch. A run that outlives a config
-        change must not move the campaign back to the old evaluator. All commits are candidates and pinned first, so a
+        The daemon scores each candidate with the campaign's config and evaluator at that moment, not at launch
+        (``Scope.now``). A run that outlives a config change must not move the campaign back to the old evaluator. All commits are candidates and pinned first, so a
         commit that waits for the evaluations before it is a ``pending`` candidate, and after a stop, ``resume`` finds
         all of them. It judges the candidates that the stop left pending, including rebased ones
         (``_follow``).
@@ -818,16 +809,8 @@ class RunController:
         """
         with self._db.session() as s:
             run = s.get_one(Run, run_id)
-            name, cfg = run.idea.campaign.name, run.idea.campaign.config
-            scope = Scope(
-                run_id,
-                campaign_id,
-                cfg,
-                cfg.track(run.idea.track),
-                repo,
-                current_evaluator(s, run.idea.campaign, cfg).id,
-                side(run),
-            )
+            name = run.idea.campaign.name
+            scope = Scope.now(s, run, repo)
             bar_id = bar_of(s, run.base).id
             candidate = run.base
             ids: list[CandidateId] = []
@@ -840,6 +823,8 @@ class RunController:
         for i, (version, candidate_id) in enumerate(zip(versions, ids, strict=True)):
             revision, unmeasured = version.revision, unmeasured_of(version)
             with self._db.session() as s:
+                scope = Scope.now(s, s.get_one(Run, run_id), repo)
+                s.commit()
                 candidate = s.get_one(Candidate, candidate_id)
                 again = candidate.origin in UNMEASURED or reproposed(candidate, s.get_one(Run, run_id))
                 judge_now = pending(candidate) or (unmeasured is None and again)
@@ -854,7 +839,7 @@ class RunController:
                 elif not self._measure(
                     run_id,
                     campaign_id,
-                    cfg,
+                    scope.cfg,
                     revision,
                     candidate_id,
                     scope.evaluator_id,
@@ -901,6 +886,8 @@ class RunController:
         current: CandidateId | None = candidate_id
         while current is not None:
             with self._db.session() as s:
+                scope = Scope.now(s, s.get_one(Run, scope.run_id), scope.repo)
+                s.commit()
                 candidate = s.get_one(Candidate, current)
                 revision, parent_id = candidate.revision, candidate.parent_id
                 needs_measurement = not measured(candidate, scope.evaluator_id)
@@ -1067,7 +1054,7 @@ class RunController:
                         why = '; '.join(notes)
                         if why and not moved and refusal(candidate, Outcome.INTERESTING, Cause.NOTE) is None:
                             by = implementer_of(s, scope.run_id)
-                            override(candidate, Outcome.INTERESTING, cause=Cause.NOTE, reason=why, by=by)
+                            note(s, candidate, why, by=by)
                     case _:
                         assert_never(unmeasured)
                 s.commit()
@@ -1267,7 +1254,7 @@ class RunController:
 
 @dataclass(frozen=True)
 class Scope:
-    """The scope for scoring the candidates of one run: the run, the campaign's config at scoring time and the track."""
+    """The scope for scoring one candidate of a run: the run, the campaign's config and evaluator now, and the track."""
 
     run_id: RunId
     campaign_id: CampaignId
@@ -1276,6 +1263,14 @@ class Scope:
     repo: Repository
     evaluator_id: EvaluatorId
     side: Lineage
+
+    @classmethod
+    def now(cls, s: Session, run: Run, repo: Repository) -> Scope:
+        """The scope of ``run``'s next candidate, so a candidate scored after ``piloop init`` uses its evaluator."""
+        campaign = run.idea.campaign
+        cfg = campaign.config
+        evaluator = current_evaluator(s, campaign, cfg)
+        return cls(run.id, campaign.id, cfg, cfg.track(run.idea.track), repo, evaluator.id, side(run))
 
 
 @dataclass(frozen=True)

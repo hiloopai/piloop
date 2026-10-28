@@ -412,7 +412,8 @@ piloop candidate note CANDIDATE_ID REASON [--follow-up HUNCH]... [--track TRACK]
 ```
 
 Keeps a measured `discard` or `interesting` candidate in view as a starting point. Each `--follow-up` files a seed
-pinned to the candidate. See [Notes](/concepts/verdict#act-on-a-candidate).
+pinned to the candidate. The `candidate.noted` event records the note and its author; `verdict_by` changes only with
+the verdict. See [Notes](/concepts/verdict#act-on-a-candidate).
 
 ### piloop candidate verdict
 

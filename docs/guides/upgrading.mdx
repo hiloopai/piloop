@@ -310,6 +310,15 @@ lines keep no campaign. Each campaign's `piloop wake` prints them after its own 
 SELECT created_at, author, line FROM journal WHERE campaign_id IS NULL ORDER BY id;
 ```
 
+### A note keeps who judged
+
+`candidates.verdict_by` changes only with the verdict. A note on an `interesting` candidate no longer signs its verdict:
+find who noted a candidate in its `candidate.noted` events.
+
+```sql
+SELECT target_id AS candidate, actor, json_extract(payload, '$.reason') FROM events WHERE kind = 'candidate.noted';
+```
+
 ### Harnesses are providers
 
 Each harness is a provider of the `harness` capability: it renders the MCP servers of a role, and reads the tokens

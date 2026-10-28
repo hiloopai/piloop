@@ -2,15 +2,20 @@
 
 ``candidates.verdict`` is only a judgement (an ``Outcome``), NULL until the daemon judges the candidate.
 ``candidates.origin`` says where it comes from, and ``candidates.cause`` why an ``interesting`` verdict is not the
-rule's own.
+rule's own. ``candidates.verdict_by`` is who set the verdict: it changes only with the verdict. A note never re-signs
+it: the ``candidate.noted`` event signs the note (``note``).
 """
 
 from enum import StrEnum
-from typing import Final, Literal
+from typing import ClassVar, Final, Literal
 
 from sqlalchemy import ColumnElement
+from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, System
+from piloop.db.events import emit, latest
+from piloop.db.models import Event, EventModel, ReadBy
+from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import JUDGED, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateView
@@ -47,9 +52,17 @@ def pending_clause() -> ColumnElement[bool]:
     return Candidate.verdict.is_(None) & Candidate.origin.in_(JUDGED)
 
 
+class CandidateNoted(EventModel):
+    """Someone noted a candidate as a lead (``note``): the event's actor, with the note's own reason."""
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['candidate.noted'] = 'candidate.noted'
+    reason: str
+
+
 def daemon_owned(c: Candidate) -> bool:
-    """Whether the daemon set the verdict. The daemon never overwrites a verdict by anyone else."""
-    return c.verdict_by == System.DAEMON.signature
+    """Whether the verdict is the daemon's to change: it set it, and nobody noted it. It never overwrites anyone else's."""
+    return c.verdict_by == System.DAEMON.signature and c.cause is not Cause.NOTE
 
 
 def rejudgeable(c: Candidate) -> bool:
@@ -110,14 +123,29 @@ def refusal(c: Candidate, to: Outcome, cause: Literal[Cause.NOTE] | None) -> Ref
             return None
 
 
-def override(c: Candidate, to: Outcome, *, cause: Literal[Cause.NOTE] | None, reason: str, by: Actor) -> None:
-    """Set ``by``'s verdict on ``c``, which ``refusal`` allows. A note keeps the reason that it notes after its own."""
-    match cause:
-        case Cause.NOTE if c.verdict_reason:
-            reason = f'{reason}; {c.verdict_reason}'
+def override(c: Candidate, to: Outcome, *, reason: str, by: Actor) -> None:
+    """Set ``by``'s verdict on ``c``, which ``refusal`` allows."""
+    write(c, to, cause=None, reason=reason, by=by)
+
+
+def note(s: Session, c: Candidate, reason: str, *, by: Actor) -> None:
+    """Note ``c`` as a lead, which ``refusal`` allows: ``interesting`` with ``Cause.NOTE``, ``reason`` before the one it notes.
+
+    The verdict is ``by``'s only when the note changes it, from a discard. The ``candidate.noted`` event signs the note.
+    """
+    noted = f'{reason}; {c.verdict_reason}' if c.verdict_reason else reason
+    match c.verdict:
+        case Outcome.INTERESTING:
+            c.cause, c.verdict_reason = Cause.NOTE, noted
         case _:
-            pass
-    write(c, to, cause=cause, reason=reason, by=by)
+            write(c, Outcome.INTERESTING, cause=Cause.NOTE, reason=noted, by=by)
+    emit(s, CandidateNoted(reason=reason), TargetRef(TargetKind.CANDIDATE, c.id), by)
+
+
+def noted_by(s: Session, c: Candidate) -> str | None:
+    """Who noted ``c`` last: the actor of its last ``candidate.noted``. Before that event, a note signed the verdict."""
+    found = latest(s, CandidateNoted, Event.target == TargetRef(TargetKind.CANDIDATE, c.id))
+    return c.verdict_by if found is None else found[0].actor
 
 
 def write(c: Candidate, to: Outcome, *, cause: Cause | None, reason: str, by: Actor) -> None:

@@ -14,7 +14,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import FINISHED_RUNS
 from piloop.plugins.campaign_type.kit.runs.stop import attempt
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
 from piloop.plugins.campaign_type.kit.verdicts.judge import baseline, lineages, track_of, trunk_keeps
-from piloop.plugins.campaign_type.kit.verdicts.verdict import label
+from piloop.plugins.campaign_type.kit.verdicts.verdict import label, noted_by
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Branch, Trunk
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.reports.overview import num
@@ -109,7 +109,7 @@ def _branches(s: Session, campaign: Campaign, cfg: CampaignConfig) -> list[str]:
     if noted:
         lines.append('- Notes (regressed, kept in view as leads; pin one with base_candidate_id):')
         lines += [
-            f'  - candidate#{c.id} {num(score(c, evaluator_id, track_of(cfg, c).primary))} by {c.verdict_by}:'
+            f'  - candidate#{c.id} {num(score(c, evaluator_id, track_of(cfg, c).primary))} by {noted_by(s, c)}:'
             f' {cell(c.verdict_reason or "", 100)}'
             for c in noted
         ]

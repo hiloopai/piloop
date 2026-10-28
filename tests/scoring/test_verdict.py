@@ -14,6 +14,9 @@ from sqlalchemy import Enum
 
 from piloop.actor import System
 from piloop.config import CampaignConfig
+from piloop.db.events import in_order
+from piloop.db.models import Campaign
+from piloop.db.session import Database
 from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole, Track, TrackConfig
@@ -23,11 +26,13 @@ from piloop.plugins.campaign_type.kit.verdicts import judge
 from piloop.plugins.campaign_type.kit.verdicts.judge import criterion
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     PENDING,
+    CandidateNoted,
     Refusal,
     daemon_owned,
     judgeable,
     label,
-    override,
+    note,
+    noted_by,
     refusal,
     write,
 )
@@ -528,15 +533,45 @@ def test_only_a_judgement_is_overridden_and_a_note_needs_a_regressed_result() ->
     assert refusal(of(Origin.BASELINE, Outcome.KEEP), Outcome.DISCARD, None) is None
 
 
-def test_a_note_keeps_the_reason_it_notes_and_a_judged_skip_is_a_runs() -> None:
-    lead = Candidate(origin=Origin.RUN, verdict=Outcome.DISCARD, verdict_reason='against candidate#1: 2 vs 3')
-    override(lead, Outcome.INTERESTING, cause=Cause.NOTE, reason='a lead', by=System.HUMAN)
-    assert (lead.verdict, lead.cause, lead.verdict_by, lead.verdict_reason) == (
-        Outcome.INTERESTING,
-        Cause.NOTE,
-        'human',
-        'a lead; against candidate#1: 2 vs 3',
-    )
+def test_a_note_never_re_signs_a_verdict_and_is_signed_in_its_own_event(db: Database, campaign: Campaign) -> None:
+    """``verdict_by`` changes only with the verdict. A note on an ``interesting`` candidate keeps who judged it, and the
+    daemon never judges a noted lead again. A note that turns a discard into a lead changes the verdict, so it signs it.
+    """
+    with db.session() as s:
+        lead, worse = (
+            Candidate(
+                campaign_id=campaign.id,
+                tree_sha=tree,
+                revision=tree,
+                origin=Origin.RUN,
+                verdict=verdict,
+                verdict_by='daemon',
+                verdict_reason='against candidate#1: 2 vs 3',
+            )
+            for tree, verdict in (('lead', Outcome.INTERESTING), ('worse', Outcome.DISCARD))
+        )
+        s.add_all([lead, worse])
+        s.flush()
+        assert judgeable(lead)
+        note(s, lead, 'a lead', by=System.ORCHESTRATOR)
+        note(s, worse, 'worth a look', by=System.HUMAN)
+        s.commit()
+        assert (lead.verdict, lead.cause, lead.verdict_by, lead.verdict_reason) == (
+            Outcome.INTERESTING,
+            Cause.NOTE,
+            'daemon',
+            'a lead; against candidate#1: 2 vs 3',
+        )
+        assert not judgeable(lead), 'the daemon never judges a noted lead again'
+        assert noted_by(s, lead) == 'orchestrator'
+        assert (worse.verdict, worse.cause, worse.verdict_by) == (Outcome.INTERESTING, Cause.NOTE, 'human')
+        assert [(e.actor, e.target_id, n.reason) for e, n in in_order(s, CandidateNoted)] == [
+            ('orchestrator', lead.id, 'a lead'),
+            ('human', worse.id, 'worth a look'),
+        ]
+
+
+def test_a_judged_skip_is_a_runs() -> None:
     skipped = Candidate(origin=Origin.SKIPPED)
     assert label(skipped) == 'skipped'
     write(skipped, Outcome.KEEP, cause=None, reason='measured at last', by=System.DAEMON)

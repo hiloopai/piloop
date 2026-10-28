@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
 from typing import Any, Literal
@@ -2196,6 +2197,41 @@ def test_a_config_change_during_a_run_scores_it_under_the_new_evaluator(
         [added] = candidates(db, run_id)
         assert [m.evaluator_id for m in s.get_one(Candidate, added.id).measurements] == [new_evaluator]
         assert added.metrics['score'] == 4.0, 'measured under the doubled evaluator'
+
+
+def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_new_evaluator(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``piloop init`` between two commits' evaluations: the second is measured and judged under the new evaluator."""
+    write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
+    reload_campaign(db, campaign)
+    run_id = make_run(db, campaign)
+    ex = controller(db, runtime, tmp_path)
+    doubled = ['sh', '-c', 'echo METRIC score=$(( 2 * $(wc -l < solve.txt) )); echo METRIC size=1']
+
+    def then_init[**P](fn: Callable[P, bool]) -> Callable[P, bool]:
+        def measured(*args: P.args, **kwargs: P.kwargs) -> bool:
+            done = fn(*args, **kwargs)
+            write_toml(Path(campaign.path), HARNESS_TWO_COMMITS, evaluate=doubled)
+            with db.session() as s:
+                sync(s, s.get_one(Campaign, campaign.id))
+                s.commit()
+            return done
+
+        return measured
+
+    monkeypatch.setattr(ex, '_measure', then_init(ex._measure))
+    execute(ex, db, run_id)
+    first, second = candidates(db, run_id)
+    with db.session() as s:
+        new_evaluator = s.get_one(Campaign, campaign.id).evaluator_id
+        old, new = (s.get_one(Candidate, c.id).measurements for c in (first, second))
+        assert [(m.evaluator_id != new_evaluator, m.metrics['score']) for m in old] == [(True, 2.0)]
+        assert [(m.evaluator_id, m.metrics['score']) for m in new] == [(new_evaluator, 6.0)], (
+            'measured under the evaluator of the config it is scored in'
+        )
+        judged = s.get_one(Candidate, second.id)
+        assert (judged.verdict, judged.verdict_by) == (Outcome.KEEP, System.DAEMON)
 
 
 SPLIT_UNITS = [

@@ -14,3 +14,5 @@
   history of an idea.
 - The daemon's own `candidate.judged` event is next to `candidate.verdict`. It has the score that the verdict was made
   from.
+- A note on a candidate is a `candidate.noted` event, signed by its author, with its reason. `verdict_by` changes only
+  with the verdict.
