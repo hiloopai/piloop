@@ -21,6 +21,7 @@ from piloop.plugins.host import ContractBroken
 from piloop.plugins.mcp_server.contract import McpServer
 from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.mcp_server.stdio import StdioServer
+from piloop.usage import ModelId
 
 ARGV = [
     '-p',
@@ -51,6 +52,8 @@ NO_EXTENSIONS = ('--no-extensions', '-ne')
 ISOLATION = ['--no-skills', '--no-context-files']
 """The user's skills and context files (``AGENTS.md``). Extensions stay off whatever ``user_config`` says: piloop pins
 the one that its agents need (``ADAPTER``), and with the user's own on, pi's built-in MCP loads the user's servers."""
+THINKING = frozenset({'off', 'minimal', 'low', 'medium', 'high', 'xhigh'})
+"""The thinking levels that pi takes after a model, as ``sonnet:high``."""
 
 
 def server(s: McpServer) -> dict[str, object]:
@@ -142,6 +145,16 @@ class Pi(Harness):
 
     def isolation(self) -> list[str]:
         return ISOLATION
+
+    def model_id(self, model: str) -> ModelId:
+        """The vendor of pi's ``<provider>/<id>`` is its provider, and a ``:<thinking>`` level is no part of it."""
+        name, _, level = model.rpartition(':')
+        bare = name if level in THINKING else model
+        match bare.split('/', 1):
+            case [vendor, named]:
+                return ModelId(vendor, named)
+            case _:
+                return ModelId(None, bare)
 
     def mcp(self) -> PiMcp:
         return PiMcp()

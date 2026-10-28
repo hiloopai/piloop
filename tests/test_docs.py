@@ -103,12 +103,12 @@ def merged(base: dict[str, object], over: dict[str, object]) -> dict[str, object
 GLOBAL_TABLES = ('storage', 'plugins')
 """The tables of ``$PILOOP_HOME/config.toml``, the global settings file. Every other TOML block is ``piloop.toml``.
 
-``[plugins]`` is in both files: a block whose ``[plugins.<name>]`` are all capabilities of the home is ``config.toml``,
-unless one sets a ``use`` that ``piloop.toml`` holds."""
+``[plugins]`` is in both files: a block with a ``[plugins.<name>]`` of a capability of the home is ``config.toml``,
+unless it sets a ``use`` that ``piloop.toml`` holds. Its other tables are the defaults of every campaign."""
 
 
 def is_global(data: dict[str, object]) -> bool:
-    """Whether a TOML block holds tables of ``config.toml`` only."""
+    """Whether a TOML block is a part of ``config.toml``."""
     plugins = data.get('plugins', {})
     of_home = {c.name for c in host.declared() if c.table is not None and c.table.scope is host.Scope.HOME}
     used_at_home = {
@@ -118,10 +118,12 @@ def is_global(data: dict[str, object]) -> bool:
     }
     if not (bool(data) and data.keys() <= set(GLOBAL_TABLES) and isinstance(plugins, dict)):
         return False
-    return all(
-        name in of_home and (name in used_at_home or not (isinstance(t, dict) and host.USE in t))
+    home = [
+        name
         for name, t in plugins.items()
-    )
+        if name in of_home and (name in used_at_home or not (isinstance(t, dict) and host.USE in t))
+    ]
+    return 'storage' in data or bool(home)
 
 
 PYPROJECT_MARKS = ('[project', '[build-system]', 'entry-points')
@@ -142,7 +144,10 @@ def check_toml(block: Block, _db: Path) -> None:
         assert not misplaced, f'{block.at()}: {", ".join(".".join(p) for p in misplaced)} is not project.entry-points'
         return
     if is_global(data):
-        HOME_PLUGINS.validate_python(data.get('plugins', {}))  # as the daemon checks them before it starts
+        plugins = data.get('plugins', {})
+        HOME_PLUGINS.validate_python(plugins)  # as the daemon checks them before it starts
+        if defaults := host.campaign_defaults(plugins):
+            CampaignConfig.model_validate(merged(BASE_CONFIG, {'plugins': defaults}))
         if (storage := data.get('storage')) is not None:
             StorageSettings.model_validate(storage)
         return

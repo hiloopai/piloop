@@ -34,6 +34,8 @@ from piloop.plugins.campaign_type.optimization.fact_source.optimization import O
 from piloop.plugins.executor.contract import AgentJob
 from piloop.plugins.fact_source.campaign import CampaignFacts
 from piloop.plugins.fact_source.command import Command
+from piloop.plugins.fact_source.contract import FACT_SOURCES
+from piloop.plugins.fact_source.spend import SpendFacts
 from piloop.plugins.harness.codex import Codex
 from piloop.plugins.harness.contract import each_provider
 from piloop.plugins.harness.pi import Pi
@@ -844,9 +846,13 @@ def test_stop_the_spend_limit_and_confidence_are_keys_of_the_rules(campaign_path
         load_campaign_config(campaign_path)
 
 
-def test_spend_is_a_command_source_that_reads_spend_and_closing_review_is_while_held_of_the_stop_rule(
+def test_spend_is_a_command_source_whose_fact_is_all_of_the_spend_and_closing_review_is_while_held(
     campaign_path: Path, tmp_path: Path
 ) -> None:
+    """``[spend]`` is the ``command`` source ``billing``, and the ``spend`` source sums only its ``billing_usd``.
+
+    So ``hold_at = { spend = … }`` holds on what it held on. Both sources come after the campaign's own.
+    """
     (tmp_path / 'bill').write_text('12.5\n')
     toml = deprecated_config(
         campaign_path,
@@ -856,18 +862,54 @@ def test_spend_is_a_command_source_that_reads_spend_and_closing_review_is_while_
         PiloopDeprecationWarning, match=r'\[spend\] is deprecated; write a \[plugins.fact_source.<name>\] source'
     ):
         cfg = load_campaign_config(campaign_path)
-    [campaign, optimization, spend] = cfg.fact_sources()
+    [campaign, optimization, billing, spend] = cfg.fact_sources()
     command = [*deprecated.SPEND_COMMAND, 'cat', str(tmp_path / 'bill')]
-    assert (campaign, optimization, spend) == (
+    assert (campaign, optimization, billing, spend) == (
         CampaignFacts(),
         OptimizationFacts(),
-        Command(command=command, metrics=['spend'], notices={'spend': [50]}, interval=60),
+        Command(command=command, metrics=['billing_usd'], notices={'billing_usd': [50]}, interval=60),
+        SpendFacts(facts=['billing_usd']),
     ), "after piloop's own sources"
-    assert isinstance(spend, Command) and spend.read(tmp_path) == {'spend': 12.5}, (
+    assert isinstance(billing, Command) and billing.read(tmp_path) == {'billing_usd': 12.5}, (
         'the old command, which prints one number, still reads'
     )
     assert STOP_RULES.selected(cfg.plugins).while_held is WhileHeld.WAIT
     assert 'closing_review = "wait"' in toml.read_text(), 'the file is not rewritten'
+
+
+@pytest.mark.parametrize(
+    ('sources', 'used'),
+    [
+        (
+            '[plugins.fact_source]\nuse = ["optimization", "campaign"]\n',
+            ['optimization', 'campaign', 'billing', 'spend'],
+        ),
+        (
+            '[[facts]]\nprovider = "optimization"\n\n[[facts]]\nprovider = "campaign"\n',
+            ['optimization', 'campaign', 'billing', 'spend'],
+        ),
+    ],
+)
+def test_spend_joins_the_sources_that_the_file_lists(campaign_path: Path, sources: str, used: list[str]) -> None:
+    """A ``use`` of the file, or a 0.3.1 ``[[facts]]``, keeps its sources, and the two come after them."""
+    deprecated_config(campaign_path, f'[spend]\ncommand = ["true"]\n\n{sources}')
+    with pytest.warns(PiloopDeprecationWarning):
+        cfg = load_campaign_config(campaign_path)
+    assert list(FACT_SOURCES.used(cfg.plugins)) == used
+
+
+@pytest.mark.parametrize('plugins', ['plugins = 3\n', '[plugins.fact_source]\nuse = "campaign"\n'])
+def test_spend_leaves_a_plugins_table_or_a_use_that_is_no_list_to_the_validation(
+    campaign_path: Path, plugins: str
+) -> None:
+    toml = deprecated_config(campaign_path, '[spend]\ncommand = ["true"]\n')
+    toml.write_text(
+        plugins + without_plugin_tables(toml.read_text())
+        if plugins.startswith('plugins')
+        else toml.read_text() + plugins
+    )
+    with pytest.warns(PiloopDeprecationWarning), pytest.raises(ConfigError, match='plugins'):
+        load_campaign_config(campaign_path)
 
 
 def test_max_spend_is_hold_at_of_the_spend(campaign_path: Path) -> None:

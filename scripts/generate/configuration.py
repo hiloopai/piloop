@@ -28,6 +28,28 @@ description: Every key of piloop.toml, with its type and its default.
 `piloop.toml` is at the root of the campaign repo. `piloop init` reads it again each time you run it, and stores a
 copy. The daemon uses that copy, so an edit takes effect only when you run `piloop init`.
 
+The home's `config.toml` can give every campaign of the home its `[plugins]` tables. A campaign's `piloop.toml`
+overrides them key by key:
+
+```toml
+# config.toml
+[plugins.fact_source]
+use = ["campaign", "optimization", "leases", "models", "spend"]
+
+[plugins.stop_rule]
+max_hours = 24
+```
+
+```toml
+# piloop.toml
+[plugins.stop_rule]
+max_hours = 48   # this campaign only; the home's use still applies
+```
+
+A key takes the first value that it finds, in this order: `PILOOP_CAMPAIGN_<KEY>`, `piloop.toml`, the home's
+`config.toml`, then piloop's default. A table merges key by key, and any other value, such as a list, replaces. A table
+of `config.toml` that a campaign does not use is no error.
+
 To override a key when `piloop init` reads the file, set `PILOOP_CAMPAIGN_<KEY>`. Join nested keys with `__`, for
 example `PILOOP_CAMPAIGN_PLUGINS__RUNTIME__USE=subprocess` or `PILOOP_CAMPAIGN_PLUGINS__ROLE__IMPLEMENTER__MAX_CONCURRENT=2`. The stored copy keeps the
 override until the next `piloop init`. The variable has no effect on `piloop serve`.

@@ -36,6 +36,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.contribution import CONTRIBUTORS, Contribution, DaemonHost, collect, contributions_of, machinery
 from piloop.plugins.executor.contract import JOB_KINDS, AgentFinished, AgentJob, JobKind
 from piloop.plugins.executor.workers import Workers
+from piloop.plugins.fact_source.spend import api as spend_api
 from piloop.plugins.host import PluginError
 from piloop.plugins.lineage import api as lineage_api
 from piloop.plugins.memory.contract import MEMORY, MemoryProvider, Synced
@@ -181,8 +182,9 @@ def test_each_installed_provider_that_a_campaign_may_choose_serves_and_documents
     installed(monkeypatch, [EntryPoint('notes', f'{__name__}:Notes', MEMORY.group)])
     controller = RunController(db, Tracer(None), tmp_path, executor=Workers())
     routers = Scheduler(db, controller, Tracer(None), tmp_path).contributions.routers
-    assert routers[1:] == (lineage_api.router, local_api.router, NOTES), (
-        "after the executor's, the lineage's, which its providers share, and the memory providers', in registry order"
+    assert routers[1:] == (spend_api.router, lineage_api.router, local_api.router, NOTES), (
+        "after the executor's, the spend source's, the lineage's, which its providers share, and the memory providers',"
+        ' in registry order'
     )
     tokens = Tokens(db)
     network = Https().open(NetworkHost(tokens, HomeSecrets(db, LocalSecrets())))

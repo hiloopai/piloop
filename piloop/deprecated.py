@@ -532,48 +532,6 @@ def spend_limit(toml: Path, raw: dict[str, object], removed_in: Version) -> None
     )
 
 
-SPEND_COMMAND = (
-    'sh',
-    '-c',
-    'out=$("$@") && printf \'{"metrics": {"spend": %s}}\\n\' "$out" >> "$PILOOP_RESULT_FILE"',
-    'sh',
-)
-"""What runs a ``[spend] command``, which prints one number, so that it reports ``{"metrics": {"spend": <number>}}``."""
-
-
-@bridge('0.4.0', '[spend] is a command source of [[facts]]: delete the spend_table bridge and SPEND_COMMAND')
-def spend_table(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``[spend]`` is a ``command`` source of ``[[facts]]`` that reads ``spend``, after ``campaign`` and ``optimization``.
-
-    Its command prints one number, so it runs in ``SPEND_COMMAND``. ``notices`` are those of ``spend``, and
-    ``closing_review`` is ``while_held`` of ``[plugins.stop_rule]``. A ``[[facts]]`` that the file lists keeps its
-    sources, and the spend's comes after them.
-    """
-    spend = raw.get('spend')
-    if not isinstance(spend, dict):
-        return
-    del raw['spend']
-    review = spend.pop('closing_review', None)
-    source: dict[str, object] = {'provider': 'command', 'metrics': ['spend']}
-    command = spend.get('command')
-    source['command'] = [*SPEND_COMMAND, *command] if isinstance(command, list) else command
-    if 'interval' in spend:
-        source['interval'] = spend['interval']
-    if 'notices' in spend:
-        source['notices'] = {'spend': spend['notices']}
-    listed = raw.get('facts', [{'provider': 'campaign'}, {'provider': 'optimization'}])
-    raw['facts'] = [*listed, source] if isinstance(listed, list) else listed
-    if review is not None:
-        _into(raw, 'stop_rule', {'while_held': review})
-    warn(
-        toml,
-        'spend',
-        '[spend] is deprecated; write a [plugins.fact_source.<name>] source with provider = "command" whose command'
-        ' reports spend, and name it in [plugins.fact_source] use',
-        removed_in=removed_in,
-    )
-
-
 @bridge('0.4.0', 'confidence is [plugins.verdict_rule] confidence: delete the confidence bridge')
 def confidence(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """The top-level ``confidence`` is ``[plugins.verdict_rule] confidence``. A value that the table sets too wins."""
@@ -796,6 +754,68 @@ def plugin_lists(toml: Path, raw: dict[str, object], removed_in: Version) -> Non
     One with parameters gets a table, named after its role (``research_low_water``) or ``status`` first.
     """
     entries(toml, raw, PLUGIN_LISTS, removed_in)
+
+
+BILLING = 'billing'
+"""The ``command`` source that a ``[spend] command`` is."""
+BILLED = 'billing_usd'
+"""The fact that ``BILLING`` reads, which is the ``spend`` that ``[spend]`` was."""
+SPEND_COMMAND = (
+    'sh',
+    '-c',
+    'out=$("$@") && printf \'{"metrics": {"billing_usd": %s}}\\n\' "$out" >> "$PILOOP_RESULT_FILE"',
+    'sh',
+)
+"""What runs a ``[spend] command``, which prints one number, so that it reports ``{"metrics": {"billing_usd": …}}``."""
+DEFAULT_SOURCES = ['campaign', 'optimization']
+"""The fact sources of a campaign that does not set ``[plugins.fact_source] use``."""
+
+
+@bridge(
+    '0.5.0',
+    '[spend] is a command source and the facts of the spend source: delete spend_table, SPEND_COMMAND, BILLING,'
+    ' BILLED and DEFAULT_SOURCES',
+)
+def spend_table(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """``[spend]`` is the ``command`` source ``billing``, which reads ``billing_usd``, and ``spend`` sums only that.
+
+    So ``spend`` and ``hold_at = { spend = … }`` mean what they meant. The command prints one number, so it runs in
+    ``SPEND_COMMAND``. ``notices`` are those of ``billing_usd``, and ``closing_review`` is ``while_held`` of
+    ``[plugins.stop_rule]``. Both sources join ``[plugins.fact_source] use``, after its own sources. A table of either
+    name that the file has wins. It runs after ``plugin_lists``, so a ``[[facts]]`` is a ``use`` already.
+    """
+    spend = raw.get('spend')
+    if not isinstance(spend, dict):
+        return
+    del raw['spend']
+    review = spend.pop('closing_review', None)
+    command = spend.get('command')
+    source: dict[str, object] = {
+        'provider': 'command',
+        'command': [*SPEND_COMMAND, *command] if isinstance(command, list) else command,
+        'metrics': [BILLED],
+    }
+    if 'interval' in spend:
+        source['interval'] = spend['interval']
+    if 'notices' in spend:
+        source['notices'] = {BILLED: spend['notices']}
+    if (sources := _rule(raw, 'fact_source')) is not None:
+        match sources.get('use', DEFAULT_SOURCES):
+            case list() as used:
+                sources['use'] = [*used, *(name for name in (BILLING, 'spend') if name not in used)]
+            case _:
+                pass  # not a list: the validation refuses it
+        sources.setdefault(BILLING, source)
+        sources.setdefault('spend', {'facts': [BILLED]})
+    if review is not None:
+        _into(raw, 'stop_rule', {'while_held': review})
+    warn(
+        toml,
+        'spend',
+        '[spend] is deprecated; write a [plugins.fact_source.<name>] source with provider = "command" that reports'
+        ' <fact>, and name the fact in [plugins.fact_source.spend] facts',
+        removed_in=removed_in,
+    )
 
 
 @bridge(

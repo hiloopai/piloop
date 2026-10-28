@@ -6,6 +6,8 @@ harnesses compare. ``input`` is the uncached input, ``cache_read`` and ``cache_w
 written to the prompt cache. ``total`` is what the harness itself counts as the session's tokens.
 """
 
+from dataclasses import dataclass
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -31,6 +33,16 @@ class Usage(BaseModel):
         if before is None:
             return self
         return Usage.model_validate({k: getattr(self, k) - getattr(before, k) for k in Usage.model_fields})
+
+
+@dataclass(frozen=True)
+class ModelId:
+    """A model as its vendor's API names it, which a price list looks up (``Harness.model_id``)."""
+
+    vendor: str | None
+    """The API that serves it, such as ``anthropic`` or ``openai``. None: its name alone says it."""
+    name: str
+    """Its id at the vendor, such as ``claude-sonnet-4-5``."""
 
 
 class UsageError(RuntimeError):

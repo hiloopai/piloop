@@ -29,7 +29,7 @@ from pydantic_settings import (
 
 from piloop import deprecated
 from piloop.actor import Actor, System
-from piloop.plugins.host import Plugins, PluginTables, Scope, refs, unknown, unreached
+from piloop.plugins.host import Plugins, PluginTables, Scope, campaign_defaults, refs, unknown, unreached
 
 DEFAULT_HOME = Path.home() / '.piloop'
 REAL_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
@@ -307,6 +307,11 @@ class Settings(BaseSettings):
         if problems := [*unknown(named, found, Scope.HOME), *map(str, unreached(found, named))]:
             raise ValueError(f'{self.home / CONFIG_FILE}: {"; ".join(problems)}')
         return found
+
+    @property
+    def campaign_defaults(self) -> dict[str, object]:
+        """The tables of ``plugins`` that are defaults of every campaign's: unvalidated (``host.campaign_defaults``)."""
+        return campaign_defaults(self.plugins)
 
     @property
     def database_url(self) -> str:

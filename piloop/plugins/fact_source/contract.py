@@ -52,6 +52,20 @@ class FactSource(Parameters, ABC):
         The campaign's config is ``campaign.config``.
         """
 
+    def reads(self) -> tuple[Fact[FactValue], ...]:
+        """The facts of the campaign's other sources that ``gather`` reads: a source that derives its values from theirs.
+
+        The campaign's config checks that another source of ``use`` supplies each. None, by default.
+        """
+        return ()
+
+    def as_of(self, s: Session, campaign: Campaign, fact: Fact[FactValue], now: datetime) -> datetime | None:
+        """When the value of ``fact`` that ``gather`` returns as of ``now`` was read. None: it was never read.
+
+        ``now``, by default: the source computes its values as it gathers them.
+        """
+        return now
+
     def due(self, s: Session, campaign: Campaign) -> datetime | None:
         """When the daemon calls ``read`` next: a time at or before now reads now.
 

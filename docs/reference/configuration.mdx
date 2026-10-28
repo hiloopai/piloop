@@ -8,6 +8,28 @@ description: Every key of piloop.toml, with its type and its default.
 `piloop.toml` is at the root of the campaign repo. `piloop init` reads it again each time you run it, and stores a
 copy. The daemon uses that copy, so an edit takes effect only when you run `piloop init`.
 
+The home's `config.toml` can give every campaign of the home its `[plugins]` tables. A campaign's `piloop.toml`
+overrides them key by key:
+
+```toml
+# config.toml
+[plugins.fact_source]
+use = ["campaign", "optimization", "leases", "models", "spend"]
+
+[plugins.stop_rule]
+max_hours = 24
+```
+
+```toml
+# piloop.toml
+[plugins.stop_rule]
+max_hours = 48   # this campaign only; the home's use still applies
+```
+
+A key takes the first value that it finds, in this order: `PILOOP_CAMPAIGN_<KEY>`, `piloop.toml`, the home's
+`config.toml`, then piloop's default. A table merges key by key, and any other value, such as a list, replaces. A table
+of `config.toml` that a campaign does not use is no error.
+
 To override a key when `piloop init` reads the file, set `PILOOP_CAMPAIGN_<KEY>`. Join nested keys with `__`, for
 example `PILOOP_CAMPAIGN_PLUGINS__RUNTIME__USE=subprocess` or `PILOOP_CAMPAIGN_PLUGINS__ROLE__IMPLEMENTER__MAX_CONCURRENT=2`. The stored copy keeps the
 override until the next `piloop init`. The variable has no effect on `piloop serve`.
@@ -28,7 +50,7 @@ section.
 | `link` | list\[string\] | `[]` | Repo-relative paths, ignored by git, that piloop puts into every worktree read-only, for example data or virtual environments. Each job gets them as they are when it is made. |
 | `context` | list\[string\] | `[]` | Repo-relative files or globs (for example `docs/error-analysis-*.md`) that hold the campaign's analysis: error analyses, comparisons with a reference, evaluation reports. The research pack lists each one with its outline, newest first, so that every sweep that reads the pack reads them before it proposes work. |
 | `agents` | [AgentTimings](#agenttimings) | `{}` | `[agents]`: how long the campaign's agents get to wrap up and to leave after their finding. |
-| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "optimization": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "scout": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "comments": {}, "concepts": {}, "cost": {}, "database": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "judging": {}, "lessons": {}, "links": {}, "orchestration": {}, "pack": {}, "past_campaigns": {}, "priorities": {}, "provenance": {}, "queries": {}, "queue": {}, "reported": {}, "runs": {}, "same_as_parent": {}, "search": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "candidates", "same_as_parent", "reported", "inbox", "events"]}, "trigger": {"cron": {}, "dead_at_startup": {}, "leaking_funnel": {}, "low_water": {}, "news": {}, "run_failed": {}, "seed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
+| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "leases": {}, "models": {}, "optimization": {}, "spend": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "scout": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "comments": {}, "concepts": {}, "cost": {}, "database": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "judging": {}, "lessons": {}, "links": {}, "orchestration": {}, "pack": {}, "past_campaigns": {}, "priorities": {}, "provenance": {}, "queries": {}, "queue": {}, "reported": {}, "runs": {}, "same_as_parent": {}, "search": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "candidates", "same_as_parent", "reported", "inbox", "events"]}, "trigger": {"cron": {}, "dead_at_startup": {}, "leaking_funnel": {}, "low_water": {}, "news": {}, "run_failed": {}, "seed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
 
 ## Tolerance
 
@@ -132,9 +154,34 @@ With `provider = "command"`:
 | `interval` | number | `300` | The number of seconds between two readings. |
 | `notices` | dict\[string, list\[number\]\] | `{}` | Values by the name that it reads. When a value passes one, the daemon posts one note to the inbox, at priority 1. |
 | `command` | list\[string\] | required | The command (argv). Example: `["uv", "run", "scripts/spend.py"]`. |
-| `metrics` | list\[string\] | required | The names that it reports, each a fact of the campaign. Example: `["spend"]`. |
+| `metrics` | list\[string\] | required | The names that it reports, each a fact of the campaign. Example: `["billing_usd"]`. |
+
+With `provider = "leases"`, the table has no other key.
+
+With `provider = "models"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `prices` | dict\[string, [Price](#price)\] | `{}` | The price of a model, by its name in `agent_sessions.model`, over the campaign's price list. Example: `{ "claude-sonnet-4-5" = { input = 3.0, output = 15.0, cache_read = 0.3, cache_write = 3.75 } }`. |
+
+### Price
+
+What a million tokens of each kind cost on one model, in USD.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `input` | number | required | The input that the prompt cache did not serve. |
+| `output` | number | required | The output. |
+| `cache_read` | number | required | The input that the prompt cache served. |
+| `cache_write` | number | required | The input written to the prompt cache. |
 
 With `provider = "optimization"`, the table has no other key.
+
+With `provider = "spend"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `facts` | list\[string\] | `["compute_usd", "models_usd"]` | The facts in USD that the spend sums, each from another source of `[plugins.fact_source] use`. The default is those of `leases` and `models`. |
 
 ### `[plugins.harness] use`
 
@@ -184,6 +231,12 @@ With `provider = "local"`:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `documents` | list\[string\] | `[]` | Repo-relative globs of text documents, for example `["docs/evidence/**/*.md"]`: campaign reports, orchestrator logs, design notes. `piloop init` and the stop of the campaign copy them into the `documents` table, where every agent of every campaign can search them. Never name a document that is derived from validation or test data. |
+
+### `[plugins.price_list]`
+
+The price list. Without a table: `genai_prices`.
+
+With `provider = "genai_prices"`, the table has no other key.
 
 ### `[plugins.role.<name>]`
 
@@ -633,7 +686,7 @@ With `provider = "workers"`:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `pools` | dict\[string, [Pool](#pool)\] | `{"serve": {"agents": null, "evaluations": 2, "max_load": null, "min_memory_gb": null, "provisioner": null, "runners": []}}` | `[plugins.executor.pools.<name>]`: the slots and thresholds of each worker of a pool. `serve` is the worker inside `piloop serve`, there with its defaults unless the table names it. Its `agents = 0` and `evaluations = 0` run nothing on the server. The jobs over the slots wait: agents as requested, evaluations in the evaluation queue (`piloop eval queue`). |
+| `pools` | dict\[string, [Pool](#pool)\] | `{"serve": {"agents": null, "evaluations": 2, "max_load": null, "min_memory_gb": null, "provisioner": null, "runners": [], "usd_per_hour": null}}` | `[plugins.executor.pools.<name>]`: the slots and thresholds of each worker of a pool. `serve` is the worker inside `piloop serve`, there with its defaults unless the table names it. Its `agents = 0` and `evaluations = 0` run nothing on the server. The jobs over the slots wait: agents as requested, evaluations in the evaluation queue (`piloop eval queue`). |
 | `renew_seconds` | number | `10` | How often the worker renews its leases with a heartbeat. Kubernetes: the kubelet renews its node Lease every 10 s. |
 | `grace_seconds` | number | `50` | The silence after which the worker is unreachable (`lease.unreachable`): its slots count zero until it is heard again. Kubernetes: `--node-monitor-grace-period`, 50 s since 1.32 (40 s before). |
 | `toleration_seconds` | number | `300` | The silence after which its leases expire and their jobs are queued again with a larger fencing token. The worker stops its own jobs two heartbeats before. Kubernetes: the `tolerationSeconds` of 300 that the `DefaultTolerationSeconds` admission plugin gives a pod for the unreachable taint. |
@@ -651,6 +704,7 @@ The capacity of each worker in a pool. Kubernetes: a node pool's allocatable, an
 | `max_load` | number \| null | `null` | The 1-minute load per CPU above which a worker takes no job, and its slots count zero. |
 | `runners` | list\[string\] | `[]` | The evaluator runners that its workers have, before any of them runs: the evaluations that a provisioned pool starts a worker for. |
 | `provisioner` | [Provisioner](#provisioner) \| null | `null` | Start and stop its workers on demand. None: they start by hand (`piloop worker`). |
+| `usd_per_hour` | number \| null | `null` | What one worker of the pool costs per hour, in USD: the `leases` fact source charges each campaign its jobs' share. None: unknown, so the compute of a campaign that ran a job here is unknown too. |
 
 #### Provisioner
 
@@ -794,7 +848,6 @@ These keys still work. Each one shows a `PiloopDeprecationWarning` that names th
 - `kind` in an entry of `[plugins.role.<name>] triggers` is `provider`: `{ provider = "cron" }`.
 - `[stop] <key>` is `[plugins.stop_rule] <key>`, a limit of the stop rule. A rule without that key refuses it. A key that `[plugins.stop_rule]` sets too keeps its value there.
 - `[spend] limit` is `[plugins.stop_rule] hold_at = { spend = <value> }`. A value that it sets too wins.
-- `[spend]` is a `command` source of `[[facts]]` that reads `spend`, after `campaign` and `optimization`. Its command prints one number, so it runs in `SPEND_COMMAND`. `notices` are those of `spend`, and `closing_review` is `while_held` of `[plugins.stop_rule]`. A `[[facts]]` that the file lists keeps its sources, and the spend's comes after them.
 - The top-level `confidence` is `[plugins.verdict_rule] confidence`. A value that the table sets too wins.
 - `PILOOP_CAMPAIGN_STOP__<KEY>` and `PILOOP_CAMPAIGN_CONFIDENCE` set keys of the rules' tables. They are `PILOOP_CAMPAIGN_PLUGINS__STOP_RULE__<KEY>` and `PILOOP_CAMPAIGN_PLUGINS__VERDICT_RULE__CONFIDENCE`. The old variable still wins over the file.
 - The `anomaly` trigger is two triggers: `run_failed` and `dead_at_startup`, in its place in the list.
@@ -803,6 +856,7 @@ These keys still work. Each one shows a `PiloopDeprecationWarning` that names th
 - `[memory] documents` is `documents` in `[plugins.memory]`, of the `local` provider. A value that `[plugins.memory]` sets too wins.
 - `mcp` and `[plugins.harness.<name>.usage]` are the harness's provider: it renders the servers, reads usage. A table named after a built-in harness drops them: the provider's own come from `home`. A table with a new name gets `provider`: its usage's `tally`, else its `mcp`. A table that sets neither runs its argv and does nothing else, as before.
 - A list of `{ provider = "…", … }` entries names instances: `[plugins.<capability>.<name>]` tables. `[plugins.role.<name>] triggers` and `sections` name `[plugins.trigger.<name>]` and `[plugins.section.<name>]`. `[status] sections` is `[plugins.section] use`, and `[[facts]]` is `[plugins.fact_source] use` with a table for each source. An entry without parameters is the name of its provider. One with parameters gets a table, named after its role (`research_low_water`) or `status` first.
+- `[spend]` is the `command` source `billing`, which reads `billing_usd`, and `spend` sums only that. So `spend` and `hold_at = { spend = … }` mean what they meant. The command prints one number, so it runs in `SPEND_COMMAND`. `notices` are those of `billing_usd`, and `closing_review` is `while_held` of `[plugins.stop_rule]`. Both sources join `[plugins.fact_source] use`, after its own sources. A table of either name that the file has wins. It runs after `plugin_lists`, so a `[[facts]]` is a `use` already.
 - In `config.toml`, `[storage.backend]` is the `remote` of `[plugins.cas] provider = "cached"`. Its `kind` is the remote's `provider`. `evict_after_days` and `local_max_gb` of `[storage]` move with it. A `[plugins.cas]` table of the file wins: the old keys then go, with the warning, and change nothing.
 - In `config.toml`, `max_evaluations` is `evaluations` in `[plugins.executor.pools.serve]`. A value that `[plugins.executor.pools.serve]` sets too wins.
 - In `config.toml`, `[runtimes.<name>]` is `[plugins.runtime.<name>]`. `PILOOP_RUNTIMES__<NAME>__<KEY>` is `PILOOP_PLUGINS__RUNTIME__<NAME>__<KEY>`.

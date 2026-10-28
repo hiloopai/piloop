@@ -198,14 +198,16 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # while_held = "run"                      # the closing review of a stop while held: run | skip | wait (until the hold ends)
 
 # [plugins.fact_source]                   # where the facts of the stop rule and the sections come from
-# use = ["campaign", "optimization", "spend"]  # if not set: campaign (hours, tokens) and optimization (the research)
+# use = ["campaign", "optimization", "billing", "spend"]  # if not set: campaign (hours, tokens) and optimization (the research)
 #                                         # a source with a table must be in use; a list lists campaign and optimization too
-# [plugins.fact_source.spend]             # a source with parameters
+# [plugins.fact_source.billing]           # a source with parameters
 # provider = "command"                    # a command that writes {"metrics": …} to $PILOOP_RESULT_FILE, as the evaluate command does
-# command = ["uv", "run", "scripts/spend.py"]  # runs at the repo root; it gets secrets from the daemon's environment
-# metrics = ["spend"]                     # the names that it prints, each a fact of the campaign
-# notices = { spend = [300, 600] }        # piloop posts one inbox note when a value crosses each
+# command = ["uv", "run", "scripts/bill.py"]  # runs at the repo root; it gets secrets from the daemon's environment
+# metrics = ["billing_usd"]               # the names that it prints, each a fact of the campaign
+# notices = { billing_usd = [300, 600] }  # piloop posts one inbox note when a value crosses each
 # interval = 300                          # seconds between two readings
+# [plugins.fact_source.spend]             # spend: the sum of facts in USD, which hold_at and the cost section read
+# facts = ["billing_usd"]                 # default: compute_usd and models_usd, of the leases and models sources
 
 # [plugins.vcs]                           # how the campaign saves versions; default: git
 # email = "piloop@localhost"              # of every commit that piloop makes or launches, whatever git's config says

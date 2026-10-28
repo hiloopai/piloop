@@ -40,6 +40,7 @@ dependencies = [
     "sqlalchemy>=2.0.41",
     "textual>=8.2,<9",
     "uvicorn>=0.54",
+    "genai-prices>=0.1.13",
 ]
 
 [project.urls]
@@ -111,6 +112,7 @@ harness = "piloop.plugins.harness.contract:HARNESSES"
 mcp_server = "piloop.plugins.mcp_server.contract:MCP_SERVERS"
 lineage = "piloop.plugins.lineage.contract:LINEAGE"
 notifier = "piloop.plugins.notifier.contract:NOTIFIERS"
+price_list = "piloop.plugins.price_list.contract:PRICE_LISTS"
 
 # What runs in the daemon for a capability, or for a provider that needs the daemon, by its name
 # (piloop.plugins.contribution.CONTRIBUTORS).
@@ -213,6 +215,12 @@ orchestration = "piloop.plugins.section.orchestration:Orchestration"
 campaign = "piloop.plugins.fact_source.campaign:CampaignFacts"
 optimization = "piloop.plugins.campaign_type.optimization.fact_source.optimization:OptimizationFacts"
 command = "piloop.plugins.fact_source.command:Command"
+leases = "piloop.plugins.fact_source.leases:LeaseFacts"
+models = "piloop.plugins.fact_source.models:ModelFacts"
+spend = "piloop.plugins.fact_source.spend:SpendFacts"
+
+[project.entry-points."piloop.price_lists"]
+genai_prices = "piloop.plugins.price_list.genai_prices:GenaiPrices"
 
 [project.entry-points."piloop.campaign_types"]
 optimization = "piloop.plugins.campaign_type.optimization:Optimization"

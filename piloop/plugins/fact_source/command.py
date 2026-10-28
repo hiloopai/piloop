@@ -19,7 +19,7 @@ TIMEOUT = 60
 
 
 class Reading(BaseModel):
-    """What the command writes to ``PILOOP_RESULT_FILE``, as one line of JSON: ``{"metrics": {"spend": 412.3}}``."""
+    """What the command writes to ``PILOOP_RESULT_FILE``, as one line of JSON: ``{"metrics": {"billing_usd": 412.3}}``."""
 
     model_config = ConfigDict(extra='forbid', frozen=True)
 
@@ -34,13 +34,13 @@ class Command(Readings):
     """``command``: run ``command`` at the repo root with the daemon's environment, which is where its secrets come from.
 
     It writes one line of JSON to the pipe that ``PILOOP_RESULT_FILE`` names, with a value for each name of
-    ``metrics``, for example ``{"metrics": {"spend": 412.3}}``. It must exit with code 0 within one minute.
+    ``metrics``, for example ``{"metrics": {"billing_usd": 412.3}}``. It must exit with code 0 within one minute.
     """
 
     command: list[str] = Field(min_length=1)
     """The command (argv). Example: ``["uv", "run", "scripts/spend.py"]``."""
     metrics: list[str] = Field(min_length=1)
-    """The names that it reports, each a fact of the campaign. Example: ``["spend"]``."""
+    """The names that it reports, each a fact of the campaign. Example: ``["billing_usd"]``."""
 
     def names(self) -> tuple[str, ...]:
         return tuple(self.metrics)

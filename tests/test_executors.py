@@ -289,9 +289,9 @@ def test_the_capacity_is_the_slots_of_the_executor_now(
 
 def test_config_toml_refuses_a_plugins_table_that_no_capability_of_the_home_declares(tmp_path: Path) -> None:
     """``[plugins.<name>]`` of ``config.toml`` is generic: the plugin host checks it, as ``piloop.toml``'s."""
-    (tmp_path / 'config.toml').write_text('[plugins.verdict_rule]\nprovider = "bootstrap"\n')
+    (tmp_path / 'config.toml').write_text('[plugins.verdict_rul]\nprovider = "bootstrap"\n')
     with pytest.raises(
-        SystemExit, match=r'verdict_rule\n  Value error, no capability has that name; there is archive, cas, executor'
+        SystemExit, match=r'verdict_rul\n  Value error, no capability has that name; there is archive, cas, executor'
     ):
         Daemon(Settings(home=tmp_path))
 

@@ -141,6 +141,9 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.METRIC_SUMS,
     capabilities.ATTEMPTS,
     capabilities.FUNNEL,
+    capabilities.COMPUTE_USD,
+    capabilities.MODELS_USD,
+    capabilities.SPEND,
     capabilities.CAMPAIGN,  # the facts of each built-in source
     capabilities.OPTIMIZATION,
     capabilities.reading,
@@ -149,10 +152,15 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.per_evaluation,
     capabilities.worker_spend,
     capabilities.per_run,
+    capabilities.Price,  # the types of the built-in spend sources' keys and of the spend's route
+    capabilities.Spend,
+    capabilities.SpendPart,
     capabilities.reader,  # what a contributed route depends on, as the API's own routes do
     capabilities.actor_access,
     capabilities.Acting,
     capabilities.Addressed,
+    capabilities.Viewed,
+    capabilities.Reading,
     capabilities.Writing,
     capabilities.REFUSALS_DOCUMENTED,
     capabilities.NodeLink,  # a type alias of the links that a lineage node holds

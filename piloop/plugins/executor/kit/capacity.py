@@ -105,6 +105,9 @@ class Pool(BaseModel):
     starts a worker for."""
     provisioner: Provisioner | None = None
     """Start and stop its workers on demand. None: they start by hand (``piloop worker``)."""
+    usd_per_hour: float | None = Field(default=None, ge=0)
+    """What one worker of the pool costs per hour, in USD: the ``leases`` fact source charges each campaign its jobs'
+    share. None: unknown, so the compute of a campaign that ran a job here is unknown too."""
 
     @model_validator(mode='after')
     def _runners(self) -> Pool:

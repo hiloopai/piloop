@@ -24,7 +24,7 @@ from piloop.ids import EnvName
 from piloop.plugins.host import Capability, Many, Parameters, Pick, Scope, Use
 from piloop.plugins.mcp_server.contract import McpServer
 from piloop.settings import Settings
-from piloop.usage import Usage
+from piloop.usage import ModelId, Usage
 
 SESSION_ID = '{session_id}'
 PROMPT = '{prompt}'
@@ -261,6 +261,10 @@ class Harness(Parameters):
         A hook of the harness runs that command in the agent's turn.
         """
         return '\n'.join(lines)
+
+    def model_id(self, model: str) -> ModelId:
+        """``model``, a value of its ``model``, as the vendor's API names it. By default, the name alone."""
+        return ModelId(None, model)
 
     def skills_dir(self, settings: Settings) -> Path:
         """Where its CLI reads user skills: by default, the Agent Skills directory (``agent_skills_dir``)."""

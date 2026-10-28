@@ -6,6 +6,8 @@
 | `FactSource.CHANGES: ClassVar[frozenset[type[EventModel]]]` | The events that `record` writes, which wake the campaigns' pass: its stop rule reads the new values. A source whose facts change only with the campaign's state (its ideas, runs, agents, status and config) names none. |
 | `FactSource.supplies() -> tuple[Fact[FactValue], ...]` | The facts that it supplies. Two sources of a campaign never supply the same one. |
 | `FactSource.gather(s: Session, campaign: Campaign, wanted: frozenset[Fact[FactValue]], now: datetime) -> dict[Fact[FactValue], FactValue]` | The values of the facts in `wanted` that it supplies, as of `now`. It reads with `s`, never writes. |
+| `FactSource.reads() -> tuple[Fact[FactValue], ...]` | The facts of the campaign's other sources that `gather` reads: a source that derives its values from theirs. |
+| `FactSource.as_of(s: Session, campaign: Campaign, fact: Fact[FactValue], now: datetime) -> datetime \| None` | When the value of `fact` that `gather` returns as of `now` was read. None: it was never read. |
 | `FactSource.due(s: Session, campaign: Campaign) -> datetime \| None` | When the daemon calls `read` next: a time at or before now reads now. |
 | `FactSource.read(repo: Path) -> dict[str, float]` | Read values by name, at the campaign's repo root. The daemon calls it outside any transaction, when it is due. |
 | `FactSource.record(s: Session, campaign: Campaign, values: dict[str, float] \| FactReadError) -> None` | Record what `read` returned or raised. The caller commits. By default, nothing. |
@@ -16,5 +18,6 @@
 | `Readings.read(repo: Path) -> dict[str, float]` | Read every value of `names`. The daemon calls it outside any transaction, at the campaign's repo root. |
 | `Readings.supplies() -> tuple[Fact[FactValue], ...]` | `reading(name)` and `since_keep(name)` for each name of `names`. |
 | `Readings.gather(s: Session, campaign: Campaign, wanted: frozenset[Fact[FactValue]], now: datetime) -> dict[Fact[FactValue], FactValue]` | Each value of the latest reading that has it, None after a failed one, and its growth since the latest keep. |
+| `Readings.as_of(s: Session, campaign: Campaign, fact: Fact[FactValue], now: datetime) -> datetime \| None` | The time of the latest reading of the name that `fact` is of: None before the first. |
 | `Readings.due(s: Session, campaign: Campaign) -> datetime \| None` | When the source reads next: `interval` after its latest reading, or now before the first. |
 | `Readings.record(s: Session, campaign: Campaign, values: dict[str, float] \| FactReadError) -> None` | Record a reading as a `fact.read` event, with a note for each notice that it passed. The caller commits. |

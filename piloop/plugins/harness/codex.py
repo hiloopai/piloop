@@ -38,6 +38,7 @@ from piloop.plugins.mcp_server.contract import McpServer, env_names
 from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.mcp_server.stdio import StdioServer
 from piloop.settings import expand_env
+from piloop.usage import ModelId
 
 NO_MEMORY = 'features.memories=false'
 """``-c`` for every Codex agent. Codex keeps memories per repo, so the notes of one agent would load into every later
@@ -259,6 +260,10 @@ class Codex(Harness):
     """Keys of Codex's own ``config.toml`` for its agents, each a ``-c key=value`` flag where ``{config}`` is in the
     argv. For example a model provider, ``{ model_provider = "gateway", model_providers.gateway = { name = "gateway",
     base_url = "https://gw.example.com/v1", env_key = "GATEWAY_KEY", wire_api = "responses" } }``."""
+
+    def model_id(self, model: str) -> ModelId:
+        """``model`` at ``openai``, whose API it calls."""
+        return ModelId('openai', model)
 
     def mcp(self) -> CodexMcp:
         return CodexMcp()

@@ -123,10 +123,17 @@ from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.fact_source.facts import Fact, Facts, FactValue, Funnel
 from piloop.plugins.fact_source.facts import HEAD, RUNS, UNSETTLED, HOURS, TOKENS, WITHOUT_KEEP, KEEPS, EVALUATIONS
 from piloop.plugins.fact_source.facts import METRIC_SUMS, ATTEMPTS, FUNNEL, CAMPAIGN, OPTIMIZATION, reading, since_keep
+from piloop.plugins.fact_source.facts import COMPUTE_USD, MODELS_USD, SPEND
 from piloop.plugins.fact_source.facts import per_keep, per_evaluation, worker_spend, per_run
 from piloop.plugins.fact_source.campaign import CampaignFacts
 from piloop.plugins.campaign_type.optimization.fact_source.optimization import OptimizationFacts
 from piloop.plugins.fact_source.command import Command
+from piloop.plugins.price_list.contract import PRICE_LISTS, PriceList
+from piloop.plugins.price_list.genai_prices import GenaiPrices
+from piloop.usage import ModelId
+from piloop.plugins.fact_source.leases import LeaseFacts
+from piloop.plugins.fact_source.models import ModelFacts, Price
+from piloop.plugins.fact_source.spend import SpendFacts, Spend, SpendPart
 from piloop.plugins.stop_rule.contract import Go, GO, Hold, Stop, Escalate
 from piloop.plugins.stop_rule.limits import Limits
 
@@ -186,7 +193,7 @@ from piloop.plugins.network.contract import Listener, NoCredential, Peer, Refuse
 from piloop.plugins.network.contract import Enrollment, NotEnrolled
 from piloop.net.tokens import Caller, Tokens
 from piloop.api.contract import Access
-from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Addressed, Writing, actor_access, reader
+from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Addressed, Reading, Viewed, Writing, actor_access, reader
 from piloop.actor import Agent, Person, Service, CallerKind, Orchestrating, System
 from piloop.plugins.network.https import Https, HttpsNetwork
 from piloop.plugins.network.proxy import Proxy

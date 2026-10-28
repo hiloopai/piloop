@@ -137,11 +137,14 @@ Map each answer to its keys:
 - **Objective target and budget → `[plugins.stop_rule]`:** `target`, `max_runs`, `max_hours`, `max_tokens`, and
   `plateau` when the human wants the campaign to end by itself. Leave them out only if the human explicitly wants an
   open-ended campaign. Never write `[stop]`: it is deprecated.
-- **Money spent outside piloop (a GPU cloud, a paid API) → a `[plugins.fact_source.spend]` table with
-  `provider = "command"`, and `[plugins.fact_source] use = ["campaign", "optimization", "spend"]`:**
-  - `command` writes `{"metrics": {"spend": <usd>}}` to `$PILOOP_RESULT_FILE`, as the evaluate command does;
-    `metrics = ["spend"]` names it. GPU hours or any other budget is one more name.
-  - `notices = { spend = [...] }` are thresholds that post a note.
+- **Money spent outside piloop (a GPU cloud, a paid API) → a `[plugins.fact_source.billing]` table with
+  `provider = "command"`, `[plugins.fact_source.spend] facts = ["billing_usd"]`, and
+  `[plugins.fact_source] use = ["campaign", "optimization", "billing", "spend"]`:**
+  - `command` writes `{"metrics": {"billing_usd": <usd>}}` to `$PILOOP_RESULT_FILE`, as the evaluate command does;
+    `metrics = ["billing_usd"]` names it. GPU hours or any other budget is one more name.
+  - `spend` is the sum of the facts that `[plugins.fact_source.spend] facts` names. Add `"compute_usd"` and
+    `"models_usd"` with the `leases` and `models` sources for piloop's own workers and tokens.
+  - `notices = { billing_usd = [...] }` are thresholds that post a note.
   - `hold_at = { spend = <usd> }` in `[plugins.stop_rule]` is hard: at it the daemon stops launches. Never write the
     budget only in a brief.
   - Put the secrets of the command in the environment of the daemon, never in the repo.

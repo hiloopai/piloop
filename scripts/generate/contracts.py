@@ -30,13 +30,14 @@ from piloop.plugins.cas.contract import Cas, CasProvider, Evictable, Upkeep
 from piloop.plugins.contribution import Contributes, Contribution
 from piloop.plugins.executor.contract import Executor, ExecutorConfig
 from piloop.plugins.fact_source import facts
-from piloop.plugins.fact_source.contract import FactSource
+from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.harness.contract import Harness
 from piloop.plugins.lineage.contract import Graph, LineageNode, LineageProvider, NodeStatus, SeriesPoint, SessionLink
 from piloop.plugins.memory.contract import MemoryProvider
 from piloop.plugins.network.contract import Network, NetworkConfig
 from piloop.plugins.notifier.contract import Notice, Notifier
+from piloop.plugins.price_list.contract import PriceList
 from piloop.plugins.provisioner.contract import ProvisionerConfig, Provisioning
 from piloop.plugins.secrets.contract import SecretsProvider
 from piloop.plugins.section.contract import Rendering, Section
@@ -67,6 +68,7 @@ CONTRACTS: dict[str, Contract] = {
     'section': Contract((Section, Rendering), '`piloop/plugins/section/contract.py`'),
     'stop-rule': Contract((StopRule, StopCase), '`piloop/plugins/stop_rule/contract.py`'),
     'fact-source': Contract((FactSource, Readings), '`piloop/plugins/fact_source/`'),
+    'price-list': Contract((PriceList,), '`piloop/plugins/price_list/contract.py`'),
     'contribution': Contract(
         (Contributes, Contribution, Consumer), '`piloop/plugins/contribution.py` and `piloop/daemon/loop.py`'
     ),
@@ -178,9 +180,12 @@ def _answers() -> str:
 
 
 def _facts() -> str:
-    """The facts of the built-in sources ``campaign`` and ``optimization``, and the ratios over facts that a rule names."""
+    """The facts of each built-in source that needs no keys, and the ratios over facts that a rule names."""
     rows = ['| Fact | Source | Type | What it is |', '|---|---|---|---|']
-    for source, supplied in (('campaign', facts.CAMPAIGN), ('optimization', facts.OPTIMIZATION)):
+    for source, model in FACT_SOURCES.builtins().items():
+        if any(field.is_required() for field in model.model_fields.values()):
+            continue
+        supplied = model().supplies()
         for name in [n for n, v in vars(facts).items() if isinstance(v, facts.Fact) and v in supplied]:
             fact = getattr(facts, name)
             rows.append(

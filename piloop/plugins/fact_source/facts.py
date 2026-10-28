@@ -6,7 +6,8 @@ section names the facts it reads and gets ``Facts``: those values, and None for 
 
 This module imports only the Python standard library, so a pure provider can import it. It also has the keys of
 piloop's own sources, so that a rule names them once: those of ``campaign`` (``CAMPAIGN``) and of ``optimization``
-(``OPTIMIZATION``), and ``reading`` and ``since_keep`` for the values that a source such as ``command`` reads.
+(``OPTIMIZATION``), those of the spend sources (``COMPUTE_USD``, ``MODELS_USD``, ``SPEND``), and ``reading`` and
+``since_keep`` for the values that a source such as ``command`` reads.
 """
 
 from dataclasses import dataclass, field
@@ -104,6 +105,17 @@ OPTIMIZATION: tuple[Fact[FactValue], ...] = (
     FUNNEL,
 )
 """The facts that the ``optimization`` source supplies: those of the research of an optimization campaign."""
+COMPUTE_USD = Fact[float](
+    'compute_usd',
+    "USD: the seconds that the campaign's jobs held a worker, each worker's time split among the jobs that it held,"
+    " times the pool's ``usd_per_hour``.",
+)
+MODELS_USD = Fact[float](
+    'models_usd',
+    'USD, API-equivalent: the tokens of the agents that ended, priced per model. Not an invoice: a subscription bills'
+    ' otherwise.',
+)
+SPEND = Fact[float]('spend', 'USD: the sum of the facts that the spend source names. None while one is unknown.')
 
 
 def reading(name: str) -> Fact[float]:

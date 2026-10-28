@@ -6,13 +6,14 @@
 | campaign type: `CAMPAIGN_TYPES` (`piloop.campaign_types`) | host | its name, where the configuration uses it | `optimization`: `Optimization` |
 | cas: `CAS` (`piloop.cas`) | host | `[plugins.cas] provider` in `config.toml` | `cached`: `Cached`<br/>`disk`: `Disk`<br/>`gcs`: `Gcs`<br/>`http`: `Http`<br/>`s3`: `S3` |
 | executor: `EXECUTORS` (`piloop.executors`) | host | `[plugins.executor] provider` in `config.toml` | `workers`: `Workers` |
-| fact source: `FACT_SOURCES` (`piloop.fact_sources`) | host | `[plugins.fact_source.<name>]` | `campaign`: `CampaignFacts`<br/>`command`: `Command`<br/>`optimization`: `OptimizationFacts` |
+| fact source: `FACT_SOURCES` (`piloop.fact_sources`) | host | `[plugins.fact_source.<name>]` | `campaign`: `CampaignFacts`<br/>`command`: `Command`<br/>`leases`: `LeaseFacts`<br/>`models`: `ModelFacts`<br/>`optimization`: `OptimizationFacts`<br/>`spend`: `SpendFacts` |
 | harness: `HARNESSES` (`piloop.harnesses`) | host | `[plugins.harness.<name>]` | `claude`: `Claude`<br/>`codex`: `Codex`<br/>`pi`: `Pi` |
 | lineage: `LINEAGE` (`piloop.lineages`) | host | `[plugins.lineage.<name>]` | `optimization`: `OptimizationLineage` |
 | mcp server: `MCP_SERVERS` (`piloop.mcp_servers`) | host | `[plugins.mcp_server.<name>]` | `http`: `HttpServer`<br/>`stdio`: `StdioServer` |
 | memory: `MEMORY` (`piloop.memory`) | host | `[plugins.memory] provider` | `local`: `LocalMemory` |
 | network: `NETWORKS` (`piloop.networks`) | host | `[plugins.network] provider` in `config.toml` | `https`: `Https`<br/>`proxy`: `Proxy` |
 | notifier: `NOTIFIERS` (`piloop.notifiers`) | host | `[plugins.notifier.<name>]` in `config.toml` | `slack`: `Slack`<br/>`slack_app`: `SlackApp` |
+| price list: `PRICE_LISTS` (`piloop.price_lists`) | pure | `[plugins.price_list] provider` | `genai_prices`: `GenaiPrices` |
 | provisioner: `PROVISIONERS` (`piloop.provisioners`) | host | its name, where the configuration uses it | `modal`: `Modal` |
 | role: `ROLES` (`piloop.roles`) | host | `[plugins.role.<name>]` | `implementer`: `ImplementerRole`<br/>`orchestrator`: `OrchestratorRole`<br/>`research`: `ResearchRole`<br/>`scout`: `ScoutRole`<br/>`watchdog`: `WatchdogRole` |
 | runtime: `RUNTIMES` (`piloop.runtimes`) | host | `[plugins.runtime.<name>]` in `config.toml` | `subprocess`: `Subprocess` |

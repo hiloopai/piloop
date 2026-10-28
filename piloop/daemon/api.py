@@ -256,6 +256,15 @@ def campaign_addressed(
     return found
 
 
+def campaign_viewed(
+    s: Reading, campaign: Annotated[str, Path(description="The campaign's name, or its id.")]
+) -> Campaign:
+    """The campaign that the path names, to read: a retired one too, by its id. Refuses one that the home does not have."""
+    if (found := referenced(s, campaign)) is None:
+        raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_CAMPAIGN, str(UnknownCampaign(campaign)))
+    return found
+
+
 def comment_addressed(s: Writing, comment: CommentId) -> Comment:
     """The comment that the path names. Refuses one that the home does not have."""
     if (found := s.get(Comment, comment)) is None:
@@ -305,6 +314,7 @@ def _agent(s: Session, agent: AgentSessionId) -> AgentSession:
 
 
 Addressed = Annotated[Campaign, Depends(campaign_addressed)]
+Viewed = Annotated[Campaign, Depends(campaign_viewed)]
 AddressedCandidate = Annotated[Candidate, Depends(candidate_addressed)]
 AddressedAgent = Annotated[AgentSession, Depends(agent_addressed)]
 AddressedRun = Annotated[Run, Depends(run_addressed)]

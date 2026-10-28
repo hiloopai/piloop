@@ -709,6 +709,24 @@ _ONE: TypeAdapter[str] = TypeAdapter(Annotated[str, Field(min_length=1)])
 _ORDERED: TypeAdapter[list[str]] = TypeAdapter(Annotated[list[str], Field(min_length=1)])
 
 
+def campaign_defaults(plugins: Mapping[str, object]) -> dict[str, object]:
+    """The tables of ``config.toml``'s ``[plugins]`` that are defaults of every campaign of the home.
+
+    They are those of each capability whose instances are in ``piloop.toml``: ``[plugins.<name>]``, with its ``use``,
+    and ``[plugins.<name>.<instance>]``. A campaign's ``piloop.toml`` overrides them key by key.
+    """
+    names = {c.name for c in declared() if _in_campaigns(c)}
+    return {str(name): table for name, table in plugins.items() if name in names}
+
+
+def _in_campaigns(capability: Capability[Parameters]) -> bool:
+    match capability.table:
+        case One(scope=Scope.CAMPAIGN) | Many(scope=Scope.CAMPAIGN):
+            return True
+        case _:
+            return False
+
+
 @dataclass(frozen=True)
 class PluginTables:
     """``Annotated[Plugins, PluginTables(scope)]``: ``[plugins]`` of the file of ``scope``.
@@ -744,14 +762,19 @@ class PluginTables:
                 return False
 
     def validate(self, value: object) -> Plugins:
-        """Validate each table. A refused table is an error at its key: ``plugins.<name>.<field>``."""
+        """Validate each table. A refused table is an error at its key: ``plugins.<name>.<field>``.
+
+        In ``config.toml``, the tables of a capability whose instances are in ``piloop.toml`` are left out: they are
+        the defaults of every campaign (``campaign_defaults``), which validate in each campaign's config.
+        """
         if not isinstance(value, Mapping):
             raise ValueError('[plugins] is a table of tables')
         known = self._capabilities()
         found: Plugins = {}
         errors: list[InitErrorDetails] = []
         many = [c.name for c in known.values() if isinstance(c.table, Many) and c.name not in value]
-        for name, table in [*value.items(), *((name, {}) for name in many)]:
+        defaults = campaign_defaults(value) if self.scope is Scope.HOME else {}
+        for name, table in [*((n, t) for n, t in value.items() if n not in defaults), *((name, {}) for name in many)]:
             try:
                 found[str(name)] = self._table(known, str(name), table)
             except ValidationError as e:

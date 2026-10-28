@@ -10,6 +10,7 @@ import ExampleKeepCost from '/snippets/generated/example-keep-cost.mdx';
 import ContractVerdictRule from '/snippets/generated/contract-verdict-rule.mdx';
 import ContractStopRule from '/snippets/generated/contract-stop-rule.mdx';
 import ContractFactSource from '/snippets/generated/contract-fact-source.mdx';
+import ContractPriceList from '/snippets/generated/contract-price-list.mdx';
 import StopAnswers from '/snippets/generated/stop-answers.mdx';
 import Facts from '/snippets/generated/facts.mdx';
 
@@ -94,7 +95,7 @@ This rule compares the fact that `spend` names, since the latest keep, with its 
 ```text
 [plugins.stop_rule]
 provider = "keep_cost"
-spend = "spend"
+spend = "billing_usd"   # a fact that a Readings source reads, which has its growth since a keep
 escalate_at = 2
 stop_at = 4
 ```
@@ -137,7 +138,7 @@ lists its limits.
 
 A **fact source** supplies the facts that a stop rule or a section reads.
 
-### Example: read the spend from a billing endpoint
+### Example: read what a billing endpoint says
 
 ```python
 import json
@@ -148,17 +149,17 @@ from piloop.capabilities import FactReadError, Readings
 
 
 class Billing(Readings):
-    """``billing``: what a billing endpoint says that the campaign spent, as ``spend``."""
+    """``billing``: what a billing endpoint says that the campaign spent, as ``billing_usd``."""
 
     url: str
 
     def names(self) -> tuple[str, ...]:
-        return ('spend',)
+        return ('billing_usd',)
 
     def read(self, repo: Path) -> dict[str, float]:
         try:
             with urllib.request.urlopen(self.url, timeout=30) as answer:
-                return {'spend': float(json.load(answer)['total'])}
+                return {'billing_usd': float(json.load(answer)['total'])}
         except (OSError, KeyError, ValueError) as e:
             raise FactReadError(f'{self.url}: {e}') from e
 ```
@@ -170,13 +171,16 @@ billing = "my_package:Billing"
 
 ```text
 [plugins.fact_source]
-use = ["campaign", "optimization", "billing"]
+use = ["campaign", "optimization", "billing", "spend"]
 
 [plugins.fact_source.billing]
 url = "https://billing.example.com/campaigns/enwik8"
+
+[plugins.fact_source.spend]
+facts = ["billing_usd"]
 ```
 
-`hold_at = { spend = 1000 }` then holds the campaign at that spend.
+`spend` sums the facts that it names, and `hold_at = { spend = 1000 }` then holds the campaign at that sum.
 
 A fact source is a provider of `FACT_SOURCES`, a subclass of `FactSource`. `[plugins.fact_source] use` lists a
 campaign's sources; a campaign that does not set it has every installed source that is on by default (`DEFAULT`):
@@ -196,3 +200,20 @@ The built-in `command` source runs a command that writes `{"metrics": {"<name>":
 as the evaluate command does.
 [Spend outside piloop](/concepts/cost#spend-outside-piloop) configures it. piloop gives no fact a meaning: a stop rule
 or a section names the facts that it reads.
+
+## Price lists
+
+A **price list** says what a model's tokens cost at its vendor's list price. The `models` fact source asks it for each
+agent that has no price in its `prices`:
+
+```toml
+[plugins.price_list]
+provider = "genai_prices"   # the default
+```
+
+The built-in `genai_prices` reads the prices that the [genai-prices](https://github.com/pydantic/genai-prices) package
+bundles, with no network. Each harness names its model as its vendor's API does (`Harness.model_id`): `claude` at
+`anthropic`, `codex` at `openai`, and `pi` by the provider of `<provider>/<id>`. A price list that has no price for a
+model returns None, and the spend of its campaign is unknown.
+
+<ContractPriceList />

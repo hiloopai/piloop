@@ -213,15 +213,22 @@ class CampaignConfig(BaseModel):
             )
 
     def _check_facts(self) -> None:
-        """Check that no two fact sources supply the same fact."""
+        """Check that no two fact sources supply the same fact, and that another source supplies each that one reads."""
         seen: dict[str, FactSource] = {}
-        for source in self.fact_sources():
+        sources = self.fact_sources()
+        for source in sources:
             for fact in source.supplies():
                 if (other := seen.setdefault(fact.name, source)) is not source:
                     names = f'{FACT_SOURCES.name_of(other)} and {FACT_SOURCES.name_of(source)}'
                     raise ValueError(
                         f'the fact {fact.name!r} comes from two sources of [plugins.fact_source] use: {names}'
                     )
+        for source in sources:
+            if missing := [fact.name for fact in source.reads() if seen.get(fact.name, source) is source]:
+                raise ValueError(
+                    f'the fact source {FACT_SOURCES.name_of(source)!r} reads {", ".join(missing)}, which no other'
+                    ' source of [plugins.fact_source] use supplies: add one that does'
+                )
 
     def fact_sources(self) -> list[FactSource]:
         """The campaign's fact sources: ``[plugins.fact_source] use``, else every installed source on by default."""
@@ -493,6 +500,20 @@ def prompt_files(role: RoleConfig) -> dict[str, str]:
     return {key: rel for key, rel in keys.items() if rel is not None}
 
 
+def merged(base: object, over: object) -> object:
+    """``over`` on top of ``base``, key by key: a table merges into the table of the same key, any other value replaces."""
+    match base, over:
+        case {**under}, {**above}:
+            return {**under, **{key: merged(under.get(key), value) for key, value in above.items()}}
+        case _:
+            return over
+
+
+def _has_table(plugins: object, capability: str, name: str) -> bool:
+    """Whether ``plugins``, a file's raw ``[plugins]``, has the table ``[plugins.<capability>.<name>]``."""
+    return isinstance(plugins, dict) and isinstance(of := plugins.get(capability), dict) and name in of
+
+
 def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
     """Load ``<campaign>/piloop.toml``.
 
@@ -515,6 +536,8 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
         raise ConfigError(f'{toml} is not loaded: {removed}')
     old = deprecated.old_instances(raw)
     deprecated.apply(toml, raw)
+    defaults = settings.campaign_defaults
+    raw['plugins'] = merged(defaults, raw.get('plugins', {}))
 
     class _Loader(BaseSettings, CampaignConfig):
         model_config = SettingsConfigDict(env_prefix='PILOOP_CAMPAIGN_', env_nested_delimiter='__', extra='forbid')
@@ -537,6 +560,8 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
     except ValidationError as e:
         raise ConfigError(explain(toml, e)) from e
     for lost in cfg.unreached():
+        if _has_table(defaults, lost.capability, lost.name):
+            continue  # a default of the home's config.toml: a campaign that does not use it leaves it
         if (lost.capability, lost.name) in old:
             deprecated.unused_instance(toml, lost.name, str(lost))
             continue

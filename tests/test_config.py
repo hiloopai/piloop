@@ -8,6 +8,7 @@ from unittest.mock import ANY
 import pytest
 from inline_snapshot import snapshot
 
+from piloop import config as config_module
 from piloop.campaign.campaigns import check_takes
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.ids import RoleName
@@ -21,6 +22,10 @@ from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.campaign_type.kit.verdicts.judge import criterion
+from piloop.plugins.executor.contract import EXECUTORS
+from piloop.plugins.executor.workers import Workers
+from piloop.plugins.fact_source.contract import FACT_SOURCES
+from piloop.plugins.fact_source.models import ModelFacts
 from piloop.plugins.harness.contract import Harness, each_provider
 from piloop.plugins.metric import Direction
 from piloop.plugins.role.contract import Files, ImplementerRole
@@ -30,6 +35,7 @@ from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule
 from piloop.plugins.stop_rule.limits import Limits
 from piloop.plugins.trigger.sql import SqlTrigger
+from piloop.settings import Settings
 from tests.conftest import AGENT_TIMEOUT, RESEARCH, SCOUT, WATCHDOG, role_of
 
 
@@ -755,3 +761,53 @@ def test_an_instance_with_a_table_of_its_own_that_no_name_puts_in_use_is_refused
     assert load_campaign_config(campaign_path, plugins={'section': {'goal': {}}}).status_sections()[1] == Goal(), (
         'an empty table changes nothing, and configures nothing'
     )
+
+
+HOME_DEFAULTS = """
+[plugins.fact_source]
+use = ["campaign", "optimization", "models"]
+
+[plugins.fact_source.models]
+prices = { a = { input = 1.0, output = 2.0, cache_read = 0.1, cache_write = 1.25 } }
+
+[plugins.fact_source.billing]
+provider = "command"
+command = ["true"]
+metrics = ["gpu_usd"]
+
+[plugins.stop_rule]
+max_runs = 7
+plateau = 3
+
+[plugins.executor.pools.serve]
+usd_per_hour = 0.5
+"""
+
+
+def test_config_toml_holds_defaults_of_each_campaign_s_plugins_which_piloop_toml_and_the_environment_override(
+    campaign_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The defaults of piloop, then the home's ``config.toml``, then ``piloop.toml``, then ``PILOOP_CAMPAIGN_*``.
+
+    A table merges key by key, and any other value replaces. A default that the campaign does not use is no error.
+    """
+    home = tmp_path / 'home'
+    home.mkdir()
+    (home / 'config.toml').write_text(HOME_DEFAULTS)
+    toml = campaign_path / 'piloop.toml'
+    toml.write_text(
+        toml.read_text() + '\n[plugins.stop_rule]\nplateau = 5\n\n[plugins.fact_source.models.prices.b]\n'
+        'input = 3.0\noutput = 15.0\ncache_read = 0.3\ncache_write = 3.75\n'
+    )
+    settings = Settings(home=home)
+    monkeypatch.setattr(config_module, 'settings', settings)
+    monkeypatch.setenv('PILOOP_CAMPAIGN_PLUGINS__STOP_RULE__MAX_RUNS', '9')
+    cfg = load_campaign_config(campaign_path)
+    assert FACT_SOURCES.used(cfg.plugins) == ('campaign', 'optimization', 'models')
+    models = FACT_SOURCES.instances(cfg.plugins)['models']
+    assert isinstance(models, ModelFacts) and sorted(models.prices) == ['a', 'b'], 'a from the home, b from the file'
+    rule = STOP_RULES.selected(cfg.plugins)
+    assert isinstance(rule, Limits) and (rule.max_runs, rule.plateau) == (9, 5)
+    assert 'fact_source' not in settings.providers, "the home's own [plugins] leave the campaigns' defaults out"
+    executor = EXECUTORS.selected(settings.providers)
+    assert isinstance(executor, Workers) and executor.pools['serve'].usd_per_hour == 0.5

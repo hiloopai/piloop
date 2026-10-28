@@ -3228,6 +3228,76 @@
         }
       }
     },
+    "/v1/campaigns/{campaign}/spend": {
+      "get": {
+        "summary": "Spend",
+        "description": "What the campaign spent, in USD: each fact that its ``spend`` source names, their sum, and the sum per keep.\n\nnull: the campaign's ``[plugins.fact_source] use`` has no ``spend`` source.",
+        "operationId": "spend",
+        "parameters": [
+          {
+            "name": "campaign",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The campaign's name, or its id.",
+              "title": "Campaign"
+            },
+            "description": "The campaign's name, or its id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Spend"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Spend"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/campaigns/{campaign}/lineage": {
       "get": {
         "summary": "Lineage",
@@ -6951,6 +7021,90 @@
         ],
         "title": "SessionLink",
         "description": "An agent session that worked on a node, with the harness's own session id, so that a trace link is exact."
+      },
+      "Spend": {
+        "properties": {
+          "usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usd",
+            "description": "The sum of the parts. None while one is unknown."
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/SpendPart"
+            },
+            "type": "array",
+            "title": "Parts"
+          },
+          "per_keep_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per Keep Usd",
+            "description": "``usd`` per keep (``keeps``). None while ``usd`` is unknown, before the first keep, and without a source of\n``keeps``."
+          }
+        },
+        "type": "object",
+        "required": [
+          "usd",
+          "parts",
+          "per_keep_usd"
+        ],
+        "title": "Spend",
+        "description": "What a campaign spent, in USD: the facts that its ``spend`` source names, each a part, and their sum."
+      },
+      "SpendPart": {
+        "properties": {
+          "fact": {
+            "type": "string",
+            "title": "Fact"
+          },
+          "usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usd",
+            "description": "None while its source does not know it: an unknown value is never 0."
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of",
+            "description": "When its source read it. None: never."
+          }
+        },
+        "type": "object",
+        "required": [
+          "fact",
+          "usd",
+          "as_of"
+        ],
+        "title": "SpendPart",
+        "description": "One fact of the spend, in USD."
       },
       "Status": {
         "properties": {

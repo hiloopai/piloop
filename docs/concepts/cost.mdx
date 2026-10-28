@@ -1,7 +1,7 @@
 ---
 title: Stop conditions and cost
 sidebarTitle: Stop conditions and cost
-description: When a campaign stops, what its agents spend in tokens, and a hard limit on what it spends outside piloop.
+description: When a campaign stops, what its agents spend in tokens, what it spent in USD, and a hard limit on its spend.
 ---
 
 import Stop from '/snippets/generated/stop.mdx';
@@ -49,12 +49,65 @@ When an agent ends, piloop reads its tokens from the harness's own session file,
 ```
 
 `input` is the input that the prompt cache did not serve. `max_tokens` limits the `total` of every agent of the
-campaign. piloop has no price table, so it counts tokens, not money.
+campaign.
+
+## What a campaign spent
+
+The `spend` fact source sums what a campaign spent in USD, from the facts of other sources:
+
+```toml
+[plugins.fact_source]
+use = ["campaign", "optimization", "leases", "models", "spend"]
+```
+
+The home's `config.toml` gives the price of one worker of each pool. It can also turn spend on for every campaign of
+the home, as a [default](/reference/configuration) of their `piloop.toml`:
+
+```toml
+[plugins.executor.pools.agents]
+usd_per_hour = 0.40
+
+[plugins.fact_source]
+use = ["campaign", "optimization", "leases", "models", "spend"]
+```
+
+`GET /v1/campaigns/enwik8/spend` answers each part and the sum:
+
+```json
+{
+  "usd": 16.0,
+  "parts": [
+    {"fact": "compute_usd", "usd": 1.0, "as_of": "2026-10-27T18:12:15.480248Z"},
+    {"fact": "models_usd", "usd": 15.0, "as_of": "2026-10-27T18:12:15.480248Z"}
+  ],
+  "per_keep_usd": 8.0
+}
+```
+
+- `compute_usd`, from `leases`: each second that a worker held a job of the campaign, at the pool's `usd_per_hour`. A
+  worker that holds several jobs splits each second evenly among them. The time that a worker holds no job is no
+  campaign's.
+- `models_usd`, from `models`: the tokens of each agent that ended, at the list price of its model. The
+  [price list](/plugins/rules#price-lists) is that of [genai-prices](https://github.com/pydantic/genai-prices), which
+  piloop bundles. This is the API-equivalent cost, not an invoice: a subscription bills otherwise.
+- A pool or a model without a price makes its part unknown (`null`), and the sum too. An unknown value is never 0. An
+  alias such as `sonnet` is no model id, so it has no list price. Give it one, in USD per million tokens:
+
+  ```toml
+  [plugins.fact_source.models]
+  prices = { sonnet = { input = 3.0, output = 15.0, cache_read = 0.3, cache_write = 3.75 } }
+  ```
+
+- `per_keep_usd` is the sum per keep.
+- `facts` in `[plugins.fact_source.spend]` names the parts. Add a value that a source reads, such as a cloud's bill
+  below: `facts = ["compute_usd", "models_usd", "gpu_usd"]`.
+- `hold_at = { spend = 1000 }` holds the campaign at that sum, as below.
 
 ## Spend outside piloop
 
 GPU time and paid APIs are **facts** that a **fact source** reads. The built-in `command` source runs a command that
-writes `{"metrics": {"<name>": <value>}}` to `$PILOOP_RESULT_FILE`, and `hold_at` holds the campaign at a limit:
+writes `{"metrics": {"<name>": <value>}}` to `$PILOOP_RESULT_FILE`. `spend` adds the fact to the sum, and `hold_at`
+holds the campaign at a limit of the sum:
 
 ```toml
 [plugins.stop_rule]
@@ -63,13 +116,16 @@ max_tokens = 50_000_000
 hold_at = { spend = 1000 }                    # nothing new starts at this spend
 
 [plugins.fact_source]
-use = ["campaign", "optimization", "spend"]   # piloop's own facts, and the source below
+use = ["campaign", "optimization", "billing", "spend"]
+
+[plugins.fact_source.billing]
+provider = "command"
+command = ["uv", "run", "python", "scripts/gpu_bill.py"]   # reports {"metrics": {"gpu_usd": 1012}}
+metrics = ["gpu_usd"]
+notices = { gpu_usd = [300, 600] }            # a note in the inbox as each one is passed
 
 [plugins.fact_source.spend]
-provider = "command"
-command = ["uv", "run", "python", "scripts/spend.py"]   # reports {"metrics": {"spend": 1012}}
-metrics = ["spend"]
-notices = { spend = [300, 600] }              # a note in the inbox as each one is passed
+facts = ["gpu_usd"]                           # add "compute_usd" and "models_usd" with their sources
 ```
 
 ```text

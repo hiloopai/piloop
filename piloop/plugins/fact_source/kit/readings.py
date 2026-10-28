@@ -87,6 +87,12 @@ class Readings(FactSource):
                 found[since_keep(name)] = None if value is None else value - _at_keep(s, campaign, name, value)
         return found
 
+    def as_of(self, s: Session, campaign: Campaign, fact: Fact[FactValue], now: datetime) -> datetime | None:
+        """The time of the latest reading of the name that ``fact`` is of: None before the first."""
+        name = next(n for n in self.names() if fact in (reading(n), since_keep(n)))
+        last = latest(s, FactRead, _on(campaign), _of(name))
+        return None if last is None else last[0].at
+
     def due(self, s: Session, campaign: Campaign) -> datetime | None:
         """When the source reads next: ``interval`` after its latest reading, or now before the first."""
         last = latest(s, FactRead, _on(campaign), _of(self.names()[0]))
