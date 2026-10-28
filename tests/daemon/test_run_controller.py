@@ -101,7 +101,7 @@ from piloop.plugins.executor.workers.worker import _Control
 from piloop.plugins.harness.contract import cleared_env
 from piloop.plugins.harness.kit.jsonl import dash_separators_wrapped
 from piloop.plugins.memory.local.tables import Lesson, LessonStatus
-from piloop.plugins.runtime.contract import AgentExit, Handle
+from piloop.plugins.runtime.contract import AgentExit, Deadline, Handle
 from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, commands as git
 from piloop.plugins.vcs.git.commands import pin as git_pin
@@ -613,9 +613,9 @@ def test_a_run_that_timed_out_after_its_commits_is_retried_from_its_last_commit(
     run_id = make_run(db, campaign, max_runs=1)
     wait = runtime.wait
 
-    def time_out_after_the_commits(handle: Handle, timeout: float) -> AgentExit:
+    def time_out_after_the_commits(handle: Handle, deadline: Deadline) -> AgentExit:
         wait_until((tmp_path / 'runs' / str(run_id) / 'committed').exists)
-        return wait(handle, 0.5)
+        return wait(handle, Deadline.after(0.5))
 
     mocker.patch.object(runtime, 'wait', side_effect=time_out_after_the_commits)
     execute(controller(db, runtime, tmp_path), db, run_id)
@@ -809,6 +809,24 @@ def test_timeout(db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_p
     with db.session() as s:
         [agent_session] = s.scalars(select(AgentSession)).all()
         assert agent_session.state is AgentSessionState.KILLED
+
+
+def test_a_role_timeout_that_init_raises_applies_to_the_next_run(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A run that is open keeps its timeout: ``piloop run extend`` gives it more."""
+    write_toml(Path(campaign.path), HARNESS_SLEEPS, implementer_timeout=0.5)
+    reload_campaign(db, campaign)
+    ex = controller(db, runtime, tmp_path)
+    first = make_run(db, campaign, max_runs=1)
+    execute(ex, db, first)
+    write_toml(Path(campaign.path), HARNESS_SLEEPS, implementer_timeout=0.7)
+    with db.session() as s:
+        sync(s, s.get_one(Campaign, campaign.id))  # what ``piloop init`` does
+        s.commit()
+    second = make_run(db, campaign, title='after the init', max_runs=1)
+    execute(ex, db, second)
+    assert [run_row(db, r).error for r in (first, second)] == ['agent timeout after 0.5s', 'agent timeout after 0.7s']
 
 
 def test_evaluate_failure_is_a_crash_verdict(
@@ -1819,9 +1837,9 @@ def test_an_implementer_that_left_its_finding_has_finished_its_run_however_its_p
     reload_campaign(db, campaign)
     wait = runtime.wait
 
-    def time_out_after_the_finding(handle: Handle, timeout: float) -> AgentExit:
+    def time_out_after_the_finding(handle: Handle, deadline: Deadline) -> AgentExit:
         wait_until((tmp_path / 'runs' / str(run_id) / 'found').exists)
-        return wait(handle, 0.5)
+        return wait(handle, Deadline.after(0.5))
 
     if timed_out:  # a loaded host can take longer than any short timeout to write the finding
         mocker.patch.object(runtime, 'wait', side_effect=time_out_after_the_finding)

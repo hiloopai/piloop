@@ -8,6 +8,7 @@
 | `Executor.configure(config: C) -> None` | Take `config`, the one that opened it with the live limits applied. The daemon calls it when one changes. |
 | `Executor.submit(job: AgentJob \| EvaluationJob) -> None` | Run `job`, now or when a slot is free. Every job ends with `Results.finished` or `Results.lost`. |
 | `Executor.prompt(key: AgentKey, prompt: Prompt) -> None` | Give `prompt` to the running agent's runtime at least once, then call `Results.queued`. |
+| `Executor.extend(key: AgentKey, seconds: float) -> None` | Let a running agent run `seconds` past its job's `timeout`: its extensions in all. |
 | `Executor.cancel(key: JobKey) -> None` | Stop a job: a kill or a cancel. It still reports how it ended. Called again, it tries again. |
 | `Executor.adopt(left: Sequence[LeftJob]) -> list[JobKey]` | Take over the jobs that a previous daemon process left, and return the keys of those it cannot. |
 | `Executor.stop(timeout: float) -> None` | Stop every job, and wait up to `timeout` for them to report. Submit no more. |

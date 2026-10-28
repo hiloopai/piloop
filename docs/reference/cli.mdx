@@ -630,6 +630,21 @@ start is not launched again. A running implementer is ended with
 save its work and stop, and ended 10 minutes later. The run closes as `cancelled`, unless its implementer left its finding
 before the daemon ended it: a later finding is refused. Its commits are scored, it counts toward no run limit, and its idea is parked: set the idea `ready` to run it again.
 
+### piloop run extend
+
+```text
+piloop run extend RUN_ID --by <duration>
+```
+
+Gives the running implementer of a run more time, such as `--by 1h` or `--by 90m`. Extensions add up:
+
+```text
+run#12: agent_session#40 may run 1:00:00 past its timeout
+```
+
+Its timeout ends it that much later, also on a worker elsewhere. A note on the implementer tells it its new deadline.
+A run that has no running implementer is refused.
+
 ### piloop agent cancel
 
 ```text

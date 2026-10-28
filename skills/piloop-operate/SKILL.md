@@ -237,11 +237,12 @@ PILOOP_ACTOR=orchestrator piloop resume <name>
   the run ends `awaiting_answer` and its idea is parked, also when you acked the escalation. The next run reads your
   `decision` on the idea in its brief: set the idea `ready`.
 
-### Cancel a run, stop a campaign
+### Cancel or extend a run, stop a campaign
 
 - A run that became redundant: `piloop run cancel <run> --wrap-up`. The implementer is told to save its work and stop, and ended
   10 minutes later, with every process it started. Its commits are scored and its idea is parked. Without `--wrap-up`,
   it is ended at once. `piloop agent cancel <agent-session> [--wrap-up]` does the same for an agent of any role, a sweep too.
+- A run that needs more time than its timeout: `piloop run extend <run> --by 1h`. The implementer is told its new deadline.
 - A campaign: `piloop campaign stop <name> --reason '<why>'`. The daemon stops it as a limit of the stop rule does: it
   drops queued work, winds the implementers down, scores their commits, then launches the closing review. `--kill` ends the
   implementers at once. Never `UPDATE campaigns SET status`: that gets no closing review.

@@ -118,6 +118,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
     assert routes(consumers, every_kind()) == snapshot(
         {
             'agent_session.cancel_requested': ['wind_down'],
+            'agent_session.extended': ['extensions', 'wind_down'],
             'agent_session.finished': ['archiver', 'campaigns'],
             'agent_session.identified': [],
             'agent_session.job_ended': [],
@@ -182,6 +183,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'launch.paused': [],
             'launch.resumed': [],
             'lease.expired': ['executor'],
+            'lease.extended': [],
             'lease.prompted': [],
             'lease.queued': ['executor'],
             'lease.revoked': [],

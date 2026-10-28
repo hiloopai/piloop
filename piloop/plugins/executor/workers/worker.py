@@ -7,7 +7,7 @@ CAS (``jobs.Site``).
 It talks to its control plane only through a ``LeaseClient``: ``Local`` in ``piloop serve``, ``Remote`` in ``piloop
 worker --server``. One thread sends a heartbeat with a host sample (``Timing.renew``), takes new jobs and resends
 unsent reports, from ``start`` until the worker stops. Another reads the worker's messages (a long-poll): a waiting job wakes the first at once, a revoke stops
-a job, and a prompt goes to its agent. Each job has a thread of its own.
+a job, an extension moves its deadline, and a prompt goes to its agent. Each job has a thread of its own.
 A worker that hears nothing back for ``Timing.self_stop`` stops its jobs and keeps their reports until it is heard
 again: by then the fence refuses them, and a person can still import what they made (``leases.StaleReport``). A
 report is kept in the worker's spool (``Spool``) until the control plane took or refused it, so a worker that is
@@ -53,6 +53,7 @@ from piloop.plugins.executor.kit.leases import (
     AgentHandle,
     Answer,
     Drain,
+    Extend,
     Grant,
     NotAddressed,
     ProcessHandle,
@@ -175,6 +176,8 @@ class Worker:
         either asked to stop or never starts, and one that was starting kills its agent once the start returns."""
         self._jobs: dict[int, Running] = {}
         self._threads: dict[int, threading.Thread] = {}
+        self._extended: dict[int, float] = {}
+        """The seconds that the agent of each lease may run past its job's timeout: its grant's, then its ``Extend``."""
         self.dismissed: Dismissed | None = None
         """Why the control plane refused this worker for good. Then it stopped its jobs, and its loop ends."""
         self._loop: threading.Thread | None = None
@@ -315,6 +318,8 @@ class Worker:
                         self._wake()
                     case Revoke(lease=lease):
                         self._stop_job(lease, 'revoke')
+                    case Extend(lease=lease, seconds=seconds):
+                        self._extend(lease, seconds)
                     case Drain():
                         self._drain()
                     case PromptMessage(lease=lease):
@@ -360,6 +365,12 @@ class Worker:
                 self._tracer.event('worker.queued_unsent', worker=self.id, message=message.id, error=str(e))
                 unanswered.append(message.id)
         return unanswered
+
+    def _extend(self, lease_id: int, seconds: float) -> None:
+        """Let the agent of ``lease_id`` run ``seconds`` past its job's timeout, from its next look at its deadline."""
+        with self._lock:
+            if lease_id in self._threads:
+                self._extended[lease_id] = max(seconds, self._extended.get(lease_id, 0.0))
 
     def _drain(self) -> None:
         """Take no more jobs: the loop ends the worker once each job reported."""
@@ -530,6 +541,7 @@ class Worker:
         )
         with self._lock:
             self._threads[grant.lease] = thread
+            self._extend(grant.lease, grant.extended)
             thread.start()
 
     def _guarded(self, lease_id: int, body: Callable[[], None]) -> None:
@@ -544,6 +556,7 @@ class Worker:
         finally:
             with self._lock:
                 self._threads.pop(lease_id, None)
+                self._extended.pop(lease_id, None)
                 self._recovered.notify_all()
 
     def _send(self, lease_id: int, unsent: Unsent) -> None:
@@ -765,3 +778,7 @@ class _Control:
 
     def secrets(self) -> JobSecrets:
         return self._worker.client.secrets(self._lease)
+
+    def extended(self) -> float:
+        with self._worker._lock:
+            return self._worker._extended.get(self._lease, 0.0)

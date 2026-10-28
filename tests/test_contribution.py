@@ -80,6 +80,7 @@ def test_the_executor_s_upkeep_and_the_archiver_run_after_limits_and_before_the_
         'notify',
         'evaluations',
         'prompts',
+        'extensions',
         'wind_down',
         'facts',
         'campaigns',

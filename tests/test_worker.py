@@ -56,7 +56,9 @@ from piloop.plugins.executor.kit.leases import (
     SERVE,
     Answer,
     Drain,
+    Extend,
     Grant,
+    LeaseExtended,
     LeasePrompted,
     Leases,
     NotAddressed,
@@ -74,7 +76,7 @@ from piloop.plugins.executor.kit.leases import (
 from piloop.plugins.executor.kit.relay import Relay
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.executor.workers.worker import WORKER_ANOMALY, Unsent, Worker
-from piloop.plugins.runtime.contract import QUEUE, ExitStatus, Handle, put, take
+from piloop.plugins.runtime.contract import QUEUE, Deadline, ExitStatus, Handle, put, take
 from piloop.plugins.vcs.git import commands as git
 from piloop.settings import INPUTS_DIR, Settings
 from piloop.store import tree as tree_module
@@ -244,6 +246,39 @@ def test_a_restarted_worker_re_attaches_to_its_agent_and_reports_it(
     assert (outcome.process.status, outcome.process.error) == (ExitStatus.EXITED, None)
     w, lease = rows(db, agent_session_id)
     assert (w.state, lease.id, lease.state) == (AgentSessionState.EXITED, 1, LeaseState.REPORTED), 'the same lease'
+
+
+def test_an_extension_moves_the_deadline_of_a_running_agent_and_of_one_that_a_restarted_worker_re_attaches(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    hold = tmp_path / 'hold'
+    hold.touch()
+    use(db, campaign, HOLD.format(hold=hold), timeout=20)
+    wait = mocker.spy(runtime, 'wait')
+    first = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
+    agent_session_id = request_agent(db, campaign)
+    launching = threading.Thread(target=launch, args=(first, agent_session_id, tmp_path))
+    launching.start()
+    wait_until(lambda: wait.call_count == 1)
+    deadline: Deadline = wait.call_args.args[1]
+    assert deadline.seconds() == 20
+    with db.session() as s:  # an extension of a lease that the worker does not hold, read first: it holds none
+        on = TargetRef(TargetKind.AGENT_SESSION, agent_session_id)
+        emit(s, LeaseExtended(lease=999, worker=SERVE, seconds=60), on, System.DAEMON)
+        s.commit()
+    first.executor.extend(AgentKey(agent_session_id), 3600)
+    wait_until(lambda: deadline.seconds() == 3620, 'the worker moved the deadline that its wait reads')
+    assert 999 not in workers_of(first).worker._extended
+    first.hand_over()
+    launching.join(30)
+    second = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
+    workers_of(second).leases.renew_all()
+    workers_of(second).worker.start()
+    wait_until(lambda: wait.call_count == 2)
+    assert wait.call_args.args[1].seconds() == 3620, 'the grant of the re-attached agent has it'
+    hold.unlink()
+    outcome = second.launcher.reattach(agent_session_id)
+    assert isinstance(outcome, Ran) and outcome.process.status is ExitStatus.EXITED
 
 
 def test_a_revoked_agent_is_stopped_by_its_worker_and_still_reported(
@@ -894,7 +929,7 @@ def held_reads(mocker: MockerFixture, leases: Leases) -> threading.Event:
     reading, release = threading.Event(), threading.Event()
     messages = leases.messages
 
-    def held(worker: str, after: int, wait: float) -> list[Work | PromptMessage | Revoke | Drain]:
+    def held(worker: str, after: int, wait: float) -> list[Work | PromptMessage | Revoke | Extend | Drain]:
         reading.set()
         assert release.wait(10)
         return messages(worker, after, wait)
@@ -1128,7 +1163,7 @@ class Refusing(Local):
         self._check('heartbeat')
         return super().heartbeat(leases, sample)
 
-    def messages(self, after: int, wait: float) -> Sequence[Work | PromptMessage | Revoke | Drain]:
+    def messages(self, after: int, wait: float) -> Sequence[Work | PromptMessage | Revoke | Extend | Drain]:
         self._check('messages')
         return super().messages(after, wait)
 

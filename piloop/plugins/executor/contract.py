@@ -160,7 +160,8 @@ class AgentJob(BaseModel):
     artifact: Source
     place: Place
     timeout: float
-    """The seconds the agent may run, counted from its start, also across a restart of its worker."""
+    """The seconds the agent may run, counted from its start, also across a restart of its worker. Its extensions add
+    to it (``Executor.extend``)."""
     brief_cid: BlobAddress | None
     """The agent's brief, a text blob in the CAS, which the worker writes to its log directory before the start: its
     first prompt names the file."""
@@ -585,6 +586,13 @@ class Executor[C: ExecutorConfig](Contributes, Protocol):
 
         Core calls it once for each prompt in each daemon process, and again after a restart when no outcome was
         recorded: an executor that may deliver it twice skips the ids that it has seen.
+        """
+        ...
+
+    def extend(self, key: AgentKey, seconds: float) -> None:
+        """Let a running agent run ``seconds`` past its job's ``timeout``: its extensions in all.
+
+        Core calls it once an extension is recorded, and again after a restart, with the same or a larger total.
         """
         ...
 

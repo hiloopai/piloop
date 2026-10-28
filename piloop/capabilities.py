@@ -25,7 +25,7 @@ from piloop.daemon.loop import Consumer, Phase, Turn
 from piloop.plugins.runtime.contract import RUNTIMES
 from piloop.plugins.runtime.contract import AgentSpec, AgentStart, Handle
 from piloop.plugins.runtime.contract import NotSteerable
-from piloop.plugins.runtime.contract import AgentExit, ExitStatus
+from piloop.plugins.runtime.contract import AgentExit, Deadline, ExitStatus
 from piloop.plugins.runtime.contract import Runtime, RuntimeConfig
 from piloop.plugins.runtime.subprocess import Subprocess, SubprocessRuntime
 

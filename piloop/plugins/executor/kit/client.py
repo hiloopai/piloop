@@ -18,6 +18,7 @@ from piloop.plugins.executor.kit.capacity import HostSample
 from piloop.plugins.executor.kit.leases import (
     Answer,
     Drain,
+    Extend,
     Grant,
     JobHandle,
     Leases,
@@ -29,7 +30,7 @@ from piloop.plugins.executor.kit.leases import (
     Work,
 )
 
-PROTOCOL = 15
+PROTOCOL = 16
 """The version of the ``LeaseClient`` calls on the wire."""
 
 
@@ -104,7 +105,7 @@ class LeaseClient(Protocol):
         """The worker cannot find its job again."""
         ...
 
-    def messages(self, after: int, wait: float) -> Sequence[Work | PromptMessage | Revoke | Drain]:
+    def messages(self, after: int, wait: float) -> Sequence[Work | PromptMessage | Revoke | Extend | Drain]:
         """The worker's messages after ``after``, its ack floor. A long-poll: it waits up to ``wait`` seconds for one."""
         ...
 
@@ -155,7 +156,7 @@ class Local:
     def lost(self, lease: int, reason: str) -> None:
         self._leases.lost(lease, self._worker, reason)
 
-    def messages(self, after: int, wait: float) -> Sequence[Work | PromptMessage | Revoke | Drain]:
+    def messages(self, after: int, wait: float) -> Sequence[Work | PromptMessage | Revoke | Extend | Drain]:
         return self._leases.messages(self._worker, after, wait)
 
     def queued(self, message: int, error: str | None) -> None:

@@ -133,6 +133,10 @@ class WorkersExecutor:
         """Send ``prompt`` to the agent's worker (``Leases.prompt``). The worker answers once it reached the agent."""
         self.leases.prompt(key, prompt)
 
+    def extend(self, key: AgentKey, seconds: float) -> None:
+        """Send the new total to the agent's worker (``Leases.extend``), which moves the agent's deadline."""
+        self.leases.extend(key, seconds)
+
     def cancel(self, key: JobKey) -> None:
         """Revoke the job's live lease: its worker stops it, and it still reports. A queued job is not touched."""
         self.leases.revoke(key)

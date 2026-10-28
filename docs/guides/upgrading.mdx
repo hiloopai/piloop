@@ -379,6 +379,17 @@ still work until 0.5.0, with a warning, and the upgrade rewrites the stored conf
 takes the name of its instance. Upgrade `piloop worker` on every machine with the server: the server refuses a worker
 of the older protocol.
 
+### A run gets more time
+
+`piloop run extend <run> --by 1h` moves the deadline of a running implementer. A plugin follows the new deadline:
+
+| Before 0.4.0 | Since 0.4.0 |
+|---|---|
+| A runtime's `wait(handle, timeout)` | `wait(handle, deadline)`: kill the agent once `deadline.passed()`, which an extension can move while it waits |
+| An executor runs a job to its `timeout` | It also has `extend(key, seconds)`, and its `Control` has `extended()`, which `run_agent` reads |
+
+Upgrade `piloop worker` on every machine with the server: the server refuses a worker of the older protocol.
+
 ### Archivings of subjects
 
 An archiving is of a subject: `archives.subject_kind` and `archives.subject_id` replace `archives.idea_id`, and

@@ -3738,6 +3738,86 @@
         }
       }
     },
+    "/v1/runs/{run}/extend": {
+      "post": {
+        "summary": "Extend Run",
+        "description": "Give a running run's implementer more time: its deadline moves by ``by``, and a note tells it so.",
+        "operationId": "extend_run",
+        "parameters": [
+          {
+            "name": "run",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtendBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Extension"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/campaigns/{campaign}/spend": {
       "get": {
         "summary": "Spend",
@@ -5224,6 +5304,53 @@
             "waiting": "#/components/schemas/WaitingSince"
           }
         }
+      },
+      "ExtendBody": {
+        "properties": {
+          "by": {
+            "type": "string",
+            "format": "duration",
+            "title": "By",
+            "description": "Added to its deadline, and to its earlier extensions."
+          }
+        },
+        "type": "object",
+        "required": [
+          "by"
+        ],
+        "title": "ExtendBody",
+        "description": "How much more time a run's implementer gets."
+      },
+      "Extension": {
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor"
+          },
+          "run": {
+            "type": "integer",
+            "title": "Run"
+          },
+          "agent": {
+            "type": "integer",
+            "title": "Agent",
+            "description": "Its implementer."
+          },
+          "seconds": {
+            "type": "number",
+            "title": "Seconds",
+            "description": "The implementer's extensions in all: how long it may run past its timeout."
+          }
+        },
+        "type": "object",
+        "required": [
+          "cursor",
+          "run",
+          "agent",
+          "seconds"
+        ],
+        "title": "Extension",
+        "description": "A run whose implementer got more time, read at ``cursor``."
       },
       "Figure": {
         "properties": {

@@ -8,8 +8,9 @@ subclass with an entry point in the group of ``RUNTIMES``. Its fields are its se
 
 import fcntl
 import json
+import time
 from abc import ABC, abstractmethod
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -90,6 +91,38 @@ class AgentExit:
     error: str | None = None
 
 
+def not_extended() -> float:
+    """No extension: the ``extended`` of a ``Deadline`` that only its timeout sets."""
+    return 0.0
+
+
+@dataclass(frozen=True)
+class Deadline:
+    """When ``Runtime.wait`` ends an agent: ``timeout`` seconds after ``start``, plus what ``extended`` says now.
+
+    ``extended`` is asked at each look, so an extension that comes while the agent runs moves the deadline.
+    """
+
+    start: float
+    """The ``time.monotonic`` at which the agent started."""
+    timeout: float
+    extended: Callable[[], float] = not_extended
+    """The seconds that the agent's extensions add to ``timeout``, in all."""
+
+    @classmethod
+    def after(cls, timeout: float, extended: Callable[[], float] = not_extended) -> Deadline:
+        """``timeout`` seconds from now."""
+        return cls(time.monotonic(), timeout, extended)
+
+    def seconds(self) -> float:
+        """The seconds the agent may run in all, from its start."""
+        return self.timeout + self.extended()
+
+    def passed(self) -> bool:
+        """Whether the agent's time is up."""
+        return time.monotonic() - self.start >= self.seconds()
+
+
 class NotSteerable(RuntimeError):
     """The runtime cannot deliver a message to this agent now. The message says why."""
 
@@ -104,8 +137,8 @@ class Runtime(Protocol):
         """
         ...
 
-    def wait(self, handle: Handle, timeout: float) -> AgentExit:
-        """Block until the agent is finished or gone. After ``timeout`` seconds, kill it and return ``timed_out``."""
+    def wait(self, handle: Handle, deadline: Deadline) -> AgentExit:
+        """Block until the agent is finished or gone. Once ``deadline`` passed, kill it and return ``timed_out``."""
         ...
 
     def session_id(self, handle: Handle) -> str | None:

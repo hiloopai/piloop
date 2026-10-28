@@ -9,6 +9,7 @@ the agent reads it there (``Launcher.launch``), whichever process applied it.
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from datetime import timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, ClassVar, Literal, assert_never
@@ -18,10 +19,10 @@ from pydantic import Field, SecretStr, TypeAdapter, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from piloop.actor import Agent, SignedAgent, System
+from piloop.actor import Actor, Agent, SignedAgent, System
 from piloop.agents.roles import harness_of
 from piloop.config import TRANSCRIPT
-from piloop.db.events import emit, has, latest
+from piloop.db.events import emit, has, in_order, latest
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Comment, Event, EventModel, ReadBy, utcnow
 from piloop.db.session import Database, write_transaction
 from piloop.ids import AgentSessionId, CommentId, CommentKind, EnvName, RoleName, TargetKind, TargetRef
@@ -206,6 +207,37 @@ def queue_prompt(s: Session, agent_session_id: AgentSessionId, text: str, author
     s.add(note)
     s.flush()
     return note.id
+
+
+class AgentSessionExtended(EventModel):
+    """Someone gave a running agent more time: ``seconds`` past its timeout, on top of its earlier extensions."""
+
+    kind: Literal['agent_session.extended'] = 'agent_session.extended'
+    seconds: float
+
+
+EXTENDED = (
+    '[piloop] {actor} gave you {by} more time: your deadline is now {total:g} s after $PILOOP_DEADLINE, which still'
+    ' holds the old one.'
+)
+"""The note that tells an extended agent its new deadline."""
+
+
+def extension(s: Session, agent_session_id: AgentSessionId) -> float:
+    """The seconds that the agent may run past its timeout: its extensions (``AgentSessionExtended``) in all."""
+    on = Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id)
+    return sum(e.seconds for _, e in in_order(s, AgentSessionExtended, on))
+
+
+def extend(s: Session, agent: AgentSession, by: timedelta, actor: Actor) -> float:
+    """Give a running agent ``by`` more time, and tell it its new deadline in a note. Return its extensions in all.
+
+    The daemon hands the total to the agent's executor (``Executor.extend``). The caller commits.
+    """
+    emit(s, AgentSessionExtended(seconds=by.total_seconds()), TargetRef(TargetKind.AGENT_SESSION, agent.id), actor)
+    total = extension(s, agent.id)
+    queue_prompt(s, agent.id, EXTENDED.format(actor=actor.signature, by=by, total=total), actor.signature)
+    return total
 
 
 @dataclass(frozen=True)

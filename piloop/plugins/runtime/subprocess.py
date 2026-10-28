@@ -14,6 +14,7 @@ from piloop.plugins.runtime.contract import (
     TAG_ENV,
     AgentExit,
     AgentSpec,
+    Deadline,
     ExitStatus,
     Handle,
     NotSteerable,
@@ -106,21 +107,22 @@ class SubprocessRuntime:
             self._specs[proc.pid] = spec
         return handle
 
-    def wait(self, handle: Handle, timeout: float) -> AgentExit:
-        """Poll until the agent is gone, resuming it while messages wait for it. On timeout, kill its process group.
+    def wait(self, handle: Handle, deadline: Deadline) -> AgentExit:
+        """Poll until the agent is gone, resuming it while messages wait for it. At the deadline, kill its process group.
 
         A turn that ends with messages in the queue, exit status 0 and a known session starts the next turn
-        (``_resume``). All turns share the timeout.
+        (``_resume``). All turns share the deadline.
         """
         started = time.monotonic()
         if _pid(handle) not in self._specs:  # a re-attach: nothing here can resume the agent
             (_log_dir(handle) / RESUMER).unlink(missing_ok=True)
         while True:
             while self._alive(handle):
-                if time.monotonic() - started > timeout:
+                if deadline.passed():
                     self.kill(handle)
                     seconds = time.monotonic() - started
-                    return AgentExit(ExitStatus.TIMED_OUT, seconds, None, f'agent timeout after {timeout:g}s')
+                    error = f'agent timeout after {deadline.seconds():g}s'
+                    return AgentExit(ExitStatus.TIMED_OUT, seconds, None, error)
                 time.sleep(POLL_SECONDS)
             if not self._resume(handle):
                 break

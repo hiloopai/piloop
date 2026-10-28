@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from importlib.metadata import EntryPoints
 from pathlib import Path
+from unittest.mock import call
 
 import pytest
 from dirty_equals import IsStr
@@ -34,6 +35,7 @@ from piloop.agents.results import (
     PromptOutcome,
     StartupAnomaly,
     WrapUp,
+    extend,
 )
 from piloop.agents.roles import SQL_HINT, compose_brief
 from piloop.campaign import campaigns, ops
@@ -2749,6 +2751,52 @@ def test_an_implementer_is_told_once_to_wrap_up_before_its_timeout(
     )
     assert revoked(db) == [], 'the role timeout ends it, not the daemon'
     assert [kind for kind, _ in settled(db, 'agent_session.wrap_up')] == [1]
+    scheduler.stop(timeout=5)
+
+
+def test_an_extension_reaches_the_executor_once_for_each_total_and_an_implementer_told_to_wrap_up_is_told_again(
+    db: Database, campaign: Campaign, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    runtime = PromptingRuntime()
+    running_agent_session(db, campaign, 'long')
+    lease_running(db)
+    scheduler = make_scheduler(db, runtime, tmp_path)
+    fake = prompted(db, scheduler, mocker)
+    extended = mocker.patch.object(scheduler._controller.executor, 'extend')
+    with db.session() as s:
+        timeout = s.get_one(Campaign, campaign.id).config.role(IMPLEMENTER).timeout
+    lead = wrap_up_lead(timeout, AgentSettings().wrap_up_lead)
+    with db.session() as s:
+        s.get_one(AgentSession, 1).started_at = utcnow() - timedelta(seconds=timeout - lead)
+        s.commit()
+    timings(db, campaign, wrap_up_grace=0)
+    for _ in range(2):
+        run_all(scheduler)
+    [(_, first)] = fake.prompts
+    assert first.text.startswith('[piloop] Your time is almost up (the role timeout of')
+
+    def extend_by(hours: float) -> None:
+        with db.session() as s:
+            extend(s, s.get_one(AgentSession, 1), timedelta(hours=hours), System.ORCHESTRATOR)
+            s.commit()
+
+    extended.side_effect = [OperationalError('INSERT', {}, Exception('locked')), None]
+    extend_by(1)
+    extend_by(1)
+    for _ in range(3):
+        run_all(scheduler)
+    assert extended.call_args_list == [call(AgentKey(AgentSessionId(1)), 7200)] * 2, (
+        'the total that it has not handed over: again after the executor refused it, then never'
+    )
+    assert [p.text[:40] for _, p in fake.prompts[1:]] == ['[piloop] orchestrator gave you 1:00:00 m'] * 2
+    with db.session() as s:
+        s.get_one(AgentSession, 1).started_at = utcnow() - timedelta(seconds=timeout + 7200 - lead)
+        s.commit()
+    for _ in range(2):
+        run_all(scheduler)
+    assert fake.prompts[-1][1].text.startswith(
+        f'[piloop] Your time is almost up (your timeout of {timeout + 7200:g}s, with its extensions)'
+    ), 'told again at the new deadline'
     scheduler.stop(timeout=5)
 
 

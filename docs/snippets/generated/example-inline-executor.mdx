@@ -98,6 +98,13 @@ class InlineExecutor:
                 running.prompts.append([prompt])
         self.host.results.queued(key, prompt.id, error)
 
+    def extend(self, key: AgentKey, seconds: float) -> None:
+        """Move the agent's deadline: its wait reads the total at its next look."""
+        with self._lock:
+            running = self._jobs.get(key)
+        if running is not None:
+            running.extension = seconds
+
     def cancel(self, key: JobKey) -> None:
         with self._lock:
             running = self._jobs.get(key)
@@ -173,6 +180,8 @@ class _Job:
         """What its runtime took, one prompt at a time: the report says which ones the agent read."""
         self._kill: Callable[[], None] | None = None
         self._asked = False
+        self.extension = 0.0
+        """The seconds that the agent may run past its job's timeout (``extend``)."""
 
     def stop(self) -> None:
         self._asked = True
@@ -223,6 +232,9 @@ class _Job:
 
     def queued(self) -> list[list[Prompt]]:
         return self.prompts
+
+    def extended(self) -> float:
+        return self.extension
 
     def secrets(self) -> JobSecrets:
         assert isinstance(self.job, AgentJob)

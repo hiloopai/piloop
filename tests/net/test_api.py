@@ -26,7 +26,7 @@ from rich.console import Console
 from sqlalchemy import select, update
 
 from piloop.actor import Agent, System
-from piloop.agents.results import PromptOutcome
+from piloop.agents.results import AgentSessionExtended, PromptOutcome
 from piloop.api import client as client_module
 from piloop.api.client import SOCKET_ACTOR_HEADER, Client, NoDaemon, Refused
 from piloop.api.contract import (
@@ -66,7 +66,7 @@ from piloop.campaign.stop import CampaignClosed
 from piloop.cli import common, main as cli
 from piloop.daemon.api import ROUTERS, Handlers, daemon_state, openapi, with_api
 from piloop.db import session, sql
-from piloop.db.events import emit
+from piloop.db.events import emit, has
 from piloop.db.models import (
     EVENT,
     AgentSession,
@@ -99,7 +99,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measu
 from piloop.plugins.campaign_type.kit.evaluation.wire import CancelledBy, EvaluationClient, RungResult, RunningSince
 from piloop.plugins.campaign_type.kit.runs import api as runs_api
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
+from piloop.plugins.campaign_type.kit.runs.wire import ExtendBody, RunsClient
 from piloop.plugins.campaign_type.kit.verdicts import api as verdicts_api
 from piloop.plugins.campaign_type.kit.verdicts.wire import RemeasureBody, VerdictsClient
 from piloop.plugins.campaign_type.optimization import api as optimization_api
@@ -1243,6 +1243,42 @@ def test_a_cancel_asks_the_daemon_to_end_an_open_run_or_a_live_agent_and_refuses
             (e.kind, e.target_id, e.actor) for e in s.scalars(select(Event)) if e.kind.endswith('cancel_requested')
         ]
     assert asked == [('agent_session.cancel_requested', 1, 'orchestrator'), ('run.cancel_requested', 1, 'orchestrator')]
+
+
+def test_an_extension_gives_a_running_run_s_implementer_more_time_signed_tells_it_so_and_refuses_a_run_without_one(
+    db: Database, campaign: Campaign, cfg: Settings
+) -> None:
+    add_run(db, campaign, status=RunStatus.RUNNING, measured=False)
+    add_run(db, campaign, measured=False)
+    with db.session() as s:
+        s.add(AgentSession(kind='implementer', campaign_id=1, run_id=1, state=AgentSessionState.RUNNING))
+        s.add(AgentSession(kind='implementer', campaign_id=1, run_id=2, state=AgentSessionState.EXITED))
+        s.commit()
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
+        first = client.extend_run(RunId(1), ExtendBody(by=timedelta(hours=1)))
+        second = client.extend_run(RunId(1), ExtendBody(by=timedelta(minutes=30)))
+        assert (first.run, first.agent, first.seconds, second.seconds) == (1, 1, 3600, 5400), 'extensions add up'
+        with pytest.raises(Refused, match='^run#2 has no running implementer$') as ended:
+            client.extend_run(RunId(2), ExtendBody(by=timedelta(hours=1)))
+        assert ended.value.error == Problem.REFUSED
+        with pytest.raises(Refused, match='^no run#9$'):
+            client.extend_run(RunId(9), ExtendBody(by=timedelta(hours=1)))
+        with pytest.raises(Refused, match='^by: Input should be greater than 0 seconds'):
+            client.extend_run(RunId(1), ExtendBody.model_construct(by=timedelta(0)))
+    with db.session() as s:
+        extended = [
+            (e.target_id, e.actor, e.payload) for e in s.scalars(select(Event).where(has(AgentSessionExtended)))
+        ]
+        notes = [(c.author, c.body) for c in s.scalars(select(Comment).where(Comment.target_id == 1))]
+    assert extended == [
+        (1, 'orchestrator', AgentSessionExtended(seconds=3600)),
+        (1, 'orchestrator', AgentSessionExtended(seconds=1800)),
+    ]
+    assert notes[-1] == (
+        'orchestrator',
+        '[piloop] orchestrator gave you 0:30:00 more time: your deadline is now 5400 s after $PILOOP_DEADLINE, which'
+        ' still holds the old one.',
+    )
 
 
 def test_a_journal_line_is_the_campaign_s_signed_by_the_caller_s_actor_and_the_server_refuses_one_too_long(

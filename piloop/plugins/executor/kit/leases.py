@@ -51,7 +51,7 @@ from piloop import deprecated
 from piloop.actor import System
 from piloop.agents.results import PromptOutcome
 from piloop.db import feed
-from piloop.db.events import emit, has
+from piloop.db.events import emit, has, latest
 from piloop.db.feed import Topic
 from piloop.db.models import (
     LIVE_LEASES,
@@ -165,6 +165,17 @@ class LeaseRevoked(EventModel):
     worker: str
 
 
+class LeaseExtended(EventModel):
+    """On the agent's row, a message for its worker (``Extend``): the agent may run longer than its job's timeout."""
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['lease.extended'] = 'lease.extended'
+    lease: int
+    worker: str
+    seconds: float
+    """The seconds past its job's timeout, in all."""
+
+
 class WorkerDrained(EventModel):
     """On the worker's instance, a message for the worker (``Drain``): take no more jobs, and exit once you hold none.
 
@@ -199,6 +210,7 @@ def topics(worker: str) -> tuple[Topic, ...]:
         Topic(LeaseQueued),
         Topic(LeasePrompted, to=worker),
         Topic(LeaseRevoked, to=worker),
+        Topic(LeaseExtended, to=worker),
         Topic(WorkerDrained, to=worker),
     )
 
@@ -283,12 +295,20 @@ class Grant(BaseModel):
     handle: JobHandle | None = None
     """What ``started`` recorded, for a worker that finds its job again after a restart. None before the start."""
     started_at: datetime | None = None
+    extended: float = 0
+    """The seconds that its agent may run past its job's timeout (``LeaseExtended``)."""
 
     @classmethod
-    def of(cls, lease: Lease) -> Grant:
+    def of(cls, s: Session, lease: Lease) -> Grant:
         """The grant of a lease row."""
         handle = HANDLE.validate_python(lease.handle) if lease.handle else None
-        return cls(lease=lease.id, job_cid=lease.job_cid, handle=handle, started_at=lease.started_at)
+        return cls(
+            lease=lease.id,
+            job_cid=lease.job_cid,
+            handle=handle,
+            started_at=lease.started_at,
+            extended=_extended(s, lease),
+        )
 
 
 class Work(BaseModel):
@@ -318,6 +338,15 @@ class Revoke(BaseModel):
     lease: int
 
 
+class Extend(BaseModel):
+    """A message: the agent of ``lease`` may run ``seconds`` past its job's timeout, in all."""
+
+    kind: Literal['extend'] = 'extend'
+    id: int
+    lease: int
+    seconds: float
+
+
 class Drain(BaseModel):
     """A message: take no more jobs, and exit once every job reported (``WorkerDrained``)."""
 
@@ -325,17 +354,17 @@ class Drain(BaseModel):
     id: int
 
 
-type Message = Annotated[Work | PromptMessage | Revoke | Drain, Field(discriminator='kind')]
+type Message = Annotated[Work | PromptMessage | Revoke | Extend | Drain, Field(discriminator='kind')]
 
 
 class NotAddressed(Exception):
     """A worker's answer to a message that is not a prompt for it: refused, and nothing changed. ``not_addressed``."""
 
 
-def _message(event: Event) -> Work | PromptMessage | Revoke | Drain:
+def _message(event: Event) -> Work | PromptMessage | Revoke | Extend | Drain:
     """The message that ``event``, of one of ``topics``, carries."""
     payload = event.payload
-    assert isinstance(payload, LeaseQueued | LeasePrompted | LeaseRevoked | WorkerDrained)  # what ``topics`` select
+    assert isinstance(payload, LeaseQueued | LeasePrompted | LeaseRevoked | LeaseExtended | WorkerDrained)  # ``topics``
     match payload:
         case LeaseQueued():
             return Work(id=event.id)
@@ -343,6 +372,8 @@ def _message(event: Event) -> Work | PromptMessage | Revoke | Drain:
             return PromptMessage(id=event.id, lease=lease, prompt=Prompt(comment, text))
         case LeaseRevoked(lease=lease):
             return Revoke(id=event.id, lease=lease)
+        case LeaseExtended(lease=lease, seconds=seconds):
+            return Extend(id=event.id, lease=lease, seconds=seconds)
         case WorkerDrained():
             return Drain(id=event.id)
         case never:
@@ -504,7 +535,7 @@ class Leases:
             rows = s.scalars(
                 select(Lease).where(Lease.worker == worker, Lease.state.in_(LIVE_LEASES)).order_by(Lease.id)
             ).all()
-            held, cursor = [Grant.of(r) for r in rows], row.cursor
+            held, cursor = [Grant.of(s, r) for r in rows], row.cursor
             s.commit()
         return held, cursor
 
@@ -534,7 +565,7 @@ class Leases:
             taken = select(Lease).where(Lease.worker == worker, Lease.acquire_request == request_id)
             if (lease := s.scalars(taken).first()) is not None:
                 s.commit()
-                return Grant.of(lease)
+                return Grant.of(s, lease)
             if row.drained_at is not None:
                 row.no_lease = NoLease.DRAINING
                 s.commit()
@@ -569,7 +600,7 @@ class Leases:
                         lease.renewed_at, lease.expires_at = now, now + timedelta(seconds=self.timing.toleration)
                         row.no_lease = None
                         s.commit()
-                        return Grant.of(lease)
+                        return Grant.of(s, lease)
             reason = row.no_lease = min(refused, key=list(NoLease).index)
             s.commit()
             return reason
@@ -905,14 +936,29 @@ class Leases:
                 return
         self._results.queued(key, prompt.id, 'the agent has no live lease')
 
-    def messages(self, worker: str, after: int, wait: float) -> list[Work | PromptMessage | Revoke | Drain]:
+    def extend(self, key: AgentKey, seconds: float) -> None:
+        """Tell the worker of the agent's live lease that the agent may run ``seconds`` past its job's timeout.
+
+        ``LeaseExtended``, unless the lease has it already: core sends it again after a restart. An agent without a
+        live lease has ended, or ends: nothing waits for its timeout.
+        """
+        with self._db.session() as s:
+            write_transaction(s)
+            lease = of_agent(s, key.agent_session)
+            if lease is not None and lease.state in LIVE_LEASES and lease.worker is not None:
+                if _extended(s, lease) != seconds:
+                    extended = LeaseExtended(lease=lease.id, worker=lease.worker, seconds=seconds)
+                    emit(s, extended, _target(self._cas, lease), System.DAEMON)
+                s.commit()
+
+    def messages(self, worker: str, after: int, wait: float) -> list[Work | PromptMessage | Revoke | Extend | Drain]:
         """Store ``after`` as the worker's cursor, and return its messages after it, waiting up to ``wait`` seconds.
 
         A long-poll, after the GitHub Actions runner: it returns at once when a message waits, and reads again on each
         wake (``Database.wait_until``). A prompt whose comment has its outcome is left out: the worker answered it.
         A worker whose row went (``scaling`` ended its instance) gets none.
         """
-        found: list[Work | PromptMessage | Revoke | Drain] = []
+        found: list[Work | PromptMessage | Revoke | Extend | Drain] = []
 
         def read(s: Session) -> bool:
             row = s.get(LeaseWorker, worker)
@@ -1004,6 +1050,15 @@ def _prompted(s: Session, cas: Cas, lease: Lease, comment: CommentId) -> bool:
     target = _target(cas, lease)
     found = select(Event.id).where(Event.target == target, has(LeasePrompted, lease=lease.id, comment=comment))
     return s.scalar(found.limit(1)) is not None
+
+
+def _extended(s: Session, lease: Lease) -> float:
+    """The seconds of the latest ``LeaseExtended`` of ``lease``, or 0 without one."""
+    if lease.agent_session_id is None:  # an evaluation: its timeout is its own
+        return 0
+    on = Event.target == TargetRef(TargetKind.AGENT_SESSION, lease.agent_session_id)
+    found = latest(s, LeaseExtended, on, has(LeaseExtended, lease=lease.id))
+    return 0 if found is None else found[1].seconds
 
 
 def _unanswered() -> ColumnElement[bool]:

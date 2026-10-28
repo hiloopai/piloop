@@ -1,7 +1,8 @@
 """The role capability's machinery: it steers the agents that run, and winds them down.
 
-It hands each running agent the comments for it (``prompts``), and tells an agent to wrap up and ends it when its
-campaign stops, someone cancels it, its role timeout comes, or it left its finding (``wind_down``).
+It hands each running agent the comments for it (``prompts``) and its extensions (``extensions``), and tells an agent
+to wrap up and ends it when its campaign stops, someone cancels it, its role timeout comes, or it left its finding
+(``wind_down``).
 """
 
 from dataclasses import dataclass
@@ -14,9 +15,11 @@ from sqlalchemy.orm import Session
 from piloop.actor import Agent, System
 from piloop.agents.results import (
     AgentEnded,
+    AgentSessionExtended,
     AgentSessionRunning,
     PromptOutcome,
     WrapUp,
+    extension,
     queue_prompt,
 )
 from piloop.campaign.launches import close
@@ -29,7 +32,7 @@ from piloop.campaign.stop import (
     timeout as agent_timeout,
 )
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
-from piloop.db.events import emit, has, in_order
+from piloop.db.events import emit, has, in_order, latest
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.requests import pending
 from piloop.db.triggers import DAEMON_ACTOR
@@ -38,6 +41,7 @@ from piloop.db.triggers.changelog import (
     Commented,
 )
 from piloop.ids import (
+    AgentSessionId,
     CampaignId,
     CampaignStatus,
     Ending,
@@ -73,10 +77,14 @@ class TimeCut(StrEnum):
 
     ROLE = 'the role timeout of {timeout:g}s'
     STOP = "the campaign's stop, {timeout:.0f}s after you started"
+    EXTENDED = 'your timeout of {timeout:g}s, with its extensions'
 
 
-WINDING: Kinds = frozenset({Commented, StopRequested, CancelRequested, CampaignStatusChanged, AgentSessionRunning})
-"""What wakes the wind-down: a finding, a stop or a cancel, and an agent that runs, to tell it."""
+WINDING: Kinds = frozenset(
+    {Commented, StopRequested, CancelRequested, CampaignStatusChanged, AgentSessionRunning, AgentSessionExtended}
+)
+"""What wakes the wind-down: a finding, a stop or a cancel, an agent that runs, to tell it, and one that got more
+time."""
 
 
 @dataclass(frozen=True)
@@ -109,11 +117,12 @@ def steer_line(comment: Comment, chars: int) -> str:
 
 
 def contribution(host: DaemonHost) -> Contribution:
-    """The consumers ``prompts`` and ``wind_down``, which act on the agents in flight."""
+    """The consumers ``prompts``, ``extensions`` and ``wind_down``, which act on the agents in flight."""
     agents = Agents(host)
     return Contribution(
         consumers=(
             Consumer('prompts', frozenset({Commented, AgentSessionRunning}), agents.prompts, Phase.IN_FLIGHT),
+            Consumer('extensions', frozenset({AgentSessionExtended}), agents.extensions, Phase.IN_FLIGHT),
             Consumer('wind_down', WINDING, agents.wind_down, Phase.IN_FLIGHT),
         )
     )
@@ -128,6 +137,8 @@ class Agents:
         self._daemon, self._agents = host.daemon, host.agents
         self._prompted: set[int] = set()
         """The comments that this daemon process handed to the executor (``_push_comments``)."""
+        self._extended: dict[AgentSessionId, float] = {}
+        """The extensions in all that this daemon process handed to the executor, by agent (``extensions``)."""
 
     def _planner_by_id(self, s: Session, campaign_id: CampaignId | None) -> Planner:
         return self._host.planners[s.get_one(Campaign, campaign_id).type]
@@ -171,6 +182,31 @@ class Agents:
                         'comment.unsent', comment=prompt.id, agent_session=agent_session_id, error=str(e)
                     )
         return refused
+
+    def extensions(self, turn: Turn) -> datetime | None:
+        """Hand each running agent's executor its extensions in all (``Executor.extend``), once per total and process.
+
+        The executor takes a total again after a restart. One that it did not take is tried again soon.
+        """
+        with self._db.session() as s:
+            running = select(AgentSession.id).where(AgentSession.state == AgentSessionState.RUNNING)
+            on_running = (Event.target_kind == TargetKind.AGENT_SESSION) & Event.target_id.in_(running)
+            extended = s.scalars(select(Event.target_id).where(has(AgentSessionExtended), on_running).distinct())
+            totals = {
+                agent: total
+                for agent in sorted(AgentSessionId(i) for i in extended)
+                if self._extended.get(agent) != (total := extension(s, agent))
+            }
+        refused = False
+        for agent_session_id, total in totals.items():
+            try:
+                self._controller.executor.extend(AgentKey(agent_session_id), total)
+            except Exception as e:  # the executor did not take it (a locked database): it is tried again
+                refused = True
+                self._tracer.event('agent_session.extension_unsent', agent_session=agent_session_id, error=str(e))
+            else:
+                self._extended[agent_session_id] = total
+        return turn.now + self._daemon.prompt_retry if refused else None
 
     def _unseen(self, s: Session, agent_session: AgentSession) -> list[Comment]:
         """Return the comments for the agent that have no outcome yet: on the agent, or on an implementer's run or idea.
@@ -325,21 +361,32 @@ class Agents:
     def _time_left(self, s: Session, implementer: AgentSession, now: datetime) -> TimeLeft | datetime | None:
         """What an implementer that was not told to wrap up has left, once it is ``wrap_up_lead`` or less.
 
-        Its timeout is its role's, cut at the campaign's stop (``stop.timeout``), as when it started. Before the lead,
-        when it comes. None when it was told, or has no timeout to wrap up before.
+        Its timeout is its role's, cut at the campaign's stop (``stop.timeout``), as when it started, plus its
+        extensions. One told before its last extension is told again. Before the lead, when it comes. None when it was
+        told, or has no timeout to wrap up before.
         """
         campaign = s.get_one(Campaign, implementer.campaign_id)
         cfg = campaign.config
         role = cfg.roles.doing_runs().get(implementer.kind)
-        told = select(Event.id).where(Event.target == TargetRef(TargetKind.AGENT_SESSION, implementer.id), has(WrapUp))
+        on = Event.target == TargetRef(TargetKind.AGENT_SESSION, implementer.id)
+        last = latest(s, AgentSessionExtended, on)
+        told = select(Event.id).where(on, has(WrapUp), Event.id > (0 if last is None else last[0].id))
         if role is None or implementer.started_at is None or s.scalar(told.limit(1)) is not None:
             return None
-        timeout = seconds(agent_timeout(s, campaign, cfg, role.timeout, implementer.started_at))
+        cut_at = seconds(agent_timeout(s, campaign, cfg, role.timeout, implementer.started_at))
+        extended = extension(s, implementer.id)
+        timeout = cut_at + extended
         left = timeout - (now - implementer.started_at).total_seconds()
         lead = wrap_up_lead(timeout, self._agents.wrap_up_lead)
         if left > lead:
             return now + timedelta(seconds=left - lead)
-        cut = TimeCut.ROLE if timeout == role.timeout else TimeCut.STOP
+        match extended, cut_at == role.timeout:
+            case 0, True:
+                cut = TimeCut.ROLE
+            case 0, False:
+                cut = TimeCut.STOP
+            case _:
+                cut = TimeCut.EXTENDED
         return TimeLeft(timeout, round(left / 60, 1), cut)
 
     def _wrap_up(self, s: Session, agent_session: AgentSession, reason: str, text: str) -> None:

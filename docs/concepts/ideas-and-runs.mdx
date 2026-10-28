@@ -79,8 +79,8 @@ A **run** is one attempt at an idea by one implementer. The daemon makes a workt
 brief (your `brief.md`, the idea and every comment on it), and starts the implementer. The implementer commits, also
 when the idea did not work.
 
-The run ends when the implementer exits, at its `timeout`, or a minute after it writes its `finding`. Then the daemon
-scores each new commit. What the implementer left uncommitted becomes a `recovered` commit, which is never measured.
+The run ends when the implementer exits, at its `timeout`, or a minute after it writes its `finding`. To give it more
+time, use [`piloop run extend`](/reference/cli#piloop-run-extend). Then the daemon scores each new commit. What the implementer left uncommitted becomes a `recovered` commit, which is never measured.
 If git refuses that commit, the run fails, and an `agent_session.work_unsaved` event holds the changes as a patch.
 Restore them in a checkout of the implementer's last commit with `piloop cas get <blob> | git apply`.
 

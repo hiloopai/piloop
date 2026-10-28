@@ -1456,6 +1456,32 @@ def test_campaign_stop_and_cancels_are_requests_that_the_daemon_acts_on(campaign
 
 
 @pytest.mark.usefixtures('api')
+def test_run_extend_gives_the_running_implementer_more_time_and_says_how_much_in_all(campaign_path: Path, out) -> None:
+    run_cli(['init', str(campaign_path)])
+    db = Database(common.settings.database_url, actor=common.settings.actor)
+    with db.session() as s:
+        idea = Idea(
+            track='score', campaign_id=1, title='x', hypothesis='x', created_by='t', status=IdeaStatus.SCHEDULED
+        )
+        s.add(idea)
+        s.flush()
+        s.add(
+            Run(idea_id=idea.id, attempt=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING)
+        )
+        s.flush()
+        s.add(AgentSession(kind='implementer', campaign_id=1, run_id=1, state=AgentSessionState.RUNNING))
+        s.commit()
+    db.close()
+    out()
+    run_cli(['run', 'extend', '1', '--by', '1h'])
+    run_cli(['run', 'extend', '1', '--by', '90m'])
+    assert out().splitlines() == [
+        'run#1: agent_session#1 may run 1:00:00 past its timeout',
+        'run#1: agent_session#1 may run 2:30:00 past its timeout',
+    ]
+
+
+@pytest.mark.usefixtures('api')
 def test_campaign_reopen_and_retire_a_stopped_campaign(campaign_path: Path, out) -> None:
     run_cli(['init', str(campaign_path)])
     db = Database(common.settings.database_url, actor=common.settings.actor)

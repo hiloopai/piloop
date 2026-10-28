@@ -16,6 +16,7 @@ from piloop.plugins.runtime import subprocess as subprocess_runtime
 from piloop.plugins.runtime.contract import (
     AgentSpec,
     AgentStart,
+    Deadline,
     ExitStatus,
     Handle,
     NotSteerable,
@@ -66,7 +67,7 @@ def test_runs_to_completion_and_captures_output(tmp_path: Path) -> None:
         'session_id_pattern': None,
         'token': IsStr(regex='[0-9a-f]{32}'),
     }
-    outcome = rt.wait(handle, timeout=10)
+    outcome = rt.wait(handle, Deadline.after(10))
     assert (outcome.status, outcome.exit_code, outcome.error) == (ExitStatus.EXITED, 3, 'agent exit 3')
     assert outcome.seconds == IsPositive()
     assert not rt._alive(handle)
@@ -79,7 +80,7 @@ def test_timeout_kills_the_whole_process_group(tmp_path: Path) -> None:
     exe = script(tmp_path, 'sleep 30 &\necho $! > child.pid\nwait')
     handle = rt.start(spec(tmp_path, exe))
     assert rt._alive(handle)
-    outcome = rt.wait(handle, timeout=0.5)
+    outcome = rt.wait(handle, Deadline.after(0.5))
     assert (outcome.status, outcome.exit_code, outcome.error) == (
         ExitStatus.TIMED_OUT,
         None,
@@ -88,6 +89,16 @@ def test_timeout_kills_the_whole_process_group(tmp_path: Path) -> None:
     child = int((tmp_path / 'child.pid').read_text())
     time.sleep(0.2)
     assert started(child) is None, 'the sleeping grandchild must die with the group'
+
+
+def test_a_deadline_that_an_extension_moves_while_the_agent_runs_ends_it_at_the_new_time(tmp_path: Path) -> None:
+    rt = Subprocess().open('subprocess')
+    handle = rt.start(spec(tmp_path, script(tmp_path, 'sleep 30')))
+    extended = threading.Event()
+    threading.Timer(0.1, extended.set).start()
+    outcome = rt.wait(handle, Deadline.after(0.3, lambda: 0.5 if extended.is_set() else 0.0))
+    assert (outcome.status, outcome.error) == (ExitStatus.TIMED_OUT, 'agent timeout after 0.8s')
+    assert outcome.seconds >= 0.8, 'not at the first deadline'
 
 
 ESCAPE = f"""
@@ -122,7 +133,7 @@ def test_a_timeout_kills_what_the_agent_started_in_a_session_of_its_own(tmp_path
     pid, start = escaped(tmp_path)
     try:
         assert os.getsid(pid) != handle.data['pid'], 'the child left the group that killpg reaches'
-        assert rt.wait(handle, timeout=0.5).status is ExitStatus.TIMED_OUT
+        assert rt.wait(handle, Deadline.after(0.5)).status is ExitStatus.TIMED_OUT
         assert gone(pid, start), 'the escaped child dies with the agent'
     finally:
         if alive(pid, start):
@@ -135,7 +146,7 @@ def test_kill_ends_an_escaped_child_after_the_agent_itself_exited(tmp_path: Path
     handle = rt.start(spec(tmp_path, script(tmp_path, ESCAPE)))
     pid, start = escaped(tmp_path)
     try:
-        assert rt.wait(handle, timeout=10).status is ExitStatus.EXITED
+        assert rt.wait(handle, Deadline.after(10)).status is ExitStatus.EXITED
         assert alive(pid, start), 'the agent exited, its job did not'
         Subprocess().open('subprocess').kill(Handle(handle.runtime, dict(handle.data)))
         assert gone(pid, start), 'any instance, from the handle in the database'
@@ -156,10 +167,10 @@ def test_session_id_is_read_from_stdout_while_the_process_still_runs(tmp_path: P
     started = time.monotonic()
     assert rt.session_id(silent) is None
     assert time.monotonic() - started < 3, 'a process that ended without the line is not waited for'
-    rt.wait(silent, timeout=5)
+    rt.wait(silent, Deadline.after(5))
     unpatterned = rt.start(spec(tmp_path, script(tmp_path, 'echo thread_id')))
     assert rt.session_id(unpatterned) is None, 'no pattern, no id'
-    rt.wait(unpatterned, timeout=5)
+    rt.wait(unpatterned, Deadline.after(5))
 
 
 def test_a_harness_without_resume_arguments_takes_no_message(tmp_path: Path) -> None:
@@ -179,16 +190,16 @@ def test_rehydrated_handle_is_observable_without_an_exit_code(tmp_path: Path) ->
     rehydrated = Handle(handle.runtime, dict(handle.data))
     assert other._alive(rehydrated)
     other.kill(rehydrated)
-    starter.wait(handle, timeout=5)
+    starter.wait(handle, Deadline.after(5))
     assert not other._alive(rehydrated)
-    assert other.wait(rehydrated, timeout=1).exit_code is None
+    assert other.wait(rehydrated, Deadline.after(1)).exit_code is None
     assert other.read(Handle('subprocess', {**handle.data, 'log_dir': str(tmp_path / 'nope')})) == ''
 
 
 def test_reused_pid_is_not_mistaken_for_the_implementer(tmp_path: Path) -> None:
     rt = Subprocess().open('subprocess')
     handle = rt.start(spec(tmp_path, script(tmp_path, 'true')))
-    rt.wait(handle, timeout=5)
+    rt.wait(handle, Deadline.after(5))
     impostor = Handle('subprocess', {**handle.data, 'pid': os.getpid(), 'start_time': -1.0})
     assert not Subprocess().open('subprocess')._alive(impostor)
 
@@ -227,7 +238,7 @@ def test_an_agent_that_exits_at_once_still_starts(tmp_path: Path, monkeypatch: p
     rt = Subprocess().open('subprocess')
     handle = rt.start(spec(tmp_path, script(tmp_path, 'exit 0')))
     assert handle.data['pgid'] == handle.data['pid']
-    assert rt.wait(handle, timeout=10).status is ExitStatus.EXITED
+    assert rt.wait(handle, Deadline.after(10)).status is ExitStatus.EXITED
 
 
 TURNS = """
@@ -255,7 +266,7 @@ def test_a_message_waits_for_the_turn_to_end_then_resumes_the_session_with_it(tm
     while not (tmp_path / 'turns.log').exists():
         time.sleep(0.05)
     assert 'turn 2' not in (tmp_path / 'turns.log').read_text(), 'the turn in progress gets nothing'
-    outcome = rt.wait(handle, timeout=20)
+    outcome = rt.wait(handle, Deadline.after(20))
     assert (outcome.status, outcome.error) == (ExitStatus.EXITED, None)
     assert (tmp_path / 'turns.log').read_text() == (
         'turn 1: the brief\nturn 2 of t-42: [piloop] note on run#1 by research#2: stop after the next commit\n'
@@ -279,7 +290,7 @@ def test_a_hook_of_the_harness_takes_the_messages_during_the_turn_and_no_turn_fo
     assert take(queue) == ['first', 'second']
     assert take(queue) == [], 'taken once'
     go.write_text('\n')
-    assert rt.wait(handle, timeout=10).error is None
+    assert rt.wait(handle, Deadline.after(10)).error is None
     assert (tmp_path / 'env.txt').read_text() == f'queue={queue}\n'
     assert not rt._resume(handle), 'nothing left for a turn of its own'
 
@@ -309,26 +320,26 @@ def test_queued_messages_stay_when_the_turn_failed_or_the_session_is_unknown_or_
     resume = ['resume', '{session_id}', '{prompt}']
     failed = rt.start(spec(tmp_path, script(tmp_path, 'sleep 0.3; exit 2'), resume=resume))
     rt.prompt(failed, 'x')
-    assert rt.wait(failed, timeout=10).exit_code == 2
+    assert rt.wait(failed, Deadline.after(10)).exit_code == 2
     assert (tmp_path / 'logs' / 'queued-messages').read_text() == '"x"\n', 'a failed turn is not resumed'
 
     (tmp_path / 'logs' / 'queued-messages').unlink()
     unknown = rt.start(spec(tmp_path, script(tmp_path, 'sleep 0.3'), pattern='id=(\\w+)', resume=resume))
     rt.prompt(unknown, 'y')
-    assert rt.wait(unknown, timeout=10).error is None
+    assert rt.wait(unknown, Deadline.after(10)).error is None
     assert (tmp_path / 'logs' / 'queued-messages').exists(), 'no session id to resume'
 
     (tmp_path / 'logs' / 'queued-messages').write_text('\n')
     blank = rt.start(spec(tmp_path, script(tmp_path, 'true'), resume=['again', '{prompt}']))
-    assert rt.wait(blank, timeout=10).error is None, 'an empty queue starts no turn'
+    assert rt.wait(blank, Deadline.after(10)).error is None, 'an empty queue starts no turn'
 
     (tmp_path / 'logs' / 'queued-messages').unlink()
     reattached = Subprocess().open('subprocess')
     other = rt.start(spec(tmp_path, script(tmp_path, 'sleep 0.3'), resume=resume))
     rt.prompt(other, 'z')
-    assert reattached.wait(other, timeout=10).error is None, 'only the starting instance knows the environment'
+    assert reattached.wait(other, Deadline.after(10)).error is None, 'only the starting instance knows the environment'
     assert (tmp_path / 'logs' / 'queued-messages').read_text() == '"z"\n'
-    rt.wait(other, timeout=10)  # reap it
+    rt.wait(other, Deadline.after(10))  # reap it
 
 
 def test_a_re_attached_agent_refuses_messages_that_no_turn_would_take(tmp_path: Path) -> None:
@@ -337,14 +348,14 @@ def test_a_re_attached_agent_refuses_messages_that_no_turn_would_take(tmp_path: 
     handle = rt.start(spec(tmp_path, script(tmp_path, 'sleep 0.5'), resume=['resume', 'id', '{prompt}']))
     rt.prompt(handle, 'before the restart')
     reattached = Subprocess().open('subprocess')
-    waiting = threading.Thread(target=reattached.wait, args=(handle, 10))
+    waiting = threading.Thread(target=reattached.wait, args=(handle, Deadline.after(10)))
     waiting.start()
     while (tmp_path / 'logs' / 'agent_session.resumer').exists():
         time.sleep(0.01)
     with pytest.raises(NotSteerable, match='the daemon that started it was restarted'):
         reattached.prompt(handle, 'after it')
     waiting.join()
-    rt.wait(handle, timeout=10)  # reap it
+    rt.wait(handle, Deadline.after(10))  # reap it
 
 
 def test_queueing_and_draining_hold_one_lock_so_no_message_falls_between_them(tmp_path: Path) -> None:
@@ -368,7 +379,7 @@ def test_queueing_and_draining_hold_one_lock_so_no_message_falls_between_them(tm
         assert draining.is_alive() and queue.exists(), 'the drain waits while a message is appended'
     draining.join()
     assert not queue.exists()
-    rt.wait(handle, timeout=10)
+    rt.wait(handle, Deadline.after(10))
 
 
 def test_a_start_that_fails_after_the_spawn_kills_and_waits_for_the_process(

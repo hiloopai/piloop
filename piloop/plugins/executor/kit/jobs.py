@@ -65,7 +65,16 @@ from piloop.plugins.executor.kit.relay import RELAY_ARGV
 from piloop.plugins.executor.kit.sessions import POLL_SECONDS, SessionFile
 from piloop.plugins.executor.kit.transfers import send_of_record
 from piloop.plugins.harness.contract import MCP, McpLaunch, expand
-from piloop.plugins.runtime.contract import AgentExit, AgentSpec, AgentStart, ExitStatus, Handle, Runtime, taken
+from piloop.plugins.runtime.contract import (
+    AgentExit,
+    AgentSpec,
+    AgentStart,
+    Deadline,
+    ExitStatus,
+    Handle,
+    Runtime,
+    taken,
+)
 from piloop.plugins.vcs.contract import Repository
 from piloop.proc import AGENT_TOKEN_ENV, PILOOP_ARGV, child_env, kill_group
 from piloop.settings import INPUTS_DIR
@@ -230,6 +239,10 @@ class Control(Protocol):
         """The values of the agent's secrets (``AgentJob.secrets``) that the home has, and its token: asked at its start."""
         ...
 
+    def extended(self) -> float:
+        """The seconds that the agent may run past its job's ``timeout``: its extensions in all (``Executor.extend``)."""
+        ...
+
 
 def run_agent(job: AgentJob, runtime: Runtime, control: Control, site: Site, span: Span) -> AgentReport | None:
     """Make the artifact, start the agent, watch it to its end, and return its report.
@@ -345,7 +358,8 @@ def watch_agent(
     """
     reader = job.harness.usage() if job.harness is not None else None
     file = None if reader is None else SessionFile(reader, site.cas, site.cwd(job), job.session_id)
-    outcome, session_id = _watch(job, runtime, handle, max(job.timeout - elapsed, 0), control, site, file, span)
+    deadline = Deadline(time.monotonic() - elapsed, job.timeout, control.extended)
+    outcome, session_id = _watch(job, runtime, handle, deadline, control, site, file, span)
     if control.handing_over():
         return None
     outcome = replace(outcome, seconds=elapsed + outcome.seconds)
@@ -366,7 +380,7 @@ def _watch(
     job: AgentJob,
     runtime: Runtime,
     handle: Handle,
-    timeout: float,
+    deadline: Deadline,
     control: Control,
     site: Site,
     file: SessionFile | None,
@@ -395,7 +409,7 @@ def _watch(
                 daemon=True,
             )
             snapshots.start()
-        outcome = runtime.wait(handle, timeout)
+        outcome = runtime.wait(handle, deadline)
     except Exception as e:  # a pane or a server that is gone: the agent ended for the worker
         span.error(e)
         outcome = AgentExit(ExitStatus.EXITED, time.monotonic() - started_at, error=f'{type(e).__name__}: {e}')

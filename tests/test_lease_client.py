@@ -34,6 +34,7 @@ from piloop.plugins.executor.kit.clones import NotSent
 from piloop.plugins.executor.kit.door import Call, Relayed
 from piloop.plugins.executor.kit.leases import (
     Answer,
+    Extend,
     Grant,
     Leases,
     NotAddressed,
@@ -291,6 +292,32 @@ def test_a_worker_reads_work_for_every_worker_and_only_its_own_prompts_and_revok
     assert w1.messages(works[-1].id, 0.01) == [stop], 'a prompt with its outcome is left out, though behind the cursor'
 
 
+def test_an_extension_reaches_the_worker_of_the_agent_s_live_lease_once_for_each_total_and_its_grant_keeps_it(
+    connect: Connect, db: Database, campaign: Campaign, tmp_path: Path, leases: Leases
+) -> None:
+    w1, w2 = connect('w1'), connect('w2')
+    start = w1.register(INFO).cursor
+    w2.register(INFO)
+    job = agent_job(db, campaign, tmp_path)
+    key = AgentKey(job.agent_session)
+    leases.submit(job)
+    [work] = w1.messages(start, 5)
+    leases.extend(key, 60)  # queued: no worker to tell, and it ends no agent yet
+    grant = w1.acquire(uuid4().hex, HOST)
+    assert isinstance(grant, Grant) and grant.extended == 0
+    w1.started(grant.lease, HANDLE, None)
+    for total in (3600, 3600, 5400):  # core sends a total again after a restart
+        leases.extend(key, total)
+    first, second = w1.messages(work.id, 5)
+    assert (first, second) == (
+        Extend(id=first.id, lease=grant.lease, seconds=3600),
+        Extend(id=second.id, lease=grant.lease, seconds=5400),
+    )
+    assert w2.messages(work.id, 0.01) == [], "another worker's extensions are not its own"
+    [held] = w1.register(INFO).held
+    assert held.extended == 5400, 'a restarted worker finds it on its grant'
+
+
 def test_a_long_poll_answers_at_the_commit_that_brings_a_message(
     connect: Connect, db: Database, campaign: Campaign, tmp_path: Path, leases: Leases
 ) -> None:
@@ -387,7 +414,7 @@ def test_a_revoked_token_and_the_servers_own_name_are_dismissed(remote: Callable
 
 def test_a_worker_of_another_protocol_is_dismissed_with_the_servers_version(remote: Callable[..., Remote]) -> None:
     with pytest.raises(
-        Dismissed, match=r'\(426\): the server runs piloop .+, with protocol 15, and the worker protocol 1'
+        Dismissed, match=r'\(426\): the server runs piloop .+, with protocol 16, and the worker protocol 1'
     ):
         remote().register(INFO.model_copy(update={'protocol': 1}))
 
@@ -404,7 +431,7 @@ def test_a_worker_that_registered_before_the_server_upgraded_is_refused_at_its_h
     ):
         refused = http.post(f'/v1/executor/{path}', content=body.model_dump_json())
         assert (refused.status_code, refused.json()['error']) == (426, 'protocol'), path
-        assert 'with protocol 15, and the worker protocol 1' in refused.json()['detail']
+        assert 'with protocol 16, and the worker protocol 1' in refused.json()['detail']
     http.close()
 
 
