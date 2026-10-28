@@ -1072,6 +1072,68 @@ def test_a_repo_without_a_piloop_toml_is_refused_with_how_to_make_one(
     assert list((cfg.home / 'repos').iterdir()) == [], 'the refused clone is gone'
 
 
+def test_a_sync_takes_a_private_repository_s_new_commit_with_a_token_that_nothing_keeps_or_a_home_secret(
+    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    origin = tmp_path / 'origin.git'
+    subprocess.run(['git', 'clone', '-q', '--bare', str(campaign_path), str(origin)], check=True)
+    token = Basic.password
+    upstream = tmp_path / 'upstream'
+    subprocess.run(['git', 'clone', '-q', str(origin), str(upstream)], check=True)
+    caplog.set_level(logging.DEBUG)
+
+    def push(message: str) -> str:
+        """A new commit in the private repository: its sha. A dumb HTTP server serves what ``update-server-info`` lists."""
+        subprocess.run(['git', 'commit', '-q', '--allow-empty', '-m', message], cwd=upstream, check=True)
+        subprocess.run(['git', 'push', '-q'], cwd=upstream, check=True)
+        subprocess.run(['git', 'update-server-info'], cwd=origin, check=True)
+        return Repo(upstream).head.commit.hexsha
+
+    with basic_server(origin) as url, serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+        added = client.register_campaign(
+            Clone(clone=Remote(url=url, credential=TokenCredential(token=SecretStr(token))))
+        )
+        checkout, ref = Repo(added.campaign.path), str(added.campaign.id)
+        new = push('upstream moved')
+        with pytest.raises(Refused, match=r'^git pull in .* failed: ') as unreachable:
+            client.sync_campaign(ref)
+        assert unreachable.value.error == Problem.REFUSED
+        client.sync_campaign(ref, SyncBody(credential=TokenCredential(token=SecretStr(token))))
+        assert checkout.head.commit.hexsha == new, 'the token fetched the new commit'
+        transport = httpx.HTTPTransport(uds=str(cfg.socket_file))
+        with httpx.Client(transport=transport, base_url='http://piloop') as raw:
+            sync = f'/v1/campaigns/{ref}/sync'
+            for invalid in (
+                {'credential': {'token': token}, 'secret': 'TOKEN'},
+                {'credential': {'token': token, 'secret': 'TOKEN'}},
+                {'credential': {}},
+            ):
+                answer = raw.post(sync, json=invalid)
+                assert answer.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, invalid
+                assert token not in answer.text, 'a refusal does not send the token back'
+        with db.session() as s:
+            assert not [e for e in s.scalars(select(Event)) if token in e.payload.model_dump_json()]
+        kept = [p for p in cfg.home.rglob('*') if p.is_file() and token.encode() in p.read_bytes()]
+        assert kept == [], 'no file of the home holds it: not the database, its WAL, the CAS or the clone'
+        assert token not in caplog.text
+        client.set_secret('TOKEN', Located(), SecretBody(value=SecretStr(token)))
+        newer = push('upstream moved again')
+        client.sync_campaign(ref, SyncBody(credential=SecretCredential(secret='TOKEN')))
+        assert checkout.head.commit.hexsha == newer, "the home's secret fetched it"
+
+
+def test_a_sync_of_a_campaign_registered_by_path_refuses_a_credential(
+    db: Database, campaign_path: Path, cfg: Settings
+) -> None:
+    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+        client.register_campaign(Checkout(path=str(campaign_path)))
+        for credential in (SecretCredential(secret='TOKEN'), TokenCredential(token=SecretStr('tok'))):
+            with pytest.raises(Refused, match=r'^campaign demo is a checkout of .*: a credential is for a cloned') as e:
+                client.sync_campaign('demo', SyncBody(credential=credential))
+            assert e.value.error == Problem.REFUSED
+        assert client.sync_campaign('demo').campaign.name == 'demo', 'without one, it syncs'
+
+
 def test_a_clone_with_a_token_uses_it_for_that_clone_and_no_file_of_the_home_or_answer_keeps_it(
     db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

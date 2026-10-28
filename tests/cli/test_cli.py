@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from piloop.actor import System
 from piloop.agents.results import PromptOutcome
 from piloop.api.client import Client, NoDaemon
-from piloop.api.contract import Selection
+from piloop.api.contract import SecretCredential, Selection, SyncBody, TokenCredential
 from piloop.campaign import campaigns as campaign_module, inbox
 from piloop.campaign.campaigns import CampaignAdded
 from piloop.campaign.stop import CancelRequested, StopRequested
@@ -1520,6 +1520,41 @@ def test_campaign_fork_makes_a_campaign_from_the_head_of_another(campaign_path: 
     )
     run_cli(['campaign', 'sync', 'demo'])
     assert out() == 'campaign demo #1: config re-read\n'
+
+
+class _Terminal(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+@pytest.mark.usefixtures('api')
+def test_campaign_sync_takes_a_token_from_stdin_or_a_secret_s_name_but_not_both(
+    campaign_path: Path, out, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """The sync reaches the daemon with the credential, which refuses one for a campaign registered by path."""
+    run_cli(['init', str(campaign_path)])
+    out()
+    sent = mocker.spy(Client, 'sync_campaign')
+    refused = '^campaign demo is a checkout of .*: a credential is for a cloned campaign'
+    for argv, stdin, credential in (
+        (['--token-stdin'], io.StringIO('  tok\n'), TokenCredential(token=SecretStr('tok'))),
+        (['--token-stdin'], io.StringIO('tok'), TokenCredential(token=SecretStr('tok'))),
+        (['--secret', 'TOKEN'], io.StringIO(), SecretCredential(secret='TOKEN')),
+    ):
+        monkeypatch.setattr(sys, 'stdin', stdin)
+        with pytest.raises(SystemExit, match=refused):
+            run_cli(['campaign', 'sync', 'demo', *argv])
+        assert sent.call_args.args[2] == SyncBody(credential=credential)
+    calls = sent.call_count
+    for argv, stdin, why in (
+        (['--token-stdin', '--secret', 'TOKEN'], io.StringIO('tok'), '^--secret and --token-stdin each give'),
+        (['--token-stdin'], io.StringIO(' \n'), '^--token-stdin read no token from stdin$'),
+        (['--token-stdin'], _Terminal(), '^--token-stdin reads the token from stdin: pipe it in$'),
+    ):
+        monkeypatch.setattr(sys, 'stdin', stdin)
+        with pytest.raises(SystemExit, match=why):
+            run_cli(['campaign', 'sync', 'demo', *argv])
+    assert sent.call_count == calls, 'none of them reached the daemon'
 
 
 @pytest.mark.usefixtures('api')

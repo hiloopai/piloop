@@ -291,7 +291,8 @@ campaign enwik8 #3: config re-read
 The checkout moves forward to the repository's head, and piloop reads its `piloop.toml` again. The campaign's
 candidates and head stay. To try the new code, import it as a candidate (`piloop candidate import enwik8 origin/main`),
 or fork the campaign at it (`piloop campaign fork enwik8 --at origin/main`). A repository whose host asks for a token
-takes `--secret`, the name of the server's secret that holds it.
+takes it on stdin, for this sync alone (`printf %s "$TOKEN" | piloop campaign sync enwik8 --token-stdin`), or
+`--secret`, the name of the server's secret that holds it.
 
 ## Files
 

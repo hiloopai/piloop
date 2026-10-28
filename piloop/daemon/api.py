@@ -412,9 +412,19 @@ def sync_campaign(
     A changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions
     changed is active again.
     """
-    if cloned(api.cfg.home, campaign):
-        with closing(vcs_of(campaign).open(FilePath(campaign.path))) as repo:
-            repo.update(_credential(api, None if body is None else body.credential))
+    match cloned(api.cfg.home, campaign), None if body is None else body.credential:
+        case True, credential:
+            with closing(vcs_of(campaign).open(FilePath(campaign.path))) as repo:
+                repo.update(_credential(api, credential))
+        case False, None:
+            pass
+        case _:
+            raise Refusal(
+                HTTPStatus.CONFLICT,
+                Problem.REFUSED,
+                f'campaign {campaign.name} is a checkout of {campaign.path}, which the server did not clone:'
+                ' a credential is for a cloned campaign, so sync it without one',
+            )
     was = campaign.status
     sync(s, campaign)
     documents = MEMORY.selected(campaign.config.plugins).sync(s, campaign, me)

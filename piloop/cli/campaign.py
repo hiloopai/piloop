@@ -1,12 +1,24 @@
 """The commands about campaigns: ``init``, and those that open the database: ``history``, ``campaign parent|tree``."""
 
+import sys
 from pathlib import Path
 from typing import Annotated
 
 import cyclopts
+from pydantic import SecretStr
 
 from piloop.api.client import Client, answers
-from piloop.api.contract import MAX_POLL_SECONDS, Checkout, EventsQuery, Fork, SecretCredential, Selection, SyncBody
+from piloop.api.contract import (
+    MAX_POLL_SECONDS,
+    Checkout,
+    Credential,
+    EventsQuery,
+    Fork,
+    SecretCredential,
+    Selection,
+    SyncBody,
+    TokenCredential,
+)
 from piloop.api.views import Registered
 from piloop.campaign import ops
 from piloop.campaign.campaigns import (
@@ -170,18 +182,43 @@ def sync_cmd(
         str | None,
         cyclopts.Parameter(help="The name of the server's secret that the host of the campaign's repository asks for."),
     ] = None,
+    token_stdin: Annotated[
+        bool,
+        cyclopts.Parameter(
+            help="Read a token that the repository's host accepts from stdin, for this sync alone: nothing keeps it.",
+            negative=(),
+        ),
+    ] = False,
 ) -> None:
     """Read a campaign's piloop.toml again. A campaign that the server cloned first takes its repository's new versions.
 
     Its checkout moves forward to them; its candidates and head stay. New code comes in with
     `piloop candidate import`, or a fork with `piloop campaign fork --at`. A local checkout is read where it is:
-    `piloop init <path>` does the same.
+    `piloop init <path>` does the same. For a private repository: `--secret`, or a token piped in with
+    `--token-stdin`.
     """
+    body = SyncBody(credential=_sync_credential(secret, token_stdin))
     with Client.connect(daemon_http()) as client:
-        credential = None if secret is None else SecretCredential(secret=secret)
-        synced = client.sync_campaign(campaign_name(client, ref), SyncBody(credential=credential))
+        synced = client.sync_campaign(campaign_name(client, ref), body)
     campaign = synced.campaign
     common.console.print(f'campaign {campaign.name} #{campaign.id}: config re-read', markup=False)
+
+
+def _sync_credential(secret: str | None, token_stdin: bool) -> Credential | None:
+    """The credential of ``piloop campaign sync``: the server's secret ``secret``, or the token that stdin holds."""
+    match secret, token_stdin:
+        case None, False:
+            return None
+        case str(), False:
+            return SecretCredential(secret=secret)
+        case None, True:
+            if sys.stdin.isatty():
+                raise SystemExit('--token-stdin reads the token from stdin: pipe it in')
+            if not (token := sys.stdin.read().strip()):
+                raise SystemExit('--token-stdin read no token from stdin')
+            return TokenCredential(token=SecretStr(token))
+        case _:
+            raise SystemExit('--secret and --token-stdin each give the credential: pass one of them')
 
 
 def parent(
