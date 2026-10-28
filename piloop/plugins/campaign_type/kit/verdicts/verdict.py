@@ -13,7 +13,7 @@ from sqlalchemy import ColumnElement
 from piloop.actor import Actor, System
 from piloop.plugins.campaign_type.kit.candidates.ids import JUDGED, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.api import CandidateView
+from piloop.plugins.campaign_type.kit.candidates.wire import CandidateView
 
 REJUDGED: Final = frozenset({Outcome.CRASH, Outcome.DISCARD, Outcome.INTERESTING})
 """The daemon's verdicts that a measurement by hand has judged again. A keep stays: runs started from it as a bar."""

@@ -1,0 +1,42 @@
+"""The runs' route: a run's cancel."""
+
+from http import HTTPStatus
+from typing import Annotated
+
+from fastapi import APIRouter, Depends
+
+from piloop.api.contract import (
+    CancelBody,
+    Problem,
+)
+from piloop.campaign.stop import request_cancel
+from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Writing, actor_access, reader
+from piloop.db import feed as db_feed
+from piloop.net import Refusal
+from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RunId
+from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.wire import RunAnswer
+
+router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUSALS_DOCUMENTED)
+"""The runs' route, beside the API's."""
+
+
+def run_addressed(s: Writing, run: RunId) -> Run:
+    """The run that the path names. Refuses one that the home does not have."""
+    if (found := s.get(Run, run)) is None:
+        raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_RUN, f'no run#{run}')
+    return found
+
+
+AddressedRun = Annotated[Run, Depends(run_addressed)]
+
+
+@router.post('/runs/{run}/cancel', operation_id='cancel_run', dependencies=[Depends(actor_access)])
+def cancel_run(s: Writing, me: Acting, run: AddressedRun, body: CancelBody) -> RunAnswer:
+    """Cancel a queued or running run: a queued one never starts, a running implementer ends as ``ending`` says."""
+    if run.status not in OPEN_RUNS:
+        raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, f'run#{run.id} is not queued or running')
+    request_cancel(s, run, me, ending=body.ending)
+    s.commit()
+    with db_feed.snapshot(s) as cursor:
+        return RunAnswer(cursor=cursor, run=run.id)

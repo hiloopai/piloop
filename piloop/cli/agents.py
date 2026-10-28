@@ -1,4 +1,4 @@
-"""The commands that act on agents, clients of the API: ``launch``, ``prompt``, ``agent cancel`` and ``run cancel``."""
+"""The commands that act on agents, clients of the API: ``launch``, ``prompt`` and ``agent cancel``."""
 
 from typing import Annotated, assert_never
 
@@ -11,10 +11,8 @@ from piloop.cli import common
 from piloop.cli.client import campaign_name, daemon_http
 from piloop.cli.common import HARNESS_HELP, CampaignRef
 from piloop.ids import AgentSessionId, Ending, RoleName
-from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
 agent_app = cyclopts.App(name='agent', help='Act on one agent.')
-run_app = cyclopts.App(name='run', help='Act on one run.')
 agent_app.command('piloop.cli.agent_io:messages', name='messages')
 
 
@@ -101,25 +99,10 @@ def agent_cancel(
     `--wrap-up`, after it was told to save its work and stop. For an implementer, this cancels its run (`piloop run cancel`).
     """
     with Client.connect(daemon_http()) as client:
-        client.cancel_agent(agent_session_id, _cancel(wrap_up))
+        client.cancel_agent(agent_session_id, cancel_body(wrap_up))
     common.console.print(f'cancel requested for agent_session#{agent_session_id}: the daemon acts at once')
 
 
-@run_app.command(name='cancel')
-def run_cancel(
-    run_id: Annotated[RunId, cyclopts.Parameter(help='The id of the run.')], /, *, wrap_up: WrapUp = False
-) -> None:
-    """Cancel a queued or running run. The daemon acts at once.
-
-    A queued run never starts, and a run whose implementer fails to start is not launched again. A running implementer is ended
-    with every process that it started, at once or, with `--wrap-up`, after it was told to save its work and stop. The run
-    closes as `cancelled`, unless the implementer left its finding before the daemon ended it: a later finding is
-    refused. Its commits are scored, and its idea is parked: set it `ready` to run it again.
-    """
-    with Client.connect(daemon_http()) as client:
-        client.cancel_run(run_id, _cancel(wrap_up))
-    common.console.print(f'cancel requested for run#{run_id}: the daemon acts at once')
-
-
-def _cancel(wrap_up: bool) -> CancelBody:
+def cancel_body(wrap_up: bool) -> CancelBody:
+    """What a cancel of an agent or of a work unit asks: at once, or after its wrap-up (``--wrap-up``)."""
     return CancelBody(ending=Ending.WRAP_UP if wrap_up else Ending.NOW)

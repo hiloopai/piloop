@@ -34,7 +34,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, Lin
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import api as evaluation_api, ops as evaluation_ops
+from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, wire as evaluation_api
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement

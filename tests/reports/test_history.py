@@ -17,11 +17,11 @@ from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunStatus
-from piloop.plugins.campaign_type.kit.runs.section.history import History
-from piloop.plugins.campaign_type.kit.runs.section.pack import Pack
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.optimization.history import FIRST_LINE_CHARS, comment_line, history, newest
+from piloop.plugins.campaign_type.optimization.section.history import History
+from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.section.contract import Rendering, markdown
-from piloop.reports.history import FIRST_LINE_CHARS, comment_line, history, newest
 from piloop.reports.wake import cost
 from piloop.text import CELL_CHARS, cell
 from tests.conftest import cas_of, spent

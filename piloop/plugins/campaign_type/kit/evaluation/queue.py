@@ -23,7 +23,9 @@ from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import measure as ledger
-from piloop.plugins.campaign_type.kit.evaluation.api import (
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
+from piloop.plugins.campaign_type.kit.evaluation.wire import (
     CancelledBy,
     EvaluationQueue,
     EvaluationState,
@@ -31,8 +33,6 @@ from piloop.plugins.campaign_type.kit.evaluation.api import (
     RunningSince,
     WaitingSince,
 )
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from piloop.plugins.campaign_type.kit.verdicts.judge import head
 
 CANCELLED = 'evaluation cancelled by {actor}'

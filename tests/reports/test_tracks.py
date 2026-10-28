@@ -10,7 +10,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.reports.pack import pack
+from piloop.plugins.campaign_type.optimization.pack import pack
 from piloop.watch.panels import PANELS, Context, campaigns, header
 from tests.conftest import home_cas, reconfigured
 from tests.reports.test_history import SHOWN, full

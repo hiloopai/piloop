@@ -3229,11 +3229,11 @@
         }
       }
     },
-    "/v1/candidates/{candidate}/note": {
+    "/v1/candidates/{candidate}/verdict": {
       "post": {
-        "summary": "Note",
-        "description": "Keep a regressed result in view as a lead, with follow-up seeds pinned to it.",
-        "operationId": "note",
+        "summary": "Set Verdict",
+        "description": "Override a candidate's judgement, with the reason. The verdict is then the caller's.",
+        "operationId": "set_verdict",
         "parameters": [
           {
             "name": "candidate",
@@ -3250,7 +3250,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NoteBody"
+                "$ref": "#/components/schemas/VerdictBody"
               }
             }
           }
@@ -3261,7 +3261,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Noted"
+                  "$ref": "#/components/schemas/VerdictChanged"
                 }
               }
             }
@@ -3309,11 +3309,11 @@
         }
       }
     },
-    "/v1/candidates/{candidate}/verdict": {
+    "/v1/candidates/{candidate}/note": {
       "post": {
-        "summary": "Set Verdict",
-        "description": "Override a candidate's judgement, with the reason. The verdict is then the caller's.",
-        "operationId": "set_verdict",
+        "summary": "Note",
+        "description": "Keep a regressed result in view as a lead, with follow-up seeds pinned to it.",
+        "operationId": "note",
         "parameters": [
           {
             "name": "candidate",
@@ -3330,7 +3330,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/VerdictBody"
+                "$ref": "#/components/schemas/NoteBody"
               }
             }
           }
@@ -3341,7 +3341,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/VerdictChanged"
+                  "$ref": "#/components/schemas/Noted"
                 }
               }
             }

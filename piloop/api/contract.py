@@ -26,9 +26,6 @@ from pydantic_core import PydanticCustomError
 from piloop import deprecated
 from piloop.actor import CALLER_NAME
 from piloop.ids import LISTED, CampaignName, CampaignStatus, CommentId, CommentKind, Ending, EnvName, RoleName
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
-from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 
 MAX_POLL_SECONDS = 25
 """The longest that the server holds a long-poll (``Polled.wait``), as the GitHub Actions runner's."""
@@ -194,92 +191,10 @@ class RetireBody(Params):
     """Why, with ids: it goes into a note on the campaign."""
 
 
-class IdeaBody(Params):
-    """A defined idea, which the daemon schedules in priority order once it is ready."""
-
-    title: str
-    hypothesis: str = ''
-    """Why this should help, and by how much. Default: the title."""
-    plan: str | None = None
-    """The steps for the implementer."""
-    provenance: str | None = None
-    """What prompted the idea, with ids or a URL."""
-    family: str | None = None
-    """The mechanism family. Ideas that try the same mechanism share it."""
-    priority: Priority = 2
-    harness: str | None = None
-    """The harness to use instead of the rotation."""
-    base: CandidateId | None = None
-    """The candidate to start from instead of the head. This makes a branch."""
-    proposed: bool = False
-    """Wait for a review before the daemon schedules the idea."""
-    track: TrackName | None = None
-    """The track it works on. Required when the campaign has more than one track."""
-    after: tuple[IdeaId, ...] = ()
-    """The ideas to wait for. The idea runs from the head when all are done."""
-    supersedes: tuple[IdeaId, ...] = ()
-    """The ideas that this idea refines."""
-
-
-class SeedBody(Params):
-    """A seed: a hunch with pointers, for research to develop into a defined idea or to reject."""
-
-    hunch: str
-    provenance: str
-    """Pointers to what prompted the hunch: ids, paths or numbers."""
-    base: CandidateId | None = None
-    """The candidate to start from, when the hunch is about that tree."""
-    track: TrackName | None = None
-    """The track it works on. Required when the campaign has more than one track."""
-
-
-class DevelopBody(Params):
-    """What makes a seed a defined idea: each field that the implementer needs."""
-
-    hypothesis: str
-    """The mechanism, and why it should move the metric."""
-    evidence: str
-    """What supports it, with ids and paths."""
-    check: str
-    """The cheapest measurement that can prove it wrong, and the result that stops the run."""
-    metric: str
-    """The metric that decides success."""
-    effect: str
-    """The expected size of the effect in the metric's units, and why."""
-    plan: str | None = None
-    title: str | None = None
-    """A clearer title. Default: the seed's."""
-    family: str | None = None
-    base: CandidateId | None = None
-    priority: Priority | None = None
-    """Default: the seed's priority."""
-    proposed: bool = False
-    after: tuple[IdeaId, ...] = ()
-    supersedes: tuple[IdeaId, ...] = ()
-
-
 class Reasoned(Params):
     """A change to an idea, with why: it goes into the event or a note on the idea."""
 
     reason: str
-
-
-class StatusBody(Reasoned):
-    """An idea's new status."""
-
-    status: IdeaStatus
-
-
-class BaseBody(Reasoned):
-    """The candidate that an idea's runs start from. Null: no pin, the head when the run starts."""
-
-    base: CandidateId | None
-
-
-class TrackBody(Reasoned):
-    """The track to move an idea to."""
-
-    track: TrackName
 
 
 class AckBody(Params):

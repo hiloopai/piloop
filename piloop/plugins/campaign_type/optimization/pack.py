@@ -7,7 +7,7 @@ repo when a sweep that proposes work starts. ``piloop history`` prints it too. I
 - the analysis artifacts (``context``) and the shared workspace, newest first, as file pointers
   with an outline;
 - what was tried, by family (``ideas.family``), and the seeds that other roles filed for research to develop;
-- the history (``piloop.reports.history``);
+- the history (``piloop.plugins.campaign_type.optimization.history``);
 - the latest implementer findings, and the digests and decisions of the orchestrator and the human, by id and first
   line.
 
@@ -47,7 +47,14 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
 from piloop.plugins.campaign_type.kit.verdicts.judge import head
 from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
-from piloop.reports.history import BRIEF_WIDTH, comment_line, newest, renderables as history, text_row, titled_table
+from piloop.plugins.campaign_type.optimization.history import (
+    BRIEF_WIDTH,
+    comment_line,
+    newest,
+    renderables as history,
+    text_row,
+    titled_table,
+)
 from piloop.text import HEADING, NONE, cell, metric
 
 WALK_ENTRIES = 20_000

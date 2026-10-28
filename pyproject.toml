@@ -54,20 +54,20 @@ piloop = "piloop.cli.main:main"
 
 # The commands of piloop itself, which load by their import path when they run (piloop.cli.main.COMMANDS).
 [project.entry-points."piloop.commands"]
-idea = "piloop.cli.idea:app"
-candidate = "piloop.cli.candidate:app"
-measurement = "piloop.cli.measurement:app"
-eval = "piloop.cli.evaluation:app"
+idea = "piloop.plugins.campaign_type.kit.backlog.cli:app"
+candidate = "piloop.plugins.campaign_type.optimization.cli:candidate_app"
+measurement = "piloop.plugins.campaign_type.kit.evaluation.cli:measurement_app"
+eval = "piloop.plugins.campaign_type.kit.evaluation.cli:eval_app"
 store = "piloop.cli.store:app"
 token = "piloop.cli.token:app"
 agent = "piloop.cli.agents:agent_app"
-run = "piloop.cli.agents:run_app"
+run = "piloop.plugins.campaign_type.kit.runs.cli:run_app"
 worker = "piloop.cli.worker:app"
 limits = "piloop.cli.limits:app"
 cas = "piloop.cli.cas:app"
 secret = "piloop.cli.secret:app"
 init = "piloop.cli.campaign:init"
-history = "piloop.cli.campaign:history"
+history = "piloop.plugins.campaign_type.optimization.cli:history"
 watch = "piloop.cli.campaign:watch_cmd"
 pause = "piloop.cli.control:pause"
 resume = "piloop.cli.control:resume"
@@ -196,8 +196,8 @@ inbox = "piloop.plugins.section.inbox:Inbox"
 events = "piloop.plugins.section.events:Events"
 tools = "piloop.plugins.section.tools:Tools"
 incidents = "piloop.plugins.section.incidents:Incidents"
-pack = "piloop.plugins.campaign_type.kit.runs.section.pack:Pack"
-history = "piloop.plugins.campaign_type.kit.runs.section.history:History"
+pack = "piloop.plugins.campaign_type.optimization.section.pack:Pack"
+history = "piloop.plugins.campaign_type.optimization.section.history:History"
 lessons = "piloop.plugins.section.lessons:Lessons"
 database = "piloop.plugins.section.database:Database"
 concepts = "piloop.plugins.campaign_type.optimization.section.concepts:Concepts"
@@ -329,7 +329,7 @@ include = ["piloop", "tests", "scripts", "examples"]
 exclude = [
     "piloop/db/migrations/versions",
     "piloop/plugins/*/*/migrations",
-    "piloop/campaign/templates",  # projects with their own deps
+    "piloop/plugins/campaign_type/optimization/templates",  # projects with their own deps
     "tests/typing",  # wrong on purpose: tests/test_typing.py checks it
 ]
 
@@ -351,7 +351,7 @@ filterwarnings = [
 [tool.coverage.run]
 data_file = ".coverage/.coverage"
 source = ["piloop"]
-omit = ["piloop/db/migrations/*", "piloop/plugins/*/*/migrations/*", "piloop/__main__.py", "piloop/campaign/templates/*"]
+omit = ["piloop/db/migrations/*", "piloop/plugins/*/*/migrations/*", "piloop/__main__.py", "piloop/plugins/campaign_type/optimization/templates/*"]
 branch = true
 
 [tool.coverage.report]

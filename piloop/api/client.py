@@ -22,12 +22,9 @@ from piloop.actor import Actor
 from piloop.api.contract import (
     MAX_POLL_SECONDS,
     AckBody,
-    BaseBody,
     CancelBody,
     Clone,
-    DevelopBody,
     EventsQuery,
-    IdeaBody,
     InboxQuery,
     LaunchBody,
     LimitBody,
@@ -38,18 +35,14 @@ from piloop.api.contract import (
     PauseBody,
     Polled,
     PromptBody,
-    Reasoned,
     Registration,
     ReopenBody,
     ReplyBody,
     RetireBody,
     SecretBody,
-    SeedBody,
     Selection,
-    StatusBody,
     StopBody,
     TokenBody,
-    TrackBody,
 )
 from piloop.api.views import (
     Acked,
@@ -57,8 +50,6 @@ from piloop.api.views import (
     Batch,
     CampaignAnswer,
     CampaignSynced,
-    Defined,
-    IdeaAnswer,
     Inbox,
     LiveKeys,
     Messaged,
@@ -68,19 +59,14 @@ from piloop.api.views import (
     Prompted,
     Registered,
     Replied,
-    RunAnswer,
     SecretChanged,
     SecretList,
     Status,
-    StatusChanged,
     Thread,
     TokenList,
     TokenMade,
-    TrackChanged,
 )
 from piloop.ids import AgentSessionId, CommentId
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, LinkKind
-from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
 TIMEOUT_SECONDS = 30
 CLONE_WAIT: Final = timedelta(minutes=15)
@@ -168,30 +154,6 @@ class Client:
     def retire(self, campaign: str, body: RetireBody) -> CampaignAnswer:
         return self.post(f'/v1/campaigns/{segment(campaign)}/retire', body, CampaignAnswer)
 
-    def add_idea(self, campaign: str, body: IdeaBody) -> Defined:
-        return self.post(f'/v1/campaigns/{segment(campaign)}/ideas', body, Defined)
-
-    def file_seed(self, campaign: str, body: SeedBody) -> IdeaAnswer:
-        return self.post(f'/v1/campaigns/{segment(campaign)}/seeds', body, IdeaAnswer)
-
-    def develop(self, idea: IdeaId, body: DevelopBody) -> Defined:
-        return self.post(f'/v1/ideas/{idea}/develop', body, Defined)
-
-    def set_status(self, idea: IdeaId, body: StatusBody) -> StatusChanged:
-        return self.post(f'/v1/ideas/{idea}/status', body, StatusChanged)
-
-    def link(self, idea: IdeaId, kind: LinkKind, target: IdeaId, body: Reasoned) -> IdeaAnswer:
-        return self._send('PUT', f'/v1/ideas/{idea}/links/{kind}/{target}', body, IdeaAnswer)
-
-    def unlink(self, idea: IdeaId, kind: LinkKind, target: IdeaId, body: Reasoned) -> IdeaAnswer:
-        return self._send('DELETE', f'/v1/ideas/{idea}/links/{kind}/{target}', body, IdeaAnswer)
-
-    def set_base(self, idea: IdeaId, body: BaseBody) -> IdeaAnswer:
-        return self.post(f'/v1/ideas/{idea}/base', body, IdeaAnswer)
-
-    def set_track(self, idea: IdeaId, body: TrackBody) -> TrackChanged:
-        return self.post(f'/v1/ideas/{idea}/track', body, TrackChanged)
-
     def limits(self) -> LiveKeys:
         return self._get('/v1/limits', Params(), LiveKeys)
 
@@ -227,9 +189,6 @@ class Client:
 
     def cancel_agent(self, agent: AgentSessionId, body: CancelBody) -> AgentAnswer:
         return self.post(f'/v1/agents/{agent}/cancel', body, AgentAnswer)
-
-    def cancel_run(self, run: RunId, body: CancelBody) -> RunAnswer:
-        return self.post(f'/v1/runs/{run}/cancel', body, RunAnswer)
 
     def ack(self, body: AckBody) -> Acked:
         return self.post('/v1/inbox/ack', body, Acked)

@@ -21,7 +21,7 @@ from piloop.plugins.runtime.subprocess import STDOUT
 from tests.fixtures.netfault import Proxy
 
 ROOT = Path(__file__).resolve().parents[2]
-TEMPLATES = ROOT / 'piloop' / 'campaign' / 'templates'
+TEMPLATES = ROOT / 'piloop' / 'plugins' / 'campaign_type' / 'optimization' / 'templates'
 CHEAPEST_MODEL = {'claude': 'claude-haiku-4-5-20251001'}
 """The model of each harness when ``--e2e-model`` is not given."""
 OPEN = {'queued', 'running'}

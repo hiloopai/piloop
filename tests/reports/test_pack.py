@@ -14,8 +14,8 @@ from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import Yield, source, yields
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.optimization.pack import OUTLINE_CHARS, pack
 from piloop.plugins.role.contract import Files
-from piloop.reports.pack import OUTLINE_CHARS, pack
 from tests.reports.test_history import SHOWN, comment, compact, idea, scored
 from tests.test_actor import ACTORS
 

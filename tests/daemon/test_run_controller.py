@@ -52,7 +52,6 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference, resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.api import Report
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import CHANGED_INPUTS
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
@@ -66,6 +65,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
 )
 from piloop.plugins.campaign_type.kit.evaluation.ops import add_measurement
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
+from piloop.plugins.campaign_type.kit.evaluation.wire import Report
 from piloop.plugins.campaign_type.kit.runs import stop as runs_stop
 from piloop.plugins.campaign_type.kit.runs.controller import (
     INTERRUPTED,

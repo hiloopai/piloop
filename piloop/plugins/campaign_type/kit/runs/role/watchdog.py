@@ -2,7 +2,7 @@ from importlib.resources import files
 
 from pydantic import Field
 
-from piloop.plugins.campaign_type.kit.runs.section.pack import Pack
+from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.role.contract import SweepRole
 from piloop.plugins.role.kit.guides import READER
 from piloop.plugins.section.contract import SECTIONS

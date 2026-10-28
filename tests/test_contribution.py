@@ -33,6 +33,7 @@ from piloop.plugins.archive.contract import ArchiveHost
 from piloop.plugins.archive.local import LocalArchive
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.optimization import api as optimization_api
 from piloop.plugins.contribution import CONTRIBUTORS, Contribution, DaemonHost, collect, contributions_of, machinery
 from piloop.plugins.executor.contract import JOB_KINDS, AgentFinished, AgentJob, JobKind
 from piloop.plugins.executor.workers import Workers
@@ -182,8 +183,8 @@ def test_each_installed_provider_that_a_campaign_may_choose_serves_and_documents
     installed(monkeypatch, [EntryPoint('notes', f'{__name__}:Notes', MEMORY.group)])
     controller = RunController(db, Tracer(None), tmp_path, executor=Workers())
     routers = Scheduler(db, controller, Tracer(None), tmp_path).contributions.routers
-    assert routers[1:] == (spend_api.router, lineage_api.router, local_api.router, NOTES), (
-        "after the executor's, the spend source's, the lineage's, which its providers share, and the memory providers',"
+    assert routers[1:] == (optimization_api.ROUTES, spend_api.router, lineage_api.router, local_api.router, NOTES), (
+        "after the executor's: the campaign types', the lineage's and the memory providers', in registry order"
         ' in registry order'
     )
     tokens = Tokens(db)

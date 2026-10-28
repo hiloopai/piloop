@@ -16,6 +16,7 @@ from typing import Annotated, TypeAliasType, get_args, get_origin, get_type_hint
 
 import httpx2 as httpx
 import pytest
+from fastapi import APIRouter
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute
 from git import Repo
@@ -37,7 +38,6 @@ from piloop.api.contract import (
     Clone,
     EventsQuery,
     Fork,
-    IdeaBody,
     InboxQuery,
     LaunchBody,
     LimitBody,
@@ -55,7 +55,6 @@ from piloop.api.contract import (
     SecretBody,
     SecretCredential,
     Selection,
-    StatusBody,
     StopBody,
     TokenBody,
     TokenCredential,
@@ -86,19 +85,24 @@ from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, E
 from piloop.net import tokens
 from piloop.net.server import OPENAPI, Server, app, local_listener
 from piloop.net.tokens import Tokens
+from piloop.plugins.campaign_type.kit.backlog import api as backlog_api
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient, IdeaBody, StatusBody
+from piloop.plugins.campaign_type.kit.candidates import api as candidates_api
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.api import (
-    CancelledBy,
-    ImportBody,
-    RemeasureBody,
-    RunningSince,
-    ScoringClient,
-)
+from piloop.plugins.campaign_type.kit.candidates.wire import CandidatesClient, ImportBody
+from piloop.plugins.campaign_type.kit.evaluation import api as evaluation_api
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
+from piloop.plugins.campaign_type.kit.evaluation.wire import CancelledBy, EvaluationClient, RunningSince
+from piloop.plugins.campaign_type.kit.runs import api as runs_api
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
+from piloop.plugins.campaign_type.kit.verdicts import api as verdicts_api
+from piloop.plugins.campaign_type.kit.verdicts.wire import RemeasureBody, VerdictsClient
+from piloop.plugins.campaign_type.optimization import api as optimization_api
+from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
 from piloop.plugins.contribution import collect, contributions_of, installed
 from piloop.plugins.memory.local.api import JournalBody, Journaled
 from piloop.plugins.memory.local.tables import Journal
@@ -111,7 +115,7 @@ from piloop.plugins.vcs.git import Git
 from piloop.settings import Settings
 from piloop.watch.panels import Context, InboxPanel
 from tests.campaign.test_stop import add_run
-from tests.conftest import disk, home_cas, measuring, serving_api, store_config
+from tests.conftest import EveryClient, disk, home_cas, measuring, serving_api, store_config
 from tests.test_git import Basic, basic_server
 
 
@@ -137,7 +141,7 @@ def test_on_the_socket_a_call_without_a_token_is_the_owner_and_a_token_is_its_ow
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
     worker = token(db, 'gpu1', Access.WORKER)
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as owner:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as owner:
         [state] = owner.status(Selection(campaign='demo')).campaigns
         assert state.name == 'demo'
         transport = httpx.HTTPTransport(uds=str(cfg.socket_file))
@@ -160,7 +164,7 @@ def test_on_the_network_a_caller_needs_a_token_whose_access_reads(
 
 
 def test_a_refusal_says_why_and_what_to_do(db: Database, campaign: Campaign, cfg: Settings) -> None:
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         with pytest.raises(Refused, match="^no campaign 'nope' in .*`piloop init <path>` registers one$") as unknown:
             client.inbox(InboxQuery(campaign='nope'))
         assert unknown.value.error == Problem.UNKNOWN_CAMPAIGN
@@ -178,7 +182,7 @@ def test_a_relative_path_names_the_campaign_from_where_the_client_runs(
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
     path = Path(campaign.path)
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         named = client.status(Selection(campaign=path.name, cwd=str(path.parent)))
         assert [c.id for c in named.campaigns] == [campaign.id]
         inside = client.status(Selection(cwd=str(path)))
@@ -188,7 +192,7 @@ def test_a_relative_path_names_the_campaign_from_where_the_client_runs(
 def test_the_events_long_poll_answers_the_first_event_that_matches_or_its_moved_cursor_at_the_end(
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         start = client.events(EventsQuery(limit=1000)).next
         emitted(db, 'noise')
         quiet = client.events(EventsQuery(after=start, kind=('wanted',), wait=0.2))
@@ -219,7 +223,7 @@ def test_a_long_poll_answers_its_moved_cursor_at_once_when_the_server_closes(
 
 
 def test_the_server_serves_the_openapi_document_of_its_routes(cfg: Settings, db: Database) -> None:
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         assert client._http.get(OPENAPI).json() == openapi()
     paths = openapi()['paths']
     routers = (*ROUTERS, *collect(contributions_of(installed()), ()).routers)
@@ -279,8 +283,18 @@ def test_each_method_of_the_client_calls_its_route_with_the_route_s_models() -> 
         sent.append(request)
         return httpx.Response(500, text='only the request counts')
 
-    client = ScoringClient(httpx.Client(transport=httpx.MockTransport(record), base_url='http://piloop'))
-    for route in [r for routes in ROUTERS for r in routes.routes]:
+    http = httpx.Client(transport=httpx.MockTransport(record), base_url='http://piloop')
+    clients: list[tuple[APIRouter, type[Client]]] = [
+        (ROUTERS[0], Client),
+        (backlog_api.router, BacklogClient),
+        (candidates_api.router, CandidatesClient),
+        (verdicts_api.router, VerdictsClient),
+        (optimization_api.router, OptimizationClient),
+        (evaluation_api.router, EvaluationClient),
+        (runs_api.router, RunsClient),
+    ]
+    assert [r for r, _ in clients] == [*ROUTERS, *optimization_api.ROUTERS], 'each router has its client'
+    for route, client in [(r, made(http)) for routes, made in clients for r in routes.routes]:
         assert isinstance(route, APIRoute)
         hints = get_type_hints(getattr(client, route.name))
         answer, taken = hints.pop('return'), list(hints.items())
@@ -345,7 +359,7 @@ def comment(db: Database, author: str, body: str) -> None:
 def test_the_news_long_poll_wakes_on_what_someone_else_writes_and_skips_what_the_caller_wrote(
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
-    with serving_api(cfg), Client.on(cfg.socket_file, System.ORCHESTRATOR) as orchestrator:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as orchestrator:
         start = orchestrator.news(NewsQuery()).next
         comment(db, 'orchestrator', 'my own decision')
         mine = orchestrator.news(NewsQuery(after=start, wait=0.2))
@@ -596,7 +610,7 @@ def test_a_message_signs_as_the_caller_wakes_the_orchestrator_and_its_reply_reac
 def test_a_write_answers_its_cursor_and_refuses_what_its_operation_refuses(
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
-    with serving_api(cfg), ScoringClient.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         added = client.add_idea('demo', IdeaBody(title='try a cache', priority=1))
         assert (added.idea.title, added.idea.status, added.idea.created_by, added.review) == (
             'try a cache',
@@ -639,7 +653,7 @@ def test_the_evaluation_queue_answers_each_state_and_a_cancel_refuses_a_candidat
     with db.session() as s:
         s.add(Evaluation(candidate_id=1, evaluator_id=campaign.evaluator_id, created_at=then, started_at=then))
         s.commit()
-    with serving_api(cfg), ScoringClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
         [running] = client.evaluations().evaluations
         assert (running.candidate, running.campaign, running.summary) == (1, 'demo', 'baseline')
         assert running.state == RunningSince(since=then)
@@ -661,7 +675,7 @@ def test_the_evaluation_queue_answers_each_state_and_a_cancel_refuses_a_candidat
 def test_a_cancelled_evaluation_of_a_baseline_that_never_measured_pauses_its_campaign(
     db: Database, campaign_path: Path, cfg: Settings
 ) -> None:
-    with serving_api(cfg), ScoringClient.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         added = client.register_campaign(Checkout(path=str(campaign_path)))
         client.remeasure(added.baseline, RemeasureBody())
         client.cancel_evaluation(added.baseline)
@@ -769,7 +783,7 @@ def first(client: Client, after: int, *kinds: str) -> EventModel:
 def test_a_checkout_registers_at_once_the_daemon_measures_its_baseline_and_its_piloop_toml_is_read_again(
     db: Database, campaign_path: Path, cfg: Settings
 ) -> None:
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         added = client.register_campaign(Checkout(path=str(campaign_path)))
         assert (added.campaign.name, added.campaign.path, added.baseline) == (
             'demo',
@@ -821,7 +835,7 @@ def test_a_fork_starts_from_a_version_of_its_source_in_a_clone_with_its_config_a
     repo.git.update_ref('refs/piloop/demo/r9/0', kept)
     repo.git.reset('-q', '--hard', base)  # only piloop's ref keeps the run's commit
     repo.close()
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         source = client.register_campaign(Checkout(path=str(campaign_path))).campaign
         with pytest.raises(Refused, match="^no campaign 'nope'") as unknown:
             client.register_campaign(Fork(fork='nope'))
@@ -850,7 +864,7 @@ def test_a_registration_names_the_campaign_and_its_git_refs_carry_that_name(
     toml = campaign_path / 'piloop.toml'
     toml.write_text(toml.read_text().replace('name = "demo"', 'name = "42"'))
     subprocess.run(['git', 'commit', '-qam', 'a name of digits'], cwd=campaign_path, check=True)
-    with serving_api(cfg), ScoringClient.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         with pytest.raises(
             Refused, match="^'42' is no campaign name: a reference of digits names a campaign by its"
         ) as e:
@@ -870,7 +884,7 @@ def test_a_registration_names_the_campaign_and_its_git_refs_carry_that_name(
 def test_a_stopped_campaign_retires_once_its_stop_is_over_and_its_name_registers_again(
     db: Database, campaign: Campaign, campaign_path: Path, cfg: Settings
 ) -> None:
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         with pytest.raises(
             Refused,
             match=r'^demo is active: only a stopped campaign retires; stop it first, with `piloop campaign stop demo`$',
@@ -958,7 +972,7 @@ def test_a_git_url_is_cloned_under_the_home_with_the_home_s_secret_and_then_regi
 ) -> None:
     url = bare(campaign_path, tmp_path / 'demo.git')
     cloned = mocker.spy(Git, 'clone')
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         with pytest.raises(Refused, match=r'^the home has no secret TOKEN: see `piloop secret list`$') as unknown:
             client.register_campaign(Clone(clone=Remote(url=url, credential=SecretCredential(secret='TOKEN'))))
         assert unknown.value.error == Problem.REFUSED and not (cfg.home / 'repos').exists()
@@ -985,7 +999,7 @@ def test_a_repo_without_a_piloop_toml_is_refused_with_how_to_make_one(
     repo.index.remove(['piloop.toml'], working_tree=True)
     repo.index.commit('no config')
     url = bare(campaign_path, tmp_path / 'demo.git')
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         with pytest.raises(Refused) as cloned:
             client.register_campaign(Clone(clone=Remote(url=url)))
         with pytest.raises(Refused) as checkout:
@@ -1054,7 +1068,7 @@ def test_the_secret_of_a_clone_until_0_4_0_is_its_credential(
     url = bare(campaign_path, tmp_path / 'demo.git')
     cloned = mocker.spy(Git, 'clone')
     assert Remote.model_validate({'url': url, 'secret': 'TOKEN'}).credential == SecretCredential(secret='TOKEN')
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         client.set_secret('TOKEN', Located(), SecretBody(value=SecretStr('tok')))
         transport = httpx.HTTPTransport(uds=str(cfg.socket_file))
         with httpx.Client(transport=transport, base_url='http://piloop') as raw:
@@ -1067,7 +1081,7 @@ def test_a_clone_that_fails_or_does_not_register_leaves_nothing_under_the_home(
     db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path
 ) -> None:
     url = bare(campaign_path, tmp_path / 'taken.git')
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         with pytest.raises(Refused, match='^git clone of file:///nowhere.git failed: ') as failed:
             client.register_campaign(Clone(clone=Remote(url='file:///nowhere.git')))
         assert failed.value.error == Problem.REFUSED
@@ -1101,7 +1115,7 @@ def test_an_admin_makes_a_token_whose_secret_only_its_answer_carries_and_revokes
 
 
 def test_an_agent_is_requested_of_a_sweeping_role_only(db: Database, campaign: Campaign, cfg: Settings) -> None:
-    with serving_api(cfg), Client.on(cfg.socket_file, System.ORCHESTRATOR) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
         asked = client.launch('demo', LaunchBody(role=RoleName('research'), model='opus', reason='look again'))
         with pytest.raises(
             Refused, match="^demo has no sweeping role 'janitor'; it has orchestrator, research, "
@@ -1131,7 +1145,7 @@ def test_a_prompt_waits_for_what_came_of_its_note_and_refuses_an_agent_that_does
             ]
         )
         s.commit()
-    with serving_api(cfg), Client.on(cfg.socket_file, System.ORCHESTRATOR) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
         unanswered = client.prompt(AgentSessionId(1), PromptBody(text='look at #3'))
         assert (unanswered.comment, unanswered.delivery) == (1, Pending()), 'no wait: it answers at once'
         threading.Timer(0.2, outcome, [db, CommentId(2)]).start()
@@ -1161,7 +1175,7 @@ def test_a_cancel_asks_the_daemon_to_end_an_open_run_or_a_live_agent_and_refuses
             ]
         )
         s.commit()
-    with serving_api(cfg), Client.on(cfg.socket_file, System.ORCHESTRATOR) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
         agent = client.cancel_agent(AgentSessionId(1), CancelBody())
         run = client.cancel_run(RunId(1), CancelBody(ending=Ending.WRAP_UP))
         assert (agent.agent, agent.role, run.run) == (1, 'research', 1)
@@ -1187,7 +1201,7 @@ def test_a_journal_line_is_the_campaign_s_signed_by_the_caller_s_actor_and_the_s
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
     path = f'/v1/campaigns/{campaign.name}/journal'
-    with serving_api(cfg), Client.on(cfg.socket_file, System.ORCHESTRATOR) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
         written = client.post(path, JournalBody(line=' parked idea#4:\n dup of #2 '), Journaled)
         with pytest.raises(Refused, match='^line: a journal line is 1 to 280 bytes, not 281: say less$') as long:
             client.post(path, JournalBody.model_construct(line='x' * 281), Journaled)
@@ -1224,7 +1238,7 @@ def test_a_write_that_waits_out_the_busy_timeout_answers_503_and_when_to_retry(
 ) -> None:
     pragmas = tuple(p for p in sql.CONNECTION_PRAGMAS if not p.startswith('busy_timeout='))
     monkeypatch.setattr(session, 'CONNECTION_PRAGMAS', ('busy_timeout=0', *pragmas))
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         with pytest.raises(Refused) as refused:
             client.message('demo', MessageBody(body='hello'))
         transport = httpx.HTTPTransport(uds=str(cfg.socket_file))
@@ -1243,7 +1257,7 @@ def test_without_a_campaign_named_status_answers_every_campaign(
     with db.session() as s:
         s.add(Campaign(name='other', path='/elsewhere', status=CampaignStatus.STOPPED, config=campaign.config))
         s.commit()
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         listed = client.status(Selection()).campaigns
     assert [c.name for c in listed] == ['demo', 'other'], 'a client that lists campaigns sees them all'
     assert [c.name for c in defaulted(listed)] == ['demo'], 'the CLI shows the only active one'
@@ -1264,7 +1278,7 @@ def test_a_campaign_whose_stored_config_is_invalid_is_listed_as_such_and_the_oth
         s.commit()
         broken_id = broken.id
     store_config(db, broken_id, {})
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         listed = client.status(Selection()).campaigns
         shown = client.overview(Selection()).campaigns
         monkeypatch.setattr(common, 'settings', cfg)

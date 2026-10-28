@@ -44,13 +44,19 @@ from piloop.net.tokens import Tokens, mint_agent
 from piloop.otel import Tracer
 from piloop.plugins.archive.local import store as archive_module
 from piloop.plugins.campaign_type.consumers import Campaigns
+from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.candidates.wire import CandidatesClient
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Measured, run_evaluate
 from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.evaluation.wire import EvaluationClient
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
+from piloop.plugins.campaign_type.kit.verdicts.wire import VerdictsClient
+from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
 from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.contribution import collect, contributions_of, installed
 from piloop.plugins.executor.kit.leases import Timing
@@ -777,3 +783,7 @@ def run_all(scheduler: Scheduler, now: datetime | None = None) -> list[AgentSess
 def active(scheduler: Scheduler) -> list[AgentSessionId]:
     """The agents whose threads run now."""
     return sorted(AgentSessionId(int(name.partition('#')[2])) for name in campaigns_of(scheduler).in_flight())
+
+
+class EveryClient(BacklogClient, CandidatesClient, VerdictsClient, OptimizationClient, EvaluationClient, RunsClient):
+    """A client of every route: core's, and those of optimization and its components."""

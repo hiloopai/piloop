@@ -22,29 +22,18 @@ from piloop.campaign import inbox
 from piloop.config import CampaignConfig
 from piloop.db.models import NOT_RETIRED, AgentSession, Campaign, Comment
 from piloop.ids import CampaignStatus, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ideas import links, superseded_by
+from piloop.plugins.campaign_type.kit.backlog.ideas import links, queued_ideas, superseded_by
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.references import references
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.measure import metrics, score
-from piloop.plugins.campaign_type.kit.verdicts.judge import track_of, trunk_keeps
+from piloop.plugins.campaign_type.kit.verdicts.judge import head_scores, scored, track_of, trunk_keeps
 from piloop.plugins.campaign_type.kit.verdicts.verdict import label
+from piloop.plugins.campaign_type.optimization.summary import summary
 from piloop.plugins.cas.contract import Cas
-from piloop.reports.overview import (
-    agent_output,
-    head_scores,
-    latest_events,
-    live_agent_sessions,
-    on,
-    paused,
-    progress,
-    queued_ideas,
-    scored,
-    stopped,
-    summary,
-)
+from piloop.reports.overview import agent_output, latest_events, live_agent_sessions, on, paused, progress, stopped
 from piloop.text import NONE, age, cell, metric
 from piloop.usage import human
 from piloop.usage.totals import campaign_tokens

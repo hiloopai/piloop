@@ -15,7 +15,7 @@ This is how piloop measures the work of a research sweep.
 """
 
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -23,7 +23,6 @@ from typing import Final
 from sqlalchemy import CTE, ColumnElement, case, distinct, exists, func, select
 from sqlalchemy.orm import Session, aliased
 
-from piloop.api.views import IdeaView
 from piloop.config import CONFIG_FILE, ConfigError
 from piloop.db.events import has
 from piloop.db.models import Campaign, Comment, Event
@@ -32,6 +31,7 @@ from piloop.db.triggers.changelog import IdeaStatusChanged
 from piloop.ids import CampaignId, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.backlog.wire import IdeaView
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
@@ -409,3 +409,11 @@ def idea_view(idea: Idea) -> IdeaView:
         track=idea.track,
         created_by=idea.created_by,
     )
+
+
+def queued_ideas(s: Session, campaign: Campaign) -> tuple[Sequence[Idea], Sequence[Idea]]:
+    """Return every ``ready`` idea in scheduling order, and the ones not blocked by a prerequisite."""
+    mine = select(Idea).where(Idea.campaign_id == campaign.id).order_by(Idea.priority, Idea.id)
+    waiting = s.scalars(mine.where(Idea.status == IdeaStatus.READY)).all()
+    ready = s.scalars(mine.where(runnable())).all()
+    return waiting, ready

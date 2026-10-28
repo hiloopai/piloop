@@ -4,12 +4,20 @@ from typing import Annotated, Literal
 
 import cyclopts
 
-from piloop.api.client import Client
-from piloop.api.contract import BaseBody, DevelopBody, IdeaBody, Reasoned, SeedBody, StatusBody, TrackBody
+from piloop.api.contract import Reasoned
 from piloop.cli import common
 from piloop.cli.client import campaign_name, daemon_http
 from piloop.cli.common import HARNESS_HELP, CampaignRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.wire import (
+    BacklogClient,
+    BaseBody,
+    DevelopBody,
+    IdeaBody,
+    SeedBody,
+    StatusBody,
+    TrackBody,
+)
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 
@@ -75,7 +83,7 @@ def idea_add(
         after=after,
         supersedes=supersedes,
     )
-    with Client.connect(daemon_http()) as client:
+    with BacklogClient.connect(daemon_http()) as client:
         added = client.add_idea(campaign_name(client, ref), body)
     idea = added.idea
     common.console.print(
@@ -108,7 +116,7 @@ def idea_seed(
     negative results. Then it defines the seed (`piloop idea develop`) or rejects it with the reason. The seed is
     signed as PILOOP_ACTOR.
     """
-    with Client.connect(daemon_http()) as client:
+    with BacklogClient.connect(daemon_http()) as client:
         idea = client.file_seed(
             campaign_name(client, ref), SeedBody(hunch=hunch, provenance=from_, base=base, track=track)
         ).idea
@@ -165,7 +173,7 @@ def idea_develop(
         after=after,
         supersedes=supersedes,
     )
-    with Client.connect(daemon_http()) as client:
+    with BacklogClient.connect(daemon_http()) as client:
         developed = client.develop(idea_id, body)
     idea = developed.idea
     common.console.print(
@@ -187,7 +195,7 @@ def idea_status(
     without a run, so the ideas after it start. A seed is developed first (`piloop idea develop`), and a scheduled
     idea has an open run: either one can only be parked or rejected. A parked or rejected idea's open run finishes.
     """
-    with Client.connect(daemon_http()) as client:
+    with BacklogClient.connect(daemon_http()) as client:
         was = client.set_status(idea_id, StatusBody(status=status, reason=reason)).was
     common.console.print(f'idea#{idea_id} {was} → {status}: {reason.strip()}', markup=False)
 
@@ -206,7 +214,7 @@ def idea_link(
     The link is written in one transaction, so the daemon never queues the idea in between. A scheduled idea takes no
     `after` link: its run started already. A link that closes a cycle of its kind is refused.
     """
-    with Client.connect(daemon_http()) as client:
+    with BacklogClient.connect(daemon_http()) as client:
         client.link(idea_id, kind, target_id, Reasoned(reason=reason))
     common.console.print(f'idea#{idea_id} {kind} idea#{target_id}', markup=False)
 
@@ -221,7 +229,7 @@ def idea_unlink(
     reason: Reason,
 ) -> None:
     """Delete an idea's link, for example an `after` link to a prerequisite that kept nothing, to run the idea anyway."""
-    with Client.connect(daemon_http()) as client:
+    with BacklogClient.connect(daemon_http()) as client:
         client.unlink(idea_id, kind, target_id, Reasoned(reason=reason))
     common.console.print(f'idea#{idea_id} no longer {kind} idea#{target_id}', markup=False)
 
@@ -242,7 +250,7 @@ def idea_base(
     A pin to another candidate than the head makes a branch. A run already open keeps its base; the next attempt
     takes the new one.
     """
-    with Client.connect(daemon_http()) as client:
+    with BacklogClient.connect(daemon_http()) as client:
         client.set_base(idea_id, BaseBody(base=None if base == 'head' else base, reason=reason))
     start = 'the head' if base == 'head' else f'candidate#{base}'
     common.console.print(f'idea#{idea_id} starts from {start}', markup=False)
@@ -260,7 +268,7 @@ def idea_track(
 
     Its runs are judged on that track's primary. A scheduled idea keeps its track: its run is judged on it.
     """
-    with Client.connect(daemon_http()) as client:
+    with BacklogClient.connect(daemon_http()) as client:
         was = client.set_track(idea_id, TrackBody(track=track, reason=reason)).was
     common.console.print(f'idea#{idea_id} track {was} → {track}', markup=False)
 

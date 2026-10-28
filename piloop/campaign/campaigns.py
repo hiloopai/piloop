@@ -70,7 +70,8 @@ REPOS = 'repos'
 (``register_clone``)."""
 IGNORED = ('data', '.venv', WORKSPACE, '__pycache__')
 """What no version of a new campaign holds (``Vcs.init``)."""
-TEMPLATES = Path(__file__).parent / 'templates'
+TEMPLATES = Path(__file__).parents[1] / 'plugins' / 'campaign_type' / 'optimization' / 'templates'
+"""The examples that ``piloop init --example`` writes: optimization's, the one campaign type that has them."""
 BLANK = TEMPLATES / 'campaign'
 """The template ``piloop init`` writes into a repo without a ``piloop.toml``."""
 EVALUATE_STUB = 'evaluate.py'

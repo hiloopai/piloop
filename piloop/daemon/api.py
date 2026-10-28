@@ -8,7 +8,6 @@ lookups as dependencies (``Selected``, ``Narrowed``) over one session per reques
 import os
 import time
 from collections.abc import Generator
-from contextlib import closing
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path as FilePath
@@ -27,15 +26,12 @@ from piloop.api.contract import (
     GRANTS,
     Access,
     AckBody,
-    BaseBody,
     CancelBody,
     Checkout,
     Clone,
     Credential,
-    DevelopBody,
     EventsQuery,
     Fork,
-    IdeaBody,
     InboxQuery,
     LaunchBody,
     LimitBody,
@@ -45,20 +41,16 @@ from piloop.api.contract import (
     PauseBody,
     Problem,
     PromptBody,
-    Reasoned,
     Registration,
     ReopenBody,
     ReplyBody,
     RetireBody,
     SecretBody,
     SecretCredential,
-    SeedBody,
     Selection,
-    StatusBody,
     StopBody,
     TokenBody,
     TokenCredential,
-    TrackBody,
 )
 from piloop.api.views import (
     Acked,
@@ -68,10 +60,8 @@ from piloop.api.views import (
     CampaignOverview,
     CampaignSynced,
     DaemonState,
-    Defined,
     Delivered,
     Delivery,
-    IdeaAnswer,
     Inbox,
     InvalidConfig,
     LiveKeys,
@@ -84,16 +74,13 @@ from piloop.api.views import (
     Queued,
     Registered,
     Replied,
-    RunAnswer,
     SecretChanged,
     SecretList,
     SecretView,
     Status,
-    StatusChanged,
     Thread,
     TokenList,
     TokenMade,
-    TrackChanged,
     Undelivered,
 )
 from piloop.campaign import inbox as inbox_module, ops
@@ -105,7 +92,6 @@ from piloop.campaign.campaigns import (
     referenced,
     register,
     register_clone,
-    repository,
     selected,
     sync,
     workspace_dir,
@@ -122,35 +108,9 @@ from piloop.net.acting import MayNotAct, acts_as
 from piloop.net.server import App, asked, authorized, changed, served
 from piloop.net.tokens import Caller
 from piloop.plugins import limits as limits_module
-from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
-from piloop.plugins.campaign_type.kit.backlog.ideas import Definition, idea_view
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, LinkKind
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
-from piloop.plugins.campaign_type.kit.candidates.references import ImportRefused, import_reference
+from piloop.plugins.campaign_type.kit.candidates.references import ImportRefused
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, queue
-from piloop.plugins.campaign_type.kit.evaluation.api import (
-    CandidateAnswer,
-    EvaluationQueue,
-    ImportBody,
-    MeasurementAdded,
-    Merge,
-    NoteBody,
-    Noted,
-    RemeasureBody,
-    Remeasured,
-    Report,
-    VerdictBody,
-    VerdictChanged,
-)
-from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRefused, request_remeasure
-from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RunId
-from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
-from piloop.plugins.campaign_type.kit.verdicts.judge import bar_of
-from piloop.plugins.campaign_type.kit.verdicts.verdict import candidate_view, rejudgeable
-from piloop.plugins.campaign_type.optimization import ops as optimization_ops
+from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRefused
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.contribution import collect, contributions_of, installed
 from piloop.plugins.limits import live_keys
@@ -272,39 +232,9 @@ def comment_addressed(s: Writing, comment: CommentId) -> Comment:
     return found
 
 
-def idea_addressed(s: Writing, idea: IdeaId) -> Idea:
-    """The idea that the path names. Refuses one that the home does not have."""
-    return _idea(s, idea)
-
-
-def target_addressed(s: Writing, target: IdeaId) -> Idea:
-    """The idea that the path links to. Refuses one that the home does not have."""
-    return _idea(s, target)
-
-
-def _idea(s: Session, idea: IdeaId) -> Idea:
-    if (found := s.get(Idea, idea)) is None:
-        raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_IDEA, f'no idea#{idea}')
-    return found
-
-
-def candidate_addressed(s: Writing, candidate: CandidateId) -> Candidate:
-    """The candidate that the path names. Refuses one that the home does not have."""
-    if (found := s.get(Candidate, candidate)) is None:
-        raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_CANDIDATE, f'no candidate#{candidate}')
-    return found
-
-
 def agent_addressed(s: Writing, agent: AgentSessionId) -> AgentSession:
     """The agent that the path names. Refuses one that the home does not have."""
     return _agent(s, agent)
-
-
-def run_addressed(s: Writing, run: RunId) -> Run:
-    """The run that the path names. Refuses one that the home does not have."""
-    if (found := s.get(Run, run)) is None:
-        raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_RUN, f'no run#{run}')
-    return found
 
 
 def _agent(s: Session, agent: AgentSessionId) -> AgentSession:
@@ -315,12 +245,8 @@ def _agent(s: Session, agent: AgentSessionId) -> AgentSession:
 
 Addressed = Annotated[Campaign, Depends(campaign_addressed)]
 Viewed = Annotated[Campaign, Depends(campaign_viewed)]
-AddressedCandidate = Annotated[Candidate, Depends(candidate_addressed)]
 AddressedAgent = Annotated[AgentSession, Depends(agent_addressed)]
-AddressedRun = Annotated[Run, Depends(run_addressed)]
 Commented = Annotated[Comment, Depends(comment_addressed)]
-AddressedIdea = Annotated[Idea, Depends(idea_addressed)]
-Target = Annotated[Idea, Depends(target_addressed)]
 
 
 REFUSALS_DOCUMENTED: dict[int | str, dict[str, object]] = {
@@ -335,14 +261,8 @@ router = APIRouter(
     responses=REFUSALS_DOCUMENTED,
 )
 """Core's routes: the views, the feed, the inbox, campaigns, agents and the home's settings. Every route reads."""
-optimization = APIRouter(
-    prefix='/v1',
-    dependencies=[Depends(reader)],
-    responses=REFUSALS_DOCUMENTED,
-)
-"""The research model's routes: ideas, candidates, measurements, evaluations and runs, on a router of their own."""
-ROUTERS = (router, optimization)
-"""The API: every router that ``with_api`` serves."""
+ROUTERS = (router,)
+"""The API: every router that ``with_api`` serves. A campaign type's routes are its contribution's."""
 
 
 @router.get('/status', operation_id='status')
@@ -542,196 +462,6 @@ def retire(s: Writing, me: Acting, campaign: Addressed, body: RetireBody) -> Cam
     ops.retire(s, campaign.id, me, reason=body.reason)
     s.commit()
     return _campaign_answer(s, campaign, me)
-
-
-@optimization.post('/campaigns/{campaign}/ideas', operation_id='add_idea', dependencies=[Depends(actor_access)])
-def add_idea(s: Writing, me: Acting, campaign: Addressed, body: IdeaBody) -> Defined:
-    """Add a defined idea, which the daemon schedules in priority order once it is ready."""
-    idea, review = backlog_ops.add_idea(
-        s,
-        campaign.id,
-        body.title,
-        actor=me,
-        hypothesis=body.hypothesis,
-        plan=body.plan,
-        provenance=body.provenance,
-        family=body.family,
-        priority=body.priority,
-        harness=body.harness,
-        base=body.base,
-        proposed=body.proposed,
-        track=body.track,
-        after=body.after,
-        supersedes=body.supersedes,
-    )
-    s.commit()
-    with db_feed.snapshot(s) as cursor:
-        return Defined(cursor=cursor, idea=idea_view(idea), review=review)
-
-
-@optimization.post('/campaigns/{campaign}/seeds', operation_id='file_seed', dependencies=[Depends(actor_access)])
-def file_seed(s: Writing, me: Acting, campaign: Addressed, body: SeedBody) -> IdeaAnswer:
-    """File a seed, for research to develop into a defined idea or to reject."""
-    idea = backlog_ops.file_seed(
-        s, campaign.id, body.hunch, actor=me, provenance=body.provenance, base=body.base, track=body.track
-    )
-    return _idea_answer(s, idea)
-
-
-@optimization.post('/ideas/{idea}/develop', operation_id='develop', dependencies=[Depends(actor_access)])
-def develop(s: Writing, me: Acting, idea: AddressedIdea, body: DevelopBody) -> Defined:
-    """Develop a seed into a defined idea that the daemon can schedule."""
-    definition = Definition(body.hypothesis, body.evidence, body.check, body.metric, body.effect, body.plan)
-    developed, review = backlog_ops.develop_seed(
-        s,
-        idea.id,
-        definition,
-        actor=me,
-        title=body.title,
-        family=body.family,
-        base=body.base,
-        priority=body.priority,
-        proposed=body.proposed,
-        after=body.after,
-        supersedes=body.supersedes,
-    )
-    s.commit()
-    with db_feed.snapshot(s) as cursor:
-        return Defined(cursor=cursor, idea=idea_view(developed), review=review)
-
-
-@optimization.post('/ideas/{idea}/status', operation_id='set_status', dependencies=[Depends(actor_access)])
-def set_status(s: Writing, me: Acting, idea: AddressedIdea, body: StatusBody) -> StatusChanged:
-    """Set an idea's status, with a note on the idea that says why."""
-    was = backlog_ops.set_idea_status(s, idea.id, body.status, reason=body.reason, actor=me)
-    s.commit()
-    with db_feed.snapshot(s) as cursor:
-        return StatusChanged(cursor=cursor, idea=idea_view(idea), was=was)
-
-
-@optimization.put('/ideas/{idea}/links/{kind}/{target}', operation_id='link', dependencies=[Depends(actor_access)])
-def link(s: Writing, me: Acting, idea: AddressedIdea, kind: LinkKind, target: Target, body: Reasoned) -> IdeaAnswer:
-    """Link an idea to another of its campaign: it runs after the target, or supersedes it."""
-    backlog_ops.link(s, idea.id, kind, target.id, reason=body.reason, actor=me)
-    return _idea_answer(s, idea)
-
-
-@optimization.delete('/ideas/{idea}/links/{kind}/{target}', operation_id='unlink', dependencies=[Depends(actor_access)])
-def unlink(s: Writing, me: Acting, idea: AddressedIdea, kind: LinkKind, target: IdeaId, body: Reasoned) -> IdeaAnswer:
-    """Delete an idea's link."""
-    backlog_ops.unlink(s, idea.id, kind, target, reason=body.reason, actor=me)
-    return _idea_answer(s, idea)
-
-
-@optimization.post('/ideas/{idea}/base', operation_id='set_base', dependencies=[Depends(actor_access)])
-def set_base(s: Writing, me: Acting, idea: AddressedIdea, body: BaseBody) -> IdeaAnswer:
-    """Set the candidate that an idea's runs start from, or clear the pin."""
-    backlog_ops.set_base(s, idea.id, body.base, reason=body.reason, actor=me)
-    return _idea_answer(s, idea)
-
-
-@optimization.post('/ideas/{idea}/track', operation_id='set_track', dependencies=[Depends(actor_access)])
-def set_track(s: Writing, me: Acting, idea: AddressedIdea, body: TrackBody) -> TrackChanged:
-    """Move an idea to another track of its campaign, with a note on the idea that says why."""
-    was = backlog_ops.set_track(s, idea.id, body.track, reason=body.reason, actor=me)
-    s.commit()
-    with db_feed.snapshot(s) as cursor:
-        return TrackChanged(cursor=cursor, idea=idea_view(idea), was=was)
-
-
-def _idea_answer(s: Session, idea: Idea) -> IdeaAnswer:
-    s.commit()
-    with db_feed.snapshot(s) as cursor:
-        return IdeaAnswer(cursor=cursor, idea=idea_view(idea))
-
-
-@optimization.post(
-    '/campaigns/{campaign}/candidates', operation_id='import_candidate', dependencies=[Depends(actor_access)]
-)
-def import_candidate(s: Writing, me: Acting, campaign: Addressed, body: ImportBody) -> CandidateAnswer:
-    """Register the files of a version as a reference candidate: a starting point for an idea."""
-    with closing(repository(campaign)) as repo:
-        candidate = import_reference(s, campaign, repo, body.version, summary=body.summary, actor=me)
-    s.commit()
-    with db_feed.snapshot(s) as cursor:
-        return CandidateAnswer(cursor=cursor, candidate=candidate_view(candidate))
-
-
-@optimization.post('/candidates/{candidate}/remeasure', operation_id='remeasure', dependencies=[Depends(actor_access)])
-def remeasure(s: Writing, me: Acting, candidate: AddressedCandidate, body: RemeasureBody) -> Remeasured:
-    """Ask the daemon to measure a candidate again, next to its bar, with the current evaluator."""
-    request_remeasure(s, candidate, me, body.repeats)
-    s.commit()
-    campaign = s.get_one(Campaign, candidate.campaign_id)
-    held = evaluation_ops.measuring_held(s, campaign, campaign.config).strip() or None
-    bar = None if candidate.parent is None else bar_of(s, candidate.parent).id
-    with db_feed.snapshot(s) as cursor:
-        return Remeasured(
-            cursor=cursor, candidate=candidate_view(candidate), bar=bar, held=held, rejudged=rejudgeable(candidate)
-        )
-
-
-@optimization.post('/candidates/{candidate}/note', operation_id='note', dependencies=[Depends(actor_access)])
-def note(s: Writing, me: Acting, candidate: AddressedCandidate, body: NoteBody) -> Noted:
-    """Keep a regressed result in view as a lead, with follow-up seeds pinned to it."""
-    _, seeds = optimization_ops.note_candidate(
-        s, candidate.id, body.reason, actor=me, follow_ups=body.follow_ups, track=body.track
-    )
-    s.commit()
-    with db_feed.snapshot(s) as cursor:
-        return Noted(cursor=cursor, candidate=candidate_view(candidate), seeds=[idea_view(i) for i in seeds])
-
-
-@optimization.post('/candidates/{candidate}/verdict', operation_id='set_verdict', dependencies=[Depends(actor_access)])
-def set_verdict(s: Writing, me: Acting, candidate: AddressedCandidate, body: VerdictBody) -> VerdictChanged:
-    """Override a candidate's judgement, with the reason. The verdict is then the caller's."""
-    done = verdicts_ops.set_verdict(s, candidate.id, body.verdict, reason=body.reason, actor=me)
-    s.commit()
-    rebased = done.rebased
-    merged = None if rebased is None or rebased.rebased is None else Merge(candidate=rebased.rebased, head=rebased.head)
-    with db_feed.snapshot(s) as cursor:
-        return VerdictChanged(cursor=cursor, candidate=candidate_view(candidate), was=done.old, merge=merged)
-
-
-@optimization.post(
-    '/candidates/{candidate}/measurements', operation_id='add_measurement', dependencies=[Depends(actor_access)]
-)
-def add_measurement(s: Writing, me: Acting, candidate: AddressedCandidate, body: Report) -> MeasurementAdded:
-    """Record a measurement of a candidate under the campaign's current evaluator, and have its verdict judged again."""
-    added = evaluation_ops.add_measurement(s, candidate.id, body, actor=me)
-    s.commit()
-    with db_feed.snapshot(s) as cursor:
-        return MeasurementAdded(
-            cursor=cursor, measurement=added.measurement.id, rejudged=added.rejudged, effect=added.effect
-        )
-
-
-@optimization.get('/evaluations', operation_id='evaluations')
-def evaluations(s: Reading) -> EvaluationQueue:
-    """The evaluation queue: the running evaluations, then the waiting ones in the order in which they get a slot."""
-    return queue.view(s)
-
-
-@optimization.post(
-    '/candidates/{candidate}/evaluation/cancel',
-    operation_id='cancel_evaluation',
-    dependencies=[Depends(actor_access)],
-)
-def cancel_evaluation(s: Writing, me: Acting, candidate: AddressedCandidate) -> CandidateAnswer:
-    """Cancel a candidate's evaluation, waiting or running, or its requested remeasure: it measures a crash at once.
-
-    A baseline that never measured pauses its campaign, as when it fails (``ops.hold_on_failed_baseline``).
-    """
-    if not queue.cancel(s, candidate.id, me):
-        raise Refusal(
-            HTTPStatus.CONFLICT,
-            Problem.REFUSED,
-            f'candidate#{candidate.id} has no evaluation that waits or runs: see `piloop eval queue`',
-        )
-    evaluation_ops.hold_on_failed_baseline(s, candidate, None)
-    s.commit()
-    with db_feed.snapshot(s) as cursor:
-        return CandidateAnswer(cursor=cursor, candidate=candidate_view(candidate))
 
 
 @router.get('/limits', operation_id='limits', dependencies=[Depends(admin_access)])
@@ -937,17 +667,6 @@ def cancel_agent(s: Writing, me: Acting, agent: AddressedAgent, body: CancelBody
     s.commit()
     with db_feed.snapshot(s) as cursor:
         return AgentAnswer(cursor=cursor, agent=agent.id, role=agent.kind)
-
-
-@optimization.post('/runs/{run}/cancel', operation_id='cancel_run', dependencies=[Depends(actor_access)])
-def cancel_run(s: Writing, me: Acting, run: AddressedRun, body: CancelBody) -> RunAnswer:
-    """Cancel a queued or running run: a queued one never starts, a running implementer ends as ``ending`` says."""
-    if run.status not in OPEN_RUNS:
-        raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, f'run#{run.id} is not queued or running')
-    request_cancel(s, run, me, ending=body.ending)
-    s.commit()
-    with db_feed.snapshot(s) as cursor:
-        return RunAnswer(cursor=cursor, run=run.id)
 
 
 @router.post('/inbox/ack', operation_id='ack', dependencies=[Depends(actor_access)])

@@ -9,6 +9,7 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
 
     from piloop.db.models import Campaign
     from piloop.ids import Revision
+    from piloop.plugins.contribution import Contribution
 
 
 class Optimization(CampaignType):
@@ -25,6 +26,13 @@ class Optimization(CampaignType):
         from piloop.plugins.campaign_type.kit.verdicts.judge import checkout_candidate
 
         return checkout_candidate(s, source).revision
+
+    def contribution(self) -> Contribution:
+        """Its routes, and those of the components that it uses (``Contributes``)."""
+        from piloop.plugins.campaign_type.optimization.api import ROUTES
+        from piloop.plugins.contribution import Contribution
+
+        return Contribution(router=ROUTES)
 
     def check_config(self, s: Session, campaign: Campaign) -> None:
         """Every idea's track stays (``check_tracks``)."""

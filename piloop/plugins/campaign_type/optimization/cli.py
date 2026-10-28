@@ -1,4 +1,4 @@
-"""The ``piloop candidate`` commands, clients of the API: import, measure again, note a regressed result, or override a verdict."""
+"""Optimization's commands, which span its components: ``piloop candidate`` and ``piloop history``."""
 
 from typing import Annotated
 
@@ -9,23 +9,19 @@ from piloop.cli import common
 from piloop.cli.client import campaign_name, daemon_http
 from piloop.cli.common import CampaignRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
-from piloop.plugins.campaign_type.kit.evaluation.api import (
-    REPEATS,
-    ImportBody,
-    NoteBody,
-    RemeasureBody,
-    ScoringClient,
-    VerdictBody,
-)
+from piloop.plugins.campaign_type.kit.candidates.wire import CandidatesClient, ImportBody
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.evaluation.wire import REPEATS
+from piloop.plugins.campaign_type.kit.verdicts.wire import RemeasureBody, VerdictBody, VerdictsClient
+from piloop.plugins.campaign_type.optimization.wire import NoteBody, OptimizationClient
 
-app = cyclopts.App(
+candidate_app = cyclopts.App(
     name='candidate',
     help='Import a starting point, measure a candidate again, keep a regressed result in view, or override a verdict.',
 )
 
 
-@app.command(name='import')
+@candidate_app.command(name='import')
 def candidate_import(
     ref: CampaignRef,
     version: Annotated[
@@ -44,7 +40,7 @@ def candidate_import(
     It does not count in the kept total, the sparkline or a stop condition. To import a candidate of another campaign,
     bring its `revision` into this campaign's repo first.
     """
-    with ScoringClient.connect(daemon_http()) as client:
+    with CandidatesClient.connect(daemon_http()) as client:
         name = campaign_name(client, ref)
         candidate = client.import_candidate(name, ImportBody(version=version, summary=summary)).candidate
     common.console.print(
@@ -54,7 +50,7 @@ def candidate_import(
     )
 
 
-@app.command(name='remeasure')
+@candidate_app.command(name='remeasure')
 def candidate_remeasure(
     candidate_id: Annotated[CandidateId, cyclopts.Parameter(help='The candidate to measure again.')],
     /,
@@ -72,7 +68,7 @@ def candidate_remeasure(
     is paused with `--evals`, or held by its stop rule. A commit that the daemon never measured, `skipped` or
     `recovered`, is measured and judged. A pending candidate is refused: its run measures and judges it.
     """
-    with ScoringClient.connect(daemon_http()) as client:
+    with VerdictsClient.connect(daemon_http()) as client:
         done = client.remeasure(candidate_id, RemeasureBody(repeats=repeats))
     later = '' if done.held is None else f' {done.held}'
     bar = 'alone' if done.bar is None else f'next to its bar candidate#{done.bar}'
@@ -83,7 +79,7 @@ def candidate_remeasure(
     )
 
 
-@app.command(name='note')
+@candidate_app.command(name='note')
 def candidate_note(
     candidate_id: Annotated[
         CandidateId, cyclopts.Parameter(help='The candidate: a measured discard, or one marked interesting already.')
@@ -111,7 +107,7 @@ def candidate_note(
     candidate. An implementer files no follow-ups. When its candidate does not exist yet, an implementer notes the
     version that it saves instead, and the daemon applies the note when it judges the version.
     """
-    with ScoringClient.connect(daemon_http()) as client:
+    with OptimizationClient.connect(daemon_http()) as client:
         noted = client.note(candidate_id, NoteBody(reason=reason, follow_ups=follow_ups, track=track))
     candidate = noted.candidate
     common.console.print(
@@ -121,7 +117,7 @@ def candidate_note(
         common.console.print(f'idea#{idea.id} seed, pinned to candidate#{candidate.id}: {idea.title}', markup=False)
 
 
-@app.command(name='verdict')
+@candidate_app.command(name='verdict')
 def candidate_verdict(
     candidate_id: Annotated[CandidateId, cyclopts.Parameter(help='The candidate.')],
     verdict: Annotated[Outcome, cyclopts.Parameter(help='keep, interesting, discard or crash.')],
@@ -137,7 +133,7 @@ def candidate_verdict(
     kept. So the candidate becomes `interesting`, and its merge onto the head is a new candidate that the daemon
     measures and judges against the head, as for its own keeps. A merge that conflicts files a seed to compose it.
     """
-    with ScoringClient.connect(daemon_http()) as client:
+    with VerdictsClient.connect(daemon_http()) as client:
         done = client.set_verdict(candidate_id, VerdictBody(verdict=verdict, reason=reason))
     common.console.print(
         f'candidate#{candidate_id} {done.was} → {done.candidate.label}: {done.candidate.verdict_reason}', markup=False
@@ -148,3 +144,30 @@ def candidate_verdict(
             f' candidate#{done.merge.head}',
             markup=False,
         )
+
+
+def history(ref: CampaignRef | None = None, /) -> None:
+    """Print the research pack: what a research sweep reads before it proposes ideas.
+
+    It shows the metrics, the analysis artifacts, what was tried per mechanism family, the latest ideas with their
+    outcomes, the kept lineage, the findings and the digests, as many as `[plugins.section.pack]` says. Without a
+    campaign, it uses the campaign that the current directory is in, else the only active campaign, else every campaign.
+    """
+    # here: it opens the database, and the candidate commands of this module load none of it
+    from rich import box
+    from rich.console import Group
+
+    from piloop.campaign.campaigns import workspace_dir
+    from piloop.cli import local
+    from piloop.plugins.campaign_type.optimization.pack import renderables as pack_renderables
+    from piloop.plugins.campaign_type.optimization.section.pack import Pack
+    from piloop.plugins.section.contract import SECTIONS
+
+    with local.session() as s:
+        for campaign in local.campaigns(s, ref):
+            common.heading(f'[bold]{campaign.name}[/] #{campaign.id}  {campaign.path}')
+            workspace = workspace_dir(common.settings.home, campaign.id)
+            cfg = campaign.config
+            shown = next((x for x in SECTIONS.instances(cfg.plugins).values() if isinstance(x, Pack)), Pack())
+            parts = pack_renderables(s, campaign, cfg, table_box=box.SIMPLE_HEAD, workspace=workspace, shown=shown)
+            common.console.print(Group(*parts))

@@ -21,8 +21,8 @@ from piloop.campaign import inbox
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign
 from piloop.ids import CampaignId, CampaignStatus
+from piloop.plugins.campaign_type.optimization.summary import summary
 from piloop.plugins.memory.local.tables import Journal, Lesson, LessonStatus
-from piloop.reports.overview import summary
 from piloop.text import metric as number
 
 CHARS_PER_TOKEN = 4

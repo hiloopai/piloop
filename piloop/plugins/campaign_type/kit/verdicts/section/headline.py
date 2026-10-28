@@ -2,10 +2,11 @@ from piloop.api.views import Figure, Figures, Rendered
 from piloop.db.models import count
 from piloop.ids import CampaignStatus
 from piloop.plugins.campaign_type.kit.candidates.references import references
+from piloop.plugins.campaign_type.kit.candidates.tables import produced
 from piloop.plugins.campaign_type.kit.evaluation.tables import evaluator_of
-from piloop.plugins.campaign_type.kit.verdicts.judge import keeps
+from piloop.plugins.campaign_type.kit.verdicts.judge import head_scores, keeps
 from piloop.plugins.section.contract import Rendering, Section, Surface
-from piloop.reports.overview import head_scores, holds, produced
+from piloop.reports.overview import holds
 from piloop.text import age
 from piloop.usage.totals import campaign_tokens
 

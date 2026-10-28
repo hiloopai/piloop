@@ -12,26 +12,16 @@ from functools import lru_cache
 from pathlib import Path
 
 from covalence import Cid
-from sqlalchemy import Select, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.agents.roles import harness_of
 from piloop.campaign.inbox import campaign_of
 from piloop.campaign.stop import describe, held
 from piloop.config import TRANSCRIPT, CampaignConfig
-from piloop.db.models import LIVE, AgentSession, Campaign, Event, Pause, count
+from piloop.db.models import LIVE, AgentSession, Campaign, Event, Pause
 from piloop.ids import CampaignStatus
-from piloop.plugins.campaign_type.kit.backlog.ideas import runnable
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import Origin
-from piloop.plugins.campaign_type.kit.candidates.references import references
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.config import Metric, Track
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.measure import full, score
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.verdicts.judge import baseline, head, keeps
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.harness.contract import UsageReader
 from piloop.plugins.role.contract import Files
@@ -39,62 +29,8 @@ from piloop.runtime.factory import handle_for, runtime_for
 from piloop.store import chunks
 from piloop.store.tree import Missing
 from piloop.text import NONE, cell, metric
-from piloop.usage import human
-from piloop.usage.totals import campaign_tokens
 
 DETAIL_CHARS = 160
-
-
-def summary(s: Session, campaign: Campaign, cfg: CampaignConfig) -> str:
-    """Return the one-line summary of the campaign.
-
-    The format is ``<name> · head <metric> <score> (candidate#<id>, <delta> vs baseline) · <kept> kept / <total>
-    candidates``. With several tracks, the head shows the primary of each track:
-    ``head candidate#9: accuracy 0.9100 (+0.0200), seconds 3.1000 (-0.4000)``. Imported references are not counted
-    as candidates. ``· 3 starting points`` follows when there are any. ``· 1.2M tok`` follows when the usage of an
-    agent is known: it is the total for all roles so far.
-    """
-    at = head_scores(s, campaign, cfg)
-    total = count(s, produced(campaign))
-    kept = count(s, keeps(campaign))
-    imported = len(references(s, campaign))
-    if at is None:
-        head_text = 'no trunk keep'
-    elif not cfg.multitrack:
-        trunk, [(track, value, delta)] = at
-        vs_baseline = f', {metric(delta, signed=True)} vs baseline' if delta is not None else ''
-        head_text = f'head {track.primary.name} {_four(value)} (candidate#{trunk.id}{vs_baseline})'
-    else:
-        trunk, values = at
-        head_text = f'head candidate#{trunk.id}: ' + ', '.join(
-            f'{track.primary.name} {_four(value)}' + (f' ({metric(delta, signed=True)})' if delta is not None else '')
-            for track, value, delta in values
-        )
-    spent = campaign_tokens(s, campaign.id)
-    tokens = f' · {human(spent)} tok' if spent else ''
-    starts = f' · {imported} starting point{"s" if imported != 1 else ""}' if imported else ''
-    return f'{campaign.name} · {head_text} · {kept} kept / {total} candidates{starts}{tokens}'
-
-
-def head_scores(
-    s: Session, campaign: Campaign, cfg: CampaignConfig
-) -> tuple[Candidate, list[tuple[Track, float | None, float | None]]] | None:
-    """Return the head and, for each track, its primary score and its delta against the baseline.
-
-    A score is None when the current evaluator has not measured it. A delta is also None when the head is the
-    baseline. Returns None when there is no trunk keep.
-    """
-    trunk = head(s, campaign)
-    if trunk is None:
-        return None
-    evaluator_id = campaign.evaluator_id
-    first = baseline(s, campaign)
-    values: list[tuple[Track, float | None, float | None]] = []
-    for track in cfg.all_tracks:
-        value = score(trunk, evaluator_id, track.primary)
-        base = score(first, evaluator_id, track.primary) if first is not None and first.id != trunk.id else None
-        values.append((track, value, None if value is None or base is None else value - base))
-    return trunk, values
 
 
 def stopped(campaign: Campaign) -> str:
@@ -123,11 +59,6 @@ def progress(s: Session, campaign: Campaign, cfg: CampaignConfig, now: datetime)
     return (' · '.join(describe(s, campaign, cfg, now)) or NONE) + (
         f' (launches held: {hold})' if hold is not None else ''
     )
-
-
-def produced(campaign: Campaign) -> Select[Candidate]:
-    """Select the candidates of the campaign: the baseline and the commits of its runs, not imported references."""
-    return select(Candidate).where(Candidate.campaign_id == campaign.id, Candidate.origin != Origin.REFERENCE)
 
 
 def live_agent_sessions(s: Session, campaign: Campaign) -> Sequence[AgentSession]:
@@ -201,27 +132,6 @@ def _transcript(log_dir: str | None) -> str:
 def _filled(text: str) -> list[str]:
     """Return the lines of ``text`` that are not blank, without trailing blanks."""
     return [line.rstrip() for line in text.splitlines() if line.strip()]
-
-
-def queued_ideas(s: Session, campaign: Campaign) -> tuple[Sequence[Idea], Sequence[Idea]]:
-    """Return every ``ready`` idea in scheduling order, and the ones not blocked by a prerequisite."""
-    mine = select(Idea).where(Idea.campaign_id == campaign.id).order_by(Idea.priority, Idea.id)
-    waiting = s.scalars(mine.where(Idea.status == IdeaStatus.READY)).all()
-    ready = s.scalars(mine.where(runnable())).all()
-    return waiting, ready
-
-
-def scored(c: Candidate, evaluator_id: EvaluatorId | None, primary: Metric) -> tuple[str, str]:
-    """Format the primary score of the candidate and its delta to its parent, each ``—`` when unknown."""
-    value = score(c, evaluator_id, primary)
-    parent = score(c.parent, evaluator_id, primary) if c.parent is not None else None
-    delta = metric(value - parent, signed=True) if value is not None and parent is not None else NONE
-    return NONE if value is None else metric(value), delta
-
-
-def known(c: Candidate) -> datetime:
-    """Return the time of the first ``full`` measurement of the candidate, else its creation time."""
-    return min((m.created_at for m in c.measurements if full(m)), default=c.created_at)
 
 
 def latest_events(s: Session, campaign: Campaign, limit: int) -> Sequence[Event]:

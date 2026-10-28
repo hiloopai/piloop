@@ -10,8 +10,8 @@ from piloop.ids import AgentSessionId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import keeps
+from piloop.plugins.campaign_type.optimization.history import history
 from piloop.plugins.section.contract import Rendering, Section, Surface
-from piloop.reports.history import history
 from piloop.reports.wake import cost
 
 

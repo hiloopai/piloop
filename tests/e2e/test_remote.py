@@ -42,13 +42,14 @@ from piloop.api.contract import (
     Problem,
     Remote,
     RetireBody,
-    SeedBody,
     Selection,
     StopBody,
 )
 from piloop.api.views import AckOutcome, CampaignState, Envelope
 from piloop.ids import AgentSessionId, CampaignId, Ending, RoleName
+from piloop.plugins.campaign_type.kit.backlog.wire import SeedBody
 from piloop.plugins.network.https import TOKEN_ENV, Https
+from tests.conftest import EveryClient
 from tests.e2e.campaign import CHEAPEST_MODEL, CommandFailed, needs
 from tests.e2e.conftest import Install
 from tests.isolation import CALLER_ENV
@@ -146,7 +147,7 @@ class Server:
     name: str
     repo: str
     """The URL that the server clones."""
-    api: Client
+    api: EveryClient
     """The person's client of the API."""
     env: dict[str, str] = field(repr=False)
     """The environment of the CLI, as the orchestrator. Not in the repr: it holds the token."""
@@ -280,7 +281,7 @@ def server(request: pytest.FixtureRequest) -> Iterator[Server]:
         'PILOOP_ACTOR': System.ORCHESTRATOR.signature,
     }
     try:
-        with Client.connect(http) as api:
+        with EveryClient.connect(http) as api:
             for left in (c for c in api.status(Selection()).campaigns if c.name == name):
                 retire(api, str(left.id), 'e2e: an earlier run left it')
             found = Server(url, name, f'{gist}.git', api, env)

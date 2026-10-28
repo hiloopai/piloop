@@ -31,12 +31,12 @@ from piloop.db.session import Database
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.consumers import Campaigns
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.campaign_type.kit.runs.section.pack import Pack
+from piloop.plugins.campaign_type.optimization import history
+from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.section.contract import SECTIONS, Guide, Rendering, guides, rendered
 from piloop.plugins.stop_rule.contract import Hold
 from piloop.plugins.vcs.contract import VCS
-from piloop.reports import history
 
 ROOT = Path(__file__).resolve().parent.parent
 PACK = Pack()

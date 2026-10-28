@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from piloop.api.contract import Access, Revealed
 from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentId, KeyOrigin, RoleName
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
@@ -561,44 +561,6 @@ class CampaignSynced(CampaignAnswer):
     documents: Synced
 
 
-class IdeaView(View):
-    """An idea, as the change that wrote it left it."""
-
-    id: IdeaId
-    campaign: CampaignId
-    title: str
-    status: IdeaStatus
-    priority: int
-    track: TrackName
-    created_by: str
-
-
-class IdeaAnswer(View):
-    """An idea that a change wrote, read at ``cursor``."""
-
-    cursor: int
-    idea: IdeaView
-
-
-class Defined(IdeaAnswer):
-    """An idea that ``add`` or ``develop`` defined."""
-
-    review: str | None
-    """Why the idea waits for a review, as ``proposed`` although nobody asked: its author's role is held. Else null."""
-
-
-class StatusChanged(IdeaAnswer):
-    """An idea whose status changed."""
-
-    was: IdeaStatus
-
-
-class TrackChanged(IdeaAnswer):
-    """An idea that moved to another track."""
-
-    was: TrackName
-
-
 class TokenView(View):
     """A bearer token of the server, never its secret."""
 
@@ -653,13 +615,6 @@ class AgentAnswer(View):
     cursor: int
     agent: AgentSessionId
     role: RoleName
-
-
-class RunAnswer(View):
-    """A run that a change asked to cancel, read at ``cursor``."""
-
-    cursor: int
-    run: RunId
 
 
 class Pending(View):

@@ -7,6 +7,7 @@ controller and the history block agree. What a score means against a bar is the 
 
 import json
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from statistics import fmean
 from typing import ClassVar, Literal
@@ -37,12 +38,12 @@ from piloop.ids import (
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import config
-from piloop.plugins.campaign_type.kit.evaluation.api import REPEATS
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import UNITS, Units
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, RungName
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
+from piloop.plugins.campaign_type.kit.evaluation.wire import REPEATS
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     pending,
@@ -357,3 +358,8 @@ def units(candidate: Candidate, evaluator_id: EvaluatorId, units_dir: Path) -> U
 def gate_of(bar: Candidate, evaluator_id: EvaluatorId, cfg: CampaignConfig) -> Gate:
     """What the ladder's stops compare with: ``bar``'s means at each rung, and the metrics' directions."""
     return Gate(bar=rungs(bar, evaluator_id), directions={m.name: m.direction for m in cfg.metrics})
+
+
+def known(c: Candidate) -> datetime:
+    """Return the time of the first ``full`` measurement of the candidate, else its creation time."""
+    return min((m.created_at for m in c.measurements if full(m)), default=c.created_at)

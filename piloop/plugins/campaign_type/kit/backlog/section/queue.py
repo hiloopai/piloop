@@ -1,11 +1,10 @@
 from sqlalchemy import func, select
 
 from piloop.api.views import Lines, Rendered
-from piloop.plugins.campaign_type.kit.backlog.ideas import links, superseded_by
+from piloop.plugins.campaign_type.kit.backlog.ideas import links, queued_ideas, superseded_by
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.section.contract import Rendering, Section, Surface
-from piloop.reports.overview import queued_ideas
 from piloop.text import NONE, age, cell
 
 BLOCKED_SHOWN = 5

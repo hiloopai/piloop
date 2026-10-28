@@ -49,12 +49,14 @@ from piloop.config import CampaignConfig, explain
 from piloop.db import feed as db_feed
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, count
 from piloop.ids import CampaignId, CommentKind, RoleName
+from piloop.plugins.campaign_type.kit.backlog.ideas import queued_ideas
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.tables import produced
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
-from piloop.plugins.campaign_type.kit.verdicts.judge import keeps
-from piloop.reports.overview import head_scores, live_agent_sessions, produced, queued_ideas
+from piloop.plugins.campaign_type.kit.verdicts.judge import head_scores, keeps
+from piloop.reports.overview import live_agent_sessions
 from piloop.text import iso
 from piloop.usage.totals import campaign_tokens
 

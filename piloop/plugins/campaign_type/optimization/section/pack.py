@@ -1,8 +1,8 @@
 from pydantic import Field
 
 from piloop.api.views import Rendered, Text
+from piloop.plugins.campaign_type.optimization.pack import pack
 from piloop.plugins.section.contract import Rendering, Section, Surface
-from piloop.reports.pack import pack
 
 
 class Pack(Section):

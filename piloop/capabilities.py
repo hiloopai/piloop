@@ -85,8 +85,8 @@ from piloop.plugins.section.inbox import Inbox
 from piloop.plugins.section.events import Events
 from piloop.plugins.section.tools import Tools
 from piloop.plugins.section.incidents import Incidents
-from piloop.plugins.campaign_type.kit.runs.section.pack import Pack
-from piloop.plugins.campaign_type.kit.runs.section.history import History
+from piloop.plugins.campaign_type.optimization.section.pack import Pack
+from piloop.plugins.campaign_type.optimization.section.history import History
 from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.section.database import Database
 from piloop.plugins.campaign_type.optimization.section.concepts import Concepts

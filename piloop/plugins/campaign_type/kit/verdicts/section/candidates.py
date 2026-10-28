@@ -1,11 +1,10 @@
 from piloop.api.views import Rendered, Table, Value
 from piloop.db.models import count
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate, produced
 from piloop.plugins.campaign_type.kit.evaluation.measure import score
 from piloop.plugins.campaign_type.kit.verdicts.judge import track_of
 from piloop.plugins.campaign_type.kit.verdicts.verdict import label
 from piloop.plugins.section.contract import Rendering, Section, Surface
-from piloop.reports.overview import produced
 from piloop.text import age, cell
 
 CANDIDATES_SHOWN = 8

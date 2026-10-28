@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import Annotated
 
 import cyclopts
-from rich import box
-from rich.console import Group
 
 from piloop.api.client import Client, answers
 from piloop.api.contract import MAX_POLL_SECONDS, Checkout, EventsQuery, Fork, Selection
@@ -21,7 +19,6 @@ from piloop.campaign.campaigns import (
     create_campaign_repo,
     stub_untouched,
     tree as campaign_tree,
-    workspace_dir,
 )
 from piloop.cli import common, daemon, local
 from piloop.cli.client import cwd, daemon_http
@@ -31,9 +28,6 @@ from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
 from piloop.ids import CampaignStatus, checked_campaign_name
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
-from piloop.plugins.campaign_type.kit.runs.section.pack import Pack
-from piloop.plugins.section.contract import SECTIONS
-from piloop.reports.pack import renderables as pack_renderables
 from piloop.text import metric
 from piloop.watch.app import Watch
 
@@ -167,23 +161,6 @@ def fork(
         f' candidate#{added.baseline}: the daemon measures it',
         markup=False,
     )
-
-
-def history(ref: CampaignRef | None = None, /) -> None:
-    """Print the research pack: what a research sweep reads before it proposes ideas.
-
-    It shows the metrics, the analysis artifacts, what was tried per mechanism family, the latest ideas with their
-    outcomes, the kept lineage, the findings and the digests, as many as `[plugins.section.pack]` says. Without a
-    campaign, it uses the campaign that the current directory is in, else the only active campaign, else every campaign.
-    """
-    with local.session() as s:
-        for campaign in local.campaigns(s, ref):
-            common.heading(f'[bold]{campaign.name}[/] #{campaign.id}  {campaign.path}')
-            workspace = workspace_dir(common.settings.home, campaign.id)
-            cfg = campaign.config
-            shown = next((x for x in SECTIONS.instances(cfg.plugins).values() if isinstance(x, Pack)), Pack())
-            parts = pack_renderables(s, campaign, cfg, table_box=box.SIMPLE_HEAD, workspace=workspace, shown=shown)
-            common.console.print(Group(*parts))
 
 
 def watch_cmd(

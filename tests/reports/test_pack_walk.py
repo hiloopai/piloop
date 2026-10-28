@@ -9,8 +9,8 @@ import pytest
 
 from piloop.db.models import Campaign
 from piloop.db.session import Database
-from piloop.reports import pack as pack_module
-from piloop.reports.pack import _file_lines, _recent
+from piloop.plugins.campaign_type.optimization import pack as pack_module
+from piloop.plugins.campaign_type.optimization.pack import _file_lines, _recent
 from tests.reports.test_pack import JAN_1, render, write
 
 

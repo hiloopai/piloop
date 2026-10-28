@@ -44,6 +44,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     ratios,
     requested,
     rungs,
+    score,
     units,
 )
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
@@ -79,7 +80,7 @@ from piloop.plugins.vcs.contract import (
     RebaseVersion,
     Repository,
 )
-from piloop.text import metric
+from piloop.text import NONE, metric
 
 
 def head(s: Session, campaign: Campaign, *, excluding: Candidate | None = None) -> Candidate | None:
@@ -659,3 +660,32 @@ def branches(s: Session, campaign: Campaign, pinned: Candidate | None, computed:
         return False
     with closing(repository(campaign)) as repo:
         return not repo.contains(pinned.revision, computed.revision)
+
+
+def head_scores(
+    s: Session, campaign: Campaign, cfg: CampaignConfig
+) -> tuple[Candidate, list[tuple[Track, float | None, float | None]]] | None:
+    """Return the head and, for each track, its primary score and its delta against the baseline.
+
+    A score is None when the current evaluator has not measured it. A delta is also None when the head is the
+    baseline. Returns None when there is no trunk keep.
+    """
+    trunk = head(s, campaign)
+    if trunk is None:
+        return None
+    evaluator_id = campaign.evaluator_id
+    first = baseline(s, campaign)
+    values: list[tuple[Track, float | None, float | None]] = []
+    for track in cfg.all_tracks:
+        value = score(trunk, evaluator_id, track.primary)
+        base = score(first, evaluator_id, track.primary) if first is not None and first.id != trunk.id else None
+        values.append((track, value, None if value is None or base is None else value - base))
+    return trunk, values
+
+
+def scored(c: Candidate, evaluator_id: EvaluatorId | None, primary: Metric) -> tuple[str, str]:
+    """Format the primary score of the candidate and its delta to its parent, each ``—`` when unknown."""
+    value = score(c, evaluator_id, primary)
+    parent = score(c.parent, evaluator_id, primary) if c.parent is not None else None
+    delta = metric(value - parent, signed=True) if value is not None and parent is not None else NONE
+    return NONE if value is None else metric(value), delta
