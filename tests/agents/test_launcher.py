@@ -470,6 +470,31 @@ def test_an_agent_that_exits_non_zero_says_its_last_output_bounded_and_without_a
     assert 'sk-live-123' in (tmp_path / 'w' / 'transcript.txt').read_text(), 'the transcript keeps what it printed'
 
 
+def test_an_agent_that_ends_early_with_exit_0_and_nothing_done_says_its_last_output(
+    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A helper binary missing from the image: the agent says so and exits 0, and its error must say it too."""
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    dies = '#!/bin/sh\necho starting\necho "error: helper binary not found at $GATEWAY_KEY"\nexit 0\n'
+    counted = {'headless': ['--session-id', '{session_id}', '{prompt}'], **READS_PI}
+    use_harness(db, campaign, dies, env={'GATEWAY_KEY': {'secret': 'TEAM_KEY'}}, **counted)
+    put_secret(db, campaign.id, 'TEAM_KEY', 'sk-live-123')
+    agent_session_id = request(db, campaign)
+    ended = launch(db, runtime, tmp_path, agent_session_id, agents=AgentSettings(exit_output_chars=200))
+    said = f'{NEVER_WORKED}: starting | error: helper binary not found at [secret TEAM_KEY]'
+    assert [a.error for _, a in anomalies(db)] == [said], 'what the escalation of a pause lists'
+    assert (ended, agent_session(db, agent_session_id).error) == (NotStarted(said), None), 'the agent itself exited 0'
+
+
+def test_an_agent_that_works_and_exits_0_has_no_error(
+    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    use_harness(db, campaign, '#!/bin/sh\necho done\necho line >> solve.txt\n')
+    agent_session_id = request(db, campaign)
+    launch(db, runtime, tmp_path, agent_session_id)
+    assert agent_session(db, agent_session_id).error is None, 'its last output is not an error'
+
+
 def test_timeout_kills_and_records(campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path) -> None:
     write_toml(Path(campaign.path), HARNESS_SLEEPS)
     cfg = load_campaign_config(Path(campaign.path), plugins={'role': {'watchdog': {'timeout': 0.3}}})

@@ -138,21 +138,49 @@ def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party
 
     It reads the ``WAKES`` events from the feed (``piloop.db.feed``), a page at a time until a page gives a line.
     ``campaign_id`` filters all of them. The returned cursor passes every event that it read, so no event is missed.
+    The escalations that still wait for ``party`` (``unanswered``) come with it, but end no wait: an orchestrator that
+    moved past one sees it again on each wait.
     """
+    waiting = waiting_for(s, party, campaign_id=campaign_id)
     cursor, found, more = after, list[NewsItem](), True
     while more and not found:
         page = db_feed.after(s, cursor, WAKES, limit=PAGE)
         cursor, more = page.next, page.more
         events = s.scalars(select(Event).where(Event.id.in_(page.ids)).order_by(Event.id)).all()
-        found = _news(s, events, campaign_id, party)
-    return News(next=cursor, items=found)
+        found = _news(s, events, waiting, campaign_id, party)
+    shown = {item.comment.id for item in found if isinstance(item, CommentNews)}
+    escalations = [comment_view(c) for c in unanswered(s, waiting) if c.id not in shown]
+    return News(next=cursor, items=found, escalations=escalations)
 
 
-def _news(s: Session, events: Sequence[Event], campaign_id: CampaignId | None, party: str) -> list[NewsItem]:
+def unanswered(s: Session, waiting: Sequence[tuple[Comment, Campaign | None]]) -> list[Comment]:
+    """The escalations of ``waiting`` that no other party answered, oldest first.
+
+    An answer is a comment on the root of the escalation's thread (``reply``) that is ``in_reply_to`` it, or that is on
+    it and answers nothing else.
+    """
+    asked = {c.id: c for c, _ in waiting if c.kind is CommentKind.ESCALATION}
+    roots = {c.target_id if c.target_kind is TargetKind.COMMENT else c.id for c in asked.values()}
+    on_roots = (Comment.target_kind == TargetKind.COMMENT) & Comment.target_id.in_(roots)
+    answered = set[CommentId]()
+    for answer in s.scalars(select(Comment).where(on_roots)):
+        to = asked.get(answer.in_reply_to if answer.in_reply_to is not None else CommentId(answer.target_id))
+        if to is not None and party_of(answer.author) != party_of(to.author):
+            answered.add(to.id)
+    return [c for id_, c in sorted(asked.items()) if id_ not in answered]
+
+
+def _news(
+    s: Session,
+    events: Sequence[Event],
+    waiting: Sequence[tuple[Comment, Campaign | None]],
+    campaign_id: CampaignId | None,
+    party: str,
+) -> list[NewsItem]:
     fresh = {e.target_id for e in events if isinstance(e.payload, (Commented, CommentEdited))}
     found: list[NewsItem] = [
         CommentNews(comment=comment_view(c), campaign_name=campaign.name if campaign else None)
-        for c, campaign in waiting_for(s, party, campaign_id=campaign_id)
+        for c, campaign in waiting
         if c.id in fresh
     ]
     for e in events:

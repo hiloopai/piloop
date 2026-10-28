@@ -388,7 +388,7 @@ class CampaignResults:
         recorded (the next daemon measures it again)."""
         self._secrets = secrets if secrets is not None else SECRETS.selected({})
         self._exit_output_chars = exit_output_chars
-        """``[agents] exit_output_chars``: how much of its last output an agent that exits non-zero leaves in its error."""
+        """``[agents] exit_output_chars``: how much of its last output a failed or early end says."""
 
     def _apply(self, guard: Guard | None, change: Callable[[Session], None]) -> None:
         """Run ``guard``, then ``change``, in one write transaction, and commit. Nothing changes when one raises."""
@@ -441,7 +441,7 @@ class CampaignResults:
         changed = report.workspace if isinstance(report, AgentFinished) and workspace is not None else {}
         # read from the CAS before the write lock: a workspace file can be large, and a remote CAS slow
         base = Manifest.get(self._cas, workspace.manifest) if workspace is not None and changed else None
-        output = self._failed_output(report)
+        output = self._last_output(report)
         with tempfile.TemporaryDirectory(dir=self._scratch()) as scratch:
             staged = stage(self._cas, changed, Path(scratch))
 
@@ -488,12 +488,15 @@ class CampaignResults:
         self._apply(None, lambda s: _record(s, key.agent_session, outcome))
         self._tracer.event(outcome.kind, comment=prompt, agent_session=key.agent_session, error=error)
 
-    def _failed_output(self, report: AgentReport | EvaluationReport) -> str | None:
-        """The transcript of an agent that exited non-zero, from the CAS, or None. Read it before the write lock."""
+    def _last_output(self, report: AgentReport | EvaluationReport) -> str | None:
+        """The transcript of an agent that exited non-zero or within ``STARTUP_SECONDS``, from the CAS, or None.
+
+        Read it before the write lock. Whether an early end did any work is known only in the transaction.
+        """
         match report:
-            case AgentFinished(process=AgentExit(exit_code=int(code)), files=files) if (
-                code != 0 and TRANSCRIPT in files
-            ):
+            case AgentFinished(process=AgentExit(exit_code=int(code), seconds=seconds), files=files) if (
+                code != 0 or seconds < STARTUP_SECONDS
+            ) and TRANSCRIPT in files:
                 data = self._cas.get(files[TRANSCRIPT])
                 assert data is not None  # finished checked that the CAS holds every file of the report
                 return data.decode(errors='replace')
@@ -506,7 +509,8 @@ class CampaignResults:
         The anomaly only when the agent did not start to work (``NotStarted``): its job did not start, or it ended
         within ``STARTUP_SECONDS`` and left nothing (``_never_worked``), unless the daemon told it to stop or ended it.
         While the daemon stops, the row closes as killed by the stop (``RunEnd.DAEMON_STOPPED``), with the usage that was read.
-        The ``output`` of an agent that exited non-zero ends its error (``explained``).
+        The ``output`` of an agent that exited non-zero ends its error (``explained``), and the reason of one that exited 0
+        and did not start to work.
         """
         w = _open(s, AgentKey(job.agent_session))
         w.ended_at = utcnow()
@@ -518,8 +522,8 @@ class CampaignResults:
                 w.state, w.error = AgentSessionState.KILLED, reason
                 ended: Ran | NotStarted = NotStarted(reason)
             case AgentFinished(process=process):
-                if output is not None:
-                    found = values(s, self._secrets, job.agent_session, job.secrets.values())
+                found = {} if output is None else values(s, self._secrets, job.agent_session, job.secrets.values())
+                if output is not None and process.exit_code != 0:
                     process = explained(process, output, found, self._exit_output_chars)
                 if report.unrestored is not None:
                     unrestored = SessionNotResumed(reason=Unresumed.UNRESTORED, detail=report.unrestored)
@@ -547,8 +551,16 @@ class CampaignResults:
                 )
                 w.error = w.error if ending else process.error
                 seconds = process.seconds
-                worked = asked or not _never_worked(s, w, report)
-                ended = Ran(process, report.work) if worked else NotStarted(process.error or NEVER_WORKED)
+                match asked or not _never_worked(s, w, report), process.error:
+                    case True, _:
+                        ended = Ran(process, report.work)
+                    case False, str() as error:
+                        ended = NotStarted(error)
+                    case _:  # it exited 0, so what it said last is all that says why
+                        said = explained(
+                            replace(process, error=NEVER_WORKED), output or '', found, self._exit_output_chars
+                        )
+                        ended = NotStarted(said.error or NEVER_WORKED)
             case _:
                 assert_never(report)
         session_finished(s, w)

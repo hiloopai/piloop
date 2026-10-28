@@ -537,6 +537,19 @@ class News(View):
     next: int
     """The cursor for the next wait. It passes every event that the read examined."""
     items: list[NewsItem]
+    escalations: list[CommentView] = []
+    """The escalations that still wait for the reader, oldest first: unacknowledged, unanswered, and not in ``items``.
+    They end no wait, and come back with each one until someone acknowledges or answers them."""
+
+    def reminder(self, now: datetime) -> str | None:
+        """The line that ``piloop inbox wait`` and a wake add for ``escalations``, with the age of each, or None."""
+        if not self.escalations:
+            return None
+        ages = ', '.join(
+            f'comment#{c.id} ({age(datetime.fromisoformat(c.created), now)} old)' for c in self.escalations
+        )
+        one = len(self.escalations) == 1
+        return f'{len(self.escalations)} escalation{"" if one else "s"} wait{"s" if one else ""} unacknowledged: {ages}'
 
 
 class CampaignAnswer(View):

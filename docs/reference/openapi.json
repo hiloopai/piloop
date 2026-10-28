@@ -6321,6 +6321,15 @@
             },
             "type": "array",
             "title": "Items"
+          },
+          "escalations": {
+            "items": {
+              "$ref": "#/components/schemas/CommentView"
+            },
+            "type": "array",
+            "title": "Escalations",
+            "description": "The escalations that still wait for the reader, oldest first: unacknowledged, unanswered, and not in ``items``.\nThey end no wait, and come back with each one until someone acknowledges or answers them.",
+            "default": []
           }
         },
         "type": "object",

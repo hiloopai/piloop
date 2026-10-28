@@ -1446,7 +1446,9 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
     run = run_row(db, run_id)
     assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.NOT_STARTED)
     with db.session() as s:
-        assert [a.error for _, a in in_order(s, StartupAnomaly)] == [NEVER_WORKED] * 3, 'each says why it failed'
+        assert [a.error for _, a in in_order(s, StartupAnomaly)] == [f'{NEVER_WORKED}: Welcome'] * 3, (
+            'each says why it failed, with its last output'
+        )
         assert runs_stop.attempts(s.get_one(Idea, run_row(db, run_id).idea_id)) == 0
 
     mocker.patch.object(runtime, 'start', side_effect=RuntimeError('no server'))

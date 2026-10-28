@@ -793,6 +793,11 @@ def test_inbox_wait_blocks_until_an_item_lands_and_hands_over_a_cursor_that_miss
     assert re.fullmatch(r'next: piloop inbox wait demo --after \d+', after) and after.split()[-1] != cursor
     run_cli(['inbox', 'wait', '--after', cursor, '--timeout', '30'])
     assert out().splitlines()[0].startswith('comment#1 escalation'), 'from an old cursor: what landed in between'
+    run_cli(['inbox', 'wait', '--after', after.split()[-1], '--timeout', '0'])
+    quiet, reminder, _ = out().splitlines()
+    assert quiet == 'nothing new in 0:00:00' and re.fullmatch(
+        r'1 escalation waits unacknowledged: comment#1 \(\d+s old\)', reminder
+    ), 'nothing ended the wait, and the escalation is still unacknowledged'
 
 
 @pytest.mark.usefixtures('api')

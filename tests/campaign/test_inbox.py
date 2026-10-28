@@ -1,7 +1,7 @@
 """The inbox: comments with a priority, scoped to a campaign through every target, until someone acknowledges them."""
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from inline_snapshot import snapshot
@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, Agent, Orchestrating, Person, Service, System, party_of
-from piloop.api.views import AckOutcome, Relation, thread_lines
+from piloop.api.views import AckOutcome, News, Relation, thread_lines
 from piloop.campaign import inbox
 from piloop.campaign.anomaly import AnomalyReported
 from piloop.db import feed as db_feed
@@ -425,6 +425,56 @@ def test_a_reply_answers_the_root_of_the_thread_and_wakes_the_orchestrator_but_n
             'comment#3 decision p2 on comment#1 (demo) by human: Revert it: the floor moved.'
         ]
         assert news_lines(s, cursor, me=System.HUMAN)[1] == [], 'not news to whoever wrote it'
+
+
+def test_an_escalation_left_unacknowledged_comes_back_with_its_age_on_each_wait_until_acked_or_answered(
+    db: Database, campaign: Campaign
+) -> None:
+    """An orchestrator that moved past an escalation sees it again, on the next wait that returns for anything else."""
+    now = utcnow()
+    on_campaign = TargetRef(TargetKind.CAMPAIGN, campaign.id)
+    with db.session() as s:
+        start = db_feed.newest(s)
+        for author, minutes in (('implementer#3', 120), ('research#4', 5), ('orchestrator', 60)):
+            s.add(
+                Comment(
+                    target=on_campaign,
+                    author=author,
+                    kind=CommentKind.ESCALATION,
+                    priority=1,
+                    body='which floor?',
+                    created_at=now - timedelta(minutes=minutes),
+                )
+            )
+        s.commit()
+        first = inbox.news(s, start, campaign_id=campaign.id, party=System.ORCHESTRATOR.party)
+        assert [i.text() for i in first.items] == [
+            'comment#1 escalation p1 on campaign#1 (demo) by implementer#3: which floor?',
+            'comment#2 escalation p1 on campaign#1 (demo) by research#4: which floor?',
+        ]
+        assert first.reminder(now) is None, 'news already'
+
+        def verdict() -> News:
+            emit(
+                s,
+                CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='+1'),
+                TargetRef(TargetKind.CANDIDATE, 1),
+                System.DAEMON,
+            )
+            s.commit()
+            return inbox.news(s, db_feed.newest(s) - 1, campaign_id=campaign.id, party=System.ORCHESTRATOR.party)
+
+        s.add(Comment(target=TargetRef(TargetKind.COMMENT, 1), author='implementer#3', body='still stuck'))
+        assert verdict().reminder(now) == '2 escalations wait unacknowledged: comment#1 (2h old), comment#2 (5m old)', (
+            'its own follow-up answers nothing'
+        )
+        inbox.ack(s, [CommentId(1)], System.ORCHESTRATOR)
+        quiet = inbox.news(s, db_feed.newest(s), campaign_id=campaign.id, party=System.ORCHESTRATOR.party)
+        assert (quiet.items, quiet.reminder(now)) == ([], '1 escalation waits unacknowledged: comment#2 (5m old)'), (
+            'a timeout says it too, but it ends no wait'
+        )
+        inbox.reply(s, CommentId(2), 'the old one', author=System.ORCHESTRATOR, priority=2)
+        assert verdict().reminder(now) is None, 'answered: the human acknowledges the answer'
 
 
 def news_lines(s: Session, after: int, *, campaign_id: CampaignId | None = None, me: Actor) -> tuple[int, list[str]]:

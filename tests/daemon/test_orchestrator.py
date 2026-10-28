@@ -1,5 +1,6 @@
 """The orchestrator role: piloop launches it on news, and each agent resumes the last one's session."""
 
+import re
 import sys
 import threading
 from collections.abc import Generator
@@ -139,6 +140,31 @@ def test_news_launches_the_orchestrator_which_resumes_its_session_and_never_wake
         assert (row.state, row.session_id) == (AgentSessionState.EXITED, s.get_one(AgentSession, first).session_id)
         on_second = Event.target == TargetRef(TargetKind.AGENT_SESSION, second)
         assert in_order(s, SessionNotResumed, on_second) == []
+
+
+def test_an_escalation_that_a_wake_left_unacknowledged_comes_back_in_the_next_wake(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, on: None
+) -> None:
+    with db.session() as s:
+        asked = Comment(
+            target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
+            author='watchdog#9',
+            kind=CommentKind.ESCALATION,
+            priority=1,
+            body='which floor?',
+        )
+        s.add(asked)
+        s.commit()
+        escalation = asked.id
+    [first] = wake(db, runtime, tmp_path)
+    assert f'comment#{escalation} escalation' in brief(tmp_path, first)
+    assert 'escalation waits unacknowledged' not in brief(tmp_path, first), 'news already'
+    asked_again = message(db, campaign, 'and now?')
+    [second] = wake(db, runtime, tmp_path)
+    [note] = notes(db, second)
+    news, reminder = note.splitlines()[1:]
+    assert news == f'- comment#{asked_again} message p1 on campaign#1 (demo) by human:ana: and now?'
+    assert re.fullmatch(rf'- 1 escalation waits unacknowledged: comment#{escalation} \(\d+s old\)', reminder)
 
 
 HOOK = (

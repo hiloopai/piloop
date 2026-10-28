@@ -172,6 +172,7 @@ def inbox_wait(
     These events end the wait: a new unacknowledged inbox item that someone else wrote, a seed that someone else
     filed, a campaign that the daemon stopped, an anomaly that the daemon gave to a watchdog, and the daemon's verdict
     on a measured candidate. Your own decisions, as PILOOP_ACTOR, do not end it. At --timeout it returns with nothing.
+    Each return also names the escalations that still wait for you, unacknowledged and unanswered, with their age.
     Set the timeout of your shell tool higher than --timeout. Without a campaign, it waits for every campaign.
     """
     deadline, cursor = time.monotonic() + timeout, after
@@ -185,6 +186,8 @@ def inbox_wait(
     again = shlex.join(['piloop', 'inbox', 'wait', *([ref] if ref else []), '--after', str(cursor)])
     lines = '\n'.join(item.text() for item in found.items)
     common.console.print(lines or f'nothing new in {timedelta(seconds=round(timeout))}', markup=False, soft_wrap=True)
+    if (reminder := found.reminder(clock())) is not None:
+        common.console.print(reminder, markup=False, soft_wrap=True)
     common.console.print(f'next: {again}', markup=False, soft_wrap=True)
 
 

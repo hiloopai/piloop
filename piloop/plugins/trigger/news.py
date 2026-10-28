@@ -6,7 +6,6 @@ takes what came after it. A row that failed did not take its news, and an agent 
 did not get: the next note takes them again. A cancelled row took the news that its notes held when it was cancelled.
 """
 
-from collections.abc import Sequence
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import ClassVar, Literal
@@ -96,9 +95,12 @@ def taken(p: Pass) -> tuple[int, datetime | None]:
     return (0, None) if last is None else (last[1].upto, last[0].at)
 
 
-def note(items: Sequence[NewsItem]) -> str:
-    """The note that hands ``items`` to the role's agent."""
-    return '\n'.join(['News for you:', *(f'- {i.text()}' for i in items)])
+def note(found: News, now: datetime) -> str:
+    """The note that hands the news to the role's agent, and the escalations that still wait for it."""
+    reminder = found.reminder(now)
+    return '\n'.join(
+        ['News for you:', *(f'- {i.text()}' for i in found.items), *([f'- {reminder}'] if reminder else [])]
+    )
 
 
 def is_open(p: Pass) -> bool:
@@ -130,7 +132,7 @@ class NewsTrigger(Trigger):
             return None
         kinds = sorted({item.kind for item in found.items})
         reason = f'news: {len(found.items)} items ({", ".join(kinds)})'
-        return Steer(note(found.items), reason, events=(NewsTaken(after=cursor, upto=found.next),))
+        return Steer(note(found, p.now), reason, events=(NewsTaken(after=cursor, upto=found.next),))
 
     def due_in(self, p: Pass) -> timedelta | None:
         cursor, last = taken(p)
