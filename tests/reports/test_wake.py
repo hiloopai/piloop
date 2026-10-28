@@ -113,7 +113,7 @@ def test_lessons_rank_dead_or_promising_first_then_the_larger_effect_then_the_ne
 def test_lessons_in_the_campaigns_metrics_outrank_larger_effects_in_other_units(
     db: Database, campaign: Campaign
 ) -> None:
-    """comment#10930: a decoder-accuracy brief opened with eval-time lessons, because seconds outnumber words."""
+    """An accuracy brief opened with eval-time lessons, because seconds outnumber words."""
     metrics = [
         {'name': 'val_correct_at_b', 'direction': 'higher', 'role': 'primary'},
         {'name': 'rep_correct_at_b', 'direction': 'higher', 'role': 'guardrail', 'margin': 40},

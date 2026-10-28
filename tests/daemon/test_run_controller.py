@@ -538,7 +538,7 @@ def test_a_verdict_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_t
 def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_a_new_run_finishes_it(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """comment#10936: a failed implementer's uncommitted tree was scored, and could become the head, never declared ready.
+    """A failed implementer's uncommitted tree was scored, and could become the head, never declared ready.
 
     It is now ``recovered``: committed, pinned, never measured, never a keep. The idea goes back to the queue with the
     recovered candidate as its base, attempts left or not, and the run that finishes it is judged as any other.
@@ -1721,7 +1721,7 @@ TIMEOUT = 'implementer timeout after 1s'
             id='unsaved-asked-commits',
         ),
         pytest.param(RunFacts(versions=2), (RunEnd.FINISHED, None), id='commits'),
-        # the overlaps that fix the order: each pair of neighbouring rows, and the #116 cases
+        # the overlaps that fix the order: each pair of neighbouring rows, and a run that ends after its finding
         pytest.param(
             RunFacts(finding=True, asked=CommentId(7), timed_out=True, error=TIMEOUT),
             (RunEnd.AWAITING_ANSWER, 'comment#7'),

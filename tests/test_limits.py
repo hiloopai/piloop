@@ -85,7 +85,7 @@ def test_the_daemon_applies_a_changed_limit_on_its_next_tick_and_keeps_its_param
 def test_with_two_evaluations_running_a_lowered_limit_starts_no_third_until_none_runs(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
-    """#108's second capacity gate: ``evaluations`` lowered from 2 to 1 while 2 run."""
+    """The second capacity gate: ``evaluations`` lowered from 2 to 1 while 2 run."""
     leases = Leases(db, Recorder(db), home_cas(db), TIMING, {'serve': Pool(evaluations=2)})
     worker = Local(leases, 'serve')
     join(leases, 'serve', ['process'], pool='serve')

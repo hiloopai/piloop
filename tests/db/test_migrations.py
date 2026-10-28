@@ -749,7 +749,7 @@ def test_0006_admits_lessons_names_each_projects_repo_adds_documents_and_the_jou
     cfg = alembic(path)
     command.upgrade(cfg, '0005')
     clone = Repo.init(tmp_path / 'clone')
-    clone.create_remote('origin', 'git@github.com:hiloopai/mudbench.git')
+    clone.create_remote('origin', 'git@github.com:example/project.git')
     comment = "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('project', 1, 'w', ?, ?)"
     lesson = 'family: voting | status: dead | best: +0.002 acc (evaluator#1)\nidea#1'
     config = {
@@ -766,7 +766,7 @@ def test_0006_admits_lessons_names_each_projects_repo_adds_documents_and_the_jou
     command.upgrade(cfg, '0006')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         assert con.execute('SELECT repo FROM projects ORDER BY id').fetchall() == [
-            ('github.com/hiloopai/mudbench',),
+            ('github.com/example/project',),
             ('/gone',),
         ], 'filled from each checkout: its remote, else its path'
         con.execute(comment, ('lesson', lesson))

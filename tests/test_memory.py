@@ -150,15 +150,15 @@ def test_a_document_glob_outside_the_repo_is_refused_when_the_config_loads(campa
 @pytest.mark.parametrize(
     ('url', 'expected'),
     [
-        ('git@github.com:hiloopai/mudbench.git', 'github.com/hiloopai/mudbench'),
-        ('https://github.com/hiloopai/mudbench', 'github.com/hiloopai/mudbench'),
-        ('https://user@github.com/hiloopai/mudbench.git/', 'github.com/hiloopai/mudbench'),
+        ('git@github.com:example/project.git', 'github.com/example/project'),
+        ('https://github.com/example/project', 'github.com/example/project'),
+        ('https://user@github.com/example/project.git/', 'github.com/example/project'),
         ('ssh://git@example.com:2222/team/repo.git', 'example.com:2222/team/repo'),
-        ('ssh://git@github.com:22/hiloopai/mudbench.git', 'github.com/hiloopai/mudbench'),
-        ('HTTPS://GitHub.com/hiloopai/mudbench', 'github.com/hiloopai/mudbench'),
-        ('https://github.com:443/hiloopai/mudbench', 'github.com/hiloopai/mudbench'),
-        ('git+ssh://git@github.com/hiloopai/mudbench', 'github.com/hiloopai/mudbench'),
-        ('/srv/git/mudbench.git', '/srv/git/mudbench'),
+        ('ssh://git@github.com:22/example/project.git', 'github.com/example/project'),
+        ('HTTPS://GitHub.com/example/project', 'github.com/example/project'),
+        ('https://github.com:443/example/project', 'github.com/example/project'),
+        ('git+ssh://git@github.com/example/project', 'github.com/example/project'),
+        ('/srv/git/project.git', '/srv/git/project'),
     ],
 )
 def test_a_repo_is_identified_by_its_remote_whatever_the_clone(tmp_path: Path, url: str, expected: str) -> None:
@@ -172,6 +172,6 @@ def test_without_origin_the_first_remote_names_the_repo_and_without_any_the_path
     repo = Repo.init(tmp_path / 'clone')
     assert identity(tmp_path / 'clone') == str(tmp_path / 'clone')
     repo.create_remote('zeta', 'https://example.com/z/repo')
-    repo.create_remote('hiloop', 'git@github.com:hiloopai/mudbench.git')
-    assert identity(tmp_path / 'clone') == 'github.com/hiloopai/mudbench'
+    repo.create_remote('fork', 'git@github.com:example/project.git')
+    assert identity(tmp_path / 'clone') == 'github.com/example/project'
     assert identity(tmp_path / 'nowhere') == str(tmp_path / 'nowhere')
