@@ -76,9 +76,9 @@ def candidate_import(
 ) -> None:
     """Register the files of a version as a reference candidate: a starting point for an idea.
 
-    The daemon measures it with the current evaluator. A reference is never kept, and it is never the head or a bar.
-    It does not count in the kept total, the sparkline or a stop condition. To import a candidate of another campaign,
-    bring its `revision` into this campaign's repo first.
+    The daemon measures it with the current evaluator, but never judges it. Once measured, a reference that builds on
+    the head can be kept by hand (`piloop candidate verdict`), and is the head then. To import a candidate of another
+    campaign, bring its `revision` into this campaign's repo first.
     """
     with CandidatesClient.connect(daemon_http()) as client:
         name = campaign_name(client, ref)
@@ -169,10 +169,12 @@ def candidate_verdict(
     """Override a candidate's judgement, with the reason.
 
     The verdict is then yours, signed as PILOOP_ACTOR, so the daemon never changes it. The `candidate.verdict` event
-    records the old and new verdict with the reason. Only a judgement is overridden: pending, reference, recovered and
+    records the old and new verdict with the reason. Only a judgement is overridden, and a measured reference is kept: pending, reference, recovered and
     skipped candidates are refused. A keep of a trunk run that does not build on the head would drop what the head
     kept. So the candidate becomes `interesting`, and its merge onto the head is a new candidate that the daemon
     measures and judges against the head, as for its own keeps. A merge that conflicts files a seed to compose it.
+    A verdict that replaces the head cancels the open runs that started from the old head, unless they pin it, as
+    `piloop run cancel --wrap-up` does. Their ideas run again from the new head once the runs end.
     """
     with VerdictsClient.connect(daemon_http()) as client:
         done = client.set_verdict(candidate_id, VerdictBody(verdict=verdict, reason=reason))
@@ -183,6 +185,12 @@ def candidate_verdict(
         common.console.print(
             f'candidate#{done.merge.candidate}: the daemon measures it and judges it against the head'
             f' candidate#{done.merge.head}',
+            markup=False,
+        )
+    for c in done.cancelled:
+        common.console.print(
+            f'run#{c.run} of idea#{c.idea} started from candidate#{c.base}, which is no longer the head: cancelled;'
+            ' the idea runs again from the head once the run ends',
             markup=False,
         )
 

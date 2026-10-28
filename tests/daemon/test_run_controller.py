@@ -3070,6 +3070,32 @@ def test_a_keep_that_has_the_heads_changes_without_its_history_is_judged_against
         assert now is not None and now.run_id == run_id
 
 
+def test_a_commit_that_has_the_head_is_judged_against_the_head_whatever_it_scores_against_its_bar(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A keep by hand moved the head below the run's bar after the run started, and the run took the head in.
+
+    Against its bar, the run's gain was lost in what the head gave up, so it was discarded.
+    """
+    run_id = make_run(db, campaign)
+    with db.session() as s:
+        [start] = s.get_one(Candidate, 1).measurements
+        below = {**start.metrics, 'score': 0.0}
+    h2 = keep_elsewhere(db, campaign, 'below', {'other.txt': 'x\n'}, below)
+    with db.session() as s:
+        h2_sha = s.get_one(Candidate, h2).revision
+    pick = f'#!/bin/sh\ngit cherry-pick -n {h2_sha}\necho mine > mine.txt\ngit add -A\ngit commit -qm "the head and mine"\n'
+    write_toml(Path(campaign.path), pick)
+    reload_campaign(db, campaign)
+    execute(controller(db, runtime, tmp_path), db, run_id)
+    [(_, verdict, reason, _, _)] = scored(db, run_id)
+    assert (verdict, reason) == (
+        Outcome.KEEP,
+        f'the head candidate#{h2} is in its history: no-op: score identical to parent candidate#1; against'
+        f' candidate#{h2}: score 1 vs 0 (+1; aggregate: no per-unit results)',
+    )
+
+
 def test_a_merge_a_stop_left_unjudged_is_measured_and_judged_when_the_run_resumes(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3211,8 +3237,10 @@ def test_a_keep_on_one_track_must_hold_the_other_track_primaries_and_its_brief_c
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = load_campaign_config(path, **tracks)
         s.commit()
+    ex = controller(db, runtime, tmp_path)
+    ex.remeasure(CandidateId(1))  # the bar has a score: on the cost track, size 10 is no gain on 5
     run_id = make_run(db, campaign, track='accuracy')
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    execute(ex, db, run_id)
     [(_, verdict, reason, _, _)] = scored(db, run_id)
     assert (verdict, reason) == (Outcome.DISCARD, 'floor: size 10 past its floor 8'), 'score 2 > 1, but size 10 > 8'
     brief = brief_of(db, run_id)
@@ -3224,6 +3252,39 @@ def test_a_keep_on_one_track_must_hold_the_other_track_primaries_and_its_brief_c
     assert '- Starting from candidate#1: score=1.0, size=5.0 — baseline' in brief
     assert '- Tracks: accuracy (primary score, higher is better; share 0.5); cost (primary size' in brief
     assert 'Your run is on track accuracy.' in brief
+
+
+TWO_TRACKS = {
+    'metrics': [
+        {'name': 'score', 'direction': 'higher', 'role': 'primary', 'track': 'accuracy', 'margin': 1},
+        {'name': 'size', 'direction': 'lower', 'role': 'primary', 'track': 'cost', 'margin': 100},
+    ],
+    'tracks': {'accuracy': {'share': 0.5}, 'cost': {'share': 0.5}},
+}
+"""Two tracks: accuracy on ``score``, the lines of ``solve.txt``, and cost on ``size``, its bytes."""
+
+
+def test_a_candidate_is_judged_on_every_track_and_a_keep_on_another_track_than_its_runs_moves_the_head(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """An accuracy run that shrinks the file without a new line is no gain on accuracy, and a keep on cost.
+
+    Each track's judgement is a ``candidate.judged`` event, and the row has the best verdict with its track.
+    """
+    write_toml(Path(campaign.path), "#!/bin/sh\nprintf 'a\\n' > solve.txt\ngit commit -qam 'shorter'\n")
+    set_config(db, campaign, **TWO_TRACKS)
+    ex = controller(db, runtime, tmp_path)
+    ex.remeasure(CandidateId(1))
+    run_id = make_run(db, campaign, track='accuracy')
+    execute(ex, db, run_id)
+    with db.session() as s:
+        [c] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
+        assert (c.verdict, c.track) == (Outcome.KEEP, 'cost')
+        assert c.verdict_reason is not None and c.verdict_reason.startswith('on the cost track: against candidate#1:')
+        judged = [(e.track, e.verdict, e.score) for _, e in in_order(s, CandidateJudged, Event.target_id == c.id)]
+        assert judged == [('accuracy', Outcome.DISCARD, 1.0), ('cost', Outcome.KEEP, 2.0)]
+        now = head(s, s.get_one(Campaign, campaign.id))
+        assert now is not None and now.id == c.id
 
 
 def test_recovered_work_whose_tree_is_already_a_candidate_still_requeues_its_idea(

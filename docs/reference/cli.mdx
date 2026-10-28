@@ -412,7 +412,8 @@ piloop candidate import REF COMMIT [--summary TEXT]
 ```
 
 Registers the tree of a commit, branch or tag of the repo as a `reference` candidate: a starting point that an idea
-can pin with `--base`. The daemon measures it. It is never kept, never the head and never a bar. To import a candidate
+can pin with `--base`. The daemon measures it, but never judges it. Once measured, a reference that builds on the head
+can be kept by hand with `piloop candidate verdict`, and is the head then. To import a candidate
 of another campaign, fetch its commit into this repo first: `git fetch <its repo> <sha>`.
 
 ### piloop candidate note

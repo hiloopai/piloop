@@ -1,22 +1,26 @@
 """What the runs tell the stop rule and the campaigns' pass: attempts, keeps and runs, and when they settle."""
 
 from datetime import datetime
+from typing import ClassVar, Literal
 
 from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.orm import Session
 
 from piloop.campaign.stop import _over_runs, _since_reopen, run_cancel
-from piloop.db.events import has
+from piloop.db.events import has, latest
 from piloop.db.models import (
     Campaign,
     Comment,
     Event,
+    EventModel,
+    ReadBy,
 )
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import CampaignStatusChanged
 from piloop.ids import CampaignStatus, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import ATTEMPTS, FINISHED_RUNS, OPEN_RUNS
@@ -65,12 +69,37 @@ def settled(s: Session, campaign: Campaign) -> bool:
     return s.scalar(busy.limit(1)) is None
 
 
-def park_cancelled(s: Session, run: Run) -> None:
-    """Park the idea of a cancelled run, with a note on the idea: a run is cancelled because it is not wanted now."""
+class HeadReplaced(EventModel):
+    """A verdict set by hand replaced the head that the run started from, so it cancelled the run.
+
+    Once the run ends, its idea is ready again, to start from the new head (``settle_cancelled``).
+    """
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['run.head_replaced'] = 'run.head_replaced'
+    head: CandidateId | None
+    """The head that replaced it. Null: no keep is left."""
+
+
+def settle_cancelled(s: Session, run: Run) -> None:
+    """Set the status of a cancelled run's idea, with a note on the idea that says why.
+
+    A run that a verdict set by hand cancelled because it replaced the run's head (``HeadReplaced``) runs again: its
+    idea is ``ready``. Any other cancel parks it: a run is cancelled because it is not wanted now.
+    """
     cancel = run_cancel(s, run.id)
-    run.idea.status = IdeaStatus.PARKED
     by = f' by {cancel[0].actor}' if cancel is not None else ''
-    body = f'parked: run#{run.id} was cancelled{by}; set the idea ready to run it again'
+    replaced = latest(s, HeadReplaced, Event.target == TargetRef(TargetKind.RUN, run.id))
+    if replaced is None:
+        run.idea.status = IdeaStatus.PARKED
+        body = f'parked: run#{run.id} was cancelled{by}; set the idea ready to run it again'
+    else:
+        run.idea.status = IdeaStatus.READY
+        now = f'candidate#{replaced[1].head}' if replaced[1].head is not None else 'none'
+        body = (
+            f'ready: run#{run.id} was cancelled{by}: it started from candidate#{run.base_candidate_id}, which a'
+            f' verdict override replaced as the head with {now}; the next run starts from the head'
+        )
     s.add(
         Comment(target=TargetRef(TargetKind.IDEA, run.idea_id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body)
     )

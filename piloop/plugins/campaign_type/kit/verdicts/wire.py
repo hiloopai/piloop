@@ -5,9 +5,11 @@ from pydantic import Field
 from piloop.api.client import Client
 from piloop.api.contract import Params, Reasoned
 from piloop.api.views import View
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer
 from piloop.plugins.campaign_type.kit.evaluation.wire import REPEATS
+from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
 
 class RemeasureBody(Params):
@@ -41,12 +43,23 @@ class Merge(View):
     head: CandidateId
 
 
+class CancelledRun(View):
+    """An open run from the head that a verdict set by hand replaced: cancelled, and its idea ready again once it ends."""
+
+    run: RunId
+    idea: IdeaId
+    base: CandidateId
+    """The head that it started from."""
+
+
 class VerdictChanged(CandidateAnswer):
     """A candidate whose verdict was set by hand."""
 
     was: str
     """The verdict that it had, as ``label`` reads it."""
     merge: Merge | None
+    cancelled: list[CancelledRun] = []
+    """The open runs from the head that it replaced, oldest first."""
 
 
 class VerdictsClient(Client):

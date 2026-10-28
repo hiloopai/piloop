@@ -100,7 +100,7 @@ Before you trust the results:
 ```sql
 -- Trajectory: every measured candidate and the global best so far (MIN for a lower-is-better metric).
 -- `keep` is relative to the bar of its run; this is the campaign-level view. Only the current evaluator's scores
--- count. References are left out, because an imported reference was never a keep.
+-- count. References are left out: the daemon never judges one.
 WITH s AS (SELECT c.id, c.run_id, c.parent_id, c.verdict, c.created_at,
                   AVG(json_extract(m.metrics, '$.<m>')) AS score, COUNT(*) AS n
            FROM candidates c JOIN measurements m ON m.candidate_id = c.id

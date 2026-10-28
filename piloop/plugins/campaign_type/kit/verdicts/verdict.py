@@ -35,7 +35,7 @@ class Refusal(StrEnum):
     PENDING = 'pending'
     """The daemon judges the candidate now."""
     NOT_JUDGED = 'not_judged'
-    """Its origin is never judged: a reference, recovered or skipped candidate."""
+    """Its origin is never judged: a recovered or skipped candidate, or a reference, which only a keep judges."""
     SAME = 'same'
     """It has that verdict already."""
     NO_RESULT = 'no_result'
@@ -107,10 +107,13 @@ def label(c: Candidate) -> str:
 def refusal(c: Candidate, to: Outcome, cause: Literal[Cause.NOTE] | None) -> Refusal | None:
     """Return why ``c``'s verdict cannot be set to ``to`` by hand, or None when it can.
 
-    Only a judgement is overridden. A note (``Cause.NOTE``) turns a measured discard or interesting candidate into an
-    ``interesting`` lead, and may be added to one that has a note already.
+    Only a judgement is overridden, and a reference is kept by hand: the daemon never judges one. A note
+    (``Cause.NOTE``) turns a measured discard or interesting candidate into an ``interesting`` lead, and may be added to
+    one that has a note already.
     """
     match c.verdict, cause:
+        case None, None if c.origin is Origin.REFERENCE and to is Outcome.KEEP:
+            return None
         case None, _:
             return Refusal.PENDING if c.origin in JUDGED else Refusal.NOT_JUDGED
         case Outcome.DISCARD | Outcome.INTERESTING, Cause.NOTE:

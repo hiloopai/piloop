@@ -254,10 +254,10 @@ class Agents:
 
         A cancelled run or agent of any role (a pending ``CancelRequested``) is ended at once, or after the wrap-up prompt
         and the grace period when the cancel asked for it. Its run ends ``RunEnd.CANCELLED``. A cancelled request never
-        starts, and its queued run fails. Both park the run's idea. A starting agent is left for a later pass, once it
-        runs; if its start fails, the run is not launched again (``RunController._relaunch``). An ``ending`` agent gets
-        its kill again every ``[daemon] kill_retry`` until it ends: a kill can fail. Then the stops and cancels that are carried
-        out are answered (``stop.answer_done``).
+        starts, and its queued run fails. The campaign type settles the run's idea. A starting agent is left for a later
+        pass, once it runs; if its start fails, the run is not launched again (``RunController._relaunch``). An
+        ``ending`` agent gets its kill again every ``[daemon] kill_retry`` until it ends: a kill can fail. Then the
+        stops and cancels that are carried out are answered (``stop.answer_done``).
 
         Returns when a grace period or a wrap-up lead ends, or when to send an ending agent's kill again.
         """

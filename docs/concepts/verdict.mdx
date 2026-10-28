@@ -58,11 +58,11 @@ The rule, in order:
 The reason names every guardrail past its floor or margin, whatever rule decided. A candidate whose values equal its
 parent's has `no-op` in its reason: the change did not reach what the evaluate command measures.
 
-Three kinds of candidate never get a verdict:
+The daemon never judges three kinds of candidate:
 
 | `candidates.origin` | What it is |
 |---|---|
-| `reference` | A starting point from outside the campaign: `piloop candidate import`. |
+| `reference` | A starting point from outside the campaign: `piloop candidate import`. Once measured, one that builds on the head can be kept by hand, and is the head then. |
 | `skipped` | A commit with a `Piloop-Eval: skip` trailer. |
 | `recovered` | What an implementer left uncommitted when it stopped. The next attempt at the idea starts from it. |
 
@@ -84,6 +84,11 @@ always give the same verdict.
 Two runs can start from the same head. When the first keeps, the head moves. A later keep of the second is then
 `interesting`, with the cause `moved`. The daemon merges it onto the new head, and measures and judges the merge
 there. A merge that conflicts files a seed, `Compose candidate#N onto the head`, for research.
+
+A commit that already has the head, such as a merge of it, is judged against the head, not against the run's bar.
+
+A verdict set by hand can replace the head. Then piloop cancels the open runs that started from the old head, and
+their ideas run again from the new head. A run that pins its base, and a branch run, go on.
 
 ## Act on a candidate
 

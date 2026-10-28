@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
 from piloop.campaign import ops
+from piloop.campaign.stop import CancelRequested
 from piloop.config import load_campaign_config
 from piloop.db.events import in_order
 from piloop.db.models import Campaign, Comment, Event, EventModel, Pause
@@ -28,21 +29,24 @@ from piloop.db.triggers.changelog import (
     IdeaTrackChanged,
     VerdictChanged,
 )
-from piloop.ids import CampaignId, CampaignStatus, CommentKind, TargetKind
+from piloop.ids import CampaignId, CampaignStatus, CommentKind, Ending, TargetKind
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.references import import_reference
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, wire as evaluation_api
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.stop import settle_cancelled
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
 from piloop.plugins.campaign_type.kit.verdicts.judge import RejudgeRequested, answer_rejudge, head, rejudges, unjudged
 from piloop.plugins.campaign_type.kit.verdicts.verdict import pending
+from piloop.plugins.vcs.git import PILOOP, GitRepository
 from tests.conftest import end_of, reconfigured
 
 ACTOR = System.ORCHESTRATOR
@@ -229,7 +233,7 @@ def test_a_verdict_override_is_the_actors_with_the_reason_in_its_event(me: Datab
             verdicts_ops.set_verdict(s, c, Outcome.CRASH, reason='', actor=ACTOR)
         with pytest.raises(ops.Refused, match='no candidate#99'):
             verdicts_ops.set_verdict(s, CandidateId(99), Outcome.CRASH, reason='why', actor=ACTOR)
-        for origin in (Origin.REFERENCE, Origin.RECOVERED, Origin.SKIPPED):
+        for origin in (Origin.RECOVERED, Origin.SKIPPED):
             s.get_one(Candidate, pending).origin = origin
             with pytest.raises(ops.Refused, match=f'candidate#{pending} is {origin}, which is never judged'):
                 verdicts_ops.set_verdict(s, pending, Outcome.KEEP, reason='why', actor=ACTOR)
@@ -285,6 +289,67 @@ def test_a_hand_keep_off_the_head_is_merged_onto_the_head_for_the_daemon_to_judg
         s.commit()
         now = head(s, s.get_one(Campaign, 1))
         assert now is not None and now.id == after_it, 'the newest trunk keep'
+
+
+def run_from(
+    db: Database, campaign: Campaign, status: RunStatus, *, base: CandidateId, pin: bool = False, branch: bool = False
+) -> RunId:
+    """An open run of a new idea from ``base``: the idea pins it with ``pin``, and ``branch`` makes it a branch run."""
+    idea_id = add_idea(db, campaign.id, f'{status} on {base} {pin} {branch}', IdeaStatus.SCHEDULED)
+    with db.session() as s:
+        s.get_one(Idea, idea_id).base_candidate_id = base if pin else None
+        run = Run(
+            idea_id=idea_id, attempt=1, base_candidate_id=base, harness='h', model='m', status=status, branch=branch
+        )
+        s.add(run)
+        s.commit()
+        return run.id
+
+
+def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_it_and_their_ideas_run_again(
+    me: Database, campaign: Campaign
+) -> None:
+    """A run from the replaced head builds on a tree that is not the head, and its brief says so: it is cancelled.
+
+    Its idea is ready again once the run ends, to start from the new head. A run that pins its base, a branch run and
+    a run whose commits are being scored keep going: what they commit is judged against the head when it has the head.
+    """
+    kept = run_candidate(me, campaign, Outcome.DISCARD)
+    with me.session() as s:
+        made = s.get_one(Run, s.get_one(Candidate, kept).run_id)
+        made.status, made.end = RunStatus.SUCCEEDED, RunEnd.FINISHED
+        s.commit()
+    queued = run_from(me, campaign, RunStatus.QUEUED, base=CandidateId(1))
+    running = run_from(me, campaign, RunStatus.RUNNING, base=CandidateId(1))
+    pinned = run_from(me, campaign, RunStatus.RUNNING, base=CandidateId(1), pin=True)
+    branch = run_from(me, campaign, RunStatus.RUNNING, base=CandidateId(1), branch=True)
+    with me.session() as s:
+        done = verdicts_ops.set_verdict(s, kept, Outcome.KEEP, reason='the score misses it', actor=ACTOR)
+        s.commit()
+        assert [r.id for r in done.cancelled] == [queued, running]
+        for run_id in (queued, running):
+            assert [k for k, _, _ in kinds(me, TargetKind.RUN, run_id)] == ['run.cancel_requested', 'run.head_replaced']
+            [(event, cancel)] = in_order(s, CancelRequested, Event.target_id == run_id)
+            assert (event.actor, cancel.ending) == (ACTOR.signature, Ending.WRAP_UP)
+        for run_id in (pinned, branch):
+            assert kinds(me, TargetKind.RUN, run_id) == []
+        run = s.get_one(Run, running)
+        run.status, run.end = RunStatus.FAILED, RunEnd.CANCELLED
+        settle_cancelled(s, run)
+        s.commit()
+        assert run.idea.status is IdeaStatus.READY
+        [note] = s.scalars(select(Comment).where(Comment.target_id == run.idea_id)).all()
+        assert note.body == (
+            f'ready: run#{running} was cancelled by orchestrator: it started from candidate#1, which a verdict'
+            f' override replaced as the head with candidate#{kept}; the next run starts from the head'
+        )
+    back = run_from(me, campaign, RunStatus.RUNNING, base=kept)
+    with me.session() as s:
+        done = verdicts_ops.set_verdict(s, kept, Outcome.INTERESTING, reason='it overfits', actor=ACTOR)
+        assert [r.id for r in done.cancelled] == [back], 'a head taken back cancels the runs on it too'
+        assert verdicts_ops.set_verdict(s, kept, Outcome.DISCARD, reason='worse', actor=ACTOR).cancelled == (), (
+            'the head stays'
+        )
 
 
 def test_a_hand_keep_off_the_head_whose_merge_conflicts_files_a_compose_seed(me: Database, campaign: Campaign) -> None:
@@ -683,3 +748,38 @@ def test_the_database_refuses_a_cycle_of_parents(me: Database, tmp_path: Path) -
             (1, 'optimization', None),
             (2, 'optimization', 1),
         ]
+
+
+def test_a_measured_reference_that_builds_on_the_head_is_kept_by_hand_and_is_the_head(
+    me: Database, campaign: Campaign
+) -> None:
+    """A composition made by hand is imported, measured, then kept: no run has to commit it."""
+    base = Repo(campaign.path).head.commit.hexsha
+    on_head = commit_on(campaign, base, {'composed.txt': 'c\n'})
+    elsewhere = commit_on(campaign, base, {'x.txt': 'x\n'})
+    with me.session() as s:
+        proj = s.get_one(Campaign, 1)
+        repo = GitRepository(Repo(campaign.path), PILOOP)
+        composed = import_reference(s, proj, repo, on_head, summary=None, actor=ACTOR).id
+        off = import_reference(s, proj, repo, elsewhere, summary=None, actor=ACTOR).id
+        s.commit()
+        with pytest.raises(ops.Refused, match=f'candidate#{composed} has no score under the current evaluator'):
+            verdicts_ops.set_verdict(s, composed, Outcome.KEEP, reason='composed by hand', actor=ACTOR)
+        with pytest.raises(ops.Refused, match=f'candidate#{composed} is reference, which is never judged'):
+            verdicts_ops.set_verdict(s, composed, Outcome.INTERESTING, reason='a lead', actor=ACTOR)
+        for c in (composed, off):
+            s.add(Measurement(candidate_id=c, evaluator_id=1, metrics={'score': 2.0, 'size': 1.0}))
+        s.flush()
+        assert verdicts_ops.set_verdict(s, composed, Outcome.KEEP, reason='composed by hand', actor=ACTOR).old == (
+            Origin.REFERENCE
+        )
+        s.commit()
+        kept = s.get_one(Candidate, composed)
+        assert (kept.origin, kept.verdict, kept.verdict_by) == (Origin.REFERENCE, Outcome.KEEP, ACTOR.signature)
+        now = head(s, s.get_one(Campaign, 1))
+        assert now is not None and now.id == composed
+        with pytest.raises(ops.Refused, match=f'candidate#{off} does not build on the head candidate#{composed}'):
+            verdicts_ops.set_verdict(s, off, Outcome.KEEP, reason='not on the head', actor=ACTOR)
+        verdicts_ops.set_verdict(s, composed, Outcome.INTERESTING, reason='it overfits', actor=ACTOR)
+        now = head(s, s.get_one(Campaign, 1))
+        assert now is not None and now.id == 1, 'then it is overridden as any judgement'

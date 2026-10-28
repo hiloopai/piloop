@@ -21,6 +21,8 @@ from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, Targe
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
@@ -194,6 +196,24 @@ def test_every_agent_of_a_role_and_the_outside_orchestrator_are_one_party_for_wh
         assert party_of('not an actor') == 'not an actor'
         assert Service(name='ci').party == Service(name='ci').signature, 'a service writes for itself'
         assert party_of('orchestrator via human:ana') == party_of('orchestrator#7') == 'orchestrator'
+
+
+def test_a_candidate_judged_on_every_track_is_news_once_with_the_verdict_that_it_has(
+    db: Database, campaign: Campaign
+) -> None:
+    with db.session() as s:
+        cursor = db_feed.newest(s)
+        s.get_one(Candidate, 1).track = TrackName('cost')
+        on = TargetRef(TargetKind.CANDIDATE, 1)
+        emit(
+            s,
+            CandidateJudged(verdict=Outcome.DISCARD, score=1.0, reason='no gain', track='accuracy'),
+            on,
+            System.DAEMON,
+        )
+        emit(s, CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='on cost', track='cost'), on, System.DAEMON)
+        s.commit()
+        assert news_lines(s, cursor, me=System.ORCHESTRATOR)[1] == ['candidate#1 keep: on cost']
 
 
 def test_thread_follows_citations_both_ways_and_the_replies_not_the_rest_of_the_target(

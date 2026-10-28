@@ -177,7 +177,7 @@ def _starting_points(
         return []
     deciding = [*(t.primary for t in cfg.all_tracks), *cfg.guardrails]
     table = titled_table(
-        f'{heading}History: starting points (pin one with base_candidate_id; never kept)',
+        f'{heading}History: starting points (pin one with base_candidate_id)',
         ['candidate', 'revision', *(m.name for m in deciding), 'summary'],
         table_box,
     )

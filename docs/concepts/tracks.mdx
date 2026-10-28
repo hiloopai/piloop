@@ -45,8 +45,10 @@ addendum = "briefs/cost.md"
 ## The rules
 
 - Each idea names its track: `piloop idea add titanic-tracks "Add a family-size feature" --track accuracy`.
-- A candidate is judged on its idea's track. The other tracks' primaries are its guardrails, each with its own
-  `margin` and `floor`.
+- A candidate is judged on every track whose primary it has a value for: first its idea's track, then the others.
+  On each track, the other tracks' primaries are its guardrails, each with its own `margin` and `floor`.
+- The candidate gets the best of these verdicts, and `candidates.track` names its track. A tie goes to its idea's
+  track. Each track's verdict is a `candidate.judged` event.
 - All tracks share one head. A keep on any track moves it.
 - A free slot goes to the track that is furthest below its `share`. The shares sum to 1. A share of 0 stops a track.
 - `addendum` is a file that piloop adds to the brief of the track's runs.

@@ -113,7 +113,7 @@ It shows:
 - the inbox and the latest decisions,
 - the last events with their ages.
 
-Imported references are counted separately as starting points. They are never kept.
+Imported references are counted separately as starting points. The daemon never judges them.
 
 `piloop history [<name>]` prints the research pack: metrics, analysis artifacts, what was tried per
 mechanism family, the waiting seeds, every idea, the kept lineage, the starting points, findings and digests.
@@ -257,7 +257,9 @@ Use this for a candidate of another campaign, or a branch.
 - The daemon measures it.
 - Start an idea from it with `piloop idea add <name> '<title>' --base <c>`.
 - A candidate of another campaign is its `revision`. If it is in another repo, fetch it into this repo first.
-- A reference is never a keep and never the head. It is the bar only of a run that is pinned to it.
+- The daemon never judges a reference. It is the bar only of a run that is pinned to it.
+- A composition that you made by hand on the head: import it, wait for its measurement or add yours
+  (`piloop measurement add`), then `piloop candidate verdict <c> keep --reason '…'`. It is the head then.
 
 Branch runs:
 
@@ -457,10 +459,12 @@ PILOOP_ACTOR=orchestrator piloop candidate verdict <c> interesting --reason '<wh
 ```
 
 - The daemon never overwrites a verdict that it did not set.
-- `keep|interesting|discard|crash`, and only over a judgement: a pending candidate, and a `reference`, `skipped` or
-  `recovered` one, is refused. A keep from an older bar would drop what the head kept, so piloop merges it onto the head
+- `keep|interesting|discard|crash`, and only over a judgement: a pending candidate, and a `skipped` or `recovered`
+  one, is refused. A `reference` takes only a keep, once it is measured. A keep from an older bar would drop what the head kept, so piloop merges it onto the head
   instead: the candidate is `interesting`, and the merge is a new candidate that the daemon measures and judges against
   the head. The output names it, or the seed that composes a merge that conflicts.
+- A verdict that replaces the head cancels the open runs that started from the old head, and their ideas run again
+  from the new head. The output lists them.
 - You measured it yourself (the daemon's evaluation timed out, say): `piloop measurement add <c> --report <file>`,
   with `{"metrics": {"<name>": <value>}, "seconds": <s>}` in the file. The daemon judges its `crash`, `discard` or
   `interesting` again with every measurement; the output says when. Never `INSERT INTO measurements`: nothing judges

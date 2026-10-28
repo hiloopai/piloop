@@ -514,13 +514,17 @@ def test_only_a_judgement_is_overridden_and_a_note_needs_a_regressed_result() ->
     assert [
         refusal(of(Origin.RUN, None), Outcome.KEEP, None),
         refusal(of(Origin.BASELINE, None), Outcome.KEEP, note),
-        *(refusal(of(o, None), Outcome.KEEP, None) for o in (Origin.REFERENCE, Origin.RECOVERED, Origin.SKIPPED)),
+        *(refusal(of(o, None), Outcome.KEEP, None) for o in (Origin.RECOVERED, Origin.SKIPPED)),
+        *(refusal(of(Origin.REFERENCE, None), to, None) for to in (Outcome.INTERESTING, Outcome.DISCARD)),
+        refusal(of(Origin.REFERENCE, None), Outcome.INTERESTING, note),
         refusal(of(Origin.RUN, Outcome.KEEP), Outcome.KEEP, None),
         refusal(of(Origin.RUN, Outcome.KEEP), Outcome.INTERESTING, note),
         refusal(of(Origin.RUN, Outcome.CRASH), Outcome.INTERESTING, note),
     ] == [
         Refusal.PENDING,
         Refusal.PENDING,
+        Refusal.NOT_JUDGED,
+        Refusal.NOT_JUDGED,
         Refusal.NOT_JUDGED,
         Refusal.NOT_JUDGED,
         Refusal.NOT_JUDGED,
@@ -531,6 +535,8 @@ def test_only_a_judgement_is_overridden_and_a_note_needs_a_regressed_result() ->
     assert refusal(of(Origin.RUN, Outcome.DISCARD), Outcome.INTERESTING, note) is None
     assert refusal(of(Origin.RUN, Outcome.INTERESTING), Outcome.INTERESTING, note) is None, 'a second note'
     assert refusal(of(Origin.BASELINE, Outcome.KEEP), Outcome.DISCARD, None) is None
+    assert refusal(of(Origin.REFERENCE, None), Outcome.KEEP, None) is None, 'a reference is only kept by hand'
+    assert refusal(of(Origin.REFERENCE, Outcome.KEEP), Outcome.INTERESTING, None) is None, 'then it is a judgement'
 
 
 def test_a_note_never_re_signs_a_verdict_and_is_signed_in_its_own_event(db: Database, campaign: Campaign) -> None:

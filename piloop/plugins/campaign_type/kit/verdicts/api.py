@@ -11,7 +11,14 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import request_remeasur
 from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
 from piloop.plugins.campaign_type.kit.verdicts.judge import bar_of
 from piloop.plugins.campaign_type.kit.verdicts.verdict import candidate_view, rejudgeable
-from piloop.plugins.campaign_type.kit.verdicts.wire import Merge, RemeasureBody, Remeasured, VerdictBody, VerdictChanged
+from piloop.plugins.campaign_type.kit.verdicts.wire import (
+    CancelledRun,
+    Merge,
+    RemeasureBody,
+    Remeasured,
+    VerdictBody,
+    VerdictChanged,
+)
 
 router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUSALS_DOCUMENTED)
 """The verdicts' routes, beside the API's."""
@@ -39,4 +46,7 @@ def set_verdict(s: Writing, me: Acting, candidate: AddressedCandidate, body: Ver
     rebased = done.rebased
     merged = None if rebased is None or rebased.rebased is None else Merge(candidate=rebased.rebased, head=rebased.head)
     with db_feed.snapshot(s) as cursor:
-        return VerdictChanged(cursor=cursor, candidate=candidate_view(candidate), was=done.old, merge=merged)
+        cancelled = [CancelledRun(run=r.id, idea=r.idea_id, base=r.base_candidate_id) for r in done.cancelled]
+        return VerdictChanged(
+            cursor=cursor, candidate=candidate_view(candidate), was=done.old, merge=merged, cancelled=cancelled
+        )

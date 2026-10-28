@@ -201,6 +201,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'run.brief_cid': [],
             'run.cancel_requested': ['wind_down'],
             'run.finished': ['campaigns'],
+            'run.head_replaced': [],
             'run.queued': [],
             'run.received': [],
             'run.relaunched': [],

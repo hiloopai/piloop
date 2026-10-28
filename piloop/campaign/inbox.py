@@ -197,9 +197,11 @@ def _news(
                 idea = s.get(Idea, e.target_id)
                 if idea is not None and idea.status is IdeaStatus.SEED and campaign_id in (None, idea.campaign_id):
                     found.append(SeedNews(seed=seed_of(idea, idea.campaign)))
-            case CandidateJudged(verdict=verdict, reason=reason) if party_of(e.actor) != party:
+            case CandidateJudged(verdict=verdict, reason=reason, track=track) if party_of(e.actor) != party:
                 candidate = s.get(Candidate, e.target_id)
-                if candidate is not None and campaign_id in (None, candidate.campaign_id):
+                # one judgement per track: the news is the one of the candidate's verdict
+                mine = track is None or candidate is None or candidate.track in (None, track)
+                if candidate is not None and mine and campaign_id in (None, candidate.campaign_id):
                     found.append(VerdictNews(candidate=candidate.id, verdict=str(verdict), reason=str(reason)))
     return found
 

@@ -24,10 +24,11 @@
 - A non-keep is not a bar. A run pinned to one (a note, a discard) starts from its tree and is judged against its
   nearest kept ancestor. It is a trunk run when that ancestor is the head.
 - A `reference` (`origin = 'reference'`) is a starting point imported with `piloop candidate import`, with no run and no
-  parent. The daemon measures it. An idea can pin it as `base_candidate_id`. It is never the head and never counts as a
-  keep.
+  parent. The daemon measures it but never judges it. An idea can pin it as `base_candidate_id`. Kept by hand, it is
+  the head.
 - A campaign can have several **tracks** (objectives), each with its own primary metric. `ideas.track` names an idea's
-  track. A candidate is judged on its track's primary. The primary of every other track is one more guardrail for it,
-  with its margin and floor. A campaign with one primary has one track, named after that metric.
+  track. A candidate is judged on every track whose primary it has, its idea's track first, and gets the best verdict:
+  `candidates.track` names its track. On a track, the primary of every other track is one more guardrail, with its
+  margin and floor. A campaign with one primary has one track, named after that metric.
 - **Comments** attach to any row. Agents and humans talk to each other through them.
 - **Events** are the append-only log of what happened.

@@ -8,7 +8,7 @@ import json
 import re
 from collections.abc import Callable
 from contextlib import ExitStack, closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -82,22 +82,24 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.stop import attempts, park_cancelled
+from piloop.plugins.campaign_type.kit.runs.stop import attempts, settle_cancelled
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     MOVED,
     CandidateJudged,
+    OnTrack,
     RejudgeFailed,
     answer_rejudge,
     bar_of,
     branches,
     criterion,
     head,
-    judge,
+    judge_tracks,
     node,
     on_moved,
     reproposed,
     side,
+    track_of,
     unjudged,
     verdict_rule,
 )
@@ -793,9 +795,9 @@ class RunController:
         all of them. It judges the candidates that the stop left pending, including rebased ones
         (``_follow``).
 
-        Each candidate is judged on the run's track (``ledger.judge``) against a bar. The bar starts at the bar of the
-        run's base (``ledger.bar_of``). Each keep becomes the new bar. A run that
-        is not a branch run keeps on the trunk only while its bar is the head. If the head has moved past the bar, a
+        Each candidate is judged on every track, the run's first (``judge_tracks``), against a bar. The bar starts at
+        the bar of the run's base (``ledger.bar_of``). Each keep becomes the new bar. A run that is not a branch run
+        keeps on the trunk only while its bar is the head. If the head has moved past the bar, a
         keep is rebased onto the head and the merge is judged there (``_judge``, ``_follow``). A commit whose tree is
         already a candidate is that candidate. It is measured only if the current evaluator has not measured it, and it
         keeps its verdict, unless another run reached it (``ledger.reproposed``): then it is judged again on this
@@ -1037,19 +1039,24 @@ class RunController:
                         candidate.origin = origin
                         candidate.verdict_reason = UNMEASURED_REASONS[origin].format(run=scope.run_id)
                     case None:
-                        verdict, reason, onto = self._verdict(s, scope, candidate, bar_id)
+                        judged, onto = self._verdict(s, scope, candidate, bar_id)
+                        *others, best = judged
                         cause = Cause.MOVED if onto is not None else None
-                        write(candidate, verdict, cause=cause, reason=reason, by=System.DAEMON)
+                        write(candidate, best.verdict, cause=cause, reason=best.reason, by=System.DAEMON)
+                        candidate.track = best.track.name
                         if onto is not None:
                             moved = True
                             rebased = on_moved(s, scope.cfg, scope.repo, candidate, onto)
                             merged = rebased.rebased if rebased is not None else None
-                        judged = CandidateJudged(
-                            verdict=verdict,
-                            score=score(candidate, scope.evaluator_id, scope.track.primary),
-                            reason=candidate.verdict_reason,
-                        )
-                        emit(s, judged, TargetRef(TargetKind.CANDIDATE, candidate_id), System.DAEMON)
+                        target = TargetRef(TargetKind.CANDIDATE, candidate_id)
+                        for j in (*others, replace(best, reason=candidate.verdict_reason or best.reason)):
+                            on = CandidateJudged(
+                                verdict=j.verdict,
+                                score=score(candidate, scope.evaluator_id, j.track.primary),
+                                reason=j.reason,
+                                track=j.track.name,
+                            )
+                            emit(s, on, target, System.DAEMON)
                         answer_rejudge(s, candidate_id)
                         why = '; '.join(notes)
                         if why and not moved and refusal(candidate, Outcome.INTERESTING, Cause.NOTE) is None:
@@ -1062,34 +1069,26 @@ class RunController:
             span.set(
                 verdict=label(candidate),
                 summary=candidate.summary,
-                score=score(candidate, scope.evaluator_id, scope.track.primary),
+                score=score(candidate, scope.evaluator_id, track_of(scope.cfg, candidate).primary),
             )
         return Judged(advanced=advanced, merged=merged)
 
     def _verdict(
         self, s: Session, scope: Scope, candidate: Candidate, bar_id: CandidateId
-    ) -> tuple[Outcome, str, Candidate | None]:
-        """Return the rule's verdict and reason against the run's bar, and the head to rebase onto if needed.
+    ) -> tuple[list[OnTrack], Candidate | None]:
+        """Return the verdict on each track against the run's bar, the candidate's own last, and the head to rebase onto.
 
-        A rebase is needed for a keep against a bar that is no longer the head, unless the run is a branch run. A
-        candidate whose history already contains the head needs no merge. It is judged against the head.
+        Each track judges it (``judge_tracks``), and the candidate has the best verdict. On the trunk, a candidate
+        whose history contains a head that is not the run's bar is judged against the head instead, whatever it scores
+        against the bar: the head may have moved below the bar, by a keep by hand. Else a rebase is needed for a keep
+        against a bar that is no longer the head, unless the run is a branch run.
         """
         trunk = head(s, s.get_one(Campaign, candidate.campaign_id), excluding=candidate)
-        verdict, reason = judge(
-            candidate,
-            s.get_one(Candidate, bar_id),
-            scope.evaluator_id,
-            scope.cfg,
-            scope.track,
-            self._units_dir,
-            head=trunk,
-            side=scope.side,
-        )
-        match scope.side, verdict, trunk:
-            case Trunk(), Outcome.KEEP, Candidate() as moved if moved.id != bar_id:
-                if not scope.repo.contains(candidate.revision, moved.revision):
-                    return Outcome.INTERESTING, MOVED.format(head=moved.id) + reason, moved
-                again, why = judge(
+        match scope.side, trunk:
+            case Trunk(), Candidate() as moved if moved.id != bar_id and scope.repo.contains(
+                candidate.revision, moved.revision
+            ):
+                judged = judge_tracks(
                     candidate,
                     moved,
                     scope.evaluator_id,
@@ -1099,9 +1098,27 @@ class RunController:
                     head=moved,
                     side=Trunk(),
                 )
-                return again, f'the head candidate#{moved.id} is in its history: {why}', None
+                why = f'the head candidate#{moved.id} is in its history: '
+                return [replace(j, reason=why + j.reason) for j in judged], None
             case _:
-                return verdict, reason, None
+                pass
+        judged = judge_tracks(
+            candidate,
+            s.get_one(Candidate, bar_id),
+            scope.evaluator_id,
+            scope.cfg,
+            scope.track,
+            self._units_dir,
+            head=trunk,
+            side=scope.side,
+        )
+        *others, best = judged
+        match scope.side, best.verdict, trunk:
+            case Trunk(), Outcome.KEEP, Candidate() as moved if moved.id != bar_id:
+                reason = MOVED.format(head=moved.id) + best.reason
+                return [*others, replace(best, verdict=Outcome.INTERESTING, reason=reason)], moved
+            case _:
+                return judged, None
 
     def _close(self, span: Span, run_id: RunId, end: RunEnd, error: str | None) -> None:
         """Record the run's end when its implementer ends, so the slot is free while the commits are scored (``scoring``)."""
@@ -1145,7 +1162,7 @@ class RunController:
                 run.scoring = False
                 if idea.status is IdeaStatus.SCHEDULED:  # A human may have parked or rejected it meanwhile.
                     if run.end is RunEnd.CANCELLED:
-                        park_cancelled(s, run)
+                        settle_cancelled(s, run)
                     elif (asked := open_escalation(s, run)) is not None:
                         idea.status = IdeaStatus.PARKED
                         s.add(

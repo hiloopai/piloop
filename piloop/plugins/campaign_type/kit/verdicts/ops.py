@@ -4,14 +4,23 @@ from contextlib import closing
 from dataclasses import dataclass, replace
 from typing import Literal, assert_never
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
 from piloop.campaign.campaigns import repository
 from piloop.campaign.ops import Refused, _get, _reason
+from piloop.campaign.stop import request_cancel
+from piloop.db.events import emit
 from piloop.db.models import Campaign
+from piloop.ids import Ending, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
+from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
+from piloop.plugins.campaign_type.kit.runs.stop import HeadReplaced
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import MOVED, Rebased, head, node, on_moved, verdict_rule
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     Refusal,
@@ -31,6 +40,8 @@ class Overridden:
 
     old: str
     rebased: Rebased | None = None
+    cancelled: tuple[Run, ...] = ()
+    """The runs from the head that it replaced, which it cancelled (``cancel_replaced``)."""
 
 
 def set_verdict(
@@ -50,13 +61,14 @@ def set_verdict(
     head's changes would drop them from the trunk. So the candidate is ``interesting`` (``Cause.MOVED``), and the
     verdict rule says what follows (``ledger.on_moved``). By default its merge onto the head is a pending candidate that
     the daemon measures and judges against the head (``ledger.unjudged``), and a merge that conflicts files a seed to
-    compose it. A keep of a branch run never moves the
-    head. With ``Cause.NOTE``, it keeps a regressed result in view as a lead (``verdict.note``), and the verdict stays
-    whoever's it was unless the note changes it.
+    compose it. A keep of a branch run never moves the head. A reference that builds on the head is kept like this
+    once the current evaluator scores it, and is the head then. With ``Cause.NOTE``, it keeps a regressed result in
+    view as a lead (``verdict.note``), and the verdict stays whoever's it was unless the note changes it.
 
     Raises:
-        Refused: the reason is blank, ``verdict.refusal`` refuses it, or it is a keep off the head of a candidate that
-            no run made, which no seed can compose.
+        Refused: the reason is blank, ``verdict.refusal`` refuses it, it is the first verdict of a reference that the
+            current evaluator does not score, or it is a keep off the head of a candidate that no run made, which no
+            seed can compose.
     """
     candidate = _get(s, Candidate, candidate_id, 'candidate')
     why = _reason(reason)
@@ -78,15 +90,21 @@ def set_verdict(
         case _:
             assert_never(refused)
     old = label(candidate)
+    campaign = s.get_one(Campaign, candidate.campaign_id)
+    if candidate.verdict is None and not metrics(candidate, campaign.evaluator_id):
+        raise Refused(
+            f'{name} has no score under the current evaluator: wait until the daemon measures it, or record your'
+            ' measurement with piloop measurement add'
+        )
+    was = head(s, campaign)
     if to is Outcome.KEEP and (trunk := missing_head(s, candidate)) is not None:
         if candidate.run is None:
             raise Refused(
                 f'{name} does not build on the head candidate#{trunk.id}: as a keep it would drop what'
-                ' the head kept. Mark it interesting, or add an idea that merges it onto the head'
+                ' the head kept. Add an idea that merges it onto the head'
             )
         reason = MOVED.format(head=trunk.id) + f'kept by hand: {why}'
         write(candidate, Outcome.INTERESTING, cause=Cause.MOVED, reason=reason, by=actor)
-        campaign = s.get_one(Campaign, candidate.campaign_id)
         with closing(repository(campaign)) as repo:
             return Overridden(old, on_moved(s, campaign.config, repo, candidate, trunk))
     match cause:
@@ -96,7 +114,37 @@ def set_verdict(
             override(candidate, to, reason=why, by=actor)
         case _:
             assert_never(cause)
-    return Overridden(old)
+    return Overridden(old, cancelled=cancel_replaced(s, campaign, was, actor))
+
+
+def cancel_replaced(s: Session, campaign: Campaign, was: Candidate | None, actor: Actor) -> tuple[Run, ...]:
+    """Cancel the open trunk runs that started from ``was``, if a verdict set by hand replaced it as the head.
+
+    Such a run builds on a tree that is not the head, and its brief named that head. A run that pins its base and a
+    branch run keep going. Each cancel is ``actor``'s, as ``piloop run cancel --wrap-up`` would ask it: the implementer
+    may save its work, which is judged against the head when it has the head. Once the run ends, its idea is ready
+    again (``HeadReplaced``). Return the runs, oldest first.
+    """
+    now = head(s, campaign)
+    if was is None or (now is not None and now.id == was.id):
+        return ()
+    stale = (
+        select(Run)
+        .join(Idea)
+        .where(
+            Idea.campaign_id == campaign.id,
+            Idea.base_candidate_id.is_(None),
+            Run.base_candidate_id == was.id,
+            Run.status.in_(OPEN_RUNS),
+            ~Run.branch,
+        )
+    )
+    runs = s.scalars(stale.order_by(Run.id)).all()
+    for run in runs:
+        request_cancel(s, run, actor, ending=Ending.WRAP_UP)
+        replaced = HeadReplaced(head=now.id if now is not None else None)
+        emit(s, replaced, TargetRef(TargetKind.RUN, run.id), actor)
+    return tuple(runs)
 
 
 def missing_head(s: Session, candidate: Candidate) -> Candidate | None:

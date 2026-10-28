@@ -18,13 +18,13 @@ class Cause(StrEnum):
 
 
 class Origin(StrEnum):
-    """Where a candidate comes from. Only a candidate from the ``baseline`` or a ``run`` is judged.
+    """Where a candidate comes from. The daemon judges only a candidate from the ``baseline`` or a ``run``.
 
     ``baseline``: the repo's HEAD when the campaign was registered. ``run``: an implementer's commit. ``reference``: a
-    starting point imported with ``piloop candidate import``, measured but never the head or a bar. ``recovered``: the
-    daemon's commit of what an implementer left uncommitted when it stopped, or where a daemon stop cut its run, never
-    declared ready, so never measured; a new run of the idea starts from it. ``skipped``: a commit marked
-    ``Piloop-Eval: skip``, never measured. A ``recovered`` or ``skipped`` tree that a later commit reaches without the
+    starting point imported with ``piloop candidate import``, measured but never judged by the daemon; kept by hand,
+    it can be the head. ``recovered``: the daemon's commit of what an implementer left uncommitted when it stopped, or
+    where a daemon stop cut its run, never declared ready, so never measured; a new run of the idea starts from it.
+    ``skipped``: a commit marked ``Piloop-Eval: skip``, never measured. A ``recovered`` or ``skipped`` tree that a later commit reaches without the
     mark is measured and judged like a new one, and becomes ``run``.
     """
 
@@ -36,7 +36,9 @@ class Origin(StrEnum):
 
 
 JUDGED: Final = frozenset({Origin.BASELINE, Origin.RUN})
-"""The origins of the candidates that get a verdict. ``verdict IS NULL`` on one of them means that it is pending."""
+"""The origins of the candidates that the daemon judges. ``verdict IS NULL`` on one of them means that it is pending."""
+VERDICTED: Final = JUDGED | {Origin.REFERENCE}
+"""The origins of the candidates that may have a verdict: those that the daemon judges, and a reference kept by hand."""
 
 
 class Outcome(StrEnum):

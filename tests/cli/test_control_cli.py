@@ -22,6 +22,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import RejudgeRequested
 from piloop.settings import Settings
@@ -151,6 +152,37 @@ def test_a_hand_keep_off_the_head_says_which_candidate_the_daemon_judges_on_the_
         'candidate#2 discard → interesting: keeps against its own bar, but the head moved on to candidate#3: kept by'
         ' hand: the score misses it; rebased onto the head as candidate#4',
         'candidate#4: the daemon measures it and judges it against the head candidate#3',
+    ]
+
+
+def test_a_keep_that_replaces_the_head_says_which_runs_from_the_old_head_it_cancelled(campaign_path: Path, out) -> None:
+    run_cli(['init', str(campaign_path)])
+    run_cli(['idea', 'add', 'demo', 'tried'])
+    run_cli(['idea', 'add', 'demo', 'started from the head'])
+    with database() as db, db.session() as s:
+        made = Run(
+            idea_id=1,
+            attempt=1,
+            base_candidate_id=1,
+            harness='script',
+            model='m',
+            status=RunStatus.SUCCEEDED,
+            end=RunEnd.FINISHED,
+        )
+        s.add(made)
+        s.add(Run(idea_id=2, attempt=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING))
+        s.get_one(Idea, 2).status = IdeaStatus.SCHEDULED
+        s.flush()
+        s.add(
+            Candidate(campaign_id=1, run_id=made.id, parent_id=1, revision='r', tree_sha='t', verdict=Outcome.DISCARD)
+        )
+        s.commit()
+    out()
+    run_cli(['candidate', 'verdict', '2', 'keep', '--reason', 'the score misses it'])
+    assert out().splitlines() == [
+        'candidate#2 discard → keep: the score misses it',
+        'run#2 of idea#2 started from candidate#1, which is no longer the head: cancelled; the idea runs again from'
+        ' the head once the run ends',
     ]
 
 

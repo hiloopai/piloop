@@ -4608,6 +4608,31 @@
         "title": "CancelledBy",
         "description": "A running evaluation that someone cancelled: the daemon stops its evaluator."
       },
+      "CancelledRun": {
+        "properties": {
+          "run": {
+            "type": "integer",
+            "title": "Run"
+          },
+          "idea": {
+            "type": "integer",
+            "title": "Idea"
+          },
+          "base": {
+            "type": "integer",
+            "title": "Base",
+            "description": "The head that it started from."
+          }
+        },
+        "type": "object",
+        "required": [
+          "run",
+          "idea",
+          "base"
+        ],
+        "title": "CancelledRun",
+        "description": "An open run from the head that a verdict set by hand replaced: cancelled, and its idea ready again once it ends."
+      },
       "CandidateAnswer": {
         "properties": {
           "cursor": {
@@ -8526,6 +8551,15 @@
                 "type": "null"
               }
             ]
+          },
+          "cancelled": {
+            "items": {
+              "$ref": "#/components/schemas/CancelledRun"
+            },
+            "type": "array",
+            "title": "Cancelled",
+            "description": "The open runs from the head that it replaced, oldest first.",
+            "default": []
           }
         },
         "type": "object",

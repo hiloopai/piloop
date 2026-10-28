@@ -3,10 +3,10 @@
 import re
 from collections.abc import Sequence
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import ClassVar, Literal, assert_never
+from typing import ClassVar, Final, Literal, assert_never
 
 from sqlalchemy import Select, func, literal, select
 from sqlalchemy.orm import Session
@@ -198,11 +198,12 @@ def _among(given: Sequence[Node], chosen: CandidateId, what: str) -> CandidateId
 
 
 def track_of(cfg: CampaignConfig, candidate: Candidate) -> Track:
-    """Return the track of the candidate's run (its idea's track). A renderer shows the candidate's score on it.
+    """Return the track of the candidate's verdict, else of its run (its idea's track). A renderer shows its score on it.
 
-    The baseline and a reference get the first track (``fallback_track``).
+    A candidate without either, such as the baseline or a reference, gets the first track (``fallback_track``).
     """
-    return fallback_track(cfg, candidate.run.idea.track if candidate.run is not None else None)
+    run = candidate.run.idea.track if candidate.run is not None else None
+    return fallback_track(cfg, candidate.track or run)
 
 
 def fallback_track(cfg: CampaignConfig, name: TrackName | None) -> Track:
@@ -268,12 +269,18 @@ class RejudgeFailed(EventModel):
 
 
 class CandidateJudged(EventModel):
-    """The daemon judged a candidate: its verdict, the primary metric's score and the reason."""
+    """The daemon judged a candidate on a track: its verdict, the score of the track's primary and the reason.
+
+    A candidate is judged on each track whose primary it has a value for, one event each. The last is the track of the
+    verdict that the candidate has (``candidates.track``).
+    """
 
     kind: Literal['candidate.judged'] = 'candidate.judged'
     verdict: Outcome
     score: float | None
     reason: str | None
+    track: TrackName | None = None
+    """The track. Null before the daemon judged on every track."""
 
 
 def unjudged(candidate: Candidate) -> bool:
@@ -395,6 +402,47 @@ def judge(
     return verdict, reason
 
 
+@dataclass(frozen=True)
+class OnTrack:
+    """The daemon's verdict on a candidate on one track, and the reason."""
+
+    track: Track
+    verdict: Outcome
+    reason: str
+
+
+RANK: Final = (Outcome.KEEP, Outcome.INTERESTING, Outcome.DISCARD, Outcome.CRASH)
+"""The verdicts, best first: a candidate has the best of its tracks' verdicts."""
+
+
+def judge_tracks(
+    candidate: Candidate,
+    own: Candidate,
+    evaluator_id: EvaluatorId,
+    cfg: CampaignConfig,
+    track: Track,
+    units_dir: Path,
+    *,
+    head: Candidate | None,
+    side: Lineage,
+) -> list[OnTrack]:
+    """Return the verdicts on ``candidate`` against ``own`` (``judge``) on each track, the best last.
+
+    It is judged on ``track``, its run's, then on each other track whose primary it has a value for. The best is the
+    first of ``RANK``, the earliest on a tie. The bar and the measurements are the same on each track: only which metric is the primary and which are the
+    guardrails differs. A reason of another track than ``track`` says which.
+    """
+    mine = metrics(candidate, evaluator_id)
+    others = [t for t in cfg.all_tracks if t.name != track.name and t.primary.name in mine]
+    judged = [
+        OnTrack(t, *judge(candidate, own, evaluator_id, cfg, t, units_dir, head=head, side=side))
+        for t in (track, *others)
+    ]
+    best = next(j for verdict in RANK for j in judged if j.verdict is verdict)
+    shown = best if best is judged[0] else replace(best, reason=f'on the {best.track.name} track: {best.reason}')
+    return [*(j for j in judged if j is not best), shown]
+
+
 def criterion(m: Metric) -> Criterion:
     """Return what a verdict rule reads of a metric of ``piloop.toml``."""
     ratio = None if m.ratio is None else Ratio(m.ratio.numerator, m.ratio.denominator)
@@ -464,7 +512,7 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
     ``candidate`` kept against its own bar after the head moved on. So it is ``interesting`` (``Cause.MOVED``), and its
     reason ends with the result of the merge. The merge is a version made without a checkout (``Repository.merge``),
     and kept (``RebaseVersion``). A new tree becomes a pending
-    candidate of the same run, with ``onto`` as its parent. A merge that conflicts files a seed on the run's track to
+    candidate of the same run, with ``onto`` as its parent. A merge that conflicts files a seed on the track of its verdict to
     compose the two by hand when ``conflicts`` is ``Seed``, unless the campaign stopped. The seed is not pinned, so it runs from the head
     (``follow_up``). It supersedes the compose seeds of the run's earlier candidates that ``candidate`` contains
     (``supersede_composed``). A merged tree that is already a candidate (the head had the change) gives no new
@@ -486,7 +534,8 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
         match conflicts:
             case Seed() if not stopped:
                 title = f'Compose candidate#{candidate.id} onto the head'
-                seeds = follow_up(s, candidate, [title], why, System.DAEMON, track=candidate.run.idea.track, pin=False)
+                on = track_of(campaign.config, candidate).name  # the track that kept it
+                seeds = follow_up(s, candidate, [title], why, System.DAEMON, track=on, pin=False)
             case Seed() | Leave():
                 seeds = []
             case _:

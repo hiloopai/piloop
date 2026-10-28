@@ -8,13 +8,15 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    String,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from piloop.db.models import NOW, Base, Tracked, by_value, text_checks, utcnow
 from piloop.ids import CampaignId, Revision
-from piloop.plugins.campaign_type.kit.candidates.ids import JUDGED, CandidateId, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import VERDICTED, CandidateId, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
 if TYPE_CHECKING:  # evaluation and runs need candidates: only the relationships name them
@@ -31,6 +33,7 @@ Base.registry.update_type_annotation_map(
         Cause: by_value(Cause),
         Origin: by_value(Origin),
         Outcome: by_value(Outcome),
+        TrackName: String,
     }
 )
 
@@ -53,9 +56,9 @@ class Candidate(Tracked, Base):
         Index('ix_candidates_run', 'run_id'),
         # the FK check on every delete of a candidate (deleting a campaign deletes thousands)
         Index('ix_candidates_parent', 'parent_id'),
-        *text_checks('candidates', nullable=('summary', 'verdict_by', 'verdict_reason')),
+        *text_checks('candidates', nullable=('summary', 'verdict_by', 'verdict_reason', 'track')),
         CheckConstraint(
-            f'verdict IS NULL OR origin IN ({", ".join(repr(o.value) for o in sorted(JUDGED))})',
+            f'verdict IS NULL OR origin IN ({", ".join(repr(o.value) for o in sorted(VERDICTED))})',
             name='candidates.verdict needs a judged origin',
         ),
         CheckConstraint(
@@ -82,6 +85,9 @@ class Candidate(Tracked, Base):
     verdict_by: Mapped[str | None]
     verdict_reason: Mapped[str | None]
     """The reason of the verdict, for a human."""
+    track: Mapped[TrackName | None]
+    """The track of the daemon's verdict: the best of the tracks that it judged the candidate on. NULL before the daemon
+    judges it, and for a verdict from before it judged on every track: that one is on the track of its run."""
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
     run: Mapped[Run | None] = relationship(back_populates='candidates', foreign_keys=[run_id])

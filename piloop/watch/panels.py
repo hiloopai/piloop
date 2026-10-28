@@ -258,7 +258,7 @@ class CandidatesPanel:
         return 'Candidates ' + ' · '.join(f'{name} {sparkline(values)}' for name, values in lines.items()) + points
 
     def items(self, s: Session, ctx: Context) -> list[Item]:
-        """Return the campaign's own candidates, newest first, then the imported references, which are never kept."""
+        """Return the campaign's own candidates, newest first, then the imported references."""
         evaluator = ctx.campaign.evaluator_id
         recent = s.scalars(
             select(Candidate)

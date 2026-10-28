@@ -164,3 +164,14 @@ def test_lineages_show_every_track_primary_of_their_latest_keep(db: Database, ca
             '  - branch from candidate#1 (keep): latest candidate#5 score 2, size 10, 1 kept',
         ]
     )
+
+
+def test_a_keep_counts_on_the_track_of_its_verdict_not_of_its_run(db: Database, campaign: Campaign) -> None:
+    """The daemon judges a candidate on every track: a score run's candidate kept on size is a size keep."""
+    two_tracks(db, campaign)
+    with db.session() as s:
+        s.get_one(Candidate, 2).track = TrackName('size')
+        s.commit()
+    tracks = render(db, campaign).split('## Tracks')[1].split('## Trajectory')[0]
+    assert '- score: score 3 at the head (+2 on the start); floor 0.5, 2.5 to spare; 0 trunk keeps;' in tracks
+    assert '1h ago; share 0.75' not in tracks and '2 trunk keeps, the latest candidate#4 1h ago' in tracks
