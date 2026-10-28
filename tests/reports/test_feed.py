@@ -60,9 +60,15 @@ def test_a_read_transaction_sees_one_state_and_refuses_unflushed_changes(db: Dat
             other.commit()
             assert db_feed.newest(s) == cursor, 'a commit after the first read is not seen'
         assert db_feed.newest(s) == cursor + 1, 'the transaction ended: the commit is seen'
+        newest_seen = cursor + 1
         s.add(make_idea(campaign.id, 'unsaved'))
         with pytest.raises(RuntimeError, match='uncommitted changes'), db_feed.snapshot(s):
             pass
+        s.flush()
+        with db_feed.snapshot(s) as cursor:
+            assert cursor == newest_seen + 1, 'a session that wrote reads in its transaction, its own event included'
+        s.commit()
+    assert newest(db) == cursor, 'the write that the cursor passed is committed with it'
 
 
 def test_the_envelope_normalizes_history_without_inventing_and_keeps_unknown_kinds_opaque(

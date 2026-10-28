@@ -11,15 +11,15 @@ from sqlalchemy import select
 
 from piloop.actor import System
 from piloop.campaign.anomaly import AnomalyReported
-from piloop.campaign.stop import request_cancel
-from piloop.config import load_campaign_config
+from piloop.campaign.stop import left, request_cancel
+from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.main import ACTOR
 from piloop.daemon.scheduler import Scheduler
 from piloop.db import sql
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, utcnow
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, Ending, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CommentKind, Ending, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
@@ -28,9 +28,11 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization.planner import NO_RUN_ERROR
 from piloop.plugins.executor.workers import Workers
+from piloop.plugins.trigger.cron import CronTrigger
 from tests.conftest import (
     HARNESS_NOOP,
     HARNESS_PROMPT_TO_FILE,
@@ -41,6 +43,7 @@ from tests.conftest import (
     campaigns_of,
     end_of,
     factory,
+    role_of,
     run_all,
     serving,
     wait_until,
@@ -232,8 +235,14 @@ def test_an_anomaly_takes_the_tick_and_does_not_reset_the_timer(
     progress = (tmp_path / 'agent_sessions' / '2' / 'brief.md').read_text()
     assert '## This sweep: a progress review' in progress and '## This sweep: an incident' not in progress
     assert '## Incidents to investigate' not in progress
-    assert progress.index('## Goal') < progress.index('### History: ideas')
+    assert '## Goal' in progress and '## Research pack' not in progress, 'a review judges the work, it proposes none'
     sched.stop(timeout=5)
+
+
+def test_a_watchdog_brief_shows_a_sweep_s_sections_without_the_research_pack_unless_its_list_names_it() -> None:
+    shown = WatchdogRole().shown()
+    assert 'goal' in shown and 'pack' not in shown
+    assert WatchdogRole(sections=['goal', 'pack']).shown() == ['goal', 'pack']
 
 
 def test_an_idle_queue_requests_no_sweep(
@@ -246,23 +255,59 @@ def test_an_idle_queue_requests_no_sweep(
     sched.stop(timeout=1)
 
 
-def test_cron_fires_once_per_interval(db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path) -> None:
+def test_cron_fires_once_per_interval_when_the_role_has_news(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A routine sweep with nothing new to read finds nothing: the timer waits for news, up to ``max_interval``."""
     configure(db, campaign, watchdog={'interval': 30})
     sched = scheduler(db, runtime, tmp_path)
     assert run_all(sched) == [], 'the campaign was registered a moment ago'
     with db.session() as s:
         s.get_one(Campaign, campaign.id).created_at = utcnow() - timedelta(seconds=31)
         s.commit()
-    assert run_all(sched) == [1]
+    assert run_all(sched) == [1], 'the first review needs no news'
     assert agent_sessions(db, WATCHDOG)[0][2] == 'timer: 30s'
     sched.wait(SETTLE)
     assert run_all(sched) == [], 'not due again'
     backdate(db, AgentSessionId(1), 31)
+    assert run_all(sched) == [], 'due, but nothing is new since the last review'
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        cfg = CampaignConfig.model_validate(p.config)
+        on = campaigns_of(sched)._pass(s, p, cfg, WATCHDOG, role_of(cfg, WatchdogRole), utcnow(), left(s, p, cfg))
+        due = CronTrigger().due_in(on)
+        assert due is not None and timedelta(hours=3, minutes=59) < due < timedelta(hours=4), (
+            'max_interval, unless news'
+        )
+
+    with db.session() as s:
+        s.add(
+            Comment(
+                target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
+                author='human',
+                kind=CommentKind.MESSAGE,
+                priority=2,
+                body='look at idea#1',
+            )
+        )
+        s.commit()
     assert run_all(sched) == [2]
+    assert agent_sessions(db, WATCHDOG)[1][2] == 'timer: 30s; news: 1 items (comment)'
+    sched.wait(SETTLE)
+    backdate(db, AgentSessionId(2), 31)
+    assert run_all(sched) == [], 'the review took that news'
+    backdate(db, AgentSessionId(2), 4 * 3600)
+    assert run_all(sched) == [3], 'after max_interval, a stuck campaign is still looked at'
+    assert agent_sessions(db, WATCHDOG)[2][2] == 'timer: no news since agent_session#2'
+    sched.wait(SETTLE)
+
+    configure(db, campaign, watchdog={'interval': 30}, trigger={'cron': {'max_interval': 0}})
+    backdate(db, AgentSessionId(3), 31)
+    assert run_all(sched) == [4], 'max_interval at or below interval: the timer alone'
     sched.wait(SETTLE)
 
     configure(db, campaign, watchdog={'interval': 0})
-    backdate(db, AgentSessionId(2), 3600)
+    backdate(db, AgentSessionId(4), 5 * 3600)
     assert run_all(sched) == [], 'interval 0 turns the timer off'
     sched.stop(timeout=5)
 

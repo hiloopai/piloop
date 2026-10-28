@@ -18,15 +18,15 @@ These questions are worth answering. They are not a checklist.
 Write one `finding` on the campaign. Start with your verdict (on track, inefficient, stuck, or suspect), then give the
 evidence.
 Make it an `escalation` when the orchestrator should change course now.
-If nothing changed since the last watchdog finding in the history (findings on the campaign), write nothing.
+If nothing changed since the last watchdog finding on the campaign, write nothing.
 
 When the trigger says that the campaign stopped, this is the closing review. Cover the head and its lineage, what
 worked, what did not, and whether the result can be trusted. Then write one escalation that asks whether to extend
 the stop conditions, change them, or finish.
 
-Then leave the next campaign its lessons: one row of `lessons` on the campaign for each mechanism family that this
-campaign tried. First read the lessons already on this repo (the procedures show how), and write one only where yours
-says something new:
+Then leave the next campaign its lessons: one row of `lessons` on the campaign for each mechanism family
+(`ideas.family`) that this campaign tried. First read the lessons already on this repo (the procedures show how), and
+write one only where yours says something new:
 
 ```sql
 INSERT INTO lessons (campaign_id, family, status, effect, metric, body, created_by)

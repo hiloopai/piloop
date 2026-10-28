@@ -11,7 +11,7 @@ from sqlalchemy import select
 from piloop.config import load_campaign_config
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, utcnow
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CommentKind
+from piloop.ids import AgentSessionId, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import yields
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.role.scout import (
@@ -78,6 +78,18 @@ def test_a_scout_sweep_fires_on_its_interval_as_a_row_of_its_own_beside_research
     sched.wait(SETTLE)
     assert run_all(sched) == [], 'the last scout started a moment ago'
     backdate(db, AgentSessionId(2), 61)
+    assert run_all(sched) == [], 'due, but nothing is new to the scout'
+    with db.session() as s:
+        s.add(
+            Comment(
+                target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
+                author='human',
+                kind=CommentKind.MESSAGE,
+                priority=2,
+                body='look wider',
+            )
+        )
+        s.commit()
     assert run_all(sched) == [3]
     sched.wait(SETTLE)
     sched.stop(timeout=5)

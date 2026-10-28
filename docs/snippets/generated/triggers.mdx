@@ -2,7 +2,7 @@
 
 | Trigger | Fires when | Parameters |
 |---|---|---|
-| `cron` | The role's `interval` passed since the start of its last routine agent, one that got no anomaly. | none |
+| `cron` | The role's `interval` passed since its last routine agent, one that got no anomaly, and the role has news. | `max_interval` |
 | `dead_at_startup` | An agent of the campaign did not start to work, and no agent got it yet. The agent gets it to investigate. | none |
 | `leaking_funnel` | Fewer than `measured` of the last `window` attempts under the current evaluator reached a measurement. | `window`, `measured` |
 | `low_water` | The backlog of runnable ideas is shorter than its target, and there is a reason to sweep now. | `buffer` |

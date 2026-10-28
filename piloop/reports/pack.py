@@ -1,7 +1,7 @@
 """The research pack: the context that the daemon gives each research sweep.
 
 Ideas written with broad context produce more keeps. The daemon builds this pack from the database and the campaign
-repo when a research sweep or a progress review starts. ``piloop history`` prints it too. It contains:
+repo when a sweep that proposes work starts. ``piloop history`` prints it too. It contains:
 
 - the metrics with their roles, tracks, margins and floors, and the start and the head on each;
 - the analysis artifacts (``context``) and the shared workspace, newest first, as file pointers

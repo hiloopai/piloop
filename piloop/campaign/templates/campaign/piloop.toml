@@ -170,6 +170,9 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # [plugins.trigger.low_water]             # a built-in trigger's table changes its parameters for every role that names it
 # buffer = 2                              # ideas to keep ready beyond one per run slot
 
+# [plugins.trigger.cron]
+# max_interval = 14400                    # seconds after which a routine sweep starts also when nothing is new
+
 # [plugins.section]                       # what `piloop status`, the API and a UI show
 # use = ["headline", "goal", …]           # if not set: the installed sections of status; see the sections
 

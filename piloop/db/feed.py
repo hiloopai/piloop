@@ -7,6 +7,7 @@ id (``piloop.db.triggers.immutable``). Otherwise a reader whose cursor had passe
 miss the event that takes it.
 """
 
+import sqlite3
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -60,7 +61,16 @@ def newest(s: Session) -> int:
 
 @contextmanager
 def snapshot(s: Session) -> Generator[int]:
-    """Hold one read transaction on ``s`` and yield its cursor: the id of the newest event that it sees."""
+    """Hold one read transaction on ``s`` and yield its cursor: the id of the newest event that it sees.
+
+    A session that wrote holds its transaction already, which sees one state: its own writes on its snapshot. Its
+    cursor can pass its own events, which are committed with whatever it writes from that cursor, or not at all.
+    """
+    driver = s.connection().connection.driver_connection
+    assert isinstance(driver, sqlite3.Connection)  # make_engine opens SQLite only
+    if driver.in_transaction:
+        yield newest(s)
+        return
     with read_transaction(s):
         yield newest(s)
 

@@ -274,7 +274,11 @@ With `provider = "limits"`:
 
 Each trigger by name.
 
-With `provider = "cron"`, the table has no other key.
+With `provider = "cron"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `max_interval` | number | `14400` | The most seconds between two routine agents of a role: after this long, one starts without news, so that a stuck campaign is still looked at. At or below the role's `interval`, every one starts on the timer alone. |
 
 With `provider = "dead_at_startup"`, the table has no other key.
 
@@ -470,7 +474,7 @@ Experimental: the scout.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `writes` | list\[string\] | `["comments(escalation, finding, note)", "lessons on the campaign once it stopped", "seeds via idea seed"]` | What a watchdog may write, as its brief states it. |
-| `triggers` | list\[string\] | `["run_failed", "dead_at_startup", "leaking_funnel", "cron", "stopped"]` | A failed run, an agent dead at startup or a leaking funnel requests an incident sweep, the timer requests a progress review, and the campaign's stop requests the closing review. |
+| `triggers` | list\[string\] | `["run_failed", "dead_at_startup", "leaking_funnel", "cron", "stopped"]` | A failed run, an agent dead at startup or a leaking funnel requests an incident sweep, the timer requests a progress review when something is new, and the campaign's stop requests the closing review. |
 | `interval` | number | `1800` | The number of seconds between two progress reviews, counted from the last review. A sweep that investigates an anomaly is not a review. 0 turns the reviews off. |
 
 ## Global settings: `config.toml`

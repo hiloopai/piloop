@@ -47,7 +47,7 @@ key of a role.
 |---|---|---|
 | **implementer** | Implements one idea, commits, and writes a `finding`. Its commits are scored. | A ready idea and a free slot. |
 | **research** | Develops seeds into ideas, and adds ideas where the head loses the most. | A new seed, a short backlog, or a stall. |
-| **watchdog** | Investigates failures and reviews progress. Writes comments and seeds, never code. | A failed run, an agent dead at its start, every `interval` seconds, and once at the stop, for the closing report. |
+| **watchdog** | Investigates failures and reviews progress. Writes comments and seeds, never code. | A failed run, an agent dead at its start, every `interval` seconds when something is new, and once at the stop, for the closing report. |
 | **scout** | Searches X, GitHub and arXiv for techniques, and files the best as seeds. | Every `interval` seconds. Off until you set it. |
 | **orchestrator** | Answers messages and escalations, steers the work, and records its decisions. Each one resumes the session of the one before. | News for it, with the `news` trigger. Off until you set it: by default, you run your own [orchestrator](/concepts/orchestrator). |
 
