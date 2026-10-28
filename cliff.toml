@@ -48,6 +48,8 @@ fail_on_unmatched_commit = true
 sort_commits = "oldest"
 # Release notes link the release's compare view, not each pull request: most pull requests are on a private mirror.
 commit_preprocessors = [
+    # A squash commit whose subject runs onto a second line keeps its first line as the subject.
+    { pattern = '^([^\n]*)\n[^\n]+', replace = "$1" },
     { pattern = '\s*\((?:[\w.-]+/[\w.-]+)?#\d+[^)]*\)', replace = "" },
 ]
 # The first parser that matches a commit sets its group, and a commit that none matches stops the run. The HTML

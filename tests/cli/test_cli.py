@@ -2254,7 +2254,7 @@ def too_old(monkeypatch: pytest.MonkeyPatch, database: Path) -> str:
         command.downgrade(alembic_config(f'sqlite:///{database}', name, disk(database.parent)), 'base')
     command.downgrade(alembic(database), '0001')
     return (
-        rf'{re.escape(str(database))} is from piloop 0\.1 \(schema revision 0001\), and this piloop .* migrates from'
+        rf'{re.escape(str(database))} is from piloop 0\.1 \(schema revision core 0001\), and this piloop .* migrates from'
         r' piloop 0\.3'
     )
 

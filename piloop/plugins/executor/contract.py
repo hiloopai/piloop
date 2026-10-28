@@ -196,7 +196,7 @@ class AgentJob(BaseModel):
         """A job that a 0.3 daemon queued names its MCP renderer and its usage tally, each the name of a harness."""
         if not isinstance(data, dict) or 'harness' in data or not ({'mcp', 'usage'} & data.keys()):
             return data
-        deprecated.until('0.4.0', 'a job of a 0.3 daemon names mcp and usage: delete AgentJob._harness')
+        deprecated.until('0.5.0', 'a job of a 0.3 daemon names mcp and usage: delete AgentJob._harness')
         usage = data.get('usage')
         named = (usage.get('tally') if isinstance(usage, dict) else None) or data.get('mcp')
         rest = {k: v for k, v in data.items() if k not in ('mcp', 'usage')}
@@ -210,7 +210,10 @@ class AgentJob(BaseModel):
             return data
         if all(isinstance(t, dict) and 'provider' in t for t in servers.values()):
             return data
-        deprecated.until('0.5.0', 'the servers of a job of protocol 13 have no provider: delete AgentJob._servers')
+        deprecated.until(
+            '0.5.0',
+            'the servers of a job of protocol 13 or older (0.3.1 is 7) have no provider: delete AgentJob._servers',
+        )
         tables = {name: dict(t) if isinstance(t, dict) else t for name, t in servers.items()}
         for step in deprecated.MCP_PROVIDERS:
             step.apply({'plugins': {'mcp_server': tables}})
@@ -375,7 +378,7 @@ class Sample(BaseModel):
     error: str | None = None
     units: dict[str, dict[str, float]] = Field(default_factory=dict)
     channel: Channel = Channel.RESULT
-    """How the evaluate command reported it: a result, or ``METRIC`` lines until 0.4.0."""
+    """How the evaluate command reported it: a result, or ``METRIC`` lines until 0.5.0."""
     rung: RungName | None = None
     """The rung of the ladder that it measured. None for the full panel."""
     stopped: str | None = None

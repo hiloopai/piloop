@@ -116,7 +116,7 @@ def test_an_evaluator_that_prints_metric_lines_gets_one_inbox_note(
     with db.session() as s:
         notes = s.scalars(select(Comment.body).where(Comment.author == System.DAEMON)).all()
     assert notes == [
-        'The evaluate command prints METRIC lines, which piloop reads until 0.4.0. Write one JSON line to '
+        'The evaluate command prints METRIC lines, which piloop reads until 0.5.0. Write one JSON line to '
         '$PILOOP_RESULT_FILE instead: https://piloop.autoresearch.inc/concepts/campaigns#the-evaluate-command'
     ], 'one note for the evaluator, at its first measurement through METRIC lines'
 

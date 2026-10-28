@@ -660,7 +660,7 @@ def test_a_home_of_0_1_0_is_refused_and_left_as_it_was(piloop_install: Install, 
     before = (home / 'piloop.db').read_bytes()
     proc = subprocess.run(['piloop', 'migrate'], env=env, capture_output=True, text=True, timeout=120)
     assert proc.returncode != 0
-    assert 'is from piloop 0.1 (schema revision 0001)' in proc.stderr, proc.stderr
+    assert 'is from piloop 0.1 (schema revision core 0001)' in proc.stderr, proc.stderr
     assert "install piloop 0.2 (`uv tool install 'piloop==0.2.*'`)" in proc.stderr, proc.stderr
     assert (home / 'piloop.db').read_bytes() == before
     assert list(home.glob('piloop.db.bak-*')) == []

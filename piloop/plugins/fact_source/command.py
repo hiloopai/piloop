@@ -83,7 +83,7 @@ class Command(Readings):
 
     @staticmethod
     def _found(lines: list[str], stdout: str, names: list[str]) -> dict[str, float]:
-        """The values of its one result line, or, until 0.4.0, those of ``names`` among its ``METRIC`` lines.
+        """The values of its one result line, or, until 0.5.0, those of ``names`` among its ``METRIC`` lines.
 
         Raises:
             FactReadError: It wrote no result, more than one, one that is not a ``Reading``, or both kinds.
@@ -91,7 +91,7 @@ class Command(Readings):
         printed = parse_metrics(stdout)
         match lines:
             case [] if printed:
-                deprecated.until('0.4.0', 'METRIC lines of the command fact source: delete this branch')
+                deprecated.until('0.5.0', 'METRIC lines of the command fact source: delete this branch')
                 return {name: printed[name] for name in names if name in printed}
             case []:
                 raise FactReadError(f'wrote no result to {RESULT_ENV}')

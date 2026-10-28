@@ -1,7 +1,7 @@
 """Run the evaluate command in a worktree, and read its result. A timeout kills the whole process group.
 
 The command writes its result to ``RESULT_ENV`` as one JSON object (``Result``), which is checked against the
-campaign's metrics. Until 0.4.0 it may print ``METRIC <name>=<value>`` lines instead (``Channel.METRIC_LINES``).
+campaign's metrics. Until 0.5.0 it may print ``METRIC <name>=<value>`` lines instead (``Channel.METRIC_LINES``).
 """
 
 import contextlib
@@ -475,7 +475,7 @@ def run_evaluate(
 
 
 def _unreported(lines: _Lines, stdout: str, units_file: Path) -> Reported | BadResult:
-    """What a run that wrote no last line reported: its ``METRIC`` lines until 0.4.0, when it wrote no line at all."""
+    """What a run that wrote no last line reported: its ``METRIC`` lines until 0.5.0, when it wrote no line at all."""
     if lines.count:
         return BadResult(f'it stopped after rung {lines.rungs[-1].rung}, before its last line')
     lines_printed = parse_metrics(stdout)
@@ -483,7 +483,7 @@ def _unreported(lines: _Lines, stdout: str, units_file: Path) -> Reported | BadR
         return BadResult(f'it wrote no result to {RESULT_ENV}')
     if lines.step.rungs:
         return BadResult(f'a ladder reports its rungs on {RESULT_ENV}, not as METRIC lines')
-    deprecated.until('0.4.0', 'METRIC lines on stdout: delete this branch, parse_metrics and UNITS_ENV')
+    deprecated.until('0.5.0', 'METRIC lines on stdout: delete this branch, parse_metrics and UNITS_ENV')
     try:
         units = read_units(units_file, lines_printed) if units_file.exists() else {}
     except ValueError as e:
@@ -527,7 +527,7 @@ def _name(signum: int) -> str:
         return f'signal {signum}'
 
 
-@deprecated.until('0.4.0', 'the units file of METRIC lines: delete read_units, UNITS and UNITS_ENV')
+@deprecated.until('0.5.0', 'the units file of METRIC lines: delete read_units, UNITS and UNITS_ENV')
 def read_units(path: Path, metrics: dict[str, float]) -> Units:
     """Validate a units file against the METRIC lines of the same evaluation.
 
@@ -558,7 +558,7 @@ def _check_units(units: Units, metrics: dict[str, float]) -> None:
             raise ValueError(f'units of {name!r} sum to {total:g}, its value is {metrics[name]:g}')
 
 
-@deprecated.until('0.4.0', 'METRIC lines on stdout: delete parse_metrics; a result goes to RESULT_ENV')
+@deprecated.until('0.5.0', 'METRIC lines on stdout: delete parse_metrics; a result goes to RESULT_ENV')
 def parse_metrics(stdout: str) -> dict[str, float]:
     """Parse ``METRIC name=value`` lines into floats. The caller checks that none is missing.
 

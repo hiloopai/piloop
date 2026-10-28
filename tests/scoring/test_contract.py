@@ -119,7 +119,7 @@ def test_a_failed_or_incomplete_evaluation_gives_an_error(tmp_path: Path) -> Non
     )
     assert evaluate(write({'errors': 3})) == ({'errors': 3.0}, 'evaluate reported no value for: seconds')
     assert evaluate('echo METRIC errors=3; echo METRIC seconds=2') == ({'errors': 3.0, 'seconds': 2.0}, None), (
-        'METRIC lines on stdout are read until 0.4.0'
+        'METRIC lines on stdout are read until 0.5.0'
     )
 
 

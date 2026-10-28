@@ -614,7 +614,7 @@ def anomaly_trigger(toml: Path, raw: dict[str, object], removed_in: Version) -> 
         )
 
 
-@bridge('0.4.0', 'max_spend is hold_at of the spend: delete the max_spend bridge')
+@bridge('0.5.0', 'max_spend is hold_at of the spend: delete the max_spend bridge')
 def max_spend(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """``[plugins.stop_rule] max_spend`` is ``hold_at = { spend = <value> }``. A value that ``hold_at`` sets too wins."""
     plugins = raw.get('plugins')
@@ -678,7 +678,7 @@ def wake_budget(toml: Path, raw: dict[str, object], removed_in: Version) -> None
 _MOVED = "wake_budget is deprecated; set budget in a [plugins.section.<name>] of lessons, in the role's sections"
 
 
-@bridge('0.4.0', '[memory] documents is [plugins.memory] documents: delete the memory_documents bridge')
+@bridge('0.5.0', '[memory] documents is [plugins.memory] documents: delete the memory_documents bridge')
 def memory_documents(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """``[memory] documents`` is ``documents`` in ``[plugins.memory]``, of the ``local`` provider.
 
@@ -710,7 +710,7 @@ OLD_HARNESSES = ('pi', 'claude', 'codex')
 """The built-in harnesses of 0.3, whose tables named their own renderer and tally."""
 
 
-@bridge('0.4.0', 'mcp and usage of a [harness.<name>] table are its provider: delete the harness_providers bridge')
+@bridge('0.5.0', 'mcp and usage of a [harness.<name>] table are its provider: delete the harness_providers bridge')
 def harness_providers(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """``mcp`` and ``[plugins.harness.<name>.usage]`` are the harness's provider: it renders the servers, reads usage.
 
@@ -893,7 +893,7 @@ def tick_seconds(toml: Path, raw: dict[str, object], removed_in: Version) -> Non
     warn(toml, 'tick_seconds', 'tick_seconds is deprecated and does nothing; delete it', removed_in=removed_in)
 
 
-@bridge('0.4.0', 'name_claim of the proxy network is name_claims: delete the name_claim bridge', CONFIG_BRIDGES)
+@bridge('0.5.0', 'name_claim of the proxy network is name_claims: delete the name_claim bridge', CONFIG_BRIDGES)
 def name_claim(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """In ``config.toml``, ``[plugins.network] name_claim`` of the ``proxy`` network is ``name_claims``, a list of one.
 
@@ -1024,7 +1024,7 @@ type MessageFormat = Literal['lines', 'claude-hook']
 """The ``--format`` of ``piloop agent messages`` in 0.3, which the hook of a running agent still passes."""
 
 
-@until('0.4.0', '--format of piloop agent messages is --harness: delete message_format, MessageFormat and the option')
+@until('0.5.0', '--format of piloop agent messages is --harness: delete message_format, MessageFormat and the option')
 def message_format(form: MessageFormat) -> str | None:
     """The harness whose messages ``--format`` printed: ``claude-hook`` is Claude's hook, ``lines`` is none."""
     match form:

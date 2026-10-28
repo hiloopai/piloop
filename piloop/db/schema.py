@@ -89,7 +89,7 @@ SCHEMAS: Slot[Schema] = Slot('schemas', TypeAdapter(Schema), 'schema', _misnamed
 
 CORE_REFERENCES = frozenset({('agent_sessions', 'run_id')})
 """Core's references to a plugin's table, as (table, column)."""
-deprecated.until('0.4.0', 'agent_sessions.subject replaces agent_sessions.run_id: delete CORE_REFERENCES')
+deprecated.until('0.5.0', 'agent_sessions.subject replaces agent_sessions.run_id: delete CORE_REFERENCES')
 
 
 def schemas() -> dict[str, Schema]:

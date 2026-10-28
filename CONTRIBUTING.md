@@ -283,10 +283,11 @@ if not handle.data.get('tag'):
     deprecated.until('0.3.0', 'a handle that 0.1.0 started has no tag: delete this branch')
 ```
 
-Pick the release by who can hit the old form. Anything that a user of the last release can hit (a key, an import, a
-column, a field of the API or of an event) stays until the second minor release after it: with 0.3.x out, mark it
-`0.5.0`, so that it still works, with a warning, all through 0.4.x. Compat code for a form that no release shipped,
-which only users of `main` hit, goes at the next minor release (`0.4.0`).
+Pick the release by what the last release does with the old form. Anything that it accepts without a warning (a key,
+an import, a column, a field of the API or of an event, a job or a hook of an agent that its daemon started) is
+bridged one more minor: with 0.3.x out, mark it `0.5.0`, so that it still works, with a warning, all through 0.4.x.
+A form that the last release already warns about goes at the release that its warning names. Compat code for a form
+that no release shipped, which only users of `main` hit, goes at the next minor release (`0.4.0`).
 
 Write both arguments as literal strings, and the version as `X.Y.Z`. Mark the definition of an old name or constant:
 once it is deleted, the type checker finds each use. `tests/test_deprecated.py` reads every marker in `piloop/`, also
@@ -463,10 +464,11 @@ Maintainers only.
 
 1. Fetch the tags (`git fetch --tags origin`). Set `version` in `pyproject.toml`, and run `uv lock`. The tests now
    fail on each [compat marker](#mark-compat-code) of this version: delete that code first.
-   For a minor release `X.Y.0`, add the release before it to `RELEASES` in `piloop/db/session.py`, with the head
-   revision that it shipped, the number of the last file that
-   `git ls-tree --name-only vX.(Y-1).0 piloop/db/migrations/versions/` lists. That head is the oldest schema that this
-   release migrates, so a database upgrades one minor release at a time. The test of `RELEASES` fails until it is there.
+   For a minor release `X.Y.0`, add the release before it, `X.(Y-1)`, to `RELEASES` in `piloop/db/session.py`, with
+   the head of each chain that its newest patch release `vX.(Y-1).Z` shipped: core's is the last file that
+   `git ls-tree --name-only vX.(Y-1).Z piloop/db/migrations/versions/` lists, and each plugin's is the last file of its
+   `migrations/` directory. Those heads are the oldest schema that this release migrates, so a database upgrades one
+   minor release at a time, through that patch release. The test of `RELEASES` fails until it is there.
 2. Write the release notes:
 
    ```bash

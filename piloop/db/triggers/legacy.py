@@ -20,7 +20,9 @@ from sqlalchemy import text
 from piloop import deprecated
 from piloop.db.triggers.ddl import Trigger
 
-deprecated.until('0.4.0', 'old migrations need the old trigger names: squash 0001-0018 at a 0.2.0 floor, delete legacy')
+deprecated.until(
+    '0.5.0', 'old migrations need the old trigger names: squash every chain at the 0.4 floor, delete legacy'
+)
 
 
 def has_table(name: str) -> str:

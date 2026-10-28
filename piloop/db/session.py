@@ -26,7 +26,7 @@ import re
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Generator, Iterable
+from collections.abc import Callable, Generator, Iterable, Mapping
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -82,22 +82,24 @@ type Stamps = dict[str, str]
 
 @dataclass(frozen=True)
 class Release:
-    """A minor release at its ``.0``, and the head revision that it shipped."""
+    """A minor release, named by its ``.0``, and the head of each chain that its newest patch release shipped."""
 
     version: Version
-    head: MigrationRevision
+    heads: Mapping[str, MigrationRevision]
+    """By schema name. Core's is always there; a plugin's chain that the release did not have is not."""
 
 
 RELEASES = (
-    Release(Version(0, 1, 0), MigrationRevision('0001')),
-    Release(Version(0, 2, 0), MigrationRevision('0018')),
+    Release(Version(0, 1, 0), {CORE: MigrationRevision('0001')}),
+    Release(Version(0, 2, 0), {CORE: MigrationRevision('0018')}),
 )
-"""Every minor release, oldest first. The newest is the floor: this piloop migrates a database from its head or from a
-newer revision, never from an older one, so a database upgrades one minor release at a time.
+"""Every minor release, oldest first. The newest is the floor: this piloop migrates each chain of a database from its
+head there or from a newer revision, never from an older one, so a database upgrades one minor release at a time.
 
-The release of ``X.Y.0`` adds ``X.(Y-1).0`` (CONTRIBUTING.md, Release); ``tests/db/test_migrations.py`` fails at that
-version bump until it does, and checks that each head is in the chain, in order. Each minor release deletes the compat
-code that the one before it marked (``piloop.deprecated``), and a database that skipped that release still needs it.
+The release of ``X.Y.0`` adds ``X.(Y-1)``, with the heads of its newest patch release (CONTRIBUTING.md, Release);
+``tests/db/test_migrations.py`` fails at that version bump until it does, and checks that each head is in its chain, in
+order. Each minor release deletes the compat code that the one before it marked (``piloop.deprecated``), and a database
+that skipped that release still needs it.
 """
 
 
@@ -384,19 +386,28 @@ def unmigratable(database: Path) -> SchemaMismatch | None:
     position, floor = chain.index, RELEASES[-1]
     if position(at) < position(HERDR_REMOVED) and (refused := on_herdr(database)) is not None:
         return refused
-    if position(at) >= position(floor.head):
+    order = {name: [r.revision for r in reversed(list(script.walk_revisions()))] for name, script in scripts().items()}
+    known = {name: revision for name, revision in found.items() if name in order}
+    reached = [r for r in RELEASES if all(order[n].index(known[n]) >= order[n].index(h) for n, h in _shared(r, known))]
+    if floor in reached:
         return None
-    before = [r.version.line for r in RELEASES if position(r.head) <= position(at)]
-    stops = [r.version.line for r in RELEASES if position(r.head) > position(at)]
+    before = [r.version.line for r in reached]
+    stops = [r.version.line for r in RELEASES if r not in reached]
     origin = f'piloop {before[-1]}' if before else f'a piloop before {stops[0]}'
     steps = ', then '.join(
         f"install piloop {m} (`uv tool install 'piloop=={m}.*'`) and run `piloop upgrade`" for m in stops
     )
+    was = {name: known[name] for name, _ in _shared(floor, known)}
     return SchemaTooOld(
-        f'{database} is from {origin} (schema revision {at}), and this {installed()} migrates from piloop'
-        f' {floor.version.line} (schema revision {floor.head}) or newer',
+        f'{database} is from {origin} (schema revision {described(was)}), and this {installed()} migrates from piloop'
+        f' {floor.version.line} (schema revision {described(floor.heads)}) or newer',
         f'upgrade one release at a time: {steps}, then install this piloop again and run `piloop upgrade`',
     )
+
+
+def _shared(release: Release, found: Stamps) -> list[tuple[str, str]]:
+    """Each chain of ``release`` that ``found`` has, with its head at ``release``."""
+    return [(name, head) for name, head in release.heads.items() if name in found]
 
 
 HERDR_REMOVED = MigrationRevision('0034')
@@ -488,7 +499,7 @@ def stamps(database: Path) -> Stamps:
     return {_named(table): row[0] for table, row in rows.items() if row is not None}
 
 
-def described(found: Stamps) -> str:
+def described(found: Mapping[str, str]) -> str:
     """``found`` for a person: each revision after its schema's name, ``core 0060, memory/local 0001``.
 
     ``none`` alone for a database that was never migrated.

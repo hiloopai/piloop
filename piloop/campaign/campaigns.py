@@ -19,7 +19,6 @@ from rich.console import Console
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from piloop import deprecated
 from piloop.actor import Actor, System
 from piloop.config import CONFIG_FILE, CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
 from piloop.db.events import emit
@@ -62,9 +61,9 @@ class CampaignAdded(EventModel):
 
 WORKSPACE = 'workspace'
 """A per-campaign directory, linked into every worktree, for files that runs share. It is never committed."""
-deprecated.until('0.4.0', 'campaign directories keep their 0.1.0 name: move projects/ to campaigns/, delete PROJECTS')
 PROJECTS = 'projects'
-"""The directory under the piloop home that holds each campaign's directory."""
+"""The directory under the piloop home that holds each campaign's directory. It keeps the name of 0.1.0: a rename would
+move every home's files and buy nothing."""
 REPOS = 'repos'
 """The directory under the piloop home that holds the checkout of each campaign that the daemon cloned, by its id
 (``register_clone``)."""

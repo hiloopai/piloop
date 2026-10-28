@@ -151,7 +151,7 @@ def test_name_claim_of_the_proxy_network_is_a_list_of_one_name_claims(tmp_path: 
     """0.3 named a proxy's caller by one claim, ``name_claim``."""
     network = '[plugins.network]\nprovider = "proxy"\nname_claim = "principal"\n'
     (tmp_path / 'config.toml').write_text(network)
-    with pytest.warns(PiloopDeprecationWarning, match=r'name_claim is deprecated.*removed in piloop 0\.4\.0') as w:
+    with pytest.warns(PiloopDeprecationWarning, match=r'name_claim is deprecated.*removed in piloop 0\.5\.0') as w:
         settings = Settings(home=tmp_path)
     assert w[0].lineno == 3
     assert settings.plugins['network'] == {'provider': 'proxy', 'name_claims': ['principal']}

@@ -24,10 +24,12 @@ from inline_snapshot import snapshot
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.exc import IntegrityError
 
+from piloop import deprecated
 from piloop.actor import System
 from piloop.config import CampaignConfig
 from piloop.db import session
 from piloop.db.models import Campaign
+from piloop.db.schema import CORE
 from piloop.db.session import (
     CAS_ATTRIBUTE,
     MIGRATIONS,
@@ -370,7 +372,7 @@ def test_a_database_at_a_revision_this_build_does_not_have_is_refused_and_left_a
     engine.dispose()
 
 
-TOO_OLD = tuple(Release(Version(0, minor, 0), MigrationRevision(f'000{minor}')) for minor in (1, 2, 3))
+TOO_OLD = tuple(Release(Version(0, minor, 0), {CORE: MigrationRevision(f'000{minor}')}) for minor in (1, 2, 3))
 """Releases for a piloop 0.4 that migrates from 0.3.0's head, 0003: a database at 0001 is two releases behind it."""
 
 
@@ -396,8 +398,8 @@ def test_a_database_older_than_the_previous_release_is_refused_and_left_as_it_wa
     )
     with pytest.raises(
         SchemaTooOld,
-        match=rf'^{re.escape(str(path))} is from {origin} \(schema revision {stamp}\), and this {this} migrates from'
-        rf' piloop 0\.3 \(schema revision 0003\) or newer: upgrade one release at a time: {steps}, then install this'
+        match=rf'^{re.escape(str(path))} is from {origin} \(schema revision core {stamp}\), and this {this} migrates from'
+        rf' piloop 0\.3 \(schema revision core 0003\) or newer: upgrade one release at a time: {steps}, then install this'
         r' piloop again and run `piloop upgrade`$',
     ):
         migrate(engine, cas=disk(tmp_path), backups=3, daemon=None)
@@ -440,15 +442,38 @@ def test_a_database_from_before_the_first_recorded_release_names_every_stop(
     engine = create_engine(f'sqlite:///{path}')
     with pytest.raises(
         SchemaTooOld,
-        match=r' is from a piloop before 0\.2 \(schema revision 0001\), .*: install piloop 0\.2 .*,'
+        match=r' is from a piloop before 0\.2 \(schema revision core 0001\), .*: install piloop 0\.2 .*,'
         r' then install piloop 0\.3 ',
     ):
         migrate(engine, cas=disk(tmp_path), backups=0, daemon=None)
     engine.dispose()
 
 
+LOCAL_MEMORY = 'memory/local'
+"""The schema of the built-in memory provider, a plugin's chain."""
+
+
+def test_a_plugin_chain_older_than_its_head_at_the_previous_release_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The floor holds for every chain that the previous release had, not for core's alone."""
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    command.upgrade(alembic_config(f'sqlite:///{path}', LOCAL_MEMORY, disk(tmp_path)), '0001')
+    engine = create_engine(f'sqlite:///{path}')
+    floor = Release(Version(0, 4, 0), {CORE: MigrationRevision(heads()[CORE]), LOCAL_MEMORY: MigrationRevision('0002')})
+    monkeypatch.setattr(session, 'RELEASES', (*TOO_OLD, floor))
+    with pytest.raises(
+        SchemaTooOld,
+        match=rf' is from piloop 0\.3 \(schema revision core {heads()[CORE]}, memory/local 0001\), and this .* migrates'
+        rf' from piloop 0\.4 \(schema revision core {heads()[CORE]}, memory/local 0002\) or newer: .*install piloop 0\.4 ',
+    ):
+        migrate(engine, cas=disk(tmp_path), backups=0, daemon=None)
+    engine.dispose()
+
+
 def test_the_floor_is_the_head_of_the_previous_minor_release() -> None:
-    """``RELEASES`` records each minor release's ``.0`` and its head, oldest first, and its newest is the floor.
+    """``RELEASES`` records each minor release and the head of each of its chains, oldest first; the newest is the floor.
 
     The release of ``X.Y.0`` records ``X.(Y-1).0`` (CONTRIBUTING.md, Release): at the version bump, this fails until it
     does. Until the next bump, the newest may be the version in ``pyproject.toml``, which is then released.
@@ -456,13 +481,17 @@ def test_the_floor_is_the_head_of_the_previous_minor_release() -> None:
     this = piloop_version()
     versions = [r.version for r in RELEASES]
     assert versions == sorted(versions) and all(v.patch == 0 for v in versions), 'X.Y.0 releases, oldest first'
-    chain = revisions()
-    assert all(r.head in chain for r in RELEASES), f'every head is a revision of {MIGRATIONS}'
-    positions = [chain.index(r.head) for r in RELEASES]
-    assert positions == sorted(positions), 'each head is after the head of the release before it'
+    assert all(CORE in r.heads for r in RELEASES), "every release has core's head"
+    for name, script in scripts().items():
+        chain = [r.revision for r in reversed(list(script.walk_revisions()))]
+        recorded = [r.heads[name] for r in RELEASES if name in r.heads]
+        assert all(head in chain for head in recorded), f'every head of {name} is a revision of its chain'
+        positions = [chain.index(head) for head in recorded]
+        assert positions == sorted(positions), f'each head of {name} is after the head of the release before it'
     previous = Version(this.major, this.minor - 1, 0)
     assert previous <= versions[-1] <= this, (
-        f'piloop {this} migrates from the head of piloop {previous}: add {previous} and its head to RELEASES'
+        f'piloop {this} migrates from the heads of piloop {previous}: add {previous} and the head of each chain to'
+        ' RELEASES'
     )
 
 
@@ -982,7 +1011,8 @@ def upgraded(config: dict[str, object]) -> object:
     """``config`` as revisions 0018 (``roles.implementer``), 0034 (no herdr), 0035 (no ``workdir``), 0036 (no Entire),
     0038 (a trigger's ``provider``), 0039 (the rules' limits), 0055 (the incident triggers), 0056 (``[[facts]]``),
     0057 (an inherited ``mcp``), 0061 (``plugins.memory``), 0063 (a harness's ``provider``), 0065 (the harnesses and
-    roles under ``plugins``) and 0066 (lists of names) store it, so that today's piloop reads it."""
+    roles under ``plugins``), 0066 (lists of names) and 0067 (``billing_usd``) store it, so that today's piloop reads
+    it."""
     roles = config.get('roles')
     if isinstance(roles, dict) and 'worker' in roles:
         roles['implementer'] = roles.pop('worker')
@@ -998,7 +1028,8 @@ def upgraded(config: dict[str, object]) -> object:
     config = revisions.get_revision('0061').module.upgraded(config)
     config = revisions.get_revision('0063').module.upgraded(config)
     config = revisions.get_revision('0065').module.moved(config)
-    return revisions.get_revision('0066').module.upgraded(config)
+    config = revisions.get_revision('0066').module.upgraded(config)
+    return revisions.get_revision('0067').module.upgraded(config)
 
 
 def test_0012_leaves_the_cached_input_out_of_the_input_of_codex_rows_and_downgrades(tmp_path: Path) -> None:
@@ -2654,7 +2685,7 @@ def test_0056_makes_spend_a_command_source_of_facts_its_latest_reading_events_an
                 | loads(con.execute(configs).fetchone()[0])
             )
         )
-        assert len(stored.fact_sources()) == 3, 'the upgraded config loads'
+        assert len(stored.fact_sources()) == 4, 'the upgraded config loads, with the spend source of 0067'
     command.downgrade(cfg, '0055')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         assert con.execute('SELECT spend_usd, spend_error, spend_at FROM campaigns ORDER BY id').fetchall() == [
@@ -2862,3 +2893,143 @@ def test_0066_names_the_instances_of_the_lists_of_triggers_sections_and_facts_an
         assert [loads(c) for (c,) in con.execute(stored)] == [old, {'plugins': {'role': {'scout': {}}}}], (
             'each list back as entries, the tables gone; a list that was not set stays unset'
         )
+
+
+def test_0067_reports_the_spend_of_a_command_source_as_billing_usd_which_the_spend_source_sums_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    """A command source that reports ``spend`` would clash with the ``spend`` sum: it reports ``billing_usd``, as the
+    ``[spend]`` bridge writes it, and the ``spend`` source sums it."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0066')
+    wrapped = [*WRAPPER_0056, 'cat', 'bill']
+    of_0056 = {  # as 0056 then 0066 store a [spend]: the source is named after its provider
+        'plugins': {
+            'fact_source': {
+                'use': ['campaign', 'optimization', 'command'],
+                'command': {'command': wrapped, 'metrics': ['spend'], 'interval': 60, 'notices': {'spend': [5]}},
+            },
+            'stop_rule': {'provider': 'limits', 'hold_at': {'spend': 10}},
+        }
+    }
+    named_spend = {  # as the guide of the time wrote it, with the result line of the bridge before 0.4.0
+        'plugins': {
+            'fact_source': {
+                'use': ['campaign', 'spend'],
+                'spend': {'provider': 'command', 'command': [*spend_wrapper('spend'), 'x'], 'metrics': ['spend']},
+            }
+        }
+    }
+    summing = {  # a spend table of its own: the bill joins its facts, or its default facts
+        'plugins': {
+            'fact_source': {
+                'use': ['own', 'spend'],
+                'own': {'provider': 'command', 'command': ['true'], 'metrics': ['spend', 'gpu_hours']},
+                'spend': {'facts': ['compute_usd']},
+            }
+        }
+    }
+    defaults = {
+        'plugins': {
+            'fact_source': {
+                'use': ['own', 'spend'],
+                'own': {'provider': 'command', 'command': ['true'], 'metrics': ['spend']},
+                'spend': {},
+            }
+        }
+    }
+    other = {'plugins': {'fact_source': {'use': ['g'], 'g': {'provider': 'command', 'metrics': ['gpu_hours']}}}}
+    configs = (of_0056, named_spend, summing, defaults, other, {})
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for n, config in enumerate(configs):
+            con.execute(
+                'INSERT INTO campaigns (name, path, config) VALUES (?, ?, ?)', (f'c{n}', f'/c{n}', dumps(config))
+            )
+    stored = 'SELECT config FROM campaigns ORDER BY id'
+    command.upgrade(cfg, '0067')
+    billed = [*deprecated.SPEND_COMMAND, 'cat', 'bill']
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        found = [loads(c) for (c,) in con.execute(stored)]
+    assert found == [
+        {
+            'plugins': {
+                'fact_source': {
+                    'use': ['campaign', 'optimization', 'command', 'spend'],
+                    'command': {
+                        'command': billed,
+                        'metrics': ['billing_usd'],
+                        'interval': 60,
+                        'notices': {'billing_usd': [5]},
+                    },
+                    'spend': {'facts': ['billing_usd']},
+                },
+                'stop_rule': {'provider': 'limits', 'hold_at': {'spend': 10}},
+            }
+        },
+        {
+            'plugins': {
+                'fact_source': {
+                    'use': ['campaign', 'billing', 'spend'],
+                    'billing': {
+                        'provider': 'command',
+                        'command': [*deprecated.SPEND_COMMAND, 'x'],
+                        'metrics': ['billing_usd'],
+                    },
+                    'spend': {'facts': ['billing_usd']},
+                }
+            }
+        },
+        {
+            'plugins': {
+                'fact_source': {
+                    'use': ['own', 'spend'],
+                    'own': {'provider': 'command', 'command': ['true'], 'metrics': ['billing_usd', 'gpu_hours']},
+                    'spend': {'facts': ['compute_usd', 'billing_usd']},
+                }
+            }
+        },
+        {
+            'plugins': {
+                'fact_source': {
+                    'use': ['own', 'spend'],
+                    'own': {'provider': 'command', 'command': ['true'], 'metrics': ['billing_usd']},
+                    'spend': {'facts': ['compute_usd', 'models_usd', 'billing_usd']},
+                }
+            }
+        },
+        other,
+        {},
+    ]
+    loaded = CampaignConfig.model_validate(
+        {
+            'name': 'a',
+            'evaluate': ['true'],
+            'metrics': [{'name': 'score', 'direction': 'higher', 'role': 'primary'}],
+            'plugins': {**found[0]['plugins'], 'harness': {'pi': {'model': 'm'}}},
+        }
+    )
+    assert len(loaded.fact_sources()) == 4, 'the upgraded config loads'
+    command.downgrade(cfg, '0066')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        back = [loads(c) for (c,) in con.execute(stored)]
+    of_0056['plugins']['fact_source']['command']['command'] = [*spend_wrapper('spend'), 'cat', 'bill']
+    named_spend['plugins']['fact_source'] = {
+        'use': ['campaign', 'billing'],
+        'billing': named_spend['plugins']['fact_source']['spend'],
+    }
+    defaults['plugins']['fact_source']['spend'] = {'facts': ['compute_usd', 'models_usd']}
+    assert back == [of_0056, named_spend, summing, defaults, other, {}], (
+        'spend again, out of the sum, and the spend source out of use when it sums nothing else; a source keeps the'
+        ' name billing, and a wrapper the result line'
+    )
+
+
+WRAPPER_0056 = ['sh', '-c', 'out=$("$@") && printf "METRIC spend=%s\\n" "$out"', 'sh']
+"""The wrapper that revision 0056 stored for a ``[spend] command``."""
+
+
+def spend_wrapper(fact: str) -> list[str]:
+    """The wrapper of a ``[spend] command`` that reports its number as ``fact`` on the result line."""
+    printed = f'out=$("$@") && printf \'{{"metrics": {{"{fact}": %s}}}}\\n\' "$out" >> "$PILOOP_RESULT_FILE"'
+    return ['sh', '-c', printed, 'sh']

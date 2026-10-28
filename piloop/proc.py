@@ -39,7 +39,7 @@ PILOOP_ARGV = (sys.executable, '-P', '-m', 'piloop')
 campaign's worktree, and its own ``json.py`` or ``piloop/`` would otherwise shadow piloop's imports."""
 
 
-@deprecated.until('0.4.0', 'METRIC lines on stdout: delete Channel, Sample.channel and the METRIC_LINES branches')
+@deprecated.until('0.5.0', 'METRIC lines on stdout: delete Channel, Sample.channel and the METRIC_LINES branches')
 class Channel(StrEnum):
     """How a command that piloop reads reported its results."""
 

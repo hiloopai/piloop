@@ -292,17 +292,17 @@ def record(
 
 
 @deprecated.until(
-    '0.4.0', 'METRIC lines on stdout: delete MetricLinesNoted and note_metric_lines, and retire evaluator.metric_lines'
+    '0.5.0', 'METRIC lines on stdout: delete MetricLinesNoted and note_metric_lines, and retire evaluator.metric_lines'
 )
 class MetricLinesNoted(EventModel):
-    """The daemon told the human that an evaluator reports through ``METRIC`` lines, which 0.4.0 removes."""
+    """The daemon told the human that an evaluator reports through ``METRIC`` lines, which 0.5.0 removes."""
 
     READ_BY: ClassVar[ReadBy] = ReadBy.READERS
     kind: Literal['evaluator.metric_lines'] = 'evaluator.metric_lines'
     evaluator: EvaluatorId
 
 
-@deprecated.until('0.4.0', 'METRIC lines on stdout: delete note_metric_lines and its call')
+@deprecated.until('0.5.0', 'METRIC lines on stdout: delete note_metric_lines and its call')
 def note_metric_lines(s: Session, campaign_id: CampaignId, evaluator_id: EvaluatorId) -> None:
     """Post one inbox note for each evaluator that still reports through ``METRIC`` lines. The caller commits."""
     on = TargetRef(TargetKind.CAMPAIGN, campaign_id)
@@ -310,7 +310,7 @@ def note_metric_lines(s: Session, campaign_id: CampaignId, evaluator_id: Evaluat
         return
     emit(s, MetricLinesNoted(evaluator=evaluator_id), on, System.DAEMON)
     body = (
-        'The evaluate command prints METRIC lines, which piloop reads until 0.4.0. Write one JSON line to '
+        'The evaluate command prints METRIC lines, which piloop reads until 0.5.0. Write one JSON line to '
         '$PILOOP_RESULT_FILE instead: https://piloop.autoresearch.inc/concepts/campaigns#the-evaluate-command'
     )
     s.add(Comment(target=on, author=System.DAEMON, kind=CommentKind.NOTE, priority=1, body=body))
