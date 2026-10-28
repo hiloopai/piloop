@@ -314,7 +314,7 @@ def restore_session(
         if brief is None:
             raise LookupError(f'the CAS lacks the resumed brief {resume.brief}')
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        path.write_bytes(job.harness.relocated(data, cwd))
         (site.log_dir(job) / BRIEF_FILE).write_bytes(brief)
     except Exception as e:  # a missing or broken blob, a full disk: the agent starts anew, and its report says why
         span.event(SESSION_UNRESTORED, agent_session=job.agent_session, error=f'{type(e).__name__}: {e}')

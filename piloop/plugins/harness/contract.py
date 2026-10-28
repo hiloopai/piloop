@@ -254,6 +254,14 @@ class Harness(Parameters):
         """
         return None
 
+    def relocated(self, session: bytes, cwd: Path) -> bytes:
+        """The bytes of a session file from the CAS, as ``resume`` continues them in ``cwd``: by default, unchanged.
+
+        Raises:
+            ValueError: The bytes are no session file of this harness.
+        """
+        return session
+
     @classmethod
     def messages(cls, lines: list[str]) -> str:
         """What ``piloop agent messages --harness <provider>`` prints for the messages it takes: by default, one a line.

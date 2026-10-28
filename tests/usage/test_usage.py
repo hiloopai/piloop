@@ -130,24 +130,40 @@ def test_sessions_are_found_under_the_home_that_the_harness_variable_names(
     assert reader_of(harness).session_file(session_id, CWD) == path
 
 
-@pytest.mark.parametrize(('harness', 'session_id'), [('claude', CLAUDE_ID), ('codex', CODEX_ID)])
+@pytest.mark.parametrize(('harness', 'session_id'), [('pi', PI_ID), ('claude', CLAUDE_ID), ('codex', CODEX_ID)])
 def test_a_session_written_back_where_its_provider_restores_it_is_found_and_read_as_the_harness_left_it(
     harness: str, session_id: str, home: Path
 ) -> None:
     left = store(home, harness, session_id, cwd=Path('/another/machine/worktree'))
     usage = reader_of(harness).read(session_id, None, None)
-    path = each_provider()[harness].restore(session_id, CWD)
+    provider = each_provider()[harness]
+    path = provider.restore(session_id, CWD)
     assert path is not None and path.is_relative_to(home) and not path.exists()
     path.parent.mkdir(parents=True)
-    path.write_bytes(left.read_bytes())
+    path.write_bytes(provider.relocated(left.read_bytes(), CWD))
     left.unlink()
     assert reader_of(harness).session_file(session_id, CWD) == path, 'what the snapshots and the usage find'
     assert reader_of(harness).read(session_id, CWD, None) == usage
 
 
-def test_pi_and_a_custom_harness_restore_no_session() -> None:
-    assert each_provider()['pi'].restore(PI_ID, CWD) is None
-    assert Custom(executable='x', headless=['{prompt}']).restore(PI_ID, CWD) is None
+def test_pi_continues_a_session_written_back_in_the_cwd_of_its_header_so_the_header_takes_the_new_one() -> None:
+    """pi runs in the cwd of the session's header, and refuses one that is gone (measured with pi 0.99.2)."""
+    left = (SESSIONS / 'pi.jsonl').read_bytes()
+    moved = each_provider()['pi'].relocated(left, CWD.parent / 'elsewhere')
+    header, rest = moved.split(b'\n', 1)
+    assert header == (
+        b'{"type":"session","version":3,"id":"01a084b5-ae5b-7113-9a8e-45c738e0ecfb",'
+        b'"timestamp":"2026-09-09T05:48:14.300Z","cwd":"/home/me/.piloop/runs/10/elsewhere"}'
+    )
+    assert rest == left.split(b'\n', 1)[1], 'every entry after the header as pi wrote it'
+    with pytest.raises(ValueError, match='no session header'):
+        each_provider()['pi'].relocated(b'{"type":"message"}\n', CWD)
+
+
+def test_a_custom_harness_restores_no_session_and_leaves_its_bytes_alone() -> None:
+    custom = Custom(executable='x', headless=['{prompt}'])
+    assert custom.restore(PI_ID, CWD) is None
+    assert custom.relocated(b'anything', CWD) == b'anything'
 
 
 def test_the_usage_since_a_resume_is_the_difference() -> None:

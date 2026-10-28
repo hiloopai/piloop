@@ -222,7 +222,7 @@ class SweepRole(RoleConfig):
     continuity: Continuity = Continuity.FRESH
     """``fresh``: each agent starts a new harness session. ``resume``: each agent continues the session of the role's
     last agent, written back from the CAS, so it remembers what the agents before it did. The harness needs
-    ``resume``, and a provider that restores its session files (``Harness.restore``): ``claude`` and ``codex``."""
+    ``resume``, and a provider that restores its session files (``Harness.restore``): every built-in one does."""
     incident_prompt: str | None = None
     """A file that follows ``prompt`` in the brief of an incident sweep, a sweep that got incidents from a
     trigger that investigates, such as ``run_failed``: a path relative to the repo root, or an absolute path. When unset, the role's own (the watchdog's

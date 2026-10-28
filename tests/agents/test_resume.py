@@ -1,5 +1,6 @@
 """A role with ``continuity = "resume"``: each agent continues the last agent's harness session, from the CAS."""
 
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -151,6 +152,62 @@ def test_each_agent_resumes_the_last_session_with_only_the_new_brief_and_counts_
     assert (started(db, third).resumes, not_resumed(db, third)) == (second, []), 'a resume that ended well goes on'
 
 
+PI_SESSION = SESSIONS / 'pi.jsonl'
+PI_HARNESS = {
+    'provider': 'pi',
+    'home': '~/pi-home',
+    'headless': ['--session-id', '{session_id}', '{prompt}'],
+    'resume': ['--session-id', '{session_id}', '{prompt}'],
+}
+"""The ``pi`` provider over the test script: it reads and restores pi session files under ``~/pi-home``."""
+
+
+def pi_harness(tmp_path: Path) -> str:
+    """pi's ``--session-id``: it continues the session of that id under the folder of its cwd, else starts one.
+
+    As pi does, it refuses a session whose header names another cwd. It keeps the brief that it read, by whether it
+    resumed.
+    """
+    lines = PI_SESSION.read_bytes().splitlines(keepends=True)
+    (tmp_path / 'head.jsonl').write_bytes(b''.join(lines[:5]))
+    (tmp_path / 'rest.jsonl').write_bytes(b''.join(lines[5:]))
+    return (
+        '#!/bin/sh\n'
+        'D="$HOME/pi-home/sessions/--$(pwd | sed \'s|^/||; s|[/:]|-|g\')--"\n'
+        'mkdir -p "$D"\n'
+        'F=$(ls "$D"/*_"$2".jsonl 2>/dev/null)\n'
+        'if [ -z "$F" ]; then\n'
+        f'  cp ../brief.md "{tmp_path}/brief-new.md"\n'
+        f'  sed "1s|\\"cwd\\":\\"[^\\"]*\\"|\\"cwd\\":\\"$(pwd)\\"|" {tmp_path / "head.jsonl"} > "$D/2026-09-09T05-48-14-300Z_$2.jsonl"\n'
+        'else\n'
+        '  head -1 "$F" | grep -qF "\\"cwd\\":\\"$(pwd)\\"" || exit 1\n'
+        f'  cp ../brief.md "{tmp_path}/brief-resumed.md"\n'
+        f'  cat {tmp_path / "rest.jsonl"} >> "$F"\n'
+        'fi\n'
+    )
+
+
+def test_a_pi_agent_resumes_the_last_session_on_another_worker_in_its_own_cwd(
+    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path, home: Path
+) -> None:
+    use_harness(db, campaign, pi_harness(tmp_path), **PI_HARNESS)
+    resuming(db, campaign)
+    first = wake(db, runtime, tmp_path, campaign)
+    one = agent_session(db, first)
+    assert one.state is AgentSessionState.EXITED and one.session_file is not None
+    sessions = home / 'pi-home' / 'sessions'
+    for folder in sessions.iterdir():
+        shutil.rmtree(folder)  # the next worker is another machine: only the CAS has the session
+
+    second = wake(db, runtime, tmp_path, campaign)
+    two = agent_session(db, second)
+    assert (two.state, two.error, not_resumed(db, second)) == (AgentSessionState.EXITED, None, [])
+    assert (started(db, second).resumes, two.session_id) == (first, one.session_id)
+    assert f'- news for watchdog#{second}' in (tmp_path / 'brief-resumed.md').read_text()
+    assert len(list(sessions.glob('*/*.jsonl'))) == 1, 'pi continued the file that piloop wrote back'
+    assert two.usage is not None and two.usage.turns == 1, 'the tokens after the resume'
+
+
 def home_cas_disk(db: Database) -> DiskCas:
     cas = home_cas(db)
     assert isinstance(cas, DiskCas)
@@ -235,7 +292,10 @@ def test_a_worker_that_cannot_restore_says_why_and_a_session_without_a_response_
         restored, resumed_start, outcome = jobs.restore_session(job, start, site, span)
         assert (restored.session_id, resumed_start.args, outcome) == ('s1', ['--resume', 's1'], jobs.Restored(None))
         cases = {
-            'the harness has no path': job.model_copy(update={'harness': Pi()}),
+            'the harness has no path': job.model_copy(update={'harness': None}),
+            'no session header': job.model_copy(
+                update={'harness': Pi(), 'resume': resume.model_copy(update={'file': cas.put(b'{"type":"message"}\n')})}
+            ),
             'the CAS lacks the resumed brief': job.model_copy(
                 update={'resume': resume.model_copy(update={'brief': Cid.of(b'never put')})}
             ),
@@ -244,4 +304,4 @@ def test_a_worker_that_cannot_restore_says_why_and_a_session_without_a_response_
             kept, same, failed = jobs.restore_session(broken, start, site, span)
             assert (kept, same) == (broken, start)
             assert isinstance(failed, jobs.Unrestored) and why in failed.reason
-    assert len(events(spans, jobs.SESSION_UNRESTORED)) == 2
+    assert len(events(spans, jobs.SESSION_UNRESTORED)) == 3

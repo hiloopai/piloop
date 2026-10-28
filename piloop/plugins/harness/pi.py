@@ -3,6 +3,7 @@
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import ClassVar
 
 from piloop.plugins.harness.contract import EFFORT, MCP, PROMPT, SESSION_ID, USER_CONFIG, Harness, McpArgs, McpLaunch
@@ -21,6 +22,7 @@ from piloop.plugins.host import ContractBroken
 from piloop.plugins.mcp_server.contract import McpServer
 from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.mcp_server.stdio import StdioServer
+from piloop.settings import expand_env
 from piloop.usage import ModelId
 
 ARGV = [
@@ -40,7 +42,8 @@ ARGV = [
     PROMPT,
 ]
 """The argv of a headless run, and of a resumed one: ``--session-id`` continues the session when it exists (verified
-with pi 0.99.2). There is no ``--session-dir``: the usage is read from pi's own store."""
+with pi 0.99.2), by the id in its header under the folder of the cwd. There is no ``--session-dir``: the usage is read
+from pi's own store."""
 ADAPTER = 'npm:pi-mcp-adapter@4.0.0'
 """Pinned, because version 5.0 turns pi's built-in MCP off in the user's own pi settings when it first starts: an
 agent would change how the user's pi works. The exclusive mode is in the adapter's code, not in its README.
@@ -163,3 +166,26 @@ class Pi(Harness):
         return JsonlSessions(
             f'{self.home}/sessions/{{cwd}}/*_{{session_id}}.jsonl', dash_separators_wrapped, tally, said
         )
+
+    def restore(self, session_id: str, cwd: Path) -> Path:
+        """A file under the session folder of ``cwd``, with a timestamped name.
+
+        ``--session-id`` finds it by the id in its header: the time says nothing (measured with pi 0.99.2).
+        """
+        name = f'sessions/{dash_separators_wrapped(cwd)}/2000-01-01T00-00-00-000Z_{session_id}.jsonl'
+        return Path(expand_env(f'{self.home}/{name}')).expanduser()
+
+    def relocated(self, session: bytes, cwd: Path) -> bytes:
+        """The session with ``cwd`` in its header, as pi's own ``--fork`` writes it.
+
+        pi runs a session in the cwd of its header, and refuses one that is gone (measured with pi 0.99.2).
+
+        Raises:
+            ValueError: The first line is no session header.
+        """
+        first, newline, rest = session.partition(b'\n')
+        header = json.loads(first)
+        if not isinstance(header, dict) or header.get('type') != 'session':
+            raise ValueError(f'the first line of the session file is no session header: {first[:80]!r}')
+        header['cwd'] = str(cwd)
+        return json.dumps(header, separators=(',', ':'), ensure_ascii=False).encode() + newline + rest
