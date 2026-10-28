@@ -19,11 +19,9 @@ from piloop.plugins.campaign_type.kit.evaluation.config import Track
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.harness.contract import Harness
 from piloop.plugins.role.contract import Files, SweepRole
+from piloop.plugins.section.contract import Guide, guides
 from piloop.plugins.vcs.contract import VCS, Vcs, prompted
 
-PROMPTS = Path(__file__).resolve().parent / 'prompts'
-PROCEDURES = 'sql_procedures.md'
-"""The database procedures of every role's brief."""
 PILOOP_HINT = '"$PILOOP_BIN"'
 """How a brief runs piloop: the worker sets ``PILOOP_BIN`` for every agent (``piloop.plugins.executor.kit.jobs.own_cli``)."""
 SQL_HINT = f'{PILOOP_HINT} sql'
@@ -152,7 +150,7 @@ def compose_brief(
     incident: bool = False,
     track: Track | None = None,
 ) -> str:
-    """Compose a brief: the role prompt, the campaign brief, the role's addendum, the database procedures, the context.
+    """Compose a brief: the role prompt, the campaign brief, the role's addendum, the role's guides, the context.
 
     A sweep also gets its role's incident or routine prompt after the role prompt: the incident prompt when it got
     anomalies (``incident``). An implementer also gets its track's addendum after the role's addendum. With several
@@ -169,19 +167,18 @@ def compose_brief(
         (repo / BRIEF_FILE).read_text().rstrip(),
         (repo / addendum).read_text().rstrip() if addendum else '',
         (repo / track.addendum).read_text().rstrip() if track is not None and track.addendum else '',
-        procedures(PROCEDURES, vcs, str(campaign.id), (track or cfg.all_tracks[0]).primary.name).rstrip(),
+        _guides(cfg.guides_of(role.kind), vcs, str(campaign.id), (track or cfg.all_tracks[0]).primary.name),
         _context(role, campaign, agent, reason, context, track),
     ]
     return '\n\n'.join(p for p in parts if p) + '\n'
 
 
-def procedures(name: str, vcs: Vcs, campaign_id: str, primary: str) -> str:
-    """The procedures in ``PROMPTS / name``, with ``campaign_id`` and its ``primary`` metric in their example queries.
-
-    ``piloop schema`` prints them without a campaign: the placeholders stay.
-    """
-    text = prompted((PROMPTS / name).read_text(), vcs)
-    return text.replace('<campaign id>', campaign_id).replace('<primary metric>', primary)
+def _guides(shown: dict[str, Guide], vcs: Vcs, campaign_id: str, primary: str) -> str:
+    """The role's guides under ``# Guides``, then the names of the others, which ``piloop schema`` prints."""
+    others = [name for name in guides() if name not in shown]
+    more = f'`{PILOOP_HINT} schema <guide>` prints another guide: {", ".join(others)}.' if others else ''
+    parts = [f'## {g.TITLE}\n\n{g.text(vcs, campaign_id, primary)}' for g in shown.values()]
+    return '\n\n'.join(['# Guides', *parts, more]).rstrip() if shown or more else ''
 
 
 def compose_resumed(role: Role, campaign: Campaign, agent: Agent, *, reason: str, context: str) -> str:

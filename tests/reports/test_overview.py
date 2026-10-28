@@ -280,6 +280,7 @@ ideas: 4 · attempts: 2 · reached the evaluator: 1 · measured: 1 · keeps: 1
     assert '  - agent_sessions(id, kind, campaign_id, run_id,' in tools, (
         'the schema is listed, so an agent does not need PRAGMA table_info'
     )
+    assert '  - leases(' not in tools and '  - evaluators(' not in tools, 'not the tables that only piloop reads'
 
 
 def test_stop_conditions_say_how_far_each_one_is(db: Database, campaign: Campaign) -> None:

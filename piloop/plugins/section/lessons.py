@@ -8,8 +8,8 @@ TITLE = 'What past campaigns on this repo concluded'
 INTRO = (
     "The current lesson of each mechanism family, from the newest campaign that tried it; those in this campaign's"
     ' metrics first, then related metrics; within them, dead or promising first, then the largest effects of each'
-    ' metric. Before you propose or build a mechanism, read more with the queries under "Remember past campaigns" in'
-    ' the procedures.'
+    ' metric. Before you propose or build a mechanism, read more with the queries of "Remember past campaigns"'
+    ' (`piloop schema past_campaigns`).'
 )
 
 

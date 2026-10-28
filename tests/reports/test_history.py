@@ -1,10 +1,14 @@
 """Tests for the history that an agent reads in its brief and that ``piloop history`` prints."""
 
+import re
+from pathlib import Path
+
 from inline_snapshot import snapshot
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.config import CampaignConfig
-from piloop.db.models import AgentSession, Campaign, Comment
+from piloop.db.models import AgentSession, Campaign, Comment, utcnow
 from piloop.db.session import Database
 from piloop.ids import CommentKind, Revision, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
@@ -13,16 +17,17 @@ from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.section.history import History
+from piloop.plugins.campaign_type.kit.runs.section.pack import Pack
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.reports.history import (
-    FINDINGS_IN_HISTORY,
-    FIRST_LINE_CHARS,
-    IDEAS_IN_HISTORY,
-    comment_line,
-    history,
-)
+from piloop.plugins.section.contract import Rendering, markdown
+from piloop.reports.history import FIRST_LINE_CHARS, comment_line, history, newest
+from piloop.reports.wake import cost
 from piloop.text import CELL_CHARS, cell
-from tests.conftest import spent
+from tests.conftest import cas_of, spent
+
+SHOWN = Pack()
+"""The research pack's default bounds."""
 
 
 def idea(
@@ -96,9 +101,14 @@ def render(db: Database, campaign: Campaign) -> str:
     return '\n'.join(compact(line) for line in raw(db, campaign).splitlines()) + '\n'
 
 
+def full(s: Session, campaign: Campaign, cfg: CampaignConfig) -> str:
+    """The history as the research pack shows it, with its default bounds."""
+    return history(s, campaign, cfg, ideas=newest(s, campaign, SHOWN.ideas), findings=SHOWN.campaign_findings)
+
+
 def raw(db: Database, campaign: Campaign) -> str:
     with db.session() as s:
-        return history(s, s.get_one(Campaign, campaign.id), CampaignConfig.model_validate(campaign.config))
+        return full(s, s.get_one(Campaign, campaign.id), CampaignConfig.model_validate(campaign.config))
 
 
 def compact(line: str) -> str:
@@ -177,30 +187,30 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
 
 def test_history_is_bounded_and_counts_what_it_omits(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
-        for n in range(IDEAS_IN_HISTORY + 3):
+        for n in range(SHOWN.ideas + 3):
             idea(s, campaign, f'idea {n}', IdeaStatus.READY)
-        for n in range(FINDINGS_IN_HISTORY + 2):
+        for n in range(SHOWN.campaign_findings + 2):
             comment(s, TargetKind.CAMPAIGN, campaign.id, f'finding {n}', author='research#1')
         s.commit()
     rendered = render(db, campaign)
     rows = [line for line in rendered.splitlines() if line.startswith('| ') and line.split(' | ')[0][2:].isdigit()]
-    assert rendered.startswith(f'### History: ideas ({IDEAS_IN_HISTORY} of {IDEAS_IN_HISTORY + 3}; 3 older omitted)')
+    assert rendered.startswith(f'### History: ideas ({SHOWN.ideas} of {SHOWN.ideas + 3}; 3 older omitted)')
     assert [r.split(' | ')[0] for r in rows[:2]] == ['| 4', '| 5'], 'the newest ideas are kept, the oldest dropped'
-    assert len(rows) == IDEAS_IN_HISTORY
+    assert len(rows) == SHOWN.ideas
     findings = [line for line in rendered.splitlines() if ' research#1: finding' in line]
-    assert findings[0].endswith(' research#1: finding 2') and len(findings) == FINDINGS_IN_HISTORY
+    assert findings[0].endswith(' research#1: finding 2') and len(findings) == SHOWN.campaign_findings
 
 
 def test_history_worst_case_stays_under_the_documented_size(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
         previous: Idea | None = None
-        for n in range(IDEAS_IN_HISTORY):
+        for n in range(SHOWN.ideas):
             links = (previous.id,) if previous is not None else ()
             row = idea(s, campaign, f'{n} ' + 't' * 200, IdeaStatus.REJECTED, 'h' * 200, after=links, supersedes=links)
             scored(s, row, 1, (Outcome.DISCARD, {'score': 0.123456, 'size': 1}, None))
             comment(s, TargetKind.IDEA, row.id, 'f' * 200)
             previous = row
-        for _ in range(FINDINGS_IN_HISTORY):
+        for _ in range(SHOWN.campaign_findings):
             comment(s, TargetKind.CAMPAIGN, campaign.id, '\n'.join(['r' * 79] * 30), author='research#1')
         s.commit()
     rendered = render(db, campaign)
@@ -245,3 +255,28 @@ def test_a_comment_is_its_id_and_first_line_and_counts_the_rest() -> None:
     assert line('  \n') == '- comment#7 research#1: —'
     assert line('done\nrejected: a\nrejected: b') == '- comment#7 research#1: done (+2 lines)'
     assert line('x' * 500) == f'- comment#7 research#1: {"x" * (FIRST_LINE_CHARS - 1)}…'
+
+
+def test_an_implementers_history_shows_its_family_then_the_keeps_then_the_newest_within_its_budget(
+    db: Database, campaign: Campaign
+) -> None:
+    with db.session() as s:
+        kin = idea(s, campaign, 'kin', family='cache')
+        kept = idea(s, campaign, 'kept', family='other')
+        scored(s, kept, 1, (Outcome.KEEP, {'score': 0.9, 'size': 1}, None))
+        for n in range(30):
+            idea(s, campaign, f'filler {n}', family='other')
+        mine = idea(s, campaign, 'mine', IdeaStatus.READY, family='cache')
+        scored(s, mine, 1, (Outcome.DISCARD, {'score': 0.1, 'size': 1}, None))
+        reader = s.scalars(select(AgentSession.id).where(AgentSession.run_id == mine.runs[0].id)).one()
+        s.commit()
+        p = s.get_one(Campaign, campaign.id)
+        section = History(budget=900, findings=0)
+        text = markdown([section], Rendering(s, utcnow(), p, Path('/no/workspace'), cas_of(s), reader=reader))
+        everything = markdown([History(budget=100_000)], Rendering(s, utcnow(), p, Path('/no/workspace'), cas_of(s)))
+    shown = [int(line.split('|')[1]) for line in text.splitlines() if re.match(r'\| \d+ ', line)]
+    assert shown[:2] == [kin.id, kept.id] and len(shown) < 32, 'its family and the keeps first, then what fits'
+    assert shown[2:] == list(range(mine.id - len(shown) + 2, mine.id)), 'then the newest, oldest first'
+    assert f'of 33; the family of idea#{mine.id}, the keeps, then the newest)' in text
+    assert cost(text.split('\n', 2)[2].splitlines()) <= section.budget
+    assert '| mine ' in everything and '(33 of 33)' in everything, 'a reader without a run sees every idea'

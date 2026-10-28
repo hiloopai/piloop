@@ -13,8 +13,8 @@ repo when a sweep that proposes work starts. ``piloop history`` prints it too. I
 
 The ideas by source and the open escalations are in the campaign overview, which every sweep also reads.
 
-The size is bounded. Each list keeps its latest rows, a comment is its first line, and files are pointers, not inlined
-content. On top of the history, the pack adds at most about 15 KB (about 4k tokens).
+The size is bounded. Each list keeps its latest rows, as many as ``Shown`` says, a comment is its first line, and files
+are pointers, not inlined content.
 """
 
 import heapq
@@ -24,6 +24,7 @@ from collections import defaultdict
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol
 
 from rich import box
 from rich.console import Console, Group, RenderableType
@@ -46,11 +47,9 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
 from piloop.plugins.campaign_type.kit.verdicts.judge import head
 from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
-from piloop.reports.history import BRIEF_WIDTH, comment_line, renderables as history, text_row, titled_table
+from piloop.reports.history import BRIEF_WIDTH, comment_line, newest, renderables as history, text_row, titled_table
 from piloop.text import HEADING, NONE, cell, metric
 
-ARTIFACTS_SHOWN = 12
-WORKSPACE_SHOWN = 10
 WALK_ENTRIES = 20_000
 """How much of the workspace the pack lists files from: a sweep's brief never waits for a walk of all of it."""
 OUTLINE_CHARS = 600
@@ -58,20 +57,57 @@ OUTLINE_CHARS = 600
 OUTLINE_LEVELS = 3
 MARKDOWN = ('.md', '.markdown')
 """The suffixes of the files that the pack outlines."""
-SEEDS_SHOWN = 20
 POINTERS_CHARS = 400
-FINDINGS_SHOWN = 8
-DIGESTS_SHOWN = 5
 OUTCOMES = (*Outcome, Origin.RECOVERED, Origin.SKIPPED, PENDING)
 """Labels of candidates (``verdict.label``), best first. The outcome of an idea is the first in this list that one of
 its candidates has."""
 
 
-def pack(s: Session, campaign: Campaign, cfg: CampaignConfig, *, workspace: Path | None) -> str:
+class Shown(Protocol):
+    """How many rows of each list the pack shows: the parameters of its section (``[plugins.section.pack]``)."""
+
+    @property
+    def ideas(self) -> int:
+        """The newest ideas in the history."""
+        ...
+
+    @property
+    def campaign_findings(self) -> int:
+        """The latest findings on the campaign, in the history."""
+        ...
+
+    @property
+    def findings(self) -> int:
+        """The latest findings of the implementers."""
+        ...
+
+    @property
+    def seeds(self) -> int:
+        """The oldest seeds that wait for research."""
+        ...
+
+    @property
+    def digests(self) -> int:
+        """The latest digests and decisions of the orchestrator and the human."""
+        ...
+
+    @property
+    def artifacts(self) -> int:
+        """The newest analysis artifacts."""
+        ...
+
+    @property
+    def workspace(self) -> int:
+        """The newest files of the shared workspace."""
+        ...
+
+
+def pack(s: Session, campaign: Campaign, cfg: CampaignConfig, *, workspace: Path | None, shown: Shown) -> str:
     """Render the pack as markdown for the brief of a sweep, with markdown tables and no colour."""
     out = io.StringIO()
     console = Console(file=out, width=BRIEF_WIDTH, color_system=None, force_terminal=False, legacy_windows=False)
-    console.print(Group(*renderables(s, campaign, cfg, table_box=box.MARKDOWN, heading='### ', workspace=workspace)))
+    parts = renderables(s, campaign, cfg, table_box=box.MARKDOWN, heading='### ', workspace=workspace, shown=shown)
+    console.print(Group(*parts))
     return '\n'.join(line.rstrip() for line in out.getvalue().splitlines()).strip() + '\n'
 
 
@@ -83,19 +119,21 @@ def renderables(
     table_box: box.Box,
     heading: str = '',
     workspace: Path | None,
+    shown: Shown,
 ) -> list[RenderableType]:
     """Build every section in reading order. ``heading='### '`` makes the titles markdown headings."""
+    ideas = newest(s, campaign, shown.ideas)
     return [
         _metrics(s, campaign, cfg, table_box, heading),
         Text(),
-        *_artifacts(campaign, cfg, workspace, heading),
+        *_artifacts(campaign, cfg, workspace, heading, shown),
         _families(s, campaign, table_box, heading),
         Text(),
-        *_seeds(s, campaign, heading),
-        *history(s, campaign, cfg, table_box=table_box, heading=heading),
+        *_seeds(s, campaign, heading, shown.seeds),
+        *history(s, campaign, cfg, table_box=table_box, heading=heading, ideas=ideas, findings=shown.campaign_findings),
         Text(),
-        *_agent_session_findings(s, campaign, cfg, heading),
-        *_digests(s, campaign, heading),
+        *_agent_session_findings(s, campaign, cfg, heading, shown.findings),
+        *_digests(s, campaign, heading, shown.digests),
     ]
 
 
@@ -152,7 +190,9 @@ def _metrics(s: Session, campaign: Campaign, cfg: CampaignConfig, table_box: box
     return table
 
 
-def _artifacts(campaign: Campaign, cfg: CampaignConfig, workspace: Path | None, heading: str) -> list[RenderableType]:
+def _artifacts(
+    campaign: Campaign, cfg: CampaignConfig, workspace: Path | None, heading: str, shown: Shown
+) -> list[RenderableType]:
     """List the analysis artifacts in ``context``, then the shared workspace, newest first.
 
     A pattern that matches no file is listed, so that a renamed report shows as missing instead of disappearing.
@@ -164,7 +204,7 @@ def _artifacts(campaign: Campaign, cfg: CampaignConfig, workspace: Path | None, 
         matches = [p for p in sorted(repo.glob(pattern)) if p.is_file()]
         missing += [] if matches else [pattern]
         found |= {str(p): p for p in matches}
-    lines = _file_lines(found, ARTIFACTS_SHOWN)
+    lines = _file_lines(found, shown.artifacts)
     lines += [Text(f'- {pattern}: matches no file in {repo}') for pattern in missing]
     if not cfg.context:
         lines = [Text('- None configured: `context` in piloop.toml lists them.')]
@@ -173,7 +213,7 @@ def _artifacts(campaign: Campaign, cfg: CampaignConfig, workspace: Path | None, 
     if workspace is not None and workspace.is_dir():
         files, cut = _recent(workspace, WALK_ENTRIES)
         title = f'{heading}Research pack: shared workspace (what agents left in ./workspace/; newest first)'
-        lines = _file_lines({f'./workspace/{p.relative_to(workspace)}': p for p in files}, WORKSPACE_SHOWN)
+        lines = _file_lines({f'./workspace/{p.relative_to(workspace)}': p for p in files}, shown.workspace)
         if cut:
             lines.append(Text(f'- (listed from the {WALK_ENTRIES:,} entries of the most recently changed directories)'))
         sections += [Text(title, style='bold'), *(lines or [Text('- Empty.')]), Text()]
@@ -285,13 +325,13 @@ def _outcome(idea: Idea) -> str:
     return next((str(v) for v in OUTCOMES if v in labels), str(idea.status))
 
 
-def _seeds(s: Session, campaign: Campaign, heading: str) -> list[RenderableType]:
+def _seeds(s: Session, campaign: Campaign, heading: str, count: int) -> list[RenderableType]:
     """List the seeds that wait for research, oldest first, with their author, base candidate and pointers."""
     rows = s.scalars(
         select(Idea)
         .where(Idea.campaign_id == campaign.id, Idea.status == IdeaStatus.SEED)
         .order_by(Idea.id)
-        .limit(SEEDS_SHOWN)
+        .limit(count)
     ).all()
     title = Text(f'{heading}Research pack: seeds to develop (oldest first)', style='bold')
     if not rows:
@@ -307,7 +347,9 @@ def _seeds(s: Session, campaign: Campaign, heading: str) -> list[RenderableType]
     return [title, *lines, Text()]
 
 
-def _agent_session_findings(s: Session, campaign: Campaign, cfg: CampaignConfig, heading: str) -> list[RenderableType]:
+def _agent_session_findings(
+    s: Session, campaign: Campaign, cfg: CampaignConfig, heading: str, count: int
+) -> list[RenderableType]:
     """List the latest findings of the agents that did runs."""
     by_runs = or_(*(Comment.author.startswith(f'{name}#', autoescape=True) for name in cfg.roles.doing_runs()))
     rows = s.scalars(
@@ -315,14 +357,14 @@ def _agent_session_findings(s: Session, campaign: Campaign, cfg: CampaignConfig,
         .join(Idea, (Comment.target_kind == TargetKind.IDEA) & (Comment.target_id == Idea.id))
         .where(Idea.campaign_id == campaign.id, Comment.kind == CommentKind.FINDING, by_runs)
         .order_by(Comment.id.desc())
-        .limit(FINDINGS_SHOWN)
+        .limit(count)
     ).all()
     title = Text(f'{heading}Research pack: latest implementer findings (newest first)', style='bold')
     lines = [comment_line(c, f'{c.author} on idea#{c.target_id}') for c in rows]
     return [title, *(lines or [Text('- None yet.')]), Text()]
 
 
-def _digests(s: Session, campaign: Campaign, heading: str) -> list[RenderableType]:
+def _digests(s: Session, campaign: Campaign, heading: str, count: int) -> list[RenderableType]:
     """List the latest findings and decisions of the orchestrator or a human."""
     rows = s.scalars(
         select(Comment)
@@ -333,7 +375,7 @@ def _digests(s: Session, campaign: Campaign, heading: str) -> list[RenderableTyp
             Comment.author != DAEMON_ACTOR,
         )
         .order_by(Comment.id.desc())
-        .limit(DIGESTS_SHOWN)
+        .limit(count)
     ).all()
     title = Text(f'{heading}Research pack: orchestrator and human digests and decisions (newest first)', style='bold')
     lines = [comment_line(c, f'{c.kind} by {c.author} on {c.target}') for c in rows]

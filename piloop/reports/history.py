@@ -9,11 +9,12 @@ The history has four parts:
 - The starting points: imported references that a pinned idea can start from.
 - The latest findings on the campaign, of every role, by id and first line.
 
-The size is bounded. 60 idea rows of about 250 characters and 10 findings of up to about 250 characters come to
-about 18 KB (about 4.5k tokens). Each kept candidate adds one line of about 200 characters.
+The caller bounds the size: it picks the ideas and the number of findings. An idea row is about 250 characters, a
+finding up to about 250, and each kept candidate adds one line of about 200.
 """
 
 import io
+from collections.abc import Sequence
 
 from rich import box
 from rich.console import Console, Group, RenderableType
@@ -38,8 +39,6 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict import label
 from piloop.text import NONE, cell, metric
 from piloop.usage import human
 
-IDEAS_IN_HISTORY = 60
-FINDINGS_IN_HISTORY = 10
 FAMILY_CHARS = 30
 FIRST_LINE_CHARS = 200
 """How much of a comment's first line a brief shows. The rest is a query away: ``comment#<id>`` names the row."""
@@ -49,19 +48,40 @@ SHORT_REVISION = 7
 """Enough of a revision to name it: a short commit SHA under ``git``."""
 
 
-def history(s: Session, campaign: Campaign, cfg: CampaignConfig) -> str:
+def newest(s: Session, campaign: Campaign, count: int) -> list[Idea]:
+    """The campaign's ``count`` newest ideas, oldest first."""
+    found = s.scalars(select(Idea).where(Idea.campaign_id == campaign.id).order_by(Idea.id.desc()).limit(count))
+    return list(found)[::-1]
+
+
+def history(
+    s: Session, campaign: Campaign, cfg: CampaignConfig, *, ideas: Sequence[Idea], findings: int, chosen: str = ''
+) -> str:
     """Render the history as markdown for an agent's brief, with markdown tables and no colour."""
     out = io.StringIO()
     console = Console(file=out, width=BRIEF_WIDTH, color_system=None, force_terminal=False, legacy_windows=False)
-    console.print(Group(*renderables(s, campaign, cfg, table_box=box.MARKDOWN, heading='### ')))
+    parts = renderables(
+        s, campaign, cfg, table_box=box.MARKDOWN, heading='### ', ideas=ideas, findings=findings, chosen=chosen
+    )
+    console.print(Group(*parts))
     text = out.getvalue()
     return '\n'.join(line.rstrip() for line in text.splitlines()).strip() + '\n'
 
 
 def renderables(
-    s: Session, campaign: Campaign, cfg: CampaignConfig, *, table_box: box.Box, heading: str = ''
+    s: Session,
+    campaign: Campaign,
+    cfg: CampaignConfig,
+    *,
+    table_box: box.Box,
+    heading: str = '',
+    ideas: Sequence[Idea],
+    findings: int,
+    chosen: str = '',
 ) -> list[RenderableType]:
-    """Build the ideas table, the kept lineage, the starting points and the last findings on the campaign.
+    """Build the table of ``ideas``, the kept lineage, the starting points and the last ``findings`` on the campaign.
+
+    ``ideas`` are in the order to show. ``chosen`` says how they were picked, in the table's title; empty: the newest.
 
     The agent brief (``history``, with ``heading='### '``) and ``piloop history`` use the same renderables.
 
@@ -72,9 +92,6 @@ def renderables(
     will never run.
     """
     tracks = cfg.all_tracks
-    ideas = s.scalars(
-        select(Idea).where(Idea.campaign_id == campaign.id).order_by(Idea.id.desc()).limit(IDEAS_IN_HISTORY)
-    ).all()[::-1]
     total = count(s, select(Idea).where(Idea.campaign_id == campaign.id))
     newer = superseded_by(s, [i.id for i in ideas])
     evaluator_id = campaign.evaluator_id
@@ -84,9 +101,9 @@ def renderables(
         .where(Comment.target == TargetRef(TargetKind.CAMPAIGN, campaign.id))
         .where(Comment.kind == CommentKind.FINDING, Comment.author.like('%#%'))
         .order_by(Comment.id.desc())
-        .limit(FINDINGS_IN_HISTORY)
+        .limit(findings)
     ).all()[::-1]
-    older = f'; {total - len(ideas)} older omitted' if total > len(ideas) else ''
+    older = chosen or (f'; {total - len(ideas)} older omitted' if total > len(ideas) else '')
     track_column = ['track'] if cfg.multitrack else []
     on = "its track's primary" if cfg.multitrack else tracks[0].primary.name
     ideas_table = titled_table(
@@ -145,7 +162,7 @@ def renderables(
             human(tokens) if tokens is not None else NONE,
             cell(c.summary or NONE),
         )
-    title = Text(f'{heading}History: findings on the campaign (last {FINDINGS_IN_HISTORY})', style='bold')
+    title = Text(f'{heading}History: findings on the campaign (last {findings})', style='bold')
     bodies = [comment_line(c, c.author) for c in campaign_findings]
     starts = _starting_points(s, campaign, cfg, table_box, heading)
     return [ideas_table, Text(), lineage, Text(), *starts, title, *bodies]

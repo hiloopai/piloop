@@ -11,6 +11,7 @@ from typing import ClassVar
 from pydantic import Field
 
 from piloop.plugins.role.contract import Continuity, Files, SweepRole, Verb
+from piloop.plugins.role.kit.guides import READER
 from piloop.plugins.section.contract import SectionName
 from piloop.plugins.trigger.contract import TriggerName
 
@@ -24,6 +25,7 @@ class OrchestratorRole(SweepRole):
             ('sql',),
             ('status',),
             ('history',),
+            ('schema',),
             ('journal',),
             ('cas', 'get'),
             ('restore',),
@@ -68,5 +70,7 @@ class OrchestratorRole(SweepRole):
         'journal lines',
         'ideas, seeds, verdicts and the campaign changes of the piloop commands in this brief',
     ]
-    sections: list[SectionName] | None = ['headline', 'trajectory', 'runs', 'queue', 'agents', 'candidates']
-    """The status that each brief shows after the news: lean, because each one stays in the resumed session."""
+    GUIDES = (*READER, 'priorities', 'links')
+    sections: list[SectionName] | None = [*GUIDES, 'headline', 'trajectory', 'runs', 'queue', 'agents', 'candidates']
+    """The guides, and the status that each brief shows after the news: lean, because each one stays in the resumed
+    session."""

@@ -33,7 +33,7 @@ from piloop.agents.results import (
     StartupAnomaly,
     WrapUp,
 )
-from piloop.agents.roles import PILOOP_HINT, SQL_HINT, Role, compose_brief, read_brief, role
+from piloop.agents.roles import PILOOP_HINT, SQL_HINT, Role, compose_brief, compose_resumed, read_brief, role
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.db.events import emit, in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, LeaseKind
@@ -211,6 +211,28 @@ def test_brief_is_role_prompt_campaign_brief_procedures_then_context(campaign: C
 - extra line
 """
     )
+
+
+def test_a_brief_has_its_roles_guides_before_the_context_and_names_the_others(campaign: Campaign, db: Database) -> None:
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        agent = Agent(role='research', session=7)
+        research = compose_brief(role_in(p, RESEARCH), p, agent, reason='timer', context='')
+        resumed = compose_resumed(role_in(p, RESEARCH), p, agent, reason='timer', context='')
+    guides = research[research.index('# Guides') : research.index('# Context')]
+    assert [line for line in guides.splitlines() if line.startswith('## ')] == [
+        '## Working with the piloop database',
+        '## The model',
+        '## Judge results',
+        '## Talk',
+        '## Search',
+        '## Remember past campaigns',
+        '## Link ideas',
+    ]
+    assert guides.rstrip().endswith(
+        f'`{PILOOP_HINT} schema <guide>` prints another guide: priorities, provenance, queries, orchestration.'
+    )
+    assert '# Guides' not in resumed, 'the resumed session has them already'
 
 
 def test_the_example_queries_of_a_brief_read_its_own_campaign_and_primary(campaign: Campaign, db: Database) -> None:

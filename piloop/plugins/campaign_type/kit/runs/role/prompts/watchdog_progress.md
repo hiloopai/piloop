@@ -25,8 +25,8 @@ worked, what did not, and whether the result can be trusted. Then write one esca
 the stop conditions, change them, or finish.
 
 Then leave the next campaign its lessons: one row of `lessons` on the campaign for each mechanism family
-(`ideas.family`) that this campaign tried. First read the lessons already on this repo (the procedures show how), and
-write one only where yours says something new:
+(`ideas.family`) that this campaign tried. First read the lessons already on this repo ("Remember past campaigns"
+shows how), and write one only where yours says something new:
 
 ```sql
 INSERT INTO lessons (campaign_id, family, status, effect, metric, body, created_by)

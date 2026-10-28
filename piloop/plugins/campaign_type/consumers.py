@@ -832,7 +832,8 @@ class Campaigns:
             ).all()
             role_pass = self._pass(s, campaign, cfg, agent_session.kind, table, now, left_now(s, campaign, cfg))
             sweep = SweepPass(**vars(role_pass), agent_session=agent_session)
-            rendering = Rendering(s, now, campaign, workspace_dir(self._home, campaign.id), self._controller.cas, given)
+            workspace = workspace_dir(self._home, campaign.id)
+            rendering = Rendering(s, now, campaign, workspace, self._controller.cas, given, reader=agent_session_id)
             lines = [
                 f'- Your cwd is a detached checkout of candidate#{base.id}, the head ({values}): read and run the'
                 ' code, try things. Nothing you commit here is scored or kept; it goes with the checkout when you end.',

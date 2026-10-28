@@ -10,4 +10,6 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evalu
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 
 TABLES = (Evaluator, Idea, IdeaLink, Run, Candidate, Measurement, Evaluation, Technique)
-SCHEMA = Schema(tables=TABLES, versions=Path(__file__).parent / 'migrations', triggers=on(TABLES))
+SCHEMA = Schema(
+    tables=TABLES, versions=Path(__file__).parent / 'migrations', triggers=on(TABLES), internal=(Evaluator,)
+)

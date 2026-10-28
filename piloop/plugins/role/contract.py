@@ -56,6 +56,7 @@ RELAYED: frozenset[Verb] = frozenset(
         ('candidate', 'import'),
         ('restore',),
         ('cas', 'get'),
+        ('schema',),
     }
 )
 """The commands that the prompts of the built-in roles name, besides the orchestrator's: what ``RoleConfig.RELAYED``
@@ -121,16 +122,21 @@ class RoleConfig(Parameters):
     """What the agents of this role may file with ``piloop idea``: ``nothing``, ``seeds`` or ``ideas``. The CLI
     refuses the rest."""
     sections: list[SectionName] | None = None
-    """What the briefs of this role show after the role's context: the names of sections, in order. When unset, every
-    installed section that a brief of this kind of role shows by default, in their order (``Section.SHOWN_IN``,
-    ``Section.ORDER``)."""
+    """What the briefs of this role show: the names of sections, in order. A guide goes before the role's context, and
+    every other section after it. When unset, the role's own guides, then every installed section that a brief of
+    this kind of role shows by default, in their order (``Section.SHOWN_IN``, ``Section.ORDER``)."""
 
     SURFACE: ClassVar[Surface]
     """Where the briefs of this kind of role show sections: the default of ``sections``."""
+    GUIDES: ClassVar[tuple[str, ...]] = ('database',)
+    """The guides that the role's agents use (``Guide``), in order: the head of ``sections`` when it is unset. A role
+    that does more extends its base's list. The others are a ``piloop schema <guide>`` away."""
 
     def shown(self) -> list[str]:
-        """The names of the sections of this role's briefs: its ``sections``, else the defaults of its surface."""
-        return defaults(self.SURFACE) if self.sections is None else self.sections
+        """The names of the sections of this role's briefs: its ``sections``, else its guides and its surface's."""
+        if self.sections is not None:
+            return self.sections
+        return list(dict.fromkeys([*self.GUIDES, *defaults(self.SURFACE)]))
 
 
 class ImplementerRole(RoleConfig):

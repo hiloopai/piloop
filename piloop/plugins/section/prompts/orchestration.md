@@ -1,5 +1,3 @@
-## The orchestrator's procedures
-
 These are for the orchestrator and the human. The agents' briefs leave them out.
 
 ### Link ideas that exist

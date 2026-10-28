@@ -50,17 +50,11 @@ When a job is slower than planned, report it in one of those `note`s. Never wait
   - an `escalation` on your idea when you need something that you cannot do or decide yourself (see below).
 - Do not change `runs`, `candidates`, `measurements`, other ideas or `agent_sessions`.
 
-Did you find something worth a run of its own, such as a loss your idea does not touch, or a mechanism you could not
-test here? Write it in your finding, in one line, with pointers to what you saw (ids, paths, the number). Research
-reads the implementers' findings against everything tried so far.
-You file no ideas or seeds: `idea add` and `idea seed` refuse an implementer.
-
 ## When you need the orchestrator
 
 A `note` is a log entry. It goes to no inbox, and nobody acts on it. Never ask for anything in a note.
 
-- When you need an action, an input or an approval that you cannot get yourself, write an `escalation` on your idea.
-  Give it a priority from 0 (urgent) to 4. The brief's context has the statement.
+- Give an escalation a priority from 0 (urgent) to 4. The brief's context has the statement.
 - The escalation goes to the inbox of the orchestrator and the human. Its answer is a `decision` on your idea.
 - Do not wait in a loop for the answer. Work on what does not need it. If you cannot go on without it, save what you
   have, leave your finding and stop.
@@ -88,10 +82,7 @@ after a tool call or when your current turn ends:
 `workspace/` is a copy of the campaign's shared workspace as it was when your run started. Its files are read-only:
 to change one, remove it and write it again. What you write there goes into the shared workspace when your run ends.
 
-Everything under `workspace/idea<your idea id>/` goes into piloop's artifact store when the idea is done. Its local
-copy is removed some days later, or sooner when the disk is short, and `piloop restore` brings it back for the runs
-that start after.
-`workspace/NOTES.md` and `workspace/research/` stay. So:
+`workspace/NOTES.md` and `workspace/research/` stay. Your idea's directory is archived (see the context), so:
 
 - Put what you produce there, large intermediate arrays included, never at the top level of the workspace.
 - Never copy the code tree into it. {vcs:old_files}

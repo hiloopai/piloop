@@ -146,6 +146,7 @@ class ScoutRole(SweepRole):
     """
 
     PROMPT = files(__package__) / 'prompts' / 'scout.md'
+    GUIDES = (*SweepRole.GUIDES, 'concepts', 'search')
     IDEAS: ClassVar[str] = (
         "- File a seed: `{piloop} idea seed {campaign} '<technique: its mechanism, one line>' --from '<link>; targets"
         " <the measured loss it might reduce, with its size>; <its substance: a number, code, an ablation>'`: research"

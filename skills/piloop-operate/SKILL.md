@@ -414,7 +414,7 @@ without a priority), out of the inbox.
 
 Every campaign that ever ran is in the database. `campaigns.repo` names the code that each campaign worked on, the same
 for every clone. Before you add an idea, and when an agent asks whether something was tried, query it. `piloop
-schema` ("Remember past campaigns") has every query: implementations to copy from any campaign, documents, the
+schema past_campaigns` has every query: implementations to copy from any campaign, documents, the
 session that worked a past idea.
 
 - Prior attempts on this repo, in every campaign, with what judged them. A discard under one evaluator is not dead

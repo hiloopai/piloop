@@ -10,6 +10,7 @@ from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterT
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.harness.contract import HarnessKey
 from piloop.plugins.role.contract import Files, Sweep, SweepRole
+from piloop.plugins.role.kit.guides import READER
 from piloop.plugins.trigger.contract import TriggerName
 
 
@@ -17,6 +18,7 @@ class ResearchRole(SweepRole):
     """``[plugins.role.research]``: research develops seeds and keeps ideas ready for the implementers."""
 
     PROMPT = files(__package__) / 'prompts' / 'research.md'
+    GUIDES = (*READER, 'search', 'past_campaigns', 'links')
 
     triggers: list[TriggerName] = ['low_water', 'seed', 'stalled']
     """A short backlog, a new seed, and a stall."""

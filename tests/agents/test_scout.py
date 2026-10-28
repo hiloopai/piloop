@@ -29,10 +29,10 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.trigger.cron import CronTrigger
-from piloop.reports.history import history
 from piloop.settings import Settings
 from tests.conftest import RESEARCH, SCOUT, SETTLE, ScriptRuntime, role_of, run_all, serving_api, write_toml
 from tests.daemon.test_triggers import add_ideas, agent_sessions, backdate, configure, occupy, scheduler
+from tests.reports.test_history import full
 from tests.reports.test_overview import overview
 
 PYTHON = shlex.quote(sys.executable)
@@ -134,7 +134,7 @@ def test_a_scout_sweep_reads_its_context_signs_as_a_scout_and_files_only_seeds_a
         assert '0 research, 1 scout, 0 watchdog; 0 of 0 ended research sweeps defined no idea' in overview(
             s, campaign_row, utcnow()
         )
-        assert 'scout#1: Problem statement: digits' in history(s, campaign_row, cfg)
+        assert 'scout#1: Problem statement: digits' in full(s, campaign_row, cfg)
 
 
 def test_sources_are_x_authors_and_github_repos() -> None:

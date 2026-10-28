@@ -5,7 +5,6 @@ from piloop.db.sql import schema_ddl
 from scripts.generate import ROOT, header
 
 PATH = ROOT / 'docs' / 'reference' / 'schema.mdx'
-REPO = 'https://github.com/hiloopai/piloop/blob/main'
 
 
 def generate() -> str:
@@ -18,8 +17,8 @@ description: The tables that piloop sql reads and writes.
 
 {header('the tables of core and of each plugin (`piloop.db.schema`)')}
 Every client reads and writes one SQLite database, `$PILOOP_HOME/piloop.db`. Run one statement with `piloop sql`.
-`piloop schema` prints the same tables with the conventions that agents follow. The agents' procedures are in
-[sql_procedures.md]({REPO}/piloop/agents/prompts/sql_procedures.md).
+`piloop schema` prints the same tables with the guides that agents follow, and `piloop schema <guide>` prints one
+guide.
 
 The indexes are part of the contract: they show which filters are cheap. The [data model](/reference/data-model)
 shows the same tables as a diagram. Each section is core's tables, or a plugin's that adds them

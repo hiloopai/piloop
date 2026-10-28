@@ -15,16 +15,8 @@ from piloop.plugins.campaign_type.kit.backlog.ideas import Yield, source, yields
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.role.contract import Files
-from piloop.reports.pack import (
-    ARTIFACTS_SHOWN,
-    DIGESTS_SHOWN,
-    FINDINGS_SHOWN,
-    OUTLINE_CHARS,
-    SEEDS_SHOWN,
-    WORKSPACE_SHOWN,
-    pack,
-)
-from tests.reports.test_history import comment, compact, idea, scored
+from piloop.reports.pack import OUTLINE_CHARS, pack
+from tests.reports.test_history import SHOWN, comment, compact, idea, scored
 from tests.test_actor import ACTORS
 
 JAN_1 = 1_767_225_600
@@ -48,7 +40,7 @@ def render(db: Database, campaign: Campaign, workspace: Path | None) -> str:
     """Render the pack with the Rich padding collapsed and the repo path shortened to ``<repo>``."""
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        text = pack(s, row, CampaignConfig.model_validate(row.config), workspace=workspace)
+        text = pack(s, row, CampaignConfig.model_validate(row.config), workspace=workspace, shown=SHOWN)
     return '\n'.join(compact(line) for line in text.replace(campaign.path, '<repo>').splitlines()) + '\n'
 
 
@@ -169,28 +161,28 @@ def test_an_empty_pack_says_what_is_missing(db: Database, campaign: Campaign, tm
 
 def test_the_pack_is_bounded(db: Database, campaign: Campaign, tmp_path: Path) -> None:
     repo = Path(campaign.path)
-    for n in range(ARTIFACTS_SHOWN + 2):
+    for n in range(SHOWN.artifacts + 2):
         write(repo / 'docs' / f'a{n:02}.md', '\n'.join(f'## heading {k} ' + 'x' * 60 for k in range(40)), n)
     workspace = tmp_path / 'workspace'
-    for n in range(WORKSPACE_SHOWN + 3):
+    for n in range(SHOWN.workspace + 3):
         write(workspace / f'w{n:02}.txt', 'x', n)
     configure(db, campaign, context=['docs/*.md'])
     with db.session() as s:
-        for n in range(max(SEEDS_SHOWN, FINDINGS_SHOWN) + 2):
+        for n in range(max(SHOWN.seeds, SHOWN.findings) + 2):
             row = idea(s, campaign, f'idea {n} ' + 't' * 200, IdeaStatus.SEED, provenance='p' * 500, family='f' * 80)
             comment(s, TargetKind.IDEA, row.id, '\n'.join(['w' * 79] * 30))
-        for _ in range(DIGESTS_SHOWN + 2):
+        for _ in range(SHOWN.digests + 2):
             note(s, campaign, 'orchestrator', CommentKind.FINDING, '\n'.join(['d' * 79] * 30))
         s.commit()
     text = render(db, campaign, workspace)
     assert '- … and 2 older files.' in text and '- … and 3 older files.' in text
-    assert f'<repo>/docs/a{ARTIFACTS_SHOWN + 1:02}.md' in text and '<repo>/docs/a00.md' not in text, 'newest first'
+    assert f'<repo>/docs/a{SHOWN.artifacts + 1:02}.md' in text and '<repo>/docs/a00.md' not in text, 'newest first'
     outlines = [line for line in text.splitlines() if line.startswith('  ## heading 0')]
-    assert len(outlines) == ARTIFACTS_SHOWN and all(len(line) == OUTLINE_CHARS + 2 for line in outlines)
-    assert text.count('- idea#') == SEEDS_SHOWN
+    assert len(outlines) == SHOWN.artifacts and all(len(line) == OUTLINE_CHARS + 2 for line in outlines)
+    assert text.count('- idea#') == SHOWN.seeds
     assert '- idea#1 by t: idea 0 ' in text, 'oldest first: research develops the seeds in the order they arrived'
-    assert text.count(' implementer#1 on idea#') == FINDINGS_SHOWN
-    assert text.count(' finding by orchestrator on campaign#') == DIGESTS_SHOWN
+    assert text.count(' implementer#1 on idea#') == SHOWN.findings
+    assert text.count(' finding by orchestrator on campaign#') == SHOWN.digests
     pack_only = (
         text.split('### History: ideas', 1)[0] + text.split('### History: findings on the campaign (last 10)', 1)[1]
     )

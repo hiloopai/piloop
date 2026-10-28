@@ -13,7 +13,6 @@ from rich.table import Table
 from rich.text import Text
 
 from piloop.actor import Actor
-from piloop.agents.roles import PROCEDURES, PROMPTS
 from piloop.cli import common, local
 from piloop.db import sql
 from piloop.db.schema import CORE
@@ -21,10 +20,8 @@ from piloop.db.session import Database, Stamps, backups, described, stamps
 from piloop.net import tokens
 from piloop.net.acting import OWNER, MayNotAct, acts_as
 from piloop.plugins.archive.local.store import ManifestNotMigrated, migrate_manifests
-from piloop.plugins.vcs.contract import VCS, prompted
-
-ORCHESTRATOR_PROCEDURES = 'sql_orchestrator.md'
-"""The procedures in ``PROMPTS`` that ``schema`` adds for the orchestrator. No brief has them."""
+from piloop.plugins.section.contract import SECTIONS, Guide, guides
+from piloop.plugins.vcs.contract import VCS
 
 
 def sql_cmd(
@@ -85,17 +82,25 @@ def _signer() -> Actor:
             raise SystemExit(f'sql error: {e}') from e
 
 
-def schema() -> None:
-    """Print the guide to the database: what `piloop sql` accepts, every procedure, and every table.
+def schema(*names: str) -> None:
+    """Print the guides to the database and every table, or only the guides that you name.
 
-    The procedures say what the default vcs provider writes in a brief: no campaign chooses one here.
+    A brief has the guides of its agent's role; this prints any guide, also one that no brief has, such as
+    `orchestration`. The examples name no campaign, and say what the default vcs provider writes.
+
+    Args:
+        names: The guides to print, such as `provenance` or `queries`. Without one, every guide, then every table.
     """
     vcs = VCS.selected({})
-    procedures = '\n\n'.join(
-        prompted((PROMPTS / name).read_text().strip(), vcs) for name in (PROCEDURES, ORCHESTRATOR_PROCEDURES)
-    )
-    text = f'{procedures}\n\n## Schema\n\n```sql\n{sql.schema_ddl()}\n```'
-    common.console.print(text, markup=False, highlight=False, soft_wrap=True)
+    found = SECTIONS.instances({})
+    installed = guides()
+    if unknown := [n for n in names if n not in installed]:
+        raise SystemExit(f'no guide {", ".join(unknown)}; the guides are {", ".join(installed)}')
+    shown = [found[n] for n in names or installed]
+    parts = [f'## {g.TITLE}\n\n{g.text(vcs)}' for g in shown if isinstance(g, Guide)]
+    if not names:
+        parts.append(f'## Schema\n\n```sql\n{sql.schema_ddl()}\n```')
+    common.console.print('\n\n'.join(parts), markup=False, highlight=False, soft_wrap=True)
 
 
 def _cell(value: object) -> str:

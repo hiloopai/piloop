@@ -1810,7 +1810,7 @@ def test_upgrade_reinstalls_migrates_and_restarts_the_daemon(
         cli_check(),
         f'ok    daemon: pid {pid} runs the installed {installed()}',
         f'ok    database: {common.settings.home}/piloop.db at schema {HEADS}, current',
-        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 3 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 1 notifier, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 21 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
+        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 3 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 1 notifier, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 32 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
         'ok    secrets: from `piloop secret set` (no secrets_command)',
         f'ok    skills (pi): current in {common.settings.agent_skills_dir}',
         'ok    harnesses: on PATH: none configured',
@@ -1838,7 +1838,7 @@ def test_upgrade_of_a_checkout_install_without_a_daemon_creates_the_schema(fake_
         cli_check(),
         'ok    daemon: not running',
         f'ok    database: {common.settings.home}/piloop.db at schema {HEADS}, current',
-        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 3 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 1 notifier, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 21 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
+        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 3 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 1 notifier, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 32 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
         'ok    secrets: from `piloop secret set` (no secrets_command)',
         f'ok    skills (Agent Skills): current in {common.settings.agent_skills_dir}',
         'ok    harnesses: on PATH: none configured',
@@ -1982,13 +1982,15 @@ def test_a_command_names_the_home_that_has_no_such_campaign(campaign_path: Path)
             run_cli(asked)
 
 
-def test_schema_prints_the_procedures_and_tables_pi_puts_in_its_sql_tool(out) -> None:
+def test_schema_prints_every_guide_and_the_tables_or_only_the_guides_named(out) -> None:
     run_cli(['schema'])
     text = out()
-    assert text.startswith('# Working with the piloop database') and 'CREATE TABLE comments (' in text
-    assert (
-        text.index('## Operating procedures') < text.index("## The orchestrator's procedures") < text.index('### Spend')
-    )
+    assert text.startswith('## Working with the piloop database') and 'CREATE TABLE comments (' in text
+    assert text.index('## The model') < text.index("## The orchestrator's procedures") < text.index('### Spend')
+    run_cli(['schema', 'provenance', 'search'])
+    assert out().startswith('## Provenance is automatic'), 'in the order named, without the tables'
+    with pytest.raises(SystemExit, match='^no guide nope; the guides are database, concepts'):
+        run_cli(['schema', 'nope'])
     assert 'i.campaign_id = <campaign id> ' in text, 'no campaign is chosen'
 
 

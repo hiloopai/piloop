@@ -65,7 +65,7 @@ from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.trigger.stopped import StoppedTrigger
 from piloop.plugins.trigger.news import NewsTrigger
 
-from piloop.plugins.section.contract import SECTIONS, Section, SectionName, Rendering, Surface
+from piloop.plugins.section.contract import SECTIONS, Guide, Section, SectionName, Rendering, Surface
 from piloop.api.views import Rendered, Block, Text, Lines, Figures, Figure, Table, Value
 from piloop.plugins.campaign_type.kit.verdicts.section.headline import Headline
 from piloop.plugins.section.goal import Goal
@@ -88,6 +88,17 @@ from piloop.plugins.section.incidents import Incidents
 from piloop.plugins.campaign_type.kit.runs.section.pack import Pack
 from piloop.plugins.campaign_type.kit.runs.section.history import History
 from piloop.plugins.section.lessons import Lessons
+from piloop.plugins.section.database import Database
+from piloop.plugins.campaign_type.optimization.section.concepts import Concepts
+from piloop.plugins.campaign_type.kit.verdicts.section.judging import Judging
+from piloop.plugins.section.comments import Comments
+from piloop.plugins.section.priorities import Priorities
+from piloop.plugins.section.search import Search
+from piloop.plugins.section.past_campaigns import PastCampaigns
+from piloop.plugins.campaign_type.kit.backlog.section.links import Links
+from piloop.plugins.section.provenance import Provenance
+from piloop.plugins.campaign_type.optimization.section.queries import Queries
+from piloop.plugins.section.orchestration import Orchestration
 
 from piloop.plugins.role.contract import ROLES, ImplementerRole, SweepRole
 from piloop.plugins.role.contract import Files, Continuity

@@ -15,7 +15,7 @@ Start from it. Query the database only to go deeper. Do not restate it.
 
 ## How to write
 
-The SQL is in the procedures below.
+The SQL is in the guides below.
 
 - Write an `escalation` when the orchestrator should decide or act. Give what happened, the evidence (ids, a log line, a
   number), the cause as far as you know it, and the one decision you need.

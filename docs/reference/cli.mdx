@@ -663,8 +663,13 @@ EOF
 
 ### piloop schema
 
-Prints what `piloop sql` accepts, the procedures for writing to the database, and every table. The orchestrator reads
-it before it writes. An agent's brief has the agents' part.
+```text
+piloop schema [GUIDE ...]
+```
+
+Prints every guide to the database, then every table. With names, it prints only those guides, such as
+`piloop schema provenance`. The orchestrator reads it before it writes. A brief has the guides of its agent's role, and
+names the others.
 
 ## The workspace archive
 

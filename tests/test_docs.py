@@ -37,7 +37,7 @@ SOURCES = [
     ROOT / 'AGENTS.md',
     ROOT / 'CONTRIBUTING.md',
     *sorted((ROOT / 'skills').rglob('SKILL.md')),
-    *sorted((ROOT / 'piloop' / 'agents' / 'prompts').glob('*.md')),
+    *sorted((ROOT / 'piloop').glob('**/section/prompts/*.md')),
 ]
 SNIPPET = re.compile(r"^import (?P<name>\w+) from '(?P<path>/snippets/[^']+)';$", re.MULTILINE)
 FENCE = re.compile(r'^(?P<indent>\s*)(?P<fence>`{3,}|~{3,})(?P<info>.*)$')

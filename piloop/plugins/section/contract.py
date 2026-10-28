@@ -17,12 +17,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, ClassVar
 
-from piloop.api.views import Rendered
+from piloop.api.views import Rendered, Text
+from piloop.ids import AgentSessionId
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.host import Capability, Many, Parameters, Pick, Scope, Use
+from piloop.plugins.vcs.contract import VCS, Vcs, prompted
 
 if TYPE_CHECKING:  # piloop.db.models types campaigns.config with the sections: only the annotations name the rows
     from sqlalchemy.orm import Session
@@ -49,6 +52,8 @@ class Rendering:
     """The home's CAS: the agents' sessions are there (``agent_sessions.session_file``)."""
     given: tuple[str, ...] = ()
     """The anomaly lines that the agent who reads got to investigate, in order. Empty for every other reader."""
+    reader: AgentSessionId | None = None
+    """The agent who reads, when the reader is an agent's brief: a section can show what is near its work."""
 
 
 class Surface(StrEnum):
@@ -79,6 +84,42 @@ class Section(Parameters, ABC):
     @abstractmethod
     def render(self, r: Rendering) -> Rendered | None:
         """Return the section now, or None when it has nothing to show: then the reader leaves it out."""
+
+
+CAMPAIGN_ID = '<campaign id>'
+"""Where a guide's example names the campaign. A brief fills it in, ``piloop schema`` leaves it."""
+PRIMARY = '<primary metric>'
+"""Where a guide's example names the primary metric. A brief fills it in, ``piloop schema`` leaves it."""
+
+
+class Guide(Section):
+    """A section of reference: how to do one thing with piloop, the same in every brief of a campaign.
+
+    A brief shows its role's guides before its context, in the order of the role's list. ``piloop schema`` prints
+    every installed guide, the ones that no brief shows included. The text is a markdown resource of the guide's
+    package, with ``{vcs:<part>}``, ``CAMPAIGN_ID`` and ``PRIMARY`` in it.
+    """
+
+    TITLE: ClassVar[str]
+    """The guide's heading."""
+    TEXT: ClassVar[Traversable]
+    """The guide's text, without its heading."""
+
+    def text(self, vcs: Vcs, campaign_id: str = CAMPAIGN_ID, primary: str = PRIMARY) -> str:
+        """The guide's text, with what ``vcs`` writes, the campaign's id and its primary metric filled in."""
+        text = prompted(self.TEXT.read_text().strip(), vcs)
+        return text.replace(CAMPAIGN_ID, campaign_id).replace(PRIMARY, primary)
+
+    def render(self, r: Rendering) -> Rendered:
+        cfg = r.campaign.config
+        text = self.text(VCS.selected(cfg.plugins), str(r.campaign.id), cfg.all_tracks[0].primary.name)
+        return Rendered(title=self.TITLE, blocks=(Text(text=text),))
+
+
+def guides() -> list[str]:
+    """Every installed guide, by ``ORDER`` and then by name."""
+    found = [(p.model.ORDER, name) for name, p in SECTIONS.providers().items() if issubclass(p.model, Guide)]
+    return [name for _, name in sorted(found)]
 
 
 def defaults(surface: Surface) -> list[str]:

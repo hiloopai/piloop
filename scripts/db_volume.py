@@ -21,11 +21,9 @@ from sqlalchemy import Engine, event, select
 from sqlalchemy.engine import Connection
 
 from piloop.actor import System
-from piloop.agents.roles import PROCEDURES, procedures
 from piloop.campaign import inbox
 from piloop.campaign.campaigns import BLANK, workspace_dir
 from piloop.campaign.stop import check, escalated
-from piloop.cli.database import ORCHESTRATOR_PROCEDURES
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.models import Campaign, utcnow
@@ -33,13 +31,16 @@ from piloop.db.session import Database
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.consumers import Campaigns
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.section.pack import Pack
 from piloop.plugins.executor.workers import Workers
-from piloop.plugins.section.contract import Rendering, rendered
+from piloop.plugins.section.contract import SECTIONS, Guide, Rendering, guides, rendered
 from piloop.plugins.stop_rule.contract import Hold
 from piloop.plugins.vcs.contract import VCS
 from piloop.reports import history
 
 ROOT = Path(__file__).resolve().parent.parent
+PACK = Pack()
+"""The research pack's default bounds, which the hot paths render with."""
 HOT_INDEXES = (
     'ix_ideas_campaign_status_priority',
     'ix_runs_status',
@@ -326,7 +327,16 @@ class HotPaths:
                     Rendering(s, utcnow(), p, workspace_dir(self._home, p.id), self._scheduler._controller.cas),
                 )
             ),
-            'history.renderables': each(lambda p, cfg: history.renderables(s, p, cfg, table_box=box.SIMPLE)),
+            'history.renderables': each(
+                lambda p, cfg: history.renderables(
+                    s,
+                    p,
+                    cfg,
+                    table_box=box.SIMPLE,
+                    ideas=history.newest(s, p, PACK.ideas),
+                    findings=PACK.campaign_findings,
+                )
+            ),
             'inbox.news': lambda: inbox.news(s, 0, party=System.ORCHESTRATOR.party),
         }
 
@@ -353,10 +363,13 @@ def hot_statements(db: Database, home: Path) -> list[Statement]:
 
 
 def documented_queries() -> list[tuple[str, str]]:
-    """Return the SELECTs in the ``sql`` fences of the procedures, each with its origin (``sql_procedures.md #1``)."""
+    """Return the SELECTs in the ``sql`` fences of the guides, each with its origin (``search #1``)."""
     queries = []
-    for name in (PROCEDURES, ORCHESTRATOR_PROCEDURES):
-        fences = re.findall(r'```sql\n(.*?)```', procedures(name, VCS.selected({}), '1', 'score'), flags=re.S)
+    found = SECTIONS.instances({})
+    for name in guides():
+        guide = found[name]
+        assert isinstance(guide, Guide)
+        fences = re.findall(r'```sql\n(.*?)```', guide.text(VCS.selected({}), '1', 'score'), flags=re.S)
         statements = (s.strip() for fence in fences for s in re.sub(r'^--.*$', '', fence, flags=re.M).split(';'))
         selects = [s for s in statements if s.upper().startswith('SELECT')]
         queries += [(f'{name} #{i}', sql) for i, sql in enumerate(selects, 1)]

@@ -423,7 +423,7 @@ class RunController:
                             cfg,
                             run,
                             base,
-                            Agent(role=run.role, session=agent_session_id).signature,
+                            Agent(role=run.role, session=agent_session_id),
                             timeout,
                         ),
                         track=cfg.track(idea.track),
@@ -1190,7 +1190,9 @@ class RunController:
                         idea.status = IdeaStatus.DONE
                 s.commit()
 
-    def _context(self, s: Session, cfg: CampaignConfig, run: Run, base: Candidate, author: str, timeout: float) -> str:
+    def _context(
+        self, s: Session, cfg: CampaignConfig, run: Run, base: Candidate, reader: Agent, timeout: float
+    ) -> str:
         """Return the implementer's context: its worktree, its time, the idea, its base, the comments on the idea and its runs, and its role's sections.
 
         A comment on a run is about the idea too. Examples are a human's decision during attempt 1, or a watchdog's
@@ -1198,6 +1200,7 @@ class RunController:
         context. All runs of the idea are included: the earlier attempts and this run, which can get comments while
         it is queued.
         """
+        author = reader.signature
         idea = run.idea
         track = cfg.track(idea.track)
         evaluator_id = idea.campaign.evaluator_id
@@ -1257,7 +1260,8 @@ class RunController:
             lines += ['', '### Plan', idea.plan.rstrip()]
         if comments:
             lines += ['', '## Comments on this idea and its runs', *(_comment_line(c) for c in comments)]
-        rendering = Rendering(s, utcnow(), idea.campaign, workspace_dir(self._home, idea.campaign.id), self.cas)
+        workspace = workspace_dir(self._home, idea.campaign.id)
+        rendering = Rendering(s, utcnow(), idea.campaign, workspace, self.cas, reader=reader.session)
         return '\n'.join([*lines, '', markdown(cfg.sections_of(RoleName(run.role)), rendering)])
 
 

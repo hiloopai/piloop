@@ -15,10 +15,10 @@ from pydantic import SecretStr
 from pytest_mock import MockerFixture
 from sqlalchemy import select
 
+import piloop
 from piloop.actor import Agent, System
-from piloop.agents.roles import IDEAS, PROCEDURES, PROMPTS, SQL_HINT
+from piloop.agents.roles import IDEAS, PILOOP_HINT, SQL_HINT
 from piloop.campaign.campaigns import checkout_of
-from piloop.cli.database import ORCHESTRATOR_PROCEDURES
 from piloop.cli.main import app
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
@@ -33,6 +33,7 @@ from piloop.plugins.executor.kit.relay import Relay, Runner
 from piloop.plugins.role.contract import RELAYED, Files
 from piloop.plugins.role.orchestrator import OrchestratorRole
 from piloop.plugins.runtime.contract import MESSAGES_ENV, QUEUE, put
+from piloop.plugins.section.contract import SECTIONS, Guide
 from piloop.proc import ACTOR_ENV
 from piloop.settings import Settings
 from tests.test_lease import agent_job
@@ -58,10 +59,24 @@ def commands(text: str) -> set[tuple[str, ...]]:
     return found
 
 
+GUIDES = {name: p.model for name, p in SECTIONS.providers().items() if issubclass(p.model, Guide)}
+"""Every built-in guide, by name."""
+ROLE_PROMPTS = sorted((Path(piloop.__file__).parent / 'plugins').glob('**/role/prompts/*.md'))
+"""The prompts of the built-in roles."""
+
+
 def test_an_agent_on_another_machine_may_run_the_commands_that_the_role_prompts_name_and_no_other() -> None:
-    """The allow-list is the prompts': a command that a prompt adds is relayed, and one that it drops is not."""
-    prompts = [p.read_text() for p in PROMPTS.glob('*.md') if p.name != ORCHESTRATOR_PROCEDURES]
-    briefs = [f'`{SQL_HINT} -`', *(line.format(piloop='piloop', campaign='demo') for line in IDEAS.values())]
+    """The allow-list is the prompts': a command that a prompt adds is relayed, and one that it drops is not.
+
+    The prompts are those of the roles and every guide that a brief can point to (``piloop schema <guide>``).
+    """
+    roles = [p.read_text() for p in ROLE_PROMPTS if p.name != 'orchestrator.md']
+    prompts = [*roles, *(guide.TEXT.read_text() for name, guide in GUIDES.items() if name != 'orchestration')]
+    briefs = [
+        f'`{SQL_HINT} -`',
+        f'`{PILOOP_HINT} schema <guide>`',
+        *(line.format(piloop='piloop', campaign='demo') for line in IDEAS.values()),
+    ]
     named = set().union(*(commands(text) for text in [*prompts, *briefs]))
     assert named == RELAYED
 
@@ -70,7 +85,8 @@ def test_an_orchestrator_on_another_machine_may_run_the_commands_that_its_brief_
     assert OrchestratorRole.PROMPT is not None
     texts = [
         OrchestratorRole.PROMPT.read_text(),
-        (PROMPTS / PROCEDURES).read_text(),
+        *(guide.TEXT.read_text() for name, guide in GUIDES.items() if name != 'orchestration'),
+        f'`{PILOOP_HINT} schema <guide>`',
         f'`{SQL_HINT} -`',
         IDEAS[Files.IDEAS].format(piloop='piloop', campaign='demo'),
     ]

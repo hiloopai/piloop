@@ -49,6 +49,9 @@ class Schema:
     triggers: tuple[Trigger, ...] = ()
     """The triggers on its tables. Its revisions create the persistent ones (``piloop.db.triggers.recreate``), and
     every connection creates the TEMP ones."""
+    internal: tuple[type[Base], ...] = ()
+    """Its tables that only piloop's own machinery reads, such as leases. A brief's list of tables leaves them out;
+    ``piloop schema`` prints them."""
 
 
 CORE_TABLES = (
@@ -66,7 +69,10 @@ CORE_TABLES = (
     Migration,
 )
 CORE_SCHEMA = Schema(
-    tables=CORE_TABLES, versions=Path(__file__).parent / 'migrations' / 'versions', triggers=on(CORE_TABLES)
+    tables=CORE_TABLES,
+    versions=Path(__file__).parent / 'migrations' / 'versions',
+    triggers=on(CORE_TABLES),
+    internal=(Lease, LeaseWorker, WorkerInstance, FirstTransfer, Limit, Secret, Token, Migration),
 )
 
 
@@ -133,3 +139,9 @@ def tables() -> list[Table]:
     """Every schema's tables, each after the tables that it references."""
     owned = {table.__tablename__ for schema in schemas().values() for table in schema.tables}
     return [t for t in Base.metadata.sorted_tables if t.name in owned]
+
+
+def agent_tables() -> list[Table]:
+    """The tables of ``tables`` that an agent reads: those that no schema calls ``internal``."""
+    internal = {table.__tablename__ for schema in schemas().values() for table in schema.internal}
+    return [t for t in tables() if t.name not in internal]

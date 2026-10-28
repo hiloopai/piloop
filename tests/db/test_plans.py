@@ -33,7 +33,7 @@ HOT_PATHS = {
     'stop.check',
     'status.sections',
     'history.renderables',
-    'sql_procedures.md #1',
+    'search #1',
     'inbox.news',
 }
 

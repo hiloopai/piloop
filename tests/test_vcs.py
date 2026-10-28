@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 import piloop
-from piloop.agents.roles import PROMPTS
 from piloop.plugins.section.tools import TOOLS
 from piloop.plugins.vcs.contract import PART, VCS, Part, prompted
 from piloop.plugins.vcs.git import PROMPTS as GIT_PROMPTS
@@ -85,8 +84,9 @@ def test_the_allowed_files_still_need_their_exception() -> None:
         assert needed, f'{rel} no longer reaches git so: change or delete it in ALLOWED'
 
 
-BUILT_IN = sorted([*PROMPTS.glob('*.md'), *(Path(piloop.__file__).parent / 'plugins').glob('**/role/prompts/*.md')])
-"""The built-in prompts: the briefs' own, and those of the built-in roles, core's and each component's."""
+PLUGINS = Path(piloop.__file__).parent / 'plugins'
+BUILT_IN = sorted([*PLUGINS.glob('**/section/prompts/*.md'), *PLUGINS.glob('**/role/prompts/*.md')])
+"""The built-in prompts: the guides, and those of the built-in roles, core's and each component's."""
 
 
 def test_every_built_in_provider_writes_every_part() -> None:

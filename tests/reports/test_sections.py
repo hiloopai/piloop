@@ -15,8 +15,8 @@ from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.host import Scope
-from piloop.plugins.role.contract import ImplementerRole
-from piloop.plugins.section.contract import SECTIONS, Rendering, Section, Surface, defaults, markdown
+from piloop.plugins.role.contract import ROLES, ImplementerRole
+from piloop.plugins.section.contract import SECTIONS, Guide, Rendering, Section, Surface, defaults, guides, markdown
 from piloop.plugins.stop_rule.contract import STOP_RULES
 from tests.campaign.test_stop import add_run
 from tests.conftest import cas_of
@@ -114,7 +114,7 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
     assert defaults(Surface.SWEEP) == ['lessons', 'incidents', *overview, 'tools', 'pack']
     assert defaults(Surface.RUN) == ['lessons', 'history']
-    assert ImplementerRole().shown() == ['lessons', 'history']
+    assert ImplementerRole().shown() == ['database', 'lessons', 'history'], 'its guides first'
 
 
 def test_the_funnel_shows_how_far_the_attempts_got_and_where_the_others_ended(db: Database, campaign: Campaign) -> None:
@@ -183,3 +183,53 @@ evaluations (size): 5 · per evaluation: 2.5 · without the evaluator: 407.3 · 
 
 spend: 412.3 · per keep: 412.3 · since the latest keep: 0\
 """)
+
+
+class Units(Guide):
+    """A package's guide for every sweep."""
+
+    TITLE = 'Units'
+    TEXT = Path(__file__)
+    SHOWN_IN = frozenset({Surface.SWEEP})
+
+
+@pytest.fixture
+def units(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    installed(monkeypatch, [EntryPoint('units', f'{__name__}:Units', SECTIONS.group)])
+    yield
+    forget_loaded()
+
+
+def test_each_role_has_guides_of_its_own_that_extend_a_shared_list() -> None:
+    shown = {name: [n for n in p.model().shown() if n in guides()] for name, p in ROLES.providers().items()}
+    assert shown == snapshot(
+        {
+            'implementer': ['database'],
+            'orchestrator': ['database', 'concepts', 'judging', 'comments', 'priorities', 'links'],
+            'research': ['database', 'concepts', 'judging', 'comments', 'search', 'past_campaigns', 'links'],
+            'scout': ['database', 'concepts', 'search'],
+            'watchdog': ['database', 'concepts', 'judging', 'comments', 'priorities', 'search', 'past_campaigns'],
+        }
+    )
+    assert not any(SECTIONS.providers()[n].model.SHOWN_IN for n in guides()), (
+        'a built-in guide goes where a role names it'
+    )
+
+
+@pytest.mark.usefixtures('units')
+def test_a_packages_guide_shows_in_every_role_of_its_surface_after_the_roles_own() -> None:
+    sweeps = {name: p.model().shown() for name, p in ROLES.providers().items() if p.model.SURFACE is Surface.SWEEP}
+    assert {name: 'units' in shown for name, shown in sweeps.items()} == {
+        'orchestrator': False,
+        'research': True,
+        'scout': True,
+        'watchdog': True,
+    }, 'the orchestrator lists its sections'
+    assert 'units' not in ImplementerRole().shown()
+
+
+def test_a_guide_renders_with_its_campaigns_id_and_primary_metric(db: Database, campaign: Campaign) -> None:
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        text = markdown(sections('judging'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
+    assert text.startswith('## Judge results') and f'c.campaign_id = {campaign.id} ' in text and "'$.score'" in text

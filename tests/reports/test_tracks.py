@@ -10,10 +10,10 @@ from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.reports.history import history
 from piloop.reports.pack import pack
 from piloop.watch.panels import PANELS, Context, campaigns, header
 from tests.conftest import home_cas, reconfigured
+from tests.reports.test_history import SHOWN, full
 from tests.reports.test_overview import NOW, candidate, live_campaign, render
 
 TRACKS = {
@@ -91,8 +91,8 @@ def test_history_and_pack_show_each_track(db: Database, campaign: Campaign) -> N
     cfg = two_tracks(db, campaign)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        text = history(s, p, cfg)
-        packed = pack(s, p, cfg, workspace=None)
+        text = full(s, p, cfg)
+        packed = pack(s, p, cfg, workspace=None, shown=SHOWN)
     assert text.splitlines()[2] == snapshot(
         "| id | status    | track | by         | family | links                        | prio | title                 | best candidate (its track's primary)     |"
     )

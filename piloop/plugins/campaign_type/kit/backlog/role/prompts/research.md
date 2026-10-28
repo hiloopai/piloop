@@ -21,7 +21,7 @@ another sweep took meanwhile.
 
 1. Read the existing work on its mechanism: its pointers, past runs and their findings, the candidates' diffs,
    `ideas_fts` and `comments_fts`, and what past campaigns on this repo left ("Remember past campaigns" in the
-   procedures).
+   guides).
 2. If an idea that is ready, scheduled or done tests the same mechanism, reject the seed with a note that names it.
 3. Only a fundamental negative settles a question: the mechanism ran as intended on the right base and did not move
    the metric. Reject on one, and name the runs. An attempt that failed on implementation (a bug, a crash, the wrong

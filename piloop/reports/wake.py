@@ -29,7 +29,7 @@ CHARS_PER_TOKEN = 4
 JOURNAL_SHARE = 0.4
 """The part of ``piloop wake``'s budget for the journal. The inbox, the campaigns and the lessons get 0.2 each."""
 OTHER_SHARE = 0.2
-LESSONS_MORE = 'the lessons query under "Remember past campaigns" in the procedures'
+LESSONS_MORE = 'the lessons query of `piloop schema past_campaigns`'
 WORD = re.compile(r'[a-z0-9]+')
 COMMON_WORDS = frozenset({'val', 'dev', 'test', 'train', 'mean', 'avg', 'total', 'all'})
 """Words of metric names that say which split or aggregate, not what is measured: sharing one makes no relation."""

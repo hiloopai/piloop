@@ -115,12 +115,18 @@ each shows every section that declares it. `[plugins.section] use` lists those o
 use = ["headline", "trajectory", "runs"]
 
 [plugins.role.research]
-sections = ["research_lessons", "goal", "queue", "pack"]
+sections = ["database", "search", "research_lessons", "goal", "queue", "pack"]
 
 [plugins.section.research_lessons]
 provider = "lessons"
 budget = 800
+
+[plugins.section.history]
+budget = 600                 # the tokens of an implementer's history
 ```
+
+A **guide**, such as `database` or `search`, is a section that says how to do one thing. A brief shows its guides
+before its context. Each role has its own guides, and `piloop schema <guide>` prints any other.
 
 <Sections />
 

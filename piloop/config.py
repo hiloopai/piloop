@@ -43,7 +43,7 @@ from piloop.plugins.host import Plugins, PluginTables, Scope, Unreached, refs, u
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer, env_names
 from piloop.plugins.role.contract import ROLES, ImplementerRole, RoleConfig, SweepRole
 from piloop.plugins.runtime.contract import RUNTIMES
-from piloop.plugins.section.contract import SECTIONS, Section
+from piloop.plugins.section.contract import SECTIONS, Guide, Section
 from piloop.plugins.stop_rule.contract import STOP_RULES, Shape
 from piloop.plugins.trigger.contract import TRIGGERS, Trigger
 from piloop.settings import AgentSettings, settings
@@ -234,9 +234,16 @@ class CampaignConfig(BaseModel):
         return [found[name] for name in SECTIONS.used(self.plugins)]
 
     def sections_of(self, name: RoleName) -> list[Section]:
-        """What the briefs of a role show after its context: its ``sections``, else the defaults of its kind."""
+        """What the briefs of a role show after its context: the sections of its ``shown`` that are not guides."""
+        return [section for section in self._shown(name).values() if not isinstance(section, Guide)]
+
+    def guides_of(self, name: RoleName) -> dict[str, Guide]:
+        """What the briefs of a role show before its context, by name: the guides of its ``shown``."""
+        return {key: section for key, section in self._shown(name).items() if isinstance(section, Guide)}
+
+    def _shown(self, name: RoleName) -> dict[str, Section]:
         found = SECTIONS.instances(self.plugins)
-        return [found[section] for section in self.role(name).shown()]
+        return {section: found[section] for section in self.role(name).shown()}
 
     def triggers_of(self, name: str) -> list[Trigger]:
         """The triggers of a sweeping role, in order: those that its ``triggers`` names. None for a role of runs."""
