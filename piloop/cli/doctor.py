@@ -66,12 +66,13 @@ def checks(cfg: Settings) -> list[Check]:
     run.
     """
     composed = _plugins(cfg)
+    daemon = running_pid(cfg)
     whose, names, command = _daemon_env(cfg)
     found_secrets, supplied = _secrets(whose, command)
     first = [
         _cli(cfg),
         _daemon(cfg),
-        _database(cfg.home / 'piloop.db', running_pid(cfg), cfg.actor),
+        _database(cfg.home / 'piloop.db', daemon, cfg.actor),
         composed,
         found_secrets,
     ]
@@ -92,7 +93,7 @@ def checks(cfg: Settings) -> list[Check]:
                 if isinstance(c.config, CampaignConfig) and c.config.mcp_servers
             ),
             *(
-                _secrets_of(c, needed, held, env)
+                _secrets_of(c, needed, held, env, daemon)
                 for c in campaigns
                 if isinstance(c.config, CampaignConfig) and (needed := _needed(c.config))
             ),
@@ -291,7 +292,15 @@ def _needed(config: CampaignConfig) -> list[str]:
     )
 
 
-def _secrets_of(campaign: StoredCampaign, needed: list[str], held: list[SecretKey], env: tuple[str, set[str]]) -> Check:
+def _set_each(daemon: int | None) -> str:
+    """How to set missing secrets: ``piloop secret`` goes through the API of the daemon (pid ``daemon``)."""
+    each = '`piloop secret set <NAME>` for each'
+    return each if daemon is not None else f'`piloop serve --detach`, then {each}: secrets go through the daemon'
+
+
+def _secrets_of(
+    campaign: StoredCampaign, needed: list[str], held: list[SecretKey], env: tuple[str, set[str]], daemon: int | None
+) -> Check:
     """Check that the secrets that the campaign's agents need are set, by name, never by value.
 
     A missing one of a stopped campaign is a warning (``StoredCampaign.severity``). A secret that only the environment
@@ -302,7 +311,7 @@ def _secrets_of(campaign: StoredCampaign, needed: list[str], held: list[SecretKe
     whose, environ = env
     missing = [n for n in needed if n not in have and n not in environ]
     if missing:
-        return Check(what, f'not set: {", ".join(missing)}', '`piloop secret set <NAME>` for each', campaign.severity)
+        return Check(what, f'not set: {", ".join(missing)}', _set_each(daemon), campaign.severity)
     if from_env := [n for n in needed if n not in have]:
         return Check(
             what,

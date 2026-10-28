@@ -5,6 +5,8 @@ No command shows a value.
 
 import getpass
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Annotated
 
 import cyclopts
@@ -12,7 +14,7 @@ from pydantic import SecretStr, TypeAdapter, ValidationError
 from rich import box
 from rich.table import Table
 
-from piloop.api.client import Client
+from piloop.api.client import Client, NoDaemon
 from piloop.api.contract import Located, SecretBody
 from piloop.cli import common
 from piloop.cli.client import cwd, daemon_http
@@ -39,7 +41,7 @@ def secret_set(name: Name, /, *, campaign: CampaignOption = None) -> None:
     value = getpass.getpass(f'{variable}: ') if sys.stdin.isatty() else sys.stdin.read().removesuffix('\n')
     if not value:
         raise SystemExit(f'{variable}: the value is empty')
-    with Client.connect(daemon_http()) as client:
+    with _daemon() as client:
         changed = client.set_secret(variable, _owner(campaign), SecretBody(value=SecretStr(value)))
     common.console.print(f'{variable} set for {_whose(changed.campaign)}', markup=False, highlight=False)
 
@@ -47,7 +49,7 @@ def secret_set(name: Name, /, *, campaign: CampaignOption = None) -> None:
 @app.command(name='list')
 def secret_list() -> None:
     """The secrets: the name, whose it is, and who set it last and when. Never a value."""
-    with Client.connect(daemon_http()) as client:
+    with _daemon() as client:
         listed = client.list_secrets().secrets
     table = Table('name', 'of', 'set', 'by', box=box.SIMPLE)
     for found in listed:
@@ -60,9 +62,24 @@ def secret_list() -> None:
 def secret_rm(name: Name, /, *, campaign: CampaignOption = None) -> None:
     """Delete a secret. An agent that starts after it no longer gets it."""
     variable = _name(name)
-    with Client.connect(daemon_http()) as client:
+    with _daemon() as client:
         changed = client.remove_secret(variable, _owner(campaign))
     common.console.print(f'{variable} of {_whose(changed.campaign)} deleted', markup=False, highlight=False)
+
+
+@contextmanager
+def _daemon() -> Generator[Client]:
+    """The client of the daemon. Secrets go through its API only, as on a server, which has nothing else."""
+    try:
+        http = daemon_http()
+    except NoDaemon as e:
+        raise SystemExit(
+            "`piloop secret` goes through the daemon's API: the daemon checks who may set each secret and records who"
+            f' did, here as on a server. No daemon listens on {common.settings.socket_file}: start it with'
+            ' `piloop serve --detach`, then run this again. A paused campaign stays paused.'
+        ) from e
+    with Client.connect(http) as client:
+        yield client
 
 
 def _name(name: str) -> str:

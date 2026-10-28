@@ -88,3 +88,17 @@ def test_an_agent_sets_and_removes_only_its_own_campaign_s_secrets(
             piped(monkeypatch, argv, 'v')
     with pytest.raises(SystemExit, match='^watchdog#1 writes only the secrets of its own campaign$'):
         run_cli(['secret', 'rm', 'KEY'])
+
+
+@pytest.mark.parametrize('args', [['set', 'EXA_API_KEY'], ['list'], ['rm', 'EXA_API_KEY']])
+def test_without_a_daemon_a_secret_command_says_why_it_needs_one_and_how_to_start_it(
+    isolated_home: Console, args: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Secrets go through the daemon's API, as on a server, which has only the API: no command writes the database."""
+    with pytest.raises(SystemExit) as raised:
+        piped(monkeypatch, args, 'value')
+    assert str(raised.value) == (
+        "`piloop secret` goes through the daemon's API: the daemon checks who may set each secret and records who did,"
+        f' here as on a server. No daemon listens on {common.settings.socket_file}: start it with'
+        ' `piloop serve --detach`, then run this again. A paused campaign stays paused.'
+    )

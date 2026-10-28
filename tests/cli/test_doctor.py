@@ -233,6 +233,9 @@ def test_a_secret_that_a_stopped_campaign_lacks_is_a_warning(
         s.commit()
     found = by_name(cfg)['secrets demo']
     assert (found.found, found.severity, found.fails) == ('not set: TEAM_KEY', Severity.WARN, False)
+    assert (
+        found.fix == '`piloop serve --detach`, then `piloop secret set <NAME>` for each: secrets go through the daemon'
+    )
 
 
 def test_a_missing_harness_is_named(cfg: Settings, db: Database, campaign: Campaign) -> None:
@@ -268,7 +271,7 @@ def test_mcp_servers_are_checked_for_their_commands_and_their_secrets_by_name_on
     )
     on_path(tmp_path, 'xai-server')
     assert by_name(cfg)['mcp demo'] == Check('mcp demo', '2 server(s) (watchdog: exa, xai)')
-    fix = '`piloop secret set <NAME>` for each'
+    fix = '`piloop serve --detach`, then `piloop secret set <NAME>` for each: secrets go through the daemon'
     assert by_name(cfg)['secrets demo'] == Check('secrets demo', 'not set: EXA_API_KEY, TEAM_KEY, XAI_API_KEY', fix)
     with db.session() as s:
         set_secret(s, SECRETS.selected({}), System.HUMAN, None, 'EXA_API_KEY', SecretStr('exa-value'))
