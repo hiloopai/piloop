@@ -83,6 +83,9 @@ INPUTS_REBUILT = 'inputs.rebuilt'
 """An event: a shared copy of a linked input no longer held its blob (a job changed it), and was made again."""
 INPUTS_CHANGED = 'inputs.changed'
 """An event: an evaluation changed a linked input that it read, so what it measured is a crash, not a measurement."""
+LOGIN_CARRIED = 'agent_session.login_carried'
+"""An isolated agent took the login keys of the user's harness settings, which piloop passes on until 0.5.0: set them
+in the harness's ``env``."""
 SESSION_UNSAVED = 'agent_session.session_unsaved'
 """An event: a snapshot of an agent's session file did not go into the CAS. The next one tries again."""
 SESSION_UNRESTORED = 'agent_session.session_unrestored'
@@ -243,7 +246,7 @@ def run_agent(job: AgentJob, runtime: Runtime, control: Control, site: Site, spa
         if site.cas.get_file(job.brief_cid, log_dir / BRIEF_FILE) is None:
             raise LookupError(f'the CAS lacks the brief {job.brief_cid}')
         job, start, restored = restore_session(job, job.spec, site, span)
-        spec = rendered(job, start.at(cwd, log_dir, site.env()), control.secrets())
+        spec = rendered(job, start.at(cwd, log_dir, site.env()), control.secrets(), span)
     except Exception as e:  # a full disk, a locked index, a missing secret: a fault of the host, not of the agent
         span.error(e)
         return _unstarted(job, site, f'{type(e).__name__}: {e}', started_at)
@@ -672,10 +675,11 @@ class MissingSecrets(LookupError):
     """An agent's job needs secrets that the home does not have. The message names them, never a value."""
 
 
-def rendered(job: AgentJob, spec: AgentSpec, found: JobSecrets) -> AgentSpec:
+def rendered(job: AgentJob, spec: AgentSpec, found: JobSecrets, span: Span) -> AgentSpec:
     """The spec with the job's secrets and token from ``found`` (``Control.secrets``), and ``{mcp}`` expanded.
 
-    piloop's own variables in the spec and the token win over a secret of the same name.
+    piloop's own variables in the spec and the token win over a secret of the same name, and both over the login that
+    an isolated agent takes from the user's setup (``Harness.carried``), which ``span`` notes.
 
     Raises:
         MissingSecrets: a secret is not set.
@@ -686,6 +690,13 @@ def rendered(job: AgentJob, spec: AgentSpec, found: JobSecrets) -> AgentSpec:
         | spec.env
         | {AGENT_TOKEN_ENV: found.token.get_secret_value()}
     )
+    if job.harness is not None and (carried := job.harness.carried(spec.args, spec.resume_args)) is not None:
+        deprecated.until(
+            '0.5.0', "auth keys of a user's harness settings pass to an isolated agent: delete this branch"
+        )
+        span.event(LOGIN_CARRIED, keys=', '.join(carried.names))
+        spec = replace(spec, args=carried.args, resume_args=carried.resume_args)
+        env = carried.env | env
     renderer = job.harness.mcp() if job.harness is not None else None
     if renderer is None or MCP not in [*spec.args, *spec.resume_args]:
         return replace(spec, env=env)

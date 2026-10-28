@@ -151,6 +151,19 @@ one. The [changelog](https://github.com/hiloopai/piloop/blob/main/CHANGELOG.md) 
 
 ## Upgrading to 0.4.0
 
+### Agents ignore your own harness setup
+
+Claude, Codex and pi agents no longer load your instructions, skills, plugins or hooks
+([Harnesses](/concepts/roles#harnesses)). Set `user_config = "load"` on a harness to keep them.
+
+A Claude login in `~/.claude/settings.json`, such as `apiKeyHelper` or `ANTHROPIC_BASE_URL` under `env`, still
+reaches the agents until 0.5.0, and `piloop doctor` warns. Move it to the harness's `env`:
+
+```toml
+[plugins.harness.claude]
+env = { ANTHROPIC_BASE_URL = "https://gw.example.com", ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" } }
+```
+
 ### Measurements of the evaluation ladder
 
 A campaign with a [`[[ladder]]`](/concepts/campaigns#the-evaluation-ladder) records each rung as a measurement with

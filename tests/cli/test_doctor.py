@@ -473,3 +473,24 @@ def test_the_source_check_never_waits_for_a_password(cfg: Settings, tmp_path: Pa
     with pytest.raises(upgrade.InstallError, match='failed: exit 128'):
         upgrade.newer(cfg.uv_tool_dir, git_install('main'))
     assert seen.read_text().strip() == 'stdin=[] prompt=0 ssh=ssh -o BatchMode=yes'
+
+
+def test_a_claude_login_in_the_user_s_settings_warns_until_it_moves_to_the_harness_env(
+    cfg: Settings, db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    home = tmp_path / 'claude-home'
+    home.mkdir()
+    (home / 'settings.json').write_text(json.dumps({'apiKeyHelper': 'team-key', 'env': {'ANTHROPIC_BASE_URL': 'u'}}))
+    with db.session() as s:
+        row = s.get_one(Campaign, campaign.id)
+        row.config = reconfigured(
+            row.config, plugins={'harness': {'use': ['claude'], 'claude': {'model': 'm', 'home': str(home)}}}
+        )
+        s.commit()
+    assert by_name(cfg)['login of claude'] == Check(
+        'login of claude',
+        "its agents ignore the user's settings, but take apiKeyHelper, env.ANTHROPIC_BASE_URL from them",
+        'set them in `[plugins.harness.claude] env` (a key as `{ secret = "NAME" }`) and `piloop init` the campaign:'
+        ' piloop stops passing them at 0.5.0',
+        Severity.WARN,
+    )

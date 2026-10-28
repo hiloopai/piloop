@@ -24,6 +24,7 @@ model = "anthropic/claude-opus-5-5"       # required for a harness in a rotation
 model = "claude-opus-5-5"
 # env = { ANTHROPIC_BASE_URL = "https://gw.example.com", ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" } }
 #                                         # more variables of its agents: a value, or a secret (`piloop secret set`)
+# user_config = "ignore"                  # "load" gives its agents your own CLAUDE.md, skills, plugins and hooks
 
 [plugins.harness.codex]
 model = "gpt-6.1-sol"

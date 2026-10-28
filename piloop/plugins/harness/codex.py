@@ -11,7 +11,17 @@ from typing import Self
 
 from pydantic import JsonValue, model_validator
 
-from piloop.plugins.harness.contract import EFFORT, MCP, PROMPT, SESSION_ID, Harness, McpArgs, McpError, McpLaunch
+from piloop.plugins.harness.contract import (
+    EFFORT,
+    MCP,
+    PROMPT,
+    SESSION_ID,
+    USER_CONFIG,
+    Harness,
+    McpArgs,
+    McpError,
+    McpLaunch,
+)
 from piloop.plugins.harness.kit.jsonl import (
     Counts,
     JsonlSessions,
@@ -52,6 +62,11 @@ default excludes (``*KEY*``, ``*SECRET*``, ``*TOKEN*``) other variables that Cla
 CONFIG = '{config}'
 """The argv element that ``Codex.config`` expands to: a ``-c key=value`` pair for each key. It comes before piloop's own
 ``-c`` flags, and Codex applies the last value of a key, so piloop's own win."""
+ISOLATION = ['-c', 'features.hooks=false', '-c', 'notify=[]', '-c', 'developer_instructions=""']
+"""Keep the user's hooks, turn-end command and instructions in ``config.toml`` from the agent, and keep the rest of
+that file: its model provider and login. ``--ignore-user-config`` would drop those too, and ``codex mcp list`` does not
+take it, so the MCP renderer would turn off servers that the agent does not have, and Codex fails on a server table
+without a transport. Codex 0.165 has no switch for the user's ``AGENTS.md`` in its home, nor for the user's skills."""
 FLAGS = [
     '--json',
     '--dangerously-bypass-approvals-and-sandbox',
@@ -59,6 +74,7 @@ FLAGS = [
     '--model',
     '{model}',
     CONFIG,
+    USER_CONFIG,
     '-c',
     f'model_reasoning_effort="{EFFORT}"',
     '-c',
@@ -247,10 +263,13 @@ class Codex(Harness):
     def mcp(self) -> CodexMcp:
         return CodexMcp()
 
+    def isolation(self) -> list[str]:
+        return ISOLATION
+
     def expanded(self, argv: list[str]) -> list[str]:
-        """``argv`` with its ``{config}`` element replaced by a ``-c key=value`` pair for each key of ``config``."""
+        """``argv`` with ``{user_config}`` expanded, and ``{config}``: a ``-c key=value`` pair for each key of ``config``."""
         flags = [a for key, value in self.config.items() for a in ('-c', f'{key}={toml(value)}')]
-        return [a for item in argv for a in (flags if item == CONFIG else [item])]
+        return [a for item in super().expanded(argv) for a in (flags if item == CONFIG else [item])]
 
     @model_validator(mode='after')
     def _config(self) -> Self:

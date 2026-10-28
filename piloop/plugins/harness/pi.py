@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import ClassVar
 
-from piloop.plugins.harness.contract import EFFORT, MCP, PROMPT, SESSION_ID, Harness, McpArgs, McpLaunch
+from piloop.plugins.harness.contract import EFFORT, MCP, PROMPT, SESSION_ID, USER_CONFIG, Harness, McpArgs, McpLaunch
 from piloop.plugins.harness.kit.jsonl import (
     Counts,
     JsonlSessions,
@@ -27,8 +27,7 @@ ARGV = [
     '--mode',
     'json',
     '--no-extensions',
-    '--no-skills',
-    '--no-context-files',
+    USER_CONFIG,
     '--approve',
     '--session-id',
     SESSION_ID,
@@ -49,6 +48,9 @@ TODO: move the pin when a release leaves the user's settings alone, or drop the 
 a config for one launch."""
 CONFIG_FILE = 'mcp.json'
 NO_EXTENSIONS = ('--no-extensions', '-ne')
+ISOLATION = ['--no-skills', '--no-context-files']
+"""The user's skills and context files (``AGENTS.md``). Extensions stay off whatever ``user_config`` says: piloop pins
+the one that its agents need (``ADAPTER``), and with the user's own on, pi's built-in MCP loads the user's servers."""
 
 
 def server(s: McpServer) -> dict[str, object]:
@@ -137,6 +139,9 @@ class Pi(Harness):
     headless: list[str] = ARGV
     resume: list[str] = ARGV
     home: str = '{env:PI_CODING_AGENT_DIR:~/.pi/agent}'
+
+    def isolation(self) -> list[str]:
+        return ISOLATION
 
     def mcp(self) -> PiMcp:
         return PiMcp()

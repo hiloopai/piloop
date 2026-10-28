@@ -13,6 +13,7 @@ its argv and does nothing else. The rotation (``[plugins.harness] use``) default
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, ClassVar, Protocol, Self
 
@@ -30,6 +31,8 @@ PROMPT = '{prompt}'
 EFFORT = '{effort}'
 MCP = '{mcp}'
 """The argv element that ``McpRenderer.render`` expands into zero or more arguments."""
+USER_CONFIG = '{user_config}'
+"""The argv element that ``Harness.expanded`` expands into the provider's ``isolation`` flags, or into nothing."""
 TAKES_NONE = 'it takes no MCP servers'
 
 
@@ -52,6 +55,29 @@ class SecretRef(BaseModel):
 
     secret: EnvName
     """The name of the secret."""
+
+
+class UserConfig(StrEnum):
+    """What an agent loads of the user's own setup of its harness: instructions, skills, plugins, hooks and settings."""
+
+    IGNORE = 'ignore'
+    """None of it. The agent gets what piloop gives it: the brief, the role's MCP servers, an extension that piloop
+    pins. The campaign repo's own files still load, and so does the login of the machine."""
+    LOAD = 'load'
+    """All of it, as the harness loads it outside piloop."""
+
+
+@deprecated.until('0.5.0', "auth keys of a user's harness settings pass to an isolated agent: delete Carried")
+@dataclass(frozen=True)
+class Carried:
+    """What an agent that ignores the user's setup still takes from it on the machine that runs it: its login."""
+
+    args: list[str]
+    resume_args: list[str]
+    env: dict[str, str]
+    """Variables under the agent's own: piloop's, the harness's ``env`` and the secrets win."""
+    names: tuple[str, ...]
+    """The keys it took, for the warning. Never their values."""
 
 
 class McpError(RuntimeError):
@@ -183,6 +209,18 @@ class Harness(Parameters):
     """Variables of the agent's environment: a value, or a secret, ``{ secret = "NAME" }``. For example a model
     gateway, ``{ ANTHROPIC_BASE_URL = "https://gw.example.com", ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" }
     }``. When unset, the agent uses the login of the machine that runs it."""
+    user_config: UserConfig = UserConfig.IGNORE
+    """Whether its agents load the user's own setup of the harness: ``ignore`` or ``load``. ``{user_config}`` in the
+    argv expands to the provider's flags that ignore it, or to nothing. An argv without it loads it."""
+
+    def isolation(self) -> list[str]:
+        """The flags that keep its agents from the user's own setup, for ``user_config = "ignore"``. None, by default."""
+        return []
+
+    @deprecated.until('0.5.0', "auth keys of a user's harness settings pass to an isolated agent: delete carried")
+    def carried(self, args: list[str], resume_args: list[str]) -> Carried | None:
+        """What an isolated agent takes from the user's setup on this machine, so that its login works. None, by default."""
+        return None
 
     def mcp(self) -> McpRenderer | None:
         """How it takes the MCP servers of a role. None, by default: it takes none."""
@@ -191,9 +229,10 @@ class Harness(Parameters):
     def expanded(self, argv: list[str]) -> list[str]:
         """``argv``, its ``headless`` or ``resume``, with the elements that only this provider knows expanded.
 
-        piloop then fills the placeholders. By default, ``argv`` as it is.
+        piloop then fills the placeholders. By default, ``{user_config}``: the ``isolation`` flags, or nothing.
         """
-        return argv
+        flags = self.isolation() if self.user_config is UserConfig.IGNORE else []
+        return [a for item in argv for a in (flags if item == USER_CONFIG else [item])]
 
     def sessions(self) -> UsageReader | None:
         """How to read the session files that its CLI leaves. None, by default: it leaves none that piloop reads."""

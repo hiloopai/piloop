@@ -21,6 +21,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from piloop import deprecated
 from piloop.actor import Actor
 from piloop.campaign.campaigns import check_takes
 from piloop.cli import skills, upgrade
@@ -97,6 +98,7 @@ def checks(cfg: Settings) -> list[Check]:
             ),
             *_skills(cfg),
             _harnesses(stored),
+            *_logins(stored),
             *(check for provider in VCS.providers().values() for check in provider.model.checks()),
         ]
     # the commands that the lines name are this install's, which a second install (piloop-canary) runs under its name
@@ -326,6 +328,28 @@ def _skills(cfg: Settings) -> list[Check]:
         if (drift := skills.drift(target))
         else Check(f'skills ({skills.readers(harnesses)})', f'current in {target}')
         for target, harnesses in skills.targets(cfg).items()
+    ]
+
+
+@deprecated.until('0.5.0', "auth keys of a user's harness settings pass to an isolated agent: delete _logins")
+def _logins(configs: list[CampaignConfig]) -> list[Check]:
+    """Warn of each harness whose isolated agents take their login from the user's own settings on this machine."""
+    found = {
+        h: carried.names
+        for c in configs
+        for kind in c.roles.all()
+        for h in c.role_harnesses(kind)
+        if (d := c.harness_for(h)) and (carried := d.carried(d.expanded(d.headless), [])) is not None
+    }
+    return [
+        Check(
+            f'login of {h}',
+            f"its agents ignore the user's settings, but take {', '.join(names)} from them",
+            f'set them in `[plugins.harness.{h}] env` (a key as `{{ secret = "NAME" }}`) and `piloop init` the'
+            ' campaign: piloop stops passing them at 0.5.0',
+            Severity.WARN,
+        )
+        for h, names in sorted(found.items())
     ]
 
 

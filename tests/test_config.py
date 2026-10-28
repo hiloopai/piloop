@@ -338,7 +338,8 @@ def test_the_codex_config_table_is_a_c_flag_for_each_key_before_piloop_s_own_so_
         args = codex.expanded(argv)
         at = args.index('{model}') + 1
         assert args[at : at + len(flags)] == flags
-        assert args[at + len(flags) :][:2] == ['-c', 'model_reasoning_effort="{effort}"'], "piloop's own come last"
+        after = args[at + len(flags) + len(codex.isolation()) :]
+        assert after[:2] == ['-c', 'model_reasoning_effort="{effort}"'], "piloop's own come last"
     assert each_provider()['codex'].expanded(['exec', '{config}']) == ['exec'], 'no table, no flag'
     assert Harness(executable='x', headless=['{config}']).expanded(['{config}']) == ['{config}'], 'a Codex element'
     with pytest.raises(ValueError, match=r'config: a value of no TOML type: None'):

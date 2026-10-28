@@ -18,7 +18,7 @@ from piloop.plugins.executor.contract import AgentJob
 from piloop.plugins.harness import claude, codex, pi
 from piloop.plugins.harness.claude import ClaudeMcp
 from piloop.plugins.harness.codex import CodexMcp
-from piloop.plugins.harness.contract import MCP, Custom, McpArgs, McpError, McpLaunch, each_provider, expand
+from piloop.plugins.harness.contract import MCP, Custom, McpArgs, McpError, McpLaunch, UserConfig, each_provider, expand
 from piloop.plugins.harness.pi import PiMcp
 from piloop.plugins.host import ContractBroken
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer, env_names
@@ -369,7 +369,9 @@ def test_only_a_harness_that_takes_servers_has_an_mcp_element() -> None:
         'claude': (True, True),
         'codex': (True, True),
     }
-    claude = each_provider()['claude'].headless
-    assert claude[claude.index(MCP) + 1].startswith('--'), (
-        "a flag follows claude's variadic --mcp-config, not the prompt"
-    )
+    for user_config in UserConfig:
+        claude = type(each_provider()['claude']).model_validate({'user_config': user_config})
+        argv = claude.expanded(claude.headless)
+        assert argv[argv.index(MCP) + 1].startswith('--'), (
+            "a flag follows claude's variadic --mcp-config, not the prompt"
+        )

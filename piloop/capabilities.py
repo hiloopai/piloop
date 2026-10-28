@@ -29,7 +29,7 @@ from piloop.plugins.runtime.contract import AgentExit, ExitStatus
 from piloop.plugins.runtime.contract import Runtime, RuntimeConfig
 from piloop.plugins.runtime.subprocess import Subprocess, SubprocessRuntime
 
-from piloop.plugins.harness.contract import HARNESSES, Harness, SecretRef, UsageReader
+from piloop.plugins.harness.contract import HARNESSES, Carried, Harness, SecretRef, UsageReader, UserConfig
 from piloop.settings import Settings, StorageSettings, TracingSettings, EvaluationSettings
 from piloop.settings import DaemonSettings, AgentSettings
 from piloop.plugins.harness.contract import McpLaunch, McpArgs, McpError, McpRenderer
