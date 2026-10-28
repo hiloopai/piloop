@@ -532,6 +532,23 @@ def test_init_example(tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.usefixtures('api')
+def test_init_names_a_ratio_primary_in_the_baseline_line(tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch) -> None:
+    template = tmp_path / 'templates' / 'ratio'
+    template.mkdir(parents=True)
+    (template / 'piloop.toml').write_text(
+        'name = "ratio"\nevaluate = ["sh", "-c", "echo METRIC tokens=512; echo METRIC seconds=2"]\n'
+        '[[metrics]]\nname = "tokens_per_s"\ndirection = "higher"\nrole = "primary"\n'
+        'ratio = { numerator = "tokens", denominator = "seconds" }\n'
+        '[[metrics]]\nname = "tokens"\ndirection = "higher"\n'
+        '[[metrics]]\nname = "seconds"\ndirection = "lower"\n[plugins.harness.pi]\nmodel = "m"\n'
+    )
+    monkeypatch.setattr(campaign_cli, 'TEMPLATES', tmp_path / 'templates')
+    monkeypatch.setattr(campaign_cli, 'EXAMPLE_DATA', {'ratio': {}})
+    run_cli(['init', '--example', 'ratio', str(tmp_path / 'r')])
+    assert 'baseline candidate#1: tokens 512, seconds 2, tokens_per_s 256\n' in out()
+
+
+@pytest.mark.usefixtures('api')
 def test_sql_and_status_while_another_client_holds_the_write_lock(
     writer: subprocess.Popen[str], monkeypatch: pytest.MonkeyPatch, out
 ) -> None:

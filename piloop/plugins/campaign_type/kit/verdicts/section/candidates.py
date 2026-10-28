@@ -1,7 +1,7 @@
 from piloop.api.views import Rendered, Table, Value
 from piloop.db.models import count
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate, produced
-from piloop.plugins.campaign_type.kit.evaluation.measure import score
+from piloop.plugins.campaign_type.kit.evaluation.measure import climb, score
 from piloop.plugins.campaign_type.kit.verdicts.judge import track_of
 from piloop.plugins.campaign_type.kit.verdicts.verdict import label
 from piloop.plugins.section.contract import Rendering, Section, Surface
@@ -11,7 +11,10 @@ CANDIDATES_SHOWN = 8
 
 
 class Candidates(Section):
-    """The latest candidates, oldest first, each with its verdict and its primary score against its parent's."""
+    """The latest candidates, oldest first, each with its verdict and its primary score against its parent's.
+
+    With a ladder, each also says where its latest climb is (``climb``).
+    """
 
     SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
     ORDER = 180
@@ -36,11 +39,21 @@ class Candidates(Section):
                     *([track.name] if cfg.multitrack else []),
                     value,
                     delta,
+                    *([climb(c, evaluator_id)] if cfg.ladder else []),
                     f'run#{c.run_id}' if c.run_id else 'no run',
                     age(c.created_at, r.now),
                     cell(c.summary or ''),
                 )
             )
-        columns = ('candidate', 'verdict', *(['track'] if cfg.multitrack else []), 'score', 'vs parent', 'run', 'age')
+        columns = (
+            'candidate',
+            'verdict',
+            *(['track'] if cfg.multitrack else []),
+            'score',
+            'vs parent',
+            *(['ladder'] if cfg.ladder else []),
+            'run',
+            'age',
+        )
         table = Table(columns=(*columns, 'summary'), rows=tuple(rows))
         return Rendered(title=f'Recent candidates ({len(recent)} of {total}; {on})', blocks=(table,))

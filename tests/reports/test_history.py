@@ -15,6 +15,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -280,3 +281,15 @@ def test_an_implementers_history_shows_its_family_then_the_keeps_then_the_newest
     assert f'of 33; the family of idea#{mine.id}, the keeps, then the newest)' in text
     assert cost(text.split('\n', 2)[2].splitlines()) <= section.budget
     assert '| mine ' in everything and '(33 of 33)' in everything, 'a reader without a run sees every idea'
+
+
+def test_an_idea_whose_candidate_stopped_at_a_rung_says_where_and_why(db: Database, campaign: Campaign) -> None:
+    with db.session() as s:
+        c = scored(s, idea(s, campaign, 'a cheaper screen'), 1, (Outcome.DISCARD, {'score': 0.5}, None))
+        [m] = c.measurements
+        m.rung, m.stopped = RungName('screen'), 'score 0.5 vs 1 (-0.5; margin 0.1)'
+        s.commit()
+    rendered = render(db, campaign)
+    assert '| a cheaper screen | discard, stopped at screen: score 0.5 vs 1 (-0.5; margin 0.1) (candidate#2) |' in (
+        rendered
+    ), rendered

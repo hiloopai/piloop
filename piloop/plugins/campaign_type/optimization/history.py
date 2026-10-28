@@ -32,7 +32,7 @@ from piloop.plugins.campaign_type.kit.candidates.references import references
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.measure import score
+from piloop.plugins.campaign_type.kit.evaluation.measure import climb, score
 from piloop.plugins.campaign_type.kit.runs.sessions import session_tokens
 from piloop.plugins.campaign_type.kit.verdicts.judge import fallback_track, keeps, track_of
 from piloop.plugins.campaign_type.kit.verdicts.verdict import label
@@ -242,7 +242,8 @@ def _outcome(s: Session, idea: Idea, primary: Metric, evaluator_id: EvaluatorId 
             best = (value, c, run.base_candidate_id)
     if best is None:  # Every commit crashed in measurement or was skipped (Piloop-Eval: skip).
         c, _ = produced[-1]
-        return f'{label(c)} (candidate#{c.id})'
+        where = climb(c, evaluator_id)
+        return f'{label(c)}{f", {where}" if where else ""} (candidate#{c.id})'
     value, c, base_id = best
     base = score(s.get_one(Candidate, base_id), evaluator_id, primary)
     delta = f' ({value - base:+g} vs candidate#{base_id})' if base is not None else ''

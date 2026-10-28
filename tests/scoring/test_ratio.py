@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from statistics import fmean
 
 import pytest
 from inline_snapshot import snapshot
@@ -121,4 +122,32 @@ def test_a_ratio_guardrail_holds_a_keep_back_on_its_resampled_worst_case() -> No
             Outcome.INTERESTING,
             'against candidate#1: solved 30 vs 20 (+10; 95% worst case +6 over 40 units); guardrails: cost_per_solved 2.4 vs 2 (+0.4; 95% worst case +0.7692 over 40 units) beyond its fraction 0.05',
         )
+    )
+
+
+THROUGHPUT = Criterion('tokens_per_s', Direction.HIGHER, ratio=Parts('tokens', 'seconds'))
+
+
+def paired(name: str, seconds: list[float]) -> Side:
+    """A side of 512 tokens per sample, whose samples ran in pairs, and no per-unit results."""
+    tokens = [512.0] * len(seconds)
+    found = {'tokens_per_s': Ratio(numerator='tokens', denominator='seconds')}
+    means = derive({'tokens': fmean(tokens), 'seconds': fmean(seconds)}, found)
+    return Side(name, means, {}, {'tokens': tokens, 'seconds': seconds})
+
+
+def test_a_ratio_over_pairs_is_the_ratio_of_the_means_that_status_shows() -> None:
+    candidate, bar = paired('candidate#2', [0.1331, 0.2333, 0.8164]), paired('candidate#1', [1.7, 1.8, 1.8])
+    c = ratio_bound(THROUGHPUT, Parts('tokens', 'seconds'), candidate, bar, 0.95)
+    assert c is not None
+    assert (c.mine, c.theirs, c.count, c.over) == (
+        candidate.means['tokens_per_s'],
+        bar.means['tokens_per_s'],
+        3,
+        bootstrap.Over.PAIRS,
+    )
+    assert c.worst > 0
+    judged = Bootstrap().decide(Case(THROUGHPUT, (), candidate, bar))
+    assert judged.reason == snapshot(
+        'against candidate#1: tokens_per_s 1299 vs 289.8 (+1009; 95% worst case +538.7 over 3 pairs)'
     )

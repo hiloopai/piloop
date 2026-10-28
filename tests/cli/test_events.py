@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal, TypedDict
 
 import pytest
@@ -17,6 +18,8 @@ from rich.console import Console
 from sqlalchemy import select, text
 
 from piloop.api import views
+from piloop.api.client import Client
+from piloop.api.views import Batch
 from piloop.campaign import campaigns as campaign_module, ops
 from piloop.cli import common, main as cli, views as cli_views
 from piloop.db.models import Campaign, Comment, Event
@@ -172,11 +175,33 @@ def test_events_reads_after_a_cursor_with_filters_and_says_how_to_read_on(
     run_cli(['events', '--after', str(parked.id), '--follow', '--timeout', '0'])
     assert out().splitlines() == [f'next: piloop events --after {parked.id}']
     write(db, UNKNOWN)
-    monkeypatch.setattr(cli_views, 'MAX_POLL_SECONDS', 0.1)
+    monkeypatch.setattr(cli_views, 'MAX_POLL_SECONDS', 0.25)
+    polls = polled(monkeypatch)
     run_cli(['events', '--after', str(parked.id), '--follow', '--timeout', '0.5', '--kind', 'x'])
     assert out().splitlines() == [f'next: piloop events --after {parked.id + 1} --kind x'], (
         'it asks again after each long-poll, until its own timeout, from the cursor that the last one moved'
     )
+    assert polls == [(parked.id, 0.25), (parked.id + 1, 0.25)]
+
+
+def polled(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, float]]:
+    """Make each read of ``piloop events`` advance its clock by its wait, whatever the load. Return each read's cursor
+    and wait.
+
+    Under load, a real first read could outlast the timeout, and the command would never ask again.
+    """
+    polls: list[tuple[int, float]] = []
+    read = cli_views._read
+
+    def timed(
+        client: Client, after: int, campaign: str | None, kind: tuple[str, ...], limit: int, wait: float
+    ) -> Batch:
+        polls.append((after, wait))
+        return read(client, after, campaign, kind, limit, wait)
+
+    monkeypatch.setattr(cli_views, '_read', timed)
+    monkeypatch.setattr(cli_views, 'time', SimpleNamespace(monotonic=lambda: sum(w for _, w in polls)))
+    return polls
 
 
 def test_a_payload_that_json_cannot_say_prints_as_stored_text_never_as_infinity(

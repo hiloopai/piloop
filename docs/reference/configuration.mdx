@@ -86,8 +86,8 @@ that primary is a guardrail.
 
 A metric that piloop computes from two that the evaluate command reports: `numerator / denominator`.
 
-Each side's value is the ratio of its means. With per-unit results for both, the bootstrap takes the ratio of the
-unit sums in each resample, so the verdict tests the ratio with confidence; with pairs, the ratio of each pair.
+Each side's value is the ratio of its means. The bootstrap resamples the units of both parts together, or else the
+pairs, and takes the ratio of their sums in each resample, so the verdict tests the ratio with confidence.
 
 | Key | Type | Default | Description |
 |---|---|---|---|

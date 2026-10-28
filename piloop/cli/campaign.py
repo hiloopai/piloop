@@ -23,11 +23,12 @@ from piloop.campaign.campaigns import (
 from piloop.cli import common, daemon, local
 from piloop.cli.client import cwd, daemon_http
 from piloop.cli.common import CampaignRef
+from piloop.config import load_campaign_config
 from piloop.db.models import EVENT
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
 from piloop.ids import CampaignStatus, checked_campaign_name
-from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
+from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded, derive
 from piloop.text import metric
 from piloop.watch.app import Watch
 
@@ -82,7 +83,8 @@ def init(
                 f'campaign [bold]{campaign.name}[/] #{campaign.id} registered; measuring baseline'
                 f' candidate#{added.baseline} (`piloop eval queue` shows it; Ctrl-C stops only the wait)'
             )
-            metrics = _measured(client, added)
+            ratios = {m.name: m.ratio for m in load_campaign_config(path).metrics if m.ratio is not None}
+            metrics = derive(_measured(client, added), ratios)
             common.console.print(
                 f'baseline candidate#{added.baseline}:'
                 f' {", ".join(f"{name} {metric(value)}" for name, value in metrics.items())}'

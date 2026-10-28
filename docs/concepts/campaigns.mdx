@@ -194,7 +194,9 @@ piloop sql "SELECT candidate_id, rung, stopped, metrics FROM measurements"
 └──────────────┴────────┴───────────────────────────────────────┴─────────────────────────────────┘
 ```
 
-The verdict of candidate#2 is `discard`: `stopped at screen: accuracy 0.2 vs 1 (-0.8; margin 0.05)`.
+The verdict of candidate#2 is `discard`: `stopped at screen: accuracy 0.2 vs 1 (-0.8; margin 0.05)`. The `ladder`
+column of `piloop status` shows the same, or `reached screen` while a climb goes on. `piloop history` shows it for an
+idea whose candidates have no score.
 
 - Each rung is a measurement with its `rung`, and only a measurement without one scores. Report each line's own
   cost: piloop sums the rows.

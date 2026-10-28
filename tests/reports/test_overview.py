@@ -17,6 +17,7 @@ from piloop.plugins.campaign_type.kit.backlog.section.queue import BLOCKED_SHOWN
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -315,6 +316,28 @@ def test_a_fresh_campaign_has_little_to_say(db: Database, campaign: Campaign) ->
     assert 'evaluations: 1 · crashed: 0 · waiting for a verdict: 1 candidates' in text
     assert '- 1 free implementer slots and no runnable idea since 2h ago; no research sweep pending' in text
     assert '## Inbox (0 unacknowledged), decisions and escalations\n\n- None.' in text
+
+
+def test_recent_candidates_say_how_far_each_climbed_the_ladder(db: Database, campaign: Campaign) -> None:
+    cfg = load_campaign_config(Path(campaign.path), ladder=[{'name': 'screen', 'stop': {'score': {'margin': 0.1}}}])
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        stopped = candidate(s, p, 1, Outcome.DISCARD, 0.5, 18)
+        stopped.measurements[0].rung = RungName('screen')
+        stopped.measurements[0].stopped = 'score 0.5 vs 1 (-0.5; margin 0.1)'
+        climbing = candidate(s, p, 1, Outcome.KEEP, 2, 19)
+        climbing.verdict = None
+        climbing.measurements[0].rung = RungName('screen')
+        s.commit()
+    text = render(db, campaign, cfg)
+    table = text[text.index('## Recent candidates') :].split('\n\n')[1]
+    assert table == snapshot("""\
+| candidate | verdict | score | vs parent | ladder | run | age | summary |
+|---|---|---|---|---|---|---|---|
+| candidate#1 | keep | 1 | — | — | no run | 0s | baseline |
+| candidate#2 | discard | — | — | stopped at screen: score 0.5 vs 1 (-0.5; margin 0.1) | no run | 0s | score 0.5 |
+| candidate#3 | pending | — | — | reached screen | no run | 0s | score 2 |\
+""")
 
 
 def test_blocked_ideas_beyond_the_shown_few_are_counted(db: Database, campaign: Campaign) -> None:

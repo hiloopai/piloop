@@ -10,6 +10,7 @@ import random
 from dataclasses import dataclass
 from enum import StrEnum
 from statistics import fmean
+from typing import assert_never
 
 from pydantic import Field
 
@@ -47,7 +48,7 @@ class Comparison:
     criterion: Criterion
     mine: float
     theirs: float
-    """The means of the pairs when ``over`` is ``PAIRS``, else the means of each side."""
+    """The values over the pairs when ``over`` is ``PAIRS``, else each side's value."""
     worst: float
     """The worst-case gain at the configured confidence: the bootstrap's lower bound, else the gain."""
     count: int
@@ -204,20 +205,35 @@ def same(case: Case, parent: Side) -> bool:
 
 
 def ratio_bound(criterion: Criterion, ratio: Ratio, mine: Side, theirs: Side, confidence: float) -> Comparison | None:
-    """Compare a ratio with a paired bootstrap over the units that both sides report for both of its parts.
+    """Compare a ratio with a paired bootstrap over the units of both of its parts, else over the pairs of their samples.
 
-    Each resample takes the same units on both sides and compares the ratios of their sums. A resample whose
-    denominator sums to 0 on a side counts as the worst gain. None when the units do not allow it: then the pairs or
-    the aggregates decide (``compare``).
+    Each resample takes the same units, or pairs, on both sides and compares the ratios of their sums. A resample whose
+    denominator sums to 0 on a side counts as the worst gain. A side's value is the ratio of its means, over its paired
+    samples when the pairs decide. None when neither allows it: then the aggregates decide (``compare``).
     """
     parts = (ratio.numerator, ratio.denominator)
-    found = [side.units.get(p) for side in (mine, theirs) for p in parts]
-    if any(u is None for u in found):
+    for over in (Over.UNITS, Over.PAIRS):
+        found = [_keyed(side, p, over) for side in (mine, theirs) for p in parts]
+        mine_top, mine_bottom, their_top, their_bottom = found
+        if (
+            all(f and f.keys() == mine_top.keys() for f in found)
+            and sum(mine_bottom.values())
+            and sum(their_bottom.values())
+        ):
+            break
+    else:
         return None
-    mine_top, mine_bottom, their_top, their_bottom = (u or {} for u in found)
+    match over:
+        case Over.UNITS:
+            values = mine.means[criterion.name], theirs.means[criterion.name]
+        case Over.PAIRS:
+            values = (
+                fmean(mine_top.values()) / fmean(mine_bottom.values()),
+                fmean(their_top.values()) / fmean(their_bottom.values()),
+            )
+        case _:
+            assert_never(over)
     keys = sorted(mine_top)
-    if any(set(u) != set(keys) for u in (mine_bottom, their_top, their_bottom)):
-        return None
     rng = random.Random(SEED)
     gains = []
     for _ in range(RESAMPLES):
@@ -230,15 +246,25 @@ def ratio_bound(criterion: Criterion, ratio: Ratio, mine: Side, theirs: Side, co
         its = sum(their_top[k] for k in drawn) / their_den
         gains.append(criterion.direction.gain(ours, its))
     gains.sort()
-    name = criterion.name
     worst = gains[int((1 - confidence) * RESAMPLES)]
-    return Comparison(criterion, mine.means[name], theirs.means[name], worst, len(keys))
+    return Comparison(criterion, *values, worst, len(keys), over)
+
+
+def _keyed(side: Side, name: str, over: Over) -> dict[str, float]:
+    """The values of a ratio's part on ``side``, by unit or by pair (``over``). Empty when it has none."""
+    match over:
+        case Over.UNITS:
+            return side.units.get(name, {})
+        case Over.PAIRS:
+            return {str(i): v for i, v in enumerate(side.samples.get(name, []))}
+        case _:
+            assert_never(over)
 
 
 def _compare(case: Case, criterion: Criterion, confidence: float) -> Comparison:
     """Compare the candidate with the bar on ``criterion``, which both sides measured.
 
-    A ratio is compared over the units of its parts (``ratio_bound``) when both sides have them.
+    A ratio is compared over the units or the pairs of its parts (``ratio_bound``) when both sides have them.
     """
     name = criterion.name
     mine, theirs = case.candidate, case.bar

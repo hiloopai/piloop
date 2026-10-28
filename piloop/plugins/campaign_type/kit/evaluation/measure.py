@@ -138,6 +138,24 @@ def rungs(candidate: Candidate, evaluator_id: EvaluatorId | None) -> dict[RungNa
     return {rung: means(rows) for rung, rows in found.items()}
 
 
+def climb(candidate: Candidate, evaluator_id: EvaluatorId | None) -> str | None:
+    """Return where the candidate's latest climb of the ladder under ``evaluator_id`` is, or None after the full panel.
+
+    ``stopped at <rung>: <why>``, or ``reached <rung>`` while it climbs.
+    """
+    for m in reversed(candidate.measurements):
+        if m.evaluator_id != evaluator_id or m.error is not None:
+            continue
+        match m.rung, m.stopped:
+            case None, _:
+                return None
+            case rung, None:
+                return f'reached {rung}'
+            case _:
+                return f'stopped at {m.rung}: {m.stopped}'
+    return None
+
+
 def means(rows: Sequence[dict[str, float]]) -> dict[str, float]:
     """Return the mean of each metric over ``rows``, the metrics of measurements."""
     names = {name for row in rows for name in row}
@@ -322,7 +340,7 @@ def pairs(candidate: Candidate, bar: Candidate, evaluator_id: EvaluatorId) -> tu
     """Return the samples that ``candidate`` and ``bar`` measured next to each other under ``evaluator_id``.
 
     The i-th sample of a metric of the candidate and the i-th of the bar are one pair (``Measurement.pair``). A pair
-    counts when both of its measurements are ``full``.
+    counts when both of its measurements are ``full``. A ratio has no samples: a rule resamples its parts.
     """
     mine: Samples = {}
     theirs: Samples = {}
@@ -332,11 +350,9 @@ def pairs(candidate: Candidate, bar: Candidate, evaluator_id: EvaluatorId) -> tu
             continue
         if other.candidate_id != bar.id or not full(other):
             continue
-        found = ratios(m.evaluator)
-        ours, its = derive(m.metrics, found), derive(other.metrics, found)
-        for name in ours.keys() & its.keys():
-            mine.setdefault(name, []).append(ours[name])
-            theirs.setdefault(name, []).append(its[name])
+        for name in m.metrics.keys() & other.metrics.keys():
+            mine.setdefault(name, []).append(m.metrics[name])
+            theirs.setdefault(name, []).append(other.metrics[name])
     return mine, theirs
 
 

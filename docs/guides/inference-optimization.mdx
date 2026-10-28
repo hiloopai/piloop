@@ -106,7 +106,7 @@ stop = { p50_ms = { fraction = 0.5 } }
   and piloop computes `tokens_per_s`. A rung that runs for a fixed time serves a different number of tokens on each
   candidate, and the ratio still compares them.
 - **Noise.** A benchmark of times is noisy. `repeats = 3` runs each candidate three times, each next to a run of its
-  bar on the same worker, and the verdict compares the ratio of each pair. The tolerances are wider than the noise:
+  bar on the same worker, and the verdict resamples the pairs. The tolerances are wider than the noise:
   `p95_ms` may get 25% worse, and the short load test stops a candidate only when its median latency is 50% worse than
   the bar's.
 - **Quality.** `match` may drop by `margin` for each keep, and never below `floor`. An approximation, such as a lower
