@@ -5,7 +5,7 @@ their SQL and their text. The scheduler uses it to find the ``ready`` ideas that
 ideas. The status and history renderers use it to show the links in one cell. Add the rule for a new kind of link
 here.
 
-``reprioritise`` changes an idea's priority. ``piloop.campaign.ops`` holds the other changes to an idea.
+``ops`` holds the changes to an idea.
 ``yields`` measures each source by its keeps, not by the number of ideas it inserted. The overview and the research
 pack show it.
 
@@ -31,7 +31,7 @@ from piloop.db.triggers.changelog import IdeaStatusChanged
 from piloop.ids import CampaignId, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
-from piloop.plugins.campaign_type.kit.backlog.wire import IdeaView
+from piloop.plugins.campaign_type.kit.backlog.wire import IdeaRow, IdeaView
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
@@ -251,18 +251,6 @@ def superseded_by(s: Session, idea_ids: list[IdeaId]) -> dict[IdeaId, list[IdeaI
     return out
 
 
-PRIORITIES = range(5)
-"""From 0 (urgent) to 4 (someday)."""
-
-
-def reprioritise(s: Session, idea_id: IdeaId, by: int) -> Idea:
-    """Change the idea's priority by ``by`` and commit. A negative ``by`` is more urgent. The result stays in 0 to 4."""
-    idea = s.get_one(Idea, idea_id)
-    idea.priority = min(max(idea.priority + by, PRIORITIES.start), PRIORITIES.stop - 1)
-    s.commit()
-    return idea
-
-
 def source(created_by: str) -> str:
     """Return where an idea came from: its signature without the agent id (``research#12`` → ``research``)."""
     return created_by.partition('#')[0]
@@ -396,6 +384,23 @@ def yields(s: Session, campaign_id: CampaignId) -> list[Yield]:
         counts[3] += interesting
     found = [Yield(name, *counts) for name, counts in tally.items()]
     return sorted(found, key=lambda y: (-y.keeps, -y.interesting, -y.ideas, y.source))
+
+
+def idea_row(idea: Idea, newer: dict[IdeaId, list[IdeaId]]) -> IdeaRow:
+    """``idea`` as a list of ideas answers it. ``newer`` is ``superseded_by`` of the ideas listed."""
+    return IdeaRow(
+        id=idea.id,
+        campaign=idea.campaign_id,
+        title=idea.title,
+        status=idea.status,
+        priority=idea.priority,
+        track=idea.track,
+        created_by=idea.created_by,
+        created=idea.created_at,
+        after=[t.id for t in idea.after],
+        supersedes=[t.id for t in idea.supersedes],
+        superseded_by=newer.get(idea.id, []),
+    )
 
 
 def idea_view(idea: Idea) -> IdeaView:

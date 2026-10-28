@@ -36,6 +36,7 @@ from piloop.api.contract import (
     CancelBody,
     Checkout,
     Clone,
+    CommentsQuery,
     EventsQuery,
     Fork,
     InboxQuery,
@@ -44,6 +45,7 @@ from piloop.api.contract import (
     Located,
     MessageBody,
     NewsQuery,
+    OutputQuery,
     Params,
     PauseBody,
     Problem,
@@ -87,7 +89,7 @@ from piloop.net.server import OPENAPI, Server, app, local_listener
 from piloop.net.tokens import Tokens
 from piloop.plugins.campaign_type.kit.backlog import api as backlog_api
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient, IdeaBody, StatusBody
+from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient, IdeaBody, IdeasQuery, PriorityBody, StatusBody
 from piloop.plugins.campaign_type.kit.candidates import api as candidates_api
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -99,12 +101,15 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measu
 from piloop.plugins.campaign_type.kit.evaluation.wire import CancelledBy, EvaluationClient, RungResult, RunningSince
 from piloop.plugins.campaign_type.kit.runs import api as runs_api
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.runs.wire import ExtendBody, RunsClient
 from piloop.plugins.campaign_type.kit.verdicts import api as verdicts_api
 from piloop.plugins.campaign_type.kit.verdicts.wire import RemeasureBody, VerdictsClient
 from piloop.plugins.campaign_type.optimization import api as optimization_api
 from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
 from piloop.plugins.contribution import collect, contributions_of, installed
+from piloop.plugins.lineage import api as lineage_api
+from piloop.plugins.lineage.wire import LineageClient
 from piloop.plugins.memory.local.api import JournalBody, Journaled
 from piloop.plugins.memory.local.tables import Journal
 from piloop.plugins.network.contract import NetworkHost
@@ -117,6 +122,7 @@ from piloop.settings import Settings
 from piloop.watch.panels import Context, InboxPanel
 from tests.campaign.test_stop import add_run
 from tests.conftest import EveryClient, disk, home_cas, measuring, serving_api, store_config
+from tests.reports.test_history import idea
 from tests.test_git import Basic, basic_server
 
 
@@ -293,8 +299,11 @@ def test_each_method_of_the_client_calls_its_route_with_the_route_s_models() -> 
         (optimization_api.router, OptimizationClient),
         (evaluation_api.router, EvaluationClient),
         (runs_api.router, RunsClient),
+        (lineage_api.router, LineageClient),
     ]
-    assert [r for r, _ in clients] == [*ROUTERS, *optimization_api.ROUTERS], 'each router has its client'
+    assert [r for r, _ in clients] == [*ROUTERS, *optimization_api.ROUTERS, lineage_api.router], (
+        'each router has its client'
+    )
     for route, client in [(r, made(http)) for routes, made in clients for r in routes.routes]:
         assert isinstance(route, APIRoute)
         hints = get_type_hints(getattr(client, route.name))
@@ -1389,3 +1398,74 @@ def test_with_a_server_set_the_commands_call_it_through_the_network_with_its_cre
         monkeypatch.setattr(common, 'console', Console(width=200, force_terminal=False))
         cli.app(['status', 'demo', '--json'], result_action='return_value', exit_on_error=False)
     assert '"name": "demo"' in capsys.readouterr().out, 'a name resolves on the server; no socket of this home'
+
+
+def test_the_reads_of_a_ui_answer_agents_their_output_ideas_and_comments(
+    db: Database, campaign: Campaign, cfg: Settings, tmp_path: Path
+) -> None:
+    log = tmp_path / 'research-log'
+    log.mkdir()
+    (log / 'transcript.txt').write_text('reading the history\n\nproposing idea B\n')
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        old = idea(s, p, 'more lines', IdeaStatus.DONE)
+        run = Run(idea=old, attempt=1, base_candidate_id=1, harness='pi', model='m', error='no commit')
+        s.add(run)
+        s.flush()
+        s.add(Candidate(id=2, campaign_id=p.id, run_id=run.id, parent_id=1, tree_sha='t2', revision='r2'))
+        s.add(Measurement(candidate_id=2, evaluator_id=1, metrics={'score': 3, 'size': 4}))
+        newer = idea(s, p, 'even more lines', IdeaStatus.READY, priority=1, after=(old.id,), supersedes=(old.id,))
+        idea(s, p, 'a hunch', IdeaStatus.SEED)
+        s.add(
+            AgentSession(
+                kind='research',
+                campaign_id=p.id,
+                harness='claude',
+                model='opus',
+                runtime='subprocess',
+                state=AgentSessionState.RUNNING,
+                reason='low_water: 1 ready < 10',
+                log_dir=str(log),
+                started_at=utcnow(),
+            )
+        )
+        s.add(Comment(target=TargetRef(TargetKind.IDEA, newer.id), author='human', body='worth a try'))
+        s.commit()
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
+        [state] = client.status(Selection(campaign='demo')).campaigns
+        assert isinstance(state, CampaignState)
+        [agent] = state.agents
+        assert (agent.runtime, agent.reason, agent.started is not None) == (
+            'subprocess',
+            'low_water: 1 ready < 10',
+            True,
+        )
+        output = client.agent_output(agent.id, OutputQuery(lines=1))
+        assert output.lines == ['proposing idea B'], 'the last lines, blank ones left out'
+        listed = client.ideas('demo', IdeasQuery(status=(IdeaStatus.SEED, IdeaStatus.READY)))
+        assert [(i.title, i.after, i.supersedes) for i in listed.ideas] == [
+            ('a hunch', [], []),
+            ('even more lines', [old.id], [old.id]),
+        ], 'in the order of the statuses asked for'
+        assert len(client.ideas('demo', IdeasQuery()).ideas) == 3
+        shown = client.idea(old.id)
+        assert (shown.idea.superseded_by, shown.hypothesis, [(r.status, r.error) for r in shown.runs]) == (
+            [newer.id],
+            'more lines helps',
+            [('queued', 'no commit')],
+        )
+        moved = client.set_priority(newer.id, PriorityBody(priority=4))
+        assert (moved.was, moved.idea.priority) == (1, 4)
+        [event] = client.events(EventsQuery(after=listed.cursor, kind=('idea.priority',))).events
+        assert (event.subject.id, event.actor) == (newer.id, 'human')
+        [note] = client.comments(CommentsQuery(kind=TargetKind.IDEA, id=newer.id)).comments
+        assert (note.author, note.body) == ('human', 'worth a try')
+        assert [n.id for n in client.lineage('demo').graph.nodes] == ['candidate#1', 'candidate#2']
+        for refused, error in [
+            (lambda: client.idea(IdeaId(99)), Problem.UNKNOWN_IDEA),
+            (lambda: client.set_priority(IdeaId(99), PriorityBody(priority=0)), Problem.UNKNOWN_IDEA),
+            (lambda: client.agent_output(AgentSessionId(99), OutputQuery(lines=1)), Problem.UNKNOWN_AGENT),
+        ]:
+            with pytest.raises(Refused) as no:
+                refused()
+            assert no.value.error == error

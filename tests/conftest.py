@@ -63,6 +63,7 @@ from piloop.plugins.executor.kit.leases import Timing
 from piloop.plugins.executor.workers import Workers, WorkersExecutor
 from piloop.plugins.executor.workers.worker import Worker
 from piloop.plugins.harness.contract import each_provider
+from piloop.plugins.lineage.wire import LineageClient
 from piloop.plugins.network.contract import NetworkConfig, NetworkHost
 from piloop.plugins.network.https import TOKEN_ENV, Https
 from piloop.plugins.role.contract import RoleConfig
@@ -785,5 +786,7 @@ def active(scheduler: Scheduler) -> list[AgentSessionId]:
     return sorted(AgentSessionId(int(name.partition('#')[2])) for name in campaigns_of(scheduler).in_flight())
 
 
-class EveryClient(BacklogClient, CandidatesClient, VerdictsClient, OptimizationClient, EvaluationClient, RunsClient):
-    """A client of every route: core's, and those of optimization and its components."""
+class EveryClient(
+    BacklogClient, CandidatesClient, VerdictsClient, OptimizationClient, EvaluationClient, RunsClient, LineageClient
+):
+    """A client of every route: core's, those of optimization and its components, and the lineage's."""

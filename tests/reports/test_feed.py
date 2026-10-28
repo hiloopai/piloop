@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from dirty_equals import IsDatetime
 from sqlalchemy import func, select, text, update
 
 from piloop.actor import System
@@ -356,6 +357,9 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
                 'harness': 'script',
                 'model': None,
                 'run': run_id,
+                'started': IsDatetime(),
+                'runtime': None,
+                'reason': None,
             }
         ],
         'roles': {

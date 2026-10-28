@@ -188,7 +188,17 @@ def _state(s: Session, campaign: Campaign, cfg: CampaignConfig, me: Actor) -> Ca
             for r in open_runs
         ],
         agents=[
-            LiveAgent(id=w.id, kind=w.kind, state=str(w.state), harness=w.harness, model=w.model, run=w.run_id)
+            LiveAgent(
+                id=w.id,
+                kind=w.kind,
+                state=str(w.state),
+                harness=w.harness,
+                model=w.model,
+                run=w.run_id,
+                started=w.started_at,
+                runtime=w.runtime,
+                reason=w.reason,
+            )
             for w in live_agent_sessions(s, campaign)
         ],
         roles=roles_of(s, campaign),

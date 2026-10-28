@@ -29,6 +29,7 @@ from piloop.api.contract import (
     CancelBody,
     Checkout,
     Clone,
+    CommentsQuery,
     Credential,
     EventsQuery,
     Fork,
@@ -38,6 +39,7 @@ from piloop.api.contract import (
     Located,
     MessageBody,
     NewsQuery,
+    OutputQuery,
     PauseBody,
     Problem,
     PromptBody,
@@ -55,10 +57,12 @@ from piloop.api.contract import (
 from piloop.api.views import (
     Acked,
     AgentAnswer,
+    AgentOutput,
     Batch,
     CampaignAnswer,
     CampaignOverview,
     CampaignSynced,
+    Comments,
     DaemonState,
     Delivered,
     Delivery,
@@ -118,7 +122,7 @@ from piloop.plugins.memory.contract import MEMORY
 from piloop.plugins.secrets import contract as secrets
 from piloop.plugins.section.contract import Rendering, rendered
 from piloop.plugins.vcs.contract import VCS, CloneFailed
-from piloop.reports import feed
+from piloop.reports import feed, overview as reports_overview
 from piloop.settings import Settings
 
 
@@ -605,6 +609,25 @@ def launch(s: Writing, campaign: Addressed, body: LaunchBody) -> AgentAnswer:
     s.commit()
     with db_feed.snapshot(s) as cursor:
         return AgentAnswer(cursor=cursor, agent=agent.id, role=agent.kind)
+
+
+@router.get('/agents/{agent}/output', operation_id='agent_output')
+def agent_output(api: Api, s: Reading, agent: AgentSessionId, query: Annotated[OutputQuery, Query()]) -> AgentOutput:
+    """The last lines that an agent wrote: the text of its latest session snapshot, else its runtime's output.
+
+    The server reads them through the agent's harness, so a client needs to know no harness's files.
+    ``agent_session.session_saved`` says that a new snapshot is in.
+    """
+    found = _agent(s, agent)
+    return AgentOutput(agent=found.id, lines=reports_overview.agent_output(s, found, query.lines, api.cas))
+
+
+@router.get('/comments', operation_id='comments')
+def comments(s: Reading, query: Annotated[CommentsQuery, Query()]) -> Comments:
+    """The comments on one row, such as an idea, oldest first."""
+    on = select(Comment).where(Comment.target == TargetRef(query.kind, query.id)).order_by(Comment.id)
+    with db_feed.snapshot(s) as cursor:
+        return Comments(cursor=cursor, comments=[inbox_module.comment_view(c) for c in s.scalars(on)])
 
 
 @router.post('/agents/{agent}/prompt', operation_id='prompt', dependencies=[Depends(actor_access)])

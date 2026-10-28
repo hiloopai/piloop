@@ -1,5 +1,7 @@
 """What the backlog's routes take and answer, and the client that calls them."""
 
+from datetime import datetime
+
 from piloop.api.client import Client, segment
 from piloop.api.contract import (
     Params,
@@ -13,6 +15,7 @@ from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 
 
 class IdeaBody(Params):
@@ -109,6 +112,62 @@ class IdeaView(View):
     created_by: str
 
 
+class IdeaRow(IdeaView):
+    """An idea in a list: its view, when it was made, and its links."""
+
+    created: datetime
+    after: list[IdeaId]
+    """The prerequisites: it runs once each one is ``done``."""
+    supersedes: list[IdeaId]
+    """The older ideas that it is a sharper version of."""
+    superseded_by: list[IdeaId]
+    """The newer ideas that are sharper versions of it."""
+
+
+class Ideas(View):
+    """A campaign's ideas of the statuses asked for, by status, then by priority, then oldest first, at ``cursor``."""
+
+    cursor: int
+    ideas: list[IdeaRow]
+
+
+class IdeaRun(View):
+    """A run of an idea."""
+
+    id: RunId
+    status: RunStatus
+    end: RunEnd | None
+    harness: str
+    model: str
+    error: str | None
+
+
+class IdeaDetail(View):
+    """An idea in full: what an implementer reads, where it came from, and its runs, at ``cursor``."""
+
+    cursor: int
+    idea: IdeaRow
+    hypothesis: str
+    plan: str | None
+    provenance: str | None
+    family: str | None
+    runs: list[IdeaRun]
+    """Oldest first."""
+
+
+class IdeasQuery(Params):
+    """Which ideas of a campaign."""
+
+    status: tuple[IdeaStatus, ...] = ()
+    """Only those of these statuses. Default: all."""
+
+
+class PriorityBody(Params):
+    """An idea's new priority."""
+
+    priority: Priority
+
+
 class IdeaAnswer(View):
     """An idea that a change wrote, read at ``cursor``."""
 
@@ -129,6 +188,12 @@ class StatusChanged(IdeaAnswer):
     was: IdeaStatus
 
 
+class PriorityChanged(IdeaAnswer):
+    """An idea whose priority changed."""
+
+    was: int
+
+
 class TrackChanged(IdeaAnswer):
     """An idea that moved to another track."""
 
@@ -137,6 +202,15 @@ class TrackChanged(IdeaAnswer):
 
 class BacklogClient(Client):
     """The calls of the backlog's routes: ideas, seeds, links, bases, tracks and statuses."""
+
+    def ideas(self, campaign: str, query: IdeasQuery) -> Ideas:
+        return self._get(f'/v1/campaigns/{segment(campaign)}/ideas', query, Ideas)
+
+    def idea(self, idea: IdeaId) -> IdeaDetail:
+        return self._get(f'/v1/ideas/{idea}', Params(), IdeaDetail)
+
+    def set_priority(self, idea: IdeaId, body: PriorityBody) -> PriorityChanged:
+        return self.post(f'/v1/ideas/{idea}/priority', body, PriorityChanged)
 
     def add_idea(self, campaign: str, body: IdeaBody) -> Defined:
         return self.post(f'/v1/campaigns/{segment(campaign)}/ideas', body, Defined)

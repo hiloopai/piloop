@@ -3,18 +3,19 @@
 from http import HTTPStatus
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
 
 from piloop.api.contract import (
     Problem,
     Reasoned,
 )
-from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Addressed, Writing, actor_access, reader
+from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Addressed, Reading, Viewed, Writing, actor_access, reader
 from piloop.db import feed as db_feed
 from piloop.net import Refusal
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
-from piloop.plugins.campaign_type.kit.backlog.ideas import Definition, idea_view
+from piloop.plugins.campaign_type.kit.backlog.ideas import Definition, idea_row, idea_view, superseded_by
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.backlog.wire import (
@@ -23,6 +24,12 @@ from piloop.plugins.campaign_type.kit.backlog.wire import (
     DevelopBody,
     IdeaAnswer,
     IdeaBody,
+    IdeaDetail,
+    IdeaRun,
+    Ideas,
+    IdeasQuery,
+    PriorityBody,
+    PriorityChanged,
     SeedBody,
     StatusBody,
     StatusChanged,
@@ -54,6 +61,49 @@ AddressedIdea = Annotated[Idea, Depends(idea_addressed)]
 
 
 Target = Annotated[Idea, Depends(target_addressed)]
+
+
+@router.get('/campaigns/{campaign}/ideas', operation_id='ideas')
+def ideas(s: Reading, campaign: Viewed, query: Annotated[IdeasQuery, Query()]) -> Ideas:
+    """The campaign's ideas of the statuses asked for, in the order of the statuses, then by priority, then oldest first."""
+    mine = select(Idea).where(Idea.campaign_id == campaign.id).options(selectinload(Idea.links))
+    found = s.scalars(mine.where(Idea.status.in_(query.status)) if query.status else mine).all()
+    rank = {status: i for i, status in enumerate(query.status)}
+    newer = superseded_by(s, [i.id for i in found])
+    with db_feed.snapshot(s) as cursor:
+        return Ideas(
+            cursor=cursor,
+            ideas=[idea_row(i, newer) for i in sorted(found, key=lambda i: (rank.get(i.status, 0), i.priority, i.id))],
+        )
+
+
+@router.get('/ideas/{idea}', operation_id='idea')
+def idea(s: Reading, idea: IdeaId) -> IdeaDetail:
+    """An idea in full: its definition, its links and its runs."""
+    found = _idea(s, idea)
+    runs = [
+        IdeaRun(id=r.id, status=r.status, end=r.end, harness=r.harness, model=r.model, error=r.error)
+        for r in found.runs
+    ]
+    with db_feed.snapshot(s) as cursor:
+        return IdeaDetail(
+            cursor=cursor,
+            idea=idea_row(found, superseded_by(s, [found.id])),
+            hypothesis=found.hypothesis,
+            plan=found.plan,
+            provenance=found.provenance,
+            family=found.family,
+            runs=runs,
+        )
+
+
+@router.post('/ideas/{idea}/priority', operation_id='set_priority', dependencies=[Depends(actor_access)])
+def set_priority(s: Writing, idea: AddressedIdea, body: PriorityBody) -> PriorityChanged:
+    """Set an idea's priority, from 0 (urgent) to 4 (someday)."""
+    was = backlog_ops.set_priority(s, idea.id, body.priority)
+    s.commit()
+    with db_feed.snapshot(s) as cursor:
+        return PriorityChanged(cursor=cursor, idea=idea_view(idea), was=was)
 
 
 @router.post('/campaigns/{campaign}/ideas', operation_id='add_idea', dependencies=[Depends(actor_access)])

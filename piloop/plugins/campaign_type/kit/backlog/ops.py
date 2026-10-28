@@ -361,6 +361,19 @@ def set_track(s: Session, idea_id: IdeaId, track: TrackName, *, reason: str, act
     return old
 
 
+def set_priority(s: Session, idea_id: IdeaId, priority: int) -> int:
+    """Set the idea's priority, from 0 (urgent) to 4 (someday), and return the old one.
+
+    The ``idea.priority`` event is the trigger's.
+
+    Raises:
+        Refused: the idea is missing.
+    """
+    idea = _get(s, Idea, idea_id, 'idea')
+    old, idea.priority = idea.priority, priority
+    return old
+
+
 def track_for(campaign: Campaign, track: TrackName | None) -> TrackName:
     """Return the track for an idea: ``track`` when ``piloop.toml`` has it, else the only track.
 

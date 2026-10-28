@@ -6,7 +6,7 @@ there. A campaign screen has a header (head, progress against the stop rule), fo
 has its own keys, which the key bar and ``?`` show. ``/`` filters the focused panel.
 
 A key that writes calls the same functions as the CLI (``inbox.ack``, ``inbox.reply``, ``ops.set_idea_status``,
-``ideas.reprioritise``, ``results.queue_prompt``). Each write is one short session signed by the watcher's actor, so
+``ops.set_priority``, ``results.queue_prompt``). Each write is one short session signed by the watcher's actor, so
 the triggers stamp it and the events feed carries it like the write of any other client.
 
 ``piloop/watch/panels.py`` gives the data. This module draws it and maps the keys. It reads again when the database
@@ -36,7 +36,6 @@ from piloop.db.models import utcnow
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
-from piloop.plugins.campaign_type.kit.backlog.ideas import reprioritise
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.cas.contract import Cas
@@ -272,7 +271,14 @@ class IdeasTable(PanelTable):
 
     def action_priority(self, by: int) -> None:
         if (key := self.key()) is not None:
-            self.campaign.act(lambda s: f'idea#{key} priority {reprioritise(s, IdeaId(key), by).priority}')
+
+            def write(s: Session) -> str:
+                now = min(max(s.get_one(Idea, key).priority + by, 0), 4)
+                backlog_ops.set_priority(s, IdeaId(key), now)
+                s.commit()
+                return f'idea#{key} priority {now}'
+
+            self.campaign.act(write)
 
 
 class CandidatesTable(PanelTable):

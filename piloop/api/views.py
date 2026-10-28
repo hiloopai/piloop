@@ -115,6 +115,12 @@ class LiveAgent(View):
     harness: str | None
     model: str | None
     run: RunId | None
+    started: datetime
+    """When it launched. While it starts, when it was requested."""
+    runtime: str | None
+    """The ``[plugins.runtime]`` instance that runs it. Null until one does."""
+    reason: str | None
+    """Why the daemon launched it, such as the trigger that fired."""
 
 
 class RoleView(View):
@@ -455,6 +461,20 @@ class Linked(CommentView):
                 return 'cited by it'
             case _:
                 assert_never(self.relation)
+
+
+class Comments(View):
+    """The comments on one row, oldest first, read at ``cursor``."""
+
+    cursor: int
+    comments: list[CommentView]
+
+
+class AgentOutput(View):
+    """The last lines that an agent wrote: the text of its harness session, else its runtime's output."""
+
+    agent: AgentSessionId
+    lines: list[str]
 
 
 class Thread(View):

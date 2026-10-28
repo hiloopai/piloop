@@ -24,6 +24,7 @@ from piloop.api.contract import (
     AckBody,
     CancelBody,
     Clone,
+    CommentsQuery,
     EventsQuery,
     InboxQuery,
     LaunchBody,
@@ -31,6 +32,7 @@ from piloop.api.contract import (
     Located,
     MessageBody,
     NewsQuery,
+    OutputQuery,
     Params,
     PauseBody,
     Polled,
@@ -47,9 +49,11 @@ from piloop.api.contract import (
 from piloop.api.views import (
     Acked,
     AgentAnswer,
+    AgentOutput,
     Batch,
     CampaignAnswer,
     CampaignSynced,
+    Comments,
     Inbox,
     LiveKeys,
     Messaged,
@@ -129,6 +133,12 @@ class Client:
 
     def thread(self, comment: CommentId) -> Thread:
         return self._get(f'/v1/inbox/{comment}', Params(), Thread)
+
+    def comments(self, query: CommentsQuery) -> Comments:
+        return self._get('/v1/comments', query, Comments)
+
+    def agent_output(self, agent: AgentSessionId, query: OutputQuery) -> AgentOutput:
+        return self._get(f'/v1/agents/{agent}/output', query, AgentOutput)
 
     def register_campaign(self, body: Registration) -> Registered:
         return self.post('/v1/campaigns', body, Registered)

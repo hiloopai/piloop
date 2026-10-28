@@ -25,7 +25,17 @@ from pydantic_core import PydanticCustomError
 
 from piloop import deprecated
 from piloop.actor import CALLER_NAME
-from piloop.ids import LISTED, CampaignName, CampaignStatus, CommentId, CommentKind, Ending, EnvName, RoleName
+from piloop.ids import (
+    LISTED,
+    CampaignName,
+    CampaignStatus,
+    CommentId,
+    CommentKind,
+    Ending,
+    EnvName,
+    RoleName,
+    TargetKind,
+)
 
 MAX_POLL_SECONDS = 25
 """The longest that the server holds a long-poll (``Polled.wait``), as the GitHub Actions runner's."""
@@ -112,6 +122,22 @@ class InboxQuery(Located):
     """Only the items of these kinds."""
     acked: bool = False
     """The acknowledged items too."""
+
+
+class CommentsQuery(Params):
+    """Which comments: those on one row."""
+
+    kind: TargetKind
+    """The kind of the row, such as ``idea``."""
+    id: int = Field(ge=1)
+    """The row's id."""
+
+
+class OutputQuery(Params):
+    """How much of an agent's output."""
+
+    lines: int = Field(ge=1, le=MAX_LIMIT)
+    """The most lines to answer: the last ones."""
 
 
 class EventsQuery(Polled, Located):

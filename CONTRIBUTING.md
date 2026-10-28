@@ -386,7 +386,8 @@ Each capability is one package, `plugins/<capability>/`, with the name of its en
 - Every other module is a built-in provider, with the name of its entry point. Providers are public: a plugin may
   import one to call it.
 - `kit/` has helpers that any provider of the capability may use. Core imports none of them.
-- `api.py` has the routes that every provider of the capability shares, such as the lineage's.
+- `api.py` has the routes that every provider of the capability shares, such as the lineage's, and `wire.py` their
+  client, which a UI calls.
 - A directory without Python has resources of the providers, such as the role prompts in `role/prompts/`.
 
 A campaign type is a provider of `campaign_type`, with a package of its own: `plugins/campaign_type/<type>/`. It

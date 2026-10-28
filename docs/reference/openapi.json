@@ -2082,6 +2082,172 @@
         }
       }
     },
+    "/v1/agents/{agent}/output": {
+      "get": {
+        "summary": "Agent Output",
+        "description": "The last lines that an agent wrote: the text of its latest session snapshot, else its runtime's output.\n\nThe server reads them through the agent's harness, so a client needs to know no harness's files.\n``agent_session.session_saved`` says that a new snapshot is in.",
+        "operationId": "agent_output",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Agent"
+            }
+          },
+          {
+            "name": "lines",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "description": "The most lines to answer: the last ones.",
+              "title": "Lines"
+            },
+            "description": "The most lines to answer: the last ones."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentOutput"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/comments": {
+      "get": {
+        "summary": "Comments",
+        "description": "The comments on one row, such as an idea, oldest first.",
+        "operationId": "comments",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TargetKind",
+              "description": "The kind of the row, such as ``idea``."
+            },
+            "description": "The kind of the row, such as ``idea``."
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The row's id.",
+              "title": "Id"
+            },
+            "description": "The row's id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comments"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/agents/{agent}/prompt": {
       "post": {
         "summary": "Prompt",
@@ -2392,6 +2558,91 @@
       }
     },
     "/v1/campaigns/{campaign}/ideas": {
+      "get": {
+        "summary": "Ideas",
+        "description": "The campaign's ideas of the statuses asked for, in the order of the statuses, then by priority, then oldest first.",
+        "operationId": "ideas",
+        "parameters": [
+          {
+            "name": "campaign",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The campaign's name, or its id.",
+              "title": "Campaign"
+            },
+            "description": "The campaign's name, or its id."
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/IdeaStatus"
+              },
+              "description": "Only those of these statuses. Default: all.",
+              "default": [],
+              "title": "Status"
+            },
+            "description": "Only those of these statuses. Default: all."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ideas"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "summary": "Add Idea",
         "description": "Add a defined idea, which the daemon schedules in priority order once it is ready.",
@@ -2426,6 +2677,156 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Defined"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ideas/{idea}": {
+      "get": {
+        "summary": "Idea",
+        "description": "An idea in full: its definition, its links and its runs.",
+        "operationId": "idea",
+        "parameters": [
+          {
+            "name": "idea",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Idea"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdeaDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ideas/{idea}/priority": {
+      "post": {
+        "summary": "Set Priority",
+        "description": "Set an idea's priority, from 0 (urgent) to 4 (someday).",
+        "operationId": "set_priority",
+        "parameters": [
+          {
+            "name": "idea",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Idea"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PriorityBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriorityChanged"
                 }
               }
             }
@@ -4171,6 +4572,28 @@
         "title": "AgentAnswer",
         "description": "An agent that a change requested or asked to cancel, read at ``cursor``."
       },
+      "AgentOutput": {
+        "properties": {
+          "agent": {
+            "type": "integer",
+            "title": "Agent"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Lines"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent",
+          "lines"
+        ],
+        "title": "AgentOutput",
+        "description": "The last lines that an agent wrote: the text of its harness session, else its runtime's output."
+      },
       "AnomalyNews": {
         "properties": {
           "kind": {
@@ -4980,6 +5403,28 @@
         "title": "CommentView",
         "description": "A comment, as ``piloop inbox show`` shows it."
       },
+      "Comments": {
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor"
+          },
+          "comments": {
+            "items": {
+              "$ref": "#/components/schemas/CommentView"
+            },
+            "type": "array",
+            "title": "Comments"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cursor",
+          "comments"
+        ],
+        "title": "Comments",
+        "description": "The comments on one row, oldest first, read at ``cursor``."
+      },
       "Credential": {
         "oneOf": [
           {
@@ -5718,6 +6163,201 @@
         "title": "IdeaBody",
         "description": "A defined idea, which the daemon schedules in priority order once it is ready."
       },
+      "IdeaDetail": {
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor"
+          },
+          "idea": {
+            "$ref": "#/components/schemas/IdeaRow"
+          },
+          "hypothesis": {
+            "type": "string",
+            "title": "Hypothesis"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance"
+          },
+          "family": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/IdeaRun"
+            },
+            "type": "array",
+            "title": "Runs",
+            "description": "Oldest first."
+          }
+        },
+        "type": "object",
+        "required": [
+          "cursor",
+          "idea",
+          "hypothesis",
+          "plan",
+          "provenance",
+          "family",
+          "runs"
+        ],
+        "title": "IdeaDetail",
+        "description": "An idea in full: what an implementer reads, where it came from, and its runs, at ``cursor``."
+      },
+      "IdeaRow": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "campaign": {
+            "type": "integer",
+            "title": "Campaign"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "status": {
+            "$ref": "#/components/schemas/IdeaStatus"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority"
+          },
+          "track": {
+            "type": "string",
+            "title": "Track"
+          },
+          "created_by": {
+            "type": "string",
+            "title": "Created By"
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created"
+          },
+          "after": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "After",
+            "description": "The prerequisites: it runs once each one is ``done``."
+          },
+          "supersedes": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Supersedes",
+            "description": "The older ideas that it is a sharper version of."
+          },
+          "superseded_by": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Superseded By",
+            "description": "The newer ideas that are sharper versions of it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "campaign",
+          "title",
+          "status",
+          "priority",
+          "track",
+          "created_by",
+          "created",
+          "after",
+          "supersedes",
+          "superseded_by"
+        ],
+        "title": "IdeaRow",
+        "description": "An idea in a list: its view, when it was made, and its links."
+      },
+      "IdeaRun": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunEnd"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness": {
+            "type": "string",
+            "title": "Harness"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "end",
+          "harness",
+          "model",
+          "error"
+        ],
+        "title": "IdeaRun",
+        "description": "A run of an idea."
+      },
       "IdeaStatus": {
         "type": "string",
         "enum": [
@@ -5774,6 +6414,28 @@
         ],
         "title": "IdeaView",
         "description": "An idea, as the change that wrote it left it."
+      },
+      "Ideas": {
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor"
+          },
+          "ideas": {
+            "items": {
+              "$ref": "#/components/schemas/IdeaRow"
+            },
+            "type": "array",
+            "title": "Ideas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cursor",
+          "ideas"
+        ],
+        "title": "Ideas",
+        "description": "A campaign's ideas of the statuses asked for, by status, then by priority, then oldest first, at ``cursor``."
       },
       "ImportBody": {
         "properties": {
@@ -6423,6 +7085,36 @@
               }
             ],
             "title": "Run"
+          },
+          "started": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started",
+            "description": "When it launched. While it starts, when it was requested."
+          },
+          "runtime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime",
+            "description": "The ``[plugins.runtime]`` instance that runs it. Null until one does."
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "Why the daemon launched it, such as the trigger that fired."
           }
         },
         "type": "object",
@@ -6432,7 +7124,10 @@
           "state",
           "harness",
           "model",
-          "run"
+          "run",
+          "started",
+          "runtime",
+          "reason"
         ],
         "title": "LiveAgent",
         "description": "An agent that is starting or running."
@@ -6937,6 +7632,42 @@
         "maximum": 4.0,
         "minimum": 0.0
       },
+      "PriorityBody": {
+        "properties": {
+          "priority": {
+            "$ref": "#/components/schemas/Priority"
+          }
+        },
+        "type": "object",
+        "required": [
+          "priority"
+        ],
+        "title": "PriorityBody",
+        "description": "An idea's new priority."
+      },
+      "PriorityChanged": {
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor"
+          },
+          "idea": {
+            "$ref": "#/components/schemas/IdeaView"
+          },
+          "was": {
+            "type": "integer",
+            "title": "Was"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cursor",
+          "idea",
+          "was"
+        ],
+        "title": "PriorityChanged",
+        "description": "An idea whose priority changed."
+      },
       "ProblemDetail": {
         "properties": {
           "error": {
@@ -7434,6 +8165,36 @@
         ],
         "title": "RunAnswer",
         "description": "A run that a change asked to cancel, read at ``cursor``."
+      },
+      "RunEnd": {
+        "type": "string",
+        "enum": [
+          "finished",
+          "failed",
+          "timed_out",
+          "awaiting_answer",
+          "cancelled",
+          "campaign_stopped",
+          "daemon_stopped",
+          "stale",
+          "role_removed",
+          "not_started",
+          "worker_lost"
+        ],
+        "title": "RunEnd",
+        "description": "How a run ended. ``runs.error`` adds the detail, when there is one.\n\n``finished``: its implementer left its finding, or committed and exited cleanly. ``failed``: its process failed, it\nmade no commit, or only the daemon's commit of what it left uncommitted (the error says which). ``timed_out``: its\nrole's timeout. ``awaiting_answer``: its implementer's escalation waits for an answer (the error names it).\n``cancelled``: someone cancelled it. ``campaign_stopped``, ``daemon_stopped``, ``stale`` (a daemon died while it\nran) and ``worker_lost``: something else ended it. ``role_removed``: ``piloop init`` removed its role while it was\nqueued. ``not_started``: no agent of it started to work. Only the first four are attempts at the idea."
+      },
+      "RunStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "timed_out"
+        ],
+        "title": "RunStatus",
+        "description": "The lifecycle of one attempt at an idea."
       },
       "RungResult": {
         "properties": {
@@ -8178,6 +8939,22 @@
         ],
         "title": "Target",
         "description": "The row that a comment is about."
+      },
+      "TargetKind": {
+        "type": "string",
+        "enum": [
+          "campaign",
+          "idea",
+          "run",
+          "candidate",
+          "measurement",
+          "agent_session",
+          "comment",
+          "instance",
+          "home"
+        ],
+        "title": "TargetKind",
+        "description": "What a comment or an event points at."
       },
       "Text": {
         "properties": {
