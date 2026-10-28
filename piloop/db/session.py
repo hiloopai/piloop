@@ -728,12 +728,15 @@ class Database:
         """How many waiters read now: ``close`` lets them end before it closes the connections that they hold."""
         self._changed: set[asyncio.Future[None]] = set()
         """The futures of ``changed``'s waiters, each on its own event loop: the next commit resolves them."""
-        event.listen(self._sessions, 'after_commit', lambda _s: self._wake())
+        event.listen(self._sessions, 'after_commit', self._on_commit)
         self._checked_out = 0
         """How many connections the pool has handed out now: ``close`` lets them come back before it closes them."""
         event.listen(self.engine, 'checkout', lambda *_: self._count_checkout(1))
         event.listen(self.engine, 'checkin', lambda *_: self._count_checkout(-1))
         event.listen(self.engine, 'do_connect', self._refuse_once_closed)
+
+    def _on_commit(self, session: Session) -> None:
+        self._wake()
 
     def session(self) -> Session:
         """A new session. Use it as a context manager.
@@ -899,4 +902,8 @@ class Database:
             self._committed.notify_all()
             self._resolve()
             self._committed.wait_for(lambda: self._reading == self._checked_out == 0, CLOSE_WAIT_SECONDS)
+        # The sessionmaker's class holds its listeners for the life of the process: this one would keep the database.
+        if event.contains(self._sessions, 'after_commit', self._on_commit):  # a second close finds it gone
+            event.remove(self._sessions, 'after_commit', self._on_commit)
         self.engine.dispose()
+        self.engine.clear_compiled_cache()  # megabytes, which a closed database that something still holds would keep

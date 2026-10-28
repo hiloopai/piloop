@@ -84,17 +84,18 @@ make
 ```
 
 `make` formats the code, runs the linter (ruff), runs the type checker (ty), runs the tests with coverage, and
-regenerates the generated files. Coverage must be 100%. The tests run in parallel, one process for each logical CPU
-([pytest-xdist](https://pytest-xdist.readthedocs.io)). While you work, skip coverage with `make test`, or run only the
-tests that you need:
+regenerates the generated files. Coverage must be 100%. The tests run in 8 parallel processes
+([pytest-xdist](https://pytest-xdist.readthedocs.io)); `PYTEST_WORKERS=16` sets another count. While you work, skip
+coverage with `make test`, or run only the tests that you need:
 
 ```bash
 make test
-COLUMNS=150 uv run pytest -n logical tests/daemon
+COLUMNS=150 uv run pytest -n 8 tests/daemon
 COLUMNS=150 uv run pytest tests/scoring
 ```
 
-On a machine that other jobs share, set `PYTEST_XDIST_AUTO_NUM_WORKERS` (for example to 4) to start fewer processes.
+On a Linux machine that others share, run `make shared`: it runs one suite at a time on the machine, with 16 workers,
+and kills one that grows past `SUITE_MEMORY` before it takes the machine down.
 
 inline-snapshot cannot fix a snapshot in a parallel run: run that test without `-n` and with `--inline-snapshot=fix`.
 

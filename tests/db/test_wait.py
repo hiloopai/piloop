@@ -1,10 +1,13 @@
 """``Database.wait_until``: a waiter wakes on a commit of this process, on an event of another, and gives up."""
 
 import asyncio
+import gc
 import sqlite3
 import threading
 import time
+import weakref
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -15,7 +18,7 @@ from piloop.actor import System
 from piloop.db import session as session_module
 from piloop.db.models import Campaign, Pause
 from piloop.db.session import Database, DatabaseClosed
-from tests.conftest import wait_until
+from tests.conftest import at_head, wait_until
 
 
 def rename(db: Database, campaign: Campaign) -> None:
@@ -215,6 +218,24 @@ def test_a_closed_database_refuses_a_new_session(db: Database) -> None:
         db.session()
     with pytest.raises(DatabaseClosed, match='the database is closed'), db.acting(System.HUMAN):
         pass
+
+
+def test_a_closed_database_that_committed_is_freed_and_closes_twice(tmp_path: Path, schema: Path) -> None:
+    """Its commit listener sits on the sessionmaker's class, which lives as long as the process: each database that a
+    process opened, with its engine's compiled statements, stayed in memory."""
+
+    def committed_and_closed() -> weakref.ref[Database]:
+        db = Database(f'sqlite:///{at_head(schema, tmp_path / "piloop.db")}', actor=System.HUMAN)
+        with db.session() as s:
+            s.execute(select(1))
+            s.commit()
+        db.close()
+        db.close()
+        return weakref.ref(db)
+
+    freed = committed_and_closed()
+    gc.collect()
+    assert freed() is None
 
 
 def test_a_waiter_gives_up_at_its_timeout(db: Database) -> None:

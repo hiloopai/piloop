@@ -75,6 +75,7 @@ def test_the_executor_s_upkeep_and_the_archiver_run_after_limits_and_before_the_
     names = [c.name for c in Scheduler(db, controller, Tracer(None), tmp_path, archiver=archiver).consumers()]
     assert names == [
         'limits',
+        'home_check',
         'executor',
         'archiver',
         'notify',

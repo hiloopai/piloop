@@ -73,6 +73,7 @@ class Net:
         argv = [sys.executable, str(SERVER_PROCESS), f'sqlite:///{self.tmp_path / "piloop.db"}', str(self.tmp_path)]
         self.server = subprocess.Popen(
             [*argv, WORKERS.model_dump_json()],
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
         )
@@ -84,8 +85,9 @@ class Net:
         self.proxy.upstream = ('127.0.0.1', int(port))
 
     def kill_server(self) -> None:
-        assert self.server is not None and self.server.stdout is not None
+        assert self.server is not None and self.server.stdin is not None and self.server.stdout is not None
         _kill(self.server)
+        self.server.stdin.close()
         self.server.stdout.close()
 
     def start_worker(self) -> subprocess.Popen[str]:
@@ -141,8 +143,9 @@ def net(db: Database, tmp_path: Path) -> Generator[Net]:
     finally:
         for proc in [*net.workers, *([net.server] if net.server else [])]:
             _kill(proc)
-            if proc.stdout is not None:
-                proc.stdout.close()
+            for pipe in (proc.stdin, proc.stdout):
+                if pipe is not None:
+                    pipe.close()
         if net.proxy is not None:
             net.proxy.close()
 

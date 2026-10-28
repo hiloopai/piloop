@@ -1,9 +1,9 @@
 """The daemon's jobs: the consumers that providers and capabilities contribute, their loop, and their lifecycles.
 
-Core names none of them. The executor and the archiver that the daemon opened, the machinery of each capability
-(``piloop.contributors``) and each installed provider that a campaign may choose contribute consumers
-(``piloop.plugins.contribution``). The loop runs them by phase (``piloop.daemon.loop``). This module starts and stops
-their lifecycles with the daemon, and runs their threads.
+Core names none of them but its own home check. The executor and the archiver that the daemon opened, the machinery
+of each capability (``piloop.contributors``) and each installed provider that a campaign may choose contribute
+consumers (``piloop.plugins.contribution``). The loop runs them by phase (``piloop.daemon.loop``). This module starts
+and stops their lifecycles with the daemon, and runs their threads.
 """
 
 import sys
@@ -14,17 +14,28 @@ from datetime import datetime
 from pathlib import Path
 from queue import SimpleQueue
 
-from piloop.daemon.loop import Consumer, Loop, Turn, in_turn_order
+from piloop.daemon.loop import Consumer, Loop, Phase, Turn, in_turn_order
 from piloop.db.models import utcnow
 from piloop.db.session import Database
 from piloop.otel import Tracer
 from piloop.plugins.archive.contract import Archiver
 from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES, CAMPAIGNS, TypeHost
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.contribution import DaemonHost, Leaving, collect, contributions_of, installed, machinery
+from piloop.plugins.contribution import (
+    Contribution,
+    DaemonHost,
+    Leaving,
+    collect,
+    contributions_of,
+    installed,
+    machinery,
+)
 from piloop.plugins.host import Plugins
 from piloop.runtime.factory import RuntimeFactory, make_runtime
 from piloop.settings import AgentSettings, DaemonSettings
+
+HOME_CHECK = 'home_check'
+"""The daemon's own consumer: the check that its home is still there."""
 
 
 class Scheduler:
@@ -77,14 +88,26 @@ class Scheduler:
             plugins if plugins is not None else {},
         )
         opened = (controller.executor,) if archiver is None else (controller.executor, archiver)
-        self.contributions = collect([*contributions_of(opened), *machinery(host), *contributions_of(installed())], [])
-        """What the providers and the capabilities add: the executor and the archiver that the daemon opened, then the
-        machinery of each capability, then each installed provider that a campaign may choose."""
+        self._home, self._home_check = home, daemon.home_check
+        own = Contribution(consumers=(Consumer(HOME_CHECK, frozenset(), self._check_home, Phase.UPKEEP),))
+        self.contributions = collect(
+            [('the daemon', own), *contributions_of(opened), *machinery(host), *contributions_of(installed())], []
+        )
+        """What the daemon, the providers and the capabilities add: the daemon's home check, the executor and the
+        archiver that the daemon opened, then the machinery of each capability, then each installed provider that a
+        campaign may choose."""
         self.loop = Loop(db, self.consumers(), now, daemon.feed_page)
 
     def consumers(self) -> tuple[Consumer, ...]:
         """The daemon's jobs, in the order that a turn of its loop runs them, with the events that wake each one."""
         return in_turn_order(self.contributions.consumers)
+
+    def _check_home(self, turn: Turn) -> datetime | None:
+        """Stop the daemon once its home is gone: no client finds it there, so nothing else would ever stop it."""
+        if not self._home.is_dir():
+            self.interrupt()
+            return None
+        return turn.now + self._home_check
 
     def run_all(self, now: datetime | None = None) -> None:
         """Run every consumer once, as the loop does when it starts."""

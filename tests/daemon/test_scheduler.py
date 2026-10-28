@@ -997,6 +997,19 @@ def test_a_signal_during_the_loops_wait_ends_it_at_once(
     assert time.monotonic() - started < 10, 'the wait ends at the signal'
 
 
+def test_the_loop_ends_once_its_home_is_gone(db: Database, runtime: ScriptRuntime, tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    home.mkdir()
+    controller = RunController(db, Tracer(None), home, factory(runtime), executor=Workers())
+    scheduler = Scheduler(db, controller, Tracer(None), home, daemon=DaemonSettings(home_check=timedelta(seconds=0.05)))
+    threading.Timer(0.5, shutil.rmtree, (home,)).start()
+    try:
+        scheduler.serve()
+    finally:
+        scheduler.stop(timeout=5)
+    assert not home.exists(), 'it ran until the home was gone'
+
+
 def test_a_signal_during_start_up_ends_the_loop_before_its_first_turn(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -45,6 +45,7 @@ from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.contract import AgentFinished, AgentReport, EvaluationReport, Source
 from piloop.plugins.executor.kit.leases import NOT_TAKEN, SERVE, Leases, StaleReport, Timing
 from piloop.plugins.executor.workers import Workers
+from piloop.plugins.runtime.kit import tags
 from piloop.plugins.vcs.git import bundles as store_commits
 from piloop.proc import alive, started
 from piloop.settings import Settings
@@ -66,7 +67,7 @@ from tests.conftest import (
 from tests.daemon.test_evaluation_queue import held_evaluate
 from tests.daemon.test_run_controller import execute, make_run, reload_campaign, run_row, set_config
 from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_watchdog
-from tests.daemon.test_serve import env_for, reap
+from tests.daemon.test_serve import env_for
 
 FAST = Timing(renew=0.1, grace=0.5, toleration=2.0)
 SLACK = Timing(renew=0.5, grace=1.0, toleration=3.0)
@@ -443,7 +444,7 @@ def test_a_real_daemon_killed_during_a_run_is_followed_by_one_that_finishes_it_o
         for daemon in daemons:
             daemon.kill()
             daemon.wait()
-        reap(cfg.home)
+        tags.kill_tagged(f'PILOOP_HOME={cfg.home}')
         db.close()
 
 

@@ -1,4 +1,6 @@
 .DEFAULT_GOAL := all
+PYTEST_WORKERS ?= 8
+SUITE_MEMORY ?= 24G
 
 .PHONY: install
 install:  ## Install deps and pre-commit hooks
@@ -21,11 +23,11 @@ typecheck:  ## Static type check
 
 .PHONY: test
 test:  ## Run tests in parallel (no coverage)
-	COLUMNS=150 uv run pytest -n logical --durations=10
+	COLUMNS=150 uv run pytest -n $(PYTEST_WORKERS) --durations=10
 
 .PHONY: testcov
 testcov:  ## Run tests in parallel with coverage; fails under 100%
-	COLUMNS=150 uv run pytest -n logical --durations=10 --cov --cov-report=term-missing:skip-covered
+	COLUMNS=150 uv run pytest -n $(PYTEST_WORKERS) --durations=10 --cov --cov-report=term-missing:skip-covered
 
 .PHONY: e2e
 e2e:  ## Run the end-to-end scenarios with real agents (about 15 minutes and 1 USD)
@@ -45,3 +47,7 @@ changelog:  ## Write the section of the version in pyproject.toml into CHANGELOG
 
 .PHONY: all
 all: format lint typecheck testcov docs
+
+.PHONY: shared
+shared:  ## Run `all` with 16 workers on a machine that others share: one suite at a time, OOM-killed past SUITE_MEMORY (Linux, systemd)
+	flock /tmp/piloop-suite.lock systemd-run --user --scope -q -p MemoryMax=$(SUITE_MEMORY) -p MemorySwapMax=0 -- $(MAKE) all PYTEST_WORKERS=16

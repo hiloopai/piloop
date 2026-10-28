@@ -126,9 +126,7 @@ jobs:
           enable-cache: true
           cache-suffix: test
       - run: uv sync
-      - run: make ${{ matrix.make || 'test' }}
-        env:
-          PYTEST_XDIST_AUTO_NUM_WORKERS: ${{ matrix.workers }}
+      - run: make ${{ matrix.make || 'test' }} PYTEST_WORKERS=${{ matrix.workers || 'logical' }}
 
   check:
     if: always()

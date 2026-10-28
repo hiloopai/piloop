@@ -3,11 +3,11 @@
 ``<parameters>`` is the JSON of ``[plugins.executor]`` for ``workers``. The remote fault tests kill this process
 (``kill -9``) and start it again, while core runs in the test process. It renews every live lease first, as a daemon
 that starts does, then serves on a free loopback port. It applies reports with core's operations (``CampaignResults``),
-and prints ``ready <port>`` once it listens. Its CAS is the ``disk`` under ``<home>``, which the worker shares.
+and prints ``ready <port>`` once it listens. Its CAS is the ``disk`` under ``<home>``, which the worker shares. It exits
+when its stdin closes: the test process that started it is gone, even when it was killed.
 """
 
 import sys
-import threading
 from functools import partial
 from pathlib import Path
 
@@ -49,7 +49,7 @@ def main() -> None:
         app(Tokens(db), network, [executor_router(lease_routes(leases, db.changed, cas, bundle, cli))]), listener
     ).start()
     print(f'ready {listener.socket.getsockname()[1]}', flush=True)
-    threading.Event().wait()
+    sys.stdin.read()
 
 
 if __name__ == '__main__':

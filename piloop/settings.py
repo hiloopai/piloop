@@ -110,6 +110,9 @@ class DaemonSettings(BaseModel):
     that is too loaded to start agents makes every new agent fail, and each failure costs a start window."""
     startup_window: timedelta = Field(default=timedelta(minutes=10), gt=timedelta(0))
     """How far back ``startup_breaker`` counts. Launches resume when fewer failures are that recent."""
+    home_check: timedelta = Field(default=timedelta(seconds=10), gt=timedelta(0))
+    """How often the daemon checks that its home is still there. A daemon whose home is gone stops: no client can find
+    it there to stop it."""
     startup_relaunches: int = Field(default=2, ge=0)
     """How many times a run is queued again with a new implementer after its implementer failed to start. Then the run
     fails. A failure at startup is a fault of the host or the harness, not an attempt at the idea: it does not count

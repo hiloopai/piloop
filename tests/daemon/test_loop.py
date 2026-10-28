@@ -389,7 +389,7 @@ def test_routing_by_kind_decides_what_a_pass_on_every_change_decides(
             ['campaigns', 'idle_slots'],
             ['notify', 'prompts', 'wind_down', 'campaigns', 'idle_slots'],
             ['limits', 'evaluations', 'campaigns', 'idle_slots'],
-            ['wind_down', 'facts', 'campaigns', 'idle_slots'],
+            ['home_check', 'wind_down', 'facts', 'campaigns', 'idle_slots'],
         ]
     ), 'the consumers that each write ran, in the order of the turn'
     assert trace(db) == snapshot(

@@ -7,7 +7,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -79,6 +79,7 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.kit.capacity import GB, HostSample
 from piloop.plugins.executor.kit.leases import Leases
+from piloop.plugins.runtime.kit import tags
 from piloop.settings import Settings
 from piloop.store.chunks import Chunked
 from piloop.version import direct_url, installed
@@ -116,7 +117,11 @@ def run_cli(tokens: list[str]) -> None:
 
 
 @pytest.fixture(autouse=True)
-def isolated_home(tmp_path: Path, schema: Path, monkeypatch: pytest.MonkeyPatch) -> Console:
+def isolated_home(tmp_path: Path, schema: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Console]:
+    """The test's home. Once the test ends, pass or fail, every process of the home is killed.
+
+    A test stops the daemon that it started (``serve --detach``) only on its last line.
+    """
     at_head(schema, tmp_path / 'piloop.db')
     monkeypatch.setattr(
         common,
@@ -126,7 +131,8 @@ def isolated_home(tmp_path: Path, schema: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(campaign_module, 'settings', common.settings)
     console = Console(record=True, width=200, force_terminal=False)
     monkeypatch.setattr(common, 'console', console)
-    return console
+    yield console
+    tags.kill_tagged(f'PILOOP_HOME={tmp_path}')
 
 
 @pytest.fixture

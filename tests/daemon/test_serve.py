@@ -1,9 +1,9 @@
 """The daemon as a real process: SIGTERM, `serve --detach`, `stop`, the pid file, service unit text."""
 
-import contextlib
 import os
 import plistlib
 import re
+import shutil
 import signal
 import stat
 import subprocess
@@ -76,14 +76,7 @@ def reap_daemons(tmp_path: Path) -> Iterator[None]:
     running for hours.
     """
     yield
-    reap(tmp_path / 'home')
-
-
-def reap(home: Path) -> None:
-    """SIGKILL every live process whose environment has ``PILOOP_HOME=<home>``."""
-    for pid, _, _ in tags.tagged(f'PILOOP_HOME={home}'):
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
+    tags.kill_tagged(f'PILOOP_HOME={tmp_path / "home"}')
 
 
 def test_a_daemon_that_a_failed_test_leaves_is_reaped(tmp_path: Path) -> None:
@@ -92,8 +85,19 @@ def test_a_daemon_that_a_failed_test_leaves_is_reaped(tmp_path: Path) -> None:
     assert piloop(cfg.home, 'serve', '--detach').returncode == 0
     pid = int(cfg.pid_file.read_text())
     assert pid in [p for p, _, _ in tags.tagged(f'PILOOP_HOME={cfg.home}')], 'with its children, if any'
-    reap(cfg.home)
+    tags.kill_tagged(f'PILOOP_HOME={cfg.home}')
     wait_until(lambda: not alive(pid))
+
+
+def test_a_daemon_whose_home_is_deleted_stops(tmp_path: Path) -> None:
+    """A test's temporary home deleted under the daemon that the test left: no client finds the daemon there to stop it."""
+    cfg = Settings(home=tmp_path / 'home')
+    cfg.home.mkdir()
+    (cfg.home / 'config.toml').write_text('[daemon]\nhome_check = 0.1\n')
+    assert piloop(cfg.home, 'serve', '--detach').returncode == 0
+    daemon = psutil.Process(int(cfg.pid_file.read_text()))
+    shutil.rmtree(cfg.home)
+    daemon.wait(timeout=60)  # raises TimeoutExpired while it runs
 
 
 def test_sigterm_kills_implementers_and_exits(campaign_path: Path, tmp_path: Path, schema: Path) -> None:
