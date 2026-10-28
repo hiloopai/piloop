@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from piloop import deprecated
 from piloop.actor import Actor, System
-from piloop.config import CONFIG_FILE, CampaignConfig, ConfigError, load_campaign_config
+from piloop.config import CONFIG_FILE, CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
 from piloop.db.events import emit
 from piloop.db.models import NOT_RETIRED, Campaign, EventModel
 from piloop.db.session import Database
@@ -184,14 +184,20 @@ def register_clone(
     commits.
 
     Raises:
-        CampaignError: The campaign's directory exists, or ``register`` refuses the clone.
+        CampaignError: The campaign's directory exists, the clone has no ``piloop.toml``, or ``register`` refuses it.
         CloneFailed: The clone failed.
     """
     (home / REPOS).mkdir(parents=True, exist_ok=True)
     cloning = home / REPOS / f'.cloning-{uuid4().hex}'
     try:
         vcs.clone(url, cloning, credential).close()
-        campaign, baseline = register(s, cloning, actor, name, fork)
+        try:
+            campaign, baseline = register(s, cloning, actor, name, fork)
+        except ConfigMissing as e:  # the error names the temporary clone, which the caller never sees
+            raise CampaignError(
+                f'{url} has no {CONFIG_FILE} at its root: `piloop init` in a checkout makes one; commit it, then'
+                ' register again'
+            ) from e
         checkout = home / REPOS / str(campaign.id)
         if checkout.exists():
             raise CampaignError(f'{checkout} exists: move it away, then register again')
@@ -257,6 +263,7 @@ def register(
     source as its parent. Its baseline is the version that the fork starts from.
 
     Raises:
+        ConfigError: The checkout's ``piloop.toml`` is missing or does not load.
         CampaignError: The name is no ``CampaignName``, another campaign has it or the checkout, or the fork's version
             is unknown.
     """

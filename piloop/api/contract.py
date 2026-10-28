@@ -154,6 +154,8 @@ class Problem(StrEnum):
     """A retire refused a campaign whose stop is not over. The detail names its open agents: retire it again later."""
     FORBIDDEN = 'forbidden'
     """The caller may not act as the actor that it asks for (``piloop.net.acting``). The detail says why."""
+    BUSY = 'busy'
+    """Another connection held the database's write lock for the whole busy timeout: send it again after Retry-After."""
 
 
 type Priority = Annotated[int, Field(ge=0, le=4)]

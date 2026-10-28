@@ -113,8 +113,8 @@ your system does not trust, set `SSL_CERT_FILE`. On the server, `piloop worker l
  serve   serve  6s ago  21.8/32  103.8 GB  816.4 GB  0       0            slots
 ```
 
-The server refuses a worker with another piloop protocol, an unknown pool, a revoked token, or a `[plugins.cas]` that
-is not the server's. The worker then stops its jobs and exits with the reason.
+The server refuses a worker with another piloop protocol, also after the server upgrades, an unknown pool, a revoked
+token, or a `[plugins.cas]` that is not the server's. The worker then stops its jobs and exits with the reason.
 
 ## Workers that the server starts
 

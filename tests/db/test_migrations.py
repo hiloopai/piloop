@@ -416,6 +416,21 @@ def test_a_database_at_the_previous_release_or_newer_migrates(tmp_path: Path, mo
     assert stamps(path) == heads()
 
 
+def test_a_database_that_migrate_creates_or_migrates_is_in_wal_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Else the first connections of its clients switch it, and that switch fails while another one reads."""
+    monkeypatch.setattr(session, 'RELEASES', TOO_OLD)
+    fresh, old = tmp_path / 'fresh.db', tmp_path / 'old.db'
+    command.upgrade(alembic(old), '0003')
+    for path in (fresh, old):
+        engine = create_engine(f'sqlite:///{path}')
+        migrate(engine, cas=disk(tmp_path), backups=0, daemon=None)
+        engine.dispose()
+        with closing(sqlite3.connect(path)) as con:
+            assert con.execute('PRAGMA journal_mode').fetchone() == ('wal',), path.name
+
+
 def test_a_database_from_before_the_first_recorded_release_names_every_stop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

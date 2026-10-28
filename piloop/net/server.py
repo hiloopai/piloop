@@ -7,6 +7,7 @@ next call outside it, so many long-polls never starve a heartbeat.
 """
 
 import asyncio
+import math
 import socket
 import ssl
 import threading
@@ -23,10 +24,12 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from sqlalchemy.exc import OperationalError
 from uvicorn.protocols.http.h11_impl import H11Protocol
 
 from piloop.api.client import SOCKET_ACTOR_HEADER
-from piloop.api.contract import GRANTS, Access
+from piloop.api.contract import GRANTS, Access, Problem
+from piloop.db.sql import BUSY_TIMEOUT_MS, busy
 from piloop.net import Changed, InvalidBody, Refusal, Route
 from piloop.net.acting import OWNER
 from piloop.net.tokens import PREFIX, Caller, Tokens
@@ -37,6 +40,8 @@ from piloop.settings import socket_dir
 GRACE_SECONDS = 5
 """How long ``Server.close`` lets the requests in flight finish."""
 OPENAPI = '/v1/openapi.json'
+BUSY_RETRY_SECONDS = math.ceil(BUSY_TIMEOUT_MS / 1000)
+"""The Retry-After of a request that waited out the busy timeout: as long as that wait."""
 
 
 def authorized(access: Access) -> Callable[[Request], Caller]:
@@ -97,7 +102,8 @@ class App(FastAPI):
     """FastAPI that knows who may call it, with the event that its ``Server`` sets when it shuts down.
 
     One ``Server`` serves one ``App``. A route's ``Refusal`` answers its status with ``{"error", "detail"}``, and a body
-    that its model refuses answers 422 with where and why, never with the value that was sent.
+    that its model refuses answers 422 with where and why, never with the value that was sent. A request that waited
+    out the database's busy timeout answers 503 ``busy``, with a Retry-After.
     """
 
     def __init__(self, tokens: Tokens, network: Network, *, openapi_url: str | None = None) -> None:
@@ -112,6 +118,20 @@ class App(FastAPI):
         @self.exception_handler(Refusal)
         def refused(request: Request, e: Refusal) -> Response:
             return JSONResponse({'error': e.error, 'detail': str(e)}, status_code=e.status)
+
+        @self.exception_handler(OperationalError)
+        def locked(request: Request, e: OperationalError) -> Response:
+            if not busy(e.orig):
+                raise e
+            return JSONResponse(
+                {
+                    'error': Problem.BUSY,
+                    'detail': f'the database is busy: another connection held its write lock for the whole'
+                    f' {BUSY_RETRY_SECONDS} s wait; retry in {BUSY_RETRY_SECONDS} s',
+                },
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+                headers={'Retry-After': str(BUSY_RETRY_SECONDS)},
+            )
 
         @self.exception_handler(RequestValidationError)
         def invalid(request: Request, e: RequestValidationError) -> Response:

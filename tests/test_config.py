@@ -10,7 +10,7 @@ from inline_snapshot import snapshot
 
 from piloop import config as config_module
 from piloop.campaign.campaigns import check_takes
-from piloop.config import CampaignConfig, ConfigError, load_campaign_config
+from piloop.config import CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
 from piloop.ids import RoleName
 from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
 from piloop.plugins.campaign_type.kit.backlog.role.scout import ScoutRole
@@ -180,7 +180,7 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
 
 
 def test_missing_file(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ConfigMissing, match=re.escape(f'{tmp_path} has no piloop.toml: `piloop init {tmp_path}`')):
         load_campaign_config(tmp_path)
 
 

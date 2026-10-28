@@ -25,15 +25,16 @@ from piloop.plugins.executor.kit.leases import (
     Revoke,
     Timing,
     UnknownPool,
+    UnknownWorker,
     Work,
 )
 
-PROTOCOL = 14
+PROTOCOL = 15
 """The version of the ``LeaseClient`` calls on the wire."""
 
 
 class Dismissed(Exception):
-    """The control plane refuses this worker for good: a revoked token, another protocol, an unknown pool.
+    """The control plane refuses this worker for good: a revoked token, another protocol, an unknown pool, or no row.
 
     The worker stops its jobs, keeps their reports, and exits with this message.
     """
@@ -134,13 +135,19 @@ class Local:
         return Registration(worker=self._worker, timing=self._leases.timing, held=held, cursor=cursor)
 
     def acquire(self, request_id: str, sample: HostSample) -> Grant | NoLease:
-        return self._leases.acquire(self._worker, request_id, sample)
+        try:
+            return self._leases.acquire(self._worker, request_id, sample)
+        except UnknownWorker as e:
+            raise Dismissed(str(e)) from e
 
     def started(self, lease: int, handle: JobHandle, session_id: str | None) -> None:
         self._leases.started(lease, self._worker, handle, session_id)
 
     def heartbeat(self, leases: Mapping[int, HarnessSession], sample: HostSample) -> dict[int, Answer]:
-        return self._leases.heartbeat(self._worker, dict(leases), sample)
+        try:
+            return self._leases.heartbeat(self._worker, dict(leases), sample)
+        except UnknownWorker as e:
+            raise Dismissed(str(e)) from e
 
     def report(self, lease: int, request_id: str, report: AgentReport | EvaluationReport) -> dict[str, object]:
         return self._leases.report(lease, self._worker, request_id, report)

@@ -298,14 +298,24 @@ def migrate(engine: Engine, *, cas: Cas, backups: int, daemon: int | None) -> Pa
     return copy
 
 
+def _wal(conn: sqlite3.Connection) -> None:
+    """Hand ``conn`` its transactions, and put its file in WAL mode, as the clients' first connections would.
+
+    A client's switch needs the file to itself, so it fails while another connection reads: switched here, under the
+    migration lock, the clients' ``journal_mode=WAL`` finds it done.
+    """
+    conn.isolation_level = None
+    conn.execute('PRAGMA journal_mode=WAL')
+
+
 def _upgrade(url: str, cas: Cas) -> None:
     """Run each chain to its head on one connection, in one transaction, and record each one's fingerprint.
 
     pysqlite commits before each DDL statement by itself, so the driver's own transaction handling is turned off and
-    the transaction is begun by hand.
+    the transaction is begun by hand. The file is switched to WAL first, outside the transaction (``_wal``).
     """
     engine = create_engine(url, poolclass=NullPool)
-    event.listen(engine, 'connect', lambda dbapi, _: setattr(dbapi, 'isolation_level', None))
+    event.listen(engine, 'connect', lambda dbapi, _: _wal(dbapi))
     event.listen(engine, 'begin', lambda connection: connection.exec_driver_sql('BEGIN'))
     packages = {name: source.package or source.entry_point for name, source in SCHEMAS.sources().items()}
     try:

@@ -92,7 +92,7 @@ def head_scores(
     values: list[tuple[Track, float | None, float | None]] = []
     for track in cfg.all_tracks:
         value = score(trunk, evaluator_id, track.primary)
-        base = score(first, evaluator_id, track.primary) if first.id != trunk.id else None
+        base = score(first, evaluator_id, track.primary) if first is not None and first.id != trunk.id else None
         values.append((track, value, None if value is None or base is None else value - base))
     return trunk, values
 

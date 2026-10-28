@@ -103,14 +103,13 @@ CONNECTION_PRAGMAS = (
 )
 """The connection settings. Every client uses the same ones (``piloop.db.session``, and ``connect`` here).
 
-``journal_mode=WAL`` is a property of the file: readers never block the daemon's writes. Every client sets it,
-because the client that connects first creates the file, and Alembic's own engine creates it in rollback mode. When
-the file is in WAL mode, the pragma does nothing. ``synchronous=NORMAL`` is the setting that SQLite recommends for
-WAL. A commit survives a process crash, and only a power loss can lose the last transactions. That is acceptable for
-a coordination database whose state can be rebuilt from git, and it saves the fsync on each commit that FULL adds to
-every insert of an agent. ``temp_store=MEMORY`` keeps the sorts for the ``ORDER BY`` of the status and the pass out
-of temporary files. ``cache_size`` stays at SQLite's default: the tables that a pass reads fit in it, and each pooled
-connection pays for its own cache.
+``journal_mode=WAL`` is a property of the file: readers never block the daemon's writes. ``migrate`` sets it, and every
+client sets it too, for a file that no migration made. When the file is in WAL mode, the pragma does nothing.
+``synchronous=NORMAL`` is the setting that SQLite recommends for WAL. A commit survives a process crash, and only a
+power loss can lose the last transactions. That is acceptable for a coordination database whose state can be rebuilt
+from git, and it saves the fsync on each commit that FULL adds to every insert of an agent. ``temp_store=MEMORY`` keeps
+the sorts for the ``ORDER BY`` of the status and the pass out of temporary files. ``cache_size`` stays at SQLite's
+default: the tables that a pass reads fit in it, and each pooled connection pays for its own cache.
 """
 PROC_LOCKS = Path('/proc/locks')
 PROC_LOCKS_READS = 3
@@ -226,11 +225,11 @@ def optimize(con: sqlite3.Connection) -> None:
     try:
         con.execute(OPTIMIZE)
     except sqlite3.OperationalError as e:
-        if not _busy(e):
+        if not busy(e):
             raise
 
 
-def _busy(e: BaseException | None) -> bool:
+def busy(e: BaseException | None) -> bool:
     """Whether ``e`` is ``database is locked``: SQLITE_BUSY or one of its extended codes."""
     return isinstance(e, sqlite3.OperationalError) and e.sqlite_errorcode & 0xFF == sqlite3.SQLITE_BUSY
 
@@ -243,7 +242,7 @@ def lock_holder(e: BaseException | None, database: Path) -> str | None:
     lock that this process holds on the file, SQLite's own locks included. None on other systems, and when the holder
     is gone.
     """
-    if not _busy(e) or (pid := _write_lock_pid(Path(f'{database}-shm'))) is None:
+    if not busy(e) or (pid := _write_lock_pid(Path(f'{database}-shm'))) is None:
         return None
     command = command_line(pid) or '(exited)'  # the holder can commit or end in the meantime
     return f'pid {pid} holds the write lock: {command}'

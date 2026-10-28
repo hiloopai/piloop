@@ -1967,7 +1967,8 @@ def test_watch_refuses_a_campaign_that_the_home_does_not_have_before_it_opens_th
         run_cli(['watch', str(campaign_path)])
     with pytest.raises(SystemExit, match=rf"^no campaign 'demo' in {home}; is PILOOP_HOME right\?"):
         run_cli(['watch', 'demo'])
-    assert database.read_bytes() == before and not database.with_name('piloop.db-wal').exists()
+    wal = database.with_name('piloop.db-wal')
+    assert database.read_bytes() == before and (not wal.exists() or wal.stat().st_size == 0), 'nothing was written'
 
 
 @pytest.mark.usefixtures('api')

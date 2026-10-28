@@ -107,7 +107,13 @@ RETRIED = frozenset({HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.TOO_MANY_REQUESTS})
 """The 4xx that a proxy in front of the server answers for a moment, tried again as a 5xx is."""
 
 
-class Acquire(BaseModel):
+class Versioned(BaseModel):
+    """A body of a call that the server refuses from a worker of another protocol (``WorkerInfo.protocol``)."""
+
+    protocol: int
+
+
+class Acquire(Versioned):
     """The body of ``acquire``."""
 
     request_id: str
@@ -126,7 +132,7 @@ class Started(BaseModel):
     session_id: str | None
 
 
-class Heartbeat(BaseModel):
+class Heartbeat(Versioned):
     """The body of ``heartbeat``."""
 
     leases: dict[int, HarnessSession]
@@ -245,14 +251,19 @@ def _as_caller[I: BaseModel](
     return handle
 
 
-def _register(cas: Cas, worker: Local, info: WorkerInfo) -> Registration:
-    if info.protocol != PROTOCOL:
+def _same_protocol(protocol: int) -> None:
+    """Refuse a worker of another protocol: at its register, and after a server upgrade, at its next call."""
+    if protocol != PROTOCOL:
         raise Refusal(
             HTTPStatus.UPGRADE_REQUIRED,
             Failure.PROTOCOL,
             f'the server runs piloop {version("piloop")}, with protocol {PROTOCOL}, and the worker protocol'
-            f' {info.protocol}: install the same piloop on both machines',
+            f' {protocol}: install the same piloop on both machines',
         )
+
+
+def _register(cas: Cas, worker: Local, info: WorkerInfo) -> Registration:
+    _same_protocol(info.protocol)
     if cas.missing([info.cas_probe]):
         raise Refusal(
             HTTPStatus.PRECONDITION_FAILED,
@@ -264,6 +275,7 @@ def _register(cas: Cas, worker: Local, info: WorkerInfo) -> Registration:
 
 
 def _acquire(worker: Local, body: Acquire) -> Acquired:
+    _same_protocol(body.protocol)
     return Acquired(worker.acquire(body.request_id, body.sample))
 
 
@@ -272,6 +284,7 @@ def _started(worker: Local, body: Started) -> None:
 
 
 def _heartbeat(worker: Local, body: Heartbeat) -> Answers:
+    _same_protocol(body.protocol)
     return Answers(worker.heartbeat(body.leases, body.sample))
 
 
@@ -339,14 +352,15 @@ class Remote:
         return registration
 
     def acquire(self, request_id: str, sample: HostSample) -> Grant | NoLease:
-        answer = self._post('acquire', Acquire(request_id=request_id, sample=sample))
+        answer = self._post('acquire', Acquire(protocol=PROTOCOL, request_id=request_id, sample=sample))
         return Acquired.model_validate_json(answer).root
 
     def started(self, lease: int, handle: JobHandle, session_id: str | None) -> None:
         self._post('started', Started(lease=lease, handle=handle, session_id=session_id))
 
     def heartbeat(self, leases: Mapping[int, HarnessSession], sample: HostSample) -> dict[int, Answer]:
-        return Answers.model_validate_json(self._post('heartbeat', Heartbeat(leases=dict(leases), sample=sample))).root
+        body = Heartbeat(protocol=PROTOCOL, leases=dict(leases), sample=sample)
+        return Answers.model_validate_json(self._post('heartbeat', body)).root
 
     def report(self, lease: int, request_id: str, report: AgentReport | EvaluationReport) -> dict[str, object]:
         answer = self._post('report', Reported(lease=lease, request_id=request_id, report=report))

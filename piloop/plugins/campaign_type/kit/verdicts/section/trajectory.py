@@ -39,7 +39,8 @@ class Trajectory(Section):
         evaluator_id = campaign.evaluator_id
         steps = trunk_keeps(s, campaign)
         if not steps:
-            lines = ["- No trunk keep: the baseline's verdict was overridden and nothing was kept since."]
+            line = "- No trunk keep: the baseline's verdict was overridden and nothing was kept since."
+            lines = [line if baseline(s, campaign) is not None else '- No baseline yet.']
             return Rendered(title='Trajectory', blocks=(Lines(lines=tuple(lines)),))
         first, last = steps[0], steps[-1]
         gains = []
@@ -88,6 +89,7 @@ def _branches(s: Session, campaign: Campaign, cfg: CampaignConfig) -> list[str]:
             match line.lineage:
                 case Trunk():
                     root = baseline(s, campaign)
+                    assert root is not None  # a lineage has keeps, so the campaign has its first candidate
                     start = f'trunk from candidate#{root.id} ({label(root)})'
                 case Branch(root=root_id):
                     root = s.get_one(Candidate, root_id)

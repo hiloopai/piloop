@@ -155,7 +155,8 @@ def test_a_database_missing_unmigrated_behind_or_ahead_says_which_command_brings
         'install the piloop that migrated it (`piloop upgrade` for a newer release), or set PILOOP_HOME to another'
         ' directory',
     )
-    assert path.read_bytes() == before and not (cfg.home / 'piloop.db-wal').exists(), 'opened read-only'
+    wal = cfg.home / 'piloop.db-wal'
+    assert path.read_bytes() == before and (not wal.exists() or wal.stat().st_size == 0), 'opened read-only'
 
 
 def test_a_campaign_whose_toml_is_gone_invalid_or_whose_stored_copy_no_longer_validates_fails(

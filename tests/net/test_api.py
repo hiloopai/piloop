@@ -66,6 +66,7 @@ from piloop.campaign import ops
 from piloop.campaign.stop import CampaignClosed
 from piloop.cli import common, main as cli
 from piloop.daemon.api import ROUTERS, Handlers, daemon_state, openapi, with_api
+from piloop.db import session, sql
 from piloop.db.events import emit
 from piloop.db.models import (
     EVENT,
@@ -977,6 +978,29 @@ def test_a_git_url_is_cloned_under_the_home_with_the_home_s_secret_and_then_regi
     assert sorted(p.name for p in (cfg.home / 'repos').iterdir()) == ['1', '2', '3'], 'the refused clone is gone'
 
 
+def test_a_repo_without_a_piloop_toml_is_refused_with_how_to_make_one(
+    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path
+) -> None:
+    repo = Repo(campaign_path)
+    repo.index.remove(['piloop.toml'], working_tree=True)
+    repo.index.commit('no config')
+    url = bare(campaign_path, tmp_path / 'demo.git')
+    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+        with pytest.raises(Refused) as cloned:
+            client.register_campaign(Clone(clone=Remote(url=url)))
+        with pytest.raises(Refused) as checkout:
+            client.register_campaign(Checkout(path=str(campaign_path)))
+    assert (cloned.value.error, str(cloned.value)) == (
+        Problem.REFUSED,
+        f'{url} has no piloop.toml at its root: `piloop init` in a checkout makes one; commit it, then register again',
+    )
+    assert (checkout.value.error, str(checkout.value)) == (
+        Problem.REFUSED,
+        f'{campaign_path} has no piloop.toml: `piloop init {campaign_path}` makes one',
+    )
+    assert list((cfg.home / 'repos').iterdir()) == [], 'the refused clone is gone'
+
+
 def test_a_clone_with_a_token_uses_it_for_that_clone_and_no_file_of_the_home_or_answer_keeps_it(
     db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -1193,6 +1217,24 @@ def test_a_write_needs_act_access_and_a_caller_whose_name_signs(
         'error': 'forbidden',
         'detail': "'two words' is no name that signs a write: name the caller another way",
     }
+
+
+def test_a_write_that_waits_out_the_busy_timeout_answers_503_and_when_to_retry(
+    db: Database, campaign: Campaign, cfg: Settings, monkeypatch: pytest.MonkeyPatch, writer: subprocess.Popen[str]
+) -> None:
+    pragmas = tuple(p for p in sql.CONNECTION_PRAGMAS if not p.startswith('busy_timeout='))
+    monkeypatch.setattr(session, 'CONNECTION_PRAGMAS', ('busy_timeout=0', *pragmas))
+    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
+        with pytest.raises(Refused) as refused:
+            client.message('demo', MessageBody(body='hello'))
+        transport = httpx.HTTPTransport(uds=str(cfg.socket_file))
+        with httpx.Client(transport=transport, base_url='http://piloop') as raw:
+            answer = raw.post('/v1/campaigns/demo/messages', json={'body': 'hello'})
+    assert (answer.status_code, answer.headers['retry-after']) == (HTTPStatus.SERVICE_UNAVAILABLE, '5')
+    assert (refused.value.error, str(refused.value)) == (
+        Problem.BUSY,
+        'the database is busy: another connection held its write lock for the whole 5 s wait; retry in 5 s',
+    )
 
 
 def test_without_a_campaign_named_status_answers_every_campaign(

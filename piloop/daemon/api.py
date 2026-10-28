@@ -326,8 +326,9 @@ Target = Annotated[Idea, Depends(target_addressed)]
 REFUSALS_DOCUMENTED: dict[int | str, dict[str, object]] = {
     HTTPStatus.NOT_FOUND: {'model': ProblemDetail},
     HTTPStatus.CONFLICT: {'model': ProblemDetail},
+    HTTPStatus.SERVICE_UNAVAILABLE: {'model': ProblemDetail},
 }
-"""What a route answers when it refuses: ``Refusal``'s 404 or 409, with a ``ProblemDetail``."""
+"""What a route answers when it refuses: ``Refusal``'s 404 or 409, or 503 ``busy``, with a ``ProblemDetail``."""
 router = APIRouter(
     prefix='/v1',
     dependencies=[Depends(reader)],

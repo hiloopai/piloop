@@ -87,6 +87,24 @@ head: candidate#4 · score: 3 · score vs baseline: 2 · size: 8 · size vs base
 """)
 
 
+def test_status_of_a_campaign_with_no_candidate_says_there_is_no_baseline_yet(db: Database, campaign: Campaign) -> None:
+    """A campaign added by hand, with SQL, before its baseline."""
+    with db.session() as s:
+        bare = Campaign(name='bare', path='/elsewhere', config=reconfigured(campaign.config, **TRACKS))
+        s.add(bare)
+        s.commit()
+    shown = render(db, bare).split('## Tracks\n\n')[1].split('## Runs')[0]
+    assert shown == snapshot("""\
+- score: no baseline yet; floor 0.5; 0 trunk keeps; share 0.75 of 1 slots, 0 running; 0 runnable ideas.
+- size: no baseline yet; floor 20; 0 trunk keeps; share 0.25 of 1 slots, 0 running; 0 runnable ideas.
+
+## Trajectory
+
+- No baseline yet.
+
+""")
+
+
 def test_history_and_pack_show_each_track(db: Database, campaign: Campaign) -> None:
     cfg = two_tracks(db, campaign)
     with db.session() as s:

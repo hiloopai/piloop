@@ -115,6 +115,18 @@ def test_an_executor_route_takes_its_model_and_answers_with_its_model_or_204(
         assert client.post('/v1/executor/other', json={}).status_code == 404
 
 
+def test_a_database_error_other_than_a_busy_lock_stays_a_crash(
+    serving: Serving, token: Callable[..., str], dial: Dial, db: Database
+) -> None:
+    def broken(caller: Caller, ask: Ask) -> Answer | None:
+        with db.session() as s:
+            s.connection().exec_driver_sql('SELECT * FROM no_such_table')
+        return None
+
+    with serving([Route('broken', Ask, broken)]) as server, dial(server.url, token()) as client:
+        assert client.post('/v1/executor/broken', json=HI).status_code == 500
+
+
 def test_tls_with_a_certificate_that_the_client_trusts_through_ssl_cert_file(
     serving: Serving, token: Callable[..., str], certificate: dict[str, str], dial: Dial
 ) -> None:

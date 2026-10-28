@@ -473,6 +473,10 @@ class ConfigError(ValueError):
     """A ``piloop.toml`` that does not load. The message names the file, each bad key and value, and the fix."""
 
 
+class ConfigMissing(ConfigError):
+    """A campaign directory without a ``piloop.toml``."""
+
+
 DOCS = 'https://piloop.autoresearch.inc/reference/configuration'
 FIXES = {
     'extra_forbidden': f'delete the key or correct its spelling; {DOCS} lists every key',
@@ -521,13 +525,13 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
     file. Deprecated keys still load through ``piloop.deprecated``, with a ``PiloopDeprecationWarning``.
 
     Raises:
-        FileNotFoundError: The campaign has no ``piloop.toml``.
+        ConfigMissing: The campaign has no ``piloop.toml``.
         ConfigError: The file is not valid TOML, not a valid config, names an instance that the home's ``config.toml``
             lacks, or names a prompt file that does not exist.
     """
     toml = campaign / CONFIG_FILE
     if not toml.is_file():
-        raise FileNotFoundError(toml)
+        raise ConfigMissing(f'{campaign} has no {CONFIG_FILE}: `piloop init {campaign}` makes one')
     try:
         raw = tomllib.loads(toml.read_text())
     except tomllib.TOMLDecodeError as e:

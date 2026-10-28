@@ -309,16 +309,25 @@ def keeps(campaign: Campaign) -> Select[Candidate]:
     return select(Candidate).where(Candidate.campaign_id == campaign.id, Candidate.verdict == Outcome.KEEP)
 
 
-def baseline(s: Session, campaign: Campaign) -> Candidate:
-    """Return the campaign's first candidate: the repo's HEAD when the campaign was registered."""
-    return s.scalars(
-        select(Candidate).where(Candidate.campaign_id == campaign.id).order_by(Candidate.id).limit(1)
-    ).one()
+def baseline(s: Session, campaign: Campaign) -> Candidate | None:
+    """Return the campaign's first candidate: the repo's HEAD when the campaign was registered.
+
+    None before it has one: a campaign added by hand, with SQL.
+    """
+    return s.scalars(_first(campaign)).first()
+
+
+def _first(campaign: Campaign) -> Select[Candidate]:
+    return select(Candidate).where(Candidate.campaign_id == campaign.id).order_by(Candidate.id).limit(1)
 
 
 def checkout_candidate(s: Session, campaign: Campaign) -> Candidate:
-    """Return what a sweeping agent gets checked out: the head, or the baseline when its verdict was overridden."""
-    return head(s, campaign) or baseline(s, campaign)
+    """Return what a sweeping agent gets checked out: the head, or the baseline when its verdict was overridden.
+
+    Raises:
+        NoResultFound: The campaign has no candidate yet (``baseline``).
+    """
+    return head(s, campaign) or s.scalars(_first(campaign)).one()
 
 
 def stop_of(candidate: Candidate, evaluator_id: EvaluatorId) -> Stopped | None:

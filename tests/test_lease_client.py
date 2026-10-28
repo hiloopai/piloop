@@ -20,7 +20,7 @@ from pytest_mock import MockerFixture
 
 from piloop.actor import Agent, System
 from piloop.api.contract import MAX_POLL_SECONDS, Access
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, LeaseState, NoLease
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, LeaseState, LeaseWorker, NoLease
 from piloop.db.session import Database
 from piloop.ids import CampaignId, CommentId, Revision
 from piloop.net import tokens
@@ -43,7 +43,7 @@ from piloop.plugins.executor.kit.leases import (
     StaleReport,
     Work,
 )
-from piloop.plugins.executor.kit.remote import Remote, SendAsked, lease_routes
+from piloop.plugins.executor.kit.remote import Acquire, Heartbeat, Remote, SendAsked, lease_routes
 from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import Https, HttpsNetwork
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets, set_secret
@@ -333,6 +333,20 @@ def test_a_worker_in_a_pool_that_the_server_lacks_is_dismissed(connect: Connect)
         connect('w1').register(INFO.model_copy(update={'pool': 'gpu'}))
 
 
+def test_a_worker_whose_row_is_gone_is_dismissed_at_its_next_call(connect: Connect, db: Database) -> None:
+    """Its instance ended (``scaling``) while it ran: it stops, rather than call on and on."""
+    w1 = connect('w1')
+    w1.register(INFO)
+    with db.session() as s:
+        s.delete(s.get_one(LeaseWorker, 'w1'))
+        s.commit()
+    gone = 'worker w1 is not registered: its instance ended, or it never registered; start it again'
+    with pytest.raises(Dismissed, match=gone):
+        w1.heartbeat({}, HOST)
+    with pytest.raises(Dismissed, match=gone):
+        w1.acquire(uuid4().hex, HOST)
+
+
 def test_a_report_on_a_lease_that_never_was_is_stale(connect: Connect) -> None:
     w1 = connect('w1')
     w1.register(INFO)
@@ -373,9 +387,25 @@ def test_a_revoked_token_and_the_servers_own_name_are_dismissed(remote: Callable
 
 def test_a_worker_of_another_protocol_is_dismissed_with_the_servers_version(remote: Callable[..., Remote]) -> None:
     with pytest.raises(
-        Dismissed, match=r'\(426\): the server runs piloop .+, with protocol 14, and the worker protocol 1'
+        Dismissed, match=r'\(426\): the server runs piloop .+, with protocol 15, and the worker protocol 1'
     ):
         remote().register(INFO.model_copy(update={'protocol': 1}))
+
+
+def test_a_worker_that_registered_before_the_server_upgraded_is_refused_at_its_heartbeat_and_acquire(
+    server: Server, db: Database, dial: Dial
+) -> None:
+    """Its slots never count as capacity, and it takes no lease, on a server of another protocol."""
+    http = dial(server.url, secret(db, 'w1'))
+    Remote(http, threading.Event(), Tracer(None)).register(INFO)
+    for path, body in (
+        ('heartbeat', Heartbeat(protocol=1, leases={}, sample=HOST)),
+        ('acquire', Acquire(protocol=1, request_id=uuid4().hex, sample=HOST)),
+    ):
+        refused = http.post(f'/v1/executor/{path}', content=body.model_dump_json())
+        assert (refused.status_code, refused.json()['error']) == (426, 'protocol'), path
+        assert 'with protocol 15, and the worker protocol 1' in refused.json()['detail']
+    http.close()
 
 
 def test_long_polls_hold_no_thread_of_the_server_so_a_heartbeat_still_answers(

@@ -228,6 +228,10 @@ class UnknownPool(ValueError):
     """A worker registers in a pool that ``[plugins.executor.pools]`` does not have."""
 
 
+class UnknownWorker(LookupError):
+    """A worker calls without a row: its instance ended (``scaling``), or it never registered."""
+
+
 class MissingJob(LookupError):
     """The CAS lacks a lease's job: the blob that ``enqueue`` put is gone from the store."""
 
@@ -422,6 +426,15 @@ def cancel(s: Session, lease: Lease, reason: str) -> None:
         lease.state, lease.ended_at, lease.receipt = LeaseState.CANCELLED, utcnow(), receipt
 
 
+def _registered(s: Session, worker: str) -> LeaseWorker:
+    """The row of ``worker``, which ``register`` wrote. Raises ``UnknownWorker`` when it is gone."""
+    if (row := s.get(LeaseWorker, worker)) is None:
+        raise UnknownWorker(
+            f'worker {worker} is not registered: its instance ended, or it never registered; start it again'
+        )
+    return row
+
+
 def _target(cas: Cas, lease: Lease) -> TargetRef:
     """The row that a lease's events go on: its agent session, or the candidate that its evaluation measures."""
     if lease.agent_session_id is not None:
@@ -516,7 +529,7 @@ class Leases:
         """
         with self._db.session() as s:
             write_transaction(s)
-            row = s.get_one(LeaseWorker, worker)  # ``register`` wrote it
+            row = _registered(s, worker)
             self._heard(s, row, host)
             taken = select(Lease).where(Lease.worker == worker, Lease.acquire_request == request_id)
             if (lease := s.scalars(taken).first()) is not None:
@@ -658,7 +671,7 @@ class Leases:
         now = utcnow()
         with self._db.session() as s:
             write_transaction(s)
-            self._heard(s, s.get_one(LeaseWorker, worker), host)
+            self._heard(s, _registered(s, worker), host)
             for lease_id, session in sessions.items():
                 try:
                     lease = self._live(s, lease_id, worker)

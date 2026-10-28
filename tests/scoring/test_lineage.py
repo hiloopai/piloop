@@ -72,11 +72,18 @@ def child(s: Session, parent: Candidate, name: str, verdict: Outcome | None, run
     return found
 
 
+def first(s: Session, campaign: Campaign) -> Candidate:
+    """The campaign's baseline, which every campaign of these tests has."""
+    found = baseline(s, campaign)
+    assert found is not None
+    return found
+
+
 def test_the_bar_of_a_run_is_the_rules_choice_from_the_ancestry_of_its_base(
     db: Database, campaign: Campaign, rules: None
 ) -> None:
     with db.session() as s:
-        root = baseline(s, s.get_one(Campaign, campaign.id))
+        root = first(s, s.get_one(Campaign, campaign.id))
         lead = child(s, child(s, root, 'lead', Outcome.INTERESTING), 'fix', Outcome.DISCARD)
         reference = Candidate(campaign_id=root.campaign_id, tree_sha='ref', revision='ref', origin=Origin.REFERENCE)
         s.add(reference)
@@ -107,7 +114,7 @@ def test_the_trunk_and_its_head_are_the_keeps_that_raise_the_trunks_bar(
 ) -> None:
     """``every_keep`` lets a branch keep raise the trunk's bar: it is a trunk keep, and the head."""
     with db.session() as s:
-        root = baseline(s, s.get_one(Campaign, campaign.id))
+        root = first(s, s.get_one(Campaign, campaign.id))
         idea = Idea(track='score', campaign_id=campaign.id, title='t', hypothesis='h', created_by='t')
         s.add(idea)
         s.flush()
@@ -118,7 +125,7 @@ def test_the_trunk_and_its_head_are_the_keeps_that_raise_the_trunks_bar(
         kept_id, lead_id = kept.id, lead.id
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
-        root = baseline(s, proj)
+        root = first(s, proj)
         assert (trunk_keeps(s, proj), head(s, proj)) == ([root], root)
         assert missing_head(s, s.get_one(Candidate, lead_id)) is None, (
             'bootstrap: a branch keep never moves the head, nor would a keep of a branch lead'
@@ -126,14 +133,14 @@ def test_the_trunk_and_its_head_are_the_keeps_that_raise_the_trunks_bar(
     select_rule(db, campaign, 'every_keep')
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
-        root, kept = baseline(s, proj), s.get_one(Candidate, kept_id)
+        root, kept = first(s, proj), s.get_one(Candidate, kept_id)
         assert (trunk_keeps(s, proj), head(s, proj)) == ([root, kept], kept)
         assert head(s, proj, excluding=kept) == root, 'the candidate judged is never its own bar'
 
 
 def test_the_head_is_the_rules_choice_among_the_trunk_keeps(db: Database, campaign: Campaign, rules: None) -> None:
     with db.session() as s:
-        root = baseline(s, s.get_one(Campaign, campaign.id))
+        root = first(s, s.get_one(Campaign, campaign.id))
         kept_id = child(s, root, 'trunk keep', Outcome.KEEP).id
         s.commit()
     with db.session() as s:
@@ -142,7 +149,7 @@ def test_the_head_is_the_rules_choice_among_the_trunk_keeps(db: Database, campai
     select_rule(db, campaign, 'first_head')
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
-        root = baseline(s, proj)
+        root = first(s, proj)
         assert (head(s, proj), head(s, proj, excluding=root)) == (root, s.get_one(Candidate, kept_id))
     select_rule(db, campaign, 'astray')
     with (

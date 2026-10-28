@@ -25,7 +25,7 @@ from piloop import deprecated
 from piloop.actor import Actor
 from piloop.campaign.campaigns import check_takes
 from piloop.cli import skills, upgrade
-from piloop.config import CampaignConfig, ConfigError, explain, load_campaign_config
+from piloop.config import CampaignConfig, ConfigError, ConfigMissing, explain, load_campaign_config
 from piloop.daemon.main import preflight, unbound_failures
 from piloop.daemon.serve import SECRETS_COMMAND_ENV, SecretsError, running_pid, secrets
 from piloop.db.models import utcnow
@@ -194,7 +194,7 @@ def _campaign(campaign: StoredCampaign) -> Check:
     severity = campaign.severity
     try:
         check_takes(Path(path), load_campaign_config(Path(path)))
-    except FileNotFoundError:
+    except ConfigMissing:
         return Check(what, f'no piloop.toml in {path}', f'restore it, then `piloop init {path}`', severity)
     except ConfigError as e:
         return Check(what, str(e), reread, severity)

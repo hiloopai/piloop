@@ -40,7 +40,7 @@ class Tracks(Section):
         for track in cfg.all_tracks:
             m = track.primary
             value = score(trunk, evaluator_id, m) if trunk is not None else None
-            start = score(first, evaluator_id, m)
+            start = score(first, evaluator_id, m) if first is not None else None
             gain = f' ({value - start:+g} on the start)' if value is not None and start is not None else ''
             floor = ''
             if m.floor is not None:
@@ -49,8 +49,9 @@ class Tracks(Section):
                 )
             mine = [c for c in steps if track_of(cfg, c).name == track.name]
             latest = f', the latest candidate#{mine[-1].id} {age(known(mine[-1]), r.now)} ago' if mine else ''
+            at = f'{m.name} {num(value)} at the head{gain}' if first is not None else 'no baseline yet'
             lines.append(
-                f'- {track.name}: {m.name} {num(value)} at the head{gain}{floor}; {len(mine)} trunk keeps{latest};'
+                f'- {track.name}: {at}{floor}; {len(mine)} trunk keeps{latest};'
                 f' share {track.share:g} of {cfg.run_slots} slots, {running[track.name]} running;'
                 f' {ready[track.name]} runnable ideas.'
             )
