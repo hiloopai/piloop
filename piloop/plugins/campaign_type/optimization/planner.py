@@ -78,6 +78,37 @@ def done_by(role: RoleName) -> ColumnElement[bool]:
     return func.likely(Run.role == role, type_=Boolean)
 
 
+def free_slots(s: Session, campaign: Campaign, roles: dict[RoleName, ImplementerRole], runs_left: int | None) -> int:
+    """Return the runs that ``roles`` can start now.
+
+    For each role, this is its ``max_concurrent`` minus its open runs. The sum is never more than the runs that the
+    stop rule leaves (``runs_left``).
+    """
+    open_runs = campaign_runs(campaign.id).where(Run.status.in_(OPEN_RUNS))
+    free = sum(max(role.max_concurrent - count(s, open_runs.where(done_by(name))), 0) for name, role in roles.items())
+    return max(free if runs_left is None else min(free, runs_left), 0)
+
+
+def offered(s: Session, campaign: Campaign, cfg: CampaignConfig, role: ImplementerRole) -> Select[Idea]:
+    """Select the runnable ideas that ``role`` takes now.
+
+    They are on a track with a share. While the head waits for a score from the current evaluator, only pinned ideas.
+    """
+    live = [t.name for t in cfg.all_tracks if t.share > 0]
+    query = select(Idea).where(Idea.campaign_id == campaign.id, runnable(), Idea.track.in_(live))
+    if head_unmeasured(s, campaign):
+        query = query.where(Idea.base_candidate_id.is_not(None))
+    return taken_by(s, role, query)
+
+
+def taken_by(s: Session, role: ImplementerRole, query: Select[Idea]) -> Select[Idea]:
+    """Narrow ``query`` to the ideas that ``role`` takes (``ImplementerRole.takes``)."""
+    if role.takes is None:
+        return query
+    taken = s.connection().exec_driver_sql(ideas_taken(role.takes)).scalars().all()
+    return query.where(Idea.id.in_(taken))
+
+
 class OptimizationPlanner:
     """The ``optimization`` type at work in one daemon process: the hooks of the campaigns' pass (``TypeHost``)."""
 
@@ -253,25 +284,11 @@ class OptimizationPlanner:
         return Backlog(
             tracks=tracks,
             target=target,
-            free=self._free_slots(s, campaign, cfg.roles.doing_runs(), left.get(facts.RUNS)),
+            free=free_slots(s, campaign, cfg.roles.doing_runs(), left.get(facts.RUNS)),
             sweeps=sweeps,
             per_sweep=cfg.roles.sweeping()[name].max_ideas,
             on_hold=head_unmeasured(s, campaign),
         )
-
-    def _free_slots(
-        self, s: Session, campaign: Campaign, roles: dict[RoleName, ImplementerRole], runs_left: int | None
-    ) -> int:
-        """Return the runs that ``roles`` can start now.
-
-        For each role, this is its ``max_concurrent`` minus its open runs. The sum is never more than the runs that the
-        stop rule leaves (``runs_left``).
-        """
-        open_runs = campaign_runs(campaign.id).where(Run.status.in_(OPEN_RUNS))
-        free = sum(
-            max(role.max_concurrent - count(s, open_runs.where(done_by(name))), 0) for name, role in roles.items()
-        )
-        return max(free if runs_left is None else min(free, runs_left), 0)
 
     def queue(self, s: Session, campaign: Campaign, left: Facts) -> None:
         """Queue a run, and request its agent, for each free slot with a runnable idea, within the runs ``left``.
@@ -293,17 +310,10 @@ class OptimizationPlanner:
         """
         cfg = campaign.config
         self._park_strays(s, campaign, cfg)
-        live = [t.name for t in cfg.all_tracks if t.share > 0]
-        query = select(Idea).where(Idea.campaign_id == campaign.id, runnable(), Idea.track.in_(live))
-        if head_unmeasured(s, campaign):
-            query = query.where(Idea.base_candidate_id.is_not(None))
         runs_left = left.get(facts.RUNS)
         for name, role in cfg.roles.doing_runs().items():
-            takes = query
-            if role.takes is not None:
-                taken = s.connection().exec_driver_sql(ideas_taken(role.takes)).scalars().all()
-                takes = query.where(Idea.id.in_(taken))
-            for _ in range(self._free_slots(s, campaign, {name: role}, runs_left)):
+            takes = offered(s, campaign, cfg, role)
+            for _ in range(free_slots(s, campaign, {name: role}, runs_left)):
                 full = full_harnesses(s, campaign, cfg)
                 fits = takes.where(or_(Idea.harness.is_(None), Idea.harness.not_in(full)))
                 explored = self._explore(s, campaign, name, role, fits)

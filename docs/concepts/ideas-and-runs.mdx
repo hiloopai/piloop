@@ -29,7 +29,7 @@ idea#2 scheduled → parked: wait for the results of idea#1
 | Status | Meaning |
 |---|---|
 | `seed` | A hunch that waits for research. |
-| `proposed` | Waits for a human to set it `ready`. Add it with `--proposed`. |
+| `proposed` | Waits for a human to set it `ready`. Add it with `--proposed`. When implementer slots sit idle behind it for `[plugins.role.implementer] idle_alert` (30 minutes), piloop escalates. |
 | `ready` | Waits for a free implementer. |
 | `scheduled` | A run of it is queued or running, or its commits wait for their verdicts. |
 | `done` | Its run ended and its commits are judged. |

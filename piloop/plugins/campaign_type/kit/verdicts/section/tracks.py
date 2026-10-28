@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from piloop.api.views import Lines, Rendered
 from piloop.plugins.campaign_type.kit.backlog.ideas import runnable
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.evaluation.measure import known, score
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
@@ -18,7 +19,7 @@ class Tracks(Section):
     """One line per track. Nothing with one track.
 
     A line shows the track's primary at the head against the start and its floor, its trunk keeps, its share of the
-    implementer slots against its open runs, and its runnable ideas.
+    implementer slots against its open runs, and its runnable and proposed ideas.
     """
 
     SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
@@ -35,7 +36,9 @@ class Tracks(Section):
         steps = [c for c in trunk_keeps(s, campaign) if c.run_id is not None]
         open_runs = campaign_runs(campaign.id).where(Run.status.in_(OPEN_RUNS)).with_only_columns(Idea.track)
         running = Counter(s.scalars(open_runs))
-        ready = Counter(s.scalars(select(Idea.track).where(Idea.campaign_id == campaign.id, runnable())))
+        tracks = select(Idea.track).where(Idea.campaign_id == campaign.id)
+        ready = Counter(s.scalars(tracks.where(runnable())))
+        proposed = Counter(s.scalars(tracks.where(Idea.status == IdeaStatus.PROPOSED)))
         lines = []
         for track in cfg.all_tracks:
             m = track.primary
@@ -53,6 +56,6 @@ class Tracks(Section):
             lines.append(
                 f'- {track.name}: {at}{floor}; {len(mine)} trunk keeps{latest};'
                 f' share {track.share:g} of {cfg.run_slots} slots, {running[track.name]} running;'
-                f' {ready[track.name]} runnable ideas.'
+                f' {ready[track.name]} runnable ideas, {proposed[track.name]} proposed.'
             )
         return Rendered(title='Tracks', blocks=(Lines(lines=tuple(lines)),))

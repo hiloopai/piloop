@@ -7,6 +7,7 @@ Every role is a provider of ``ROLES``, a built-in one or a package's, and so are
 
 import re
 from collections.abc import Mapping
+from datetime import timedelta
 from enum import StrEnum
 from importlib.resources import files
 from importlib.resources.abc import Traversable
@@ -177,6 +178,10 @@ class ImplementerRole(RoleConfig):
     last ``explore_every - 1`` runs did, the next slot goes to the most urgent ready idea that is pinned to a base
     other than the head (a reference, an older keep or a note), whatever its priority. Nothing changes while no such
     idea is ready. 0 turns this off."""
+    idle_alert: timedelta = Field(default=timedelta(minutes=30), ge=timedelta(0))
+    """How long free slots of this role may sit with no runnable idea for them while ideas that the role would take
+    wait in ``proposed``. Then piloop raises one escalation of priority 1, which the notifiers send. piloop
+    acknowledges it when the slots fill, or when no such idea waits. 0 turns this off."""
 
 
 def ideas_taken(takes: str) -> str:

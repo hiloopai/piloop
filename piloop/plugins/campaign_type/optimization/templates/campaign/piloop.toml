@@ -63,6 +63,7 @@ timeout = 1800                            # seconds one implementer may run
 max_concurrent = 4                        # the most runs at the same time, on all workers together
 explore_every = 4                         # at least 1 run in 4 starts from a pinned idea, when one is ready; 0 = off
 recovery_requeues = 2                     # times an idea is requeued from the last commit of a failed implementer
+idle_alert = 1800                         # seconds free slots wait behind proposed ideas before an escalation; 0 = off
 
 [plugins.role.watchdog]                   # a watchdog investigates anomalies and reviews progress every `interval` seconds
 # harnesses = ["pi", "claude", "codex"]   # if not set: [plugins.harness] use

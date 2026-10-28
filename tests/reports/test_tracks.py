@@ -10,6 +10,8 @@ from piloop.api.contract import Selection
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign
 from piloop.db.session import Database
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
@@ -52,6 +54,18 @@ def two_tracks(db: Database, campaign: Campaign) -> CampaignConfig:
 
 def test_status_names_every_track_its_head_its_floor_and_what_works_on_it(db: Database, campaign: Campaign) -> None:
     two_tracks(db, campaign)
+    with db.session() as s:
+        s.add(
+            Idea(
+                campaign_id=campaign.id,
+                track=TrackName('size'),
+                title='review me',
+                hypothesis='h',
+                status=IdeaStatus.PROPOSED,
+                created_by='research#9',
+            )
+        )
+        s.commit()
     lay = render(db, campaign).split('## Runs')[0]
     assert lay == snapshot("""\
 ## Campaign
@@ -66,8 +80,8 @@ head: candidate#4 · score: 3 · score vs baseline: 2 · size: 8 · size vs base
 
 ## Tracks
 
-- score: score 3 at the head (+2 on the start); floor 0.5, 2.5 to spare; 1 trunk keeps, the latest candidate#2 1h ago; share 0.75 of 1 slots, 0 running; 0 runnable ideas.
-- size: size 8 at the head (-4 on the start); floor 20, 12 to spare; 1 trunk keeps, the latest candidate#4 1h ago; share 0.25 of 1 slots, 2 running; 0 runnable ideas.
+- score: score 3 at the head (+2 on the start); floor 0.5, 2.5 to spare; 1 trunk keeps, the latest candidate#2 1h ago; share 0.75 of 1 slots, 0 running; 0 runnable ideas, 0 proposed.
+- size: size 8 at the head (-4 on the start); floor 20, 12 to spare; 1 trunk keeps, the latest candidate#4 1h ago; share 0.25 of 1 slots, 2 running; 0 runnable ideas, 1 proposed.
 
 ## Trajectory
 
@@ -101,8 +115,8 @@ def test_status_of_a_campaign_with_no_candidate_says_there_is_no_baseline_yet(db
         s.commit()
     shown = render(db, bare).split('## Tracks\n\n')[1].split('## Runs')[0]
     assert shown == snapshot("""\
-- score: no baseline yet; floor 0.5; 0 trunk keeps; share 0.75 of 1 slots, 0 running; 0 runnable ideas.
-- size: no baseline yet; floor 20; 0 trunk keeps; share 0.25 of 1 slots, 0 running; 0 runnable ideas.
+- score: no baseline yet; floor 0.5; 0 trunk keeps; share 0.75 of 1 slots, 0 running; 0 runnable ideas, 0 proposed.
+- size: no baseline yet; floor 20; 0 trunk keeps; share 0.25 of 1 slots, 0 running; 0 runnable ideas, 0 proposed.
 
 ## Trajectory
 

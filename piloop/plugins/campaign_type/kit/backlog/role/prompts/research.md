@@ -29,8 +29,8 @@ another sweep took meanwhile.
    data, a fixed bug). Develop it and name what changed.
 4. Define it with `idea develop` (the command is under Context), in words an implementer can act on, with ids and
    paths. Give it a `--family`, reusing a name from the families table. A seed with no expected effect on the metric (an audit, a refactor) is not a run: do its cheap part
-   yourself and fold the result into an idea that can move the metric, or reject it. A seed that needs a human's
-   approval gets `--proposed` and an escalation.
+   yourself and fold the result into an idea that can move the metric, or reject it. File it ready unless a human
+   must decide (section 3).
 5. Reject with `piloop idea status <id> rejected --reason '<why>'`, and name what settled it.
 
 ## 3. Ideas of your own
@@ -61,6 +61,10 @@ it is not one. Name the prior work you checked in `--from`.
 
 Other sweeps may run at the same time: before you add, read the ideas created since your sweep started (the time is
 under Context). A UNIQUE error on the title means someone proposed it first; extend their idea with a `note`.
+
+File every idea ready. A proposed idea waits for a human while implementer slots sit idle. Add `--proposed` only when
+the idea needs a decision that only a human can take, such as a cost, a risk to data, or a change to what the brief
+allows. Then write one `escalation` on the campaign that names the idea and that decision.
 
 ## 4. Prior art
 
