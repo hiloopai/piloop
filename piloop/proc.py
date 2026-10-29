@@ -80,8 +80,15 @@ def kill_group(leader: Leader) -> None:
 def running(leader: Leader) -> bool:
     """Whether ``leader`` has not exited. A child that exited is reaped."""
     match leader:
+        case subprocess.Popen() if leader.poll() is not None:
+            return False
         case subprocess.Popen():
-            return leader.poll() is None
+            # poll() answers None too while another thread waits on the child (it skips a waitpid that Popen holds):
+            # ask the kernel, without reaping it from under that thread. One that reaped it meanwhile ended it.
+            try:
+                return os.waitid(os.P_PID, leader.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None
+            except ChildProcessError:
+                return False
         case Started(pid=pid, start=start):
             return alive(pid, start)
         case _:

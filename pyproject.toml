@@ -406,6 +406,8 @@ markers = [
     "needs(*tests): skip unless these earlier tests of the module passed (tests/e2e)",
 ]
 xfail_strict = true
+# A test that runs this long prints every thread's stack, so a hang names its test before the job times out.
+faulthandler_timeout = 120
 filterwarnings = [
     "error",
 ]

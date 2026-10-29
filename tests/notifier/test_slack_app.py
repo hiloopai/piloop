@@ -1,6 +1,8 @@
 """The ``slack_app`` notifier, against a local Web API and Socket Mode endpoint: no test reaches Slack."""
 
 import sys
+import threading
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -580,3 +582,29 @@ def test_a_listener_needs_the_slack_extra_and_both_tokens(
 
 def test_the_doctor_checks_the_slack_extra_that_the_listener_imports() -> None:
     assert SlackApp(channel='C1').checks() == [Check('slack app', 'slack_sdk is installed')]
+
+
+def test_a_stop_waits_for_the_socket_to_close_only_up_to_its_timeout(
+    slack: FakeSlackApp, secrets: HomeSecrets, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slack's SDK joins its session thread with no timeout on close, and a reconnect in flight can keep it alive."""
+    from slack_sdk.socket_mode.builtin import SocketModeClient
+
+    released = threading.Event()
+    close = SocketModeClient.close
+
+    def stuck(client: SocketModeClient) -> None:
+        released.wait()
+        close(client)
+
+    monkeypatch.setattr(SocketModeClient, 'close', stuck)
+    heard = Heard(secrets, Again())
+    listener = app_of(slack).listen(heard.host)
+    listener.start()
+    began = time.monotonic()
+    try:
+        listener.stop(Leaving.STOP, 0.2)
+        assert time.monotonic() - began < 10, 'the stop returned at its timeout'
+        assert heard.failures == []
+    finally:
+        released.set()

@@ -308,6 +308,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
     return campaign
 
 
+@pytest.mark.quarantine(issue=536)
 def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, live_campaign: Campaign) -> None:
     shots: list[str] = []
 

@@ -9,6 +9,7 @@ reply changes it (``Edit``). Only ``people`` can answer. It needs the ``slack`` 
 """
 
 import hashlib
+import threading
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
@@ -365,8 +366,14 @@ class SocketListener:
         return {}
 
     def stop(self, leaving: Leaving, timeout: float) -> None:
-        if self._client is not None:
-            self._client.close()
+        if self._client is None:
+            return
+        # The SDK's close takes up to a second (its queue's poll), and a reconnect in flight can keep its session
+        # thread alive for good while close joins it with no timeout. So it closes in a thread of its own, waited for
+        # up to the timeout: the SDK's threads are daemon threads, and nothing of the daemon waits on them.
+        closing = threading.Thread(target=self._client.close, name='slack-socket-close', daemon=True)
+        closing.start()
+        closing.join(timeout)
 
     def _on(self, client: BaseSocketModeClient, request: SocketModeRequest, token: str) -> None:
         """Ack the envelope at once, as Slack asks within 3 seconds, then act on its event or its click."""

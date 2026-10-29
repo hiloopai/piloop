@@ -38,6 +38,25 @@ def test_kill_group_takes_eperm_for_gone_when_the_child_exited(monkeypatch: pyte
     assert proc.returncode == 0, 'reaped'
 
 
+def test_kill_group_takes_eperm_for_gone_when_the_child_exited_while_another_thread_waits_on_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Popen.poll`` answers None while another thread waits on the child, as an evaluation's run does while the
+    timer of its grace kills: the exit is read from the kernel then, without reaping the child."""
+    proc = subprocess.Popen(['true'], start_new_session=True)
+    deadline = time.monotonic() + 10
+    while psutil.Process(proc.pid).status() != psutil.STATUS_ZOMBIE and time.monotonic() < deadline:
+        time.sleep(0.01)
+    monkeypatch.setattr(os, 'killpg', _eperm)
+    monkeypatch.setattr(proc, 'poll', lambda: None)  # what it answers while another thread is in proc.wait()
+    kill_group(proc)
+    monkeypatch.undo()
+    assert proc.wait() == 0, 'still there for the thread that waits on it'
+    monkeypatch.setattr(os, 'killpg', _eperm)
+    monkeypatch.setattr(proc, 'poll', lambda: None)
+    kill_group(proc)  # that thread reaped it meanwhile
+
+
 def test_kill_group_raises_eperm_while_the_child_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     proc = subprocess.Popen(['sleep', '30'], start_new_session=True)
     try:
