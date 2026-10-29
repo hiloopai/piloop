@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import System
 from piloop.agents.results import (
+    AgentEnded,
     AgentSessionFinished,
     CampaignResults,
     DaemonStopped,
@@ -249,6 +250,38 @@ def test_a_report_read_after_a_restart_closes_the_agent_as_the_stop_on_its_row_s
     with db.session() as s:
         w = s.get_one(AgentSession, agent_session_id)
         assert ((w.state, w.error), ended_of(s, agent_session_id)) == (closed, ended)
+
+
+def test_an_end_that_comes_after_the_agents_report_leaves_its_row_closed(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """The scheduler reads a running agent, then ends it for its finding, and its report closes the row in between.
+
+    The end must not set the closed row ``ending`` again: no report would ever come to close it, and it would count as
+    live.
+    """
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
+    with db.session() as s:
+        w = AgentSession(kind=WATCHDOG, campaign_id=campaign.id, state=AgentSessionState.RUNNING, reason='t')
+        s.add(w)
+        s.commit()
+        agent_session_id = w.id
+        assert w.state is AgentSessionState.RUNNING  # read, as the scheduler's pass reads it
+        job = AgentJob(
+            agent_session=agent_session_id,
+            runtime='subprocess',
+            artifact=Source(vcs=Git(), repo=RepoId(campaign.id), revision=baseline(db, campaign.id).revision),
+            place='agent',
+            timeout=60,
+            brief_cid=BRIEF,
+            spec=START,
+        )
+        results.finished(job, AgentFinished(process=AgentExit(ExitStatus.EXITED, 200, 0)))
+        end_agent(s, w, 'left its finding', RunEnd.FINISHED, Tracer(None))
+        s.commit()
+    with db.session() as s:
+        w = s.get_one(AgentSession, agent_session_id)
+        assert (w.state, w.error, in_order(s, AgentEnded)) == (AgentSessionState.EXITED, None, [])
 
 
 def test_two_results_for_one_job_in_plain_sessions_close_its_row_once_and_measure_it_once(

@@ -16,7 +16,7 @@ from typing import Annotated, ClassVar, Literal, assert_never
 
 from covalence import Cid
 from pydantic import Field, SecretStr, TypeAdapter, ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, Agent, SignedAgent, System
@@ -146,13 +146,23 @@ class AgentEnded(EventModel):
 
 
 def end_agent(s: Session, w: AgentSession, reason: str, end: RunEnd, tracer: Tracer) -> None:
-    """Set a live agent ``ending``, with ``AgentEnded``, before its executor stops it. The caller commits.
+    """Set a starting or running agent ``ending``, with ``AgentEnded``, before its executor stops it. The caller commits.
 
-    An agent that is ``ending`` already keeps the end that was first given: it is why the agent stops.
+    An agent that is ``ending`` already keeps the end that was first given: it is why the agent stops. The row is
+    checked as the database has it, not as ``w`` was read: the agent's report can close it in between, and a closed
+    row stays closed.
     """
-    if w.state is AgentSessionState.ENDING:
+    ending = (
+        update(AgentSession)
+        .where(AgentSession.id == w.id, AgentSession.state.in_((AgentSessionState.STARTING, AgentSessionState.RUNNING)))
+        .values(state=AgentSessionState.ENDING, error=reason)
+        .returning(AgentSession.id)
+        .execution_options(synchronize_session=False)
+    )
+    ended = s.execute(ending).first() is not None
+    s.expire(w, ['state', 'error'])
+    if not ended:
         return
-    w.state, w.error = AgentSessionState.ENDING, reason
     emit(s, AgentEnded(reason=reason, end=end), TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
     tracer.event('agent_session.ended', agent_session=w.id, reason=reason)
 
