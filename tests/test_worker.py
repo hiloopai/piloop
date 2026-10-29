@@ -50,7 +50,7 @@ from piloop.plugins.executor.contract import (
 )
 from piloop.plugins.executor.kit.capacity import HostSample, sample
 from piloop.plugins.executor.kit.client import Dismissed, Local, Registration, WorkerInfo
-from piloop.plugins.executor.kit.door import AgentCall, Relayed
+from piloop.plugins.executor.kit.door import AgentCall, Call, Relayed
 from piloop.plugins.executor.kit.jobs import STOPPED, local_site, remote_site, send_of_record
 from piloop.plugins.executor.kit.leases import (
     SERVE,
@@ -78,7 +78,7 @@ from piloop.plugins.executor.workers import Workers
 from piloop.plugins.executor.workers.worker import WORKER_ANOMALY, Unsent, Worker
 from piloop.plugins.runtime.contract import QUEUE, AgentSpec, Deadline, ExitStatus, Handle, put, take
 from piloop.plugins.vcs.git import commands as git
-from piloop.settings import INPUTS_DIR, Settings
+from piloop.settings import INPUTS_DIR, RELAY_SOCKET, Settings, socket_at
 from piloop.store import tree as tree_module
 from tests.conftest import (
     Gate,
@@ -102,6 +102,15 @@ from tests.test_executors import Steerable
 from tests.test_lease import BRIEF, PROBE, START, Recorder, agent_job, evaluation_job
 
 HOLD = '#!/bin/sh\nwhile [ -f {hold} ]; do sleep 0.05; done\n'
+
+
+def quiet_relay(home: Path) -> Relay:
+    """A relay that relays nothing: the agents of these tests call piloop directly."""
+
+    def refuse(lease: int, call: Call) -> Relayed:
+        raise AssertionError(f'no agent of this test relays a call: {call.argv}')
+
+    return Relay(socket_at(home / RELAY_SOCKET), refuse)
 
 
 def use(db: Database, campaign: Campaign, body: str, timeout: float = 20) -> None:
@@ -1230,6 +1239,7 @@ def test_a_dismissed_worker_stops_its_job_keeps_an_unsent_report_in_its_spool_an
         Tracer(None),
         local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0),
         runners=('process',),
+        relay=quiet_relay(tmp_path),
     )
     worker.clock = still  # so the self-stop never ends it: only the refusal can
     worker.start()
@@ -1258,7 +1268,7 @@ def test_a_worker_elsewhere_short_of_disk_drops_the_input_copies_that_no_worktre
     os.link(inputs / 'used', worktree / 'data')  # a job that still runs links it
     monkeypatch.setattr(tree_module, 'free', lambda _: 0)  # always short: only the linked copy may stay
     site = remote_site(home, cas, partial(send_of_record, cas, partial(record_of, db)), reserve=1)
-    worker = Worker(Local(leases, 'w1'), Tracer(None), site, runners=('process',))
+    worker = Worker(Local(leases, 'w1'), Tracer(None), site, runners=('process',), relay=quiet_relay(site.home))
     job = evaluation_job(db, campaign, tmp_path)
     with db.session() as s:
         s.get_one(Evaluation, job.evaluation).started_at = utcnow()  # as the scheduler starts it
@@ -1298,6 +1308,7 @@ def test_a_worker_whose_registration_failed_registers_on_a_later_turn_and_a_stop
         Tracer(None),
         local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0),
         runners=('process',),
+        relay=quiet_relay(tmp_path),
     )
     worker.start()  # its own try, then the loop's first
     wait_until(lambda: client.registers == 2)
@@ -1324,6 +1335,7 @@ def test_a_worker_dismissed_while_it_reports_a_job_it_cannot_find_again_ends(
         Tracer(None),
         local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0),
         runners=('process',),
+        relay=quiet_relay(tmp_path),
     )
     worker.start()
     worker.wait()
@@ -1342,7 +1354,9 @@ def started_evaluation(db: Database, campaign: Campaign, tmp_path: Path) -> Eval
 def worker_on(leases: Leases, db: Database, tmp_path: Path, *, once: bool = False) -> Worker:
     """A worker of ``serve`` on ``leases``, on a clock that stands still: only a drain or ``once`` ends it."""
     site = local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0)
-    worker = Worker(Local(leases, SERVE), Tracer(None), site, runners=('process',), once=once)
+    worker = Worker(
+        Local(leases, SERVE), Tracer(None), site, runners=('process',), once=once, relay=quiet_relay(site.home)
+    )
     worker.clock = still
     return worker
 
@@ -1420,14 +1434,23 @@ def test_a_worker_with_an_orphan_exit_stays_while_its_server_answers_and_ends_on
         db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
     )
     site = local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0)
-    answered = Worker(Local(leases, SERVE), Tracer(None), site, runners=('process',), orphan_exit=0.3)
+    answered = Worker(
+        Local(leases, SERVE), Tracer(None), site, runners=('process',), orphan_exit=0.3, relay=quiet_relay(site.home)
+    )
     answered.start()
     assert answered._loop is not None
     answered._loop.join(1.5)
     assert answered._loop.is_alive(), 'idle past its orphan exit, with its server there'
     answered.stop()
     answered.wait()
-    gone = Worker(ServerGone(leases, 'gone'), Tracer(None), site, runners=('process',), orphan_exit=0.3)
+    gone = Worker(
+        ServerGone(leases, 'gone'),
+        Tracer(None),
+        site,
+        runners=('process',),
+        orphan_exit=0.3,
+        relay=quiet_relay(site.home),
+    )
     began = time.monotonic()
     gone.start()
     gone.wait()
@@ -1448,7 +1471,14 @@ def test_a_worker_whose_server_answers_slowly_is_no_orphan(db: Database, tmp_pat
         db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
     )
     site = local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0)
-    slow = Worker(SlowServer(leases, SERVE), Tracer(None), site, runners=('process',), orphan_exit=0.3)
+    slow = Worker(
+        SlowServer(leases, SERVE),
+        Tracer(None),
+        site,
+        runners=('process',),
+        orphan_exit=0.3,
+        relay=quiet_relay(site.home),
+    )
     slow.start()
     assert slow._loop is not None
     slow._loop.join(1.5)
@@ -1464,7 +1494,7 @@ def test_a_worker_whose_cas_lacks_the_job_loses_its_lease_with_why(
     leases.submit(agent_job(db, campaign, tmp_path))
     elsewhere = tmp_path / 'elsewhere'
     site = local_site(elsewhere, disk(elsewhere), partial(checkout_of, db), partial(record_of, db), reserve=0)
-    worker = Worker(Local(leases, SERVE), Tracer(None), site)
+    worker = Worker(Local(leases, SERVE), Tracer(None), site, relay=quiet_relay(site.home))
     worker.start()
     wait_until(lambda: lease_states(db) == [LeaseState.EXPIRED])
     with db.session() as s:

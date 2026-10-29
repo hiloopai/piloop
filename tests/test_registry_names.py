@@ -46,6 +46,7 @@ LEAVES: dict[str, frozenset[str] | None] = {
     'plugins/role/contract.py': frozenset({'seed', 'sql', 'orchestrator'}),
     'plugins/role/orchestrator.py': frozenset({'seed', 'sql'}),
     'plugins/archive/local/archiver.py': frozenset({'research'}),
+    'plugins/runtime/docker.py': frozenset({'docker'}),
 }
 """The files that may name entries, and which ones (None: any). The reasons:
 
@@ -64,6 +65,7 @@ LEAVES: dict[str, frozenset[str] | None] = {
   idea seed`` and ``piloop sql``, and ``orchestrator`` among the names that a new role may not take: the outside
   orchestrator signs with it.
 - ``plugins/archive/local/archiver.py``: ``research/`` is a folder of the shared workspace, not the role.
+- ``plugins/runtime/docker.py``: ``docker``, the Docker CLI that the runtime runs, not the runtime's name.
 """
 
 

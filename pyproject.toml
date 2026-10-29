@@ -130,6 +130,7 @@ notifier = "piloop.plugins.notifier.consumers:contribution"
 
 [project.entry-points."piloop.runtimes"]
 subprocess = "piloop.plugins.runtime.subprocess:Subprocess"
+docker = "piloop.plugins.runtime.docker:Docker"
 
 [project.entry-points."piloop.harnesses"]
 pi = "piloop.plugins.harness.pi:Pi"

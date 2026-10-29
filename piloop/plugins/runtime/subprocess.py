@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -79,7 +80,7 @@ class SubprocessRuntime:
         """
         spec.log_dir.mkdir(parents=True, exist_ok=True)
         token = uuid4().hex
-        proc = _spawn(spec, spec.args, 'w', token)
+        proc = _spawn(spec, self._command(spec, spec.args, token), 'w')
         try:
             if spec.resume_args:
                 (spec.log_dir / RESUMER).touch()
@@ -192,13 +193,18 @@ class SubprocessRuntime:
             return False
         prompt = '\n'.join(messages)
         args = [fill(a, prompt=prompt, session_id=session) for a in spec.resume_args]
-        proc = _spawn(spec, args, 'a', str(handle.data['token']))
+        proc = _spawn(spec, self._command(spec, args, str(handle.data['token'])), 'a')
         self._procs[_pid(handle)] = proc
         # replaced in one step: another instance may read it at any moment (status, kill, prompt)
         current = log_dir / f'{CURRENT}.tmp'
         current.write_text(json.dumps({'pid': proc.pid, 'start_time': started(proc.pid)}))
         current.replace(log_dir / CURRENT)
         return True
+
+    def _command(self, spec: AgentSpec, args: list[str], token: str) -> Command:
+        """The argv and the environment of one turn: the harness itself, with the agent's tag and queue."""
+        env = child_env() | spec.env | {TAG_ENV: token, MESSAGES_ENV: str(spec.log_dir / QUEUE)}
+        return Command([spec.executable, *args], env)
 
     def read(self, handle: Handle, lines: int = 80) -> str:
         """Return the last ``lines`` lines of the captured stdout."""
@@ -242,16 +248,24 @@ def _current(handle: Handle) -> tuple[int, float]:
     return int(str(data['pid'])), float(str(data['start_time']))
 
 
-def _spawn(spec: AgentSpec, args: list[str], mode: str, token: str) -> subprocess.Popen[bytes]:
+@dataclass(frozen=True)
+class Command:
+    """What one turn of an agent runs on this machine."""
+
+    argv: list[str]
+    env: dict[str, str]
+
+
+def _spawn(spec: AgentSpec, command: Command, mode: str) -> subprocess.Popen[bytes]:
     """Start one turn of the agent in a session of its own, writing (``w``) or appending (``a``) its output files."""
     with (spec.log_dir / STDOUT).open(mode) as out, (spec.log_dir / STDERR).open(mode) as err:
         return subprocess.Popen(
-            [spec.executable, *args],
+            command.argv,
             cwd=spec.cwd,
             stdout=out,
             stderr=err,
             stdin=subprocess.DEVNULL,
-            env=child_env() | spec.env | {TAG_ENV: token, MESSAGES_ENV: str(spec.log_dir / QUEUE)},
+            env=command.env,
             start_new_session=True,
         )
 

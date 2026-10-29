@@ -39,10 +39,10 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.contract import HARNESSES
-from piloop.plugins.host import PluginError, compose
+from piloop.plugins.host import Capability, PluginError, compose
 from piloop.plugins.lineage.contract import LINEAGE
 from piloop.plugins.role.contract import ROLES
-from piloop.plugins.runtime.contract import RUNTIMES, Runtime
+from piloop.plugins.runtime.contract import RUNTIMES, Runtime, RuntimeConfig
 from piloop.plugins.section.contract import SECTIONS
 from piloop.plugins.trigger.contract import TRIGGERS, Quiet
 from piloop.runtime.factory import RuntimeFactory
@@ -713,11 +713,18 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
     forget_loaded()
 
 
+def keyless(capability: Capability[RuntimeConfig]) -> list[str]:
+    """The providers that are instances without a table: those whose keys all have defaults (``docker`` needs one)."""
+    return [
+        n for n, p in capability.providers().items() if not any(f.is_required() for f in p.model.model_fields.values())
+    ]
+
+
 def test_a_runtime_that_is_not_registered_fails_with_the_registered_ones(campaign_path: Path, plugins: None) -> None:
     with pytest.raises(
         ConfigError,
         match=re.escape(
-            f"plugins.runtime.use[0] = 'tmux': no [plugins.runtime.tmux]; there are {', '.join(RUNTIMES.providers())}"
+            f"plugins.runtime.use[0] = 'tmux': no [plugins.runtime.tmux]; there are {', '.join(keyless(RUNTIMES))}"
         ),
     ):
         load_campaign_config(campaign_path, plugins={'runtime': {'use': 'tmux'}})

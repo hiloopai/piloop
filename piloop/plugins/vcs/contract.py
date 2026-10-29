@@ -178,6 +178,10 @@ class Repository(Protocol):
         """The version that the checkout is at."""
         ...
 
+    def store(self) -> Path:
+        """The folder that holds the repository's versions, where a checkout of it saves its new ones."""
+        ...
+
     def version(self, native: str) -> Version:
         """The version that ``native`` names in the provider's own terms: a revision, or under ``git`` a branch or tag.
 

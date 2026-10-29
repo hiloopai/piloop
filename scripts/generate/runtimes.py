@@ -17,8 +17,13 @@ def generate() -> str:
     rows = ['| ' + ' | '.join(head) + ' |', '|' + '---|' * len(head)]
     for kind, config in sorted(RUNTIMES.builtins().items()):
         runtime = get_type_hints(config.open)['return']
-        cells = [cell(told(own(runtime, m), f'{runtime.__name__}.{m}')) for m in COMMANDS]
+        cells = [cell(told(own(defining(runtime, m), m), f'{runtime.__name__}.{m}')) for m in COMMANDS]
         what = cell(lead(runtime, runtime.__name__))
         rows.append(f'| `{kind}` | {what} | {" | ".join(cells)} |')
     source = 'the docstrings of the runtimes of the `piloop.runtimes` entry points in `pyproject.toml`, `piloop/plugins/runtime/`'
     return header(source) + '\n' + '\n'.join(rows) + '\n'
+
+
+def defining(runtime: type, name: str) -> type:
+    """The class that defines ``name`` for ``runtime``: itself, or the runtime it extends, such as ``docker`` does."""
+    return next((c for c in runtime.__mro__ if name in vars(c)), runtime)

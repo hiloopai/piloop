@@ -19,6 +19,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import closing
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import partial
@@ -65,6 +66,7 @@ from piloop.plugins.executor.kit.relay import RELAY_ARGV
 from piloop.plugins.executor.kit.sessions import POLL_SECONDS, SessionFile
 from piloop.plugins.executor.kit.transfers import send_of_record
 from piloop.plugins.harness.contract import MCP, McpLaunch, UsageReader, expand
+from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.runtime.contract import (
     AgentExit,
     AgentSpec,
@@ -258,6 +260,8 @@ def run_agent(job: AgentJob, runtime: Runtime, control: Control, site: Site, spa
             raise LookupError(f'the CAS lacks the brief {job.brief_cid}')
         job, start, unrestored = restore_session(job, job.spec, site, span)
         spec = rendered(job, start.at(cwd, log_dir, site.env()), control.secrets(), span)
+        with closing(site.clones.repository(job.artifact)) as repo:
+            spec = replace(spec, shares=(*spec.shares, repo.store()))
     except Exception as e:  # a full disk, a locked index, a missing secret: a fault of the host, not of the agent
         span.error(e)
         return _unstarted(job, site, f'{type(e).__name__}: {e}', started_at)
@@ -690,6 +694,8 @@ class MissingSecrets(LookupError):
 def rendered(job: AgentJob, spec: AgentSpec, found: JobSecrets, span: Span) -> AgentSpec:
     """The spec with the job's secrets and token from ``found`` (``Control.secrets``), and ``{mcp}`` expanded.
 
+    It also names what a runtime that isolates the agent must let through: its harness's sessions, and its servers.
+
     piloop's own variables in the spec and the token win over a secret of the same name, and both over the login that
     an isolated agent takes from the user's setup (``Harness.carried``), which ``span`` notes.
 
@@ -709,6 +715,12 @@ def rendered(job: AgentJob, spec: AgentSpec, found: JobSecrets, span: Span) -> A
         span.event(LOGIN_CARRIED, keys=', '.join(carried.names))
         spec = replace(spec, args=carried.args, resume_args=carried.resume_args)
         env = carried.env | env
+    reader = job.harness.sessions() if job.harness is not None else None
+    spec = replace(
+        spec,
+        shares=() if reader is None else (reader.root(),),
+        reaches=tuple(s.address for s in job.servers.values() if isinstance(s, HttpServer)),
+    )
     renderer = job.harness.mcp() if job.harness is not None else None
     if renderer is None or MCP not in [*spec.args, *spec.resume_args]:
         return replace(spec, env=env)

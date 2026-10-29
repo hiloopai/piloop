@@ -28,6 +28,7 @@ from piloop.plugins.runtime.contract import NotSteerable
 from piloop.plugins.runtime.contract import AgentExit, Deadline, ExitStatus
 from piloop.plugins.runtime.contract import Runtime, RuntimeConfig
 from piloop.plugins.runtime.subprocess import Subprocess, SubprocessRuntime
+from piloop.plugins.runtime.docker import Docker
 
 from piloop.plugins.harness.contract import HARNESSES, Carried, Harness, SecretRef, UsageReader, UserConfig
 from piloop.settings import Settings, StorageSettings, TracingSettings, EvaluationSettings

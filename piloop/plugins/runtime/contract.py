@@ -68,6 +68,13 @@ class AgentSpec(AgentStart):
 
     cwd: Path
     log_dir: Path
+    shares: tuple[Path, ...] = ()
+    """Directories other than ``cwd`` and ``log_dir`` that the agent writes and its worker reads: its harness's
+    sessions, and the store of the repository that its commits go to. A runtime that isolates the agent's files shares
+    them."""
+    reaches: tuple[str, ...] = ()
+    """The ``host:port`` of each server that the agent's role needs besides its model: its HTTP MCP servers. A runtime
+    that limits the agent's network lets them through."""
 
 
 @dataclass(frozen=True)

@@ -98,8 +98,9 @@ def test_an_installed_package_mounts_its_runtime_and_shows_where_it_comes_from(
     app(['plugins'], result_action='return_value', exit_on_error=False)
     lines = printed[0].splitlines()
     runtimes = lines.index('runtimes (host tier, piloop.runtimes):')
-    assert lines[runtimes : runtimes + 3] == [
+    assert lines[runtimes : runtimes + 4] == [
         'runtimes (host tier, piloop.runtimes):',
+        f'  docker      {built_in}',
         f'  subprocess  {built_in}',
         '  nice        piloop-nice 0.1.0, entry point nice = piloop_nice:Nice',
     ]
@@ -163,7 +164,7 @@ def test_two_packages_with_the_same_name_fail_before_the_daemon_starts(
         (
             '[plugins.runtime.tmux]\nx = 1\n',
             r'config.toml: 1 validation error for \[plugins\]\nruntime\.tmux\n  Value error, no runtime has that name: add'
-            r' provider = "<runtime>"; registered runtimes: subprocess',
+            r' provider = "<runtime>"; registered runtimes: docker, subprocess',
         ),
         (
             '[plugins.cas]\nprovider = "azure"\n',
@@ -257,7 +258,7 @@ def test_a_broken_package_of_a_capability_that_nothing_binds_is_a_warning(
 
 
 def test_a_name_that_no_provider_has_lists_the_ones_there_are() -> None:
-    with pytest.raises(MissingProvider, match="^unknown runtime 'tmux'; registered runtimes: subprocess$"):
+    with pytest.raises(MissingProvider, match="^unknown runtime 'tmux'; registered runtimes: docker, subprocess$"):
         RUNTIMES.get('tmux')
 
 

@@ -95,6 +95,10 @@ class GitRepository(Repository):
     def head(self) -> Version:
         return self._version(self.repo.head.commit.hexsha)
 
+    def store(self) -> Path:
+        """Its git directory: the common one, which every worktree of it commits to."""
+        return Path(self.repo.common_dir).resolve()
+
     def version(self, native: str) -> Version:
         try:
             sha = self.repo.commit(native).hexsha

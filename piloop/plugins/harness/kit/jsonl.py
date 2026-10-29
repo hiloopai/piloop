@@ -6,6 +6,7 @@ have the numbers and the agent's text. A provider passes these to ``JsonlSession
 """
 
 import glob
+import itertools
 import json
 import os
 import re
@@ -157,6 +158,11 @@ class JsonlSessions:
             if matches:
                 return max(matches, key=lambda p: p.stat().st_mtime)
         return None
+
+    def root(self) -> Path:
+        """``file`` up to its first folder with a placeholder or a wildcard."""
+        fixed = itertools.takewhile(lambda part: not ({'{', '*'} & set(part)), Path(self.pattern('{session_id}')).parts)
+        return Path(*fixed)
 
     def pattern(self, session_id: str, folder: str = '*') -> str:
         """The glob of the session file: ``file`` with its placeholders filled in, and ``~`` as the user's home."""

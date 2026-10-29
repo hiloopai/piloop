@@ -52,6 +52,7 @@ from piloop.plugins.executor.kit.remote import Remote, lease_routes
 from piloop.plugins.executor.kit.scaling import Scaler
 from piloop.plugins.executor.kit.transfers import FirstTransfers
 from piloop.plugins.executor.workers.worker import Worker
+from piloop.settings import RELAY_SOCKET, socket_at
 
 
 class Workers(ExecutorConfig):
@@ -106,13 +107,16 @@ class WorkersExecutor:
         """What the ``send`` route does: versions from the repo of record, into the CAS."""
         self._cli = Runner(host.db, host.home, host.repos)
         """What the ``cli`` route does: an agent's relayed call, run here."""
+        local = Local(self.leases, SERVE)
         self.worker = Worker(
-            Local(self.leases, SERVE),
+            local,
             host.tracer,
             jobs.local_site(host.home, host.cas, host.repos, host.records, host.reserve),
             runtime_factory=host.runtimes,
+            relay=Relay(socket_at(host.home / RELAY_SOCKET), lambda lease, call: self._cli(local.relayed(lease), call)),
         )
-        """The worker inside ``piloop serve``, in the pool ``serve``."""
+        """The worker inside ``piloop serve``, in the pool ``serve``. Its agents call piloop directly, except those of a
+        runtime that sees none of this home, such as ``docker``: they relay their calls, as on a worker elsewhere."""
         self.scaler = Scaler.of(
             host.db, lambda: self.leases.pools, host.network, host.tracer, timing, host.home, _worker_argv
         )

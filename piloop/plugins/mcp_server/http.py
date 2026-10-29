@@ -1,6 +1,7 @@
 """``http``: a streamable HTTP server."""
 
 from typing import Self
+from urllib.parse import urlsplit
 
 from pydantic import model_validator
 
@@ -26,6 +27,12 @@ class HttpServer(McpServer):
         if self.bearer_token_env and AUTHORIZATION in {h.lower() for h in self.headers_env}:
             raise ValueError('bearer_token_env sets Authorization; drop it from headers_env')
         return self
+
+    @property
+    def address(self) -> str:
+        """``host:port`` of ``url``: what a sandbox's network lets through (``AgentSpec.reaches``)."""
+        url = urlsplit(self.url)
+        return f'{url.hostname}:{url.port or (443 if url.scheme == "https" else 80)}'
 
     @property
     def env_names(self) -> list[str]:

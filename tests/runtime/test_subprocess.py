@@ -395,8 +395,8 @@ def test_a_start_that_fails_after_the_spawn_kills_and_waits_for_the_process(
     spawned: list[subprocess.Popen[bytes]] = []
     real = subprocess_runtime._spawn
 
-    def spawn(spec: AgentSpec, args: list[str], mode: str, token: str) -> subprocess.Popen[bytes]:
-        spawned.append(proc := real(spec, args, mode, token))
+    def spawn(spec: AgentSpec, command: subprocess_runtime.Command, mode: str) -> subprocess.Popen[bytes]:
+        spawned.append(proc := real(spec, command, mode))
         return proc
 
     monkeypatch.setattr(subprocess_runtime, '_spawn', spawn)

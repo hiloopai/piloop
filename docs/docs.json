@@ -42,6 +42,7 @@
           "guides/secrets",
           "guides/notifications",
           "guides/workers",
+            "guides/containers",
           "guides/mcp-servers",
           "guides/upgrading",
           "guides/watch",

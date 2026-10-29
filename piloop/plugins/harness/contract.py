@@ -166,6 +166,10 @@ class UsageReader(Protocol):
         """The session's own file on this machine, which piloop puts in the CAS. None when there is none (yet)."""
         ...
 
+    def root(self) -> Path:
+        """The directory under which the harness writes every session file: a sandbox shares it with the worker."""
+        ...
+
 
 class Harness(Parameters):
     """``[plugins.harness.<name>]``: how to launch one coding agent, with which model, and how many at once.

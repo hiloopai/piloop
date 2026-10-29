@@ -17,9 +17,17 @@ from piloop.db.session import Database
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.kit.client import Local
+from piloop.plugins.executor.kit.door import Call, Relayed
 from piloop.plugins.executor.kit.jobs import local_site
 from piloop.plugins.executor.kit.leases import Leases, Timing
+from piloop.plugins.executor.kit.relay import Relay
 from piloop.plugins.executor.workers.worker import Worker
+from piloop.settings import RELAY_SOCKET, socket_at
+
+
+def refuse(lease: int, call: Call) -> Relayed:
+    """The relay of this worker: its agents call piloop directly."""
+    raise AssertionError(f'no agent of this worker relays a call: {call.argv}')
 
 
 def main() -> None:
@@ -29,7 +37,12 @@ def main() -> None:
     cas = CAS.selected({}).open(home)
     results = CampaignResults(db, Tracer(None), home, cas, lambda: False)
     site = local_site(home, cas, partial(checkout_of, db), partial(record_of, db), reserve=0)
-    worker = Worker(Local(Leases(db, results, cas, timing), worker_id), Tracer(None), site)
+    worker = Worker(
+        Local(Leases(db, results, cas, timing), worker_id),
+        Tracer(None),
+        site,
+        relay=Relay(socket_at(home / RELAY_SOCKET), refuse),
+    )
     worker.start()
     print('ready', flush=True)
     threading.Event().wait()  # the worker's loop looks for jobs on every heartbeat

@@ -13,6 +13,7 @@
 | `Vcs.prompt(part: Part) -> str` | What the built-in prompts say about `part` for this provider (`prompted`). |
 | `Repository.close() -> None` | Release what the open repository holds. Later calls do nothing. |
 | `Repository.head() -> Version` | The version that the checkout is at. |
+| `Repository.store() -> Path` | The folder that holds the repository's versions, where a checkout of it saves its new ones. |
 | `Repository.version(native: str) -> Version` | The version that `native` names in the provider's own terms: a revision, or under `git` a branch or tag. |
 | `Repository.update(credential: SecretStr \| None) -> Version` | Bring a clone up to the repository it was cloned from, and return the version that it is at then. |
 | `Repository.receive(cas: Cas, transfer: Transfer, base: Revision) -> list[Version]` | Take the versions of `transfer` from `cas`, and return those from `base` to its head, oldest first. |

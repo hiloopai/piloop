@@ -526,7 +526,7 @@ The keys that every `[plugins.role.<name>]` table accepts. Each role's table bel
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `prompt` | string \| null | `null` | The file that starts the brief of this role: a path relative to the repo root, or an absolute path. When unset, the role's own prompt (`PROMPT`). A new role needs it. |
-| `runtime` | string \| null | `null` | Where the agents of this role run. When unset, the role uses the campaign's, `[plugins.runtime] use`. Built in: `subprocess`. |
+| `runtime` | string \| null | `null` | Where the agents of this role run. When unset, the role uses the campaign's, `[plugins.runtime] use`. Built in: `docker`, `subprocess`. |
 | `harnesses` | list\[string\] \| null | `null` | The harness rotation of this role. When unset, the role uses the campaign's, `[plugins.harness] use`. |
 | `model` | dict\[string, string\] \| null | `null` | The model for each harness in this role, over the `model` of each `[plugins.harness.<name>]`. |
 | `effort` | string | `"high"` | How hard the agents of this role think, as the harness names it, for example `high`. It fills `{effort}` in the harness's argv, and the harness checks it. |
@@ -863,6 +863,18 @@ A caller whose claims have these values gets `access`.
 #### `[plugins.runtime.<name>]`
 
 Each runtime by name.
+
+With `provider = "docker"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `image` | string | required | The image of the agents' containers. It has the harness CLIs that the campaigns use and git. A glibc-based image: piloop's own CLI runs in it from the worker's install. |
+| `allow` | list\[string\] | `["api.anthropic.com", "api.openai.com"]` | What agents may reach: `host`, `host:port` or `*.domain` (port 443 when none). The HTTP MCP servers of an agent's role are added to it. A model gateway on this machine is `127.0.0.1:<port>`. |
+| `network` | string | `"piloop"` | The Docker network of the containers, which piloop creates as `--internal`: it has no route out. |
+| `proxy_port` | integer | `3129` | The port of the egress proxy on the network's gateway. A fixed one, so that an agent survives a restart of its worker: the next worker serves it on the same address. |
+| `executable` | string | `"docker"` | The Docker CLI, or a CLI that takes the same arguments, such as `podman`. |
+| `link_depth` | integer | `2` | How many folder levels of a worktree piloop reads for the links of `link`, such as `data/train.csv`. |
+| `docker_seconds` | number | `600` | How long a call of the Docker CLI that sets up or removes a container may take, a pull of the image included. |
 
 With `provider = "subprocess"`, the table has no other key.
 

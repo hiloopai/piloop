@@ -1,0 +1,72 @@
+---
+title: Run agents in containers
+sidebarTitle: Containers
+description: The docker runtime gives each agent a container that sees only its own files and the hosts that it may reach.
+---
+
+The `docker` runtime runs each agent in a container of your image. The agent sees its worktree, its logs and the hosts
+that you allow, and nothing else of the machine. Set it in the `config.toml` of the home:
+
+```toml
+[plugins.runtime.docker]
+image = "ghcr.io/acme/agent:1"
+allow = ["api.anthropic.com"]
+```
+
+Then pick it in the campaign's `piloop.toml`, for every role or for one:
+
+```toml
+[plugins.runtime]
+use = "docker"
+```
+
+## The image
+
+The image holds the harness CLIs that your campaigns use, git, and glibc. piloop runs its own CLI in the container
+from the worker's install, so the image does not need piloop:
+
+```text
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://claude.ai/install.sh | bash && cp -L /root/.local/bin/claude /usr/local/bin/claude
+```
+
+Add the tools that the agents use to test their work, such as `uv` or a compiler.
+
+## The login
+
+The container has an empty home, so your own login of the harness is not there. Give the harness a key:
+
+```toml
+[plugins.harness.claude]
+env = { ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" } }
+```
+
+To use a subscription, run a gateway on the machine that holds the login. Point the harness at it, and allow it:
+
+```toml
+[plugins.harness.claude]
+env = { ANTHROPIC_BASE_URL = "http://127.0.0.1:8317", ANTHROPIC_AUTH_TOKEN = { secret = "GATEWAY_TOKEN" } }
+```
+
+```toml
+[plugins.runtime.docker]
+image = "ghcr.io/acme/agent:1"
+allow = ["127.0.0.1:8317"]
+```
+
+## What the container sees
+
+| What | How |
+|---|---|
+| The worktree, its git directory, the log directory | Read-write, at the same paths as on the machine |
+| `link` inputs | Read-only |
+| The shared workspace | Read-write |
+| The harness's sessions | Read-write: piloop reads the tokens and keeps the session |
+| Your home | An empty one: no `CLAUDE.md`, `AGENTS.md`, skills, settings or credentials |
+| `piloop` | The worker's relay socket: the calls of the agent's role, as on a [worker elsewhere](/guides/workers) |
+| The network | Only `allow` and the role's HTTP MCP servers, through a proxy of the worker |
+
+An agent that asks for any other host gets a `403` from the proxy. The container runs as your user, so its commits
+are yours. When the agent ends, piloop removes the container and its home.
