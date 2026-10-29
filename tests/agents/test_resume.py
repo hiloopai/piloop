@@ -102,8 +102,8 @@ def launch(db: Database, ctl: RunController, campaign: Campaign, agent_session_i
         row = s.get_one(Campaign, campaign.id)
         agent = Agent(role=WATCHDOG, session=agent_session_id)
         watchdog = role(row.config, WATCHDOG, Path(row.path))
-        brief = compose_brief(watchdog, row, agent, reason='news', context='- the whole brief')
-        resumed = compose_resumed(watchdog, row, agent, reason='news', context=f'- news for {agent}')
+        brief = compose_brief(watchdog, row, '- the whole brief')
+        resumed = compose_resumed(row.config.role(WATCHDOG), agent, f'- news for {agent}')
     ctl.launcher.launch(
         agent_session_id,
         brief=ctl.cas.put(brief.encode()),

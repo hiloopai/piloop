@@ -28,12 +28,15 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import count
 from pathlib import Path
-from typing import Literal, Protocol, assert_never
+from typing import TYPE_CHECKING, Literal, Protocol, assert_never
 
 from pydantic import InstanceOf, TypeAdapter
 
 from piloop.plugins.host import PluginError, Scope, Slot
 from piloop.version import Version
+
+if TYPE_CHECKING:  # the sections import this module
+    from piloop.plugins.section.contract import Section
 
 
 class Marked(Protocol):
@@ -544,6 +547,22 @@ def plugin_lists(toml: Path, raw: dict[str, object], removed_in: Version) -> Non
     One with parameters gets a table, named after its role (``research_low_water``) or ``status`` first.
     """
     entries(toml, raw, PLUGIN_LISTS, removed_in)
+
+
+@until('0.5.0', 'a list of sections without the context shows it after its guides: delete context_listed')
+def context_listed(shown: list[Section], found: Mapping[str, Section]) -> list[Section]:
+    """A role's list of sections, with the ``context`` section after its guides when it names none.
+
+    Before the context was a section, every brief showed it after the guides of its role's list, and the list's other
+    sections after it.
+    """
+    from piloop.plugins.section.context import Context  # here: the sections import this module
+    from piloop.plugins.section.contract import Guide  # here: the sections import this module
+
+    if any(isinstance(section, Context) for section in shown):
+        return shown
+    guides = [section for section in shown if isinstance(section, Guide)]
+    return [*guides, found['context'], *(section for section in shown if not isinstance(section, Guide))]
 
 
 type MessageFormat = Literal['lines', 'claude-hook']

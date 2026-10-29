@@ -136,7 +136,7 @@ each shows every section that declares it. `[plugins.section] use` lists those o
 use = ["headline", "trajectory", "runs"]
 
 [plugins.role.research]
-sections = ["database", "search", "research_lessons", "goal", "queue", "pack"]
+sections = ["database", "search", "context", "research_lessons", "goal", "queue", "pack"]
 
 [plugins.section.research_lessons]
 provider = "lessons"
@@ -146,8 +146,21 @@ budget = 800
 budget = 600                 # the tokens of an implementer's history
 ```
 
-A **guide**, such as `database` or `search`, is a section that says how to do one thing. A brief shows its guides
-before its context. Each role has its own guides, and `piloop schema <guide>` prints any other.
+A brief is the role's prompt, then `brief.md`, then the role's `addendum`, then its sections. A **guide**, such as
+`database` or `search`, is a section that says how to do one thing. Each role has its own guides, and `piloop schema
+<guide>` prints any other. A list without `sections` shows the guides first.
+
+The **context** section says who the agent is, where the campaign is, why the agent started and how it runs piloop. Then
+it shows what the agent's run or sweep adds. Its `lines` change what it says. A line with an empty field, such as a
+role that writes nothing, is left out:
+
+```toml
+[plugins.section.context]
+lines = ["- You are {agent}, the {role} for {campaign}.", "- Why you started: {reason}", "- You may write: {writes}."]
+```
+
+Each agent starts with the role's `first_message`, which names its brief. An agent that resumes the role's last
+session starts with `resume_message`.
 
 <Sections />
 

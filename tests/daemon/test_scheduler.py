@@ -37,7 +37,7 @@ from piloop.agents.results import (
     WrapUp,
     extend,
 )
-from piloop.agents.roles import SQL_HINT, compose_brief
+from piloop.agents.roles import PILOOP_HINT, compose_brief
 from piloop.campaign import campaigns, ops
 from piloop.campaign.campaigns import sync
 from piloop.campaign.stop import left, request_cancel, request_stop
@@ -1228,8 +1228,8 @@ def test_a_stop_after_the_implementer_left_its_finding_scores_its_run_on_the_nex
         " ('idea', 1, 'implementer#1', 'escalation', 1, 'run the audit')"
     )
     harness = (
-        f'#!/bin/sh\necho step >> solve.txt\ngit commit -qam "step"\n{SQL_HINT} "{finding}"\n'
-        + (f'{SQL_HINT} "{ask}"\n' if escalated else '')
+        f'#!/bin/sh\necho step >> solve.txt\ngit commit -qam "step"\n{PILOOP_HINT} sql "{finding}"\n'
+        + (f'{PILOOP_HINT} sql "{ask}"\n' if escalated else '')
         + 'sleep 30 &\necho $! > ../child.pid\nwait\n'
     )
     write_toml(Path(campaign.path), harness, implementer_timeout=60)
@@ -2890,7 +2890,7 @@ def test_an_implementer_that_left_a_job_running_after_its_finding_succeeds_and_t
         " 'done')"
     )
     harness = (
-        f'#!/bin/sh\necho step >> solve.txt\ngit commit -qam "step"\n{SQL_HINT} "{finding}"\n'
+        f'#!/bin/sh\necho step >> solve.txt\ngit commit -qam "step"\n{PILOOP_HINT} sql "{finding}"\n'
         'sleep 300 &\necho $! > ../child.pid\nwait\n'
     )
     write_toml(Path(campaign.path), harness, implementer_timeout=300)

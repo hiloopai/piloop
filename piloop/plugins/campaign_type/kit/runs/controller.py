@@ -33,7 +33,7 @@ from piloop.agents.results import (
     WorkUnsaved,
     record,
 )
-from piloop.agents.roles import compose_brief, read_brief, role
+from piloop.agents.roles import briefing, compose_brief, read_brief, role
 from piloop.campaign.campaigns import (
     WORKSPACE,
     Sources,
@@ -415,20 +415,23 @@ class RunController:
                     return
                 base = s.get_one(Candidate, run.base_candidate_id)
                 if run.brief_cid is None:
+                    agent = Agent(role=run.role, session=agent_session_id)
+                    track = cfg.track(idea.track)
+                    brief = briefing(
+                        role(cfg, run.role, Path(campaign.path)),
+                        campaign,
+                        agent,
+                        reason=f'idea#{idea.id} is ready',
+                        lines=self._context(s, cfg, run, base, agent, timeout),
+                        track=track,
+                    )
+                    workspace = workspace_dir(self._home, campaign.id)
+                    rendering = Rendering(s, utcnow(), campaign, workspace, self.cas, brief=brief)
                     composed = compose_brief(
                         role(cfg, run.role, Path(campaign.path)),
                         campaign,
-                        Agent(role=run.role, session=agent_session_id),
-                        reason=f'idea#{idea.id} is ready',
-                        context=self._context(
-                            s,
-                            cfg,
-                            run,
-                            base,
-                            Agent(role=run.role, session=agent_session_id),
-                            timeout,
-                        ),
-                        track=cfg.track(idea.track),
+                        markdown(cfg.sections_of(RoleName(run.role)), rendering),
+                        track=track,
                     )
                     run.brief_cid = self.cas.put(composed.encode())
                 brief = run.brief_cid
@@ -1261,8 +1264,8 @@ class RunController:
 
     def _context(
         self, s: Session, cfg: CampaignConfig, run: Run, base: Candidate, reader: Agent, timeout: float
-    ) -> str:
-        """Return the implementer's context: its worktree, its time, the idea and its base, then its role's sections.
+    ) -> list[str]:
+        """Return the implementer's lines of context: its worktree, its time, the idea and its base.
 
         The comments on the idea and its runs are a section of their own (``idea_comments``).
         """
@@ -1315,9 +1318,7 @@ class RunController:
             lines += ['', f'Proposed by {idea.created_by}, prompted by: {idea.provenance.strip()}']
         if idea.plan:
             lines += ['', '### Plan', idea.plan.rstrip()]
-        workspace = workspace_dir(self._home, idea.campaign.id)
-        rendering = Rendering(s, utcnow(), idea.campaign, workspace, self.cas, reader=reader.session)
-        return '\n'.join([*lines, '', markdown(cfg.sections_of(RoleName(run.role)), rendering)])
+        return lines
 
 
 @dataclass(frozen=True)

@@ -40,13 +40,6 @@ from piloop.plugins.executor.contract import AgentJob, Executor, ExecutorConfig,
 from piloop.plugins.harness.contract import SESSION_ID, cleared_env, fill, of_provider, takes_session_id
 from piloop.plugins.runtime.contract import AgentStart
 
-PROMPT = 'Your brief is in {path}. Read all of it, in parts if a read comes back cut short, then follow it.'
-"""An agent's first prompt, on its argv.
-
-It names the brief's file instead of holding the brief. The prompt is one argument, and Linux limits one argument to
-128 KiB (``MAX_ARG_STRLEN``). A research brief with a long history is longer than that.
-"""
-
 
 class Launcher:
     """Turns an ``agent_sessions`` row into a job of the executor, and waits for the result that closes the row."""
@@ -198,7 +191,7 @@ class Launcher:
             session_id = str(uuid4()) if definition.needs_session_id and takes_session_id(definition.headless) else None
             kind, reason = w.kind, w.reason
             span.set(kind=kind, harness=harness, model=model, reason=reason, session_id=session_id)
-            prompt = PROMPT.format(path=f'{{log_dir}}/{BRIEF_FILE}')
+            prompt = cfg.role(kind).first_message.format(brief=f'{{log_dir}}/{BRIEF_FILE}')
             # the worker adds its PATH and its piloop (``jobs.Site.env``), and the values of the secrets
             agent = Agent(role=kind, session=agent_session_id)
             env = {

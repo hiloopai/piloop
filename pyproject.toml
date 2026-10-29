@@ -183,6 +183,7 @@ slack_app = "piloop.plugins.notifier.slack_app:SlackApp"
 [project.entry-points."piloop.sections"]
 headline = "piloop.plugins.campaign_type.kit.verdicts.section.headline:Headline"
 goal = "piloop.plugins.section.goal:Goal"
+context = "piloop.plugins.section.context:Context"
 tracks = "piloop.plugins.campaign_type.kit.verdicts.section.tracks:Tracks"
 trajectory = "piloop.plugins.campaign_type.kit.verdicts.section.trajectory:Trajectory"
 runs = "piloop.plugins.campaign_type.kit.runs.section.runs:Runs"

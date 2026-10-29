@@ -66,10 +66,11 @@ from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.trigger.stopped import StoppedTrigger
 from piloop.plugins.trigger.news import NewsTrigger
 
-from piloop.plugins.section.contract import SECTIONS, Guide, Section, SectionName, Rendering, Surface
+from piloop.plugins.section.contract import SECTIONS, Guide, Section, SectionName, Rendering, Briefing, Surface
 from piloop.api.views import Rendered, Block, Text, Lines, Figures, Figure, Table, Value
 from piloop.plugins.campaign_type.kit.verdicts.section.headline import Headline
 from piloop.plugins.section.goal import Goal
+from piloop.plugins.section.context import Context
 from piloop.plugins.campaign_type.kit.verdicts.section.tracks import Tracks
 from piloop.plugins.campaign_type.kit.verdicts.section.trajectory import Trajectory
 from piloop.plugins.campaign_type.kit.runs.section.runs import Runs

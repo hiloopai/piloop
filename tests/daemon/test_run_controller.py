@@ -35,7 +35,7 @@ from piloop.agents.results import (
     StartupAnomaly,
     WorkUnsaved,
 )
-from piloop.agents.roles import SQL_HINT, read_brief
+from piloop.agents.roles import PILOOP_HINT, read_brief
 from piloop.campaign import stop
 from piloop.campaign.campaigns import sync
 from piloop.cli.plugins import selections
@@ -1652,7 +1652,7 @@ def test_a_relaunched_implementer_signs_as_itself_and_its_finding_without_a_comm
     idea_id = run_row(db, run_id).idea_id
     finding = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, '$me', 'finding', 'no effect')"
     me = 'me=$(grep -o "Sign what you write as .implementer#[0-9]*" ../brief.md | grep -o "implementer#[0-9]*")'
-    write_toml(Path(campaign.path), f'#!/bin/sh\n{me}\n{SQL_HINT} "{finding}"\n')
+    write_toml(Path(campaign.path), f'#!/bin/sh\n{me}\n{PILOOP_HINT} sql "{finding}"\n')
     reload_campaign(db, campaign)
     start = mocker.patch.object(runtime, 'start', wraps=runtime.start)
     start.side_effect = [RuntimeError('no pickup'), DEFAULT]
@@ -1687,7 +1687,7 @@ def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it
     idea_id = run_row(db, run_id).idea_id
     finding = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, '$me', 'finding', 'no effect')"
     me = 'me=$(grep -o "Sign what you write as .implementer#[0-9]*" ../brief.md | grep -o "implementer#[0-9]*")'
-    body = HARNESS_APPEND if work == 'commit' else f'#!/bin/sh\n{me}\n{SQL_HINT} "{finding}"\n'
+    body = HARNESS_APPEND if work == 'commit' else f'#!/bin/sh\n{me}\n{PILOOP_HINT} sql "{finding}"\n'
     write_toml(Path(campaign.path), body)
     script = load_campaign_config(Path(campaign.path)).harness['script'].model_dump(mode='json')
     counted = {'headless': ['--session-id', '{session_id}', '{prompt}'], **READS_PI}
@@ -1756,7 +1756,7 @@ def test_a_finding_without_a_commit_is_a_result(
     with db.session() as s:
         idea_id, agent_session_id = run_row(db, run_id).idea_id, s.scalars(select(AgentSession.id)).one()
     finding = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, 'implementer#{agent_session_id}', 'finding', 'arm B: no effect')"
-    write_toml(Path(campaign.path), f'#!/bin/sh\n{SQL_HINT} "{finding}"\n')
+    write_toml(Path(campaign.path), f'#!/bin/sh\n{PILOOP_HINT} sql "{finding}"\n')
     reload_campaign(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     run = run_row(db, run_id)
@@ -1886,7 +1886,7 @@ def test_an_implementer_that_left_its_finding_has_finished_its_run_however_its_p
         f" ('idea', {idea_id}, 'implementer#{agent_session_id}', 'finding', 'DONE: added a line')"
     )
     end = 'touch ../found\nsleep 30 &\nwait' if timed_out else 'exit 1'
-    body = f'#!/bin/sh\necho line >> solve.txt\ngit commit -qam "a line"\n{SQL_HINT} "{finding}"\n{end}\n'
+    body = f'#!/bin/sh\necho line >> solve.txt\ngit commit -qam "a line"\n{PILOOP_HINT} sql "{finding}"\n{end}\n'
     write_toml(Path(campaign.path), body)
     reload_campaign(db, campaign)
     wait = runtime.wait
@@ -1932,8 +1932,8 @@ def test_an_implementer_that_stops_on_its_open_escalation_is_blocked_and_its_ide
     write_toml(
         Path(campaign.path),
         (
-            f'#!/bin/sh\n{SQL_HINT} "{ask}"\n'
-            + (f'{SQL_HINT} "{report}"\n' if reported else '')
+            f'#!/bin/sh\n{PILOOP_HINT} sql "{ask}"\n'
+            + (f'{PILOOP_HINT} sql "{report}"\n' if reported else '')
             + 'echo line >> solve.txt\ngit commit -qam "a line"\n'
         ),
         # the script runs two `piloop sql` processes before it commits: on a loaded host they outlast 20 s

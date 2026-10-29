@@ -4,9 +4,11 @@ Every role shares one lifecycle (``piloop.agents.launcher``). A role differs in 
 (``piloop.plugins.role``), its triggers (``piloop.plugins.trigger``) and the content of its brief, which this module composes.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import NamedTuple
 
 from covalence import Cid
 from sqlalchemy.orm import Session
@@ -18,13 +20,12 @@ from piloop.ids import RoleName
 from piloop.plugins.campaign_type.kit.evaluation.config import Track
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.harness.contract import Harness
-from piloop.plugins.role.contract import Files, SweepRole
-from piloop.plugins.section.contract import Guide, guides
-from piloop.plugins.vcs.contract import VCS, Vcs, prompted
+from piloop.plugins.role.contract import Files, RoleConfig, SweepRole
+from piloop.plugins.section.contract import Briefing, Guide, Rendering, Section
+from piloop.plugins.vcs.contract import VCS, prompted
 
 PILOOP_HINT = '"$PILOOP_BIN"'
 """How a brief runs piloop: the worker sets ``PILOOP_BIN`` for every agent (``piloop.plugins.executor.kit.jobs.own_cli``)."""
-SQL_HINT = f'{PILOOP_HINT} sql'
 
 
 @dataclass(frozen=True)
@@ -43,8 +44,6 @@ class Role:
     """The file that follows ``prompt`` in an incident sweep, one that got anomalies. None: nothing follows."""
     routine: Traversable | None
     """The file that follows ``prompt`` in every other sweep. None for a role that does runs, or a role without one."""
-    writes: tuple[str, ...]
-    """What the role may write. The brief states it."""
     files: Files
     """What the role may file with ``piloop idea``. The CLI enforces it."""
     ideas: str
@@ -91,7 +90,7 @@ def role(cfg: CampaignConfig, kind: RoleName, repo: Path) -> Role:
         incident = _prompt(repo, table.incident_prompt, table.INCIDENT_PROMPT)
         routine = _prompt(repo, table.routine_prompt, table.ROUTINE_PROMPT)
     ideas = table.IDEAS or IDEAS[table.files]
-    return Role(kind, prompt, incident, routine, tuple(table.writes), table.files, ideas)
+    return Role(kind, prompt, incident, routine, table.files, ideas)
 
 
 def _prompt(repo: Path, configured: str | None, own: Traversable | None) -> Traversable | None:
@@ -140,21 +139,43 @@ def read_brief(cas: Cas, brief: Cid) -> str:
     return data.decode()
 
 
+def briefing(
+    role: Role, campaign: Campaign, agent: Agent, *, reason: str, lines: Sequence[str], track: Track | None = None
+) -> Briefing:
+    """The agent that a brief is for, with ``lines`` of its campaign's type under the tracks and how it files ideas.
+
+    With several tracks, the context lists them, and an implementer's names its own ``track``.
+    """
+    cfg = campaign.config
+    ideas = role.ideas.format(piloop=PILOOP_HINT, campaign=campaign.name)
+    return Briefing(agent, reason, (*([tracks_line(cfg, track)] if cfg.multitrack else []), ideas, *lines))
+
+
+class BriefSections(NamedTuple):
+    """A brief's sections in markdown."""
+
+    whole: str
+    """Every section."""
+    resumed: str
+    """The sections that are not guides: the brief of an agent that resumes a session, which has the guides."""
+
+
+def render_sections(sections: Sequence[Section], r: Rendering) -> BriefSections:
+    """Render ``sections`` once, for a whole brief and for a resumed one."""
+    found = [(section, out.markdown()) for section in sections if (out := section.render(r)) is not None]
+    return BriefSections(
+        '\n\n'.join(text for _, text in found),
+        '\n\n'.join(text for section, text in found if not isinstance(section, Guide)),
+    )
+
+
 def compose_brief(
-    role: Role,
-    campaign: Campaign,
-    agent: Agent,
-    *,
-    reason: str,
-    context: str,
-    incident: bool = False,
-    track: Track | None = None,
+    role: Role, campaign: Campaign, sections: str, *, incident: bool = False, track: Track | None = None
 ) -> str:
-    """Compose a brief: the role prompt, the campaign brief, the role's addendum, the role's guides, the context.
+    """Compose a brief: the role prompt, the campaign brief, the role's addendum, then ``sections``.
 
     A sweep also gets its role's incident or routine prompt after the role prompt: the incident prompt when it got
-    anomalies (``incident``). An implementer also gets its track's addendum after the role's addendum. With several
-    tracks, the context lists them. ``context`` ends with the role's sections.
+    anomalies (``incident``). An implementer also gets its track's addendum after the role's addendum.
     """
     repo = Path(campaign.path)
     cfg = campaign.config
@@ -167,50 +188,17 @@ def compose_brief(
         (repo / BRIEF_FILE).read_text().rstrip(),
         (repo / addendum).read_text().rstrip() if addendum else '',
         (repo / track.addendum).read_text().rstrip() if track is not None and track.addendum else '',
-        _guides(cfg.guides_of(role.kind), vcs, str(campaign.id), (track or cfg.all_tracks[0]).primary.name),
-        _context(role, campaign, agent, reason, context, track),
+        sections,
     ]
     return '\n\n'.join(p for p in parts if p) + '\n'
 
 
-def _guides(shown: dict[str, Guide], vcs: Vcs, campaign_id: str, primary: str) -> str:
-    """The role's guides under ``# Guides``, then the names of the others, which ``piloop schema`` prints."""
-    others = [name for name in guides() if name not in shown]
-    more = f'`{PILOOP_HINT} schema <guide>` prints another guide: {", ".join(others)}.' if others else ''
-    parts = [f'## {g.TITLE}\n\n{g.text(vcs, campaign_id, primary)}' for g in shown.values()]
-    return '\n\n'.join(['# Guides', *parts, more]).rstrip() if shown or more else ''
-
-
-def compose_resumed(role: Role, campaign: Campaign, agent: Agent, *, reason: str, context: str) -> str:
-    """Compose the brief of an agent that resumes its role's last session: only its context, which is new to it.
+def compose_resumed(table: RoleConfig, agent: Agent, sections: str) -> str:
+    """Compose the brief of an agent that resumes its role's last session: the role's resume message, then ``sections``.
 
     The session holds the rest of the brief already, from the agent that started it.
     """
-    lead = (
-        f'You continue this session as a new agent, {agent.signature}. Your earlier briefs and work are above.'
-        ' Follow your role as before, with this new context.'
-    )
-    return f'{lead}\n\n{_context(role, campaign, agent, reason, context, None)}\n'
-
-
-def _context(role: Role, campaign: Campaign, agent: Agent, reason: str, context: str, track: Track | None) -> str:
-    author = agent.signature
-    cfg = campaign.config
-    return '\n'.join(
-        [
-            '# Context',
-            f'- You are {author}, the {role.kind} for campaign#{campaign.id} ({campaign.name}).',
-            f"- Campaign repo: {campaign.path}, on the daemon's machine. Your checkout can read every candidate's version.",
-            f"- Sign what you write as '{author}' (comments.author, ideas.created_by).",
-            f'- Why this agent started (context, not a scope): {reason}',
-            f"- piloop: `{PILOOP_HINT}` is this daemon's piloop. Run every `piloop` command of this brief with it.",
-            f"- SQL tool: `{SQL_HINT} -`, with the statement on stdin from a quoted heredoc (`<<'EOF'`).",
-            *([tracks_line(cfg, track)] if cfg.multitrack else []),
-            role.ideas.format(piloop=PILOOP_HINT, campaign=campaign.name),
-            *([f'- You may write: {", ".join(sorted(role.writes))}.'] if role.writes else []),
-            context.rstrip(),
-        ]
-    )
+    return f'{table.resume_message.format(agent=agent.signature)}\n\n{sections}\n'
 
 
 def tracks_line(cfg: CampaignConfig, track: Track | None) -> str:

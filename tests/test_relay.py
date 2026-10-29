@@ -17,7 +17,7 @@ from sqlalchemy import select
 
 import piloop
 from piloop.actor import Agent, System
-from piloop.agents.roles import IDEAS, PILOOP_HINT, SQL_HINT
+from piloop.agents.roles import IDEAS, PILOOP_HINT
 from piloop.campaign.campaigns import checkout_of
 from piloop.cli.main import app
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
@@ -74,7 +74,7 @@ def test_an_agent_on_another_machine_may_run_the_commands_that_the_role_prompts_
     for_the_orchestrator = ('orchestration', 'research_commands')
     prompts = [*roles, *(guide.TEXT.read_text() for name, guide in GUIDES.items() if name not in for_the_orchestrator)]
     briefs = [
-        f'`{SQL_HINT} -`',
+        f'`{PILOOP_HINT} sql -`',
         f'`{PILOOP_HINT} schema <guide>`',
         *(line.format(piloop='piloop', campaign='demo') for line in IDEAS.values()),
     ]
@@ -88,7 +88,7 @@ def test_an_orchestrator_on_another_machine_may_run_the_commands_that_its_brief_
         OrchestratorRole.PROMPT.read_text(),
         *(guide.TEXT.read_text() for name, guide in GUIDES.items() if name != 'orchestration'),
         f'`{PILOOP_HINT} schema <guide>`',
-        f'`{SQL_HINT} -`',
+        f'`{PILOOP_HINT} sql -`',
         IDEAS[Files.IDEAS].format(piloop='piloop', campaign='demo'),
     ]
     assert set().union(*(commands(text) for text in texts)) == OrchestratorRole.RELAYED

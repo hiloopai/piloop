@@ -11,4 +11,4 @@
 | `Rendering.workspace: Path` | The campaign's shared workspace, where agents leave notes and artifacts for each other. |
 | `Rendering.cas: Cas` | The home's CAS: the agents' sessions are there (`agent_sessions.session_file`). |
 | `Rendering.given: tuple[str, ...]` | The anomaly lines that the agent who reads got to investigate, in order. Empty for every other reader. |
-| `Rendering.reader: AgentSessionId \| None` | The agent who reads, when the reader is an agent's brief: a section can show what is near its work. |
+| `Rendering.brief: Briefing \| None` | The agent who reads, when the reader is an agent's brief. None for every other reader. |

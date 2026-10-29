@@ -693,10 +693,12 @@ def test_an_instance_with_a_table_of_its_own_that_no_name_puts_in_use_is_refused
     with pytest.raises(ConfigError, match=re.escape('add it to [plugins.section] use')):
         load_campaign_config(campaign_path, plugins={'section': {'short': lessons}})
     used = load_campaign_config(
-        campaign_path, plugins={'section': {'short': lessons}, 'role': {'research': {'sections': ['short', 'goal']}}}
+        campaign_path,
+        plugins={'section': {'short': lessons}, 'role': {'research': {'sections': ['context', 'short', 'goal']}}},
     )
-    assert [type(s).__name__ for s in used.sections_of(RESEARCH)] == ['Lessons', 'Goal'], 'a role names it'
-    assert used.sections_of(WATCHDOG)[0] == Lessons(), "the watchdog's own lessons are the built-in one"
+    assert [type(s).__name__ for s in used.sections_of(RESEARCH)] == ['Context', 'Lessons', 'Goal'], 'a role names it'
+    watchdogs = [s for s in used.sections_of(WATCHDOG) if isinstance(s, Lessons)]
+    assert watchdogs == [Lessons()], "the watchdog's own lessons are the built-in one"
     with pytest.raises(
         ConfigError, match=re.escape('[plugins.harness.codex] is configured, and nothing uses it: add it')
     ):

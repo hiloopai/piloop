@@ -15,9 +15,10 @@ from opentelemetry.trace import StatusCode
 from pydantic import SecretStr
 from pytest_mock import MockerFixture
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
-from piloop.agents.launcher import PROMPT, Launcher, fill
+from piloop.agents.launcher import Launcher, fill
 from piloop.agents.results import (
     NEVER_WORKED,
     AgentSessionFinished,
@@ -32,10 +33,19 @@ from piloop.agents.results import (
     StartupAnomaly,
     WrapUp,
 )
-from piloop.agents.roles import PILOOP_HINT, SQL_HINT, Role, compose_brief, compose_resumed, read_brief, role
-from piloop.config import CampaignConfig, load_campaign_config
+from piloop.agents.roles import (
+    PILOOP_HINT,
+    Role,
+    briefing,
+    compose_brief,
+    compose_resumed,
+    read_brief,
+    render_sections,
+    role,
+)
+from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.events import emit, in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, LeaseKind
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, LeaseKind, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import AgentSessionRequested
 from piloop.ids import AgentSessionId, CampaignId, RoleName, TargetKind, TargetRef
@@ -52,8 +62,11 @@ from piloop.plugins.executor.kit.sessions import SessionFile
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.contract import MCP, each_provider
 from piloop.plugins.harness.kit.jsonl import dash_separators_wrapped
+from piloop.plugins.role.contract import FIRST_MESSAGE
 from piloop.plugins.runtime.contract import AgentExit, AgentSpec, ExitStatus
 from piloop.plugins.secrets.contract import SECRETS, set_secret
+from piloop.plugins.section.context import Context
+from piloop.plugins.section.contract import Rendering
 from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import Git
 from piloop.settings import AgentSettings, Settings
@@ -67,6 +80,7 @@ from tests.conftest import (
     SCOUT,
     WATCHDOG,
     ScriptRuntime,
+    cas_of,
     events,
     factory,
     home_cas,
@@ -92,6 +106,25 @@ UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 
 def role_in(campaign: Campaign, kind: RoleName = WATCHDOG) -> Role:
     return role(campaign.config, kind, Path(campaign.path))
+
+
+def brief_in(
+    s: Session,
+    campaign: Campaign,
+    kind: RoleName = WATCHDOG,
+    *,
+    lines: tuple[str, ...] = (),
+    incident: bool = False,
+    resumed: bool = False,
+) -> str:
+    """The brief of agent ``<kind>#7``, started for ``timer``, with ``lines`` as its type's context: whole, or resumed."""
+    agent = Agent(role=kind, session=7)
+    brief = briefing(role_in(campaign, kind), campaign, agent, reason='timer', lines=lines)
+    r = Rendering(s, utcnow(), campaign, Path('/no/workspace'), cas_of(s), brief=brief)
+    sections = render_sections(campaign.config.sections_of(kind), r)
+    if resumed:
+        return compose_resumed(campaign.config.role(kind), agent, sections.resumed)
+    return compose_brief(role_in(campaign, kind), campaign, sections.whole, incident=incident)
 
 
 def request(db: Database, campaign: Campaign, kind: RoleName = WATCHDOG, **fields: object) -> AgentSessionId:
@@ -131,9 +164,7 @@ def launch(
 ):
     with db.session() as s:
         campaign = s.get_one(Campaign, s.get_one(AgentSession, agent_session_id).campaign_id)
-        brief = compose_brief(
-            role_in(campaign), campaign, Agent(role='watchdog', session=agent_session_id), reason='test', context=''
-        )
+        brief = compose_brief(role_in(campaign), campaign, '## Context')
     ctl = controller(db, runtime, tmp_path, tracer, agents)
     ended = ctl.launcher.launch(
         agent_session_id,
@@ -184,43 +215,48 @@ def use_harness(db: Database, campaign: Campaign, body: str, **definition: objec
         s.commit()
 
 
-def test_brief_is_role_prompt_campaign_brief_procedures_then_context(campaign: Campaign, db: Database) -> None:
+def context_of(brief: str) -> str:
+    """The text of a brief's context section."""
+    start = brief.index('## Context\n\n') + len('## Context\n\n')
+    end = brief.find('\n\n## ', start)
+    return brief[start : None if end < 0 else end]
+
+
+def test_brief_is_role_prompt_campaign_brief_guides_then_the_context_section(campaign: Campaign, db: Database) -> None:
     with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        brief = compose_brief(role_in(p), p, Agent(role='watchdog', session=7), reason='timer', context='- extra line')
+        brief = brief_in(s, s.get_one(Campaign, campaign.id), lines=('- extra line',))
     assert WatchdogRole.PROMPT is not None
     assert brief.startswith(WatchdogRole.PROMPT.read_text()[:40])
     assert "The orchestrator's procedures" not in brief and 'piloop pause' not in brief, 'only `piloop schema` has them'
     assert (
         brief.index('# Watchdog')
         < brief.index('# Demo')
-        < brief.index('# Working with the piloop')
-        < brief.index('# Context')
+        < brief.index('## Working with the piloop')
+        < brief.index('## Context')
     )
-    assert brief.endswith(
-        f"""# Context
-- You are watchdog#7, the watchdog for campaign#1 (demo).
+    assert '# Guides' not in brief and '\n# Context' not in brief, 'every section is a ## heading'
+    assert context_of(brief) == (
+        f"""- You are watchdog#7, the watchdog for campaign#1 (demo).
 - Campaign repo: {campaign.path}, on the daemon's machine. Your checkout can read every candidate's version.
 - Sign what you write as 'watchdog#7' (comments.author, ideas.created_by).
 - Why this agent started (context, not a scope): timer
 - piloop: `{PILOOP_HINT}` is this daemon's piloop. Run every `piloop` command of this brief with it.
-- SQL tool: `{SQL_HINT} -`, with the statement on stdin from a quoted heredoc (`<<'EOF'`).
+- SQL tool: `{PILOOP_HINT} sql -`, with the statement on stdin from a quoted heredoc (`<<'EOF'`).
+- You may write: comments(escalation, finding, note), lessons on the campaign once it stopped, seeds via idea seed.
+- `{PILOOP_HINT} schema <guide>` prints another guide: links, research_commands, provenance, queries, orchestration, long_jobs, workspace.
 - File a seed: `{PILOOP_HINT} idea seed demo '<hunch, one line>' --from '<pointers: ids, paths, numbers>'` (`--base\
  <candidate>` when it is about that tree): research checks it against the existing work and develops it into an idea,\
  or rejects it with the reason.
-- You may write: comments(escalation, finding, note), lessons on the campaign once it stopped, seeds via idea seed.
-- extra line
-"""
+- extra line"""
     )
 
 
 def test_a_brief_has_its_roles_guides_before_the_context_and_names_the_others(campaign: Campaign, db: Database) -> None:
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        agent = Agent(role='research', session=7)
-        research = compose_brief(role_in(p, RESEARCH), p, agent, reason='timer', context='')
-        resumed = compose_resumed(role_in(p, RESEARCH), p, agent, reason='timer', context='')
-    guides = research[research.index('# Guides') : research.index('# Context')]
+        research = brief_in(s, p, RESEARCH)
+        resumed = brief_in(s, p, RESEARCH, resumed=True)
+    guides = research[research.index('## Working with the piloop database') : research.index('## Context')]
     assert [line for line in guides.splitlines() if line.startswith('## ')] == [
         '## Working with the piloop database',
         '## The model',
@@ -230,10 +266,51 @@ def test_a_brief_has_its_roles_guides_before_the_context_and_names_the_others(ca
         '## Remember past campaigns',
         '## Link ideas',
     ]
-    assert guides.rstrip().endswith(
-        f'`{PILOOP_HINT} schema <guide>` prints another guide: priorities, research_commands, provenance, queries, orchestration, long_jobs, workspace.'
+    assert (
+        f'- `{PILOOP_HINT} schema <guide>` prints another guide: priorities, research_commands, provenance, queries, orchestration, long_jobs, workspace.'
+        in (context_of(research))
     )
-    assert '# Guides' not in resumed, 'the resumed session has them already'
+    assert resumed.startswith('You continue this session as a new agent, research#7.')
+    assert '## Working with the piloop database' not in resumed and '## Context' in resumed, (
+        'the resumed session has the guides already'
+    )
+
+
+def test_the_context_is_a_section_that_a_list_moves_and_its_lines_configure(campaign: Campaign, db: Database) -> None:
+    """A line whose field is empty is left out: the scout writes nothing that its brief lists."""
+    plugins = {
+        'section': {'context': {'lines': ['- You are {agent}, in {repo}.', '- You may write: {writes}.']}},
+        'role': {'scout': {'writes': [], 'sections': ['goal', 'context', 'database']}},
+    }
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        p.config = load_campaign_config(Path(campaign.path), plugins=plugins)
+        brief = brief_in(s, p, SCOUT, lines=('- the type',))
+    assert brief.index('## Goal') < brief.index('## Context') < brief.index('## Working with the piloop database')
+    with db.session() as s:
+        status = Rendering(s, utcnow(), s.get_one(Campaign, campaign.id), Path('/no/workspace'), cas_of(s))
+        assert Context().render(status) is None, 'no agent reads piloop status'
+    context = context_of(brief).splitlines()
+    assert (context[0], context[-1]) == (f'- You are scout#7, in {campaign.path}.', '- the type')
+    assert not any(line.startswith('- You may write') for line in context)
+    with pytest.raises(ConfigError, match=r"'- \{who\}' has the field who: use agent, role,"):
+        load_campaign_config(Path(campaign.path), plugins={'section': {'context': {'lines': ['- {who}']}}})
+
+
+def test_a_list_without_the_context_shows_it_after_its_guides(campaign: Campaign, db: Database) -> None:
+    """A list that 0.3 wrote: the guides, the context and the rest, in the order of 0.3's briefs."""
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        p.config = load_campaign_config(
+            Path(campaign.path), plugins={'role': {'scout': {'sections': ['goal', 'database', 'search']}}}
+        )
+        brief = brief_in(s, p, SCOUT)
+    assert (
+        brief.index('## Working with the piloop database')
+        < brief.index('## Search')
+        < brief.index('## Context')
+        < brief.index('## Goal')
+    )
 
 
 def test_the_example_queries_of_a_brief_read_its_own_campaign_and_primary(campaign: Campaign, db: Database) -> None:
@@ -242,11 +319,11 @@ def test_the_example_queries_of_a_brief_read_its_own_campaign_and_primary(campai
         second = Campaign(name='second', path=first.path, config=first.config)
         s.add(second)
         s.flush()
-        brief = compose_brief(role_in(second), second, Agent(role='watchdog', session=7), reason='timer', context='')
+        brief = brief_in(s, second)
     assert second.id == 2
     assert 'i.campaign_id = 2 ' in brief and 'c.campaign_id = 2 ' in brief and 'WHERE id = 2)' in brief
     assert "json_extract(m.metrics, '$.score')" in brief, 'the primary of the campaign, not of another example'
-    procedures = brief[brief.index('# Working with the piloop database') : brief.index('# Context')]
+    procedures = brief[brief.index('## Working with the piloop database') : brief.index('## Context')]
     assert 'campaign_id = 1' not in procedures and '<campaign id>' not in procedures, procedures
 
 
@@ -260,9 +337,7 @@ def test_a_brief_says_git_or_commit_only_in_the_vcs_providers_parts(
 
     mocker.patch.object(Git, 'prompt', marked)
     with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        agent = Agent(role=kind, session=7)
-        brief = compose_brief(role_in(p, kind), p, agent, reason='timer', context='', incident=incident)
+        brief = brief_in(s, s.get_one(Campaign, campaign.id), kind, incident=incident)
     for phrase, _ in ALLOWED_WORDS.values():
         brief = brief.replace(phrase, '')
     assert git_words(brief) == []
@@ -277,12 +352,33 @@ def test_a_roles_addendum_follows_the_campaign_brief_in_that_roles_briefs_only(
         p.config = load_campaign_config(
             Path(campaign.path), plugins={'role': {'research': {'addendum': 'research.md'}}}
         )
-        research = compose_brief(role_in(p, RESEARCH), p, Agent(role='research', session=7), reason='timer', context='')
-        watchdog = compose_brief(role_in(p), p, Agent(role='watchdog', session=8), reason='timer', context='')
+        research = brief_in(s, p, RESEARCH)
+        watchdog = brief_in(s, p)
     assert (
-        research.index('# Demo') < research.index('# Search wide first') < research.index('# Working with the piloop')
+        research.index('# Demo') < research.index('# Search wide first') < research.index('## Working with the piloop')
     )
     assert '# Search wide first' not in watchdog
+
+
+def test_a_roles_first_message_names_its_brief(
+    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    use_harness(db, campaign, HARNESS_PROMPT_TO_FILE.replace('prompt.txt', '../prompt.txt'))
+    with db.session() as s:
+        s.get_one(Campaign, campaign.id).config = load_campaign_config(
+            Path(campaign.path), plugins={'role': {'watchdog': {'first_message': 'Read {brief}, then work.'}}}
+        )
+        s.commit()
+    exit_of(launch(db, runtime, tmp_path, request(db, campaign)))
+    assert (tmp_path / 'w' / 'prompt.txt').read_text() == f'Read {tmp_path / "w" / "brief.md"}, then work.'
+    with pytest.raises(ConfigError, match=r"first_message = 'Read it': 'Read it' names no \{brief\}"):
+        load_campaign_config(Path(campaign.path), plugins={'role': {'watchdog': {'first_message': 'Read it'}}})
+    resumes = load_campaign_config(
+        Path(campaign.path), plugins={'role': {'watchdog': {'resume_message': 'Go, {agent}.'}}}
+    )
+    assert resumes.role(WATCHDOG).resume_message == 'Go, {agent}.'
+    with pytest.raises(ConfigError, match=r"'\{who\} goes on' has who: only \{agent\} is filled in"):
+        load_campaign_config(Path(campaign.path), plugins={'role': {'watchdog': {'resume_message': '{who} goes on'}}})
 
 
 def test_launch_runs_the_row_through_its_lifecycle(
@@ -308,7 +404,7 @@ def test_launch_runs_the_row_through_its_lifecycle(
         None,
     )
     assert w.handle['pid'] and w.ended_at is not None and w.ended_at >= w.started_at
-    assert (tmp_path / 'w' / 'prompt.txt').read_text() == PROMPT.format(path=tmp_path / 'w' / 'brief.md')
+    assert (tmp_path / 'w' / 'prompt.txt').read_text() == FIRST_MESSAGE.format(brief=tmp_path / 'w' / 'brief.md')
     assert (tmp_path / 'w' / 'brief.md').read_text().startswith('# Watchdog')
     assert (tmp_path / 'w' / 'transcript.txt').is_file()
     assert runtime.killed, 'the runtime is told to release the implementer'
@@ -342,7 +438,9 @@ def test_an_agent_writes_through_piloop_sql_as_its_own_actor(
 ) -> None:
     """The brief's SQL command in a launched process records ``<kind>#<agent-session>``: PILOOP_ACTOR comes with PILOOP_HOME."""
     use_harness(
-        db, campaign, f'#!/bin/sh\n{SQL_HINT} "UPDATE campaigns SET name = \'renamed\' WHERE id = {campaign.id}"\n'
+        db,
+        campaign,
+        f'#!/bin/sh\n{PILOOP_HINT} sql "UPDATE campaigns SET name = \'renamed\' WHERE id = {campaign.id}"\n',
     )
     agent_session_id = request(db, campaign, kind=RESEARCH)
     outcome = launch(db, runtime, tmp_path, agent_session_id)
@@ -374,7 +472,7 @@ def test_an_agent_cannot_sign_as_the_orchestrator_through_piloop_sql(
     use_harness(
         db,
         campaign,
-        f'#!/bin/sh\nPILOOP_ACTOR=orchestrator {SQL_HINT} "UPDATE campaigns SET name = \'renamed\' WHERE id = {campaign.id}"'
+        f'#!/bin/sh\nPILOOP_ACTOR=orchestrator {PILOOP_HINT} sql "UPDATE campaigns SET name = \'renamed\' WHERE id = {campaign.id}"'
         ' || true\n',
     )
     outcome = launch(db, runtime, tmp_path, request(db, campaign, kind=RESEARCH))
@@ -593,9 +691,7 @@ def test_a_cwd_that_cannot_be_made_is_a_failed_start(
     """The worker makes the artifact (a worktree) as part of the start: when it fails, the agent did not start to work."""
     start = mocker.spy(runtime, 'start')
     agent_session_id = request(db, campaign)
-    brief = compose_brief(
-        role_in(campaign), campaign, Agent(role='watchdog', session=agent_session_id), reason='test', context=''
-    )
+    brief = compose_brief(role_in(campaign), campaign, '## Context')
     mocker.patch('piloop.plugins.vcs.git.commands.add_worktree', side_effect=OSError(28, 'No space left on device'))
     lc = launcher(db, runtime, tmp_path)
     artifact = Source(vcs=Git(), repo=RepoId(campaign.id), revision=Repo(campaign.path).head.commit.hexsha)
@@ -954,7 +1050,9 @@ def test_a_brief_past_the_limit_of_one_argument_reaches_the_agent_as_a_file(
         timeout=60,
     )
     assert (exit_of(outcome).status, exit_of(outcome).error) == (ExitStatus.EXITED, None)
-    assert (tmp_path / 'w' / 'argv.txt').read_text().splitlines() == [PROMPT.format(path=tmp_path / 'w' / 'brief.md')]
+    assert (tmp_path / 'w' / 'argv.txt').read_text().splitlines() == [
+        FIRST_MESSAGE.format(brief=tmp_path / 'w' / 'brief.md')
+    ]
     assert (tmp_path / 'w' / 'brief.md').read_text() == brief
 
 

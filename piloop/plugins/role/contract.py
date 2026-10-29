@@ -11,9 +11,10 @@ from datetime import timedelta
 from enum import StrEnum
 from importlib.resources import files
 from importlib.resources.abc import Traversable
+from string import Formatter
 from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from piloop.ids import ROLE_NAME, CommentKind
 from piloop.plugins.harness.contract import HarnessKey, HarnessName
@@ -73,6 +74,31 @@ class Continuity(StrEnum):
     new part of its brief. When that cannot work, it starts fresh, and ``agent_session.not_resumed`` says why."""
 
 
+FIRST_MESSAGE = 'Your brief is in {brief}. Read all of it, in parts if a read comes back cut short, then follow it.'
+"""An agent's first message, on its argv, by default.
+
+It names the brief's file instead of holding the brief. The message is one argument, and Linux limits one argument to
+128 KiB (``MAX_ARG_STRLEN``). A research brief with a long history is longer than that.
+"""
+RESUME_MESSAGE = (
+    'You continue this session as a new agent, {agent}. Your earlier briefs and work are above.'
+    ' Follow your role as before, with this new context.'
+)
+"""What starts a resumed agent's brief, by default."""
+
+
+def _filled(message: str, field: str) -> set[str]:
+    """The fields in braces of ``message``.
+
+    Raises:
+        ValueError: One is not ``field``.
+    """
+    fields = {name for _, name, _, _ in Formatter().parse(message) if name is not None}
+    if others := fields - {field}:
+        raise ValueError(f'{message!r} has {", ".join(sorted(others))}: only {{{field}}} is filled in')
+    return fields
+
+
 class RoleConfig(Parameters):
     """The keys that every ``[plugins.role.<name>]`` table accepts. Each role's table below adds keys and sets defaults."""
 
@@ -118,9 +144,27 @@ class RoleConfig(Parameters):
     """The most words in the plan of an idea that an agent of this role adds or develops: steps that one run can
     follow, not a protocol. A longer plan is refused."""
     sections: list[SectionName] | None = None
-    """What the briefs of this role show: the names of sections, in order. A guide goes before the role's context, and
-    every other section after it. When unset, the role's own guides, then every installed section that a brief of
-    this kind of role shows by default, in their order (``Section.SHOWN_IN``, ``Section.ORDER``)."""
+    """What the briefs of this role show after ``brief.md``: the names of sections, in order, the ``context`` among them.
+    When unset, the role's own guides, then every installed section that a brief of this kind of role shows by default,
+    the guides first, in their order (``Section.SHOWN_IN``, ``Section.ORDER``)."""
+    first_message: str = FIRST_MESSAGE
+    """The first message of each agent of this role. ``{brief}`` is the path of its brief."""
+    resume_message: str = RESUME_MESSAGE
+    """What starts the brief of an agent that resumes the session of the role's last agent. ``{agent}`` is its
+    signature."""
+
+    @field_validator('first_message')
+    @classmethod
+    def _names_the_brief(cls, message: str) -> str:
+        if not _filled(message, 'brief'):
+            raise ValueError(f'{message!r} names no {{brief}}')
+        return message
+
+    @field_validator('resume_message')
+    @classmethod
+    def _names_the_agent(cls, message: str) -> str:
+        _filled(message, 'agent')
+        return message
 
     SURFACE: ClassVar[Surface]
     """Where the briefs of this kind of role show sections: the default of ``sections``."""

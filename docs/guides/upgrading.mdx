@@ -149,6 +149,20 @@ Each use shows a `PiloopDeprecationWarning` with the file, the line, the new key
 one. The [changelog](https://github.com/hiloopai/piloop/blob/main/CHANGELOG.md) lists every deprecation, and
 [Deprecated keys and variables](#deprecated-keys-and-variables) lists those of 0.2.0.
 
+## Upgrading to 0.5.0
+
+### The context is a section
+
+A brief's context is the `context` section. A role's `sections` list puts it where it names it:
+
+```toml
+[plugins.role.research]
+sections = ["database", "search", "context", "goal", "queue", "pack"]
+```
+
+Until 0.5.0, a list without `context` shows it after the list's guides, as before. Add it to each list. Each section now
+has a `##` heading, and the brief has no `# Guides` or `# Context` heading.
+
 ## Upgrading to 0.4.0
 
 ### Removed keys

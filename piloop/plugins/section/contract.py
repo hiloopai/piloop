@@ -21,6 +21,7 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, ClassVar
 
+from piloop.actor import Agent
 from piloop.api.views import Rendered, Text
 from piloop.ids import AgentSessionId
 from piloop.plugins.cas.contract import Cas
@@ -31,6 +32,17 @@ if TYPE_CHECKING:  # piloop.db.models types campaigns.config with the sections: 
     from sqlalchemy.orm import Session
 
     from piloop.db.models import Campaign
+
+
+@dataclass(frozen=True)
+class Briefing:
+    """The agent that a brief is for: what its ``context`` section says of it."""
+
+    agent: Agent
+    reason: str
+    """Why the agent started."""
+    lines: tuple[str, ...] = ()
+    """What the campaign's type adds to the context: the lines of the agent's run, or of its sweep."""
 
 
 @dataclass(frozen=True)
@@ -52,8 +64,13 @@ class Rendering:
     """The home's CAS: the agents' sessions are there (``agent_sessions.session_file``)."""
     given: tuple[str, ...] = ()
     """The anomaly lines that the agent who reads got to investigate, in order. Empty for every other reader."""
-    reader: AgentSessionId | None = None
-    """The agent who reads, when the reader is an agent's brief: a section can show what is near its work."""
+    brief: Briefing | None = None
+    """The agent who reads, when the reader is an agent's brief. None for every other reader."""
+
+    @property
+    def reader(self) -> AgentSessionId | None:
+        """The session of the agent who reads: a section can show what is near its work. None when no agent reads."""
+        return None if self.brief is None else self.brief.agent.session
 
 
 class Surface(StrEnum):
@@ -123,12 +140,16 @@ def guides() -> list[str]:
 
 
 def defaults(surface: Surface) -> list[str]:
-    """The sections that ``surface`` shows when its list is not set, by ``ORDER`` and then by name.
+    """The sections that ``surface`` shows when its list is not set: the guides first, each by ``ORDER``, then by name.
 
     They are every installed section with ``surface`` in its ``SHOWN_IN``.
     """
-    shown = [(p.model.ORDER, name) for name, p in SECTIONS.providers().items() if surface in p.model.SHOWN_IN]
-    return [name for _, name in sorted(shown)]
+    shown = [
+        (not issubclass(p.model, Guide), p.model.ORDER, name)
+        for name, p in SECTIONS.providers().items()
+        if surface in p.model.SHOWN_IN
+    ]
+    return [name for *_, name in sorted(shown)]
 
 
 def of_status() -> list[str]:

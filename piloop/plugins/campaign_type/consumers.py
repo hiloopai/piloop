@@ -29,7 +29,7 @@ from piloop.agents.results import (
     AgentSessionStarted,
     StartupAnomaly,
 )
-from piloop.agents.roles import compose_brief, compose_resumed, role_of
+from piloop.agents.roles import briefing, compose_brief, compose_resumed, render_sections, role_of
 from piloop.campaign.anomaly import AnomalyReported, assigned
 from piloop.campaign.campaigns import WORKSPACE, CampaignAdded, workspace_dir
 from piloop.campaign.launches import choose_harness, close, earlier, full_harnesses, remove_checkouts, resumed_on
@@ -112,7 +112,7 @@ from piloop.plugins.host import ContractBroken
 from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchCase, LaunchPolicy, Share
 from piloop.plugins.memory.contract import MEMORY
 from piloop.plugins.role.contract import PUSHED_KINDS, Continuity, ImplementerRole, SweepRole
-from piloop.plugins.section.contract import Rendering, markdown
+from piloop.plugins.section.contract import Rendering
 from piloop.plugins.stop_rule.contract import GO, STOP_RULES, Go, Hold, Stop, WhileHeld
 from piloop.plugins.trigger.contract import TRIGGERS, Backlog, Fire, Quiet, Steer
 from piloop.runtime.factory import handle_for, runtime_for
@@ -774,9 +774,9 @@ class Campaigns:
     def _sweep(self, agent_session_id: AgentSessionId) -> None:
         """Run a sweep, an agent without a run, in a worktree at the head, with a brief made from its row.
 
-        The context of the brief has the daemon's lines (the checkout, the workspace), then the role's own
-        (``SweepRole.context``), then the notes on the row so far, which it gets here and not again, then the role's
-        sections (``[plugins.role.<name>] sections``). A sweep that got anomalies is
+        The brief shows the role's sections (``[plugins.role.<name>] sections``). Its ``context`` section ends with the
+        sweep's lines: the checkout, the workspace, the role's own (``SweepRole.context``), then the notes on the row so
+        far, which it gets here and not again. A sweep that got anomalies is
         an incident sweep: its sections read them (``Rendering.given``), and the brief adds the role's incident prompt.
         Every other sweep's brief adds the role's routine prompt. The watchdog's are its incident sweep and its
         progress review. Nothing that a sweep commits is scored. In a worktree at the head, the commits are removed
@@ -810,7 +810,6 @@ class Campaigns:
             role_pass = self._pass(s, campaign, cfg, agent_session.kind, table, now, left_now(s, campaign, cfg))
             sweep = SweepPass(**vars(role_pass), agent_session=agent_session)
             workspace = workspace_dir(self._home, campaign.id)
-            rendering = Rendering(s, now, campaign, workspace, self._controller.cas, given, reader=agent_session_id)
             lines = [
                 f'- Your cwd is a detached checkout of candidate#{base.id}, the head ({values}): read and run the'
                 ' code, try things. Nothing you commit here is scored or kept; it goes with the checkout when you end.',
@@ -820,15 +819,15 @@ class Campaigns:
                 *table.context(sweep),
                 *(['', '# Notes', *(f'{n.body}\n' for n in notes)] if notes else []),
                 f'- Sweep started at: {now:%Y-%m-%d %H:%M:%S} (UTC; the sections below are as of then).',
-                '',
-                markdown(cfg.sections_of(agent_session.kind), rendering),
             ]
             agent = Agent(role=agent_session.kind, session=agent_session_id)
-            reason, context = agent_session.reason or 'requested', '\n'.join(lines)
-            brief = compose_brief(role, campaign, agent, reason=reason, context=context, incident=bool(given))
+            brief_of = briefing(role, campaign, agent, reason=agent_session.reason or 'requested', lines=lines)
+            rendering = Rendering(s, now, campaign, workspace, self._controller.cas, given, brief=brief_of)
+            sections = render_sections(cfg.sections_of(agent_session.kind), rendering)
+            brief = compose_brief(role, campaign, sections.whole, incident=bool(given))
             match table.continuity:
                 case Continuity.RESUME:
-                    resumed = compose_resumed(role, campaign, agent, reason=reason, context=context)
+                    resumed = compose_resumed(table, agent, sections.resumed)
                 case Continuity.FRESH:
                     resumed = None
                 case _:

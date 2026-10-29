@@ -113,9 +113,11 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     overview = ['headline', 'goal', 'tracks', 'trajectory', 'runs', 'queue', 'idle_queue', 'agents', 'evaluations']
     overview += ['funnel', 'yields', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
-    assert defaults(Surface.SWEEP) == ['lessons', 'incidents', *overview, 'tools', 'pack']
-    assert defaults(Surface.RUN) == ['idea_comments', 'lessons', 'history']
-    assert ImplementerRole().shown() == ['database', 'idea_comments', 'lessons', 'history'], 'its guides first'
+    assert defaults(Surface.SWEEP) == ['context', 'lessons', 'incidents', *overview, 'tools', 'pack']
+    assert defaults(Surface.RUN) == ['context', 'idea_comments', 'lessons', 'history']
+    assert ImplementerRole().shown() == ['database', 'context', 'idea_comments', 'lessons', 'history'], (
+        'its guides first'
+    )
 
 
 def test_the_funnel_shows_how_far_the_attempts_got_and_where_the_others_ended(db: Database, campaign: Campaign) -> None:
@@ -226,6 +228,9 @@ def test_a_packages_guide_shows_in_every_role_of_its_surface_after_the_roles_own
         'scout': True,
         'watchdog': True,
     }, 'the orchestrator lists its sections'
+    assert all(shown.index('units') < shown.index('context') for shown in sweeps.values() if 'units' in shown), (
+        'a guide goes before the other sections of a default list'
+    )
     assert 'units' not in ImplementerRole().shown()
 
 

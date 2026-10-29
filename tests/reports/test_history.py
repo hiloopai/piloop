@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from piloop.actor import Agent
 from piloop.config import CampaignConfig
 from piloop.db.models import AgentSession, Campaign, Comment, utcnow
 from piloop.db.session import Database
@@ -21,7 +22,7 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization.history import FIRST_LINE_CHARS, comment_line, history, newest
 from piloop.plugins.campaign_type.optimization.section.history import History
 from piloop.plugins.campaign_type.optimization.section.pack import Pack
-from piloop.plugins.section.contract import Rendering, markdown
+from piloop.plugins.section.contract import Briefing, Rendering, markdown
 from piloop.reports.wake import cost
 from piloop.text import CELL_CHARS, cell
 from tests.conftest import cas_of, has_lines, spent
@@ -266,7 +267,17 @@ def test_an_implementers_history_shows_its_family_then_the_keeps_then_the_newest
         s.commit()
         p = s.get_one(Campaign, campaign.id)
         section = History(budget=900, findings=0)
-        text = markdown([section], Rendering(s, utcnow(), p, Path('/no/workspace'), cas_of(s), reader=reader))
+        text = markdown(
+            [section],
+            Rendering(
+                s,
+                utcnow(),
+                p,
+                Path('/no/workspace'),
+                cas_of(s),
+                brief=Briefing(Agent(role=IMPLEMENTER, session=reader), 'x'),
+            ),
+        )
         everything = markdown([History(budget=100_000)], Rendering(s, utcnow(), p, Path('/no/workspace'), cas_of(s)))
     shown = [int(line.split('|')[1]) for line in text.splitlines() if re.match(r'\| \d+ ', line)]
     assert shown[:2] == [kin.id, kept.id] and len(shown) < 32, 'its family and the keeps first, then what fits'
