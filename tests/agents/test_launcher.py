@@ -45,7 +45,7 @@ from piloop.agents.roles import (
 )
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.events import emit, in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, LeaseKind, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import AgentSessionRequested
 from piloop.ids import AgentSessionId, CampaignId, RoleName, TargetKind, TargetRef
@@ -54,7 +54,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.cas.contract import CAS
-from piloop.plugins.executor.contract import AgentJob, HarnessSession, RepoId, Source
+from piloop.plugins.executor.contract import AGENT, AgentJob, HarnessSession, RepoId, Source
 from piloop.plugins.executor.kit import jobs, sessions
 from piloop.plugins.executor.kit.capacity import HostSample
 from piloop.plugins.executor.kit.leases import SERVE, Answer, LeaseQueued, Leases, LeaseWorkerJoined, read_job
@@ -417,7 +417,7 @@ def test_launch_runs_the_row_through_its_lifecycle(
         (1, AgentSessionRequested(role=WATCHDOG, campaign=campaign.id, reason='test')),
         (1, LeaseWorkerJoined(worker=SERVE, pool=SERVE)),
         (1, AgentSessionStarted(role=WATCHDOG, harness='script', model='watchdog-model', reason='test')),
-        (1, LeaseQueued(lease=1, lease_kind=LeaseKind.AGENT)),
+        (1, LeaseQueued(lease=1, lease_kind=AGENT)),
         (1, AgentSessionRunning(machine=None)),
         (1, AgentSessionFinished(role=WATCHDOG, reason='test', state=AgentSessionState.EXITED, error=None)),
     ]

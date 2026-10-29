@@ -93,15 +93,33 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.key_of,
     capabilities.Settled,
     capabilities.AgentReport,  # type aliases, which the search of classes does not find by itself
-    capabilities.JobKey,  # a type alias, which the search of classes does not find by itself
+    capabilities.Key,
     capabilities.RepoId,  # a NewType, which neither
-    capabilities.Control,
+    capabilities.AgentJob,  # core's own kind of job, and its report: Job and Report are their bases
+    capabilities.AgentStart,
+    capabilities.Resume,
+    capabilities.AgentFinished,
+    capabilities.AgentNotStarted,
     capabilities.MissingBlobs,
-    capabilities.Site,
     capabilities.local_site,
+    capabilities.Machine,
     capabilities.run_agent,
+    capabilities.job_kinds,  # what an executor dispatches the jobs of another kind with
+    capabilities.kind_of,
+    capabilities.EvaluationJob,  # the evaluation job kind's, which an executor of 0.3.1 named
+    capabilities.EvaluationReport,
+    capabilities.Sample,
+    capabilities.Bar,
+    capabilities.Rung,
+    capabilities.Tolerance,
+    capabilities.Gate,
+    capabilities.Channel,
     capabilities.run_evaluation,
+    capabilities.EvaluationKey,  # bridges of 0.3.1 names, until 0.5.0
     capabilities.remove,
+    capabilities.RunVersion,
+    capabilities.RebaseVersion,
+    capabilities.ReferenceVersion,
     capabilities.kill_group,
     capabilities.Leases,  # the kit: helpers that an executor may use
     capabilities.Timing,
@@ -128,7 +146,10 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.JobSecrets,
     capabilities.executor_router,  # what an executor's contribution routes its workers' calls with
     capabilities.Route,
-    capabilities.JobKind,  # what a package's piloop.job_kinds name
+    capabilities.JobKind,  # what a package's piloop.job_kinds name, and what its run and apply get
+    capabilities.Control,
+    capabilities.Site,
+    capabilities.Applying,
     capabilities.Owner,  # a type alias
     capabilities.FactSource,  # what a provider that supplies facts implements, which no signature names
     capabilities.HEAD,  # the facts that a rule reads, and the ratios over them
@@ -348,8 +369,6 @@ STILL_IMPORT_THE_TYPE_KIT = frozenset(
         'db/triggers/changelog.py',
         'plugins/campaign_type/contract.py',
         'plugins/contribution.py',
-        'plugins/executor/contract.py',
-        'plugins/vcs/contract.py',
         'reports/feed.py',
         'reports/overview.py',
         'watch/app.py',

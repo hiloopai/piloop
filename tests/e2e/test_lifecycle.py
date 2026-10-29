@@ -105,7 +105,9 @@ def live_campaign(make_campaign: MakeCampaign) -> Iterator[Smoke]:
     live_campaign = make_campaign(
         config=CONFIG,
         home_config={
-            'plugins': {'executor': {'provider': 'workers', 'pools': {'serve': {'evaluations': MAX_EVALUATIONS}}}}
+            'plugins': {
+                'executor': {'provider': 'workers', 'pools': {'serve': {'slots': {'evaluation': MAX_EVALUATIONS}}}}
+            }
         },
     )
     live_campaign.start_readers()

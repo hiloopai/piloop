@@ -24,16 +24,17 @@ from sqlalchemy import func, select
 from piloop.agents.results import PromptOutcome, queue_prompt
 from piloop.api.contract import Access
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, Campaign, Comment, Event, Lease, LeaseKind, LeaseState
+from piloop.db.models import AgentSession, Campaign, Comment, Event, Lease, LeaseState
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, TargetKind
 from piloop.net import tokens
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RunStatus
-from piloop.plugins.executor.contract import AgentKey, Prompt
+from piloop.plugins.executor.contract import AGENT, AgentKey, Prompt
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.door import AgentCall, Call
 from piloop.plugins.executor.kit.leases import StaleLease, StaleReport, read_job
@@ -53,7 +54,7 @@ from tests.test_git import by
 SERVER_PROCESS = Path(__file__).parent.parent / 'fixtures' / 'server_process.py'
 WORKER = 'gpu1'
 WORKERS = Workers(
-    renew_seconds=0.2, grace_seconds=1.0, toleration_seconds=6.0, pools={'gpu': Pool(agents=1, evaluations=1)}
+    renew_seconds=0.2, grace_seconds=1.0, toleration_seconds=6.0, pools={'gpu': Pool(agents=1, slots={EVALUATION: 1})}
 )
 """Short lease times with the default's two stages. The self-stop, 5.6 s, outlasts a restart of the server process."""
 
@@ -401,7 +402,7 @@ def test_a_remote_implementers_commits_come_back_as_a_bundle_and_are_scored_and_
     assert by(Repo(campaign.path), scored.revision) == (f'implementer#1 <{PILOOP.email}>',) * 2
     with db.session() as s:
         leases = s.execute(select(Lease.kind, Lease.worker).order_by(Lease.id)).all()
-    assert leases == [(LeaseKind.AGENT, WORKER), (LeaseKind.EVALUATION, WORKER)], 'both ran on the worker elsewhere'
+    assert leases == [(AGENT, WORKER), (EVALUATION, WORKER)], 'both ran on the worker elsewhere'
     with db.session() as s:
         assert s.get_one(AgentSession, 1).machine == WORKER, 'piloop attach names it'
     workspace = tmp_path / 'projects' / str(campaign.id) / 'workspace'

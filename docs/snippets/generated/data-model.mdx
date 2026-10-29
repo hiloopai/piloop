@@ -213,9 +213,10 @@ erDiagram
     }
     leases {
         integer id PK
-        LeaseKind kind
+        varchar kind
         integer agent_session_id FK
-        integer evaluation_id
+        integer job_id
+        varchar runner
         LeaseState state
         varchar worker
         varchar job_cid

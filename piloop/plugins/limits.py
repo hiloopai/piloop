@@ -1,7 +1,7 @@
 """Live limits: values for the ``Live`` keys of a provider's parameters, changed while the daemon runs.
 
 A **limit** is a row of ``limits``: a dotted key, the capability then the path in its provider's fields
-(``executor.pools.serve.evaluations``), a value, a reason and who set it. It wins over ``config.toml``. The daemon
+(``executor.pools.serve.slots.evaluation``), a value, a reason and who set it. It wins over ``config.toml``. The daemon
 hands the executor its provider with the limits applied (``applied``, then ``Executor.configure``) at once,
 so a busy GPU takes fewer evaluations without a restart.
 
@@ -65,11 +65,15 @@ def _put(raw: dict[str, object], path: list[str], value: JsonValue) -> None:
 def live(model: BaseModel, prefix: str) -> Iterator[tuple[str, object]]:
     """Each ``Live`` key of ``model`` and of the models in it, under ``prefix``, with its value.
 
-    A dict's keys are path segments: ``pools.serve.evaluations``.
+    A dict's keys are path segments: ``pools.serve.agents``, and of a ``Live`` dict each item is a key of its own,
+    ``pools.serve.slots.evaluation``.
     """
     for name, field in type(model).model_fields.items():
         value, key = getattr(model, name), f'{prefix}.{name}'
         match value:
+            case dict() if Live in field.metadata:
+                for item, inner in value.items():
+                    yield f'{key}.{item}', inner
             case _ if Live in field.metadata:
                 yield key, value
             case BaseModel():

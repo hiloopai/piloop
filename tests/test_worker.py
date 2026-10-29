@@ -32,20 +32,19 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EvaluationJob
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.executor.contract import (
     AgentJob,
     AgentKey,
-    AgentReport,
-    EvaluationJob,
-    EvaluationReport,
     HarnessSession,
     JobSecrets,
     MissingBlobs,
     Prompt,
+    Report,
     Source,
 )
 from piloop.plugins.executor.kit.capacity import HostSample, sample
@@ -474,7 +473,7 @@ def test_an_agent_that_removes_its_own_worktree_is_still_reported(
         place='logs',
         artifact=head_of(ex, agent_session_id),
         timeout=60,
-        capture=RunId(1),
+        capture=TargetRef(RUN, 1),
     )
     assert isinstance(outcome, Ran) and outcome.process.error is not None and outcome.work is None, (
         'the report says what is known'
@@ -882,7 +881,7 @@ def test_a_report_that_cannot_be_sent_keeps_the_worktree_and_a_restarted_worker_
     tried: list[int] = []
 
     def locked_for_the_first(
-        self: Leases, lease_id: int, worker: str, request_id: str, result: AgentReport | EvaluationReport
+        self: Leases, lease_id: int, worker: str, request_id: str, result: Report
     ) -> dict[str, object]:
         if self is workers_of(first).leases:
             tried.append(lease_id)
@@ -1209,7 +1208,7 @@ class Refusing(Local):
         self._check('messages')
         return super().messages(after, wait)
 
-    def report(self, lease: int, request_id: str, report: AgentReport | EvaluationReport) -> dict[str, object]:
+    def report(self, lease: int, request_id: str, report: Report) -> dict[str, object]:
         self._check('report')
         return super().report(lease, request_id, report)
 

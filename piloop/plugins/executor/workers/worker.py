@@ -2,7 +2,7 @@
 
 ``piloop serve`` runs one (``SERVE``). It reports each job when it ends. It reads no campaign table: everything
 comes in the job's description, which it reads from the CAS, and everything goes back in the report, by address in the
-CAS (``jobs.Site``).
+CAS (``jobs.Machine``).
 
 It talks to its control plane only through a ``LeaseClient``: ``Local`` in ``piloop serve``, ``Remote`` in ``piloop
 worker --server``. One thread sends a heartbeat with a host sample (``Timing.renew``), takes new jobs and resends
@@ -25,23 +25,23 @@ from dataclasses import dataclass, field
 from functools import partial
 from importlib.metadata import version
 from pathlib import Path
-from typing import assert_never
+from typing import Annotated, assert_never
 
 from covalence import Cid
 from pydantic import BaseModel, ConfigDict
 
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.evaluation.measure import evaluator_runners
 from piloop.plugins.executor.contract import (
+    REPORTS,
     AgentJob,
-    AgentReport,
-    EvaluationJob,
-    EvaluationReport,
     HarnessSession,
+    Job,
     JobSecrets,
     MissingBlobs,
     Prompt,
     Report,
+    job_kinds,
+    kind_of,
 )
 from piloop.plugins.executor.kit import jobs
 from piloop.plugins.executor.kit.capacity import sample
@@ -82,7 +82,7 @@ class Unsent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     request_id: str
-    report: Report
+    report: Annotated[Report, REPORTS]
     job: AgentJob | None
 
 
@@ -117,8 +117,9 @@ class Running:
     """A job that this worker runs now: how to stop it, and what its heartbeat says."""
 
     kill: Callable[[], None] | None
-    """How to stop its process. None while it starts, and after its evaluator ended: nothing to kill yet, or any more."""
-    evaluation: bool = False
+    """How to stop its process. None while it starts, and after its process ended: nothing to kill yet, or any more."""
+    agent: bool = True
+    """An agent's job, which a hand-over leaves running. False: a job of a ``JobKind``, which a hand-over stops."""
     session: HarnessSession = HarnessSession()
     """What its heartbeat says of its agent's harness session."""
     asked: bool = False
@@ -127,7 +128,7 @@ class Running:
     """The kill went through. Until then, each heartbeat that asks again, and each turn of a silent worker, tries it
     again: a kill can fail."""
     steer: Callable[[str], None] | None = None
-    """How to prompt its agent (``Runtime.prompt`` at its handle), once the agent started. None for an evaluation."""
+    """How to prompt its agent (``Runtime.prompt`` at its handle), once the agent started. None for another kind."""
     queued: list[list[Prompt]] = field(default_factory=list)
     """The prompts that its runtime took, one list for each ``steer``, oldest first."""
 
@@ -139,7 +140,7 @@ class Worker:
         self,
         client: LeaseClient,
         tracer: Tracer,
-        site: jobs.Site,
+        site: jobs.Machine,
         *,
         pool: str = SERVE,
         runtime_factory: RuntimeFactory = make_runtime,
@@ -159,7 +160,8 @@ class Worker:
         """The lease timing, which its registration gives."""
         self._tracer = tracer
         self.runtime_factory = runtime_factory
-        self.runners = runners if runners is not None else evaluator_runners()
+        self.runners = runners if runners is not None else tuple(r for k in job_kinds().values() for r in k.runners())
+        """What it has to run the jobs of each ``JobKind`` (``JobKind.runners``): a job of a kind needs one of them."""
         self.relay = relay
         """How its agents' ``piloop`` calls reach the server: those of a worker elsewhere, and those of a runtime that
         sees none of the home, such as ``docker``."""
@@ -224,7 +226,7 @@ class Worker:
 
         A registration that fails (a locked database) is tried again on each turn of the loop. A job that a restarted
         worker cannot find again is reported gone (``LeaseClient.lost``): an agent whose worktree is gone, an
-        evaluation (its evaluator cannot be watched again, so it is stopped and queued again).
+        job of a ``JobKind`` (its process cannot be watched again, so it is stopped and queued again).
         """
         with self._lock:
             if self._started or self._stopping:
@@ -396,16 +398,16 @@ class Worker:
     def hand_over(self) -> None:
         """Take no more jobs, and leave the agents running for the next daemon process (an in-place restart).
 
-        Their leases stay live, and the next worker re-attaches to them. Evaluations are stopped: a new worker cannot
-        watch an evaluator again, and its lease is reported gone by the next worker, which queues it again.
+        Their leases stay live, and the next worker re-attaches to them. The jobs of a ``JobKind`` are stopped: a new
+        worker cannot watch their process again, and the next worker reports their lease gone, which queues them again.
         """
         with self._lock:
             self._handover = self._stopping = True
             self._ended.set()
             # a start that is not recorded leaves the next worker an agent it cannot find; starts are bounded waits
             self._started_all.wait_for(lambda: not self._starting)
-            evaluations = [lease_id for lease_id, running in self._jobs.items() if running.evaluation]
-        for lease_id in evaluations:
+            kinds = [lease_id for lease_id, running in self._jobs.items() if not running.agent]
+        for lease_id in kinds:
             self._stop_job(lease_id, 'hand-over')
         self._wanted.set()  # a loop that waits ends at once; one that turns ends after its turn
         if (loop := self._loop) is not None:
@@ -585,10 +587,10 @@ class Worker:
             return
         self.spool.remove(lease_id)
         if unsent.job is not None and not self._handover:
-            jobs.remove(unsent.job, self.site)
+            self.site.remove(unsent.job)
         self.site.evict_inputs()  # once the job's worktree no longer links its copies
 
-    def _report(self, lease_id: int, report: AgentReport | EvaluationReport, job: AgentJob | None = None) -> None:
+    def _report(self, lease_id: int, report: Report, job: AgentJob | None = None) -> None:
         """Send the report of a job that ended, then remove ``job``'s worktree. Nothing after a hand-over."""
         with self._lock:
             self._jobs.pop(lease_id, None)
@@ -600,28 +602,28 @@ class Worker:
         self._send(lease_id, unsent)
         self._wake()  # a slot is free
 
-    def _register(self, lease_id: int, kill: Callable[[], None] | None, *, evaluation: bool = False) -> Running:
-        running = Running(kill, evaluation)
+    def _register(self, lease_id: int, kill: Callable[[], None] | None, *, agent: bool = True) -> Running:
+        running = Running(kill, agent)
         self._jobs[lease_id] = running
         return running
 
-    def _job(self, grant: Grant) -> AgentJob | EvaluationJob:
+    def _job(self, grant: Grant) -> Job:
         """The job of ``grant``, read from this worker's CAS. Raises ``MissingJob``: the job is then lost."""
         return read_job(self.site.cas, grant.lease, grant.job_cid)
 
     def _recover(self, grant: Grant) -> None:
         """Watch a job of this worker's that an earlier process of it started, or report it gone."""
         job = self._job(grant)
-        if isinstance(job, EvaluationJob):
+        if not isinstance(job, AgentJob):
             match grant.handle:
                 case ProcessHandle(pgid=pgid, start_time=float(start)) if alive(pgid, start):
                     kill_group(Started(pgid, start))
-            self._lost(grant.lease, GONE.format(what='evaluator'))
-            jobs.remove(job, self.site)  # its worktree is this lease's own: no later lease removes it
+            self._lost(grant.lease, GONE.format(what=job.kind))
+            self.site.remove(job)  # its worktree is this lease's own: no later lease removes it
             return
         self.relay.open({job.agent_session: grant.lease})  # a re-attached agent goes on relaying
         if grant.started_at is None or not isinstance(grant.handle, AgentHandle):  # it never started, or unrecorded
-            jobs.remove(job, self.site)
+            self.site.remove(job)
             self._lost(grant.lease, GONE.format(what='agent'))
             return
         if not self.site.cwd(job).is_dir():
@@ -659,10 +661,8 @@ class Worker:
         match self._job(grant):
             case AgentJob() as job:
                 self._agent(grant, job)
-            case EvaluationJob() as job:
-                self._evaluation(grant, job)
-            case never:
-                assert_never(never)
+            case job:
+                self._kind(grant, job)
 
     def _agent(self, grant: Grant, job: AgentJob) -> None:
         """Run an agent's job (``jobs.run_agent``), and report it once the job's span ends.
@@ -676,12 +676,13 @@ class Worker:
         if report is not None:
             self._report(grant.lease, report, job)
 
-    def _evaluation(self, grant: Grant, job: EvaluationJob) -> None:
-        """Run an evaluation's job (``jobs.run_evaluation``), and report what it measured."""
-        with self._lock:  # a stop that comes before the evaluator starts kills it when it starts
-            self._register(grant.lease, None, evaluation=True)
-        with self._tracer.span('piloop.job', lease=grant.lease, evaluation=job.evaluation) as span:
-            report = jobs.run_evaluation(job, _Control(self, grant.lease), self.site, span)
+    def _kind(self, grant: Grant, job: Job) -> None:
+        """Run the job of a ``JobKind`` (``JobKind.run``), and report it."""
+        kind = kind_of(job)
+        with self._lock:  # a stop that comes before its process starts kills it when it starts
+            self._register(grant.lease, None, agent=False)
+        with self._tracer.span('piloop.job', lease=grant.lease, job=job.kind, job_id=kind.id(job)) as span:
+            report = kind.run(job, _Control(self, grant.lease), self.site, span)
         self._report(grant.lease, report)
 
 

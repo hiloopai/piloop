@@ -54,7 +54,6 @@ from piloop.db.models import (
     Event,
     EventModel,
     Lease,
-    LeaseKind,
     LeaseState,
     Pause,
     utcnow,
@@ -76,6 +75,7 @@ from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION
 from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRequested, current_evaluator, request_remeasure
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController, wrap_up_lead
@@ -86,7 +86,7 @@ from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.campaign_type.kit.verdicts.judge import due, head
 from piloop.plugins.campaign_type.optimization.planner import RunQueued, RunRerouted
-from piloop.plugins.executor.contract import AgentKey, Capacity, Prompt
+from piloop.plugins.executor.contract import AGENT, AgentKey, Capacity, Prompt
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.leases import SERVE
 from piloop.plugins.executor.workers import Workers
@@ -231,7 +231,9 @@ def test_agents_launch_across_campaigns_within_the_executors_agent_slots_fewest_
     assert run_all(scheduler) == [], 'every slot is taken, by agents not submitted yet or by their leases'
     wait_until(lambda: not scheduler._controller.launcher.unsubmitted)
     assert run_all(scheduler) == [], 'the executor counts them once submitted'
-    mocker.patch.object(scheduler._controller.executor, 'capacity', return_value=Capacity(agents=1, evaluations=None))
+    mocker.patch.object(
+        scheduler._controller.executor, 'capacity', return_value=Capacity(agents=1, slots={EVALUATION: None})
+    )
     assert len(run_all(scheduler)) == 1, 'one free slot: core subtracts nothing that the executor counts'
     scheduler.stop(timeout=5)
 
@@ -248,7 +250,7 @@ def test_a_job_submitted_while_the_scheduler_counts_its_slots_still_takes_one(
     def submitted_meanwhile() -> Capacity:
         if any(frame.name == '_launch' for frame in traceback.extract_stack()):  # the agents' count, not evaluations'
             unsubmitted.discard(AgentSessionId(99))  # its submit lands after the executor's read: no lease of it there
-        return Capacity(agents=1, evaluations=None)
+        return Capacity(agents=1, slots={EVALUATION: None})
 
     mocker.patch.object(scheduler._controller.executor, 'capacity', side_effect=submitted_meanwhile)
     assert run_all(scheduler) == [], 'its one slot is taken'
@@ -1907,7 +1909,7 @@ def lease_running(db: Database) -> None:
             handle: dict[str, object] = {'runtime': w.runtime, 'data': w.handle}
             s.add(
                 Lease(
-                    kind=LeaseKind.AGENT,
+                    kind=AGENT,
                     agent_session_id=w.id,
                     state=LeaseState.RUNNING,
                     worker='elsewhere',

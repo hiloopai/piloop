@@ -22,10 +22,9 @@ from typing import Protocol
 from covalence import Cid
 from pydantic import BaseModel, ConfigDict, SecretStr
 
+from piloop import deprecated
 from piloop.actor import Agent
-from piloop.ids import Revision
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
-from piloop.plugins.campaign_type.kit.runs.ids import RunId
+from piloop.ids import Revision, TargetRef
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.host import Capability, One, Parameters, Scope
 
@@ -84,33 +83,46 @@ class Captured:
     """What it left unsaved, when the save of it failed."""
 
 
-@dataclass(frozen=True)
-class RunVersion:
-    """The ``index``-th version of a run, oldest first."""
-
-    campaign: str
-    run: RunId
-    index: int
+PIN_NAME = re.compile(r'[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*')
 
 
 @dataclass(frozen=True)
-class RebaseVersion:
-    """The merge of a candidate onto the head (``ledger.rebase``)."""
+class Pin:
+    """Why a version must outlive whatever named it first (a branch, an agent's worktree): ``Repository.keep``.
+
+    ``name`` is its owner's, unique in the campaign, and segments of letters, digits, ``_`` and ``-`` joined by
+    ``/``: a run's third version is ``r12/2``. The provider keeps one version per pin.
+    """
 
     campaign: str
-    candidate: CandidateId
+    name: str
+
+    def __post_init__(self) -> None:
+        if not PIN_NAME.fullmatch(self.name):
+            raise ValueError(f'{self.name!r} is not a pin name: segments of letters, digits, _ and - joined by /')
 
 
-@dataclass(frozen=True)
-class ReferenceVersion:
-    """A version that a human imported as a reference candidate."""
-
-    campaign: str
-    candidate: CandidateId
+@deprecated.until('0.5.0', 'RunVersion of 0.3.1 is a Pin: delete RunVersion')
+def RunVersion(campaign: str, run: int, index: int) -> Pin:
+    """The ``index``-th version of a run, oldest first, as 0.3.1 named it."""
+    return Pin(campaign, f'r{run}/{index}')
 
 
-type Keep = RunVersion | RebaseVersion | ReferenceVersion
-"""Why a version must outlive whatever named it first (a branch, an agent's worktree): ``Repository.keep``."""
+@deprecated.until('0.5.0', 'RebaseVersion of 0.3.1 is a Pin: delete RebaseVersion')
+def RebaseVersion(campaign: str, candidate: int) -> Pin:
+    """The merge of a candidate onto the head, as 0.3.1 named it."""
+    return Pin(campaign, f'rebase/{candidate}')
+
+
+@deprecated.until('0.5.0', 'ReferenceVersion of 0.3.1 is a Pin: delete ReferenceVersion')
+def ReferenceVersion(campaign: str, candidate: int) -> Pin:
+    """A version that a human imported as a reference candidate, as 0.3.1 named it."""
+    return Pin(campaign, f'reference/{candidate}')
+
+
+type Keep = Pin
+"""What ``Repository.keep`` took in 0.3.1, ``deprecated.until('0.5.0')``: a ``Pin``."""
+deprecated.until('0.5.0', 'Keep of 0.3.1 is Pin: delete Keep')
 
 type Fetch = Callable[[Sequence[Revision], Sequence[Revision]], list[Cid]]
 """Ask the repo of record to put what ``revisions`` have beyond the revisions that a replica has into the CAS, and return
@@ -235,7 +247,7 @@ class Repository(Protocol):
         """
         ...
 
-    def keep(self, revision: Revision, why: Keep) -> None:
+    def keep(self, revision: Revision, why: Pin) -> None:
         """Keep ``revision`` for ``why``, also after whatever named it is gone."""
         ...
 
@@ -258,11 +270,11 @@ class Repository(Protocol):
         """Those of ``names`` that ``revision`` does not hold: what was put in its checkout from elsewhere."""
         ...
 
-    def capture(self, cas: Cas, base: Revision, run: RunId, ignore: Sequence[str]) -> Captured:
+    def capture(self, cas: Cas, base: Revision, by: TargetRef, ignore: Sequence[str]) -> Captured:
         """Put the versions that an agent saved in this checkout of ``base`` into ``cas``.
 
         What it left unsaved, outside ``ignore`` (the paths that are not its work), is saved first as a ``recovered``
-        version of ``run``, with a summary that the provider writes. A version that the agent saved is never changed: it is scored as the agent made it.
+        version by ``by``, what the agent works on (``run#12``), with a summary that the provider writes. A version that the agent saved is never changed: it is scored as the agent made it.
         A save that fails puts the unsaved changes into ``cas`` instead (``Captured.unsaved``), and the versions still come.
         """
         ...

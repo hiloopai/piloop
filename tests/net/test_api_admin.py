@@ -34,7 +34,7 @@ from tests.net.test_api import token
 def test_a_limit_is_set_and_unset_by_an_admin_and_refused_on_a_key_that_is_not_live(
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
-    key = 'executor.pools.serve.evaluations'
+    key = 'executor.pools.serve.slots.evaluation'
     with serving_api(cfg, listen='127.0.0.1:0') as [_, tcp], Client.on(cfg.socket_file, System.HUMAN) as client:
         assert {k.key: k.origin for k in client.limits().keys}[key] == 'default'
         set_ = client.set_limit(key, LimitBody(value=1, reason='the GPU is busy'))

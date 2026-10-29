@@ -12,6 +12,7 @@ from piloop.db.session import Database
 from piloop.ids import KeyOrigin
 from piloop.otel import Tracer
 from piloop.plugins import limits
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.executor.contract import Capacity
 from piloop.plugins.executor.kit.capacity import NoLease, Pool
@@ -31,8 +32,8 @@ from tests.test_lease import (
     queue,
 )
 
-KEY = 'executor.pools.serve.evaluations'
-GPU = {'executor': Workers.model_validate({'pools': {'gpu': {'evaluations': 4}}})}
+KEY = 'executor.pools.serve.slots.evaluation'
+GPU = {'executor': Workers.model_validate({'pools': {'gpu': {'slots': {'evaluation': 4}}}})}
 
 
 def test_only_a_live_key_that_there_is_takes_a_limit_and_only_a_value_that_its_parameters_accept(
@@ -41,52 +42,56 @@ def test_only_a_live_key_that_there_is_takes_a_limit_and_only_a_value_that_its_p
     with db.session() as s:
         with pytest.raises(limits.Refused, match='executor.renew_seconds is not a live key; the live keys are'):
             limits.set_limit(s, {}, 'executor.renew_seconds', 5, reason='r', actor='human')
-        with pytest.raises(limits.Refused, match='executor.pools.gpu.evaluations is not a live key'):
-            limits.set_limit(s, {}, 'executor.pools.gpu.evaluations', 1, reason='a limit adds no pool', actor='human')
+        with pytest.raises(limits.Refused, match='executor.pools.gpu.slots.evaluation is not a live key'):
+            limits.set_limit(
+                s, {}, 'executor.pools.gpu.slots.evaluation', 1, reason='a limit adds no pool', actor='human'
+            )
         with pytest.raises(limits.Refused, match='greater than or equal to 0'):
             limits.set_limit(s, {}, KEY, -1, reason='r', actor='human')
         with pytest.raises(limits.Refused, match=r'no provider of the home is \[plugins.nope\]'):
             limits.set_limit(s, {}, 'nope.x', 1, reason='r', actor='human')
-        limits.set_limit(s, GPU, 'executor.pools.gpu.evaluations', 1, reason='the GPU is shared', actor='human')
+        limits.set_limit(s, GPU, 'executor.pools.gpu.slots.evaluation', 1, reason='the GPU is shared', actor='human')
         limits.set_limit(s, GPU, KEY, 0, reason='nothing on the server', actor='orchestrator')
         limits.set_limit(s, GPU, KEY, 1, reason='one on the server', actor='human')
         s.commit()
         assert [(row.key, row.value, row.actor) for row in s.scalars(select(Limit).order_by(Limit.key))] == [
-            ('executor.pools.gpu.evaluations', 1, 'human'),
+            ('executor.pools.gpu.slots.evaluation', 1, 'human'),
             (KEY, 1, 'human'),
         ], 'set again, a limit has its last value'
         sources = {k: (v, o, row.reason if row else None) for k, v, o, row in limits.sources(s, GPU)}
         assert sources[KEY] == (1, KeyOrigin.LIMIT, 'one on the server')
         assert sources['executor.pools.gpu.agents'] == (None, KeyOrigin.DEFAULT, None)
-        assert limits.unset_limit(s, 'executor.pools.gpu.evaluations') and not limits.unset_limit(s, 'nope')
+        assert limits.unset_limit(s, 'executor.pools.gpu.slots.evaluation') and not limits.unset_limit(s, 'nope')
         s.flush()
-        assert {k: o for k, _, o, _ in limits.sources(s, GPU)}['executor.pools.gpu.evaluations'] is KeyOrigin.CONFIG
+        assert {k: o for k, _, o, _ in limits.sources(s, GPU)}[
+            'executor.pools.gpu.slots.evaluation'
+        ] is KeyOrigin.CONFIG
 
 
 def test_the_daemon_applies_a_changed_limit_on_its_next_tick_and_keeps_its_parameters_when_one_is_refused(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     ex = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
-    assert ex.executor.capacity() == Capacity(None, 2)
+    assert ex.executor.capacity() == Capacity(None, {EVALUATION: 2})
     with db.session() as s:
         limits.set_limit(s, {}, KEY, 1, reason='the GPU is busy', actor='human')
         s.commit()
-    assert ex.executor.capacity() == Capacity(None, 2), 'until the next tick'
+    assert ex.executor.capacity() == Capacity(None, {EVALUATION: 2}), 'until the next tick'
     ex.configure()
-    assert ex.executor.capacity() == Capacity(None, 1)
+    assert ex.executor.capacity() == Capacity(None, {EVALUATION: 1})
     with db.session() as s:
         s.get_one(Limit, KEY).value = 'many'  # a limit that the parameters no longer accept
         s.commit()
     ex.configure()
-    assert ex.executor.capacity() == Capacity(None, 1), 'the last parameters hold'
-    assert workers_of(ex).leases.pools['serve'] == Pool(evaluations=1)
+    assert ex.executor.capacity() == Capacity(None, {EVALUATION: 1}), 'the last parameters hold'
+    assert workers_of(ex).leases.pools['serve'] == Pool(slots={EVALUATION: 1})
 
 
 def test_with_two_evaluations_running_a_lowered_limit_starts_no_third_until_none_runs(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
     """The second capacity gate: ``evaluations`` lowered from 2 to 1 while 2 run."""
-    leases = Leases(db, Recorder(db), home_cas(db), TIMING, {'serve': Pool(evaluations=2)})
+    leases = Leases(db, Recorder(db), home_cas(db), TIMING, {'serve': Pool(slots={EVALUATION: 2})})
     worker = Local(leases, 'serve')
     join(leases, 'serve', ['process'], pool='serve')
     queue(db, evaluation_job(db, campaign, tmp_path))
@@ -113,8 +118,8 @@ def test_the_live_keys_are_found_in_models_and_in_dicts_of_models_by_their_path(
     nested = Nested(flags={'a': 1}, pools={'gpu': Pool(agents=1)})
     keys = [key for key, _ in limits.live(nested, 'x')]
     assert keys == [
-        *(f'x.pools.gpu.{k}' for k in ('agents', 'evaluations', 'min_memory_gb', 'max_load')),
-        *(f'x.serve.{k}' for k in ('agents', 'evaluations', 'min_memory_gb', 'max_load')),
+        *(f'x.pools.gpu.{k}' for k in ('agents', 'slots.evaluation', 'min_memory_gb', 'max_load')),
+        *(f'x.serve.{k}' for k in ('agents', 'slots.evaluation', 'min_memory_gb', 'max_load')),
         'x.window',
     ]
     other = Limit(key='store.window', value=9)

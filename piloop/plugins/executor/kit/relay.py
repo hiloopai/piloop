@@ -46,7 +46,7 @@ from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, PILOOP_ARGV, child_env
 from piloop.settings import socket_dir
 
 RELAY_ARGV = (sys.executable, '-P', '-m', agent_end.__name__)
-"""What an agent's ``piloop`` runs on a worker elsewhere (``jobs.Site.piloop``): ``door.main``."""
+"""What an agent's ``piloop`` runs on a worker elsewhere (``jobs.Machine.piloop``): ``door.main``."""
 
 
 class LeaseCall(Call):

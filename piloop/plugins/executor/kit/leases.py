@@ -60,62 +60,79 @@ from piloop.db.models import (
     Event,
     EventModel,
     Lease,
-    LeaseKind,
     LeaseState,
     ReadBy,
     utcnow,
 )
 from piloop.db.session import Database, read_transaction, write_transaction
 from piloop.ids import HOME, AgentSessionId, CommentId, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.executor.contract import (
+    AGENT,
     JOB,
+    REPORTS,
     AgentJob,
     AgentKey,
     AgentNotStarted,
-    AgentReport,
     Capacity,
-    EvaluationJob,
-    EvaluationKey,
-    EvaluationReport,
     Guard,
     HarnessSession,
+    Job,
     JobKey,
     JobSecrets,
+    Key,
     LeftJob,
     Prompt,
     Report,
     Results,
     Settled,
+    job_kinds,
     job_secrets,
+    kind_of,
 )
-from piloop.plugins.executor.kit.capacity import HostSample, Pool, add, admits, less, pressure, slots, times
+from piloop.plugins.executor.kit.capacity import (
+    HostSample,
+    Pool,
+    add,
+    admits,
+    counted,
+    kinds,
+    less,
+    pressure,
+    slots,
+    times,
+)
 from piloop.plugins.executor.kit.tables import LeaseWorker, NoLease, WorkerInstance
 from piloop.plugins.secrets.contract import SECRETS, SecretsProvider
 
 SERVE = 'serve'
 """The id of the worker inside ``piloop serve``, and its pool. The id is stable, so the next daemon's worker finds its
 leases again."""
-DEFAULT_POOLS: Mapping[str, Pool] = {SERVE: Pool()}
+
+
+def default_pools() -> dict[str, Pool]:
+    """The pools of a home that names none: the worker of ``piloop serve``, with each job kind's slots.
+
+    A function: a pool reads the installed job kinds, whose packages may import this module.
+    """
+    return {SERVE: Pool()}
+
+
 UNREPORTED = 'the daemon stopped, and the job did not report in time'
 NOT_TAKEN = 'the daemon stopped before a worker took the job'
-KINDS = (LeaseKind.AGENT, LeaseKind.EVALUATION)
-"""The order in which a worker takes jobs: agents first."""
 PAGE = 100
 """How many messages one read returns at most. A worker reads again at once for the rest."""
 
 
 class StaleReport(EventModel):
-    """On the job's row (the agent session, or the evaluated candidate): a report that the fence refused."""
+    """On the job's row (the agent session, or its kind's ``JobKind.target``): a report that the fence refused."""
 
     READ_BY: ClassVar[ReadBy] = ReadBy.READERS
     kind: Literal['lease.stale_report'] = 'lease.stale_report'
     lease: int
     worker: str
     reason: str
-    report: Report
+    report: Annotated[Report, REPORTS]
     """What it brought back, by address: its work and files stay in the CAS."""
 
 
@@ -141,7 +158,8 @@ class LeaseQueued(EventModel):
 
     kind: Literal['lease.queued'] = 'lease.queued'
     lease: int
-    lease_kind: LeaseKind
+    lease_kind: str
+    """The kind of its job: ``agent``, or a job kind's name."""
 
 
 class LeasePrompted(EventModel):
@@ -379,12 +397,12 @@ def _message(event: Event) -> Work | PromptMessage | Revoke | Extend | Drain:
             assert_never(never)
 
 
-def read_job(cas: Cas, lease: int, job_cid: Cid) -> AgentJob | EvaluationJob:
+def read_job(cas: Cas, lease: int, job_cid: Cid) -> Job:
     """The job of ``lease``, read from ``cas``, as its worker runs it. Raises ``MissingJob``.
 
-    An evaluation gets a place of this lease's own, ``<place>/lease-<id>``. Its job is queued again on a new lease
-    while the old one's may still run (a lease that expired before its evaluator started): with the same worktree and
-    logs, the stale job would remove, overwrite or read the replacement's. An agent's job is never queued again: a
+    A job of a ``JobKind`` gets a place of this lease's own, ``<place>/lease-<id>``. Its job is queued again on a new
+    lease while the old one's may still run (a lease that expired before its process started): with the same worktree
+    and logs, the stale job would remove, overwrite or read the replacement's. An agent's job is never queued again: a
     re-attached agent goes on in its worktree.
     """
     if (data := cas.get(job_cid)) is None:
@@ -395,16 +413,17 @@ def read_job(cas: Cas, lease: int, job_cid: Cid) -> AgentJob | EvaluationJob:
     return job.model_copy(update={'place': f'{job.place}/lease-{lease}'})
 
 
-def enqueue(s: Session, cas: Cas, job: AgentJob | EvaluationJob) -> Lease:
+def enqueue(s: Session, cas: Cas, job: Job) -> Lease:
     """Put ``job`` in ``cas``, then insert its ``queued`` lease, and its ``LeaseQueued``, in the caller's transaction.
 
     The caller commits.
     """
-    lease = Lease(kind=LeaseKind(job.kind), job_cid=cas.put(JOB.dump_json(job)))
+    lease = Lease(kind=job.kind, job_cid=cas.put(JOB.dump_json(job)))
     if isinstance(job, AgentJob):
         lease.agent_session_id = job.agent_session
     else:
-        lease.evaluation_id = job.evaluation
+        kind = kind_of(job)
+        lease.job_id, lease.runner = kind.id(job), kind.runner(job)
     s.add(lease)
     s.flush()
     emit(s, LeaseQueued(lease=lease.id, lease_kind=lease.kind), _target(cas, lease), System.DAEMON)
@@ -418,13 +437,12 @@ def of_agent(s: Session, agent_session_id: AgentSessionId) -> Lease | None:
     ).first()
 
 
-def lease_of(s: Session, key: JobKey) -> Lease | None:
+def lease_of(s: Session, key: Key) -> Lease | None:
     """Return the newest lease of the job of ``key``, or None when it has none."""
     if isinstance(key, AgentKey):
         return of_agent(s, key.agent_session)
-    return s.scalars(
-        select(Lease).where(Lease.evaluation_id == key.evaluation).order_by(Lease.id.desc()).limit(1)
-    ).first()
+    of_job = (Lease.kind == key.kind) & (Lease.job_id == key.id)
+    return s.scalars(select(Lease).where(of_job).order_by(Lease.id.desc()).limit(1)).first()
 
 
 def revoke(s: Session, cas: Cas, lease: Lease) -> None:
@@ -466,19 +484,26 @@ def _registered(s: Session, worker: str) -> LeaseWorker:
 
 
 def _target(cas: Cas, lease: Lease) -> TargetRef:
-    """The row that a lease's events go on: its agent session, or the candidate that its evaluation measures."""
+    """The row that a lease's events go on: its agent session, or its kind's (``JobKind.target``)."""
     if lease.agent_session_id is not None:
         return TargetRef(TargetKind.AGENT_SESSION, lease.agent_session_id)
     job = read_job(cas, lease.id, lease.job_cid)
-    assert isinstance(job, EvaluationJob)
-    return TargetRef(CANDIDATE, job.candidate)
+    return kind_of(job).target(job)
+
+
+def _key(lease: Lease) -> Key:
+    """The key of the job of ``lease``."""
+    if lease.agent_session_id is not None:
+        return AgentKey(lease.agent_session_id)
+    assert lease.job_id is not None  # a CHECK: a lease of any other kind has its job's row
+    return JobKey(lease.kind, lease.job_id)
 
 
 def _job_of(lease: Lease) -> ColumnElement[bool]:
     """Select the leases of the job of ``lease``."""
     if lease.agent_session_id is not None:
         return Lease.agent_session_id == lease.agent_session_id
-    return Lease.evaluation_id == lease.evaluation_id
+    return (Lease.kind == lease.kind) & (Lease.job_id == lease.job_id)
 
 
 class Leases:
@@ -495,7 +520,7 @@ class Leases:
         results: Results,
         cas: Cas,
         timing: Timing = DEFAULT_TIMING,
-        pools: Mapping[str, Pool] = DEFAULT_POOLS,
+        pools: Mapping[str, Pool] | None = None,
         secrets: SecretsProvider | None = None,
     ) -> None:
         """``cas`` holds the jobs: ``submit`` puts each one there, and the workers read it from there.
@@ -506,7 +531,7 @@ class Leases:
         self._results = results
         self._cas = cas
         self.timing = timing
-        self.pools = pools
+        self.pools = pools if pools is not None else default_pools()
         self._secrets = secrets if secrets is not None else SECRETS.selected({})
 
     def register(
@@ -552,8 +577,9 @@ class Leases:
     def acquire(self, worker: str, request_id: str, host: HostSample) -> Grant | NoLease:
         """Take the oldest queued job that ``worker`` can run and that its pool admits, or say why there is none.
 
-        Agent jobs go first. An evaluation job goes only to a worker with its runner. Core submits an evaluation only
-        when it has a slot, in the order of its queue, so the order of the leases is that order. ``host`` is the
+        Agent jobs go first, then each job kind's, in the order of their entry points. A job of a kind goes only to a
+        worker with its runner. Core submits a job only when it has a slot, in its owner's order, so the order of the
+        leases is that order. ``host`` is the
         worker's sample now, which the gates read (``capacity.admits``). An acquire sent again with its request id gets
         the lease that it took, so a lost answer leaves no lease to expire.
         """
@@ -573,16 +599,12 @@ class Leases:
             counts = Counter(
                 s.scalars(select(Lease.kind).where(Lease.worker == worker, Lease.state.in_(LIVE_LEASES))).all()
             )
-            running = Capacity(counts[LeaseKind.AGENT], counts[LeaseKind.EVALUATION])
+            running = counted(counts)
             refused: list[NoLease] = []
-            for kind in KINDS:
+            for kind in kinds():
                 queued = select(Lease).where(Lease.kind == kind, Lease.state == LeaseState.QUEUED)
-                if kind is LeaseKind.EVALUATION:
-                    queued = (
-                        queued.join(Evaluation, Evaluation.id == Lease.evaluation_id)
-                        .join(Evaluator, Evaluator.id == Evaluation.evaluator_id)
-                        .where(Evaluator.runner.in_(row.runners))
-                    )
+                if kind != AGENT:
+                    queued = queued.where(Lease.runner.in_(row.runners))
                 lease = s.scalars(queued.order_by(Lease.id).limit(1)).first()
                 match lease, admits(pool, host, running, kind):
                     case None, None:
@@ -619,25 +641,26 @@ class Leases:
             leased = s.execute(select(Lease.worker, Lease.kind).where(Lease.state.in_(LIVE_LEASES))).all()
             live = Counter((worker, kind) for worker, kind in leased)
             queued = Counter(s.scalars(select(Lease.kind).where(Lease.state == LeaseState.QUEUED)))
-        free: dict[LeaseKind, int | None] = dict.fromkeys(KINDS, 0)
+        every = kinds()
+        free: dict[str, int | None] = dict.fromkeys(every, 0)
         pool_of = {worker: pool for worker, pool, _, _ in workers}
         for name, pool in self.pools.items():
             if pool.provisioner is not None:
-                for kind in KINDS:
-                    taken = sum(n for (worker, k), n in live.items() if k is kind and pool_of.get(worker) == name)
+                for kind in every:
+                    taken = sum(n for (worker, k), n in live.items() if k == kind and pool_of.get(worker) == name)
                     free[kind] = add(free[kind], less(times(slots(pool, kind), pool.provisioner.max), taken))
         for worker, pool_name, sample, seen_at in workers:
             if seen_at <= since or (pool := self.pools.get(pool_name)) is None or pool.provisioner is not None:
                 continue
-            running = Capacity(live[worker, LeaseKind.AGENT], live[worker, LeaseKind.EVALUATION])
+            running = counted({k: n for (w, k), n in live.items() if w == worker})
             host = HostSample.model_validate(sample)
-            for kind in KINDS:
+            for kind in every:
                 if admits(pool, host, running, kind) is None:
                     bound = slots(pool, kind)
                     left = None if bound is None else bound - (slots(running, kind) or 0)
                     free[kind] = add(free[kind], left)
-        agent, evaluation = LeaseKind.AGENT, LeaseKind.EVALUATION
-        return Capacity(less(free[agent], queued[agent]), less(free[evaluation], queued[evaluation]))
+        left = {kind: less(free[kind], queued[kind]) for kind in every}
+        return Capacity(left.pop(AGENT), left)
 
     def _live(self, s: Session, lease_id: int, worker: str) -> Lease:
         """Return the lease if it is ``worker``'s, live and the newest of its job: the fence. Else raise.
@@ -760,9 +783,7 @@ class Leases:
             s.commit()
         return found
 
-    def report(
-        self, lease_id: int, worker: str, request_id: str, report: AgentReport | EvaluationReport
-    ) -> dict[str, object]:
+    def report(self, lease_id: int, worker: str, request_id: str, report: Report) -> dict[str, object]:
         """Apply the job's result, and return the receipt. A report sent again with its request id gets the same receipt.
 
         Raises:
@@ -794,7 +815,7 @@ class Leases:
             raise
         return receipt
 
-    def _keep_stale(self, lease: Lease, worker: str, report: AgentReport | EvaluationReport, reason: str) -> None:
+    def _keep_stale(self, lease: Lease, worker: str, report: Report, reason: str) -> None:
         """Keep a refused report as a ``StaleReport`` event on its job's row: what it made stays in the CAS."""
         stale = StaleReport(lease=lease.id, worker=worker, reason=reason, report=report)
         with self._db.session() as s:
@@ -820,14 +841,8 @@ class Leases:
             emit(s, expired, _target(self._cas, lease), System.DAEMON)
 
         lease = self._job(lease_id)
-        key: JobKey
-        if lease.agent_session_id is not None:
-            key = AgentKey(lease.agent_session_id)
-        else:
-            assert lease.evaluation_id is not None
-            key = EvaluationKey(lease.evaluation_id)  # core submits it again
         try:
-            self._results.lost(key, reason, guard=mark)
+            self._results.lost(_key(lease), reason, guard=mark)
         except Settled as e:
             with self._db.session() as s:
                 write_transaction(s)
@@ -905,13 +920,13 @@ class Leases:
             )
             s.commit()
 
-    def submit(self, job: AgentJob | EvaluationJob) -> None:
+    def submit(self, job: Job) -> None:
         """Queue ``job`` on a new lease, which tells every worker (``Work``)."""
         with self._db.session() as s:
             enqueue(s, self._cas, job)
             s.commit()
 
-    def revoke(self, key: JobKey) -> None:
+    def revoke(self, key: Key) -> None:
         """Ask the worker of the job's live lease to stop it (``revoke``). Its job still reports."""
         with self._db.session() as s:
             lease = lease_of(s, key)
@@ -987,17 +1002,17 @@ class Leases:
             case _:
                 raise NotAddressed(f'not_addressed: event#{message} is not a prompt for {worker}')
 
-    def adopt(self, left: Sequence[LeftJob], worker: str) -> list[JobKey]:
+    def adopt(self, left: Sequence[LeftJob], worker: str) -> list[Key]:
         """Give every live lease a full period, and return the jobs of ``left`` that have no open lease.
 
         A job on an open lease goes on: its worker finds it again (``register``).
         """
         self.renew_all()
-        refused: list[JobKey] = []
+        refused: list[Key] = []
         with self._db.session() as s:
             write_transaction(s)
-            # an evaluation that no worker took is the previous daemon's: this one asks again for what it needs
-            untaken = (Lease.kind == LeaseKind.EVALUATION) & (Lease.state == LeaseState.QUEUED)
+            # a job of a kind that no worker took is the previous daemon's: this one asks again for what it needs
+            untaken = (Lease.kind != AGENT) & (Lease.state == LeaseState.QUEUED)
             for lease in s.scalars(select(Lease).where(untaken)).all():
                 cancel(s, lease, NOT_TAKEN)
             for job in left:
@@ -1010,7 +1025,7 @@ class Leases:
     def stop_untaken(self) -> None:
         """End the agent leases that no worker took, with a result that says so: what waits for each returns."""
         with self._db.session() as s:
-            queued = (Lease.kind == LeaseKind.AGENT) & (Lease.state == LeaseState.QUEUED)
+            queued = (Lease.kind == AGENT) & (Lease.state == LeaseState.QUEUED)
             untaken = s.scalars(select(Lease).where(queued)).all()
         for lease in untaken:
 
@@ -1035,7 +1050,7 @@ class Leases:
         """End the live agent leases: a report that comes later is refused, and no next worker takes them."""
         with self._db.session() as s:
             write_transaction(s)
-            live = (Lease.kind == LeaseKind.AGENT) & Lease.state.in_(LIVE_LEASES)
+            live = (Lease.kind == AGENT) & Lease.state.in_(LIVE_LEASES)
             for lease in s.scalars(select(Lease).where(live)).all():
                 cancel(s, lease, UNREPORTED)
             s.commit()
@@ -1050,7 +1065,7 @@ def _prompted(s: Session, cas: Cas, lease: Lease, comment: CommentId) -> bool:
 
 def _extended(s: Session, lease: Lease) -> float:
     """The seconds of the latest ``LeaseExtended`` of ``lease``, or 0 without one."""
-    if lease.agent_session_id is None:  # an evaluation: its timeout is its own
+    if lease.agent_session_id is None:  # not an agent: its timeout is its kind's own
         return 0
     on = Event.target == TargetRef(TargetKind.AGENT_SESSION, lease.agent_session_id)
     found = latest(s, LeaseExtended, on, has(LeaseExtended, lease=lease.id))
@@ -1069,23 +1084,15 @@ def _unanswered() -> ColumnElement[bool]:
     return Event.kind.not_in(LeasePrompted.kinds()) | ~answered
 
 
-def _held_back(s: Session, kind: LeaseKind, runners: Sequence[str]) -> bool:
+def _held_back(s: Session, kind: str, runners: Sequence[str]) -> bool:
     """Whether core holds back a job of ``kind`` that a worker with ``runners`` could run.
 
     Core submits a job only when ``Executor.capacity`` has a free slot, so while every slot is full the job waits in
-    core, as a requested agent or a waiting evaluation, and no lease is queued for it.
+    core, as a requested agent or as its kind keeps it (``JobKind.waiting``), and no lease is queued for it.
     """
-    match kind:
-        case LeaseKind.AGENT:
-            query = select(AgentSession.id).where(AgentSession.state == AgentSessionState.REQUESTED)
-        case LeaseKind.EVALUATION:
-            query = (
-                select(Evaluation.id)
-                .join(Evaluator, Evaluator.id == Evaluation.evaluator_id)
-                .where(Evaluation.started_at.is_(None), Evaluator.runner.in_(runners))
-            )
-        case _:
-            assert_never(kind)
+    if kind != AGENT:
+        return job_kinds()[kind].waiting(s, runners)
+    query = select(AgentSession.id).where(AgentSession.state == AgentSessionState.REQUESTED)
     return s.scalar(query.limit(1)) is not None
 
 

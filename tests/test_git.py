@@ -20,8 +20,8 @@ from pydantic import SecretStr
 
 from piloop.actor import Agent
 from piloop.api.client import CLONE_WAIT
-from piloop.ids import AgentSessionId, Revision
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunId
+from piloop.ids import AgentSessionId, Revision, TargetRef
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN
 from piloop.plugins.vcs.contract import CloneFailed, Version
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, commands as git
 from tests.conftest import disk, git_processes
@@ -195,7 +195,7 @@ def test_piloops_own_commits_carry_its_identity_on_a_machine_that_has_none(
     base = record.head().revision
     record.checkout(base, tmp_path / 'wt')
     (tmp_path / 'wt' / 'solve.txt').write_text('base\nmore\n')
-    captured = vcs.open(tmp_path / 'wt').capture(disk(tmp_path), base, RunId(5), ['data'])
+    captured = vcs.open(tmp_path / 'wt').capture(disk(tmp_path), base, TargetRef(RUN, 5), ['data'])
     assert captured.work is not None and captured.unsaved is None
     saved = vcs.open(tmp_path / 'wt').head()
     assert (saved.summary, saved.recovered) == (UNCOMMITTED, True)
@@ -232,7 +232,7 @@ def test_unsaved_work_is_saved_when_nothing_is_ignored(campaign_path: Path, tmp_
     base = vcs.open(campaign_path).head().revision
     vcs.open(campaign_path).checkout(base, tmp_path / 'wt')
     (tmp_path / 'wt' / 'solve.txt').write_text('base\nmore\n')
-    assert vcs.open(tmp_path / 'wt').capture(disk(tmp_path), base, RunId(5), []).unsaved is None
+    assert vcs.open(tmp_path / 'wt').capture(disk(tmp_path), base, TargetRef(RUN, 5), []).unsaved is None
 
 
 def test_a_save_that_git_refuses_keeps_the_unsaved_work_in_the_cas_and_brings_the_agents_own_commits_back(
@@ -251,7 +251,7 @@ def test_a_save_that_git_refuses_keeps_the_unsaved_work_in_the_cas_and_brings_th
     head = wt.head.commit.hexsha
     (tmp_path / 'wt' / 'solve.txt').write_text('base\nthe agent\nunsaved\n')
     (tmp_path / 'wt' / 'new.bin').write_bytes(b'\x00\x01')
-    captured = vcs.open(tmp_path / 'wt').capture(cas, base, RunId(5), ['data'])
+    captured = vcs.open(tmp_path / 'wt').capture(cas, base, TargetRef(RUN, 5), ['data'])
     assert captured.work is not None and captured.work.head == head, 'its own commit still comes back'
     assert captured.unsaved is not None and 'refused' in captured.unsaved.error
     patch = cas.get(captured.unsaved.blob)
@@ -282,7 +282,7 @@ def test_a_save_takes_the_work_while_a_job_still_writes_an_excluded_path(campaig
     (tmp_path / 'wt' / 'scratch').mkdir()
     (tmp_path / 'wt' / 'scratch' / 'out.txt').write_text('started\n')
     (tmp_path / 'wt' / 'solve.txt').write_text('base\nthe work\n')
-    captured = vcs.open(tmp_path / 'wt').capture(disk(tmp_path), base, RunId(5), ['scratch'])
+    captured = vcs.open(tmp_path / 'wt').capture(disk(tmp_path), base, TargetRef(RUN, 5), ['scratch'])
     assert captured.work is not None and captured.unsaved is None
     assert saved_paths(wt) == ['solve.txt']
     assert (tmp_path / 'wt' / 'scratch' / 'out.txt').read_text() == 'started\n', 'git never read it'
@@ -302,7 +302,7 @@ def test_a_save_keeps_what_the_agent_committed_under_an_excluded_path_as_it_comm
     wt.git.commit('-qm', 'keep a note')
     (tmp_path / 'wt' / 'workspace' / 'kept.txt').write_text('edited later\n')
     (tmp_path / 'wt' / 'solve.txt').write_text('base\nmore\n')
-    captured = vcs.open(tmp_path / 'wt').capture(disk(tmp_path), base, RunId(5), ['workspace'])
+    captured = vcs.open(tmp_path / 'wt').capture(disk(tmp_path), base, TargetRef(RUN, 5), ['workspace'])
     assert captured.work is not None and captured.unsaved is None
     assert saved_paths(wt) == ['solve.txt']
     assert wt.git.show('HEAD:workspace/kept.txt') == 'committed'
@@ -323,13 +323,13 @@ def test_a_save_after_a_refused_one_takes_all_the_work_and_nothing_excluded(
     (tmp_path / 'wt' / 'solve.txt').write_text('base\nfirst\n')
     (tmp_path / 'wt' / 'scratch').mkdir()
     (tmp_path / 'wt' / 'scratch' / 'a.txt').write_text('a\n')
-    first = vcs.open(tmp_path / 'wt').capture(cas, base, RunId(5), ['scratch'])
+    first = vcs.open(tmp_path / 'wt').capture(cas, base, TargetRef(RUN, 5), ['scratch'])
     assert first.unsaved is not None and b'scratch' not in (cas.get(first.unsaved.blob) or b'')
     hook.unlink()
     (tmp_path / 'wt' / 'new.txt').write_text('second\n')
     (tmp_path / 'wt' / 'scratch' / 'b.txt').write_text('b\n')
     wt.git.add('scratch/b.txt')
-    second = vcs.open(tmp_path / 'wt').capture(cas, base, RunId(5), ['scratch'])
+    second = vcs.open(tmp_path / 'wt').capture(cas, base, TargetRef(RUN, 5), ['scratch'])
     assert second.work is not None and second.unsaved is None
     assert saved_paths(wt) == ['new.txt', 'solve.txt']
     assert not git.is_dirty(wt, ['scratch']) and wt.git.diff('--cached', '--name-only') == ''

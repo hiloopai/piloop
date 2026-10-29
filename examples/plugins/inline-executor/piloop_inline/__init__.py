@@ -1,8 +1,8 @@
 """``inline``: a piloop executor that runs each job at once, in a thread of the daemon, with no leases.
 
-Each job runs as the built-in ``workers`` executor's worker runs it (``run_agent``, ``run_evaluation``), and its result
-goes to core through ``Host.results``. There is no fence: one thread owns each job, and only
-it reports. Nothing survives the daemon: ``adopt`` takes over no job, and ``hand_over`` stops every job.
+Each job runs as the built-in ``workers`` executor's worker runs it (``run_agent``, or its kind's ``JobKind.run``), and
+its result goes to core through ``Host.results``. There is no fence: one thread owns each job, and only it reports.
+Nothing survives the daemon: ``adopt`` takes over no job, and ``hand_over`` stops every job.
 """
 
 import subprocess
@@ -16,29 +16,28 @@ from covalence import Cid
 from piloop.capabilities import (
     AgentJob,
     AgentKey,
-    AgentReport,
     Capacity,
     Contribution,
-    EvaluationJob,
-    EvaluationReport,
     EventModel,
     ExecutorConfig,
     Handle,
     HarnessSession,
     Host,
-    JobKey,
+    Job,
     JobSecrets,
+    Key,
     LeftJob,
     Prompt,
+    Report,
     Runtime,
     Settled,
+    job_kinds,
     job_secrets,
     key_of,
     kill_group,
+    kind_of,
     local_site,
-    remove,
     run_agent,
-    run_evaluation,
 )
 
 
@@ -56,7 +55,7 @@ class InlineExecutor:
         self.host = host
         self.site = local_site(host.home, host.cas, host.repos, host.records, host.reserve)
         self._lock = threading.Lock()
-        self._jobs: dict[JobKey, _Job] = {}
+        self._jobs: dict[Key, _Job] = {}
         self.stopping = False
 
     def configure(self, config: ExecutorConfig) -> None:
@@ -64,9 +63,9 @@ class InlineExecutor:
 
     def capacity(self) -> Capacity:
         """No bound: every job runs as soon as it is submitted."""
-        return Capacity(agents=None, evaluations=None)
+        return Capacity(agents=None, slots=dict.fromkeys(job_kinds()))
 
-    def submit(self, job: AgentJob | EvaluationJob) -> None:
+    def submit(self, job: Job) -> None:
         running = _Job(self, job)
         with self._lock:
             if self.stopping:
@@ -97,13 +96,13 @@ class InlineExecutor:
         if running is not None:
             running.extension = seconds
 
-    def cancel(self, key: JobKey) -> None:
+    def cancel(self, key: Key) -> None:
         with self._lock:
             running = self._jobs.get(key)
         if running is not None:
             running.stop()
 
-    def adopt(self, left: Sequence[LeftJob]) -> list[JobKey]:
+    def adopt(self, left: Sequence[LeftJob]) -> list[Key]:
         """Take over nothing: a previous daemon's jobs died with its threads."""
         return [job.key for job in left]
 
@@ -132,7 +131,7 @@ class InlineExecutor:
     def close(self) -> None:
         """Nothing to release: the threads end with their jobs."""
 
-    def _run(self, job: AgentJob | EvaluationJob, running: _Job) -> None:
+    def _run(self, job: Job, running: _Job) -> None:
         """Run ``job`` to its end and apply its result, or tell core it is lost when the run itself fails."""
         results, key = self.host.results, running.key
         try:
@@ -140,15 +139,15 @@ class InlineExecutor:
                 if isinstance(job, AgentJob):
                     runtime = self.host.runtimes(job.runtime)
                     running.runtime = runtime
-                    report: AgentReport | EvaluationReport | None = run_agent(job, runtime, running, self.site, span)
+                    report: Report | None = run_agent(job, runtime, running, self.site, span)
                     running.steer = None  # the agent ended: a prompt from now on is undelivered
                 else:
-                    report = run_evaluation(job, running, self.site, span)
+                    report = kind_of(job).run(job, running, self.site, span)
             if report is not None:
                 with suppress(Settled):  # its row closed meanwhile: a stop
                     results.finished(job, report)
             if isinstance(job, AgentJob):
-                remove(job, self.site)
+                self.site.remove(job)
         except Exception as e:  # a fault of the executor: nothing must wait for this job forever
             with suppress(Settled):
                 results.lost(key, f'{type(e).__name__}: {e}')
@@ -160,7 +159,7 @@ class InlineExecutor:
 class _Job:
     """``Control`` for one job: how to stop it, and its start and session id."""
 
-    def __init__(self, executor: InlineExecutor, job: AgentJob | EvaluationJob) -> None:
+    def __init__(self, executor: InlineExecutor, job: Job) -> None:
         self._executor = executor
         self.job = job
         self.key = key_of(job)

@@ -75,11 +75,7 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
     VerdictRule,
 )
 from piloop.plugins.host import ContractBroken
-from piloop.plugins.vcs.contract import (
-    Conflicts,
-    RebaseVersion,
-    Repository,
-)
+from piloop.plugins.vcs.contract import Conflicts, Pin, Repository
 from piloop.text import metric
 
 
@@ -509,7 +505,7 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
 
     ``candidate`` kept against its own bar after the head moved on. So it is ``interesting`` (``Cause.MOVED``), and its
     reason ends with the result of the merge. The merge is a version made without a checkout (``Repository.merge``),
-    and kept (``RebaseVersion``). A new tree becomes a pending
+    and kept (``rebase/<candidate>``). A new tree becomes a pending
     candidate of the same run, with ``onto`` as its parent. A merge that conflicts files a seed on the track of its verdict to
     compose the two by hand when ``conflicts`` is ``Seed``, unless the campaign stopped. The seed is not pinned, so it runs from the head
     (``follow_up``). It supersedes the compose seeds of the run's earlier candidates that ``candidate`` contains
@@ -545,7 +541,7 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
         candidate.verdict_reason = f'{candidate.verdict_reason}; its merge onto the head conflicts in {paths}{filed}'
         rebased = Rebased(head=onto.id, conflicts=list(merged.paths))
     else:
-        repo.keep(merged.revision, RebaseVersion(campaign.name, candidate.id))
+        repo.keep(merged.revision, Pin(campaign.name, f'rebase/{candidate.id}'))
         found, created = resolve(
             s, candidate.campaign_id, merged, parent=onto, run_id=candidate.run_id, origin=Origin.RUN
         )

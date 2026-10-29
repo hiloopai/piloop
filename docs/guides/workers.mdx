@@ -19,7 +19,7 @@ provider = "workers"
 
 [plugins.executor.pools.serve]
 agents = 2
-evaluations = 1
+slots = { evaluation = 1 }
 max_load = 1.5      # the 1-minute load per CPU
 min_memory_gb = 4
 ```
@@ -30,20 +30,20 @@ and its slots count zero. The daemon launches an agent only into a free slot, an
 the daemon's next pass, and `piloop status` shows it with its reason:
 
 ```bash
-piloop limits set executor.pools.serve.evaluations=1 --reason "the GPU trains a model"
-piloop limits unset executor.pools.serve.evaluations
+piloop limits set executor.pools.serve.slots.evaluation=1 --reason "the GPU trains a model"
+piloop limits unset executor.pools.serve.slots.evaluation
 ```
 
 ```text
-executor.pools.serve.evaluations = 1: the daemon applies it at once
-executor.pools.serve.evaluations: the limit is gone
+executor.pools.serve.slots.evaluation = 1: the daemon applies it at once
+executor.pools.serve.slots.evaluation: the limit is gone
 ```
 
 `piloop worker list` shows each worker, and why it got no lease:
 
 ```text
- worker  pool   seen    load     memory   disk      agents  evaluations  no lease
- serve   serve  6s ago  78.1/32  60.8 GB  379.3 GB  0       0            slots
+ worker  pool   seen    load     memory   disk      agents  evaluation  no lease
+ serve   serve  6s ago  78.1/32  60.8 GB  379.3 GB  0       0           slots
 ```
 
 ## When a worker goes silent
@@ -67,7 +67,7 @@ Give the worker's [pool](#capacity) its slots in `config.toml`:
 ```toml
 [plugins.executor.pools.gpu]
 agents = 2
-evaluations = 1
+slots = { evaluation = 1 }
 ```
 
 Set `tls` in `[plugins.network]`: a certificate, `tls = { cert = "<cert.pem>", key = "<key.pem>" }`, or `"proxy"`
@@ -108,9 +108,9 @@ The worker's name is the token's name. It calls the server, and the server never
 your system does not trust, set `SSL_CERT_FILE`. On the server, `piloop worker list` shows it:
 
 ```text
- worker  pool   seen    load     memory    disk      agents  evaluations  no lease
- gpu1    gpu    6s ago  21.8/32  103.8 GB  816.4 GB  1       0            nothing
- serve   serve  6s ago  21.8/32  103.8 GB  816.4 GB  0       0            slots
+ worker  pool   seen    load     memory    disk      agents  evaluation  no lease
+ gpu1    gpu    6s ago  21.8/32  103.8 GB  816.4 GB  1       0           nothing
+ serve   serve  6s ago  21.8/32  103.8 GB  816.4 GB  0       0           slots
 ```
 
 The server refuses a worker with another piloop protocol, also after the server upgrades, an unknown pool, a revoked
@@ -134,7 +134,7 @@ url = "https://piloop.example.com:8443"
 
 [plugins.executor.pools.gpu]
 agents = 0
-evaluations = 1
+slots = { evaluation = 1 }
 runners = ["process"]
 
 [plugins.executor.pools.gpu.provisioner]

@@ -51,9 +51,12 @@ pytestmark = pytest.mark.e2e
 RELEASE = '0.3.1'
 RELEASE_HEAD = '0053'
 """The schema revision of core that ``RELEASE`` shipped. It had no other chain."""
-RENAMES = Renames(columns={'archives.idea_id': 'subject_id'})
-"""The renames since ``RELEASE`` that the upgrading guide documents: ``archives.idea_id`` (archive's 0002, which adds
-``subject_kind`` beside it). A rename of a later release goes here."""
+RENAMES = Renames(
+    columns={'archives.idea_id': 'subject_id', 'agent_sessions.run_id': 'subject_id', 'leases.evaluation_id': 'job_id'}
+)
+"""The renames since ``RELEASE`` that the upgrading guide documents: ``archives.idea_id`` (archive's 0002) and
+``agent_sessions.run_id`` (0070), each with ``subject_kind`` beside it, and ``leases.evaluation_id`` (0073), with the
+lease's ``kind`` and its ``runner`` beside it. A rename of a later release goes here."""
 CONFIG_REWRITES = (
     'roles.*',
     'status.*',

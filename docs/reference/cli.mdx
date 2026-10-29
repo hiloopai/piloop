@@ -147,11 +147,11 @@ piloop limits unset KEY
 ```
 
 Lists, sets or removes a **limit**: a value for a live key of a provider of the home, such as
-`executor.pools.serve.evaluations`, that wins over `config.toml` at once. The value is JSON, or
+`executor.pools.serve.slots.evaluation`, that wins over `config.toml` at once. The value is JSON, or
 else text. `piloop status` shows each live key with its source:
 
 ```text
-limit: executor.pools.serve.evaluations = 1  (limit by human: the GPU is busy)
+limit: executor.pools.serve.slots.evaluation = 1  (limit by human: the GPU is busy)
 ```
 
 See [Capacity](/guides/workers#capacity).

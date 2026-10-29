@@ -26,7 +26,7 @@ def limits_list() -> None:
 
 @app.command(name='set')
 def limits_set(
-    assignment: Annotated[str, cyclopts.Parameter(help='`KEY=VALUE`: `executor.pools.serve.evaluations=1`.')],
+    assignment: Annotated[str, cyclopts.Parameter(help='`KEY=VALUE`: `executor.pools.serve.slots.evaluation=1`.')],
     /,
     *,
     reason: Annotated[str, cyclopts.Parameter(help='Why: it shows next to the value.')],

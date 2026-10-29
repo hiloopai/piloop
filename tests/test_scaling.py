@@ -24,8 +24,9 @@ from piloop.net.tokens import Caller, Tokens
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, EvaluationJob
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
-from piloop.plugins.executor.contract import Capacity, EvaluationJob, RepoId, Source
+from piloop.plugins.executor.contract import Capacity, RepoId, Source
 from piloop.plugins.executor.kit import scaling
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.client import Local
@@ -75,11 +76,11 @@ def pools(platform: str, **policy: object) -> dict[str, Pool]:
     compute = {'provider': 'memory', 'platform': platform}
     gpu = {
         'agents': 0,
-        'evaluations': 1,
+        'slots': {'evaluation': 1},
         'runners': ['process'],
         'provisioner': {'max': 2, 'compute': compute} | policy,
     }
-    return {'serve': Pool(agents=0, evaluations=0), 'gpu': Pool.model_validate(gpu)}
+    return {'serve': Pool(agents=0, slots={EVALUATION: 0}), 'gpu': Pool.model_validate(gpu)}
 
 
 @dataclass
@@ -158,14 +159,14 @@ def test_a_provisioned_pool_counts_the_slots_of_its_max_workers_less_its_live_le
     db: Database, campaign: Campaign, platform: str, tmp_path: Path
 ) -> None:
     s = server(db, tmp_path / 'home', pools(platform))
-    assert s.leases.capacity() == Capacity(0, 2), 'no worker yet, and two can start'
+    assert s.leases.capacity() == Capacity(0, {EVALUATION: 2}), 'no worker yet, and two can start'
     waiting(db, campaign, tmp_path)
-    assert s.leases.capacity() == Capacity(0, 1), 'a queued lease takes a slot'
+    assert s.leases.capacity() == Capacity(0, {EVALUATION: 1}), 'a queued lease takes a slot'
     join(s.leases, 'gpu-1', ['process'], 'gpu')
     assert isinstance(Local(s.leases, 'gpu-1').acquire(uuid4().hex, HOST), Grant)
-    assert s.leases.capacity() == Capacity(0, 1), 'a live lease too, whether its worker counts or not'
+    assert s.leases.capacity() == Capacity(0, {EVALUATION: 1}), 'a live lease too, whether its worker counts or not'
     s.configure(pools(platform, max=0))
-    assert s.leases.capacity() == Capacity(0, 0)
+    assert s.leases.capacity() == Capacity(0, {EVALUATION: 0})
 
 
 def test_queued_leases_start_workers_up_to_max_each_with_a_credential_of_its_own(
@@ -194,7 +195,7 @@ def test_queued_leases_start_workers_up_to_max_each_with_a_credential_of_its_own
 def test_a_free_slot_of_any_worker_covers_a_queued_lease_of_its_runner(
     db: Database, campaign: Campaign, platform: str, tmp_path: Path
 ) -> None:
-    s = server(db, tmp_path / 'home', {**pools(platform, max=4), 'cpu': Pool(agents=0, evaluations=1)})
+    s = server(db, tmp_path / 'home', {**pools(platform, max=4), 'cpu': Pool(agents=0, slots={EVALUATION: 1})})
     join(s.leases, 'cpu1', ['process'], 'cpu')
     join(s.leases, 'cuda1', ['cuda'], 'cpu')
     waiting(db, campaign, tmp_path)
@@ -477,7 +478,7 @@ def test_a_start_that_fails_on_the_way_is_started_again_after_a_list_with_a_new_
 def test_a_pool_with_a_provisioner_names_its_runners_and_min_is_at_most_max(platform: str) -> None:
     compute = {'provider': 'memory', 'platform': platform}
     with pytest.raises(ValueError, match='runners'):
-        Pool.model_validate({'evaluations': 1, 'provisioner': {'max': 1, 'compute': compute}})
+        Pool.model_validate({'slots': {'evaluation': 1}, 'provisioner': {'max': 1, 'compute': compute}})
     never = {'runners': ['process'], 'provisioner': {'max': 1, 'orphan_exit_seconds': None, 'compute': compute}}
     assert Pool.model_validate(never).provisioner is not None
     with pytest.raises(ValueError, match='min = 2 is more than max = 1'):
@@ -494,7 +495,7 @@ def test_the_first_provisioned_pool_in_order_that_runs_a_lease_starts_its_worker
     found = pools(platform)
     gpu = found['gpu']
     tpu = gpu.model_copy(update={'runners': ['jax']})
-    big = gpu.model_copy(update={'evaluations': 2})
+    big = gpu.model_copy(update={'slots': {EVALUATION: 2}})
     s = server(db, tmp_path / 'home', {'serve': found['serve'], 'tpu': tpu, 'gpu': gpu, 'big': big})
     waiting(db, campaign, tmp_path)
     s.scaler.reconcile(utcnow())

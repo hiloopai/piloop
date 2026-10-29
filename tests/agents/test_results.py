@@ -33,6 +33,7 @@ from piloop.ids import AgentSessionId, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, EvaluationJob, EvaluationReport, Sample
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -42,13 +43,12 @@ from piloop.plugins.executor.contract import (
     AgentKey,
     AgentNotStarted,
     AgentReport,
-    EvaluationJob,
-    EvaluationKey,
-    EvaluationReport,
     HarnessSession,
+    Job,
+    JobKey,
     MissingBlobs,
     RepoId,
-    Sample,
+    Report,
     Settled,
     Source,
     Workspace,
@@ -91,7 +91,7 @@ def test_an_evaluation_that_left_the_queue_or_never_started_is_settled(
     with pytest.raises(Settled, match='is not running'):
         results.finished(job, report)  # it waits: no executor started it
     with pytest.raises(Settled, match='left the queue'):
-        results.lost(EvaluationKey(waiting + 1), 'gone')
+        results.lost(JobKey(EVALUATION, waiting + 1), 'gone')
 
 
 def test_an_evaluator_that_prints_metric_lines_gets_one_inbox_note(
@@ -320,7 +320,7 @@ def test_two_results_for_one_job_in_plain_sessions_close_its_row_once_and_measur
         known=['score'],
         max_evidence_bytes=0,
     )
-    reports: list[tuple[AgentJob | EvaluationJob, AgentReport | EvaluationReport]] = [
+    reports: list[tuple[Job, Report]] = [
         (agent, AgentFinished(process=AgentExit(ExitStatus.EXITED, 200, 0))),
         (measure, EvaluationReport(samples=[Sample(metrics={'score': 1.0}, seconds=1)])),
     ]

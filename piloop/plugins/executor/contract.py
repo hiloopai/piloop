@@ -1,10 +1,10 @@
 """The executor capability: how jobs reach the machines that run them, and how their results come back.
 
-A **job** is one agent session or one evaluation, described as data (``AgentJob``, ``EvaluationJob``): what to check
-out, what to run, what to bring back. Core decides what runs (the planner, the roles, the evaluation queue); the
-executor decides where and how, and keeps track of it. When a job starts, ends or is lost, the executor calls the core
-operations (``Results``), which change the campaign's rows. Like Airflow's executors (``LocalExecutor``,
-``CeleryExecutor``): core queues work and reads results, and the executor owns the workers.
+A **job** is one agent session, or one job of a kind that a package declares (``JobKind``), such as an evaluation,
+described as data (``Job``): what to check out, what to run, what to bring back. Core decides what runs (the planner,
+the roles, each kind's owner); the executor decides where and how, and keeps track of it. When a job starts, ends or is
+lost, the executor calls the core operations (``Results``), which change the campaign's rows. Like Airflow's executors
+(``LocalExecutor``, ``CeleryExecutor``): core queues work and reads results, and the executor owns the workers.
 
 Host tier: an executor runs processes. ``[plugins.executor] provider`` in ``config.toml`` selects one (``workers`` by
 default). The entry point names an ``ExecutorConfig`` class, whose fields are the other keys of the table, and the
@@ -16,14 +16,29 @@ and fencing tokens, checked inside the session in which it calls ``Results``. Wh
 protect it, is the executor's choice.
 """
 
+import json
+import subprocess
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Literal, NewType, Protocol, Self, get_args
+from types import MappingProxyType
+from typing import Annotated, ClassVar, Final, Literal, NewType, Protocol, Self
 
 from covalence import Cid
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    GetCoreSchemaHandler,
+    GetJsonSchemaHandler,
+    InstanceOf,
+    TypeAdapter,
+    model_validator,
+)
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema, core_schema
 from sqlalchemy.orm import Session
 
 from piloop import deprecated
@@ -31,14 +46,9 @@ from piloop.actor import Agent
 from piloop.api.contract import Revealed
 from piloop.db.models import AgentSession, EventModel
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CampaignId, CommentId, EnvName, Revision
+from piloop.ids import AgentSessionId, CampaignId, CommentId, EnvName, Ref, Revision, TargetRef
 from piloop.net.tokens import mint_agent
-from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
-from piloop.plugins.campaign_type.kit.evaluation.config import Rung
-from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
-from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
-from piloop.plugins.campaign_type.kit.runs.ids import RunId
+from piloop.otel import Span, Tracer
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.contribution import Contributes
 from piloop.plugins.harness.contract import HARNESSES, Harness, Usage
@@ -46,10 +56,10 @@ from piloop.plugins.host import Capability, One, Parameters, Scope, Slot
 from piloop.plugins.mcp_server.bridges import MCP_PROVIDERS
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer
 from piloop.plugins.network.contract import Network
-from piloop.plugins.runtime.contract import AgentExit, AgentStart, RuntimeFactory
+from piloop.plugins.runtime.contract import AgentExit, AgentStart, Handle, RuntimeFactory
 from piloop.plugins.secrets.contract import SecretsProvider, values
 from piloop.plugins.vcs.contract import VCS, Repository, Transfer, Unsaved, Vcs
-from piloop.proc import Channel
+from piloop.store.tree import Materialised
 
 
 def _relative(place: str) -> str:
@@ -141,7 +151,21 @@ class Resume(BaseModel):
     """The arguments that continue the session with the agent's first prompt, in place of ``AgentStart.args``."""
 
 
-class AgentJob(BaseModel):
+class Job(BaseModel):
+    """The description of a job: everything a worker needs, so it reads no campaign table. A kind adds its own fields.
+
+    ``kind`` names the job's kind: ``agent``, core's own, or a ``JobKind`` that a package declares.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str
+    artifact: Source
+    place: Place
+    """Its log directory under the home of the machine that runs it, with its worktree in it."""
+
+
+class AgentJob(Job):
     """The description of an agent's job: everything a worker needs, so it reads no campaign table.
 
     It names no path of the machine that made it. The worker makes the job's ``place`` under its own home: the log
@@ -155,8 +179,6 @@ class AgentJob(BaseModel):
     agent_session: AgentSessionId
     runtime: str
     """The runtime that starts the agent on the worker's host (``runtime`` in ``piloop.toml``)."""
-    artifact: Source
-    place: Place
     timeout: float
     """The seconds the agent may run, counted from its start, also across a restart of its worker. Its extensions add
     to it (``Executor.extend``)."""
@@ -175,9 +197,9 @@ class AgentJob(BaseModel):
     (``Harness.secrets``), and each variable of the ``servers``, the secret of its own name."""
     session_id: str | None = None
     """The session id the launcher made for the argv (``{session_id}``), or None when the runtime reports it."""
-    capture: RunId | None = None
-    """Bring the agent's work back, with what it left unsaved as a version recovered for this run
-    (``Repository.capture``). None for a sweep: nothing that it saves comes back."""
+    capture: Ref | None = None
+    """Bring the agent's work back, with what it left unsaved as a version recovered for this subject (``run#12``,
+    ``Repository.capture``). None for a sweep: nothing that it saves comes back."""
     resume: Resume | None = None
     """Continue this session instead of starting a new one. When the worker cannot write its file back, it starts the
     agent with ``spec`` and says why (``AgentFinished.unrestored``)."""
@@ -198,6 +220,15 @@ class AgentJob(BaseModel):
         named = (usage.get('tally') if isinstance(usage, dict) else None) or data.get('mcp')
         rest = {k: v for k, v in data.items() if k not in ('mcp', 'usage')}
         return {**rest, 'harness': {'provider': named}} if named is not None else rest
+
+    @model_validator(mode='before')
+    @classmethod
+    def _capture(cls, data: object) -> object:
+        """A job that a daemon of 0.4 or older queued captures for a run by its id: its agent may still run."""
+        if not isinstance(data, dict) or not isinstance(run := data.get('capture'), int):
+            return data
+        deprecated.until('0.5.0', 'a job of 0.4 captures for a run id: delete AgentJob._capture')
+        return {**data, 'capture': f'run#{run}'}
 
     @model_validator(mode='before')
     @classmethod
@@ -227,78 +258,108 @@ def job_secrets(s: Session, secrets: SecretsProvider, job: AgentJob) -> JobSecre
     return JobSecrets(values=found, token=mint_agent(s, agent))
 
 
-class Bar(BaseModel):
-    """The bar of a paired evaluation: the candidate that the measured one must beat, and its tree."""
-
-    model_config = ConfigDict(frozen=True)
-
-    candidate: CandidateId
-    artifact: Source
+AGENT: Final = 'agent'
+"""The kind of an agent's job (``AgentJob``): core's own, which no ``JobKind`` declares."""
 
 
-class EvaluationJob(BaseModel):
-    """The description of an evaluation's job: the evaluator's runner and its arguments, on the candidate's tree.
+class Report(BaseModel):
+    """How a job ended, as its executor saw it: of the kind of its job. Each kind adds its own fields."""
 
-    It runs the evaluator ``repeats`` times on the candidate. With a ``bar``, it is a **paired evaluation**: each run of
-    the candidate has a run of the bar next to it, in the order candidate, bar, bar, candidate, candidate, bar. So a
-    load that changes slowly hits both sides alike.
+    kind: str
+    files: dict[str, BlobAddress] = Field(default_factory=dict)
+    """Its log directory's files by relative path: core puts them in the job's place under its own home."""
+
+    def blobs(self) -> list[Cid]:
+        """Every blob that it names: what the CAS holds before core applies it."""
+        return list(self.files.values())
+
+
+class Control(Protocol):
+    """What running one job asks of the executor that runs it."""
+
+    def begin(self) -> bool:
+        """The agent is about to start. False when the executor stops: start nothing."""
+        ...
+
+    def started(self, handle: Handle, session_id: str | None) -> bool:
+        """The start went through: record it. False when the job is no longer the executor's: it is killed."""
+        ...
+
+    def running(self, kill: Callable[[], None] | None) -> None:
+        """The start is over: this is how to stop the job now. None when there is nothing to kill (any more)."""
+        ...
+
+    def process(self, proc: subprocess.Popen[bytes]) -> bool:
+        """An evaluator started. Return False to kill it at once: a stop, or a job that is no longer the executor's."""
+        ...
+
+    def session(self, session_id: str) -> None:
+        """The runtime reported the agent's session id."""
+        ...
+
+    def saved(self, session_file: Cid) -> None:
+        """A new snapshot of the agent's session file is in the CAS (``SessionFile``)."""
+        ...
+
+    def asked(self) -> bool:
+        """Whether the executor asked the job to stop: an evaluator that it killed is not run again."""
+        ...
+
+    def stopping(self) -> bool:
+        """Whether the executor stops: an evaluation runs no more of its repeats then."""
+        ...
+
+    def handing_over(self) -> bool:
+        """Whether the daemon restarts in place: the agent keeps running, with its worktree, for the next one."""
+        ...
+
+    def queued(self) -> list[list[Prompt]]:
+        """The prompts that the agent's runtime took, one list for each ``Runtime.prompt``, oldest first."""
+        ...
+
+    def secrets(self) -> JobSecrets:
+        """The values of the agent's secrets (``AgentJob.secrets``) that the home has, and its token, asked at its start."""
+        ...
+
+    def extended(self) -> float:
+        """The seconds that the agent may run past its job's ``timeout``: its extensions in all (``Executor.extend``)."""
+        ...
+
+
+class Site(Protocol):
+    """The machine that runs a job, as its kind's ``JobKind.run`` sees it: the job's place on it, and its checkout.
+
+    The executor's kit makes one for the machine of the daemon and for each worker (``local_site``, ``remote_site``).
     """
 
-    model_config = ConfigDict(frozen=True)
+    def log_dir(self, job: Job) -> Path:
+        """The job's place on this machine: its log files, and its worktree."""
+        ...
 
-    kind: Literal['evaluation'] = 'evaluation'
-    evaluation: int
-    candidate: CandidateId
-    run: RunId | None = None
-    """The run whose version it measures, named on the measurement's event. None for a measurement on request."""
-    runner: str
-    """The evaluator runner (``evaluators.runner``). A worker takes only jobs of the runners that it has."""
-    artifact: Source
-    place: Place
-    """Its log directory under the worker's home: each run of the evaluator has a directory of its own in it."""
-    command: list[str]
-    timeout: float
-    required: list[str]
-    """The metrics that the evaluate command must report: the primaries and the guardrails."""
-    known: list[str]
-    """Every metric that it may report: those of ``[[metrics]]``. A result with another is refused."""
-    max_evidence_bytes: int = Field(ge=0)
-    """The evidence files that one run may name, all together (``[evaluation] max_evidence_mb``)."""
-    ladder: list[Rung] = []
-    """The rungs that each run of the evaluator on the candidate climbs before the full panel (``[[ladder]]``)."""
-    gate: Gate | None = None
-    """Set: the first run on the candidate stops at the first rung whose ``stop`` holds. None: every run climbs every
-    rung."""
-    stop_grace: float = Field(default=0, ge=0)
-    """The seconds between the SIGTERM and the SIGKILL that end an evaluate command at a stop
-    (``[evaluation] stop_grace_seconds``)."""
-    bar: Bar | None = None
-    """The bar to run next to the candidate. None: the candidate alone."""
-    repeats: int = Field(default=1, ge=1)
-    """How many times the evaluator runs on the candidate, and on the bar."""
+    def cwd(self, job: Job) -> Path:
+        """Where the job runs: its checkout."""
+        ...
 
+    def checkout(self, job: Job) -> Materialised:
+        """Make the job's checkout of its artifact at ``cwd``, with its links."""
+        ...
 
-type Job = Annotated[AgentJob | EvaluationJob, Field(discriminator='kind')]
-JOB: TypeAdapter[AgentJob | EvaluationJob] = TypeAdapter(Job)
-KINDS = frozenset(m.model_fields['kind'].default for m in get_args(get_args(Job.__value__)[0]))
-"""The kinds of job that executors run: ``agent`` and ``evaluation``."""
+    def remove(self, job: Job) -> None:
+        """Remove the job's checkout, if it made one."""
+        ...
+
+    def files(self, job: Job) -> dict[str, Cid]:
+        """Put the files of the job's log directory, its checkout aside, into the CAS, and return them by path."""
+        ...
 
 
 @dataclass(frozen=True)
-class JobKind:
-    """A kind of job that a package declares: the data of its job and of its report."""
+class Applying:
+    """What a job kind's ``apply`` reads of the daemon that applies a report."""
 
-    job: type[BaseModel]
-    report: type[BaseModel]
-
-
-def _run_already(name: str, _kind: JobKind) -> str | None:
-    return f'piloop runs jobs of the kind {name!r} already' if name in KINDS else None
-
-
-JOB_KINDS: Slot[JobKind] = Slot('job_kinds', TypeAdapter(JobKind), 'job kind', _run_already)
-"""The kinds of job that packages add, by name. The daemon checks them when it starts, and executors run only
-``KINDS``."""
+    home: Path
+    stopping: bool
+    """The daemon stops: what its job measured may be cut short, and the next daemon asks again."""
 
 
 class HarnessSession(BaseModel):
@@ -312,7 +373,7 @@ class HarnessSession(BaseModel):
     """The latest snapshot of its session file in the CAS."""
 
 
-class AgentFinished(BaseModel):
+class AgentFinished(Report):
     """An agent's process ended, as its executor saw it. Core decides the rest (``Results.finished``)."""
 
     kind: Literal['agent_finished'] = 'agent_finished'
@@ -330,8 +391,6 @@ class AgentFinished(BaseModel):
     """Its work: its versions, when the job asked for them back (``AgentJob.capture``) and there are some."""
     unsaved: Unsaved | None = None
     """What it left unsaved, when the job asked for its work back and the save of it failed."""
-    files: dict[str, BlobAddress] = Field(default_factory=dict)
-    """Its log directory's files by relative path: core puts them in the job's place under its own home."""
     read: list[CommentId] = Field(default_factory=list)
     """The prompts that the agent read: it took them from its runtime's queue."""
     unread: list[CommentId] = Field(default_factory=list)
@@ -348,61 +407,136 @@ class AgentFinished(BaseModel):
         return [*self.files.values(), *workspace, *work, *unsaved, *session]
 
 
-class AgentNotStarted(BaseModel):
+class AgentNotStarted(Report):
     """An agent's job did not start, so no process ran: its worktree, its secrets or its start failed, or a stop came."""
 
     kind: Literal['agent_not_started'] = 'agent_not_started'
     reason: str
     seconds: float = 0
     """How long it tried."""
-    files: dict[str, BlobAddress] = Field(default_factory=dict)
-    """Its log directory's files by relative path (``AgentFinished.files``): a failed start's screen, say."""
-
-    def blobs(self) -> list[Cid]:
-        """Every blob that it names: what the CAS holds before core applies it."""
-        return list(self.files.values())
 
 
 type AgentReport = AgentFinished | AgentNotStarted
 """How an agent's job ended, as its executor saw it."""
 
 
-class Sample(BaseModel):
-    """One run of the evaluator on one tree, which the control plane records as one measurement."""
+class JobKind(ABC):
+    """A kind of job besides an agent's, which a package declares in ``piloop.job_kinds``: ``<name> = <module>:<obj>``.
 
-    metrics: dict[str, float]
-    seconds: float
-    error: str | None = None
-    units: dict[str, dict[str, float]] = Field(default_factory=dict)
-    channel: Channel = Channel.RESULT
-    """How the evaluate command reported it: a result, or ``METRIC`` lines until 0.5.0."""
-    rung: RungName | None = None
-    """The rung of the ladder that it measured. None for the full panel."""
-    stopped: str | None = None
-    """Why the climb stopped at ``rung``. None when it went on."""
-
-
-class EvaluationReport(BaseModel):
-    """What an evaluation measured, in the order of its runs: each run's rungs, then its full panel.
-
-    It stops at the first run that fails or stops at a rung.
+    Temporal's activity type. A worker runs the job (``run``) and the daemon applies its report under the lease's fence
+    (``apply``), so the executor and its workers know nothing of what the job does. The ``evaluation`` kind measures a
+    candidate.
     """
 
-    kind: Literal['evaluation'] = 'evaluation'
-    samples: list[Sample] = Field(min_length=1)
-    """The candidate's samples. The first one ran first."""
-    bar_samples: list[Sample] = Field(default_factory=list)
-    """The bar's samples of a paired evaluation: the i-th ran next to the i-th of ``samples``."""
-    files: dict[str, BlobAddress] = Field(default_factory=dict)
-    """Its log directory's files by relative path (``AgentFinished.files``)."""
+    JOB: ClassVar[type[Job]]
+    """Its description, whose ``kind`` is a ``Literal`` of the entry point's name."""
+    REPORT: ClassVar[type[Report]]
+    """Its report, whose ``kind`` is a ``Literal`` of its own."""
+    SLOTS: ClassVar[int] = 1
+    """How many of its jobs one worker runs at the same time when its pool names none
+    (``[plugins.executor.pools.<p>] slots``)."""
 
-    def blobs(self) -> list[Cid]:
-        """Every blob that it names: what the CAS holds before core applies it."""
-        return list(self.files.values())
+    @abstractmethod
+    def id(self, job: Job) -> int:
+        """The row of ``job``, which its lease names (``leases.job_id``): one job of the kind has one."""
+
+    @abstractmethod
+    def runner(self, job: Job) -> str:
+        """What a worker must have to run ``job``: one of its ``runners``."""
+
+    @abstractmethod
+    def runners(self) -> list[str]:
+        """What this machine has to run the kind's jobs: the worker says so when it registers."""
+
+    @abstractmethod
+    def target(self, job: Job) -> TargetRef:
+        """The row that the events of ``job``'s lease go on."""
+
+    @abstractmethod
+    def run(self, job: Job, control: Control, site: Site, span: Span) -> Report:
+        """Run ``job`` on this machine, and return its report. On a worker: the job's files are under ``site``."""
+
+    @abstractmethod
+    def apply(self, s: Session, job: Job, report: Report, daemon: Applying) -> None:
+        """Apply ``report`` in the transaction of the fence. Raises ``Settled`` when ``job``'s row is settled already."""
+
+    @abstractmethod
+    def lost(self, s: Session, job_id: int) -> None:
+        """Nothing came back from the job of row ``job_id``: it waits again. Raises ``Settled`` when it is settled."""
+
+    @abstractmethod
+    def waiting(self, s: Session, runners: Sequence[str]) -> bool:
+        """Whether a job of the kind that a worker with ``runners`` could run waits in core for a slot, with no lease."""
 
 
-type Report = Annotated[AgentFinished | AgentNotStarted | EvaluationReport, Field(discriminator='kind')]
-REPORT: TypeAdapter[AgentReport | EvaluationReport] = TypeAdapter(Report)
+def _run_already(name: str, kind: JobKind) -> str | None:
+    if name == AGENT:
+        return f'piloop runs jobs of the kind {name!r} already'
+    if (declared := kind.JOB.model_fields['kind'].default) != name:
+        return f'its job is of the kind {declared!r}, not {name!r}'
+    return None
+
+
+JOB_KINDS: Slot[JobKind] = Slot('job_kinds', TypeAdapter(InstanceOf[JobKind]), 'job kind', _run_already)
+"""The kinds of job that packages add, by name. The daemon checks them when it starts."""
+
+
+def job_kinds() -> dict[str, JobKind]:
+    """Every kind of job besides an agent's, by name, in the order of their entry points."""
+    return JOB_KINDS.once()
+
+
+def kind_of(job: Job) -> JobKind:
+    """The ``JobKind`` of ``job``, which is not an agent's. Raises ``KeyError`` for a kind that no package declares."""
+    return job_kinds()[job.kind]
+
+
+@dataclass(frozen=True)
+class ByKind[M: BaseModel]:
+    """``Annotated[Job, JOBS]`` and ``Annotated[Report, REPORTS]``: a model of the kind that its ``kind`` names.
+
+    The models are an agent's, then each ``JobKind``'s, read when a value is validated: a kind that a package declares
+    validates with no change here, as a provider's table does (``Capability.entry``).
+    """
+
+    own: tuple[type[M], ...]
+    side: Callable[[JobKind], type[M]]
+
+    def models(self) -> dict[str, type[M]]:
+        """Each model by the value of its ``kind``."""
+        found = [*self.own, *(self.side(kind) for kind in job_kinds().values())]
+        return {m.model_fields['kind'].default: m for m in found}
+
+    def validate(self, value: object) -> M:
+        """``value`` as the model of its kind: a model, a dict, or JSON. Raises ``ValueError`` for an unknown kind."""
+        data = json.loads(value) if isinstance(value, str | bytes) else value
+        if isinstance(data, BaseModel):
+            data = data.model_dump(mode='json')
+        kind = data.get('kind') if isinstance(data, dict) else None
+        model = self.models().get(kind) if isinstance(kind, str) else None
+        if model is None:
+            raise ValueError(f'no installed job kind has the kind {kind!r}')
+        return model.model_validate(data)
+
+    def __get_pydantic_core_schema__(self, source: type[object], handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_plain_validator_function(
+            self.validate, serialization=core_schema.plain_serializer_function_ser_schema(_dumped, info_arg=True)
+        )
+
+    def __get_pydantic_json_schema__(self, schema: CoreSchema, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
+        return {'type': 'object'}
+
+
+def _dumped(model: BaseModel, info: core_schema.SerializationInfo) -> dict[str, object]:
+    return model.model_dump(mode=info.mode)
+
+
+JOBS: ByKind[Job] = ByKind((AgentJob,), lambda kind: kind.JOB)
+REPORTS: ByKind[Report] = ByKind((AgentFinished, AgentNotStarted), lambda kind: kind.REPORT)
+JOB: TypeAdapter[Job] = TypeAdapter(Annotated[Job, JOBS])
+"""A job's description in the CAS, of any installed kind."""
+REPORT: TypeAdapter[Report] = TypeAdapter(Annotated[Report, REPORTS])
+"""A report on the wire, of any installed kind."""
 
 
 @dataclass(frozen=True)
@@ -413,25 +547,33 @@ class AgentKey:
 
 
 @dataclass(frozen=True)
-class EvaluationKey:
-    """The key of an evaluation's job: its row of the evaluation queue (``evaluations``)."""
+class JobKey:
+    """The key of a job of a ``JobKind``: its kind, and its row (``JobKind.id``)."""
 
-    evaluation: int
-
-
-type JobKey = AgentKey | EvaluationKey
+    kind: str
+    id: int
 
 
-def key_of(job: AgentJob | EvaluationJob) -> JobKey:
+type Key = AgentKey | JobKey
+"""The key of any job."""
+
+
+@deprecated.until('0.5.0', "EvaluationKey(n) of 0.3.1 is JobKey('evaluation', n): delete EvaluationKey")
+def EvaluationKey(evaluation: int) -> JobKey:
+    """The key of an evaluation's job, as 0.3.1 named it: ``JobKey('evaluation', evaluation)``."""
+    return JobKey('evaluation', evaluation)
+
+
+def key_of(job: Job) -> Key:
     """Return the key of ``job``."""
-    return AgentKey(job.agent_session) if isinstance(job, AgentJob) else EvaluationKey(job.evaluation)
+    return AgentKey(job.agent_session) if isinstance(job, AgentJob) else JobKey(job.kind, kind_of(job).id(job))
 
 
 @dataclass(frozen=True)
 class LeftJob:
     """A job that a previous daemon process left in flight, for ``Executor.adopt``: its key. Its executor finds it."""
 
-    key: JobKey
+    key: Key
 
 
 @dataclass(frozen=True)
@@ -482,19 +624,17 @@ class Results(Protocol):
         """
         ...
 
-    def finished(
-        self, job: AgentJob | EvaluationJob, report: AgentReport | EvaluationReport, *, guard: Guard | None = None
-    ) -> None:
-        """Apply the result of a job that ended: close the agent's row, or record the measurement. Raises ``Settled``.
+    def finished(self, job: Job, report: Report, *, guard: Guard | None = None) -> None:
+        """Apply the result of a job that ended: close the agent's row, or its kind's ``apply``. Raises ``Settled``.
 
         ``report`` is of the job's kind.
         """
         ...
 
-    def lost(self, key: JobKey, reason: str, *, guard: Guard | None = None) -> None:
+    def lost(self, key: Key, reason: str, *, guard: Guard | None = None) -> None:
         """Nothing came back from a job. Raises ``Settled``.
 
-        An agent's run ends ``worker_lost``, and an evaluation waits again for a slot of the queue.
+        An agent's run ends ``worker_lost``, and a job of another kind waits again (``JobKind.lost``).
         """
         ...
 
@@ -532,12 +672,33 @@ class Host:
     """The home's secrets: an agent's job gets the values of its ``AgentJob.secrets`` at its start (``values``)."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Capacity:
     """How many more jobs of each kind an executor can take now: its free slots. None: no bound."""
 
     agents: int | None
-    evaluations: int | None
+    slots: Mapping[str, int | None]
+    """The free slots of each ``JobKind`` by name. A kind that it does not name has none."""
+
+    def __init__(self, agents: int | None, slots: Mapping[str, int | None] | None = None, **old: int | None) -> None:
+        found = dict(slots or {})
+        if unknown := sorted(set(old) - {'evaluations'}):
+            raise TypeError(f'Capacity takes agents and slots, not {", ".join(unknown)}')
+        if 'evaluations' in old:
+            deprecated.until('0.5.0', "Capacity(evaluations=n) of 0.3.1 is Capacity(slots={'evaluation': n})")
+            found.setdefault('evaluation', old['evaluations'])
+        object.__setattr__(self, 'agents', agents)
+        object.__setattr__(self, 'slots', MappingProxyType(found))
+
+    def free(self, kind: str) -> int | None:
+        """The free slots of jobs of ``kind``: ``AGENT``, or a ``JobKind``'s name. None: no bound."""
+        return self.agents if kind == AGENT else self.slots.get(kind, 0)
+
+    @property
+    def evaluations(self) -> int | None:
+        """The free slots of evaluations, as 0.3.1 named them."""
+        deprecated.until('0.5.0', "Capacity.evaluations of 0.3.1 is Capacity.free('evaluation')")
+        return self.free('evaluation')
 
 
 class Executor[C: ExecutorConfig](Contributes, Protocol):
@@ -552,8 +713,8 @@ class Executor[C: ExecutorConfig](Contributes, Protocol):
     def capacity(self) -> Capacity:
         """How many more jobs of each kind it can take now: its free slots, less the jobs it has and has not started.
 
-        Core submits no more than that, in its own order: it launches agents across campaigns, and evaluations in the
-        order of the evaluation queue. The order and the fairness are not the executor's: the home's launch policy picks
+        Core submits no more than that, in its own order: it launches agents across campaigns, and the jobs of each other
+        kind in its owner's order (evaluations: the evaluation queue's). The order and the fairness are not the executor's: the home's launch policy picks
         the campaign of each agent slot (``LAUNCH_POLICIES``).
         """
         ...
@@ -569,7 +730,7 @@ class Executor[C: ExecutorConfig](Contributes, Protocol):
         """Take ``config``, the one that opened it with the live limits applied. The daemon calls it when one changes."""
         ...
 
-    def submit(self, job: AgentJob | EvaluationJob) -> None:
+    def submit(self, job: Job) -> None:
         """Run ``job``, now or when a slot is free. Every job ends with ``Results.finished`` or ``Results.lost``."""
         ...
 
@@ -588,14 +749,14 @@ class Executor[C: ExecutorConfig](Contributes, Protocol):
         """
         ...
 
-    def cancel(self, key: JobKey) -> None:
+    def cancel(self, key: Key) -> None:
         """Stop a job: a kill or a cancel. It still reports how it ended. Called again, it tries again."""
         ...
 
-    def adopt(self, left: Sequence[LeftJob]) -> list[JobKey]:
+    def adopt(self, left: Sequence[LeftJob]) -> list[Key]:
         """Take over the jobs that a previous daemon process left, and return the keys of those it cannot.
 
-        Core fails the rows of an agent that it cannot adopt, and asks again for an evaluation.
+        Core fails the rows of an agent that it cannot adopt, and asks again for a job of another kind.
         """
         ...
 

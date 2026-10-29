@@ -999,7 +999,7 @@ def test_worker_list_shows_each_worker_its_sample_its_jobs_and_why_it_got_no_lea
         'memory',
         'disk',
         'agents',
-        'evaluations',
+        'evaluation',
         'no',
         'lease',
     ]
@@ -1038,21 +1038,21 @@ def test_limits_set_a_live_key_that_status_shows_with_its_source_and_unset_remov
     run_cli(['init', str(campaign_path)])
     out()
     run_cli(['limits'])
-    assert 'executor.pools.serve.evaluations = 2  (default)' in out().splitlines()
-    run_cli(['limits', 'set', 'executor.pools.serve.evaluations=1', '--reason', 'the GPU is busy'])
-    assert out().strip() == 'executor.pools.serve.evaluations = 1: the daemon applies it at once'
+    assert 'executor.pools.serve.slots.evaluation = 2  (default)' in out().splitlines()
+    run_cli(['limits', 'set', 'executor.pools.serve.slots.evaluation=1', '--reason', 'the GPU is busy'])
+    assert out().strip() == 'executor.pools.serve.slots.evaluation = 1: the daemon applies it at once'
     with pytest.raises(SystemExit, match='executor.renew_seconds is not a live key'):
         run_cli(['limits', 'set', 'executor.renew_seconds=5', '--reason', 'r'])
     with pytest.raises(SystemExit, match='write KEY=VALUE'):
-        run_cli(['limits', 'set', 'executor.pools.serve.evaluations', '--reason', 'r'])
+        run_cli(['limits', 'set', 'executor.pools.serve.slots.evaluation', '--reason', 'r'])
     run_cli(['status'])
-    assert 'limit: executor.pools.serve.evaluations = 1  (limit by human: the GPU is busy)' in out().splitlines()
+    assert 'limit: executor.pools.serve.slots.evaluation = 1  (limit by human: the GPU is busy)' in out().splitlines()
     with pytest.raises(SystemExit, match=r"max_load = 'high': Input should be a valid number"):
         run_cli(['limits', 'set', 'executor.pools.serve.max_load=high', '--reason', 'not JSON: the text, refused'])
-    run_cli(['limits', 'unset', 'executor.pools.serve.evaluations'])
-    assert out().strip() == 'executor.pools.serve.evaluations: the limit is gone'
+    run_cli(['limits', 'unset', 'executor.pools.serve.slots.evaluation'])
+    assert out().strip() == 'executor.pools.serve.slots.evaluation: the limit is gone'
     with pytest.raises(SystemExit, match='has no limit'):
-        run_cli(['limits', 'unset', 'executor.pools.serve.evaluations'])
+        run_cli(['limits', 'unset', 'executor.pools.serve.slots.evaluation'])
 
 
 @pytest.mark.usefixtures('api')

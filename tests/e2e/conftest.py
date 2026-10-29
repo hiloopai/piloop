@@ -73,7 +73,7 @@ def distributed(home_config: Toml | None) -> dict[str, object]:
     executor = plugins.get('executor', {}) if isinstance(plugins, dict) else {}
     pools = executor.get('pools', {}) if isinstance(executor, dict) else {}
     serve = pools.get('serve', {}) if isinstance(pools, dict) else {}
-    nothing = {'agents': 0, 'evaluations': 0}
+    nothing = {'agents': 0, 'slots': {'evaluation': 0}}
     return merged(
         home_config or {},
         {'plugins': {'executor': {'provider': 'workers', 'pools': {'serve': nothing, ELSEWHERE: serve}}}},

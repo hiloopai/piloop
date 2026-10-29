@@ -157,9 +157,10 @@ CREATE INDEX ix_events_kind ON events (kind, target_kind, target_id, id);
 CREATE INDEX ix_events_target ON events (target_kind, target_id, id);
 CREATE TABLE leases (
 	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-	kind VARCHAR(16) NOT NULL,
+	kind VARCHAR NOT NULL,
 	agent_session_id INTEGER,
-	evaluation_id INTEGER,
+	job_id INTEGER,
+	runner VARCHAR,
 	state VARCHAR(16) DEFAULT 'queued' NOT NULL,
 	worker VARCHAR,
 	job_cid VARCHAR NOT NULL,
@@ -174,16 +175,15 @@ CREATE TABLE leases (
 	acquire_request VARCHAR,
 	report_request VARCHAR,
 	receipt JSON DEFAULT '{}' NOT NULL,
-	CONSTRAINT "leases.a lease has the job of its kind" CHECK ((kind = 'agent') = (agent_session_id IS NOT NULL) AND (kind = 'evaluation') = (evaluation_id IS NOT NULL)),
+	CONSTRAINT "leases.a lease has the job of its kind" CHECK ((kind = 'agent') = (agent_session_id IS NOT NULL) AND (kind = 'agent') = (job_id IS NULL)),
 	CONSTRAINT "leases.worker must be a text value" CHECK (typeof(worker) IN ('text', 'null')),
 	CONSTRAINT "leases.report_request must be a text value" CHECK (typeof(report_request) IN ('text', 'null')),
-	CONSTRAINT leasekind CHECK (kind IN ('agent', 'evaluation')),
 	FOREIGN KEY(agent_session_id) REFERENCES agent_sessions (id) ON DELETE CASCADE,
 	CONSTRAINT leasestate CHECK (state IN ('queued', 'acquired', 'running', 'reported', 'expired', 'cancelled'))
 );
 CREATE UNIQUE INDEX ix_leases_acquire_request ON leases (acquire_request);
 CREATE INDEX ix_leases_agent_session ON leases (agent_session_id);
-CREATE INDEX ix_leases_evaluation ON leases (evaluation_id);
+CREATE INDEX ix_leases_job ON leases (kind, job_id);
 CREATE INDEX ix_leases_state ON leases (state);
 CREATE VIRTUAL TABLE comments_fts USING fts5(body, content='comments', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2');
 ```

@@ -29,13 +29,7 @@ from piloop.ids import AgentSessionId, CommentId, CommentKind, EnvName, Ref, Rol
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import measure as ledger
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId
-from piloop.plugins.campaign_type.kit.evaluation.measure import save_units
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.executor.contract import (
@@ -44,22 +38,23 @@ from piloop.plugins.executor.contract import (
     AgentKey,
     AgentNotStarted,
     AgentReport,
-    EvaluationJob,
-    EvaluationKey,
-    EvaluationReport,
+    Applying,
     Guard,
     HarnessSession,
+    Job,
     JobKey,
+    Key,
     MissingBlobs,
-    Sample,
+    Report,
     Settled,
     Workspace,
+    job_kinds,
+    kind_of,
 )
 from piloop.plugins.runtime.contract import AgentExit, ExitStatus
 from piloop.plugins.secrets.contract import SECRETS, SecretsProvider, hidden, values
 from piloop.plugins.vcs.contract import Transfer
-from piloop.proc import Channel
-from piloop.settings import TMP_DIR, UNITS_DIR, AgentSettings
+from piloop.settings import TMP_DIR, AgentSettings
 from piloop.store.tree import Manifest, Staged, merge, stage, write_files
 
 
@@ -422,7 +417,7 @@ def explained(process: AgentExit, output: str, found: Mapping[EnvName, SecretStr
 
 
 class CampaignResults:
-    """``Results``: what an agent's or an evaluation's end changes in the campaign's rows.
+    """``Results``: what the end of an agent's job, or of another kind's (``JobKind.apply``), changes in the rows.
 
     A job's files come back in ``cas``, and go into its place under ``home``, where the readers of logs look.
     """
@@ -442,10 +437,9 @@ class CampaignResults:
         self._db = db
         self._tracer = tracer
         self._home = home
-        self._units_dir = home / UNITS_DIR
         self._cas = cas
         self._stopping = stopping
-        """Whether the daemon stops: a measurement is not recorded then (the next daemon measures it again). An agent's
+        """Whether the daemon stops, which a job kind's ``apply`` reads (an evaluation records nothing then). An agent's
         stop is on its row instead (``stopped_by_daemon``), for the daemon that reads its report after a restart."""
         self._secrets = secrets if secrets is not None else SECRETS.selected({})
         self._exit_output_chars = exit_output_chars
@@ -491,9 +485,7 @@ class CampaignResults:
 
         self._apply(guard, change)
 
-    def finished(
-        self, job: AgentJob | EvaluationJob, report: AgentReport | EvaluationReport, *, guard: Guard | None = None
-    ) -> None:
+    def finished(self, job: Job, report: Report, *, guard: Guard | None = None) -> None:
         """Apply the report once the CAS holds every blob that it names, else raise ``MissingBlobs``.
 
         Its files go into the job's place in the transaction that applies it: what reads the row closed finds them.
@@ -510,13 +502,12 @@ class CampaignResults:
 
             def change(s: Session) -> None:
                 if isinstance(job, AgentJob):
-                    assert isinstance(report, AgentFinished | AgentNotStarted)
+                    assert isinstance(report, AgentFinished | AgentNotStarted)  # a report is of its job's kind
                     self._agent(s, job, report, output)
                     if workspace is not None and base is not None:
                         self._workspace(s, job, workspace, base, staged, changed)
                 else:
-                    assert isinstance(report, EvaluationReport)
-                    self._measured(s, job, report)
+                    kind_of(job).apply(s, job, report, Applying(self._home, self._stopping()))
                 write_files(self._cas, report.files, self._home / job.place)
 
             self._apply(guard, change)
@@ -528,13 +519,10 @@ class CampaignResults:
                     'comment.undelivered', comment=comment, agent_session=job.agent_session, error=UNREAD
                 )
 
-    def lost(self, key: JobKey, reason: str, *, guard: Guard | None = None) -> None:
+    def lost(self, key: Key, reason: str, *, guard: Guard | None = None) -> None:
         def change(s: Session) -> None:
-            if isinstance(key, EvaluationKey):
-                evaluation = s.get(Evaluation, key.evaluation)
-                if evaluation is None:
-                    raise Settled(f'evaluation#{key.evaluation} left the queue')
-                evaluation.started_at = None
+            if isinstance(key, JobKey):
+                job_kinds()[key.kind].lost(s, key.id)
                 return
             w = _open(s, key)
             w.state, w.ended_at, w.error = AgentSessionState.KILLED, utcnow(), reason
@@ -551,7 +539,7 @@ class CampaignResults:
         self._apply(None, lambda s: _record(s, key.agent_session, outcome))
         self._tracer.event(outcome.kind, comment=prompt, agent_session=key.agent_session, error=error)
 
-    def _last_output(self, report: AgentReport | EvaluationReport) -> str | None:
+    def _last_output(self, report: Report) -> str | None:
         """The transcript of an agent that exited non-zero or within ``startup_seconds`` (``[agents]``), from the CAS, or None.
 
         Read it before the write lock. Whether an early end did any work is known only in the transaction.
@@ -684,36 +672,6 @@ class CampaignResults:
         session_finished(s, w)
         _ended(s, w.id, DaemonStopped(work))
 
-    def _measured(self, s: Session, job: EvaluationJob, report: EvaluationReport) -> None:
-        """Record each sample of an evaluation as one measurement, and take the evaluation out of the queue.
-
-        A sample of the full panel of the candidate names the bar's that ran next to it (``Measurement.pair``): the i-th
-        of one side with the i-th of the other. A rung's sample has no pair.
-
-        A cancelled evaluation records nothing: ``queue.cancel`` recorded its crash. Nor does one that ends while the
-        daemon stops: its evaluator was killed, and the next daemon measures it again.
-        """
-        evaluation = s.get(Evaluation, job.evaluation)
-        if evaluation is None or evaluation.started_at is None:
-            raise Settled(f'evaluation#{job.evaluation} is not running')
-        s.delete(evaluation)
-        if self._stopping() or evaluation.cancelled_by is not None:
-            return
-        evaluator_id = evaluation.evaluator_id
-        bar = job.bar
-        pairs: list[MeasurementId] = []
-        for b in report.bar_samples:
-            assert bar is not None  # a bar's samples come only from a paired evaluation
-            measurement = record(s, self._units_dir, None, bar.candidate, evaluator_id, b)
-            if b.rung is None:
-                pairs.append(measurement)
-        pending = iter(pairs)
-        for sample in report.samples:
-            pair = next(pending, None) if sample.rung is None else None
-            record(s, self._units_dir, job.run, job.candidate, evaluator_id, sample, pair=pair)
-        if any(sample.channel is Channel.METRIC_LINES for sample in (*report.samples, *report.bar_samples)):
-            ledger.note_metric_lines(s, evaluation.candidate.campaign_id, evaluator_id)
-
 
 def _open(s: Session, key: AgentKey) -> AgentSession:
     """Return the agent's row while it is starting, running or ending. Raises ``Settled`` once it is closed."""
@@ -840,35 +798,3 @@ def _never_worked(s: Session, w: AgentSession, report: AgentFinished, startup_se
             return False
     signed = select(Comment.id).where(Comment.author == Agent(role=w.kind, session=w.id).signature).limit(1)
     return s.scalar(signed) is None
-
-
-def record(
-    s: Session,
-    units_dir: Path,
-    run_id: RunId | None,
-    candidate_id: CandidateId,
-    evaluator_id: EvaluatorId,
-    sample: Sample,
-    *,
-    pair: MeasurementId | None = None,
-) -> MeasurementId:
-    """Store one sample as the daemon's measurement (``ledger.record``), with its per-unit results, and return its id.
-
-    The caller commits. ``pair`` is the bar's measurement that ran next to it in a paired evaluation.
-    """
-    candidate = s.get_one(Candidate, candidate_id)
-    measurement = ledger.record(
-        s,
-        candidate,
-        evaluator_id,
-        System.DAEMON,
-        metrics=sample.metrics,
-        error=sample.error,
-        seconds=sample.seconds,
-        run=run_id,
-        pair=pair,
-        rung=sample.rung,
-        stopped=sample.stopped,
-    )
-    save_units(units_dir, measurement.id, sample.units)
-    return measurement.id

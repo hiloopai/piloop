@@ -47,8 +47,8 @@ the routes of its [contribution](/plugins/contributions#routes-and-consumers).
 
 A job's end goes to `host.results`: `finished` or `lost`, in a session that the executor commits. Core raises
 `Settled` for a job whose row is closed already. An executor whose workers can report late uses
-[leases](#leases) to refuse those reports; `inline` needs none. `run_agent` and `run_evaluation` run one
-job on this machine.
+[leases](#leases) to refuse those reports; `inline` needs none. `run_agent` runs an agent's job on this machine, and
+`kind_of(job).run` a job of any other kind, such as an evaluation.
 
 ### Built in
 
@@ -76,7 +76,7 @@ stateDiagram-v2
 
 | Word | Meaning |
 |---|---|
-| Job | One agent session or one evaluation: what to check out, what to run, what to bring back. It is a blob in the CAS, and its lease names it by address. Its commit, its inputs and its results go by address too. |
+| Job | One agent session, or one job of a [kind](#job-kinds) such as an evaluation: what to check out, what to run, what to bring back. It is a blob in the CAS, and its lease names it by address. Its commit, its inputs and its results go by address too. |
 | Worker | A process that takes leases and runs their jobs. `piloop serve` has one, called `serve`. |
 | Heartbeat | The worker renews its leases every `renew_seconds`. |
 | Fencing token | The lease id. It grows with each new lease of a job, and a report with an old one is refused. |
@@ -84,6 +84,19 @@ stateDiagram-v2
 | Message | An event that a worker reads after its cursor, with a long-poll: a job waits, stop a job, or a prompt for an agent. A restart of either side loses none. |
 
 [Workers](/guides/workers) sets up pools and says what happens when a worker goes silent.
+
+### Job kinds
+
+An agent's job is piloop's own. A package adds another kind of job with a `JobKind`, named in `piloop.job_kinds`: a
+worker runs it (`run`), and the daemon applies its report under the lease's fence (`apply`). `evaluation` is one.
+
+```toml
+[project.entry-points."piloop.job_kinds"]
+render = "my_package:RENDER"
+```
+
+A job of the kind goes only to a worker that has its `runner`, and a pool runs `slots = { render = 2 }` of them on
+each worker, or the kind's `SLOTS` when it names none.
 
 ## Networks
 

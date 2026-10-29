@@ -3008,3 +3008,61 @@ def test_0072_moves_a_campaign_s_finding_grace_to_its_implementer_drops_0_4_s_nu
             {'agents': {}},
             {'agents': {'finding_grace': 'PT2M'}},
         ], 'the nulls held nothing: 0.4 reads their keys as unset'
+
+
+def test_0073_names_a_lease_s_job_by_kind_and_row_with_its_runner_moves_the_pool_limits_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    """An evaluation's lease keeps its row as ``job_id`` and gets its evaluator's runner, while its queue row is there.
+
+    A lease of another kind than 0.4's can be queued, and it blocks the downgrade until it is gone.
+    """
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0072')
+    lease = "INSERT INTO leases (kind, agent_session_id, evaluation_id, job_cid) VALUES (?, ?, ?, 'cid')"
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        roles = '{"plugins": {"role": {"implementer": {}}}}'
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('c', '/c', ?)", (roles,))
+        con.execute("INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 't', 'r')")
+        con.execute("INSERT INTO evaluators (campaign_id, key, definition, runner) VALUES (1, 'k', '{}', 'gpu')")
+        con.execute('INSERT INTO evaluations (candidate_id, evaluator_id) VALUES (1, 1)')
+        con.execute("INSERT INTO agent_sessions (kind, campaign_id) VALUES ('implementer', 1)")
+        con.execute(lease, ('agent', 1, None))
+        con.execute(lease, ('evaluation', None, 1))
+        con.execute(lease, ('evaluation', None, 99))  # measured: its queue row is gone
+        for key in ('executor.pools.serve.evaluations', 'executor.pools.serve.agents'):
+            con.execute("INSERT INTO limits (key, value, reason, actor) VALUES (?, '1', 'r', 'human')", (key,))
+    command.upgrade(cfg, '0073')
+    leases = 'SELECT id, kind, agent_session_id, job_id, runner FROM leases ORDER BY id'
+    keys = 'SELECT key FROM limits ORDER BY key'
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute(leases).fetchall() == [
+            (1, 'agent', 1, None, None),
+            (2, 'evaluation', None, 1, 'gpu'),
+            (3, 'evaluation', None, 99, None),
+        ]
+        assert con.execute(keys).fetchall() == [
+            ('executor.pools.serve.agents',),
+            ('executor.pools.serve.slots.evaluation',),
+        ]
+        with pytest.raises(sqlite3.IntegrityError, match='a lease has the job of its kind'):
+            con.execute("INSERT INTO leases (kind, job_cid) VALUES ('probe', 'cid')")
+        con.execute("INSERT INTO leases (kind, job_id, runner, job_cid) VALUES ('probe', 5, 'gpu', 'cid')")
+    with pytest.raises(RuntimeError, match="a lease of the job kind 'probe'"):
+        command.downgrade(cfg, '0072')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("DELETE FROM leases WHERE kind = 'probe'")
+    command.downgrade(cfg, '0072')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT id, kind, agent_session_id, evaluation_id FROM leases ORDER BY id').fetchall() == [
+            (1, 'agent', 1, None),
+            (2, 'evaluation', None, 1),
+            (3, 'evaluation', None, 99),
+        ]
+        assert con.execute(keys).fetchall() == [
+            ('executor.pools.serve.agents',),
+            ('executor.pools.serve.evaluations',),
+        ]
+        with pytest.raises(sqlite3.IntegrityError, match='leasekind'):
+            con.execute("INSERT INTO leases (kind, evaluation_id, job_cid) VALUES ('probe', 5, 'cid')")

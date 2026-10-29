@@ -24,26 +24,26 @@ from piloop.db.session import Database, write_transaction
 from piloop.ids import CommentId, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, EvaluationJob, EvaluationReport, Sample
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.executor.contract import (
     JOB,
     AgentFinished,
     AgentJob,
     AgentKey,
-    AgentReport,
     Capacity,
-    EvaluationJob,
-    EvaluationKey,
-    EvaluationReport,
     Guard,
     HarnessSession,
+    Job,
     JobKey,
+    Key,
     Prompt,
     RepoId,
-    Sample,
+    Report,
     Settled,
     Source,
     key_of,
+    kind_of,
 )
 from piloop.plugins.executor.kit import leases as leases_module
 from piloop.plugins.executor.kit.capacity import GB, HostSample, Pool
@@ -79,7 +79,7 @@ from tests.conftest import WATCHDOG, baseline, home_cas
 
 HANDLE = AgentHandle(runtime='subprocess', data={})
 TIMING = Timing(renew=10, grace=50, toleration=300)
-POOLS = {'test': Pool(evaluations=99)}
+POOLS = {'test': Pool(slots={EVALUATION: 99})}
 """A pool whose slots no test fills, unless it says so."""
 HOST = HostSample(at=utcnow(), cpus=4, load1=0.5, memory_available=8 * GB, disk_free=100 * GB)
 PROBE = Cid.of(b'piloop worker cas probe\n')
@@ -130,18 +130,16 @@ class Recorder:
     def session(self, key: AgentKey, session: HarnessSession, *, guard: Guard | None = None) -> None:
         self._apply(guard, ('session', key.agent_session, session.id), lambda s: None)
 
-    def finished(
-        self, job: AgentJob | EvaluationJob, report: AgentReport | EvaluationReport, *, guard: Guard | None = None
-    ) -> None:
-        target = job.agent_session if isinstance(job, AgentJob) else job.evaluation
+    def finished(self, job: Job, report: Report, *, guard: Guard | None = None) -> None:
+        target = job.agent_session if isinstance(job, AgentJob) else kind_of(job).id(job)
         self._apply(guard, ('finished', target, report), lambda s: None)
 
-    def lost(self, key: JobKey, reason: str, *, guard: Guard | None = None) -> None:
+    def lost(self, key: Key, reason: str, *, guard: Guard | None = None) -> None:
         def change(s: Session) -> None:
-            if isinstance(key, EvaluationKey):  # as core does: the evaluation waits for a slot again
-                s.get_one(Evaluation, key.evaluation).started_at = None
+            if isinstance(key, JobKey):  # as core does: the evaluation waits for a slot again
+                s.get_one(Evaluation, key.id).started_at = None
 
-        target = key.evaluation if isinstance(key, EvaluationKey) else key.agent_session
+        target = key.id if isinstance(key, JobKey) else key.agent_session
         self._apply(guard, ('lost', target, reason), change)
 
     def queued(self, key: AgentKey, prompt: CommentId, error: str | None) -> None:
@@ -215,14 +213,14 @@ def evaluation_job(db: Database, campaign: Campaign, tmp_path: Path, runner: str
     )
 
 
-def queue(db: Database, job: AgentJob | EvaluationJob) -> int:
+def queue(db: Database, job: Job) -> int:
     with db.session() as s:
         lease = enqueue(s, home_cas(db), job)
         s.commit()
         return lease.id
 
 
-def granted(db: Database, grant: Grant) -> AgentJob | EvaluationJob:
+def granted(db: Database, grant: Grant) -> Job:
     """The job of ``grant``, as its worker reads it from the home's CAS."""
     return read_job(home_cas(db), grant.lease, grant.job_cid)
 
@@ -493,9 +491,7 @@ def test_the_fence_and_the_write_are_one_transaction_so_an_expiry_cannot_slip_be
     expiries: list[threading.Thread] = []
 
     class Slow(Recorder):
-        def finished(
-            self, job: AgentJob | EvaluationJob, report: AgentReport | EvaluationReport, *, guard: Guard | None = None
-        ) -> None:
+        def finished(self, job: Job, report: Report, *, guard: Guard | None = None) -> None:
             def slow(s: Session) -> None:
                 assert guard is not None
                 guard(s)
@@ -534,13 +530,13 @@ def test_an_unreachable_worker_counts_no_slot_until_it_is_heard_again(
 ) -> None:
     held = queue(db, agent_job(db, campaign, tmp_path))
     take(leases, 'w1', [])
-    assert leases.capacity() == Capacity(None, 99)
+    assert leases.capacity() == Capacity(None, {EVALUATION: 99})
     with db.session() as s:
         s.get_one(LeaseWorker, 'w1').seen_at = utcnow() - timedelta(seconds=51)
         s.commit()
-    assert leases.capacity() == Capacity(0, 0), 'unreachable'
+    assert leases.capacity() == Capacity(0, {EVALUATION: 0}), 'unreachable'
     Local(leases, 'w1').heartbeat({held: HarnessSession()}, HOST)
-    assert leases.capacity() == Capacity(None, 99)
+    assert leases.capacity() == Capacity(None, {EVALUATION: 99})
 
 
 def test_capacity_counts_a_lease_that_a_worker_takes_while_it_reads_once(
@@ -653,9 +649,7 @@ def test_a_stop_leaves_an_agent_lease_that_a_worker_took_meanwhile_to_its_report
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
     class TakenFirst(Recorder):
-        def finished(
-            self, job: AgentJob | EvaluationJob, report: AgentReport | EvaluationReport, *, guard: Guard | None = None
-        ) -> None:
+        def finished(self, job: Job, report: Report, *, guard: Guard | None = None) -> None:
             take(leases, 'w1', [])  # between the stop's look for untaken leases and its write
             super().finished(job, report, guard=guard)
 
@@ -749,9 +743,7 @@ class Overtaken(Recorder):
 
     first: Callable[[], object] | None = None
 
-    def finished(
-        self, job: AgentJob | EvaluationJob, report: AgentReport | EvaluationReport, *, guard: Guard | None = None
-    ) -> None:
+    def finished(self, job: Job, report: Report, *, guard: Guard | None = None) -> None:
         if (first := self.first) is not None:
             self.first = None
             first()
@@ -778,7 +770,7 @@ def test_a_worker_whose_slots_count_again_says_so_on_the_home(
     db: Database, campaign: Campaign, tmp_path: Path, recorder: Recorder
 ) -> None:
     """The daemon wakes on these: a worker that joins, one heard again after its silence, one whose host recovers."""
-    leases = Leases(db, recorder, home_cas(db), TIMING, {'test': Pool(evaluations=99, max_load=1.0)})
+    leases = Leases(db, recorder, home_cas(db), TIMING, {'test': Pool(max_load=1.0, slots={EVALUATION: 99})})
     join(leases, 'w1', [])
     assert events(db, LeaseWorkerJoined) == [(TargetKind.HOME, 1, LeaseWorkerJoined(worker='w1', pool='test'))]
     with db.session() as s:

@@ -142,7 +142,7 @@ A worker on another machine takes the jobs of its pool. Give the pool its slots,
 ```toml
 [plugins.executor.pools.gpu]
 agents = 2
-evaluations = 1
+slots = { evaluation = 1 }
 ```
 
 ```bash

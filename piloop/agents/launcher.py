@@ -35,7 +35,7 @@ from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Ev
 from piloop.db.session import Database, write_transaction
 from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.otel import Span, Tracer
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
 from piloop.plugins.executor.contract import AgentJob, Executor, ExecutorConfig, Resume, Source
 from piloop.plugins.harness.contract import SESSION_ID, cleared_env, fill, of_provider, takes_session_id
 from piloop.plugins.runtime.contract import AgentStart
@@ -93,7 +93,7 @@ class Launcher:
         place: str,
         artifact: Source,
         timeout: float,
-        capture: RunId | None = None,
+        capture: TargetRef | None = None,
         resumed_brief: Cid | None = None,
         read: Sequence[CommentId] = (),
     ) -> Ended:
@@ -164,7 +164,7 @@ class Launcher:
         place: str,
         artifact: Source,
         timeout: float,
-        capture: RunId | None,
+        capture: TargetRef | None,
         resumed_brief: Cid | None,
         read: Sequence[CommentId],
     ) -> AgentJob:
@@ -192,7 +192,7 @@ class Launcher:
             kind, reason = w.kind, w.reason
             span.set(kind=kind, harness=harness, model=model, reason=reason, session_id=session_id)
             prompt = cfg.role(kind).first_message.format(brief=f'{{log_dir}}/{BRIEF_FILE}')
-            # the worker adds its PATH and its piloop (``jobs.Site.env``), and the values of the secrets
+            # the worker adds its PATH and its piloop (``jobs.Machine.env``), and the values of the secrets
             agent = Agent(role=kind, session=agent_session_id)
             env = {
                 **definition.literals,

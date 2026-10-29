@@ -19,11 +19,12 @@ from piloop.actor import System
 from piloop.campaign.stop import gather
 from piloop.config import CampaignConfig
 from piloop.db.events import emit
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Lease, LeaseKind, LeaseState, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Lease, LeaseState, utcnow
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
-from piloop.plugins.executor.contract import EXECUTORS, Executor, ExecutorConfig, Host
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION
+from piloop.plugins.executor.contract import AGENT, EXECUTORS, Executor, ExecutorConfig, Host
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.leases import LeaseQueued
 from piloop.plugins.executor.kit.tables import LeaseWorker, WorkerInstance
@@ -90,9 +91,9 @@ def hold(
     zero = now - timedelta(seconds=1000)
     start, end = held
     lease = Lease(
-        kind=LeaseKind.AGENT if agent is not None else LeaseKind.EVALUATION,
+        kind=AGENT if agent is not None else EVALUATION,
         agent_session_id=agent,
-        evaluation_id=None if agent is not None else 1,
+        job_id=None if agent is not None else 1,
         state=LeaseState.QUEUED if worker is None else LeaseState.RUNNING if end is None else LeaseState.REPORTED,
         worker=worker,
         job_cid=Cid.of(b'{}'),
@@ -103,7 +104,7 @@ def hold(
     s.flush()
     if candidate is not None:
         on = TargetRef(CANDIDATE, candidate)
-        emit(s, LeaseQueued(lease=lease.id, lease_kind=LeaseKind.EVALUATION), on, System.DAEMON)
+        emit(s, LeaseQueued(lease=lease.id, lease_kind=EVALUATION), on, System.DAEMON)
 
 
 def test_compute_is_each_worker_s_time_split_among_the_jobs_that_it_held_then_at_its_pool_s_price(

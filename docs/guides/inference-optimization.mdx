@@ -144,11 +144,11 @@ provider = "workers"
 
 [plugins.executor.pools.serve]
 agents = 4
-evaluations = 0                    # the server runs no benchmark
+slots = { evaluation = 0 }         # the server runs no benchmark
 
 [plugins.executor.pools.gpu]
 agents = 0
-evaluations = 1                    # one benchmark per GPU: two would slow each other
+slots = { evaluation = 1 }         # one benchmark per GPU: two would slow each other
 runners = ["process"]
 
 [plugins.executor.pools.gpu.provisioner]

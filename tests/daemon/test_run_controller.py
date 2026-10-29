@@ -53,8 +53,10 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference, resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation import jobs as evaluation_jobs
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import CHANGED_INPUTS
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
+from piloop.plugins.campaign_type.kit.evaluation.jobs import INPUTS_CHANGED
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     MeasurementRecorded,
     current_evaluator,
@@ -95,7 +97,7 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label, pe
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, Branch, Trunk
 from piloop.plugins.executor.contract import Source
 from piloop.plugins.executor.kit import jobs
-from piloop.plugins.executor.kit.jobs import INPUTS_CHANGED, INPUTS_REBUILT
+from piloop.plugins.executor.kit.jobs import INPUTS_REBUILT
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.executor.workers.worker import _Control
 from piloop.plugins.harness.contract import cleared_env
@@ -2180,8 +2182,10 @@ def test_an_evaluator_spawned_after_cancel_is_killed_at_once(
     ex.stop(0)
     proc = subprocess.Popen(['sleep', '30'], start_new_session=True)
     worker = workers_of(ex).worker
-    worker._register(1, None, evaluation=True)  # the evaluation's job, before its evaluator starts
-    jobs._track(_Control(worker, 1), proc)  # what run_evaluate calls right after Popen: the stop may have won meanwhile
+    worker._register(1, None, agent=False)  # the evaluation's job, before its evaluator starts
+    evaluation_jobs._track(
+        _Control(worker, 1), proc
+    )  # what run_evaluate calls right after Popen: the stop may have won meanwhile
     assert proc.wait(timeout=2) == -9
 
 
@@ -2817,7 +2821,7 @@ def test_a_keep_that_lost_the_race_to_the_head_is_merged_onto_it_and_judged_ther
     h2 = keep_elsewhere(db, campaign, 'notes', {'notes.txt': 'n\n'}, {'score': 1.0, 'size': 5.0})
     ex = controller(db, runtime, tmp_path)
     ended: list[None] = []
-    track = jobs._track
+    track = evaluation_jobs._track
 
     def h3_kept_while_the_merge_is_measured(control: jobs.Control, proc: subprocess.Popen[bytes] | None) -> None:
         track(control, proc)
@@ -2826,7 +2830,7 @@ def test_a_keep_that_lost_the_race_to_the_head_is_merged_onto_it_and_judged_ther
             if len(ended) == 2:
                 keep_elsewhere(db, campaign, 'docs', {'docs.txt': 'd\n'}, {'score': 1.0, 'size': 5.0}, on=h2)
 
-    monkeypatch.setattr(jobs, '_track', h3_kept_while_the_merge_is_measured)
+    monkeypatch.setattr(evaluation_jobs, '_track', h3_kept_while_the_merge_is_measured)
     execute(ex, db, run_id)
     repo = Repo(campaign.path)
     with db.session() as s:
@@ -3102,7 +3106,7 @@ def test_a_keep_that_lands_while_another_run_measures_its_tree_is_not_judged_aga
         s.delete(measurement)
         candidate.verdict = None
         s.commit()
-    track = jobs._track
+    track = evaluation_jobs._track
 
     def kept_meanwhile(control: jobs.Control, proc: subprocess.Popen[bytes] | None) -> None:
         track(control, proc)
@@ -3113,7 +3117,7 @@ def test_a_keep_that_lands_while_another_run_measures_its_tree_is_not_judged_aga
                 c.verdict, c.verdict_reason = Outcome.KEEP, 'kept on accuracy'
                 s.commit()
 
-    monkeypatch.setattr(jobs, '_track', kept_meanwhile)
+    monkeypatch.setattr(evaluation_jobs, '_track', kept_meanwhile)
     execute(ex, db, make_run(db, campaign, title='the same line, on the cost track', track='cost'))
     with db.session() as s:
         again = s.get_one(Candidate, kept.id)
@@ -3295,7 +3299,7 @@ def test_a_tree_two_runs_reach_is_never_judged_against_itself(
         s.delete(measurement)
         candidate.verdict = None
         s.commit()
-    track = jobs._track
+    track = evaluation_jobs._track
 
     def kept_meanwhile(control: jobs.Control, proc: subprocess.Popen[bytes] | None) -> None:
         """Land the first run's measurement and keep while the second run evaluates the same tree."""
@@ -3306,7 +3310,7 @@ def test_a_tree_two_runs_reach_is_never_judged_against_itself(
                 s.get_one(Candidate, kept.id).verdict = Outcome.KEEP
                 s.commit()
 
-    monkeypatch.setattr(jobs, '_track', kept_meanwhile)
+    monkeypatch.setattr(evaluation_jobs, '_track', kept_meanwhile)
     execute(ex, db, make_run(db, campaign, title='same lines'))
     with db.session() as s:
         again = s.get_one(Candidate, kept.id)

@@ -1,30 +1,27 @@
-"""Run one job on this machine: an agent with its runtime, or an evaluation with the evaluator runner.
+"""Run one job on this machine: an agent with its runtime. A job of another kind runs as its kind says (``JobKind.run``).
 
 Any executor can use it (``piloop.plugins.executor.contract``): ``workers`` does, for each job its worker takes, and so
 can one that runs jobs inline. What the executor does around a job (track it, stop it, report it) is its
-``Control``; the machine it runs on is its ``Site``. Like Airflow's ``run_workload``: one way to run a unit of work,
+``Control``; the machine it runs on is its ``Machine``. Like Airflow's ``run_workload``: one way to run a unit of work,
 whichever executor placed it.
 
 The steps of an agent's job: make its place and its artifact (a checkout, ``Clones``), write the brief, put the values
 of its secrets in its environment, render the MCP servers, start the agent, watch it to its end, save its transcript,
 put its session file in the CAS, read its usage, and bring its versions back. What it made goes back by address: the report names
-its versions, its log files (``Site.files``) and what it wrote in the shared workspace in the CAS. The checkout stays:
+its versions, its log files (``Machine.files``) and what it wrote in the shared workspace in the CAS. The checkout stays:
 the executor removes it (``remove``) once the report is out, so a worker that restarts in between finds the ended agent
 there.
 """
 
 import os
 import shlex
-import subprocess
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field, replace
-from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import Protocol, assert_never
 
 from covalence import Cid
 from pydantic import SecretStr
@@ -33,20 +30,6 @@ from piloop import deprecated
 from piloop.config import BRIEF_FILE, TRANSCRIPT
 from piloop.ids import CommentId, EnvName
 from piloop.otel import Span
-from piloop.plugins.campaign_type.kit.evaluation.config import Rung
-from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
-    EvalResult,
-    Failed,
-    InputsChanged,
-    Killed,
-    Measured,
-    NotRun,
-    Step,
-    StoppedAt,
-    printed,
-    run_evaluate,
-)
-from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import (
     DEADLINE_ENV,
@@ -54,12 +37,12 @@ from piloop.plugins.executor.contract import (
     AgentJob,
     AgentNotStarted,
     AgentReport,
-    EvaluationJob,
-    EvaluationReport,
+    Control,
+    Job,
     JobSecrets,
     Prompt,
     RepoId,
-    Sample,
+    Site,
 )
 from piloop.plugins.executor.kit.clones import Clones, Fetch, of_record, own_replica
 from piloop.plugins.executor.kit.relay import RELAY_ARGV
@@ -78,7 +61,7 @@ from piloop.plugins.runtime.contract import (
     taken,
 )
 from piloop.plugins.vcs.contract import Repository
-from piloop.proc import AGENT_TOKEN_ENV, PILOOP_ARGV, child_env, kill_group
+from piloop.proc import AGENT_TOKEN_ENV, PILOOP_ARGV, child_env
 from piloop.settings import INPUTS_DIR
 from piloop.store.chunks import read as read_chunks
 from piloop.store.tree import Materialised, Seen, evict_unlinked, put_tree
@@ -92,8 +75,6 @@ CLONES = 'clones'
 """Where a worker elsewhere keeps its clones, under its home (``clone_of``)."""
 INPUTS_REBUILT = 'inputs.rebuilt'
 """An event: a shared copy of a linked input no longer held its blob (a job changed it), and was made again."""
-INPUTS_CHANGED = 'inputs.changed'
-"""An event: an evaluation changed a linked input that it read, so what it measured is a crash, not a measurement."""
 LOGIN_CARRIED = 'agent_session.login_carried'
 """An isolated agent took the login keys of the user's harness settings, which piloop passes on until 0.5.0: set them
 in the harness's ``env``."""
@@ -122,8 +103,11 @@ def own_cli(home: Path, argv: Sequence[str]) -> Path:
 
 
 @dataclass
-class Site:
-    """The machine that runs jobs: its home, under which each job's place is made, its CAS, and its clones."""
+class Machine:
+    """The machine that runs jobs: its home, under which each job's place is made, its CAS, and its clones.
+
+    It is the ``Site`` that a job kind's ``run`` gets.
+    """
 
     home: Path
     cas: Cas
@@ -139,11 +123,11 @@ class Site:
     def __post_init__(self) -> None:
         self.cli = own_cli(self.home, self.piloop)
 
-    def log_dir(self, job: AgentJob | EvaluationJob) -> Path:
+    def log_dir(self, job: Job) -> Path:
         """The job's place on this machine: its log files, and its worktree."""
         return self.home / job.place
 
-    def cwd(self, job: AgentJob | EvaluationJob) -> Path:
+    def cwd(self, job: Job) -> Path:
         """Where the job runs: its checkout."""
         return self.log_dir(job) / WORKTREE
 
@@ -163,7 +147,15 @@ class Site:
         """
         return evict_unlinked(self.home / INPUTS_DIR, self.reserve)
 
-    def files(self, job: AgentJob | EvaluationJob) -> dict[str, Cid]:
+    def checkout(self, job: Job) -> Materialised:
+        """Make the job's checkout of its artifact (``cwd``)."""
+        return self.clones.checkout(job.artifact, self.cwd(job))
+
+    def remove(self, job: Job) -> None:
+        """Remove the job's checkout, if it made one."""
+        self.clones.remove(job.artifact, self.cwd(job))
+
+    def files(self, job: Job) -> dict[str, Cid]:
         """Put the files of the job's log directory, its checkout aside, into the CAS, and return them by path."""
         log_dir = self.log_dir(job)
         names = [name for name in os.listdir(log_dir) if name != WORKTREE] if log_dir.is_dir() else []
@@ -173,20 +165,20 @@ class Site:
 
 def local_site(
     home: Path, cas: Cas, repos: Callable[[RepoId], Path], records: Callable[[RepoId], Repository], reserve: int
-) -> Site:
+) -> Machine:
     """The machine of the daemon's own process: its home and CAS, with the repos of record as its clones.
 
     A version that a clone lacks goes from the repo of record into the CAS, as the server does for a remote worker.
     """
-    return Site(home, cas, Clones(cas, repos, of_record, partial(send_of_record, cas, records), home), reserve)
+    return Machine(home, cas, Clones(cas, repos, of_record, partial(send_of_record, cas, records), home), reserve)
 
 
-def remote_site(home: Path, cas: Cas, fetch: Fetch, reserve: int) -> Site:
+def remote_site(home: Path, cas: Cas, fetch: Fetch, reserve: int) -> Machine:
     """The machine of a worker elsewhere: its home and the shared CAS, with clones of its own, filled by ``fetch``.
 
     Its agents' ``piloop`` is the relay to the server (``door.main``).
     """
-    return Site(home, cas, Clones(cas, partial(clone_of, home), own_replica, fetch, home), reserve, RELAY_ARGV)
+    return Machine(home, cas, Clones(cas, partial(clone_of, home), own_replica, fetch, home), reserve, RELAY_ARGV)
 
 
 def clone_of(home: Path, repo: RepoId) -> Path:
@@ -194,59 +186,7 @@ def clone_of(home: Path, repo: RepoId) -> Path:
     return home / CLONES / str(repo)
 
 
-class Control(Protocol):
-    """What running one job asks of the executor that runs it."""
-
-    def begin(self) -> bool:
-        """The agent is about to start. False when the executor stops: start nothing."""
-        ...
-
-    def started(self, handle: Handle, session_id: str | None) -> bool:
-        """The start went through: record it. False when the job is no longer the executor's: it is killed."""
-        ...
-
-    def running(self, kill: Callable[[], None] | None) -> None:
-        """The start is over: this is how to stop the job now. None when there is nothing to kill (any more)."""
-        ...
-
-    def process(self, proc: subprocess.Popen[bytes]) -> bool:
-        """An evaluator started. Return False to kill it at once: a stop, or a job that is no longer the executor's."""
-        ...
-
-    def session(self, session_id: str) -> None:
-        """The runtime reported the agent's session id."""
-        ...
-
-    def saved(self, session_file: Cid) -> None:
-        """A new snapshot of the agent's session file is in the CAS (``SessionFile``)."""
-        ...
-
-    def asked(self) -> bool:
-        """Whether the executor asked the job to stop: an evaluator that it killed is not run again."""
-        ...
-
-    def stopping(self) -> bool:
-        """Whether the executor stops: an evaluation runs no more of its repeats then."""
-        ...
-
-    def handing_over(self) -> bool:
-        """Whether the daemon restarts in place: the agent keeps running, with its worktree, for the next one."""
-        ...
-
-    def queued(self) -> list[list[Prompt]]:
-        """The prompts that the agent's runtime took, one list for each ``Runtime.prompt``, oldest first."""
-        ...
-
-    def secrets(self) -> JobSecrets:
-        """The values of the agent's secrets (``AgentJob.secrets``) that the home has, and its token: asked at its start."""
-        ...
-
-    def extended(self) -> float:
-        """The seconds that the agent may run past its job's ``timeout``: its extensions in all (``Executor.extend``)."""
-        ...
-
-
-def run_agent(job: AgentJob, runtime: Runtime, control: Control, site: Site, span: Span) -> AgentReport | None:
+def run_agent(job: AgentJob, runtime: Runtime, control: Control, site: Machine, span: Span) -> AgentReport | None:
     """Make the artifact, start the agent, watch it to its end, and return its report.
 
     None when there is nothing to report: the job is no longer the executor's, or the daemon hands it over.
@@ -254,7 +194,7 @@ def run_agent(job: AgentJob, runtime: Runtime, control: Control, site: Site, spa
     started_at = time.monotonic()
     log_dir, cwd = site.log_dir(job), site.cwd(job)
     try:
-        _rebuilt(site.clones.checkout(job.artifact, cwd), span)
+        rebuilt(site.checkout(job), span)
         log_dir.mkdir(parents=True, exist_ok=True)
         if site.cas.get_file(job.brief_cid, log_dir / BRIEF_FILE) is None:
             raise LookupError(f'the CAS lacks the brief {job.brief_cid}')
@@ -266,7 +206,7 @@ def run_agent(job: AgentJob, runtime: Runtime, control: Control, site: Site, spa
         span.error(e)
         return _unstarted(job, site, f'{type(e).__name__}: {e}', started_at)
     if not control.begin():
-        remove(job, site)
+        site.remove(job)
         return AgentNotStarted(reason=STOPPED)
     handle: Handle | None = None
     try:
@@ -287,7 +227,7 @@ def run_agent(job: AgentJob, runtime: Runtime, control: Control, site: Site, spa
         if not recorded:  # the job is no longer the executor's: nothing waits for this agent
             runtime.kill(handle)
             handle = None
-            remove(job, site)
+            site.remove(job)
             return None
     finally:
         control.running(None if handle is None else _killer(runtime, handle))
@@ -303,7 +243,7 @@ class Unrestored:
 
 
 def restore_session(
-    job: AgentJob, start: AgentStart, site: Site, span: Span
+    job: AgentJob, start: AgentStart, site: Machine, span: Span
 ) -> tuple[AgentJob, AgentStart, Unrestored | None]:
     """The job and the start of an agent, after its ``resume``: its file and brief written back and the resume argv.
 
@@ -337,7 +277,7 @@ def watch_agent(
     handle: Handle,
     elapsed: float,
     control: Control,
-    site: Site,
+    site: Machine,
     span: Span,
     unrestored: Unrestored | None = None,
 ) -> AgentFinished | None:
@@ -356,7 +296,7 @@ def watch_agent(
     return _finish(job, outcome, session_id, control, site, file, span, unrestored)
 
 
-def inherited(job: AgentJob, session_id: str | None, reader: UsageReader, site: Site) -> Usage | None:
+def inherited(job: AgentJob, session_id: str | None, reader: UsageReader, site: Machine) -> Usage | None:
     """The usage that the session held when the agent resumed it: its file in the CAS, as the worker wrote it back.
 
     It is not the agent's. None when the agent continues no session: its job resumes none, or it started a new one
@@ -379,9 +319,9 @@ def _killer(runtime: Runtime, handle: Handle) -> Callable[[], None]:
     return lambda: runtime.kill(handle)
 
 
-def _unstarted(job: AgentJob, site: Site, error: str, started_at: float) -> AgentNotStarted:
+def _unstarted(job: AgentJob, site: Machine, error: str, started_at: float) -> AgentNotStarted:
     """Remove the worktree of an agent that did not start, and return its report: a failed start."""
-    remove(job, site)
+    site.remove(job)
     return AgentNotStarted(reason=error, seconds=time.monotonic() - started_at, files=site.files(job))
 
 
@@ -391,7 +331,7 @@ def _watch(
     handle: Handle,
     deadline: Deadline,
     control: Control,
-    site: Site,
+    site: Machine,
     file: SessionFile | None,
     span: Span,
 ) -> tuple[AgentExit, str | None]:
@@ -485,7 +425,7 @@ def _finish(
     outcome: AgentExit,
     session_id: str | None,
     control: Control,
-    site: Site,
+    site: Machine,
     file: SessionFile | None,
     span: Span,
     unrestored: Unrestored | None,
@@ -539,152 +479,17 @@ def _reads(queued: list[list[Prompt]], log_dir: Path) -> tuple[list[CommentId], 
     return [p.id for b in queued[max(split - read, 0) : split] for p in b], [p.id for b in queued[split:] for p in b]
 
 
-def remove(job: AgentJob | EvaluationJob, site: Site) -> None:
-    """Remove the job's worktree, if it made one."""
-    site.clones.remove(job.artifact, site.cwd(job))
+@deprecated.until('0.5.0', 'remove(job, site) of 0.3.1 is site.remove(job): delete remove')
+def remove(job: Job, site: Site) -> None:
+    """Remove the job's worktree, if it made one: ``Site.remove``."""
+    site.remove(job)
 
 
-def run_evaluation(job: EvaluationJob, control: Control, site: Site, span: Span) -> EvaluationReport:
-    """Run the evaluator ``repeats`` times on the candidate's tree, each next to a run on the bar's tree, if any.
-
-    The order is candidate, bar, bar, candidate, candidate, bar (``order``). It stops at the first run that fails: a
-    candidate that crashes once crashes again, and a pair needs both sides. The candidate runs first, so each job
-    measures it. Each run climbs the job's ladder (``_climb``): one sample for each rung, then one for the full panel.
-    Only the first run, on the candidate, runs the rungs that have a command of their own, and only it may stop at a
-    rung (``EvaluationJob.gate``), which ends the job too. Each run has its own worktree and logs, under
-    ``<side>-<n>`` in the job's place, and the report names the files of all of them.
-    """
-    samples: dict[Tree, list[Sample]] = {Tree.CANDIDATE: [], Tree.BAR: []}
-    runs: dict[Tree, int] = {Tree.CANDIDATE: 0, Tree.BAR: 0}
-    for i, side in enumerate(order(job.repeats, paired=job.bar is not None)):
-        artifact = job.artifact if side is Tree.CANDIDATE or job.bar is None else job.bar.artifact
-        one = job.model_copy(update={'artifact': artifact, 'place': f'{job.place}/{side}-{runs[side]}'})
-        runs[side] += 1
-        first = i == 0
-        own = tuple(r for r in job.ladder if r.evaluate is not None) if first else ()
-        climb = [sample(r) for r in _evaluate(one, control, site, span, own=own, gate=job.gate if first else None)]
-        last = climb[-1]
-        span.set(error=last.error, stopped=last.stopped)
-        samples[side].extend(climb)
-        if last.error is not None or last.stopped is not None or control.asked() or control.stopping():
-            break
-    return EvaluationReport(samples=samples[Tree.CANDIDATE], bar_samples=samples[Tree.BAR], files=site.files(job))
-
-
-class Tree(StrEnum):
-    """The tree that one run of an evaluation measures."""
-
-    CANDIDATE = 'candidate'
-    BAR = 'bar'
-
-
-def order(repeats: int, *, paired: bool) -> list[Tree]:
-    """The runs of an evaluation: ``repeats`` of the candidate, and with ``paired``, as many of the bar in ABBA order.
-
-    Linear drift of the load then costs both sides alike. The candidate opens, so a first run that is slower (a cold
-    cache) counts against the candidate, never for it.
-    """
-    if not paired:
-        return [Tree.CANDIDATE] * repeats
-    pairs = [(Tree.CANDIDATE, Tree.BAR), (Tree.BAR, Tree.CANDIDATE)]
-    return [side for i in range(repeats) for side in pairs[i % 2]]
-
-
-def _evaluate(
-    job: EvaluationJob, control: Control, site: Site, span: Span, *, own: tuple[Rung, ...], gate: Gate | None
-) -> list[EvalResult]:
-    """Climb the evaluator's ladder once on the job's tree (``_climb``).
-
-    An evaluate that another process killed, an agent's ``pkill -f`` say, measured nothing of the tree, so the climb
-    runs once more, in a new worktree. The executor's own kills (a cancel, its stop) are not run again.
-    """
-    climb = _climb(job, control, site, span, own=own, gate=gate)
-    match climb[-1]:
-        case Failed(why=Killed() as killed) as failed if killed.sent and not control.asked() and not control.stopping():
-            span.event('evaluation.retry', evaluation=job.evaluation, error=failed.error)
-            climb = _climb(job, control, site, span, own=own, gate=gate)
-        case _:
-            pass
-    return climb
-
-
-def sample(result: EvalResult) -> Sample:
-    """What the report says of one line of the evaluate command: what it measured, where it stopped, or why it failed."""
-    match result:
-        case Measured(metrics=metrics, seconds=seconds, units=units, channel=channel, rung=rung):
-            return Sample(metrics=metrics, seconds=seconds, units=units, channel=channel, rung=rung)
-        case StoppedAt(rung=rung, reason=reason, metrics=metrics, seconds=seconds, units=units):
-            return Sample(metrics=metrics, seconds=seconds, units=units, rung=rung, stopped=reason)
-        case Failed(seconds=seconds, rung=rung) as failed:
-            return Sample(metrics=failed.printed, seconds=seconds, error=failed.error, rung=rung)
-        case _:
-            assert_never(result)
-
-
-def _climb(
-    job: EvaluationJob, control: Control, site: Site, span: Span, *, own: tuple[Rung, ...], gate: Gate | None
-) -> list[EvalResult]:
-    """Climb the ladder in a new worktree, which is removed after: what each rung measured, then the full panel.
-
-    The rungs of ``own``, which have a command of their own, run first, each a run of its own. Then the evaluate
-    command reports the other rungs and the full panel. With ``gate``, a rung may stop the climb. The climb ends at the first rung
-    that stops it or fails. A failure to start is a crash. What it measured counts only if the linked inputs that it
-    read still hold their blobs: a crash otherwise.
-    """
-    log_dir, cwd = site.log_dir(job), site.cwd(job)
-    try:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        links = _rebuilt(site.clones.checkout(job.artifact, cwd), span)
-
-        def run(command: list[str], step: Step, prefix: str) -> list[EvalResult]:
-            return run_evaluate(
-                command,
-                cwd=cwd,
-                log_dir=log_dir,
-                timeout=job.timeout,
-                required=set(job.required),
-                known=set(job.known),
-                max_evidence_bytes=job.max_evidence_bytes,
-                track=lambda proc: _track(control, proc),
-                step=step,
-                gate=gate,
-                stop_grace=job.stop_grace,
-                prefix=prefix,
-            )
-
-        climb: list[EvalResult] = []
-        for rung in own:
-            assert rung.evaluate is not None  # the rungs that have a command of their own
-            climb += run(rung.evaluate, Step(last=rung), f'eval-{rung.name}')
-            if not isinstance(climb[-1], Measured):
-                return climb
-        climb += run(job.command, Step(rungs=tuple(r for r in job.ladder if r.evaluate is None)), 'eval')
-        if changed := sorted(rel for rel, copy in links.copies.items() if not copy.holds(cwd / rel)):
-            span.event(INPUTS_CHANGED, evaluation=job.evaluation, paths=', '.join(changed[:SHOWN]))
-            last = climb[-1]
-            return [*climb[:-1], Failed(InputsChanged(tuple(changed[:SHOWN])), last.seconds, printed(last))]
-        return climb
-    except Exception as e:
-        span.error(e)
-        return [Failed(NotRun(f'{type(e).__name__}: {e}'), 0.0)]
-    finally:
-        remove(job, site)
-
-
-def _rebuilt(links: Materialised, span: Span) -> Materialised:
+def rebuilt(links: Materialised, span: Span) -> Materialised:
     """Record the blobs whose shared copy a job had changed: they were made again for this one."""
     if links.rebuilt:
         span.event(INPUTS_REBUILT, blobs=', '.join(str(blob) for blob in links.rebuilt[:SHOWN]))
     return links
-
-
-def _track(control: Control, proc: subprocess.Popen[bytes] | None) -> None:
-    """Tell the executor how to kill the evaluator while it runs. One that it refuses is killed at once."""
-    if proc is None:
-        control.running(None)
-        return
-    if not control.process(proc):
-        kill_group(proc)
 
 
 class MissingSecrets(LookupError):

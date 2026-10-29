@@ -6,9 +6,10 @@ from uuid import uuid4
 
 import pytest
 
-from piloop.db.models import AgentSession, Campaign, LeaseKind, utcnow
+from piloop.db.models import AgentSession, Campaign, utcnow
 from piloop.db.session import Database
-from piloop.plugins.executor.contract import Capacity
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION
+from piloop.plugins.executor.contract import AGENT, Capacity
 from piloop.plugins.executor.kit.capacity import GB, HostSample, Pool, admits, sample
 from piloop.plugins.executor.kit.leases import SERVE, Grant, Leases
 from piloop.plugins.executor.kit.tables import LeaseWorker, NoLease
@@ -17,30 +18,30 @@ from tests.conftest import RESEARCH, home_cas
 from tests.test_lease import TIMING, Recorder, agent_job, evaluation_job, granted, queue
 
 HOST = HostSample(at=utcnow(), cpus=4, load1=2.0, memory_available=8 * GB, disk_free=100 * GB)
-IDLE = Capacity(0, 0)
+IDLE = Capacity(0, {EVALUATION: 0})
 
 
 @pytest.mark.parametrize(
     ('pool', 'host', 'running', 'kind', 'reason'),
     [
-        (Pool(), HOST, IDLE, LeaseKind.AGENT, None),
-        (Pool(), HOST, Capacity(50, 0), LeaseKind.AGENT, None),
-        (Pool(agents=2), HOST, Capacity(2, 0), LeaseKind.AGENT, NoLease.SLOTS),
-        (Pool(agents=2), HOST, Capacity(1, 9), LeaseKind.AGENT, None),
-        (Pool(agents=0), HOST, IDLE, LeaseKind.AGENT, NoLease.SLOTS),
-        (Pool(), HOST, Capacity(9, 1), LeaseKind.EVALUATION, None),
-        (Pool(), HOST, Capacity(0, 2), LeaseKind.EVALUATION, NoLease.SLOTS),
-        (Pool(evaluations=0), HOST, IDLE, LeaseKind.EVALUATION, NoLease.SLOTS),
-        (Pool(min_memory_gb=8), HOST, IDLE, LeaseKind.AGENT, None),
-        (Pool(min_memory_gb=8.5), HOST, IDLE, LeaseKind.AGENT, NoLease.MEMORY),
-        (Pool(max_load=0.5), HOST, IDLE, LeaseKind.EVALUATION, None),
-        (Pool(max_load=0.4), HOST, IDLE, LeaseKind.EVALUATION, NoLease.LOAD),
-        (Pool(agents=0, min_memory_gb=9, max_load=0.1), HOST, IDLE, LeaseKind.AGENT, NoLease.MEMORY),
-        (Pool(agents=0, max_load=0.1), HOST, IDLE, LeaseKind.AGENT, NoLease.LOAD),
+        (Pool(), HOST, IDLE, AGENT, None),
+        (Pool(), HOST, Capacity(50, {EVALUATION: 0}), AGENT, None),
+        (Pool(agents=2), HOST, Capacity(2, {EVALUATION: 0}), AGENT, NoLease.SLOTS),
+        (Pool(agents=2), HOST, Capacity(1, {EVALUATION: 9}), AGENT, None),
+        (Pool(agents=0), HOST, IDLE, AGENT, NoLease.SLOTS),
+        (Pool(), HOST, Capacity(9, {EVALUATION: 1}), EVALUATION, None),
+        (Pool(), HOST, Capacity(0, {EVALUATION: 2}), EVALUATION, NoLease.SLOTS),
+        (Pool(slots={EVALUATION: 0}), HOST, IDLE, EVALUATION, NoLease.SLOTS),
+        (Pool(min_memory_gb=8), HOST, IDLE, AGENT, None),
+        (Pool(min_memory_gb=8.5), HOST, IDLE, AGENT, NoLease.MEMORY),
+        (Pool(max_load=0.5), HOST, IDLE, EVALUATION, None),
+        (Pool(max_load=0.4), HOST, IDLE, EVALUATION, NoLease.LOAD),
+        (Pool(agents=0, min_memory_gb=9, max_load=0.1), HOST, IDLE, AGENT, NoLease.MEMORY),
+        (Pool(agents=0, max_load=0.1), HOST, IDLE, AGENT, NoLease.LOAD),
     ],
 )
 def test_admits_gives_the_first_gate_that_refuses(
-    pool: Pool, host: HostSample, running: Capacity, kind: LeaseKind, reason: NoLease | None
+    pool: Pool, host: HostSample, running: Capacity, kind: str, reason: NoLease | None
 ) -> None:
     """Memory, then load (per CPU), then the slots of the job's kind; None takes the job."""
     assert admits(pool, host, running, kind) is reason
@@ -53,17 +54,20 @@ def test_a_sample_reads_this_host(tmp_path: Path) -> None:
 
 def test_pools_keep_serve_with_its_defaults_unless_the_table_names_it() -> None:
     assert Workers().pools == {SERVE: Pool()}
-    gpu = Workers.model_validate({'pools': {'gpu': {'evaluations': 1}}}).pools
-    assert gpu == {SERVE: Pool(), 'gpu': Pool(evaluations=1)}
+    gpu = Workers.model_validate({'pools': {'gpu': {'slots': {'evaluation': 1}}}}).pools
+    assert gpu == {SERVE: Pool(), 'gpu': Pool(slots={EVALUATION: 1})}
     assert Workers.model_validate({'pools': {'serve': {'agents': 2}}}).pools == {SERVE: Pool(agents=2)}
     with pytest.raises(ValueError, match='Extra inputs'):
         Workers.model_validate({'evaluations': 2})
+    assert Pool().slots == {EVALUATION: 2}, "a kind that the pool does not name has the kind's SLOTS"
+    with pytest.raises(ValueError, match='slots of no job kind: render; the kinds are evaluation'):
+        Pool(slots={'render': 1})
 
 
 def test_a_worker_takes_no_job_over_its_slots_or_under_pressure_and_its_row_says_why(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
-    pools = {'small': Pool(agents=1, evaluations=1, min_memory_gb=4)}
+    pools = {'small': Pool(agents=1, min_memory_gb=4, slots={EVALUATION: 1})}
     leases = Leases(db, Recorder(db), home_cas(db), TIMING, pools)
     with pytest.raises(ValueError, match="no pool 'big'"):
         leases.register('w1', 'big', '0.2.0', ['process'], HOST)
@@ -88,7 +92,7 @@ def test_a_worker_whose_slots_are_full_says_slots_while_core_holds_back_a_job_fo
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
     """Core submits a job only to a free slot, so a full worker sees no queued lease: the jobs wait in core."""
-    leases = Leases(db, Recorder(db), home_cas(db), TIMING, {'full': Pool(agents=0, evaluations=0)})
+    leases = Leases(db, Recorder(db), home_cas(db), TIMING, {'full': Pool(agents=0, slots={EVALUATION: 0})})
     leases.register('w1', 'full', '0.2.0', ['process'], HOST)
     leases.register('w2', 'full', '0.2.0', ['gpu'], HOST)
     assert leases.acquire('w1', uuid4().hex, HOST) is NoLease.NOTHING
@@ -102,24 +106,26 @@ def test_a_worker_whose_slots_are_full_says_slots_while_core_holds_back_a_job_fo
 
 
 def test_capacity_sums_the_slots_of_the_reachable_workers_that_are_not_under_pressure(db: Database) -> None:
-    pools = {SERVE: Pool(agents=2), 'gpu': Pool(agents=0, evaluations=1, max_load=1.0)}
+    pools = {SERVE: Pool(agents=2), 'gpu': Pool(agents=0, max_load=1.0, slots={EVALUATION: 1})}
     leases = Leases(db, Recorder(db), home_cas(db), TIMING, pools)
-    assert leases.capacity() == Capacity(0, 0), 'no worker yet'
+    assert leases.capacity() == Capacity(0, {EVALUATION: 0}), 'no worker yet'
     leases.register(SERVE, SERVE, '0.2.0', ['process'], HOST)
-    assert leases.capacity() == Capacity(2, 2)
+    assert leases.capacity() == Capacity(2, {EVALUATION: 2})
     for name in ('gpu1', 'gpu2'):
         leases.register(name, 'gpu', '0.2.0', ['process'], HOST)
-    assert leases.capacity() == Capacity(2, 4)
+    assert leases.capacity() == Capacity(2, {EVALUATION: 4})
     leases.heartbeat('gpu2', {}, HOST.model_copy(update={'load1': 4.5}))
-    assert leases.capacity() == Capacity(2, 3), 'under pressure: zero'
+    assert leases.capacity() == Capacity(2, {EVALUATION: 3}), 'under pressure: zero'
     with db.session() as s:
         s.get_one(LeaseWorker, 'gpu1').seen_at = utcnow() - timedelta(seconds=TIMING.grace + 1)
         s.commit()
-    assert leases.capacity() == Capacity(2, 2), 'unreachable: zero'
+    assert leases.capacity() == Capacity(2, {EVALUATION: 2}), 'unreachable: zero'
     unbounded = Leases(db, Recorder(db), home_cas(db), TIMING, {SERVE: Pool(), 'gpu': Pool()})
-    assert unbounded.capacity() == Capacity(None, 4)
+    assert unbounded.capacity() == Capacity(None, {EVALUATION: 4})
     without_gpu = Leases(db, Recorder(db), home_cas(db), TIMING, {SERVE: Pool()})
-    assert without_gpu.capacity() == Capacity(None, 2), 'a pool that the configuration no longer has counts zero'
+    assert without_gpu.capacity() == Capacity(None, {EVALUATION: 2}), (
+        'a pool that the configuration no longer has counts zero'
+    )
 
 
 def test_capacity_is_the_free_slots_and_a_worker_under_pressure_starves_no_other(

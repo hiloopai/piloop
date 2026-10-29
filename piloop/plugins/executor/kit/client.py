@@ -12,7 +12,7 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict
 
 from piloop.plugins.cas.contract import BlobAddress
-from piloop.plugins.executor.contract import AgentJob, AgentReport, EvaluationReport, HarnessSession, JobSecrets
+from piloop.plugins.executor.contract import AgentJob, HarnessSession, JobSecrets, Report
 from piloop.plugins.executor.kit.capacity import HostSample
 from piloop.plugins.executor.kit.leases import (
     Answer,
@@ -30,7 +30,7 @@ from piloop.plugins.executor.kit.leases import (
 )
 from piloop.plugins.executor.kit.tables import NoLease
 
-PROTOCOL = 16
+PROTOCOL = 17
 """The version of the ``LeaseClient`` calls on the wire."""
 
 
@@ -52,7 +52,7 @@ class WorkerInfo(BaseModel):
     """The piloop version that it runs."""
     pool: str
     runners: list[str]
-    """The evaluator runners that it has."""
+    """What it has to run the jobs of each kind (``JobKind.runners``), such as evaluator runners."""
     sample: HostSample
     cas_probe: BlobAddress
     """A tiny blob, unique to this start, that the worker just put in its CAS. A server whose CAS lacks it refuses the
@@ -97,7 +97,7 @@ class LeaseClient(Protocol):
         """Renew the leases that the worker runs, each with what it knows of its agent's harness session."""
         ...
 
-    def report(self, lease: int, request_id: str, report: AgentReport | EvaluationReport) -> dict[str, object]:
+    def report(self, lease: int, request_id: str, report: Report) -> dict[str, object]:
         """Apply the job's result, and return its receipt. Sent again with its request id, it gets the same one."""
         ...
 
@@ -150,7 +150,7 @@ class Local:
         except UnknownWorker as e:
             raise Dismissed(str(e)) from e
 
-    def report(self, lease: int, request_id: str, report: AgentReport | EvaluationReport) -> dict[str, object]:
+    def report(self, lease: int, request_id: str, report: Report) -> dict[str, object]:
         return self._leases.report(lease, self._worker, request_id, report)
 
     def lost(self, lease: int, reason: str) -> None:

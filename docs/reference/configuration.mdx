@@ -769,7 +769,7 @@ With `provider = "workers"`:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `pools` | dict\[string, [Pool](#pool)\] | `{"serve": {"agents": null, "evaluations": 2, "max_load": null, "min_memory_gb": null, "provisioner": null, "runners": [], "usd_per_hour": null}}` | `[plugins.executor.pools.<name>]`: the slots and thresholds of each worker of a pool. `serve` is the worker inside `piloop serve`, there with its defaults unless the table names it. Its `agents = 0` and `evaluations = 0` run nothing on the server. The jobs over the slots wait: agents as requested, evaluations in the evaluation queue (`piloop eval queue`). |
+| `pools` | dict\[string, [Pool](#pool)\] | `{"serve": {"agents": null, "max_load": null, "min_memory_gb": null, "provisioner": null, "runners": [], "slots": {"evaluation": 2}, "usd_per_hour": null}}` | `[plugins.executor.pools.<name>]`: the slots and thresholds of each worker of a pool. `serve` is the worker inside `piloop serve`, there with its defaults unless the table names it. Its `agents = 0` and `slots = { evaluation = 0 }` run nothing on the server. The jobs over the slots wait: agents as requested, evaluations in the evaluation queue (`piloop eval queue`). |
 | `renew_seconds` | number | `10` | How often the worker renews its leases with a heartbeat. Kubernetes: the kubelet renews its node Lease every 10 s. |
 | `grace_seconds` | number | `50` | The silence after which the worker is unreachable (`lease.unreachable`): its slots count zero until it is heard again. Kubernetes: `--node-monitor-grace-period`, 50 s since 1.32 (40 s before). |
 | `toleration_seconds` | number | `300` | The silence after which its leases expire and their jobs are queued again with a larger fencing token. The worker stops its own jobs two heartbeats before. Kubernetes: the `tolerationSeconds` of 300 that the `DefaultTolerationSeconds` admission plugin gives a pod for the unreachable taint. |
@@ -782,10 +782,10 @@ The capacity of each worker in a pool. Kubernetes: a node pool's allocatable, an
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `agents` | integer \| null | `null` | How many agents a worker of the pool runs at the same time. No bound when unset. |
-| `evaluations` | integer | `2` | How many evaluations a worker of the pool runs at the same time. |
+| `slots` | dict\[string, integer\] | `{}` | How many jobs of each other kind a worker of the pool runs at the same time, by kind: `{ evaluation = 1 }`. A kind that it does not name has its own default (`JobKind.SLOTS`: 2 evaluations). |
 | `min_memory_gb` | number \| null | `null` | A worker with less memory available takes no job, and its slots count zero. |
 | `max_load` | number \| null | `null` | The 1-minute load per CPU above which a worker takes no job, and its slots count zero. |
-| `runners` | list\[string\] | `[]` | The evaluator runners that its workers have, before any of them runs: the evaluations that a provisioned pool starts a worker for. |
+| `runners` | list\[string\] | `[]` | The runners that its workers have, before any of them runs (`JobKind.runner`), such as evaluator runners: the jobs that a provisioned pool starts a worker for. |
 | `provisioner` | [Provisioner](#provisioner) \| null | `null` | Start and stop its workers on demand. None: they start by hand (`piloop worker`). |
 | `usd_per_hour` | number \| null | `null` | What one worker of the pool costs per hour, in USD: the `leases` fact source charges each campaign its jobs' share. None: unknown, so the compute of a campaign that ran a job here is unknown too. |
 
@@ -903,5 +903,6 @@ These keys still work. Each one shows a `PiloopDeprecationWarning` that names th
 - `[spend]` is the `command` source `billing`, which reads `billing_usd`, and `spend` sums only that. So `spend` and `hold_at = { spend = … }` mean what they meant. The command prints one number, so it runs in `SPEND_COMMAND`. `notices` are those of `billing_usd`, and `closing_review` is `while_held` of `[plugins.stop_rule]`. Both sources join `[plugins.fact_source] use`, after its own sources. A table of either name that the file has wins. It runs after `plugin_lists`, so a `[[facts]]` is a `use` already.
 - In `config.toml`, `[daemon] startup_relaunches`, `[agents] finding_grace` and `wrap_up_lead` are the role's. They are keys of `[plugins.role.implementer]`, the defaults of every campaign's implementer, and their variables move the same way (`moved_env`). A role of your own that does runs gets the role's defaults, not these.
 - In `config.toml`, `[plugins.network] name_claim` of the `proxy` network is `name_claims`, a list of one. A `name_claims` that the table sets too wins.
+- In `config.toml`, `evaluations` of `[plugins.executor.pools.<name>]` is `slots = { evaluation = n }`. `PILOOP_PLUGINS__EXECUTOR__POOLS__<NAME>__EVALUATIONS` is `…__SLOTS__EVALUATION`.
 - In `config.toml`, `[runtimes.<name>]` is `[plugins.runtime.<name>]`. `PILOOP_RUNTIMES__<NAME>__<KEY>` is `PILOOP_PLUGINS__RUNTIME__<NAME>__<KEY>`.
 - In `config.toml`, `[daemon] startup_breaker` and `startup_window` are `[plugins.launch_policy]` keys. Their variables move the same way.

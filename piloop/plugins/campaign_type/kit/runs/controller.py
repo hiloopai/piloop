@@ -31,7 +31,6 @@ from piloop.agents.results import (
     PromptOutcome,
     Ran,
     WorkUnsaved,
-    record,
 )
 from piloop.agents.roles import briefing, compose_brief, read_brief, role
 from piloop.campaign.campaigns import (
@@ -73,6 +72,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.config import Track
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, Bar, EvaluationJob, Sample, record
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     current_evaluator,
     gate_of,
@@ -119,20 +119,17 @@ from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.executor.contract import (
     DEADLINE_ENV,
     EXECUTORS,
-    Bar,
-    EvaluationJob,
-    EvaluationKey,
     Executor,
     ExecutorConfig,
     Host,
-    Sample,
+    JobKey,
 )
 from piloop.plugins.network.contract import NETWORKS, Network, NetworkHost
 from piloop.plugins.runtime.contract import ExitStatus, RuntimeFactory, make_runtime
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets, SecretsProvider
 from piloop.plugins.section.contract import Rendering, markdown
 from piloop.plugins.stop_rule.contract import Stop
-from piloop.plugins.vcs.contract import Repository, RunVersion, Transfer, Version
+from piloop.plugins.vcs.contract import Pin, Repository, Transfer, Version
 from piloop.settings import AgentSettings, EvaluationSettings, StorageSettings
 
 RECOVERED_REASON = 'recovered: what the implementer of run#{run} left unsaved, never declared ready; not measured'
@@ -305,7 +302,7 @@ class RunController:
             evaluation = s.get(Evaluation, evaluation_id)
             if evaluation is None or evaluation.started_at is not None:
                 return evaluation is None
-            return (free := self.executor.capacity().evaluations) is None or free > 0
+            return (free := self.executor.capacity().free(EVALUATION)) is None or free > 0
 
         while self._db.wait_until(done_or_dispatchable, give_up=self.launcher.cancelled.is_set):
             with self._db.session() as s:
@@ -323,7 +320,7 @@ class RunController:
         with self.launcher.lock:
             if self.launcher.cancelled.is_set():
                 return
-            free = self.executor.capacity().evaluations
+            free = self.executor.capacity().free(EVALUATION)
             with self._db.session() as s:
                 write_transaction(s)
                 starting: list[EvaluationJob] = []
@@ -355,7 +352,7 @@ class RunController:
                 select(Evaluation.id).where(Evaluation.cancelled_by.is_not(None), Evaluation.started_at.is_not(None))
             ).all()
         for evaluation_id in cancelled:
-            self.executor.cancel(EvaluationKey(evaluation_id))
+            self.executor.cancel(JobKey(EVALUATION, evaluation_id))
 
     def hand_over(self) -> None:
         """Stop for an in-place restart. The agents keep running for the next daemon, whose executor adopts them."""
@@ -480,7 +477,7 @@ class RunController:
                     place=run_place(run_id),
                     artifact=self.sources.agent(self._campaign(campaign_id), base_revision),
                     timeout=timeout,
-                    capture=run_id,
+                    capture=TargetRef(RUN, run_id),
                 )
             # a daemon stop owns the rows, also when it came just after the report applied
             stopping = self.launcher.cancelled.is_set()
@@ -659,7 +656,7 @@ class RunController:
         if not versions:
             return
         for i, version in enumerate(versions):
-            repo.keep(version.revision, RunVersion(name, run_id, i))
+            repo.keep(version.revision, run_pin(name, run_id, i))
         if not cut:
             return
         with self._db.session() as s:
@@ -857,7 +854,7 @@ class RunController:
                 ids.append(candidate.id)
             s.commit()
         for i, version in enumerate(versions):
-            repo.keep(version.revision, RunVersion(name, run_id, i))
+            repo.keep(version.revision, run_pin(name, run_id, i))
         for i, (version, candidate_id) in enumerate(zip(versions, ids, strict=True)):
             revision, unmeasured = version.revision, unmeasured_of(version)
             with self._db.session() as s:
@@ -1540,3 +1537,8 @@ def implementer_of(s: Session, run_id: RunId) -> Actor:
     """The run's newest implementer, which a note from its finding is by; the daemon for a run that has none."""
     w = s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id.desc()).limit(1)).first()
     return Agent(role=w.kind, session=w.id) if w is not None else System.DAEMON
+
+
+def run_pin(campaign: str, run: RunId, index: int) -> Pin:
+    """The pin of a run's ``index``-th version, oldest first: ``r<run>/<index>``."""
+    return Pin(campaign, f'r{run}/{index}')

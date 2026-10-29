@@ -11,7 +11,6 @@ import subprocess
 from collections.abc import Sequence
 from contextlib import suppress
 from pathlib import Path
-from typing import assert_never
 
 from covalence import Cid
 from git import Repo
@@ -19,8 +18,7 @@ from git.exc import BadName, GitCommandError, GitError, InvalidGitRepositoryErro
 from pydantic import SecretStr
 
 from piloop.actor import Agent
-from piloop.ids import Revision
-from piloop.plugins.campaign_type.kit.runs.ids import RunId
+from piloop.ids import Revision, TargetRef
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.host import Check
 from piloop.plugins.vcs.contract import (
@@ -28,13 +26,10 @@ from piloop.plugins.vcs.contract import (
     Captured,
     Conflicts,
     Fetch,
-    Keep,
     NotARepository,
     Part,
-    RebaseVersion,
-    ReferenceVersion,
+    Pin,
     Repository,
-    RunVersion,
     Transfer,
     UnknownRevision,
     Unsaved,
@@ -51,7 +46,8 @@ SKIP = 'Piloop-Eval'
 NOTE = 'Piloop-Note'
 """The trailer of a note on a commit, applied when it is judged."""
 RECOVERED = 'Piloop-Recovered'
-"""The trailer of the commit that ``capture`` makes of what an agent left uncommitted: ``Piloop-Recovered: run#<id>``."""
+"""The trailer of the commit that ``capture`` makes of what an agent left uncommitted, with its subject:
+``Piloop-Recovered: run#12``."""
 UNCOMMITTED = 'piloop: uncommitted implementer changes'
 """The subject of the commit that ``capture`` makes of what an agent left uncommitted."""
 PROMPTS = Path(__file__).parent / 'prompts'
@@ -63,22 +59,9 @@ FETCHED = 'refs/piloop/fetched/'
 """Where a replica pins each commit that came as a bundle: it stays, and the next fetch names it as a commit it has."""
 
 
-def ref(why: Keep) -> str:
-    """The ref that pins a commit kept for ``why``."""
-    match why:
-        case RunVersion(campaign=campaign, run=run, index=index):
-            return f'{runs(campaign, run)}{index}'
-        case RebaseVersion(campaign=campaign, candidate=candidate):
-            return f'refs/piloop/{campaign}/rebase/{candidate}'
-        case ReferenceVersion(campaign=campaign, candidate=candidate):
-            return f'refs/piloop/{campaign}/reference/{candidate}'
-        case _:
-            assert_never(why)
-
-
-def runs(campaign: str, run: RunId) -> str:
-    """The prefix of the refs that pin a run's commits, ``<prefix><n>``."""
-    return f'refs/piloop/{campaign}/r{run}/'
+def ref(why: Pin) -> str:
+    """The ref that pins a commit kept for ``why``: ``refs/piloop/<campaign>/<name>``."""
+    return f'refs/piloop/{why.campaign}/{why.name}'
 
 
 class GitRepository(Repository):
@@ -158,7 +141,7 @@ class GitRepository(Repository):
         except GitError as e:
             raise VcsError(str(e)) from e
 
-    def keep(self, revision: Revision, why: Keep) -> None:
+    def keep(self, revision: Revision, why: Pin) -> None:
         git.pin(self.repo, ref(why), revision)
 
     def checkout(self, revision: Revision, path: Path) -> None:
@@ -174,16 +157,15 @@ class GitRepository(Repository):
     def untracked(self, revision: Revision, names: Sequence[str]) -> list[str]:
         return git.untracked(self.repo, revision, names)
 
-    def capture(self, cas: Cas, base: Revision, run: RunId, ignore: Sequence[str]) -> Captured:
+    def capture(self, cas: Cas, base: Revision, by: TargetRef, ignore: Sequence[str]) -> Captured:
         """Commit what the agent left uncommitted on its own, never amended into its last commit, then bundle them.
 
-        The commit is by the run, and committed by piloop. When git refuses it, a hook say, the unsaved changes go into
-        ``cas`` as a patch onto the agent's last commit.
+        The commit is by ``by``, what the agent works on, and committed by piloop. When git refuses it, a hook say, the
+        unsaved changes go into ``cas`` as a patch onto the agent's last commit.
         """
         unsaved = None
         if git.is_dirty(self.repo, list(ignore)):
-            by = f'run#{run}'
-            author = self.committer.model_copy(update={'name': by})
+            author = self.committer.model_copy(update={'name': str(by)})
             message = f'{UNCOMMITTED}\n\n{RECOVERED}: {by}'
             try:
                 git.commit_all(self.repo, message, list(ignore), author, self.committer)

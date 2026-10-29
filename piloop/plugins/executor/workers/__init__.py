@@ -20,32 +20,31 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.daemon.loop import Consumer, Phase, Turn
-from piloop.db.models import LIVE_LEASES, EventModel, Lease, LeaseKind
+from piloop.db.models import LIVE_LEASES, EventModel, Lease
 from piloop.net.server import executor_router
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.contribution import Contribution
 from piloop.plugins.executor.contract import (
-    AgentJob,
     AgentKey,
     Capacity,
-    EvaluationJob,
     ExecutorConfig,
     Host,
-    JobKey,
+    Job,
+    Key,
     LeftJob,
     Prompt,
 )
 from piloop.plugins.executor.kit import jobs, scaling
-from piloop.plugins.executor.kit.capacity import HostSample, Pool, Provisioner
+from piloop.plugins.executor.kit.capacity import HostSample, Pool, Provisioner, counted
 from piloop.plugins.executor.kit.client import Local
 from piloop.plugins.executor.kit.leases import (
-    DEFAULT_POOLS,
     SERVE,
     Leases,
     LeaseWorkerJoined,
     LeaseWorkerRelieved,
     Timing,
+    default_pools,
 )
 from piloop.plugins.executor.kit.relay import Relay, Runner
 from piloop.plugins.executor.kit.remote import Remote, lease_routes
@@ -62,11 +61,11 @@ class Workers(ExecutorConfig):
     A policy beyond these numbers (placement, retries) is another executor's, not more keys here.
     """
 
-    pools: dict[str, Pool] = Field(default=dict(DEFAULT_POOLS))
+    pools: dict[str, Pool] = Field(default_factory=default_pools)
     """``[plugins.executor.pools.<name>]``: the slots and thresholds of each worker of a pool. ``serve`` is the worker
     inside ``piloop serve``, there with its defaults unless the table names it. Its ``agents = 0`` and
-    ``evaluations = 0`` run nothing on the server. The jobs over the slots wait: agents as requested, evaluations in
-    the evaluation queue (``piloop eval queue``)."""
+    ``slots = { evaluation = 0 }`` run nothing on the server. The jobs over the slots wait: agents as requested,
+    evaluations in the evaluation queue (``piloop eval queue``)."""
     renew_seconds: float = Field(default=10, gt=0)
     """How often the worker renews its leases with a heartbeat. Kubernetes: the kubelet renews its node Lease every
     10 s."""
@@ -84,7 +83,7 @@ class Workers(ExecutorConfig):
     @field_validator('pools', mode='after')
     @classmethod
     def _serve(cls, pools: dict[str, Pool]) -> dict[str, Pool]:
-        return {**DEFAULT_POOLS, **pools}
+        return {**default_pools(), **pools}
 
     @model_validator(mode='after')
     def _ordered(self) -> Self:
@@ -131,7 +130,7 @@ class WorkersExecutor:
         """The free slots of the reachable workers that their pools admit now (``Leases.capacity``)."""
         return self.leases.capacity()
 
-    def submit(self, job: AgentJob | EvaluationJob) -> None:
+    def submit(self, job: Job) -> None:
         self.leases.submit(job)
 
     def prompt(self, key: AgentKey, prompt: Prompt) -> None:
@@ -142,15 +141,15 @@ class WorkersExecutor:
         """Send the new total to the agent's worker (``Leases.extend``), which moves the agent's deadline."""
         self.leases.extend(key, seconds)
 
-    def cancel(self, key: JobKey) -> None:
+    def cancel(self, key: Key) -> None:
         """Revoke the job's live lease: its worker stops it, and it still reports. A queued job is not touched."""
         self.leases.revoke(key)
 
-    def adopt(self, left: Sequence[LeftJob]) -> list[JobKey]:
+    def adopt(self, left: Sequence[LeftJob]) -> list[Key]:
         """Take back the jobs on a lease, then start the worker. A job that has no lease is returned.
 
         The worker re-attaches to each agent that still has its worktree, and reports the rest gone. Core fails a
-        returned agent, or asks again for a returned evaluation.
+        returned agent, or asks again for a returned job of another kind.
         """
         refused = self.leases.adopt(left, SERVE)
         self.worker.start()
@@ -245,11 +244,7 @@ def seen(s: Session) -> list[Seen]:
     rows = s.execute(select(Lease.worker, Lease.kind).where(Lease.state.in_(LIVE_LEASES))).all()
     live = Counter((worker, kind) for worker, kind in rows)
     return [
-        Seen(
-            row,
-            HostSample.model_validate(row.sample),
-            Capacity(live[row.id, LeaseKind.AGENT], live[row.id, LeaseKind.EVALUATION]),
-        )
+        Seen(row, HostSample.model_validate(row.sample), counted({k: n for (w, k), n in live.items() if w == row.id}))
         for row in s.scalars(select(LeaseWorker).order_by(LeaseWorker.id))
     ]
 

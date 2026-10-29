@@ -152,13 +152,6 @@ OPEN = (AgentSessionState.REQUESTED, *LIVE)
 ENDED = (AgentSessionState.EXITED, AgentSessionState.KILLED)
 
 
-class LeaseKind(StrEnum):
-    """What a lease's job is: an agent session, or an evaluation of the evaluation queue."""
-
-    AGENT = 'agent'
-    EVALUATION = 'evaluation'
-
-
 class LeaseState(StrEnum):
     """The lifecycle of a lease (``piloop.plugins.executor.kit.leases``).
 
@@ -376,7 +369,6 @@ class Base(DeclarativeBase):
         CommentKind: KindText(CommentKind),
         AfterEnd: by_value(AfterEnd),
         AgentSessionState: by_value(AgentSessionState),
-        LeaseKind: by_value(LeaseKind),
         LeaseState: by_value(LeaseState),
         Access: by_value(Access),
     }
@@ -521,12 +513,12 @@ class Lease(Base):
     __tablename__ = 'leases'
     __table_args__ = (
         CheckConstraint(
-            "(kind = 'agent') = (agent_session_id IS NOT NULL) AND (kind = 'evaluation') = (evaluation_id IS NOT NULL)",
+            "(kind = 'agent') = (agent_session_id IS NOT NULL) AND (kind = 'agent') = (job_id IS NULL)",
             name='leases.a lease has the job of its kind',
         ),
         Index('ix_leases_state', 'state'),
         Index('ix_leases_agent_session', 'agent_session_id'),
-        Index('ix_leases_evaluation', 'evaluation_id'),
+        Index('ix_leases_job', 'kind', 'job_id'),
         Index('ix_leases_acquire_request', 'acquire_request', unique=True),
         *text_checks('leases', nullable=('worker', 'report_request')),
         {'sqlite_autoincrement': True},
@@ -534,18 +526,21 @@ class Lease(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     """The fencing token. AUTOINCREMENT: an id is never used again, so a newer lease always has a larger one."""
-    kind: Mapped[LeaseKind]
+    kind: Mapped[str]
+    """The kind of its job: ``agent``, or a job kind's name (``piloop.job_kinds``), such as ``evaluation``."""
     agent_session_id: Mapped[AgentSessionId | None] = mapped_column(ForeignKey('agent_sessions.id', ondelete='CASCADE'))
     """The job of an ``agent`` lease."""
-    evaluation_id: Mapped[int | None]
-    """The job of an ``evaluation`` lease: an ``evaluations`` id. No foreign key: the queue row goes when it is
-    measured, and the lease stays."""
+    job_id: Mapped[int | None]
+    """The job of a lease of another kind: its row, as its kind names it (``JobKind.id``), such as an ``evaluations``
+    id. No foreign key: the row may go when its job applied, and the lease stays."""
+    runner: Mapped[str | None]
+    """What a worker must have to take the job (``JobKind.runner``), such as an evaluator runner. NULL for an agent."""
     state: Mapped[LeaseState] = mapped_column(default=LeaseState.QUEUED, server_default=LeaseState.QUEUED.value)
     worker: Mapped[str | None]
     """The worker that acquired it. NULL while it is queued."""
     job_cid: Mapped[Cid] = mapped_column(CidText)
-    """The job description (``AgentJob``, ``EvaluationJob``), a JSON blob in the CAS: what to materialize, what to run,
-    and what to return. One job queued again on a new lease is one blob."""
+    """The job description (``AgentJob``, or its kind's ``JobKind.JOB``), a JSON blob in the CAS: what to materialize,
+    what to run, and what to return. One job queued again on a new lease is one blob."""
     handle: Mapped[dict[str, object]] = mapped_column(default=dict, server_default=EMPTY_JSON)
     """What the worker needs to find its job again after a restart: the runtime's handle of an agent, or the process
     group of an evaluator."""
@@ -644,7 +639,7 @@ class Limit(Base):
     __table_args__ = (*text_checks('limits', 'key', 'reason', 'actor'),)
 
     key: Mapped[str] = mapped_column(primary_key=True)
-    """The dotted key: the capability, then the path in its parameters, ``executor.pools.serve.evaluations``."""
+    """The dotted key: the capability, then the path in its parameters, ``executor.pools.serve.slots.evaluation``."""
     value: Mapped[JsonValue] = mapped_column(JSON, nullable=False)
     """JSON: a null is a value too, as ``agents = null``, no bound."""
     reason: Mapped[str]

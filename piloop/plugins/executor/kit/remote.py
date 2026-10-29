@@ -28,6 +28,7 @@ from functools import partial
 from http import HTTPStatus
 from importlib.metadata import version
 from time import monotonic
+from typing import Annotated
 
 import httpx2 as httpx
 from covalence import Cid
@@ -39,15 +40,7 @@ from piloop.net import Changed, Refusal, Route
 from piloop.net.tokens import Caller
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import BlobAddress, Cas
-from piloop.plugins.executor.contract import (
-    AgentReport,
-    EvaluationReport,
-    HarnessSession,
-    JobSecrets,
-    MissingBlobs,
-    RepoId,
-    Report,
-)
+from piloop.plugins.executor.contract import REPORTS, HarnessSession, JobSecrets, MissingBlobs, RepoId, Report
 from piloop.plugins.executor.kit.capacity import HostSample
 from piloop.plugins.executor.kit.client import PROTOCOL, Dismissed, Local, Registration, WorkerInfo
 from piloop.plugins.executor.kit.clones import NotSent
@@ -149,7 +142,7 @@ class Reported(BaseModel):
 
     lease: int
     request_id: str
-    report: Report
+    report: Annotated[Report, REPORTS]
 
 
 class Receipt(RootModel[dict[str, object]]):
@@ -363,7 +356,7 @@ class Remote:
         body = Heartbeat(protocol=PROTOCOL, leases=dict(leases), sample=sample)
         return Answers.model_validate_json(self._post('heartbeat', body)).root
 
-    def report(self, lease: int, request_id: str, report: AgentReport | EvaluationReport) -> dict[str, object]:
+    def report(self, lease: int, request_id: str, report: Report) -> dict[str, object]:
         answer = self._post('report', Reported(lease=lease, request_id=request_id, report=report))
         return Receipt.model_validate_json(answer).root
 

@@ -84,7 +84,7 @@ def run_candidates(db: Database, run_id: RunId) -> list[Candidate]:
 
 
 def queued_executor(db: Database, runtime: ScriptRuntime, tmp_path: Path, slots: int) -> RunController:
-    executor = Workers.model_validate({'pools': {'serve': {'evaluations': slots}}})
+    executor = Workers.model_validate({'pools': {'serve': {'slots': {'evaluation': slots}}}})
     return serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=executor))
 
 

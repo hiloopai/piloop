@@ -6,15 +6,16 @@ pressure takes no job, as the node conditions of Kubernetes taint a node. Its sl
 """
 
 import os
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
 import psutil
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from piloop.db.models import LeaseKind, utcnow
-from piloop.plugins.executor.contract import Capacity
+from piloop.db.models import utcnow
+from piloop.plugins.executor.contract import AGENT, Capacity, job_kinds
 from piloop.plugins.executor.kit.tables import NoLease
 from piloop.plugins.host import Live
 from piloop.plugins.provisioner.contract import PROVISIONERS, ProvisionerConfig
@@ -95,31 +96,53 @@ class Pool(BaseModel):
 
     agents: Annotated[int | None, Field(ge=0), Live] = None
     """How many agents a worker of the pool runs at the same time. No bound when unset."""
-    evaluations: Annotated[int, Field(ge=0), Live] = 2
-    """How many evaluations a worker of the pool runs at the same time."""
+    slots: Annotated[dict[str, Annotated[int, Field(ge=0)]], Field(validate_default=True), Live] = {}
+    """How many jobs of each other kind a worker of the pool runs at the same time, by kind: ``{ evaluation = 1 }``. A
+    kind that it does not name has its own default (``JobKind.SLOTS``: 2 evaluations)."""
     min_memory_gb: Annotated[float | None, Live] = None
     """A worker with less memory available takes no job, and its slots count zero."""
     max_load: Annotated[float | None, Live] = None
     """The 1-minute load per CPU above which a worker takes no job, and its slots count zero."""
     runners: list[str] = []
-    """The evaluator runners that its workers have, before any of them runs: the evaluations that a provisioned pool
-    starts a worker for."""
+    """The runners that its workers have, before any of them runs (``JobKind.runner``), such as evaluator runners: the
+    jobs that a provisioned pool starts a worker for."""
     provisioner: Provisioner | None = None
     """Start and stop its workers on demand. None: they start by hand (``piloop worker``)."""
     usd_per_hour: float | None = Field(default=None, ge=0)
     """What one worker of the pool costs per hour, in USD: the ``leases`` fact source charges each campaign its jobs'
     share. None: unknown, so the compute of a campaign that ran a job here is unknown too."""
 
+    @field_validator('slots', mode='after')
+    @classmethod
+    def _kinds(cls, slots: dict[str, int]) -> dict[str, int]:
+        """Every kind that the pool does not name has its default; one that no package declares is refused."""
+        kinds = job_kinds()
+        if unknown := sorted(set(slots) - set(kinds)):
+            raise ValueError(f'slots of no job kind: {", ".join(unknown)}; the kinds are {", ".join(kinds)}')
+        return {k: slots.get(k, kind.SLOTS) for k, kind in kinds.items()}
+
     @model_validator(mode='after')
     def _runners(self) -> Pool:
-        if self.provisioner is not None and self.evaluations and not self.runners:
-            raise ValueError('a pool with a provisioner names the evaluator runners of its workers: runners = [...]')
+        if self.provisioner is not None and not self.runners and any(self.slots.values()):
+            raise ValueError('a pool with a provisioner names the runners of its workers: runners = [...]')
         return self
 
 
-def slots(capacity: Pool | Capacity, kind: LeaseKind) -> int | None:
+def kinds() -> list[str]:
+    """Every kind of job, in the order in which a worker takes them: agents first, then each ``JobKind``'s."""
+    return [AGENT, *job_kinds()]
+
+
+def slots(capacity: Pool | Capacity, kind: str) -> int | None:
     """The slots of ``kind`` in a pool or a capacity. None: no bound."""
-    return {LeaseKind.AGENT: capacity.agents, LeaseKind.EVALUATION: capacity.evaluations}[kind]
+    if isinstance(capacity, Pool):
+        return capacity.agents if kind == AGENT else capacity.slots.get(kind, 0)
+    return capacity.free(kind)
+
+
+def counted(live: Mapping[str, int]) -> Capacity:
+    """A capacity that counts ``live``, the jobs of each kind that a worker runs: what ``admits`` reads."""
+    return Capacity(live.get(AGENT, 0), {k: n for k, n in live.items() if k != AGENT})
 
 
 def pressure(pool: Pool, host: HostSample) -> NoLease | None:
@@ -131,7 +154,7 @@ def pressure(pool: Pool, host: HostSample) -> NoLease | None:
     return next((reason for reason, refused in gates if refused), None)
 
 
-def admits(pool: Pool, host: HostSample, running: Capacity, kind: LeaseKind) -> NoLease | None:
+def admits(pool: Pool, host: HostSample, running: Capacity, kind: str) -> NoLease | None:
     """Return why a worker of ``pool`` takes no job of ``kind`` now, or None when it takes one.
 
     ``running`` counts the worker's live leases of each kind. The host's ``pressure`` comes first, then the slots.

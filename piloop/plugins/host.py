@@ -660,6 +660,10 @@ def _entries(group: str, noun: str) -> dict[str, EntryPoint]:
     return dict(sorted(found.items(), key=lambda item: id(item[1].dist) not in ours))
 
 
+_FORGET: list[Callable[[], None]] = []
+"""What ``close`` calls to make each ``Slot`` read its entry points again."""
+
+
 class Slot[T]:
     """An entry point group that a package declares into, which piloop reads before it opens any provider.
 
@@ -678,6 +682,12 @@ class Slot[T]:
         self.kind = kind
         self.noun = noun
         self.refuses = refuses
+        self._loaded: dict[str, T] | None = None
+        _FORGET.append(self.forget)
+
+    def forget(self) -> None:
+        """Forget what ``once`` read: its next call reads the entry points again."""
+        self._loaded = None
 
     def paths(self) -> dict[str, str]:
         """Each entry's ``<module>:<attribute>`` by name, in order, with nothing imported.
@@ -694,6 +704,15 @@ class Slot[T]:
             PluginError: Two entry points have one name.
         """
         return {name: _source(ep) for name, ep in _entries(self.group, self.noun).items()}
+
+    def once(self) -> dict[str, T]:
+        """What ``loaded`` returns, read once until ``close``: the installed packages do not change while a process runs.
+
+        For a slot that is read on a hot path, such as the job kinds on each job and report.
+        """
+        if self._loaded is None:
+            self._loaded = self.loaded()
+        return self._loaded
 
     def loaded(self) -> dict[str, T]:
         """What each entry names by name, in order, imported and checked.
@@ -1235,7 +1254,12 @@ def _activate[P: Parameters](capability: Capability[P], stack: ExitStack) -> Non
 
 
 def close() -> None:
-    """Unregister every capability of the process, newest first, and forget ``declared``. Closing twice is harmless."""
+    """Unregister every capability of the process, newest first, and forget ``declared`` and each ``Slot``'s entries.
+
+    Closing twice is harmless.
+    """
     with _lock:
         _process.close()
         declared.cache_clear()
+        for forget in _FORGET:
+            forget()

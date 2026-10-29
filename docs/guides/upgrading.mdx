@@ -242,6 +242,44 @@ SELECT id, session_file FROM agent_sessions WHERE subject_kind = 'run' AND subje
 place of `run`, `idea` and `proposed_by`, and `anomaly.startup` carries `subject` in place of `run`. The upgrade
 rewrites the stored events, so a reader of the feed sees only the new keys. Upgrade hiloop-traces with piloop.
 
+### Upgrade the workers with the server
+
+The workers' protocol is 17. A server refuses a worker of another protocol, which stops its jobs and exits: an agent
+that it ran ends `worker_lost`, and an evaluation waits again. Upgrade when no job runs, and upgrade every worker
+elsewhere with the server.
+
+### A pool's slots of each kind of job
+
+`evaluations` of `[plugins.executor.pools.<pool>]` is `slots = { evaluation = n }`: change it in `config.toml`. The
+upgrade moves a live limit to its new key:
+
+```toml
+[plugins.executor.pools.gpu]
+agents = 0
+slots = { evaluation = 1 }
+```
+
+```bash
+piloop limits set executor.pools.gpu.slots.evaluation=1 --reason "the GPU trains a model"
+```
+
+`piloop worker list` has a column for each kind of job. `leases.evaluation_id` is `leases.job_id`, with the lease's
+`kind`, and `leases.runner` says what a worker needs to take the job.
+
+### Executor and vcs plugins
+
+A kind of job besides an agent's is a `JobKind`: its job and report models, what runs it on a worker, and what applies
+its report. An executor runs it with `kind_of(job).run`. The `JobKind(job, report)` of 0.4.0 is replaced.
+
+| Before 0.5.0 | Since 0.5.0 |
+|---|---|
+| `submit(job: AgentJob \| EvaluationJob)`, `Results.finished(job, report)` | `submit(job: Job)`; `finished` takes any kind's report |
+| `Capacity(agents, evaluations)`, `.evaluations` | `Capacity(agents, slots={'evaluation': n})`, `.free('evaluation')` |
+| `EvaluationKey(n)`, `type JobKey` | `JobKey('evaluation', n)`, `type Key = AgentKey \| JobKey` |
+| `run_evaluation`, `remove(job, site)` | `kind_of(job).run(job, control, site, span)`, `site.remove(job)` |
+| `Repository.capture(cas, base, run, ignore)` | `capture(cas, base, by, ignore)`: `by` is the agent's subject, `run#12` |
+| `Repository.keep(revision, RunVersion(c, run, i))` | `keep(revision, Pin(c, f'r{run}/{i}'))`: the ref names are the same |
+
 ## Upgrading to 0.4.0
 
 ### Removed keys

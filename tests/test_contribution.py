@@ -1,12 +1,12 @@
 """Contributions: what a provider that the daemon opened, or an installed package, adds to the kernel."""
 
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future
 from datetime import datetime
 from importlib.metadata import EntryPoint
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 import cyclopts
 import httpx2 as httpx
@@ -32,7 +32,7 @@ from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.net import Route
 from piloop.net.server import app, executor_router
 from piloop.net.tokens import Caller, Tokens
-from piloop.otel import Tracer
+from piloop.otel import Span, Tracer
 from piloop.plugins import contribution
 from piloop.plugins.archive.contract import ArchiveHost
 from piloop.plugins.archive.local import LocalArchive
@@ -40,7 +40,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.optimization import api as optimization_api
 from piloop.plugins.contribution import CONTRIBUTORS, Contribution, DaemonHost, collect, contributions_of, machinery
-from piloop.plugins.executor.contract import JOB_KINDS, AgentFinished, AgentJob, JobKind
+from piloop.plugins.executor.contract import JOB_KINDS, JOBS, Applying, Control, Job, JobKind, Report, Site
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.fact_source.spend import api as spend_api
 from piloop.plugins.host import PluginError
@@ -265,7 +265,47 @@ def check_declared() -> None:
         slot.loaded()
 
 
-LATTICE = JobKind(AgentJob, AgentFinished)
+class LatticeJob(Job):
+    kind: Literal['lattice'] = 'lattice'
+
+
+class LatticeReport(Report):
+    kind: Literal['lattice'] = 'lattice'
+
+
+class Lattice(JobKind):
+    """A job kind that a package declares: no test runs it."""
+
+    JOB: ClassVar[type[Job]] = LatticeJob
+    REPORT: ClassVar[type[Report]] = LatticeReport
+
+    def id(self, job: Job) -> int:
+        raise NotImplementedError
+
+    def runner(self, job: Job) -> str:
+        raise NotImplementedError
+
+    def runners(self) -> list[str]:
+        raise NotImplementedError
+
+    def target(self, job: Job) -> TargetRef:
+        raise NotImplementedError
+
+    def run(self, job: Job, control: Control, site: Site, span: Span) -> Report:
+        raise NotImplementedError
+
+    def apply(self, s: Session, job: Job, report: Report, daemon: Applying) -> None:
+        raise NotImplementedError
+
+    def lost(self, s: Session, job_id: int) -> None:
+        raise NotImplementedError
+
+    def waiting(self, s: Session, runners: Sequence[str]) -> bool:
+        raise NotImplementedError
+
+
+LATTICE = Lattice()
+ARTIFACT = {'vcs': {'provider': 'git'}, 'repo': 1, 'revision': 'abc'}
 
 
 def test_a_package_s_job_kind_is_checked_when_the_daemon_starts_and_one_of_piloop_is_refused(
@@ -273,9 +313,18 @@ def test_a_package_s_job_kind_is_checked_when_the_daemon_starts_and_one_of_piloo
 ) -> None:
     installed(monkeypatch, [EntryPoint('lattice', f'{__name__}:LATTICE', JOB_KINDS.group)])
     check_declared()
-    assert JOB_KINDS.loaded() == {'lattice': LATTICE}
+    assert list(JOB_KINDS.loaded()) == ['evaluation', 'lattice'] and JOB_KINDS.loaded()['lattice'] is LATTICE
+    assert JOBS.validate({'kind': 'lattice', 'artifact': ARTIFACT, 'place': 'p'}) == LatticeJob.model_validate(
+        {'artifact': ARTIFACT, 'place': 'p'}
+    ), 'a job of the kind validates with no change in core'
+    installed(monkeypatch, [EntryPoint('agent', f'{__name__}:LATTICE', JOB_KINDS.group)])
+    with pytest.raises(PluginError, match="piloop.job_kinds: piloop runs jobs of the kind 'agent' already"):
+        check_declared()
+    installed(monkeypatch, [EntryPoint('mesh', f'{__name__}:LATTICE', JOB_KINDS.group)])
+    with pytest.raises(PluginError, match="its job is of the kind 'lattice', not 'mesh'"):
+        check_declared()
     installed(monkeypatch, [EntryPoint('evaluation', f'{__name__}:LATTICE', JOB_KINDS.group)])
-    with pytest.raises(PluginError, match="piloop.job_kinds: piloop runs jobs of the kind 'evaluation' already"):
+    with pytest.raises(PluginError, match="'evaluation' is a job kind already"):
         check_declared()
 
 

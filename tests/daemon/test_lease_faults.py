@@ -42,7 +42,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import attempts
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.contract import CAS
-from piloop.plugins.executor.contract import AgentFinished, AgentReport, EvaluationReport
+from piloop.plugins.executor.contract import AgentFinished, Report
 from piloop.plugins.executor.kit.leases import NOT_TAKEN, SERVE, Leases, StaleReport, Timing
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.runtime.kit import tags
@@ -286,7 +286,7 @@ def test_a_report_whose_answer_was_lost_is_sent_again_and_applies_once(
     receipts: list[dict[str, object]] = []
 
     def answer_lost_once(
-        self: Leases, lease_id: int, worker: str, request_id: str, result: AgentReport | EvaluationReport
+        self: Leases, lease_id: int, worker: str, request_id: str, result: Report
     ) -> dict[str, object]:
         sent.append(request_id)
         receipt = report(self, lease_id, worker, request_id, result)

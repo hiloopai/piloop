@@ -7,7 +7,7 @@ pool in config order:
 
 | Step | Rule |
 |---|---|
-| waiting | The queued leases that the pool's workers can run: a kind of job that it has slots for, and an evaluation of one of its ``runners``. |
+| waiting | The queued leases that the pool's workers can run: a kind of job that it has slots for, and a job of another kind with one of its ``runners``. |
 | covered | The free slots of the reachable workers of any pool that can run them, and the slots of the workers that still start, in any provisioned pool. |
 | need | The workers for what waits and is not covered. With ``once``: one for each lease. |
 | start | Up to ``min``, or the need, below ``max``. At most ``max_starting`` at once, and none during a backoff or past ``max_worker_hours_per_day``. |
@@ -45,16 +45,26 @@ from piloop.campaign import escalations
 from piloop.db import feed
 from piloop.db.events import emit
 from piloop.db.feed import Topic
-from piloop.db.models import LIVE_LEASES, EventModel, Lease, LeaseKind, LeaseState, ReadBy, utcnow
+from piloop.db.models import LIVE_LEASES, EventModel, Lease, LeaseState, ReadBy, utcnow
 from piloop.db.session import Database, read_transaction, write_transaction
 from piloop.ids import TargetRef
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.escalation.contract import Choice, EscalationView
-from piloop.plugins.executor.contract import Capacity
+from piloop.plugins.executor.contract import AGENT
 from piloop.plugins.executor.kit import leases
-from piloop.plugins.executor.kit.capacity import HostSample, Pool, Provisioner, add, admits, less, slots, times
-from piloop.plugins.executor.kit.leases import KINDS, LeaseExpired, LeaseQueued, LeaseUnreachable, Timing, WorkerDrained
+from piloop.plugins.executor.kit.capacity import (
+    HostSample,
+    Pool,
+    Provisioner,
+    add,
+    admits,
+    counted,
+    kinds,
+    less,
+    slots,
+    times,
+)
+from piloop.plugins.executor.kit.leases import LeaseExpired, LeaseQueued, LeaseUnreachable, Timing, WorkerDrained
 from piloop.plugins.executor.kit.tables import INSTANCE, InstanceEnd, LeaseWorker, WorkerInstance, WorkerInstanceState
 from piloop.plugins.network.contract import Network, NotEnrolled
 from piloop.plugins.provisioner.contract import (
@@ -129,19 +139,19 @@ class Seen:
     instances: list[WorkerInstance]
     """The rows that have not ended, oldest first."""
     workers: dict[str, LeaseWorker]
-    live: Counter[tuple[str, LeaseKind]]
+    live: Counter[tuple[str, str]]
     """The live leases of each worker, by kind."""
     held: set[str]
     """The workers that held a lease once."""
     last_end: dict[str, datetime]
     """When each worker's last lease ended."""
-    queued: list[tuple[LeaseKind, str | None]]
-    """The queued leases: their kind, and an evaluation's runner."""
+    queued: list[tuple[str, str | None]]
+    """The queued leases: their kind, and their runner (None for an agent's)."""
     hours: dict[str, float]
     """The hours that each pool's workers ran in the last 24."""
 
     def busy(self, worker: str) -> bool:
-        return any(self.live[worker, kind] for kind in KINDS)
+        return any(n for (w, _), n in self.live.items() if w == worker)
 
 
 @dataclass
@@ -522,14 +532,9 @@ def _read(db: Database, now: datetime) -> Seen:
         ended = s.execute(
             select(Lease.worker, func.max(Lease.ended_at)).where(Lease.worker.is_not(None)).group_by(Lease.worker)
         ).all()
-        queued: list[tuple[LeaseKind, str | None]] = [  # an agent's lease has no evaluator: None
+        queued: list[tuple[str, str | None]] = [
             (kind, runner)
-            for kind, runner in s.execute(
-                select(Lease.kind, Evaluator.runner)
-                .outerjoin(Evaluation, Evaluation.id == Lease.evaluation_id)
-                .outerjoin(Evaluator, Evaluator.id == Evaluation.evaluator_id)
-                .where(Lease.state == LeaseState.QUEUED)
-            )
+            for kind, runner in s.execute(select(Lease.kind, Lease.runner).where(Lease.state == LeaseState.QUEUED))
         ]
         recent = s.scalars(
             select(WorkerInstance).where(WorkerInstance.ended_at.is_(None) | (WorkerInstance.ended_at > since))
@@ -549,11 +554,11 @@ def _need(
 ) -> int:
     """The workers that ``pool`` needs for the jobs that wait and that no free or starting slot covers."""
     need = 0
-    for kind in KINDS:
+    for kind in kinds():
         per = slots(pool, kind)
         if per == 0:
             continue
-        waiting = sum(1 for k, runner in seen.queued if k is kind and _runs(pool, kind, runner))
+        waiting = sum(1 for k, runner in seen.queued if k == kind and _runs(pool, kind, runner))
         covered = _covered(kind, pool, seen, pools, starting, since)
         short = waiting - covered if covered is not None else 0
         if short > 0:
@@ -561,13 +566,13 @@ def _need(
     return need
 
 
-def _runs(pool: Pool, kind: LeaseKind, runner: str | None) -> bool:
-    """Whether a worker of ``pool`` can run a job of ``kind``, of ``runner`` for an evaluation."""
-    return kind is LeaseKind.AGENT or runner in pool.runners
+def _runs(pool: Pool, kind: str, runner: str | None) -> bool:
+    """Whether a worker of ``pool`` can run a job of ``kind`` that needs ``runner``: any agent's."""
+    return kind == AGENT or runner in pool.runners
 
 
 def _covered(
-    kind: LeaseKind, pool: Pool, seen: Seen, pools: Mapping[str, Pool], starting: Counter[str], since: datetime
+    kind: str, pool: Pool, seen: Seen, pools: Mapping[str, Pool], starting: Counter[str], since: datetime
 ) -> int | None:
     """The slots of ``kind`` that can take the jobs that ``pool`` would run. None: no bound.
 
@@ -578,13 +583,13 @@ def _covered(
         found = pools.get(worker.pool)
         if found is None or worker.drained_at is not None or worker.seen_at <= since:
             continue
-        if kind is LeaseKind.EVALUATION and not set(worker.runners) & set(pool.runners):
+        if kind != AGENT and not set(worker.runners) & set(pool.runners):
             continue
-        running = Capacity(seen.live[worker.id, LeaseKind.AGENT], seen.live[worker.id, LeaseKind.EVALUATION])
+        running = counted({k: n for (w, k), n in seen.live.items() if w == worker.id})
         if admits(found, HostSample.model_validate(worker.sample), running, kind) is None:
             total = add(total, less(slots(found, kind), slots(running, kind) or 0))
     for name, count in starting.items():  # each a provisioned pool of the pass
         found = pools[name]
-        if kind is LeaseKind.AGENT or set(found.runners) & set(pool.runners):
+        if kind == AGENT or set(found.runners) & set(pool.runners):
             total = add(total, times(slots(found, kind), count))
     return total

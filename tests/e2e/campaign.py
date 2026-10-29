@@ -186,7 +186,7 @@ class Smoke:
         """The process tags of the run's implementers, or of every agent."""
         rows = self.sql(
             "SELECT json_extract(handle, '$.token') AS token FROM agent_sessions WHERE token IS NOT NULL"
-            + (' AND run_id = ?' if run_id is not None else ''),
+            + (" AND subject_kind = 'run' AND subject_id = ?" if run_id is not None else ''),
             *([run_id] if run_id is not None else []),
         )
         return [r['token'] for r in rows]

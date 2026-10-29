@@ -13,7 +13,7 @@ from piloop.cli import common, local
 from piloop.db.models import utcnow
 from piloop.otel import tracer
 from piloop.plugins.cas.contract import CAS
-from piloop.plugins.executor.contract import EXECUTORS
+from piloop.plugins.executor.contract import EXECUTORS, job_kinds
 from piloop.plugins.executor.workers import Workers, instances, remote_worker, seen
 from piloop.plugins.network.contract import NETWORKS, NoCredential
 from piloop.proc import withhold
@@ -86,7 +86,8 @@ def worker_list() -> None:
         now = utcnow()
         workers = seen(s)
         started = instances(s)
-        table = Table('worker', 'pool', 'seen', 'load', 'memory', 'disk', 'agents', 'evaluations', 'no lease', box=None)
+        others = job_kinds()
+        table = Table('worker', 'pool', 'seen', 'load', 'memory', 'disk', 'agents', *others, 'no lease', box=None)
         for w in workers:
             table.add_row(
                 w.worker.id,
@@ -96,7 +97,7 @@ def worker_list() -> None:
                 decimal(w.host.memory_available),
                 decimal(w.host.disk_free),
                 str(w.running.agents),
-                str(w.running.evaluations),
+                *(str(w.running.free(kind)) for kind in others),
                 w.worker.no_lease or '',
             )
     if not isinstance(executor := EXECUTORS.selected(common.settings.providers), Workers):

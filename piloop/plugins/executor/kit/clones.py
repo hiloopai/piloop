@@ -17,8 +17,7 @@ from pathlib import Path
 
 from covalence import Cid
 
-from piloop.ids import Revision
-from piloop.plugins.campaign_type.kit.runs.ids import RunId
+from piloop.ids import Revision, TargetRef
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import RepoId, Source
 from piloop.plugins.vcs.contract import Captured, Repository, Vcs
@@ -120,11 +119,11 @@ class Clones:
         with closing(self.repository(source)) as repo:
             return repo.untracked(source.revision, names)
 
-    def bring_back(self, source: Source, cwd: Path, run: RunId) -> Captured:
-        """Save what the agent left unsaved for ``run``, and put its versions into the CAS (``Repository.capture``)."""
+    def bring_back(self, source: Source, cwd: Path, subject: TargetRef) -> Captured:
+        """Save what the agent left unsaved, by ``subject``, and put its versions into the CAS (``Repository.capture``)."""
         ignored = self.ignored(source)
         with closing(source.vcs.open(cwd)) as checkout:
-            return checkout.capture(self._cas, source.revision, run, ignored)
+            return checkout.capture(self._cas, source.revision, subject, ignored)
 
     def remove(self, artifact: Source, cwd: Path) -> None:
         """Remove the checkout at ``cwd``."""

@@ -178,17 +178,19 @@ from piloop.store.tree import Materialised, Copy
 from piloop.plugins.archive.local import LocalArchive
 from piloop.plugins.executor.contract import EXECUTORS, Executor, ExecutorConfig, Host
 from piloop.plugins.executor.contract import Results, Settled
-from piloop.plugins.executor.contract import AgentJob, EvaluationJob, LeftJob, Resume
-from piloop.plugins.executor.contract import AgentReport, EvaluationReport, Sample
+from piloop.plugins.executor.contract import Job, AgentJob, LeftJob, Resume
+from piloop.plugins.executor.contract import Report, AgentReport
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EvaluationJob, EvaluationReport, Sample, Bar
+from piloop.plugins.campaign_type.kit.evaluation.jobs import run_evaluation
 from piloop.plugins.campaign_type.kit.evaluation.config import Rung, Tolerance
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.executor.contract import AgentFinished, AgentNotStarted, HarnessSession
-from piloop.plugins.executor.contract import AgentKey, EvaluationKey, JobKey
+from piloop.plugins.executor.contract import AgentKey, EvaluationKey, JobKey, Key
 from piloop.plugins.executor.contract import key_of, Capacity, Prompt
-from piloop.plugins.executor.contract import JobKind, JobSecrets, job_secrets
-from piloop.plugins.executor.contract import Source, Bar, RepoId, MissingBlobs, Workspace
-from piloop.plugins.executor.kit.jobs import Control, Site, local_site, run_agent, remove
-from piloop.plugins.executor.kit.jobs import run_evaluation
+from piloop.plugins.executor.contract import JobKind, Applying, job_kinds, kind_of, JobSecrets, job_secrets
+from piloop.plugins.executor.contract import Source, RepoId, MissingBlobs, Workspace
+from piloop.plugins.executor.contract import Control, Site
+from piloop.plugins.executor.kit.jobs import Machine, local_site, run_agent, remove
 from piloop.plugins.executor.kit.leases import Leases, Timing, Grant, Answer
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.proc import Channel, kill_group
@@ -213,7 +215,7 @@ from piloop.plugins.network.proxy import Proxy
 
 from piloop.ids import Revision
 from piloop.plugins.vcs.contract import VCS, Vcs, Repository, Version, Conflicts, Transfer, Fetch, Captured, Unsaved
-from piloop.plugins.vcs.contract import Keep, RunVersion, RebaseVersion, ReferenceVersion
+from piloop.plugins.vcs.contract import Pin, Keep, RunVersion, RebaseVersion, ReferenceVersion
 from piloop.plugins.vcs.contract import VcsError, NotARepository, UnknownRevision, CloneFailed
 from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import Git, GitRepository

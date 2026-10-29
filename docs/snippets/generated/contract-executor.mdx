@@ -6,11 +6,11 @@
 | `Executor.capacity() -> Capacity` | How many more jobs of each kind it can take now: its free slots, less the jobs it has and has not started. |
 | `Executor.capacity_events() -> frozenset[type[EventModel]]` | The events of this executor that say its capacity grew: core then launches what waits for a slot. |
 | `Executor.configure(config: C) -> None` | Take `config`, the one that opened it with the live limits applied. The daemon calls it when one changes. |
-| `Executor.submit(job: AgentJob \| EvaluationJob) -> None` | Run `job`, now or when a slot is free. Every job ends with `Results.finished` or `Results.lost`. |
+| `Executor.submit(job: Job) -> None` | Run `job`, now or when a slot is free. Every job ends with `Results.finished` or `Results.lost`. |
 | `Executor.prompt(key: AgentKey, prompt: Prompt) -> None` | Give `prompt` to the running agent's runtime at least once, then call `Results.queued`. |
 | `Executor.extend(key: AgentKey, seconds: float) -> None` | Let a running agent run `seconds` past its job's `timeout`: its extensions in all. |
-| `Executor.cancel(key: JobKey) -> None` | Stop a job: a kill or a cancel. It still reports how it ended. Called again, it tries again. |
-| `Executor.adopt(left: Sequence[LeftJob]) -> list[JobKey]` | Take over the jobs that a previous daemon process left, and return the keys of those it cannot. |
+| `Executor.cancel(key: Key) -> None` | Stop a job: a kill or a cancel. It still reports how it ended. Called again, it tries again. |
+| `Executor.adopt(left: Sequence[LeftJob]) -> list[Key]` | Take over the jobs that a previous daemon process left, and return the keys of those it cannot. |
 | `Executor.stop(timeout: float) -> None` | Stop every job, and wait up to `timeout` for them to report. Submit no more. |
 | `Executor.hand_over() -> None` | Leave the jobs running for the next daemon process (an in-place restart), which adopts them. |
 | `Executor.close() -> None` | Release what the executor holds. The daemon calls it last. |
