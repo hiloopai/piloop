@@ -102,22 +102,16 @@ jobs:
           PATH="/tmp/bin:$PATH" piloop install-skills
           test -f ~/.agents/skills/piloop-operate/SKILL.md
 
+  # The suite is CPU-bound on a runner's two vCPUs, so it is split over four runners by a hash of each test's id
+  # (tests/shard.py). Each part runs four workers, as the tests also wait on subprocesses. `coverage` adds up their data.
   test:
-    name: test on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    name: test, part ${{ matrix.shard }} of 4
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        exclude:
-          # macOS minutes are scarce in the private mirror: there it runs nightly, on demand and on release PRs only.
-          - os: ${{ (github.repository == 'hiloopai/piloop' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'release-')) && 'none' || 'macos-latest' }}
-        include:
-          - os: ubuntu-latest
-            make: testcov
-            # Two vCPUs; the tests wait on subprocesses, so four pytest workers finish sooner than two.
-            workers: 4
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -128,7 +122,51 @@ jobs:
           enable-cache: true
           cache-suffix: test
       - run: uv sync
-      - run: make ${{ matrix.make || 'test' }} PYTEST_WORKERS=${{ matrix.workers || 'logical' }}
+      - run: uv run pytest -n 4 --shard ${{ matrix.shard }}/4 --durations=10 --cov --cov-report= --cov-fail-under=0
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.shard }}
+          path: .coverage/.coverage
+          include-hidden-files: true
+          retention-days: 1
+
+  coverage:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-suffix: test
+      - run: uv sync
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-*
+          path: parts
+      - run: uv run coverage combine parts/*/.coverage
+      - run: uv run coverage report
+
+  # macOS minutes are scarce in the private mirror: there it runs nightly, on demand and on release PRs only.
+  macos:
+    name: test on macos-latest
+    if: github.repository == 'hiloopai/piloop' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'release-')
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-suffix: test
+      - run: uv sync
+      - run: make test PYTEST_WORKERS=logical
 
   # Not in `check`: a quarantined test fails here without failing CI. It runs on every push, so its fix shows as a
   # run of passes.
@@ -164,9 +202,10 @@ jobs:
 
   check:
     if: always()
-    needs: [lint, test]
+    needs: [lint, test, coverage, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: re-actors/alls-green@release/v1
         with:
+          allowed-skips: macos
           jobs: ${{ toJSON(needs) }}

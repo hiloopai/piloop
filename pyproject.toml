@@ -342,7 +342,7 @@ testpaths = ["tests"]
 pythonpath = ["examples/plugins/nice-runtime", "examples/plugins/sqlite-cas", "examples/plugins/min-gain", "examples/plugins/stop-after-keeps", "examples/plugins/keep-cost", "examples/plugins/inline-executor", "examples/plugins/inference"]
 # The e2e tests run real agents and cost money: only `make e2e` (`-m e2e`, which overrides this) selects them.
 # A quarantined test runs only in `make quarantine` (`-m quarantine`), until its issue is fixed.
-addopts = ["-m", "not e2e and not quarantine"]
+addopts = ["-m", "not e2e and not quarantine", "-p", "tests.shard"]
 markers = [
     "e2e: a real campaign with real agents (make e2e)",
     "quarantine(issue): a flaky test, out of the required run until its open issue (tests/quarantine.toml) is fixed",
