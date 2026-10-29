@@ -16,8 +16,14 @@ from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import Https, HttpsNetwork
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
+from piloop.settings import Settings
 
 type Serving = Callable[..., AbstractContextManager[Server]]
+
+
+@pytest.fixture
+def cfg(tmp_path: Path) -> Settings:
+    return Settings(home=tmp_path)
 
 
 @pytest.fixture

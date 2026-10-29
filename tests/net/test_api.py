@@ -1,14 +1,12 @@
 """The API: who may call it on each listener, what it answers, how its long-poll waits, and its OpenAPI document."""
 
 import errno
-import logging
 import os
 import subprocess
 import threading
 import time
 from contextlib import closing
-from datetime import UTC, datetime, timedelta
-from functools import partial
+from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path
 from types import UnionType
@@ -19,91 +17,60 @@ import pytest
 from fastapi import APIRouter
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute
-from git import Repo
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel
 from pytest_mock import MockerFixture
 from rich.console import Console
-from sqlalchemy import select, update
 
-from piloop.actor import Agent, System
-from piloop.agents.results import AgentSessionExtended, PromptOutcome
+from piloop.actor import System
+from piloop.agents.results import PromptOutcome
 from piloop.api import client as client_module
-from piloop.api.client import SOCKET_ACTOR_HEADER, Client, NoDaemon, Refused
+from piloop.api.client import Client, NoDaemon, Refused
 from piloop.api.contract import (
     MAX_POLL_SECONDS,
     Access,
     AckBody,
-    CancelBody,
-    Checkout,
-    Clone,
-    CommentsQuery,
     EventsQuery,
-    Fork,
     InboxQuery,
-    LaunchBody,
-    LimitBody,
-    Located,
     MessageBody,
     NewsQuery,
-    OutputQuery,
     Params,
     PauseBody,
     Problem,
     PromptBody,
     Reasoned,
-    Remote,
     ReplyBody,
-    RetireBody,
-    SecretBody,
-    SecretCredential,
     Selection,
     StopBody,
-    SyncBody,
-    TokenBody,
-    TokenCredential,
-    defaulted,
 )
-from piloop.api.views import AckOutcome, CampaignState, InvalidConfig, Pending, Queued, Relation, Status, thread_lines
-from piloop.campaign import ops
-from piloop.campaign.stop import CampaignClosed
+from piloop.api.views import CampaignState, Pending, Status, thread_lines
 from piloop.cli import common, main as cli
 from piloop.daemon.api import ROUTERS, Handlers, daemon_state, openapi, with_api
 from piloop.db import session, sql
-from piloop.db.events import emit, has
+from piloop.db.events import emit
 from piloop.db.models import (
     EVENT,
     AgentSession,
     AgentSessionState,
     Campaign,
     Comment,
-    Event,
     EventModel,
-    Pause,
     UnknownEvent,
-    utcnow,
 )
 from piloop.db.session import Database
-from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
-from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.net import tokens
 from piloop.net.server import OPENAPI, Server, app, local_listener
 from piloop.net.tokens import Tokens
 from piloop.plugins.campaign_type.kit.backlog import api as backlog_api
-from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient, IdeaBody, IdeasQuery, PriorityBody, StatusBody
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient, IdeaBody, StatusBody
 from piloop.plugins.campaign_type.kit.candidates import api as candidates_api
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.candidates.wire import CandidatesClient, ImportBody
+from piloop.plugins.campaign_type.kit.candidates.wire import CandidatesClient
 from piloop.plugins.campaign_type.kit.evaluation import api as evaluation_api
-from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
-from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
-from piloop.plugins.campaign_type.kit.evaluation.wire import CancelledBy, EvaluationClient, RungResult, RunningSince
+from piloop.plugins.campaign_type.kit.evaluation.wire import EvaluationClient
 from piloop.plugins.campaign_type.kit.runs import api as runs_api
-from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.runs.wire import ExtendBody, RunsClient
+from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
 from piloop.plugins.campaign_type.kit.verdicts import api as verdicts_api
 from piloop.plugins.campaign_type.kit.verdicts.wire import RemeasureBody, VerdictsClient
 from piloop.plugins.campaign_type.optimization import api as optimization_api
@@ -111,24 +78,12 @@ from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
 from piloop.plugins.contribution import collect, contributions_of, installed
 from piloop.plugins.lineage import api as lineage_api
 from piloop.plugins.lineage.wire import LineageClient
-from piloop.plugins.memory.local.api import JournalBody, Journaled
-from piloop.plugins.memory.local.tables import Journal
 from piloop.plugins.network.contract import NetworkHost
-from piloop.plugins.network.https import ACTOR_HEADER, TIMEOUT, TOKEN_ENV, Https
-from piloop.plugins.network.proxy import Proxy, Rule
+from piloop.plugins.network.https import TIMEOUT, TOKEN_ENV, Https
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
-from piloop.plugins.vcs.git import Git
 from piloop.settings import Settings
-from tests.campaign.test_stop import add_run
-from tests.conftest import EveryClient, disk, measuring, serving_api, store_config
-from tests.reports.test_history import idea
-from tests.test_git import Basic, basic_server
-
-
-@pytest.fixture
-def cfg(tmp_path: Path) -> Settings:
-    return Settings(home=tmp_path)
+from tests.conftest import EveryClient, disk, serving_api
 
 
 def token(db: Database, name: str, access: Access) -> str:
@@ -386,238 +341,6 @@ def test_the_news_long_poll_wakes_on_what_someone_else_writes_and_skips_what_the
         assert unknown.value.error == Problem.UNKNOWN_COMMENT
 
 
-def test_a_caller_acts_as_itself_or_the_orchestrator_and_only_an_agent_s_token_as_that_agent(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    reader = {'Authorization': f'Bearer {token(db, "ana", Access.READ)}'}
-    with serving_api(cfg, listen='127.0.0.1:0') as [_, tcp]:
-        news = tcp.url + '/v1/inbox/news'
-        for named in (None, 'human', 'human:ana', 'orchestrator'):
-            headers = {**reader, **({ACTOR_HEADER: named} if named else {})}
-            assert httpx.get(news, headers=headers, timeout=TIMEOUT).status_code == 200
-        agent = httpx.get(news, headers={**reader, ACTOR_HEADER: 'implementer#12'}, timeout=TIMEOUT)
-        assert agent.json() == {
-            'error': 'forbidden',
-            'detail': 'ana may not act as implementer#12: only the token of implementer#12 acts as it',
-        }
-        other = httpx.get(news, headers={**reader, ACTOR_HEADER: 'human:bob'}, timeout=TIMEOUT)
-        assert other.json() == {'error': 'forbidden', 'detail': 'ana has read access, which may not act as human:bob'}
-        assert httpx.get(news, headers={**reader, ACTOR_HEADER: 'implementer#'}, timeout=TIMEOUT).status_code == 422
-
-
-def test_an_agent_s_token_acts_as_its_agent_only_and_the_owner_on_the_socket_as_anyone_else(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    """The owner acts as the orchestrator with no setup. An agent's token on the socket is that agent, whatever it asks."""
-    with db.session() as s:
-        live = [AgentSession(kind='watchdog', campaign_id=campaign.id, state=AgentSessionState.RUNNING) for _ in '12']
-        s.add_all(live)
-        s.flush()
-        [bound, older] = [Agent(role=RoleName('watchdog'), session=w.id) for w in live]
-        secret = tokens.mint_agent(s, bound).get_secret_value()
-        s.commit()
-    uds = httpx.HTTPTransport(uds=str(cfg.socket_file))
-    with serving_api(cfg), httpx.Client(transport=uds, base_url='http://piloop') as http:
-
-        def journal(text: str, named: str | None, *, bearer: str | None = None) -> httpx.Response:
-            headers = {
-                **({SOCKET_ACTOR_HEADER: named} if named else {}),
-                **({'Authorization': f'Bearer {bearer}'} if bearer else {}),
-            }
-            return http.post(f'/v1/campaigns/{campaign.name}/journal', json={'line': text}, headers=headers)
-
-        for named in (None, 'human', 'orchestrator', 'human:ana'):
-            assert journal(f'owner as {named}', named).status_code == 200, 'the owner needs no setup'
-        for named in (None, 'human', str(bound)):
-            assert journal(f'agent as {named}', named, bearer=secret).status_code == 200
-        for named in ('orchestrator', 'human:ana', str(older)):
-            refused = journal('posing', named, bearer=secret)
-            assert refused.json() == {'error': 'forbidden', 'detail': f'{bound} acts only as itself, not as {named}'}
-        assert journal('posing', str(bound)).json() == {
-            'error': 'forbidden',
-            'detail': f'owner may not act as {bound}: only the token of {bound} acts as it',
-        }, 'without its token, nobody acts as an agent'
-        assert journal('an agent of the daemon before', str(older)).status_code == 200, 'until 0.5.0'
-        assert journal('no such agent', 'watchdog#99').status_code == 403
-    with db.session() as s:
-        signed = {(j.line, j.author) for j in s.scalars(select(Journal))}
-    assert signed >= {
-        ('owner as orchestrator', 'orchestrator'),
-        ('owner as None', 'human'),
-        ('agent as None', str(bound)),
-        ('agent as human', str(bound)),
-        (f'agent as {bound}', str(bound)),
-        ('an agent of the daemon before', str(older)),
-    }
-    assert not {line for line, _ in signed} & {'posing', 'no such agent'}
-
-
-PROXY = Proxy.model_validate(
-    {
-        'listen': '127.0.0.1:0',
-        'claims': {'principal': 'x-principal-id'},
-        'name_claims': ['principal'],
-        'rules': [{'when': {}, 'access': 'act'}],
-    }
-)
-
-
-def test_a_proxy_caller_s_ack_reply_and_pause_sign_as_the_person_it_names(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    comment(db, 'watchdog#2', 'look at this')
-    stamped = {'x-principal-id': 'ana@example.com'}
-    with serving_api(cfg, network_config=PROXY) as [_, tcp], httpx.Client(base_url=tcp.url, headers=stamped) as http:
-        client = Client(http)
-        [acked] = client.ack(AckBody(ids=(CommentId(1),))).results
-        replied = client.reply(CommentId(1), ReplyBody(body='go ahead')).comment
-        paused = client.pause('demo', PauseBody(reason='waits for comment#2')).campaign
-        with (
-            httpx.Client(base_url=tcp.url, headers={**stamped, PROXY.actor_header: 'orchestrator'}) as asking,
-            Client.on(cfg.socket_file, System.HUMAN) as local,
-            Client.on(cfg.socket_file, System.ORCHESTRATOR) as orchestrator,
-        ):
-            start = local.news(NewsQuery()).next
-            acted = Client(asking).reply(CommentId(1), ReplyBody(body='mine')).comment
-            [news] = local.news(NewsQuery(after=start)).items
-            shown = local.inbox(InboxQuery()).items
-            assert orchestrator.news(NewsQuery(after=start)).items == [], (
-                'the orchestrator at the terminal is the same party as the network orchestrator: nothing waits'
-            )
-    me = 'human:ana@example.com'
-    assert news.text() == f'comment#{acted.id} decision p2 on comment#1 (demo) by orchestrator via {me}: mine', (
-        "the person at the terminal sees the network orchestrator's decision, and whose it is"
-    )
-    assert isinstance(paused, CampaignState)
-    assert (acked.acked_by, replied.author, paused.paused) == (me, me, 'launches')
-    assert acted.author == f'orchestrator via {me}', 'a person acts as the orchestrator, and the write says who'
-    with db.session() as s:
-        row = s.get_one(Campaign, campaign.id)
-        assert (row.updated_by, s.get_one(Comment, 1).acked_by) == (me, me)
-        signed = {(e.kind, e.actor) for e in s.scalars(select(Event).where(Event.id > 1))}
-    assert signed == {
-        ('campaign.paused', me),
-        ('comment.acked_at', me),
-        ('comment.decision', me),
-        ('comment.decision', f'orchestrator via {me}'),
-    }, 'the change log signs as the caller'
-    assert {i.author for i in shown} >= {me, f'orchestrator via {me}'}, 'the inbox, as watch shows it, says who replied'
-
-
-def test_behind_the_proxy_an_agent_s_token_signs_on_the_socket_and_no_piloop_token_passes_the_listener(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    """A relayed call runs ``piloop`` on the server's socket with the agent's token; the proxy fronts the listener."""
-    with db.session() as s:
-        live, ended = [
-            AgentSession(kind='watchdog', campaign_id=campaign.id, state=AgentSessionState.RUNNING) for _ in '12'
-        ]
-        s.add_all([live, ended])
-        s.flush()
-        agent, gone = (Agent(role=RoleName('watchdog'), session=w.id) for w in (live, ended))
-        [secret, stale] = [tokens.mint_agent(s, a).get_secret_value() for a in (agent, gone)]
-        ended.state = AgentSessionState.EXITED
-        s.commit()
-    person = token(db, 'ana', Access.ADMIN)
-    uds = httpx.HTTPTransport(uds=str(cfg.socket_file))
-    stamped = {'x-principal-id': 'ana@example.com'}
-    with (
-        serving_api(cfg, network_config=PROXY) as [_, tcp],
-        httpx.Client(transport=uds, base_url='http://piloop') as socket,
-        httpx.Client(base_url=tcp.url, headers=stamped) as network,
-    ):
-        signed = socket.post(
-            f'/v1/campaigns/{campaign.name}/journal',
-            json={'line': 'relayed'},
-            headers={'Authorization': f'Bearer {secret}'},
-        )
-        assert signed.status_code == 200, signed.text
-        late = socket.post(
-            f'/v1/campaigns/{campaign.name}/journal',
-            json={'line': 'late'},
-            headers={'Authorization': f'Bearer {stale}'},
-        )
-        assert (late.status_code, late.json()) == (401, {'detail': 'the token is unknown or revoked'})
-        for bearer in (person, secret):
-            refused = network.post(
-                f'/v1/campaigns/{campaign.name}/journal',
-                json={'line': 'around'},
-                headers={'Authorization': f'Bearer {bearer}'},
-            )
-            assert refused.status_code == 401 and 'takes no piloop token' in refused.json()['detail']
-    with db.session() as s:
-        assert {(j.line, j.author) for j in s.scalars(select(Journal))} == {('relayed', str(agent))}
-
-
-def test_a_proxy_caller_that_its_rule_calls_a_service_never_signs_as_a_person(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    comment(db, 'watchdog#2', 'look at this')
-    rules = [{'when': {}, 'access': 'act', 'caller': 'service'}]
-    network = PROXY.model_copy(update={'rules': [Rule.model_validate(r) for r in rules]})
-    stamped = {'x-principal-id': 'key-2'}
-    with serving_api(cfg, network_config=network) as [_, tcp]:
-        with httpx.Client(base_url=tcp.url, headers=stamped) as http:
-            replied = Client(http).reply(CommentId(1), ReplyBody(body='go ahead')).comment
-        with httpx.Client(base_url=tcp.url, headers={**stamped, PROXY.actor_header: 'orchestrator'}) as http:
-            acted = Client(http).reply(CommentId(1), ReplyBody(body='mine')).comment
-    assert (replied.author, acted.author) == ('service:key-2', 'orchestrator via service:key-2')
-
-
-def test_a_message_signs_as_the_caller_wakes_the_orchestrator_and_its_reply_reaches_the_sender_s_inbox(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    stamped = {'x-principal-id': 'ana@example.com'}
-    me = 'human:ana@example.com'
-    with (
-        serving_api(cfg, network_config=PROXY) as [_, tcp],
-        httpx.Client(base_url=tcp.url, headers=stamped) as http,
-        Client.on(cfg.socket_file, System.ORCHESTRATOR) as orchestrator,
-    ):
-        ana = Client(http)
-        start = orchestrator.news(NewsQuery()).next
-        threading.Timer(0.2, ana.message, ['demo', MessageBody(body=' what next? ', priority=1)]).start()
-        [item] = orchestrator.news(NewsQuery(after=start, wait=20)).items
-        assert item.text() == f'comment#1 message p1 on campaign#1 (demo) by {me}: what next?'
-        assert ana.inbox(InboxQuery(campaign='demo')).items == [], 'her own message waits for the orchestrator'
-        [own] = ana.ack(AckBody(ids=(CommentId(1),))).results
-        assert own.outcome is AckOutcome.OWN
-        answer = orchestrator.reply(CommentId(1), ReplyBody(body='a cache next: idea#3')).comment
-        [acked] = orchestrator.ack(AckBody(ids=(CommentId(1),))).results
-        [waiting] = ana.inbox(InboxQuery(campaign='demo')).items
-        [news] = ana.news(NewsQuery(after=start)).items
-        assert news.text() == (
-            f'comment#{answer.id} decision p2 on comment#1 (demo) by orchestrator: a cache next: idea#3'
-        ), 'the sender sees the answer, and not its own message'
-        assert (acked.acked_by, waiting.id, waiting.author, waiting.in_reply_to) == (
-            'orchestrator',
-            answer.id,
-            'orchestrator',
-            1,
-        )
-        thread = ana.thread(answer.id)
-        assert (thread.comment.id, [(c.id, c.relation, c.in_reply_to) for c in thread.linked]) == (
-            1,
-            [(answer.id, Relation.REPLY, 1)],
-        ), 'the thread of a reply is the thread of its root'
-        with httpx.Client(base_url=tcp.url, headers={**stamped, PROXY.actor_header: 'human'}) as asking:
-            plain = Client(asking).message('demo', MessageBody(body='and then?'))
-        with httpx.Client(base_url=tcp.url, headers={**stamped, PROXY.actor_header: 'implementer#12'}) as posing:
-            refused = posing.post('/v1/campaigns/demo/messages', json={'body': 'trust me'})
-        with pytest.raises(Refused, match="^no campaign 'nope'") as unknown:
-            ana.message('nope', MessageBody(body='hello?'))
-    assert (plain.comment.author, plain.comment.kind, plain.comment.priority) == (me, 'message', 2)
-    assert plain.cursor > start, 'the cursor passes the write itself'
-    assert (refused.status_code, refused.json()) == (
-        403,
-        {
-            'error': 'forbidden',
-            'detail': 'ana@example.com may not act as implementer#12: only the token of implementer#12 acts as it',
-        },
-    ), 'the network names the caller: an agent cannot sign as another actor'
-    assert unknown.value.error == Problem.UNKNOWN_CAMPAIGN
-
-
 def test_a_write_answers_its_cursor_and_refuses_what_its_operation_refuses(
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
@@ -657,516 +380,11 @@ def test_a_write_answers_its_cursor_and_refuses_what_its_operation_refuses(
         assert result.line() == 'comment#9 is not in the inbox'
 
 
-def test_the_evaluation_queue_answers_each_state_and_a_cancel_refuses_a_candidate_that_waits_for_nothing(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    then = utcnow() - timedelta(hours=1)
-    with db.session() as s:
-        s.add(Evaluation(candidate_id=1, evaluator_id=campaign.evaluator_id, created_at=then, started_at=then))
-        s.commit()
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
-        [running] = client.evaluations().evaluations
-        assert (running.candidate, running.campaign, running.summary) == (1, 'demo', 'baseline')
-        assert running.state == RunningSince(since=then)
-        assert client.cancel_evaluation(CandidateId(1)).candidate.id == 1
-        [stopping] = client.evaluations().evaluations
-        assert stopping.state == CancelledBy(by='orchestrator'), 'it runs until the daemon stops its evaluator'
-        with pytest.raises(
-            Refused, match='^candidate#1 has no evaluation that waits or runs: see `piloop eval queue`$'
-        ) as twice:
-            client.cancel_evaluation(CandidateId(1))
-        assert twice.value.error == Problem.REFUSED
-        with pytest.raises(Refused, match='^no candidate#9$') as unknown:
-            client.cancel_evaluation(CandidateId(9))
-        assert unknown.value.error == Problem.UNKNOWN_CANDIDATE
-    with db.session() as s:
-        assert s.get_one(Campaign, campaign.id).paused is None, 'a baseline that measured before holds nothing'
-
-
-def test_a_candidate_reads_with_its_metrics_beside_its_parents_and_each_rung_of_its_climb(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    stop = 'score 2 vs 3 (-1; margin 0.5)'
-    with db.session() as s:
-        c = Candidate(campaign_id=campaign.id, parent_id=1, tree_sha='t2', revision='r2', summary='screened')
-        s.add(c)
-        s.flush()
-        on = {'candidate_id': c.id, 'evaluator_id': campaign.evaluator_id}
-        s.add_all(
-            [
-                Measurement(**on, rung=RungName('smoke'), metrics={'score': 1.0}, seconds=0.5),
-                Measurement(**on, rung=RungName('screen'), metrics={'score': 3.0, 'size': 4.0}, seconds=1.0),
-                Measurement(**on, rung=RungName('screen'), metrics={}, seconds=9.0, error='boom'),
-                Measurement(
-                    **on, rung=RungName('screen'), metrics={'score': 2.0, 'size': 6.0}, seconds=3.0, stopped=stop
-                ),
-            ]
-        )
-        s.commit()
-        candidate_id = c.id
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        shown = client.candidate(candidate_id)
-        assert (shown.candidate.id, shown.candidate.label, shown.revision, shown.parent, shown.run) == (
-            candidate_id,
-            'pending',
-            'r2',
-            1,
-            None,
-        )
-        assert (shown.evaluator, shown.metrics, shown.parent_metrics) == (
-            campaign.evaluator_id,
-            {},
-            {'score': 1.0, 'size': 5.0},
-        )
-        assert shown.rungs == [
-            RungResult(rung=RungName('smoke'), metrics={'score': 1.0}, seconds=0.5, measurements=1, stopped=None),
-            RungResult(
-                rung=RungName('screen'), metrics={'score': 2.5, 'size': 5.0}, seconds=2.0, measurements=2, stopped=stop
-            ),
-        ], 'the means of the successful measurements of each rung, and why the latest one stopped there'
-        assert client.candidate(CandidateId(1)).rungs == []
-        with pytest.raises(Refused, match='^no candidate#9$') as unknown:
-            client.candidate(CandidateId(9))
-        assert unknown.value.error == Problem.UNKNOWN_CANDIDATE
-
-
-def test_a_cancelled_evaluation_of_a_baseline_that_never_measured_pauses_its_campaign(
-    db: Database, campaign_path: Path, cfg: Settings
-) -> None:
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        added = client.register_campaign(Checkout(path=str(campaign_path)))
-        client.remeasure(added.baseline, RemeasureBody())
-        client.cancel_evaluation(added.baseline)
-    with db.session() as s:
-        held = s.get_one(Campaign, added.campaign.id)
-        assert (held.paused, held.paused_reason) == (
-            Pause.LAUNCHES,
-            'the baseline failed to evaluate: evaluation cancelled by human; fix it, then'
-            f' `piloop candidate remeasure {added.baseline}` and `piloop resume demo`',
-        )
-
-
-def test_a_limit_is_set_and_unset_by_an_admin_and_refused_on_a_key_that_is_not_live(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    key = 'executor.pools.serve.evaluations'
-    with serving_api(cfg, listen='127.0.0.1:0') as [_, tcp], Client.on(cfg.socket_file, System.HUMAN) as client:
-        assert {k.key: k.origin for k in client.limits().keys}[key] == 'default'
-        set_ = client.set_limit(key, LimitBody(value=1, reason='the GPU is busy'))
-        [limit] = [k for k in set_.keys if k.key == key]
-        assert (limit.value, limit.origin, limit.actor, limit.reason) == (1, 'limit', 'human', 'the GPU is busy')
-        with pytest.raises(Refused, match='^executor.renew_seconds is not a live key') as not_live:
-            client.set_limit('executor.renew_seconds', LimitBody(value=5, reason='r'))
-        assert not_live.value.error == Problem.REFUSED
-        [config] = [k for k in client.unset_limit(key).keys if k.key == key]
-        assert (config.value, config.origin) == (2, 'default'), 'config.toml holds again'
-        with pytest.raises(Refused, match=f'^{key} has no limit: see `piloop limits`$') as unknown:
-            client.unset_limit(key)
-        assert unknown.value.error == Problem.UNKNOWN_LIMIT
-        actor = {'Authorization': f'Bearer {token(db, "ana", Access.ACT)}'}
-        refused = httpx.get(tcp.url + '/v1/limits', headers=actor, timeout=TIMEOUT)
-    assert refused.json() == {'detail': 'ana has act access, and this route needs admin'}
-
-
-def test_an_admin_sets_lists_and_removes_secrets(
-    db: Database, campaign: Campaign, cfg: Settings, tmp_path: Path
-) -> None:
-    with db.session() as s:
-        s.add(Campaign(name='other', path=str(tmp_path / 'other'), config=campaign.config))
-        s.commit()
-    home, demo, other = Located(), Located(campaign='demo'), Located(campaign='other')
-    body = SecretBody(value=SecretStr('s3cret'))
-    assert 's3cret' not in repr(body), 'a log of the body shows no value'
-    with (
-        serving_api(cfg, listen='127.0.0.1:0') as [_, tcp],
-        Client.on(cfg.socket_file, System.HUMAN) as admin,
-    ):
-        assert admin.set_secret('KEY', home, body).campaign is None
-        assert admin.set_secret('KEY', demo, body).campaign == 'demo'
-        assert admin.set_secret('OWN', other, body).campaign == 'other'
-        listed = [(f.name, f.campaign, f.set_by) for f in admin.list_secrets().secrets]
-        assert listed == [('KEY', None, 'human'), ('KEY', 'demo', 'human'), ('OWN', 'other', 'human')]
-        assert admin.remove_secret('KEY', demo).campaign == 'demo'
-        with pytest.raises(Refused, match=r'^campaign demo has no secret KEY: see `piloop secret list`$') as unknown:
-            admin.remove_secret('KEY', demo)
-        assert unknown.value.error == Problem.UNKNOWN_SECRET
-        with pytest.raises(Refused) as nowhere:
-            admin.set_secret('KEY', Located(campaign='nowhere'), body)
-        assert nowhere.value.error == Problem.UNKNOWN_CAMPAIGN
-        with pytest.raises(Refused, match='^name: String should match pattern'):
-            admin.set_secret('1X', home, body)
-        actor = {'Authorization': f'Bearer {token(db, "ana", Access.ACT)}'}
-        refused = httpx.get(tcp.url + '/v1/secrets', headers=actor, timeout=TIMEOUT)
-    assert refused.json() == {'detail': 'ana has act access, and this route needs admin'}
-
-
-def test_act_sets_and_removes_a_campaign_s_secrets_and_only_admin_the_home_s(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    """A person with ``act`` stores a model key for a campaign without ``admin``. The home's secrets stay ``admin``'s."""
-    with serving_api(cfg, listen='127.0.0.1:0') as [_, tcp], Client.on(cfg.socket_file, System.HUMAN) as admin:
-        bearer = {'Authorization': f'Bearer {token(db, "ana", Access.ACT)}'}
-        with Client.connect(httpx.Client(base_url=tcp.url, headers=bearer)) as ana:
-            body = SecretBody(value=SecretStr('hil_key'))
-            assert ana.set_secret('REVOLVER_TOKEN', Located(campaign='demo'), body).campaign == 'demo'
-            assert ana.remove_secret('REVOLVER_TOKEN', Located(campaign='demo')).campaign == 'demo'
-            for write in (
-                partial(ana.set_secret, 'KEY', Located(), body),
-                partial(ana.remove_secret, 'KEY', Located()),
-            ):
-                with pytest.raises(Refused, match=r"^ana has act access, and the home's secrets need admin$"):
-                    write()
-        admin.set_secret('REVOLVER_TOKEN', Located(campaign='demo'), body)
-        assert [(f.name, f.campaign, f.set_by) for f in admin.list_secrets().secrets] == [
-            ('REVOLVER_TOKEN', 'demo', 'human')
-        ], 'the home has no secret: the refused writes changed nothing'
-    with db.session() as s:
-        set_by = s.scalars(select(Event.actor).where(Event.kind == 'secret.set').order_by(Event.id)).all()
-    assert set_by[0] == 'human:ana'
-
-
-def bare(checkout: Path, at: Path) -> str:
-    """A bare clone of ``checkout`` at ``at``, as a file:// URL."""
-    subprocess.run(['git', 'clone', '-q', '--bare', str(checkout), str(at)], check=True)
-    return at.as_uri()
-
-
 def first(client: Client, after: int, *kinds: str) -> EventModel:
     """The payload of the first event of ``kinds`` after the cursor ``after``, once it comes."""
     while not (batch := client.events(EventsQuery(after=after, kind=kinds, wait=MAX_POLL_SECONDS))).events:
         after = batch.next
     return EVENT.validate_python(batch.events[0].payload)
-
-
-def test_a_checkout_registers_at_once_the_daemon_measures_its_baseline_and_its_piloop_toml_is_read_again(
-    db: Database, campaign_path: Path, cfg: Settings
-) -> None:
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        added = client.register_campaign(Checkout(path=str(campaign_path)))
-        assert (added.campaign.name, added.campaign.path, added.baseline) == (
-            'demo',
-            str(campaign_path),
-            CandidateId(1),
-        )
-        assert isinstance(added.campaign, CampaignState)
-        head = added.campaign.head
-        assert head is not None and (head.candidate, [t.value for t in head.tracks]) == (added.baseline, [None]), (
-            'the baseline is the head, and nothing measured it yet'
-        )
-        assert added.documents.line() == 'documents: 0 added, 0 unchanged'
-        with measuring(cfg):  # the daemon's next pass, which also follows a restart
-            recorded = first(client, added.cursor, *MeasurementRecorded.kinds())
-        assert recorded == MeasurementRecorded(
-            candidate=added.baseline, metrics={'score': 1.0, 'size': 5.0}, error=None, run=None
-        )
-        with pytest.raises(Refused, match=f'^{campaign_path} is the checkout of campaign demo #1 already$') as taken:
-            client.register_campaign(Checkout(path=str(campaign_path), name='other'))
-        assert taken.value.error == Problem.REFUSED
-        with pytest.raises(Refused, match='^path: an absolute path, not campaign$'):
-            client.register_campaign(Checkout.model_construct(path='campaign'))
-        transport = httpx.HTTPTransport(uds=str(cfg.socket_file))
-        with httpx.Client(transport=transport, base_url='http://piloop') as raw:
-            for neither_or_both in ({}, {'path': str(campaign_path), 'clone': {'url': 'file:///x.git'}}):
-                assert raw.post('/v1/campaigns', json=neither_or_both).status_code == HTTPStatus.UNPROCESSABLE_ENTITY
-        with db.session() as s:
-            s.execute(update(Campaign).values(status=CampaignStatus.STOPPED))
-            s.commit()
-        (campaign_path / 'piloop.toml').write_text('name = "demo"\n')
-        with pytest.raises(Refused, match='is not a valid piloop config') as invalid:
-            client.sync_campaign('demo')
-        assert invalid.value.error == Problem.REFUSED
-        subprocess.run(['git', 'checkout', '-q', 'piloop.toml'], cwd=campaign_path, check=True)
-        synced = client.sync_campaign('demo')
-        assert (synced.was, synced.campaign.status) == (CampaignStatus.STOPPED, CampaignStatus.STOPPED), (
-            'the stop conditions did not change'
-        )
-
-
-def test_a_fork_starts_from_a_version_of_its_source_in_a_clone_with_its_config_and_repo(
-    db: Database, campaign_path: Path, cfg: Settings
-) -> None:
-    repo = Repo(campaign_path)
-    base = repo.head.commit.hexsha
-    (campaign_path / 'solve.txt').write_text('a run of the source\n')
-    repo.git.commit('-qam', 'a run')
-    kept = repo.head.commit.hexsha
-    repo.git.update_ref('refs/piloop/demo/r9/0', kept)
-    repo.git.reset('-q', '--hard', base)  # only piloop's ref keeps the run's commit
-    repo.close()
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        source = client.register_campaign(Checkout(path=str(campaign_path))).campaign
-        with pytest.raises(Refused, match="^no campaign 'nope'") as unknown:
-            client.register_campaign(Fork(fork='nope'))
-        assert unknown.value.error == Problem.UNKNOWN_CAMPAIGN
-        with pytest.raises(Refused, match="^demo has no version 'nowhere' to fork from: ") as no_version:
-            client.register_campaign(Fork(fork='demo', at='nowhere'))
-        assert no_version.value.error == Problem.REFUSED
-        at_head = client.register_campaign(Fork(fork='demo'))
-        at_run = client.register_campaign(Fork(fork=str(source.id), at=kept, name='from-the-run'))
-    with db.session() as s:
-        first, second = s.get_one(Campaign, at_head.campaign.id), s.get_one(Campaign, at_run.campaign.id)
-        assert (first.name, first.parent_id, first.repo, first.path) == (
-            'demo-2',
-            source.id,
-            s.get_one(Campaign, source.id).repo,
-            str(cfg.home / 'repos' / str(first.id)),
-        ), 'the memory of the repo is shared'
-        assert first.config == s.get_one(Campaign, source.id).config, "the source's stored config"
-        assert s.get_one(Candidate, at_head.baseline).revision == base, "the source's head is its baseline"
-        assert (second.name, s.get_one(Candidate, at_run.baseline).revision) == ('from-the-run', kept)
-
-
-def test_a_registration_names_the_campaign_and_its_git_refs_carry_that_name(
-    db: Database, campaign_path: Path, cfg: Settings
-) -> None:
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text(toml.read_text().replace('name = "demo"', 'name = "42"'))
-    subprocess.run(['git', 'commit', '-qam', 'a name of digits'], cwd=campaign_path, check=True)
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        with pytest.raises(
-            Refused, match="^'42' is no campaign name: a reference of digits names a campaign by its"
-        ) as e:
-            client.register_campaign(Checkout(path=str(campaign_path)))
-        assert e.value.error == Problem.REFUSED
-        added = client.register_campaign(Checkout(path=str(campaign_path), name='chosen'))
-        assert added.campaign.name == 'chosen'
-        (campaign_path / 'solve.txt').write_text('another\n')
-        subprocess.run(['git', 'commit', '-qam', 'another tree'], cwd=campaign_path, check=True)
-        imported = client.import_candidate('chosen', ImportBody(version='HEAD')).candidate
-    refs = subprocess.run(
-        ['git', 'for-each-ref', '--format=%(refname)'], cwd=campaign_path, capture_output=True, text=True
-    )
-    assert f'refs/piloop/chosen/reference/{imported.id}' in refs.stdout.split(), 'not the name of piloop.toml'
-
-
-def test_a_stopped_campaign_retires_once_its_stop_is_over_and_its_name_registers_again(
-    db: Database, campaign: Campaign, campaign_path: Path, cfg: Settings
-) -> None:
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        with pytest.raises(
-            Refused,
-            match=r'^demo is active: only a stopped campaign retires; stop it first, with `piloop campaign stop demo`$',
-        ) as e:
-            client.retire('demo', RetireBody(reason='done'))
-        assert e.value.error == Problem.REFUSED
-        with db.session() as s:
-            s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
-            s.add(AgentSession(kind='research', campaign_id=campaign.id, state=AgentSessionState.RUNNING))
-            s.add(
-                Comment(
-                    target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
-                    author='w',
-                    kind='escalation',
-                    body='?',
-                    priority=1,
-                )
-            )
-            s.commit()
-        with pytest.raises(Refused, match=r'^demo is still stopping; agents #1 are not over: try again once its') as e:
-            client.retire('demo', RetireBody(reason='done'))
-        assert e.value.error == Problem.STILL_STOPPING
-        with db.session() as s:
-            s.execute(update(AgentSession).values(state=AgentSessionState.EXITED))
-            s.commit()
-        with pytest.raises(
-            Refused, match=r'^demo is still stopping: try again once its closing review and runs are over'
-        ):
-            client.retire('demo', RetireBody(reason='done'))
-        with db.session() as s:
-            emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)
-            s.commit()
-        with pytest.raises(Refused, match='^a reason is required'):
-            client.retire('demo', RetireBody(reason=' '))
-        assert client.inbox(InboxQuery()).items, 'the escalation waits'
-        retired = client.retire('demo', RetireBody(reason='the e2e ended')).campaign
-        assert (retired.id, retired.status) == (campaign.id, CampaignStatus.RETIRED)
-        assert client.inbox(InboxQuery()).items == [], 'a retired campaign asks nothing more'
-        assert client.status(Selection()).campaigns == []
-        [listed] = client.status(Selection(status=(CampaignStatus.RETIRED,))).campaigns
-        [by_id] = client.status(Selection(campaign=str(campaign.id))).campaigns
-        assert listed.name == by_id.name == 'demo'
-        with pytest.raises(Refused, match=f'^campaign #{campaign.id} \\(demo\\) is retired$') as changed:
-            client.pause(str(campaign.id), PauseBody(reason='no'))
-        assert changed.value.error == Problem.REFUSED
-        with pytest.raises(Refused, match='^no campaign .demo.') as gone:
-            client.pause('demo', PauseBody(reason='no'))
-        assert gone.value.error == Problem.UNKNOWN_CAMPAIGN
-        again = client.register_campaign(Checkout(path=str(campaign_path))).campaign
-        assert (again.name, again.path, again.status) == ('demo', str(campaign_path), CampaignStatus.ACTIVE)
-        assert again.id != campaign.id
-        [here] = client.status(Selection(cwd=str(campaign_path))).campaigns
-        assert here.id == again.id, 'the retired campaign holds no path'
-    with db.session() as s:
-        notes = s.scalars(select(Comment.body).where(Comment.kind == CommentKind.NOTE)).all()
-        retirements = s.scalars(select(Event.payload).where(Event.kind == 'campaign.status')).all()
-        assert notes == ['retired: the e2e ended']
-        assert [p.new for p in retirements if isinstance(p, CampaignStatusChanged)][-1] is CampaignStatus.RETIRED
-        with pytest.raises(
-            ops.Refused, match=f'^campaign #{campaign.id} \\(demo\\) is retired, for good: fork it instead'
-        ):
-            ops.retire(s, campaign.id, System.HUMAN, reason='twice')
-
-
-def test_a_baseline_that_fails_to_evaluate_registers_and_then_pauses_its_campaign(
-    db: Database, campaign_path: Path, cfg: Settings
-) -> None:
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text(toml.read_text().replace('"sh", "-c"', '"false", "-c"'))
-    with serving_api(cfg), measuring(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
-        added = client.register_campaign(Checkout(path=str(campaign_path)))
-        paused = first(client, added.cursor, *CampaignPausedChanged.kinds())
-    logs = cfg.home / 'projects' / str(added.campaign.id) / 'measure' / f'{added.baseline}-e1'
-    assert isinstance(paused, CampaignPausedChanged) and paused.new is Pause.LAUNCHES
-    assert paused.paused_reason == (
-        f'the baseline failed to evaluate: evaluate exit 1: ; its logs are in {logs}; fix it, then'
-        f' `piloop candidate remeasure {added.baseline}` and `piloop resume demo`'
-    )
-    with db.session() as s:
-        assert s.get_one(Campaign, added.campaign.id).name == 'demo', 'it stays registered'
-
-
-def test_a_git_url_is_cloned_under_the_home_with_the_home_s_secret_and_then_registered_as_often_as_asked(
-    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path, mocker: MockerFixture
-) -> None:
-    url = bare(campaign_path, tmp_path / 'demo.git')
-    cloned = mocker.spy(Git, 'clone')
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        with pytest.raises(Refused, match=r'^the home has no secret TOKEN: see `piloop secret list`$') as unknown:
-            client.register_campaign(Clone(clone=Remote(url=url, credential=SecretCredential(secret='TOKEN'))))
-        assert unknown.value.error == Problem.REFUSED and not (cfg.home / 'repos').exists()
-        client.set_secret('TOKEN', Located(), SecretBody(value=SecretStr('tok')))
-        added = client.register_campaign(Clone(clone=Remote(url=url, credential=SecretCredential(secret='TOKEN'))))
-        assert added.campaign.path == str(cfg.home / 'repos' / str(added.campaign.id))
-        [(_, _, path, credential)] = [c.args for c in cloned.call_args_list]
-        assert (path.parent, credential.get_secret_value()) == (cfg.home / 'repos', 'tok')
-        again = client.register_campaign(Clone(clone=Remote(url=url), name='again'))
-        assert (again.campaign.name, again.campaign.path) == ('again', str(cfg.home / 'repos' / str(again.campaign.id)))
-        (cfg.home / 'repos' / str(again.campaign.id + 1)).mkdir()
-        with pytest.raises(
-            Refused, match=f'^{cfg.home / "repos" / str(again.campaign.id + 1)} exists: move it away'
-        ) as e:
-            client.register_campaign(Clone(clone=Remote(url=url), name='third'))
-        assert e.value.error == Problem.REFUSED
-    assert sorted(p.name for p in (cfg.home / 'repos').iterdir()) == ['1', '2', '3'], 'the refused clone is gone'
-
-
-def test_a_repo_without_a_piloop_toml_is_refused_with_how_to_make_one(
-    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path
-) -> None:
-    repo = Repo(campaign_path)
-    repo.index.remove(['piloop.toml'], working_tree=True)
-    repo.index.commit('no config')
-    url = bare(campaign_path, tmp_path / 'demo.git')
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        with pytest.raises(Refused) as cloned:
-            client.register_campaign(Clone(clone=Remote(url=url)))
-        with pytest.raises(Refused) as checkout:
-            client.register_campaign(Checkout(path=str(campaign_path)))
-    assert (cloned.value.error, str(cloned.value)) == (
-        Problem.REFUSED,
-        f'{url} has no piloop.toml at its root: `piloop init` in a checkout makes one; commit it, then register again',
-    )
-    assert (checkout.value.error, str(checkout.value)) == (
-        Problem.REFUSED,
-        f'{campaign_path} has no piloop.toml: `piloop init {campaign_path}` makes one',
-    )
-    assert list((cfg.home / 'repos').iterdir()) == [], 'the refused clone is gone'
-
-
-def test_a_sync_takes_a_private_repository_s_new_commit_with_a_token_that_nothing_keeps_or_a_home_secret(
-    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    origin = tmp_path / 'origin.git'
-    subprocess.run(['git', 'clone', '-q', '--bare', str(campaign_path), str(origin)], check=True)
-    token = Basic.password
-    upstream = tmp_path / 'upstream'
-    subprocess.run(['git', 'clone', '-q', str(origin), str(upstream)], check=True)
-    caplog.set_level(logging.DEBUG)
-
-    def push(message: str) -> str:
-        """A new commit in the private repository: its sha. A dumb HTTP server serves what ``update-server-info`` lists."""
-        subprocess.run(['git', 'commit', '-q', '--allow-empty', '-m', message], cwd=upstream, check=True)
-        subprocess.run(['git', 'push', '-q'], cwd=upstream, check=True)
-        subprocess.run(['git', 'update-server-info'], cwd=origin, check=True)
-        return Repo(upstream).head.commit.hexsha
-
-    with basic_server(origin) as url, serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
-        added = client.register_campaign(
-            Clone(clone=Remote(url=url, credential=TokenCredential(token=SecretStr(token))))
-        )
-        checkout, ref = Repo(added.campaign.path), str(added.campaign.id)
-        new = push('upstream moved')
-        with pytest.raises(Refused, match=r'^git pull in .* failed: ') as unreachable:
-            client.sync_campaign(ref)
-        assert unreachable.value.error == Problem.REFUSED
-        client.sync_campaign(ref, SyncBody(credential=TokenCredential(token=SecretStr(token))))
-        assert checkout.head.commit.hexsha == new, 'the token fetched the new commit'
-        transport = httpx.HTTPTransport(uds=str(cfg.socket_file))
-        with httpx.Client(transport=transport, base_url='http://piloop') as raw:
-            sync = f'/v1/campaigns/{ref}/sync'
-            for invalid in (
-                {'credential': {'token': token}, 'secret': 'TOKEN'},
-                {'credential': {'token': token, 'secret': 'TOKEN'}},
-                {'credential': {}},
-            ):
-                answer = raw.post(sync, json=invalid)
-                assert answer.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, invalid
-                assert token not in answer.text, 'a refusal does not send the token back'
-        with db.session() as s:
-            assert not [e for e in s.scalars(select(Event)) if token in e.payload.model_dump_json()]
-        kept = [p for p in cfg.home.rglob('*') if p.is_file() and token.encode() in p.read_bytes()]
-        assert kept == [], 'no file of the home holds it: not the database, its WAL, the CAS or the clone'
-        assert token not in caplog.text
-        client.set_secret('TOKEN', Located(), SecretBody(value=SecretStr(token)))
-        newer = push('upstream moved again')
-        client.sync_campaign(ref, SyncBody(credential=SecretCredential(secret='TOKEN')))
-        assert checkout.head.commit.hexsha == newer, "the home's secret fetched it"
-
-
-def test_a_sync_of_a_campaign_registered_by_path_refuses_a_credential(
-    db: Database, campaign_path: Path, cfg: Settings
-) -> None:
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
-        client.register_campaign(Checkout(path=str(campaign_path)))
-        for credential in (SecretCredential(secret='TOKEN'), TokenCredential(token=SecretStr('tok'))):
-            with pytest.raises(Refused, match=r'^campaign demo is a checkout of .*: a credential is for a cloned') as e:
-                client.sync_campaign('demo', SyncBody(credential=credential))
-            assert e.value.error == Problem.REFUSED
-        assert client.sync_campaign('demo').campaign.name == 'demo', 'without one, it syncs'
-
-
-def test_a_clone_with_a_token_uses_it_for_that_clone_and_no_file_of_the_home_or_answer_keeps_it(
-    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A token that the call carries opens a private repo, and is gone with the call: on disk, in logs and in answers."""
-    origin = tmp_path / 'origin.git'
-    subprocess.run(['git', 'clone', '-q', '--bare', str(campaign_path), str(origin)], check=True)
-    token = Basic.password
-    caplog.set_level(logging.DEBUG)
-    with basic_server(origin) as url, serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
-        with pytest.raises(Refused, match=f'^git clone of {url} failed: ') as refused:
-            client.register_campaign(Clone(clone=Remote(url=url, credential=TokenCredential(token=SecretStr('wrong')))))
-        assert refused.value.error == Problem.REFUSED
-        added = client.register_campaign(
-            Clone(clone=Remote(url=url, credential=TokenCredential(token=SecretStr(token))))
-        )
-        assert added.campaign.path == str(cfg.home / 'repos' / str(added.campaign.id))
-        transport = httpx.HTTPTransport(uds=str(cfg.socket_file))
-        with httpx.Client(transport=transport, base_url='http://piloop') as raw:
-            for invalid in (
-                {'clone': {'url': url, 'credential': {'token': token, 'secret': 'TOKEN'}}},
-                {'clone': {'url': url, 'credential': {'token': token}, 'secret': 'TOKEN'}},
-                {'clone': {'url': url, 'credential': {'token': token}}, 'name': 'not a name'},
-                {'clone': {'url': url, 'credential': {}}},
-            ):
-                answer = raw.post('/v1/campaigns', json=invalid)
-                assert answer.status_code == HTTPStatus.UNPROCESSABLE_ENTITY, invalid
-                assert token not in answer.text, 'a refusal does not send the token back'
-        with db.session() as s:
-            assert not [e for e in s.scalars(select(Event)) if token in e.payload.model_dump_json()]
-    kept = [p for p in cfg.home.rglob('*') if p.is_file() and token.encode() in p.read_bytes()]
-    assert kept == [], 'no file of the home holds it: not the database, its WAL, the CAS or the clone'
-    assert token not in caplog.text
 
 
 def test_a_validation_refusal_says_where_and_why_and_never_echoes_what_was_sent(db: Database, cfg: Settings) -> None:
@@ -1182,215 +400,11 @@ def test_a_validation_refusal_says_where_and_why_and_never_echoes_what_was_sent(
     assert 'input' not in error and sent not in answer.text
 
 
-def test_a_sync_of_a_cloned_campaign_takes_its_repository_s_new_versions_and_reads_its_piloop_toml_again(
-    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path
-) -> None:
-    url = bare(campaign_path, tmp_path / 'demo.git')
-    with serving_api(cfg), Client.on(cfg.socket_file, System.HUMAN) as client:
-        added = client.register_campaign(Clone(clone=Remote(url=url)))
-        upstream = tmp_path / 'upstream'
-        subprocess.run(['git', 'clone', '-q', url, str(upstream)], check=True)
-        toml = upstream / 'piloop.toml'
-        toml.write_text(toml.read_text().replace('"sh", "-c"', '"bash", "-c"'))
-        subprocess.run(['git', 'commit', '-qam', 'evaluate with bash'], cwd=upstream, check=True)
-        subprocess.run(['git', 'push', '-q'], cwd=upstream, check=True)
-        synced = client.sync_campaign(str(added.campaign.id), SyncBody())
-        checkout = Path(added.campaign.path)
-        assert 'bash' in (checkout / 'piloop.toml').read_text(), 'the checkout moved forward'
-        with db.session() as s:
-            row = s.get_one(Campaign, added.campaign.id)
-            assert row.config.evaluate[0] == 'bash' and row.evaluator_id != 1, 'a new evaluator'
-            assert s.scalars(select(Candidate.id).where(Candidate.campaign_id == row.id)).all() == [added.baseline]
-        assert synced.campaign.status == 'active'
-        subprocess.run(['git', 'commit', '-q', '--allow-empty', '-m', 'its own way'], cwd=checkout, check=True)
-        subprocess.run(['git', 'commit', '-q', '--allow-empty', '-m', 'upstream'], cwd=upstream, check=True)
-        subprocess.run(['git', 'push', '-q'], cwd=upstream, check=True)
-        with pytest.raises(Refused, match=r'^git pull in .* failed: ') as diverged:
-            client.sync_campaign(str(added.campaign.id))
-        assert diverged.value.error == Problem.REFUSED
-
-
-def test_a_clone_that_fails_or_does_not_register_leaves_nothing_under_the_home(
-    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path
-) -> None:
-    url = bare(campaign_path, tmp_path / 'taken.git')
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        with pytest.raises(Refused, match='^git clone of file:///nowhere.git failed: ') as failed:
-            client.register_campaign(Clone(clone=Remote(url='file:///nowhere.git')))
-        assert failed.value.error == Problem.REFUSED
-        client.register_campaign(Checkout(path=str(campaign_path)))
-        with pytest.raises(Refused, match="^campaign name 'demo' is already used") as taken:
-            client.register_campaign(Clone(clone=Remote(url=url)))
-        assert taken.value.error == Problem.REFUSED
-    assert list((cfg.home / 'repos').iterdir()) == [], 'a retry clones again'
-
-
-def test_an_admin_makes_a_token_whose_secret_only_its_answer_carries_and_revokes_it(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    with serving_api(cfg, listen='127.0.0.1:0') as [_, tcp], Client.on(cfg.socket_file, System.HUMAN) as client:
-        made = client.create_token(TokenBody(name='gpu1', access=Access.WORKER))
-        secret = made.secret.get_secret_value()
-        assert secret not in repr(made), 'a log of the answer shows no secret'
-        assert Tokens(db).verify(secret) == tokens.Caller('gpu1', Access.WORKER)
-        with pytest.raises(Refused, match="^a token is called 'gpu1' already") as taken:
-            client.create_token(TokenBody(name='gpu1', access=Access.READ))
-        assert taken.value.error == Problem.REFUSED
-        [listed] = client.list_tokens().tokens
-        assert (listed.name, listed.access, listed.created_at) == ('gpu1', Access.WORKER, made.created_at)
-        assert client.revoke_token('gpu1').tokens == []
-        with pytest.raises(Refused, match="^no token is called 'gpu1'$") as unknown:
-            client.revoke_token('gpu1')
-        assert unknown.value.error == Problem.UNKNOWN_TOKEN
-        actor = {'Authorization': f'Bearer {token(db, "ana", Access.ACT)}'}
-        refused = httpx.post(
-            tcp.url + '/v1/tokens', headers=actor, json={'name': 'mine', 'access': 'admin'}, timeout=TIMEOUT
-        )
-    assert refused.json() == {'detail': 'ana has act access, and this route needs admin'}
-
-
-def test_an_agent_is_requested_of_a_sweeping_role_only(db: Database, campaign: Campaign, cfg: Settings) -> None:
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
-        asked = client.launch('demo', LaunchBody(role=RoleName('research'), model='opus', reason='look again'))
-        with pytest.raises(
-            Refused, match="^demo has no sweeping role 'janitor'; it has orchestrator, research, "
-        ) as refused:
-            client.launch('demo', LaunchBody(role=RoleName('janitor'), reason='sweep'))
-    assert refused.value.error == Problem.REFUSED
-    with db.session() as s:
-        agent = s.get_one(AgentSession, asked.agent)
-        assert (asked.role, agent.kind, agent.model, agent.reason) == ('research', 'research', 'opus', 'look again')
-
-
 def outcome(db: Database, comment: CommentId) -> None:
     with db.session() as s:
         queued = PromptOutcome(kind='comment.queued', comment=comment)
         emit(s, queued, TargetRef(TargetKind.AGENT_SESSION, 1), System.DAEMON)
         s.commit()
-
-
-def test_a_prompt_waits_for_what_came_of_its_note_and_refuses_an_agent_that_does_not_run(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    with db.session() as s:
-        s.add_all(
-            [
-                AgentSession(kind='research', campaign_id=1, state=AgentSessionState.RUNNING),
-                AgentSession(kind='research', campaign_id=1, state=AgentSessionState.EXITED),
-            ]
-        )
-        s.commit()
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
-        unanswered = client.prompt(AgentSessionId(1), PromptBody(text='look at #3'))
-        assert (unanswered.comment, unanswered.delivery) == (1, Pending()), 'no wait: it answers at once'
-        threading.Timer(0.2, outcome, [db, CommentId(2)]).start()
-        started = time.monotonic()
-        queued = client.prompt(AgentSessionId(1), PromptBody(text='and #4', wait=20))
-        assert (queued.comment, queued.delivery) == (2, Queued()) and time.monotonic() - started < 10
-        with pytest.raises(Refused, match='^agent_session#2 is not running$') as ended:
-            client.prompt(AgentSessionId(2), PromptBody(text='x'))
-        assert ended.value.error == Problem.REFUSED
-        with pytest.raises(Refused, match='^no agent_session#9$') as unknown:
-            client.prompt(AgentSessionId(9), PromptBody(text='x'))
-        assert unknown.value.error == Problem.UNKNOWN_AGENT
-    with db.session() as s:
-        assert s.get_one(Comment, 1).author == 'orchestrator'
-
-
-def test_a_cancel_asks_the_daemon_to_end_an_open_run_or_a_live_agent_and_refuses_a_closed_one(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    add_run(db, campaign, status=RunStatus.RUNNING, measured=False)
-    add_run(db, campaign, measured=False)
-    with db.session() as s:
-        s.add_all(
-            [
-                AgentSession(kind='research', campaign_id=1, state=AgentSessionState.REQUESTED),
-                AgentSession(kind='research', campaign_id=1, state=AgentSessionState.EXITED),
-            ]
-        )
-        s.commit()
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
-        agent = client.cancel_agent(AgentSessionId(1), CancelBody())
-        run = client.cancel_run(RunId(1), CancelBody(ending=Ending.WRAP_UP))
-        assert (agent.agent, agent.role, run.run) == (1, 'research', 1)
-        with pytest.raises(Refused, match='^agent_session#2 is not requested, starting or running$') as ended:
-            client.cancel_agent(AgentSessionId(2), CancelBody())
-        with pytest.raises(Refused, match='^run#2 is not queued or running$') as closed:
-            client.cancel_run(RunId(2), CancelBody())
-        assert ended.value.error == closed.value.error == Problem.REFUSED
-        with pytest.raises(Refused, match='^no agent_session#9$') as no_agent:
-            client.cancel_agent(AgentSessionId(9), CancelBody())
-        assert no_agent.value.error == Problem.UNKNOWN_AGENT
-        with pytest.raises(Refused, match='^no run#9$') as no_run:
-            client.cancel_run(RunId(9), CancelBody())
-        assert no_run.value.error == Problem.UNKNOWN_RUN
-    with db.session() as s:
-        asked = [
-            (e.kind, e.target_id, e.actor) for e in s.scalars(select(Event)) if e.kind.endswith('cancel_requested')
-        ]
-    assert asked == [('agent_session.cancel_requested', 1, 'orchestrator'), ('run.cancel_requested', 1, 'orchestrator')]
-
-
-def test_an_extension_gives_a_running_run_s_implementer_more_time_signed_tells_it_so_and_refuses_a_run_without_one(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    add_run(db, campaign, status=RunStatus.RUNNING, measured=False)
-    add_run(db, campaign, measured=False)
-    with db.session() as s:
-        s.add(
-            AgentSession(kind='implementer', campaign_id=1, subject=TargetRef(RUN, 1), state=AgentSessionState.RUNNING)
-        )
-        s.add(
-            AgentSession(kind='implementer', campaign_id=1, subject=TargetRef(RUN, 2), state=AgentSessionState.EXITED)
-        )
-        s.commit()
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
-        first = client.extend_run(RunId(1), ExtendBody(by=timedelta(hours=1)))
-        second = client.extend_run(RunId(1), ExtendBody(by=timedelta(minutes=30)))
-        assert (first.run, first.agent, first.seconds, second.seconds) == (1, 1, 3600, 5400), 'extensions add up'
-        with pytest.raises(Refused, match='^run#2 has no running implementer$') as ended:
-            client.extend_run(RunId(2), ExtendBody(by=timedelta(hours=1)))
-        assert ended.value.error == Problem.REFUSED
-        with pytest.raises(Refused, match='^no run#9$'):
-            client.extend_run(RunId(9), ExtendBody(by=timedelta(hours=1)))
-        with pytest.raises(Refused, match='^by: Input should be greater than 0 seconds'):
-            client.extend_run(RunId(1), ExtendBody.model_construct(by=timedelta(0)))
-    with db.session() as s:
-        extended = [
-            (e.target_id, e.actor, e.payload) for e in s.scalars(select(Event).where(has(AgentSessionExtended)))
-        ]
-        notes = [(c.author, c.body) for c in s.scalars(select(Comment).where(Comment.target_id == 1))]
-    assert extended == [
-        (1, 'orchestrator', AgentSessionExtended(seconds=3600)),
-        (1, 'orchestrator', AgentSessionExtended(seconds=1800)),
-    ]
-    assert notes[-1] == (
-        'orchestrator',
-        '[piloop] orchestrator gave you 0:30:00 more time: your deadline is now 5400 s after $PILOOP_DEADLINE, which'
-        ' still holds the old one.',
-    )
-
-
-def test_a_journal_line_is_the_campaign_s_signed_by_the_caller_s_actor_and_the_server_refuses_one_too_long(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    path = f'/v1/campaigns/{campaign.name}/journal'
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
-        written = client.post(path, JournalBody(line=' parked idea#4:\n dup of #2 '), Journaled)
-        with pytest.raises(Refused, match='^line: a journal line is 1 to 280 bytes, not 281: say less$') as long:
-            client.post(path, JournalBody.model_construct(line='x' * 281), Journaled)
-        with pytest.raises(Refused) as unknown:
-            client.post('/v1/campaigns/nope/journal', JournalBody(line='parked idea#4'), Journaled)
-    assert long.value.error is None
-    assert unknown.value.error == Problem.UNKNOWN_CAMPAIGN
-    with db.session() as s:
-        entry = s.get_one(Journal, written.journal)
-        assert (entry.campaign_id, entry.author, entry.line) == (
-            campaign.id,
-            'orchestrator',
-            'parked idea#4: dup of #2',
-        )
 
 
 def test_a_write_needs_act_access_and_a_caller_whose_name_signs(
@@ -1426,51 +440,6 @@ def test_a_write_that_waits_out_the_busy_timeout_answers_503_and_when_to_retry(
     )
 
 
-def test_without_a_campaign_named_status_answers_every_campaign(
-    db: Database, campaign: Campaign, cfg: Settings
-) -> None:
-    with db.session() as s:
-        s.add(Campaign(name='other', path='/elsewhere', status=CampaignStatus.STOPPED, config=campaign.config))
-        s.commit()
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        listed = client.status(Selection()).campaigns
-    assert [c.name for c in listed] == ['demo', 'other'], 'a client that lists campaigns sees them all'
-    assert [c.name for c in defaulted(listed)] == ['demo'], 'the CLI shows the only active one'
-
-
-def test_a_campaign_whose_stored_config_is_invalid_is_listed_as_such_and_the_others_as_ever(
-    db: Database,
-    campaign: Campaign,
-    cfg: Settings,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A stored copy that no longer validates, as after an upgrade, is no 500 for every campaign: status and the
-    overview list it with what is wrong and how to fix it, and every other campaign in full."""
-    with db.session() as s:
-        broken = Campaign(name='broken', path='/elsewhere', config=campaign.config)
-        s.add(broken)
-        s.commit()
-        broken_id = broken.id
-    store_config(db, broken_id, {})
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        listed = client.status(Selection()).campaigns
-        shown = client.overview(Selection()).campaigns
-        monkeypatch.setattr(common, 'settings', cfg)
-        monkeypatch.setattr(common, 'console', Console(width=200, force_terminal=False))
-        cli.app(['status'], result_action='return_value', exit_on_error=False)
-        cli.app(['pause', 'broken', '--reason', 'r'], result_action='return_value', exit_on_error=False)
-    for entries in (listed, shown):
-        ok, invalid = entries
-        assert not isinstance(ok, InvalidConfig) and ok.name == 'demo'
-        assert isinstance(invalid, InvalidConfig) and (invalid.id, invalid.name) == (broken_id, 'broken')
-        assert invalid.fix == '`piloop init /elsewhere`'
-        assert invalid.problem.startswith('the stored config is not a valid piloop config'), invalid.problem
-    status, paused = capsys.readouterr().out.split('campaign broken paused')
-    assert 'demo #1' in status and 'broken #2' in status and 'fix: `piloop init /elsewhere`' in status, status
-    assert paused.startswith('; its stored config is invalid, fix it with `piloop init /elsewhere`;'), paused
-
-
 def test_with_a_server_set_the_commands_call_it_through_the_network_with_its_credential(
     db: Database, campaign: Campaign, cfg: Settings, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1480,74 +449,3 @@ def test_with_a_server_set_the_commands_call_it_through_the_network_with_its_cre
         monkeypatch.setattr(common, 'console', Console(width=200, force_terminal=False))
         cli.app(['status', 'demo', '--json'], result_action='return_value', exit_on_error=False)
     assert '"name": "demo"' in capsys.readouterr().out, 'a name resolves on the server; no socket of this home'
-
-
-def test_the_reads_of_a_ui_answer_agents_their_output_ideas_and_comments(
-    db: Database, campaign: Campaign, cfg: Settings, tmp_path: Path
-) -> None:
-    log = tmp_path / 'research-log'
-    log.mkdir()
-    (log / 'transcript.txt').write_text('reading the history\n\nproposing idea B\n')
-    with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        old = idea(s, p, 'more lines', IdeaStatus.DONE)
-        run = Run(idea=old, attempt=1, base_candidate_id=1, harness='pi', model='m', error='no commit')
-        s.add(run)
-        s.flush()
-        s.add(Candidate(id=2, campaign_id=p.id, run_id=run.id, parent_id=1, tree_sha='t2', revision='r2'))
-        s.add(Measurement(candidate_id=2, evaluator_id=1, metrics={'score': 3, 'size': 4}))
-        newer = idea(s, p, 'even more lines', IdeaStatus.READY, priority=1, after=(old.id,), supersedes=(old.id,))
-        idea(s, p, 'a hunch', IdeaStatus.SEED)
-        s.add(
-            AgentSession(
-                kind='research',
-                campaign_id=p.id,
-                harness='claude',
-                model='opus',
-                runtime='subprocess',
-                state=AgentSessionState.RUNNING,
-                reason='low_water: 1 ready < 10',
-                log_dir=str(log),
-                started_at=utcnow(),
-            )
-        )
-        s.add(Comment(target=TargetRef(IDEA, newer.id), author='human', body='worth a try'))
-        s.commit()
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        [state] = client.status(Selection(campaign='demo')).campaigns
-        assert isinstance(state, CampaignState)
-        [agent] = state.agents
-        assert (agent.runtime, agent.reason, agent.started is not None) == (
-            'subprocess',
-            'low_water: 1 ready < 10',
-            True,
-        )
-        output = client.agent_output(agent.id, OutputQuery(lines=1))
-        assert output.lines == ['proposing idea B'], 'the last lines, blank ones left out'
-        listed = client.ideas('demo', IdeasQuery(status=(IdeaStatus.SEED, IdeaStatus.READY)))
-        assert [(i.title, i.after, i.supersedes) for i in listed.ideas] == [
-            ('a hunch', [], []),
-            ('even more lines', [old.id], [old.id]),
-        ], 'in the order of the statuses asked for'
-        assert len(client.ideas('demo', IdeasQuery()).ideas) == 3
-        shown = client.idea(old.id)
-        assert (shown.idea.superseded_by, shown.hypothesis, [(r.status, r.error) for r in shown.runs]) == (
-            [newer.id],
-            'more lines helps',
-            [('queued', 'no commit')],
-        )
-        moved = client.set_priority(newer.id, PriorityBody(priority=4))
-        assert (moved.was, moved.idea.priority) == (1, 4)
-        [event] = client.events(EventsQuery(after=listed.cursor, kind=('idea.priority',))).events
-        assert (event.subject.id, event.actor) == (newer.id, 'human')
-        [note] = client.comments(CommentsQuery(kind=IDEA, id=newer.id)).comments
-        assert (note.author, note.body) == ('human', 'worth a try')
-        assert [n.id for n in client.lineage('demo').graph.nodes] == ['candidate#1', 'candidate#2']
-        for refused, error in [
-            (lambda: client.idea(IdeaId(99)), Problem.UNKNOWN_IDEA),
-            (lambda: client.set_priority(IdeaId(99), PriorityBody(priority=0)), Problem.UNKNOWN_IDEA),
-            (lambda: client.agent_output(AgentSessionId(99), OutputQuery(lines=1)), Problem.UNKNOWN_AGENT),
-        ]:
-            with pytest.raises(Refused) as no:
-                refused()
-            assert no.value.error == error
