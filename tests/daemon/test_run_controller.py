@@ -688,6 +688,32 @@ def test_dirt_after_a_commit_is_recovered_on_its_own_and_the_commit_is_scored_as
         assert (idea.status, idea.base_candidate_id) == (IdeaStatus.DONE, None), 'a run that succeeded is not requeued'
 
 
+HARNESS_LEAVES_DIRT_WHILE_A_JOB_WRITES_THE_WORKSPACE = (
+    '#!/bin/sh\ngit config filter.job.clean "tee -a %f"\nmkdir -p "$(git rev-parse --git-common-dir)/info"\n'
+    'echo "workspace/** filter=job" > "$(git rev-parse --git-common-dir)/info/attributes"\n'
+    'echo log > workspace/run.log\ngit add -f workspace/run.log\ngit commit -qm "keep the log"\n'
+    'echo line >> solve.txt\n'
+)
+"""Leaves an edit of ``solve.txt`` unsaved. The filter is a job that writes the log whenever git reads it."""
+
+
+def test_dirt_is_recovered_while_a_job_still_writes_the_workspace(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The save never reads the workspace, so the job's writes there cannot make git refuse it."""
+    (tmp_path / 'projects' / str(campaign.id) / 'workspace').mkdir(parents=True)
+    write_toml(Path(campaign.path), HARNESS_LEAVES_DIRT_WHILE_A_JOB_WRITES_THE_WORKSPACE)
+    reload_campaign(db, campaign)
+    run_id = make_run(db, campaign)
+    execute(controller(db, runtime, tmp_path), db, run_id)
+    assert [c[0] for c in scored(db, run_id)] == ['keep the log', UNCOMMITTED]
+    with db.session() as s:
+        recovered = s.scalars(select(Candidate.revision).where(Candidate.summary == UNCOMMITTED)).one()
+    repo = Repo(campaign.path)
+    assert repo.git.show('--name-only', '--format=', recovered) == 'solve.txt'
+    assert repo.git.show(f'{recovered}:workspace/run.log') == 'log', 'as the implementer committed it'
+
+
 def test_an_idea_whose_implementers_keep_dying_is_requeued_from_its_recovered_work_only_so_often(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:

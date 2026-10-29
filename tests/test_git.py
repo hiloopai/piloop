@@ -260,6 +260,80 @@ def test_a_save_that_git_refuses_keeps_the_unsaved_work_in_the_cas_and_brings_th
     assert (tmp_path / 'restored' / 'new.bin').read_bytes() == b'\x00\x01'
 
 
+def saved_paths(repo: Repo) -> list[str]:
+    """The paths that the HEAD commit changed."""
+    return sorted(repo.git.show('--name-only', '--format=', 'HEAD').split())
+
+
+def test_a_save_takes_the_work_while_a_job_still_writes_an_excluded_path(campaign_path: Path, tmp_path: Path) -> None:
+    """The save never reads an excluded path, so a job that writes there meanwhile cannot make git refuse it.
+
+    The clean filter is the job: it appends to the file each time git reads it.
+    """
+    vcs = Git()
+    base = vcs.open(campaign_path).head().revision
+    vcs.open(campaign_path).checkout(base, tmp_path / 'wt')
+    wt = Repo(tmp_path / 'wt')
+    wt.git.config('filter.job.clean', 'sh -c \'cat; echo more >> "$1"\' clean %f')
+    (Path(wt.common_dir) / 'info').mkdir(exist_ok=True)
+    (Path(wt.common_dir) / 'info' / 'attributes').write_text('scratch/** filter=job\n')
+    (tmp_path / 'wt' / 'scratch').mkdir()
+    (tmp_path / 'wt' / 'scratch' / 'out.txt').write_text('started\n')
+    (tmp_path / 'wt' / 'solve.txt').write_text('base\nthe work\n')
+    captured = vcs.open(tmp_path / 'wt').capture(disk(tmp_path), base, RunId(5), ['scratch'])
+    assert captured.work is not None and captured.unsaved is None
+    assert saved_paths(wt) == ['solve.txt']
+    assert (tmp_path / 'wt' / 'scratch' / 'out.txt').read_text() == 'started\n', 'git never read it'
+
+
+def test_a_save_keeps_what_the_agent_committed_under_an_excluded_path_as_it_committed_it(
+    campaign_path: Path, tmp_path: Path
+) -> None:
+    """The save neither deletes the agent's file under the workspace nor takes its later edits, which stay on disk."""
+    vcs = Git()
+    base = vcs.open(campaign_path).head().revision
+    vcs.open(campaign_path).checkout(base, tmp_path / 'wt')
+    wt = Repo(tmp_path / 'wt')
+    (tmp_path / 'wt' / 'workspace').mkdir()
+    (tmp_path / 'wt' / 'workspace' / 'kept.txt').write_text('committed\n')
+    wt.git.add('-f', 'workspace/kept.txt')
+    wt.git.commit('-qm', 'keep a note')
+    (tmp_path / 'wt' / 'workspace' / 'kept.txt').write_text('edited later\n')
+    (tmp_path / 'wt' / 'solve.txt').write_text('base\nmore\n')
+    captured = vcs.open(tmp_path / 'wt').capture(disk(tmp_path), base, RunId(5), ['workspace'])
+    assert captured.work is not None and captured.unsaved is None
+    assert saved_paths(wt) == ['solve.txt']
+    assert wt.git.show('HEAD:workspace/kept.txt') == 'committed'
+    assert (tmp_path / 'wt' / 'workspace' / 'kept.txt').read_text() == 'edited later\n'
+
+
+def test_a_save_after_a_refused_one_takes_all_the_work_and_nothing_excluded(
+    campaign_path: Path, tmp_path: Path
+) -> None:
+    """A refused save leaves its changes staged; the agent stages an excluded file too. The next save starts clean."""
+    hook = campaign_path / '.git' / 'hooks' / 'pre-commit'
+    hook.write_text('#!/bin/sh\necho refused >&2\nexit 1\n')
+    hook.chmod(0o755)
+    vcs, cas = Git(), disk(tmp_path)
+    base = vcs.open(campaign_path).head().revision
+    vcs.open(campaign_path).checkout(base, tmp_path / 'wt')
+    wt = Repo(tmp_path / 'wt')
+    (tmp_path / 'wt' / 'solve.txt').write_text('base\nfirst\n')
+    (tmp_path / 'wt' / 'scratch').mkdir()
+    (tmp_path / 'wt' / 'scratch' / 'a.txt').write_text('a\n')
+    first = vcs.open(tmp_path / 'wt').capture(cas, base, RunId(5), ['scratch'])
+    assert first.unsaved is not None and b'scratch' not in (cas.get(first.unsaved.blob) or b'')
+    hook.unlink()
+    (tmp_path / 'wt' / 'new.txt').write_text('second\n')
+    (tmp_path / 'wt' / 'scratch' / 'b.txt').write_text('b\n')
+    wt.git.add('scratch/b.txt')
+    second = vcs.open(tmp_path / 'wt').capture(cas, base, RunId(5), ['scratch'])
+    assert second.work is not None and second.unsaved is None
+    assert saved_paths(wt) == ['new.txt', 'solve.txt']
+    assert not git.is_dirty(wt, ['scratch']) and wt.git.diff('--cached', '--name-only') == ''
+    assert sorted(p.name for p in (tmp_path / 'wt' / 'scratch').iterdir()) == ['a.txt', 'b.txt']
+
+
 SECRET = SecretStr('s3cret-token')
 
 

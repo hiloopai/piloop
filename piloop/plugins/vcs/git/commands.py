@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import timedelta
@@ -294,20 +295,38 @@ def contains(repo: Repo, sha: str, ancestor: str) -> bool:
     return isinstance(merged, str) and merged == tree_sha(repo, sha)
 
 
+def outside(ignore: list[str]) -> list[str]:
+    """The pathspecs of the whole worktree but the paths in ``ignore``."""
+    return ['.', *(f':(exclude){p}' for p in ignore)]
+
+
 def is_dirty(wt: Repo, ignore: list[str]) -> bool:
     """Whether the worktree has uncommitted changes, ignoring the paths in ``ignore``."""
-    return bool(wt.git.status('--porcelain', '--', '.', *(f':(exclude){p}' for p in ignore)))
+    return bool(wt.git.status('--porcelain', '--', *outside(ignore)))
 
 
 def commit_all(wt: Repo, message: str, ignore: list[str], author: Identity, committer: Identity) -> None:
-    """Stage everything except ``ignore`` and commit it, by ``author`` and ``committer``.
+    """Stage every change outside ``ignore`` and commit it, by ``author`` and ``committer``.
 
-    ``git add`` refuses ``:(exclude)`` pathspecs that name ignored files, so the paths in ``ignore`` are unstaged
-    after the ``add``.
+    The index starts again from HEAD, and git reads only the files that it lists outside ``ignore``. ``git add``
+    refuses an ``:(exclude)`` pathspec that names an ignored file, and staging ``ignore`` only to unstage it fails when
+    a job writes a file there meanwhile. A file under ``ignore`` that HEAD tracks stays as HEAD has it.
     """
-    wt.git.add('-A', '--', '.')
-    if ignore:  # git rm takes no empty pathspec
-        wt.git.rm('-rq', '--cached', '--ignore-unmatch', '--', *ignore)
+    wt.git.reset('-q')
+    listed = wt.git.ls_files(
+        '-z',
+        '--modified',
+        '--deleted',
+        '--others',
+        '--exclude-standard',
+        '--',
+        *outside(ignore),
+        stdout_as_string=False,
+    )
+    with tempfile.TemporaryFile() as names:
+        names.write(bytes(listed))
+        names.seek(0)
+        wt.git.update_index('--add', '--remove', '-z', '--stdin', istream=names)
     wt.git.commit('-qm', message, env=commit_env(author, committer))
 
 
