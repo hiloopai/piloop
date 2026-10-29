@@ -22,8 +22,10 @@ The campaign brief, the idea and the state of the campaign follow.
   `piloop schema long_jobs` shows how to run and wait for one.
 - A comment on your idea or your run reaches you while you work, as a line that starts with `[piloop]`. A `decision`
   is an instruction: read it in full and follow it. A note or a finding is information.
-- Ask for what you cannot do or decide with an `escalation` on your idea, never a note (the statement is in the
-  context). Do not wait for the answer: work on, or save, leave your finding and stop.
+- Ask for what you cannot do or decide with `piloop escalate idea#<your idea> --priority <0 to 4>`, never a note: its
+  form goes on stdin as JSON (`--guide` prints the fields). One decision in plain words; ids, hashes and paths go in
+  `details`. If an open escalation asks the same, cite it in a note on your run instead. It goes to the orchestrator
+  first. Do not wait for the answer: work on, or save, leave your finding and stop.
 
 ## Never
 

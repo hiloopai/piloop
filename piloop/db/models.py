@@ -787,6 +787,9 @@ class Comment(Tracked, Base):
     """When someone acknowledged the inbox item. NULL while it waits in the inbox."""
     acked_by: Mapped[str | None]
     """Who acknowledged it: ``human`` with ``piloop inbox ack``, or ``orchestrator`` when the orchestrator did."""
+    form: Mapped[JsonValue | None] = mapped_column(JSON)
+    """An escalation's typed payload, as ``piloop escalate`` filed it: the campaign's ``[plugins.escalation]`` provider
+    reads it, and ``body`` is its plain text. NULL for every other comment, and for an escalation filed as free text."""
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
 

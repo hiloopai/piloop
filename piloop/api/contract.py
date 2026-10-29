@@ -31,6 +31,7 @@ from piloop.ids import (
     CommentKind,
     Ending,
     EnvName,
+    Ref,
     RoleName,
     TargetKind,
 )
@@ -234,6 +235,26 @@ class ReplyBody(Params):
 
     body: str
     priority: Priority = 2
+
+
+class EscalateBody(Params):
+    """An escalation on a target, with the form that the campaign's ``[plugins.escalation]`` provider takes."""
+
+    target: Ref
+    form: JsonValue
+    priority: Priority = 2
+
+
+class ChooseBody(Params):
+    """The answer to an escalation: one of the choices that it offers, by its id."""
+
+    choice: str
+
+
+class GuideQuery(Params):
+    """The target whose campaign's escalation provider says how to fill its form."""
+
+    target: Ref
 
 
 class MessageBody(Params):

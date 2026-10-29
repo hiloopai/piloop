@@ -185,7 +185,7 @@ def test_the_startup_breaker_counts_with_the_launch_policys_limits(
     request_watchdog(db, campaign)
     assert run_all(scheduler) == []
     [escalation] = pause_escalations(db)
-    assert escalation.body.startswith('Launches paused: 1 agents died at startup in the last 2 minutes.')
+    assert '1 agents failed in the last 2 minutes.' in escalation.body
     scheduler.stop(timeout=5)
 
 

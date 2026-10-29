@@ -1,11 +1,13 @@
-"""``piloop inbox ack``, ``piloop inbox reply`` and ``piloop message``: acknowledge, answer, or write to the orchestrator."""
+"""``piloop inbox ack``, ``reply`` and ``choose``, ``piloop message`` and ``piloop escalate``: answer, write, or ask."""
 
+import json
+import sys
 from typing import Annotated
 
 import cyclopts
 
 from piloop.api.client import Client
-from piloop.api.contract import AckBody, InboxQuery, MessageBody, ReplyBody
+from piloop.api.contract import AckBody, ChooseBody, EscalateBody, GuideQuery, InboxQuery, MessageBody, ReplyBody
 from piloop.cli import common
 from piloop.cli.client import campaign_name, cwd, daemon_http
 from piloop.cli.common import CampaignRef
@@ -72,3 +74,42 @@ def message(
     with Client.connect(daemon_http()) as client:
         sent = client.message(campaign_name(client, ref), MessageBody(body=body, priority=priority)).comment
     common.console.print(f'comment#{sent.id} message on {sent.target}', markup=False)
+
+
+def inbox_choose(
+    comment: Annotated[CommentId, cyclopts.Parameter(help='The id of the escalation.')],
+    choice: Annotated[str, cyclopts.Parameter(help='The id of one of its choices, such as A.')],
+    /,
+) -> None:
+    """Answer an escalation with one of its choices: a `decision` reply signed as PILOOP_ACTOR, and an ack."""
+    with Client.connect(daemon_http()) as client:
+        answer = client.choose(comment, ChooseBody(choice=choice)).comment
+    common.console.print(f'comment#{answer.id} decision on {answer.target}: {answer.body}', markup=False)
+
+
+def escalate(
+    target: Annotated[str, cyclopts.Parameter(help='What it is about, such as idea#12.')],
+    /,
+    *,
+    priority: Annotated[int, cyclopts.Parameter(help='From 0 (urgent) to 4 (someday).')] = 2,
+    guide: Annotated[bool, cyclopts.Parameter(help="Print how to fill the form of the target's campaign.")] = False,
+) -> None:
+    """Ask for a decision: an escalation on a target, with its form as JSON on stdin.
+
+    The campaign's `[plugins.escalation]` provider checks the form and says what to fix. `--guide` prints its fields,
+    limits and an example.
+    """
+    with Client.connect(daemon_http()) as client:
+        if guide:
+            common.console.print(
+                client.escalation_guide(GuideQuery.model_validate({'target': target})).text, markup=False
+            )
+            return
+        try:
+            form = json.loads(sys.stdin.read())
+        except json.JSONDecodeError as e:
+            raise SystemExit(f'the form on stdin is not JSON: {e}') from e
+        filed = client.escalate(
+            EscalateBody.model_validate({'target': target, 'form': form, 'priority': priority})
+        ).comment
+    common.console.print(f'comment#{filed.id} escalation on {filed.target}', markup=False)

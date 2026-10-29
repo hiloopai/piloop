@@ -537,6 +537,15 @@ campaign, and `--kind` keeps only the items of the given kinds. With `IDS`, `--c
 `--kind` are refused.
 Nothing waits on an acknowledgement. To revise a decision, write a `decision` comment on its target.
 
+### piloop inbox choose
+
+```text
+piloop inbox choose ID CHOICE
+```
+
+Answers an escalation with one of its choices: a `decision` reply in its thread, signed as you, and an
+acknowledgement. `piloop inbox show ID` lists the choices. See [Escalations](/concepts/orchestrator#escalations).
+
 ### piloop inbox reply
 
 ```text
@@ -557,6 +566,17 @@ returns for a new inbox item that someone else wrote, a seed that someone else f
 an anomaly that the daemon gave to a watchdog, and the daemon's verdict on a measured candidate. `--after` is the cursor
 that the last wait printed (default: now). `--timeout` (default 1800) is how long to wait before it returns with
 nothing. Set the timeout of your shell tool above it.
+
+### piloop escalate
+
+```text
+piloop escalate TARGET [--priority N] < form.json
+piloop escalate TARGET --guide
+```
+
+Files an escalation on `TARGET` (`idea#12`), with its form as JSON on stdin. The campaign's `[plugins.escalation]`
+provider checks the form, and a refusal says what to fix. `--guide` prints the provider's fields, limits and an example.
+`--priority` defaults to 2.
 
 ### piloop message
 

@@ -29,11 +29,14 @@ from piloop.api.contract import (
     AckBody,
     CancelBody,
     Checkout,
+    ChooseBody,
     Clone,
     CommentsQuery,
     Credential,
+    EscalateBody,
     EventsQuery,
     Fork,
+    GuideQuery,
     InboxQuery,
     LaunchBody,
     LimitBody,
@@ -68,6 +71,8 @@ from piloop.api.views import (
     DaemonState,
     Delivered,
     Delivery,
+    Filed,
+    Guide,
     Inbox,
     InvalidConfig,
     LiveKeys,
@@ -89,7 +94,7 @@ from piloop.api.views import (
     TokenMade,
     Undelivered,
 )
-from piloop.campaign import inbox as inbox_module, ops
+from piloop.campaign import escalations, inbox as inbox_module, ops
 from piloop.campaign.campaigns import (
     CampaignError,
     FromUrl,
@@ -111,7 +116,17 @@ from piloop.db import feed as db_feed
 from piloop.db.events import has, latest
 from piloop.db.models import AgentSession, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentId, EnvName, KeyOrigin, TargetKind, TargetRef
+from piloop.ids import (
+    AgentSessionId,
+    CampaignId,
+    CampaignStatus,
+    CommentId,
+    CommentKind,
+    EnvName,
+    KeyOrigin,
+    TargetKind,
+    TargetRef,
+)
 from piloop.net import Refusal, tokens
 from piloop.net.acting import MayNotAct, acts_as
 from piloop.net.server import App, asked, authorized, changed, served
@@ -346,7 +361,35 @@ def thread(s: Reading, comment: CommentId) -> Thread:
     """The thread of a comment, the same for each comment of it: the root in full, its replies, and its citations."""
     if (found := s.get(Comment, comment)) is None:
         raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_COMMENT, f'no comment#{comment}')
-    return inbox_module.thread_of(s, found)
+    found_thread = inbox_module.thread_of(s, found)
+    root = s.get_one(Comment, found_thread.comment.id)
+    if root.kind is not CommentKind.ESCALATION or root.form is None:  # free text shows as it was filed
+        return found_thread
+    item = escalations.escalated(s, root)
+    return found_thread.model_copy(update={'escalation': escalations.policy(s, item.campaign).view(item)})
+
+
+@router.post('/escalations', operation_id='escalate', dependencies=[Depends(actor_access)])
+def escalate(s: Writing, me: Acting, body: EscalateBody) -> Filed:
+    """File an escalation: the campaign's ``[plugins.escalation]`` provider checks its form, and says what to fix."""
+    comment = escalations.escalate(s, body.target, body.form, author=me, priority=body.priority)
+    s.commit()
+    with db_feed.snapshot(s) as cursor:
+        return Filed(cursor=cursor, comment=inbox_module.comment_view(comment))
+
+
+@router.get('/escalations/guide', operation_id='escalation_guide')
+def escalation_guide(s: Reading, query: Annotated[GuideQuery, Query()]) -> Guide:
+    """How to fill the escalation form of the target's campaign: its provider's fields, limits and an example."""
+    return Guide(text=escalations.policy(s, escalations.campaign_of_target(s, query.target)).guide())
+
+
+@router.post('/inbox/{comment}/choose', operation_id='choose', dependencies=[Depends(actor_access)])
+def choose(s: Writing, me: Acting, comment: Commented, body: ChooseBody) -> Replied:
+    """Answer an escalation with one of its choices: a ``decision`` reply signed by the caller, and an ack."""
+    answer = escalations.choose(s, comment.id, body.choice, author=me)
+    with db_feed.snapshot(s) as cursor:
+        return Replied(cursor=cursor, comment=inbox_module.comment_view(answer))
 
 
 @router.post('/campaigns', operation_id='register_campaign', dependencies=[Depends(actor_access)])
@@ -765,6 +808,7 @@ def with_api(server: App, api: Handlers) -> App:
 
 REFUSALS: tuple[type[Exception], ...] = (
     ops.Refused,
+    escalations.Refused,
     ImportRefused,
     RemeasureRefused,
     limits_module.Refused,

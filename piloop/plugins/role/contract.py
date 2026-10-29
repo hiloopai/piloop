@@ -50,6 +50,7 @@ type Verb = tuple[str, ...]
 RELAYED: frozenset[Verb] = frozenset(
     {
         ('sql',),
+        ('escalate',),
         ('idea', 'add'),
         ('idea', 'seed'),
         ('idea', 'develop'),

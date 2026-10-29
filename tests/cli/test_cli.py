@@ -2476,3 +2476,64 @@ def test_a_help_loads_the_commands_that_it_lists_for_their_lines(capsys: pytest.
     cli.load_for_help([])
     run_cli(['--help'])
     assert 'Print the last lines that an agent wrote' in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures('api')
+def test_an_escalation_is_filed_with_its_form_shown_by_its_provider_and_answered_with_a_choice(
+    campaign_path: Path, out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_cli(['init', str(campaign_path)])
+    out()
+    run_cli(['escalate', 'campaign#1', '--guide'])
+    assert out().startswith('Write an escalation in plain words, as JSON on stdin:')
+    form = {
+        'ask': 'Do you approve a longer timeout?',
+        'why': 'Each run takes 3 hours. The timeout is 1 hour.',
+        'options': [
+            {'choice': 'Raise it to 4 hours.', 'result': 'Each run costs more.'},
+            {'choice': 'Keep it.', 'result': 'The idea stops.'},
+        ],
+        'recommend': 0,
+        'details': 'run#41 timed out.',
+    }
+    as_human = common.settings
+    monkeypatch.setattr(common, 'settings', Settings(home=as_human.home, actor='orchestrator'))
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps(form)))
+    run_cli(['escalate', 'campaign#1', '--priority', '1'])
+    assert out().strip() == 'comment#1 escalation on campaign#1'
+    monkeypatch.setattr(common, 'settings', as_human)
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps({**form, 'ask': 'Fix run#41?'})))
+    with pytest.raises(
+        SystemExit, match=r'the form is refused: ask: an id \(run#41\) goes in details\. `piloop escalate'
+    ):
+        run_cli(['escalate', 'campaign#1'])
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps(form)))
+    with pytest.raises(SystemExit, match='instance#1 is in no campaign: escalate on your idea, run or campaign'):
+        run_cli(['escalate', 'instance#1'])
+    monkeypatch.setattr('sys.stdin', io.StringIO('{'))
+    with pytest.raises(SystemExit, match='the form on stdin is not JSON: '):
+        run_cli(['escalate', 'campaign#1'])
+    run_cli(['inbox', 'show', '1'])
+    _, *lines = out().splitlines()
+    assert lines == [
+        'Do you approve a longer timeout?',
+        '',
+        'Each run takes 3 hours. The timeout is 1 hour.',
+        '',
+        'A. Raise it to 4 hours. (recommended) → Each run costs more.',
+        'B. Keep it. → The idea stops.',
+        'Answer: `piloop inbox choose 1 <A|B>`',
+        '',
+        'Details:',
+        'run#41 timed out.',
+    ]
+    with pytest.raises(SystemExit, match="comment#1 offers no choice 'C'; it offers A, B"):
+        run_cli(['inbox', 'choose', '1', 'C'])
+    run_cli(['inbox', 'choose', '1', 'a'])
+    assert out().strip() == 'comment#2 decision on comment#1: Chose A: Raise it to 4 hours. → Each run costs more.'
+    run_cli(['inbox', 'show', '1'])
+    assert '· p1, acknowledged by human 0s ago' in out().splitlines()[0]
+    with pytest.raises(
+        SystemExit, match='comment#2 is a decision, not an escalation: answer it with `piloop inbox reply`'
+    ):
+        run_cli(['inbox', 'choose', '2', 'A'])

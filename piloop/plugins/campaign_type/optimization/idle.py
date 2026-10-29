@@ -13,16 +13,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import System
+from piloop.campaign import escalations
 from piloop.campaign.stop import acted, asked, check, requested
 from piloop.config import CampaignConfig
 from piloop.daemon.loop import Soonest
 from piloop.db.events import emit, has, latest
 from piloop.db.models import Campaign, Comment, Event, EventModel, ReadBy, count
-from piloop.db.triggers import DAEMON_ACTOR
-from piloop.ids import CampaignStatus, CommentId, CommentKind, RoleName, TargetKind, TargetRef
+from piloop.ids import CampaignStatus, CommentId, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.optimization.planner import free_slots, offered, taken_by
+from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.facts import Facts
 from piloop.plugins.role.contract import ImplementerRole
@@ -103,19 +104,24 @@ def _spell(
         case (seen, SlotsIdle(kind='slots_idle.seen')) if now < (due := seen.at + role.idle_alert):
             return due
         case (_, SlotsIdle(kind='slots_idle.seen')):
-            body = _body(name, idle, ideas)
-            item = Comment(target=on, author=DAEMON_ACTOR, kind=CommentKind.ESCALATION, priority=PRIORITY, body=body)
-            s.add(item)
-            s.flush()
+            item = escalations.escalate(s, on, _asked(name, idle, ideas), author=System.DAEMON, priority=PRIORITY)
             emit(s, SlotsIdle(kind='slots_idle.raised', role=name, comment=item.id), on, System.DAEMON)
             return None
         case _:  # raised: one item for the spell
             return None
 
 
-def _body(name: RoleName, idle: int, ideas: list[Idea]) -> str:
+def _asked(name: RoleName, idle: int, ideas: list[Idea]) -> EscalationView:
     shown = ', '.join(f'idea#{i.id}' for i in ideas[:SHOWN]) + (', …' if len(ideas) > SHOWN else '')
-    return (
-        f'{len(ideas)} proposed ideas await review while {idle} {name} slots are idle ({shown}). Set each one ready,'
-        " parked or rejected: piloop idea status <id> ready --reason '…'."
+    return EscalationView(
+        headline=f'{len(ideas)} ideas wait for your review while {idle} {name} slots are free. Do you review them?',
+        why='piloop runs only ideas that are ready. Until you review these, the free slots do nothing.',
+        choices=(
+            Choice(id='A', label='Review the ideas now.', result='The ideas that you set ready start at once.'),
+            Choice(id='B', label='Let the slots wait.', result='The slots stay free until you review.'),
+        ),
+        details=(
+            f'{len(ideas)} proposed ideas await review while {idle} {name} slots are idle ({shown}). Set each one'
+            " ready, parked or rejected: piloop idea status <id> ready --reason '…'."
+        ),
     )

@@ -219,10 +219,10 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
     bill(db, campaign, file, '1012')
     request_watchdog(db, campaign)
     assert run_all(scheduler) == [], 'at the limit nothing launches, not even a row inserted by hand'
-    assert daemon_comments(db)[1:] == [
-        ('note', 1, 'Notice: spend is 1012, past the 200 notice.'),
-        ('escalation', 0, f'Stop rule limits: spend reached its hold_at of 300: {HELD}'),
-    ]
+    note, (kind, priority, body) = daemon_comments(db)[1:]
+    assert note == ('note', 1, 'Notice: spend is 1012, past the 200 notice.')
+    assert (kind, priority) == ('escalation', 0)
+    assert body.endswith(f'Details:\nStop rule limits: spend reached its hold_at of 300: {HELD}')
     hold.unlink()
     scheduler.wait(SETTLE)
     with db.session() as s:
@@ -286,7 +286,7 @@ def test_a_failing_source_holds_launches_and_escalates_once_for_each_series_of_f
     assert run_all(scheduler) == [], 'no bill yet: the spend is unknown, not 0'
     [(kind, priority, body)] = daemon_comments(db)
     assert (kind, priority) == ('escalation', 0)
-    assert body.startswith('Fact source command (spend): the reading failed (exit 1: cat: ')
+    assert '\nDetails:\nFact source command (spend): the reading failed (exit 1: cat: ' in body
     bill(db, campaign, file, 'oops')
     assert run_all(scheduler) == [] and len(daemon_comments(db)) == 1, 'the same series: no second escalation'
     with db.session() as s:

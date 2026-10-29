@@ -23,6 +23,8 @@ from typing import Final
 from sqlalchemy import CTE, ColumnElement, case, distinct, exists, func, select
 from sqlalchemy.orm import Session, aliased
 
+from piloop.actor import System
+from piloop.campaign import escalations
 from piloop.config import CONFIG_FILE, ConfigError
 from piloop.db.events import has
 from piloop.db.models import Campaign, Comment, Event
@@ -37,6 +39,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import NEVER_RAN
+from piloop.plugins.escalation.contract import Choice, EscalationView
 
 
 def unblocked() -> ColumnElement[bool]:
@@ -152,17 +155,20 @@ def park_stranded(s: Session, campaign_id: CampaignId) -> dict[IdeaId, IdeaId]:
         for idea, prerequisite in first.items():
             outcome = 'kept nothing' if prerequisite.status is IdeaStatus.DONE else f'is {prerequisite.status}'
             idea.status = IdeaStatus.PARKED
-            s.add(
-                Comment(
-                    target=TargetRef(TargetKind.IDEA, idea.id),
-                    author=DAEMON_ACTOR,
-                    kind=CommentKind.ESCALATION,
-                    priority=2,
-                    body=f'parked: it runs after idea#{prerequisite.id}, which {outcome}. Unlink it (piloop idea unlink'
-                    f' {idea.id} after {prerequisite.id}) to run it without that change, or set it ready once'
-                    f' idea#{prerequisite.id} is ready again',
-                )
+            asked = EscalationView(
+                headline='An idea waits for another idea that changed nothing. Do you run it anyway?',
+                why=f'It must run after another idea, which {outcome}. So it is parked.',
+                choices=(
+                    Choice(id='A', label='Run it without that change.', result='It runs on the head.'),
+                    Choice(
+                        id='B', label='Wait for the other idea.', result='It stays parked until that idea is ready.'
+                    ),
+                ),
+                details=f'parked: it runs after idea#{prerequisite.id}, which {outcome}. Unlink it (piloop idea unlink'
+                f' {idea.id} after {prerequisite.id}) to run it without that change, or set it ready once'
+                f' idea#{prerequisite.id} is ready again',
             )
+            escalations.escalate(s, TargetRef(TargetKind.IDEA, idea.id), asked, author=System.DAEMON, priority=2)
             parked[idea.id] = prerequisite.id
         s.flush()
     return parked

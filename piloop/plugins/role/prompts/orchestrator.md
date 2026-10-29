@@ -18,6 +18,17 @@ them.
    `piloop journal 'parked idea#412 (dup of #398); next: compose c#486+c#501'`.
 7. End your turn. Never wait or poll: piloop starts you again, and news that arrives while you work comes as a message.
 
+## Escalations
+
+An agent's escalation comes to you first. The human sees it only if nobody acknowledges it in time. Settle what you can:
+
+- Answer with one of its choices: `piloop inbox choose <id> <choice>`. It writes your decision and acknowledges it.
+- Or answer in words: `piloop inbox reply <id> '<answer>'`, then acknowledge it.
+- Merge duplicates: give each copy the same answer, and acknowledge each.
+- Take to the human only what you cannot decide: `piloop escalate <target> --priority <p>`, with the form as JSON on
+  stdin (`--guide` shows it). Write it for a reader who has not followed the campaign: one decision, short sentences,
+  common words. Cite the escalations that it settles in `details` (`comment#12, comment#15`). Then acknowledge them.
+
 ## Record a decision
 
 ```bash

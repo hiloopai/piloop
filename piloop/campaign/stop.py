@@ -12,7 +12,8 @@ from typing import ClassVar, Literal, assert_never
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
-from piloop.actor import Actor
+from piloop.actor import Actor, System
+from piloop.campaign import escalations
 from piloop.config import CampaignConfig
 from piloop.db.events import emit, has, in_order, latest
 from piloop.db.models import (
@@ -20,7 +21,6 @@ from piloop.db.models import (
     AgentSession,
     AgentSessionState,
     Campaign,
-    Comment,
     Event,
     EventModel,
     ReadBy,
@@ -30,9 +30,10 @@ from piloop.db.models import (
 from piloop.db.requests import answer, pending
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
-from piloop.ids import CampaignStatus, CommentKind, Ending, TargetKind, TargetRef
+from piloop.ids import CampaignStatus, Ending, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.fact_source.facts import HOURS, Fact, Facts, FactValue
 from piloop.plugins.stop_rule.contract import STOP_RULES, Escalate, Go, Hold, Stop, StopCase, WhileHeld
 
@@ -235,6 +236,15 @@ def left_of(answer: Go | Hold | Stop | Escalate) -> Facts:
             assert_never(done)
 
 
+GOES_ON = 'The campaign goes on under the new rule.'
+WHAT_THEN: dict[type[Go | Hold | Stop], str] = {
+    Go: 'The campaign goes on as it is.',
+    Hold: 'Nothing new starts until the rule lets it.',
+    Stop: 'The campaign stops.',
+}
+"""What keeping the stop rule does, by what the rule does after its escalation (``Escalate.then``)."""
+
+
 def acted(answer: Go | Hold | Stop | Escalate) -> Go | Hold | Stop:
     """What piloop does on an answer of the stop rule: the answer, or the ``then`` of an ``Escalate``."""
     return answer.then if isinstance(answer, Escalate) else answer
@@ -249,13 +259,17 @@ def escalated(
     """
     match answer:
         case Escalate(reason=reason, then=then):
-            body = f'Stop rule {STOP_RULES.name_of(STOP_RULES.selected(cfg.plugins))}: {reason}'
-            target = TargetRef(TargetKind.CAMPAIGN, campaign.id)
-            said = select(Comment.id).where(
-                Comment.target == target, Comment.kind == CommentKind.ESCALATION, Comment.body == body
+            rule = STOP_RULES.name_of(STOP_RULES.selected(cfg.plugins))
+            asked = EscalationView(
+                headline='The stop rule needs your decision before the campaign goes on.',
+                why=reason,
+                choices=(
+                    Choice(id='A', label='Change the rule in piloop.toml, then run piloop init.', result=GOES_ON),
+                    Choice(id='B', label='Keep the rule as it is.', result=WHAT_THEN[type(then)]),
+                ),
+                details=f'Stop rule {rule}: {reason}',
             )
-            if s.scalar(said.limit(1)) is None:
-                s.add(Comment(target=target, author=DAEMON_ACTOR, kind=CommentKind.ESCALATION, priority=0, body=body))
+            escalations.escalate_once(s, TargetRef(TargetKind.CAMPAIGN, campaign.id), asked, priority=0)
             return then
         case Go() | Hold() | Stop():
             return answer
@@ -339,12 +353,19 @@ def review_waits(s: Session, campaign: Campaign, cfg: CampaignConfig) -> bool:
 
 def review_skipped(s: Session, campaign: Campaign, held: str) -> None:
     """Post the escalation of a closing review that ``while_held = "skip"`` dropped. The caller commits."""
-    body = (
-        f'Closing review skipped: the campaign stopped while the stop rule held its launches ({held}), and the rule'
-        ' skips a review then (while_held = "skip").'
+    asked = EscalationView(
+        headline='The campaign stopped without its closing review. Do you want a review?',
+        why='The campaign stopped while the stop rule held its launches. The rule skips the review then.',
+        choices=(
+            Choice(id='A', label='Start the review by hand.', result='An agent reviews the campaign and reports.'),
+            Choice(id='B', label='Do nothing.', result='The campaign stays stopped without a review.'),
+        ),
+        details=(
+            f'Closing review skipped: the campaign stopped while the stop rule held its launches ({held}), and the'
+            ' rule skips a review then (while_held = "skip").'
+        ),
     )
-    target = TargetRef(TargetKind.CAMPAIGN, campaign.id)
-    s.add(Comment(target=target, author=DAEMON_ACTOR, kind=CommentKind.ESCALATION, priority=0, body=body))
+    escalations.escalate(s, TargetRef(TargetKind.CAMPAIGN, campaign.id), asked, author=System.DAEMON, priority=0)
 
 
 def asked(s: Session, campaign: Campaign, cfg: CampaignConfig) -> bool:

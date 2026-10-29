@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import ACTORS, Person, System
+from piloop.campaign import escalations
 from piloop.campaign.campaigns import CampaignAdded
 from piloop.campaign.inbox import ack, campaign_of, items, root_of
 from piloop.campaign.ops import Refused as BacklogRefused
@@ -23,6 +24,7 @@ from piloop.ids import HOME, CampaignId, CommentId, CommentKind, TargetKind, Tar
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ops import file_seed
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, Lifecycle
+from piloop.plugins.escalation.contract import At, EscalationView, Never, Now
 from piloop.plugins.notifier.contract import (
     NOTIFIERS,
     Accepted,
@@ -274,8 +276,9 @@ def _record(s: Session, name: str, notices: Sequence[Notice], posts: Sequence[Me
 def due(s: Session, name: str, notifier: Notifier, now: datetime) -> Due:
     """The items that the notifier ``name`` sends now: the one rule of what is due.
 
-    An item is an escalation, or of priority 0, that nobody has acknowledged and that a person did not write. It is due
-    when the notifier never sent it, or sent it ``remind_every`` ago. Nothing is due while the backoff of the
+    An item is an escalation whose campaign's escalation provider says it reaches a human now (``reach``), or another
+    comment of priority 0, that nobody has acknowledged and that a person did not write. It is due when the notifier
+    never sent it, or sent it ``remind_every`` ago. Nothing is due while the backoff of the
     failures since the notifier's last send lasts.
     """
     failures = _failures(s, name)
@@ -289,15 +292,26 @@ def due(s: Session, name: str, notifier: Notifier, now: datetime) -> Due:
         for comment, thread in follow_ups
     ]
     threaded = {comment.id for comment, _ in follow_ups}
-    wanted = [
-        (comment, campaign)
-        for comment, campaign in items(s)
-        if (comment.kind is CommentKind.ESCALATION or comment.priority == 0)
-        and not _by_a_person(comment.author)
-        and comment.id not in threaded
-    ]
-    sent = _sent(s, name, [c.id for c, _ in wanted])
     later = Soonest()
+    wanted: list[tuple[Comment, Campaign | None]] = []
+    for comment, campaign in items(s):
+        if _by_a_person(comment.author) or comment.id in threaded:
+            continue
+        if comment.kind is not CommentKind.ESCALATION:
+            wanted += [(comment, campaign)] if comment.priority == 0 else []
+            continue
+        match escalations.policy(s, campaign.id if campaign else None).reach(escalations.escalated(s, comment), now):
+            case Now():
+                wanted.append((comment, campaign))
+            case At(at=at) if at <= now:
+                wanted.append((comment, campaign))
+            case At(at=at):
+                later.add(at)
+            case Never():
+                pass
+            case reach:
+                assert_never(reach)
+    sent = _sent(s, name, [c.id for c, _ in wanted])
     for comment, campaign in wanted:
         if (at := sent.get(comment.id)) is None:
             notices.append(_notice(s, notifier, NoticeKind.NEW, comment, campaign))
@@ -405,7 +419,15 @@ def _notice(
         owner=_owner(s, campaign) if campaign is not None else None,
         link=link,
         thread=thread,
+        view=_view(s, comment, campaign),
     )
+
+
+def _view(s: Session, comment: Comment, campaign: Campaign | None) -> EscalationView | None:
+    """How an escalation shows, as its campaign's provider says, or None for another comment."""
+    if comment.kind is not CommentKind.ESCALATION:
+        return None
+    return escalations.policy(s, campaign.id if campaign else None).view(escalations.escalated(s, comment))
 
 
 def _owner(s: Session, campaign: Campaign) -> Person | None:

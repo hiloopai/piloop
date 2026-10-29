@@ -2,8 +2,9 @@
 
 A **notifier** is a named instance, ``[plugins.notifier.<name>]`` in ``config.toml``, and ``[plugins.notifier] use``
 there names those that the daemon sends to. Each pass of its machinery (``consumers``) sends each notifier one message
-with every item that is due (``due``): an escalation, or an item of priority 0, that nobody has acknowledged and that a
-person did not write. A ``notification.sent`` event on the item records each send, so a restart sends nothing twice.
+with every item that is due (``due``): an escalation when its campaign's ``[plugins.escalation]`` provider says it
+reaches a human, or another item of priority 0, that nobody has acknowledged and that a person did not write. A
+``notification.sent`` event on the item records each send, so a restart sends nothing twice.
 
 A failed send is a ``notification.failed`` event, and the items stay due: the next try comes after a backoff that the
 events give. Modelled on Alertmanager: its receivers, its notification log, and its ``repeat_interval``.
@@ -28,6 +29,7 @@ from piloop.actor import Person
 from piloop.db.models import EventModel, ReadBy
 from piloop.ids import CommentId, CommentKind
 from piloop.plugins.contribution import Lifecycle
+from piloop.plugins.escalation.contract import EscalationView
 from piloop.plugins.host import Capability, Many, Parameters, Pick, Scope, Use
 from piloop.plugins.secrets.contract import HomeSecrets
 
@@ -74,6 +76,8 @@ class Notice:
     """The item's page, from the notifier's ``link``. None when it has none: show ``piloop inbox show <comment>``."""
     thread: MessageRef | None = None
     """The post to answer under, for a ``FOLLOW_UP``. None for the others: a post of its own."""
+    view: EscalationView | None = None
+    """How an escalation shows, as its campaign's ``[plugins.escalation]`` provider says. None for another comment."""
 
 
 class NotDelivered(Exception):

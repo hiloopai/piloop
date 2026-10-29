@@ -33,6 +33,8 @@ class OrchestratorRole(SweepRole):
             ('inbox', 'show'),
             ('inbox', 'ack'),
             ('inbox', 'reply'),
+            ('inbox', 'choose'),
+            ('escalate',),
             ('idea', 'add'),
             ('idea', 'seed'),
             ('idea', 'develop'),

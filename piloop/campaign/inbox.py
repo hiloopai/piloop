@@ -49,6 +49,8 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.text import iso
 
+type Column[T] = Mapped[T] | ColumnElement[T]
+"""A column of a mapped class, or an expression of the same type, such as a literal target."""
 CITATION = re.compile(r'comment#(\d+)')
 """How a comment refers to another comment in its body. ``thread`` follows these references in both directions."""
 
@@ -321,7 +323,7 @@ def thread(s: Session, root: Comment) -> list[tuple[Comment, Relation]]:
     return [(c, Relation(r)) for c, r in rows]
 
 
-def campaign_of(target_kind: Mapped[TargetKind], target_id: Mapped[int]) -> ColumnElement[int | None]:
+def campaign_of(target_kind: Column[TargetKind], target_id: Column[int]) -> ColumnElement[int | None]:
     """Return the campaign that the target of a comment or event belongs to.
 
     A ``comment`` target is resolved through that comment's target, and through one more comment. That covers every
@@ -331,7 +333,7 @@ def campaign_of(target_kind: Mapped[TargetKind], target_id: Mapped[int]) -> Colu
     return case(*_owner_branches(target_kind, target_id, comments=2))
 
 
-def _owner_of_comment(comment_id: Mapped[int], comments: int) -> ScalarSelect[int | None]:
+def _owner_of_comment(comment_id: Column[int], comments: int) -> ScalarSelect[int | None]:
     parent = aliased(Comment)
     return (
         select(case(*_owner_branches(parent.target_kind, parent.target_id, comments)))
@@ -341,8 +343,8 @@ def _owner_of_comment(comment_id: Mapped[int], comments: int) -> ScalarSelect[in
 
 
 def _owner_branches(
-    target_kind: Mapped[TargetKind], target_id: Mapped[int], comments: int
-) -> list[tuple[ColumnElement[bool], Mapped[int] | ScalarSelect[int] | ScalarSelect[int | None]]]:
+    target_kind: Column[TargetKind], target_id: Column[int], comments: int
+) -> list[tuple[ColumnElement[bool], Column[int] | ScalarSelect[int] | ScalarSelect[int | None]]]:
     through = [(target_kind == TargetKind.COMMENT, _owner_of_comment(target_id, comments - 1))] if comments else []
     return [
         *through,

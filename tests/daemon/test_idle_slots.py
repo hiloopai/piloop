@@ -13,6 +13,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.optimization.idle import SlotsIdle, watch
 from tests.campaign.test_stop import with_spend
+from tests.conftest import details
 from tests.daemon.test_scheduler import add_ideas, set_config
 
 ALERT = timedelta(minutes=30)
@@ -64,7 +65,7 @@ def test_idle_slots_behind_proposed_ideas_raise_one_item_after_the_alert_until_t
         'daemon',
         1,
     )
-    assert item.body == snapshot(
+    assert details(item) == snapshot(
         "3 proposed ideas await review while 2 implementer slots are idle (idea#2, idea#3, idea#4). Set each one ready, parked or rejected: piloop idea status <id> ready --reason '…'."
     )
     with db.session() as s:

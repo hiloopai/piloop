@@ -59,7 +59,7 @@ piloop inbox
 ┏━━━━┳━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━┳━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ id ┃ p ┃ kind       ┃ campaign ┃ on         ┃ by     ┃ age ┃ first line                                                                                           ┃
 ┡━━━━╇━━━╇━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━╇━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ 5  │ 0 │ escalation │ enwik8   │ campaign#1 │ daemon │ 2m  │ Stop rule limits: spend reached its hold_at of 1000: nothing launches until you raise it and run pi… │
+│ 5  │ 0 │ escalation │ enwik8   │ campaign#1 │ daemon │ 2m  │ The stop rule needs your decision before the campaign goes on.                                       │
 │ 3  │ 1 │ note       │ enwik8   │ campaign#1 │ daemon │ 4m  │ Notice: spend is 412.3, past the 300 notice.                                                         │
 │ 4  │ 1 │ note       │ enwik8   │ campaign#1 │ daemon │ 2m  │ Notice: spend is 1012, past the 600 notice.                                                          │
 └────┴───┴────────────┴──────────┴────────────┴────────┴─────┴──────────────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -91,8 +91,46 @@ an idea goes into the brief of its next run.
 | `note` | Context, or a short remark. |
 | `finding` | What an agent tried and learned. |
 | `decision` | A decision, with the reason and how to revert it. |
-| `escalation` | A question that needs a decision. It always has a priority. |
+| `escalation` | A question that needs a decision, filed with `piloop escalate`. It always has a priority. |
 | `message` | Someone's word to the orchestrator. |
+
+## Escalations
+
+An agent asks for a decision with `piloop escalate`, and its form says it in plain words:
+
+```bash
+piloop escalate campaign#1 --priority 1 <<'JSON'
+{"ask": "Do you approve a longer timeout?",
+ "why": "Each run takes 3 hours. The timeout is 1 hour.",
+ "options": [{"choice": "Raise it to 4 hours.", "result": "Each run costs more."},
+             {"choice": "Keep it.", "result": "The idea stops."}],
+ "recommend": 0,
+ "details": "run#41 timed out."}
+JSON
+piloop inbox show 1
+```
+
+```text
+Do you approve a longer timeout?
+
+Each run takes 3 hours. The timeout is 1 hour.
+
+A. Raise it to 4 hours. (recommended) → Each run costs more.
+B. Keep it. → The idea stops.
+Answer: `piloop inbox choose 1 <A|B>`
+
+Details:
+run#41 timed out.
+```
+
+`piloop inbox choose 1 A` answers it: a decision signed as you, and an acknowledgement.
+
+- An agent's escalation goes to the orchestrator first. The orchestrator answers it, gives its duplicates the same
+  answer, or files one escalation of its own for you. A [notifier](/guides/notifications) sends it to you only when
+  nobody has acknowledged it 30 minutes after it was filed.
+- The orchestrator's escalations, and the daemon's, reach you at once.
+- The form, its limits and that wait are the campaign's `[plugins.escalation]`. `structured`, built in, is the
+  default. The [configuration reference](/reference/configuration#plugins) lists its keys.
 
 ## Decisions
 

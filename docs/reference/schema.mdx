@@ -51,6 +51,7 @@ CREATE TABLE comments (
 	priority INTEGER,
 	acked_at DATETIME,
 	acked_by VARCHAR,
+	form JSON,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_by VARCHAR,

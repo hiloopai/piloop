@@ -30,6 +30,7 @@ from piloop.agents.results import (
     StartupAnomaly,
 )
 from piloop.agents.roles import briefing, compose_brief, compose_resumed, render_sections, role_of
+from piloop.campaign import escalations
 from piloop.campaign.anomaly import AnomalyReported, assigned
 from piloop.campaign.campaigns import WORKSPACE, CampaignAdded, workspace_dir
 from piloop.campaign.launches import choose_harness, close, earlier, full_harnesses, remove_checkouts, resumed_on
@@ -104,6 +105,7 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import (
     checkout_candidate,
 )
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving
+from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.executor.consumers import LIMITS
 from piloop.plugins.executor.contract import AgentKey, LeftJob
 from piloop.plugins.fact_source.contract import FACT_SOURCES
@@ -752,21 +754,18 @@ class Campaigns:
         if pause is None or escalation is None:
             self._escalate_pause(s, campaign, deaths)
         else:
-            escalation.body = pause_body(deaths, pause.load, self._launch_policy)
+            escalations.revise(s, escalation, pause_asked(deaths, pause.load, self._launch_policy))
         return deaths[-self._launch_policy.startup_breaker][0].at + self._launch_policy.startup_window
 
     def _escalate_pause(self, s: Session, campaign: Campaign, deaths: Sequence[tuple[Event, StartupAnomaly]]) -> None:
-        # TODO: file it through the escalation capability's helper once that lands, at the same priority
         load = ' / '.join(f'{x:.1f}' for x in os.getloadavg())
-        comment = Comment(
-            target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
-            author=DAEMON_ACTOR,
-            kind=CommentKind.ESCALATION,
+        comment = escalations.escalate(
+            s,
+            TargetRef(TargetKind.CAMPAIGN, campaign.id),
+            pause_asked(deaths, load, self._launch_policy),
+            author=System.DAEMON,
             priority=1,
-            body=pause_body(deaths, load, self._launch_policy),
         )
-        s.add(comment)
-        s.flush()
         paused = LaunchPaused(comment=comment.id, deaths=len(deaths), load=load)
         emit(s, paused, TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)
         self._tracer.event(paused.kind, campaign=campaign.name, deaths=len(deaths), load=load)
@@ -939,6 +938,20 @@ def pause_body(deaths: Sequence[tuple[Event, StartupAnomaly]], load: str, policy
         ),
     ]
     return '\n'.join(lines)
+
+
+def pause_asked(deaths: Sequence[tuple[Event, StartupAnomaly]], load: str, policy: LaunchPolicy) -> EscalationView:
+    """What the escalation of a launch pause asks: what to do while agents die at startup, with ``pause_body``."""
+    minutes = policy.startup_window.total_seconds() / 60
+    return EscalationView(
+        headline='Agents fail as they start, so new launches are paused. What do you do?',
+        why=f'{len(deaths)} agents failed in the last {minutes:g} minutes. The host may be too busy.',
+        choices=(
+            Choice(id='A', label='Wait.', result='Launches start again when the failures are older.'),
+            Choice(id='B', label='Stop what makes the host busy.', result='Launches start again sooner.'),
+        ),
+        details=pause_body(deaths, load, policy),
+    )
 
 
 @dataclass(frozen=True)

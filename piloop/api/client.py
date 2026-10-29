@@ -23,9 +23,12 @@ from piloop.api.contract import (
     MAX_POLL_SECONDS,
     AckBody,
     CancelBody,
+    ChooseBody,
     Clone,
     CommentsQuery,
+    EscalateBody,
     EventsQuery,
+    GuideQuery,
     InboxQuery,
     LaunchBody,
     LimitBody,
@@ -55,6 +58,8 @@ from piloop.api.views import (
     CampaignAnswer,
     CampaignSynced,
     Comments,
+    Filed,
+    Guide,
     Inbox,
     LiveKeys,
     Messaged,
@@ -206,6 +211,15 @@ class Client:
 
     def reply(self, comment: CommentId, body: ReplyBody) -> Replied:
         return self.post(f'/v1/inbox/{comment}/reply', body, Replied)
+
+    def escalate(self, body: EscalateBody) -> Filed:
+        return self.post('/v1/escalations', body, Filed)
+
+    def escalation_guide(self, query: GuideQuery) -> Guide:
+        return self._get('/v1/escalations/guide', query, Guide)
+
+    def choose(self, comment: CommentId, body: ChooseBody) -> Replied:
+        return self.post(f'/v1/inbox/{comment}/choose', body, Replied)
 
     def _get[A: BaseModel](self, path: str, query: Params, answer: type[A]) -> A:
         """GET ``path`` with ``query`` as its query string, and read the answer as ``answer``.

@@ -90,6 +90,7 @@ from tests.conftest import (
     SETTLE,
     WATCHDOG,
     ScriptRuntime,
+    details,
     end_of,
     example,
     run_all,
@@ -718,10 +719,10 @@ def test_closing_review_skip_ends_the_stop_at_once_with_an_escalation(
     with db.session() as s:
         last = s.scalars(select(Comment).order_by(Comment.id.desc()).limit(1)).one()
         assert (last.kind, last.priority, last.author) == (CommentKind.ESCALATION, 0, 'daemon')
-        assert last.body.startswith(
+        assert details(last).startswith(
             'Closing review skipped: the campaign stopped while the stop rule held its launches (spend not known)'
         )
-        assert last.body.endswith('(while_held = "skip").')
+        assert details(last).endswith('(while_held = "skip").')
         reads = len(in_order(s, FactRead))
     due_now(db, campaign)
     run_all(sched)
@@ -1226,7 +1227,7 @@ def test_a_rule_that_escalates_lets_the_campaign_go_on_and_tells_a_human_once_pe
         sched.stop(timeout=5)
         with db.session() as s:
             said = s.scalars(select(Comment).where(Comment.kind == CommentKind.ESCALATION).order_by(Comment.id))
-            assert [(c.target, c.author, c.priority, c.body) for c in said] == [
+            assert [(c.target, c.author, c.priority, details(c)) for c in said] == [
                 (TargetRef(TargetKind.CAMPAIGN, campaign.id), 'daemon', 0, f'Stop rule escalates: {reason}')
                 for reason in ('$900 since the last keep', '$1,800 since the keep')
             ], 'one escalation for each distinct reason: the comment is the record'

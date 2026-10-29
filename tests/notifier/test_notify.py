@@ -7,12 +7,13 @@ from pathlib import Path
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from pydantic import PrivateAttr, SecretStr
+from pydantic import JsonValue, PrivateAttr, SecretStr
 from pytest_mock import MockerFixture
 from sqlalchemy import select
 
-from piloop.actor import Actor, Person, System
+from piloop.actor import Actor, Agent, Person, System
 from piloop.api.views import CommentNews
+from piloop.campaign import escalations
 from piloop.campaign.campaigns import CampaignAdded
 from piloop.campaign.inbox import ack, news
 from piloop.campaign.ops import Refused as BacklogRefused
@@ -28,6 +29,8 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.contribution import DaemonHost, Leaving, Lifecycle
+from piloop.plugins.escalation.contract import Escalated, Never, ToHuman
+from piloop.plugins.escalation.structured import Structured
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.host import Plugins
 from piloop.plugins.notifier import consumers
@@ -53,11 +56,13 @@ from piloop.plugins.notifier.contract import (
     Notifier,
     Reply,
 )
+from piloop.plugins.notifier.slack import Slack
 from piloop.plugins.notifier.slack_app import SocketListener
 from piloop.plugins.secrets.contract import HomeSecrets, set_secret
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.runtime.factory import make_runtime
 from piloop.settings import AgentSettings, DaemonSettings, Settings
+from tests.conftest import store_config
 from tests.fixtures.slack import FakeSlack
 
 
@@ -135,7 +140,7 @@ def write(
     campaign: Campaign,
     kind: CommentKind = CommentKind.ESCALATION,
     priority: int | None = 1,
-    author: str = 'implementer#12',
+    author: str = 'orchestrator',
 ) -> CommentId:
     with db.session() as s:
         comment = Comment(
@@ -193,7 +198,7 @@ def test_the_consumer_posts_each_due_item_once_to_each_notifier_in_use(
     again = consumer.run(Turn(now))
     [sent_at] = times(db, NotificationSent)
     assert [post['text'] for post in slack.posts] == [
-        f':rotating_light: *{campaign.name}* · escalation comment#{item} · P1 · from implementer#12\nx\n'
+        f':rotating_light: *{campaign.name}* · escalation comment#{item} · P1 · from orchestrator\nx\n'
         f'<https://p.example/{item}|open>'
     ]
     assert sent_of(db) == [(item, NotificationSent(notifier='team', notice=NoticeKind.NEW))]
@@ -558,3 +563,66 @@ def test_an_edit_of_a_reply_changes_it_as_its_author_and_it_waits_to_be_read_aga
     assert [(n.comment.id, n.comment.body) for n in found.items if isinstance(n, CommentNews)] == [
         (reply.id, 'raise it')
     ], 'the orchestrator that read the old text gets the new one as news'
+
+
+def test_an_agent_s_escalation_waits_its_grace_for_the_orchestrator_then_reaches_a_human_with_its_view(
+    db: Database, campaign: Campaign
+) -> None:
+    form: JsonValue = {
+        'ask': 'Do you approve a longer timeout?',
+        'why': 'Each run takes 3 hours.',
+        'options': [
+            {'choice': 'Raise it.', 'result': 'Runs cost more.'},
+            {'choice': 'Keep it.', 'result': 'It stops.'},
+        ],
+        'recommend': 1,
+    }
+    with db.session() as s:
+        filed = escalations.escalate(
+            s,
+            TargetRef(TargetKind.CAMPAIGN, campaign.id),
+            form,
+            author=Agent(role='implementer', session=12),
+            priority=1,
+        )
+        found = due(s, 'outbox', Outbox(), filed.created_at)
+        assert (found.notices, found.later) == ((), filed.created_at + timedelta(minutes=30))
+        [notice] = due(s, 'outbox', Outbox(), filed.created_at + timedelta(minutes=30)).notices
+    assert notice.view is not None and [c.id for c in notice.view.choices] == ['A', 'B']
+    assert Slack().text([notice]).splitlines()[1:6] == [
+        'Do you approve a longer timeout?',
+        '',
+        'Each run takes 3 hours.',
+        '',
+        'A. Raise it. → Runs cost more.',
+    ]
+
+
+class Silent(Structured):
+    """A provider whose escalations never reach a human through the notifiers."""
+
+    def reach(self, item: Escalated, now: datetime) -> ToHuman:
+        return Never()
+
+
+def test_a_provider_decides_whether_an_escalation_reaches_a_human_and_a_broken_config_falls_back_to_the_default(
+    db: Database, campaign: Campaign, mocker: MockerFixture
+) -> None:
+    write(db, campaign, author='daemon')
+    with db.session() as s:
+        s.add(
+            Comment(
+                target=TargetRef(TargetKind.INSTANCE, 1),
+                author='daemon',
+                kind=CommentKind.ESCALATION,
+                priority=0,
+                body='a worker is gone',
+            )
+        )
+        s.commit()
+    store_config(db, campaign.id, {'name': 'demo', 'plugins': {'escalation': {'provider': 'nope'}}})
+    with db.session() as s:
+        assert isinstance(escalations.policy(s, campaign.id), Structured), 'a stored config that no longer loads'
+        assert len(due(s, 'outbox', Outbox(), utcnow()).notices) == 2
+        mocker.patch.object(escalations, 'policy', return_value=Silent())
+        assert due(s, 'outbox', Outbox(), utcnow()).notices == ()

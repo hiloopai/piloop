@@ -220,6 +220,14 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # [plugins.memory]                        # what past campaigns leave for the next ones; see the research memory page
 # documents = ["docs/evidence/**/*.md"]   # repo files that `piloop init` and the stop copy into `documents`; default none
 
+# [plugins.escalation]                    # what an escalation holds and who sees it when; without the table: structured
+# grace = "PT30M"                         # an agent's escalation waits this long for the orchestrator, then a human sees it
+# ask_words = 25                          # the most words of its ask, one sentence
+# why_sentences = 3                       # the most sentences of its why
+# sentence_words = 20                     # the most words of each sentence of the why
+# choice_words = 20                       # the most words of each choice and of each result
+# max_options = 5                         # the most options that it offers
+
 [[metrics]]                               # one entry for each metric that evaluate reports; one primary for each track
 name = "score"
 direction = "higher"                      # higher | lower

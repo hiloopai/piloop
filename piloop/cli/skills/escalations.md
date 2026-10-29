@@ -31,12 +31,12 @@ writer gave it a priority.
 2. **Decide.**
    - If the human is talking to you now, give them the one decision, with the evidence and your recommendation.
    - Otherwise decide yourself. Take the smallest reversible step that keeps work moving.
-   - An irreversible step that can wait is not yours. Leave the escalation unacknowledged and keep everything else
-     moving. If the writer gave it too low a priority, raise it: `UPDATE comments SET priority = 0 WHERE id = <id>`.
+   - An irreversible step that can wait is not yours: leave it unacknowledged. Too low a priority? Raise it with SQL.
+   - Answer one that offers choices with `piloop inbox choose <id> <choice>`. Give duplicates the same answer. Ask the
+     human with `piloop escalate <target>` (its form on stdin; `--guide`), citing in `details` what it settles.
 3. **Record** the decision on the same target, addressed to the human (use the template below).
    - Then acknowledge the escalation: `PILOOP_ACTOR=orchestrator piloop inbox ack <id>`. Your decision replaces it in
      the inbox.
    - If the human decided it with you, the decision is theirs. Record it without a priority, and acknowledge it as the
      human: `piloop inbox ack <id>`, with no `PILOOP_ACTOR`.
-4. **Apply** it: un-park or reject the idea, change its priority, or fix `piloop.toml` and run `piloop init .` to read
-   it again.
+4. **Apply** it: un-park or reject the idea, change its priority, or fix `piloop.toml` and run `piloop init .`.

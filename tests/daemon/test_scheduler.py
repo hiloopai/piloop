@@ -110,6 +110,7 @@ from tests.conftest import (
     ScriptRuntime,
     active,
     campaigns_of,
+    details,
     disk,
     events,
     factory,
@@ -703,7 +704,7 @@ def test_a_prerequisite_that_ended_without_a_keep_parks_the_ideas_after_it_with_
         assert [s.get_one(Idea, i).status for i in (*stranded, chained)] == [IdeaStatus.PARKED] * 4, 'chains too'
         assert [s.get_one(Idea, i).status for i in released] == [IdeaStatus.READY] * 3
         asked = s.scalars(select(Comment).where(Comment.author == DAEMON_ACTOR).order_by(Comment.id)).all()
-        assert [(c.target_id, c.kind, c.priority, c.body) for c in asked] == snapshot(
+        assert [(c.target_id, c.kind, c.priority, details(c)) for c in asked] == snapshot(
             [
                 (
                     7,
@@ -2516,7 +2517,7 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
     assert run_all(scheduler) == []
     [escalation] = pause_escalations(db)
     assert (escalation.target_kind, escalation.author, escalation.priority) == (TargetKind.CAMPAIGN, 'daemon', 1)
-    assert escalation.body == IsStr(
+    assert details(escalation) == IsStr(
         regex=r'Launches paused: 4 agents died at startup in the last 10 minutes\. Load average [\d.]+ / [\d.]+ / [\d.]+'
         rf' on \d+ CPUs when launches paused\..*\n- agent_session#\d+ \(research on script\): .*\n- agent_session#{died[0]} \(watchdog on script\):'
         rf' FileNotFoundError: watchdog-{died[0]}: no such harness\n'
@@ -2534,9 +2535,9 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
     assert run_all(scheduler) == []
     [extended] = pause_escalations(db)
     assert extended.id == escalation.id and extended.acked_at is not None, 'the same pause: updated in place'
-    assert (
-        extended.body.startswith('Launches paused: 5 agents') and f'- agent_session#{latest} (research' in extended.body
-    )
+    assert details(extended).startswith(
+        'Launches paused: 5 agents'
+    ) and f'- agent_session#{latest} (research' in details(extended)
 
     with db.session() as s:
         for event in s.scalars(select(Event).where(has(StartupAnomaly))):

@@ -41,12 +41,12 @@ from sqlalchemy import func, select
 
 from piloop.actor import System
 from piloop.api.contract import Access
+from piloop.campaign import escalations
 from piloop.db import feed
 from piloop.db.events import emit
 from piloop.db.feed import Topic
 from piloop.db.models import (
     LIVE_LEASES,
-    Comment,
     EventModel,
     InstanceEnd,
     Lease,
@@ -59,9 +59,10 @@ from piloop.db.models import (
     utcnow,
 )
 from piloop.db.session import Database, read_transaction, write_transaction
-from piloop.ids import CommentKind, TargetKind, TargetRef
+from piloop.ids import TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
+from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.executor.contract import Capacity
 from piloop.plugins.executor.kit import leases
 from piloop.plugins.executor.kit.capacity import HostSample, Pool, Provisioner, add, admits, less, slots, times
@@ -491,21 +492,21 @@ class Scaler:
         self._started.pop(row.name, None)
 
     def _escalate(self, row: WorkerInstance, reason: str) -> None:
-        body = (
-            f'The provisioner of the pool {row.pool} refused {REFUSALS} starts in a row, the last one with: {reason}. '
-            'The pool backs off and tries again. Fix the provisioner, or set its max to 0: piloop limits set '
-            f'executor.pools.{row.pool}.provisioner.max=0 --reason "…"'
+        asked = EscalationView(
+            headline='A worker pool cannot start machines. Do you fix its provisioner?',
+            why=f'The provisioner refused {REFUSALS} starts in a row. The pool waits, then tries again.',
+            choices=(
+                Choice(id='A', label='Fix the provisioner.', result='The pool starts machines again.'),
+                Choice(id='B', label='Stop the starts of the pool.', result='No new machine starts.'),
+            ),
+            details=(
+                f'The provisioner of the pool {row.pool} refused {REFUSALS} starts in a row, the last one with:'
+                f' {reason}. The pool backs off and tries again. Fix the provisioner, or set its max to 0: piloop'
+                f' limits set executor.pools.{row.pool}.provisioner.max=0 --reason "…"'
+            ),
         )
         with self.db.session() as s:
-            s.add(
-                Comment(
-                    target=_on(row),
-                    author=System.DAEMON.signature,
-                    kind=CommentKind.ESCALATION,
-                    priority=ESCALATION_PRIORITY,
-                    body=body,
-                )
-            )
+            escalations.escalate(s, _on(row), asked, author=System.DAEMON, priority=ESCALATION_PRIORITY)
             s.commit()
 
 

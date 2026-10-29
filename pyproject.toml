@@ -77,6 +77,7 @@ prompt = "piloop.cli.agents:prompt"
 attach = "piloop.cli.agent_io:attach"
 journal = "piloop.plugins.memory.local.cli:journal"
 message = "piloop.cli.inbox:message"
+escalate = "piloop.cli.inbox:escalate"
 wake = "piloop.cli.wake:wake"
 serve = "piloop.cli.daemon:serve"
 stop = "piloop.cli.daemon:stop"
@@ -112,6 +113,7 @@ harness = "piloop.plugins.harness.contract:HARNESSES"
 mcp_server = "piloop.plugins.mcp_server.contract:MCP_SERVERS"
 lineage = "piloop.plugins.lineage.contract:LINEAGE"
 notifier = "piloop.plugins.notifier.contract:NOTIFIERS"
+escalation = "piloop.plugins.escalation.contract:ESCALATIONS"
 price_list = "piloop.plugins.price_list.contract:PRICE_LISTS"
 launch_policy = "piloop.plugins.launch_policy.contract:LAUNCH_POLICIES"
 harness_choice = "piloop.plugins.harness_choice.contract:HARNESS_CHOICES"
@@ -175,6 +177,9 @@ git = "piloop.plugins.vcs.git:Git"
 
 [project.entry-points."piloop.secrets"]
 local = "piloop.plugins.secrets.local:LocalSecrets"
+
+[project.entry-points."piloop.escalations"]
+structured = "piloop.plugins.escalation.structured:Structured"
 
 [project.entry-points."piloop.notifiers"]
 slack = "piloop.plugins.notifier.slack:Slack"

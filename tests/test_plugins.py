@@ -364,7 +364,7 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
         ({'verdict_rule': {'provider': 'min_gain'}}, 'min_gain: Field required'),
         (
             {'planner': {'provider': 'min_gain'}},
-            'plugins.planner: no capability has that name; there is fact_source, harness, harness_choice, lineage, mcp_server, memory, price_list, role, runtime, section, stop_rule, trigger, vcs, verdict_rule',
+            'plugins.planner: no capability has that name; there is escalation, fact_source, harness, harness_choice, lineage, mcp_server, memory, price_list, role, runtime, section, stop_rule, trigger, vcs, verdict_rule',
         ),
         (
             {'verdict_rule': {'provider': 'bootstrap', 'min_gain': 2}},

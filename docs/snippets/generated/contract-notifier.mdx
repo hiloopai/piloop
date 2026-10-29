@@ -19,3 +19,4 @@
 | `Notice.owner: Person \| None` | Whoever added the campaign, when a person did: whom the item concerns on a shared server. |
 | `Notice.link: str \| None` | The item's page, from the notifier's `link`. None when it has none: show `piloop inbox show <comment>`. |
 | `Notice.thread: MessageRef \| None` | The post to answer under, for a `FOLLOW_UP`. None for the others: a post of its own. |
+| `Notice.view: EscalationView \| None` | How an escalation shows, as its campaign's `[plugins.escalation]` provider says. None for another comment. |

@@ -1,0 +1,16 @@
+{/* WARNING: This file is auto-generated (uv run -m scripts.generate_all). Update the docstrings in `piloop/plugins/escalation/contract.py` if you want to change anything here. */}
+
+| Member | What it is |
+|---|---|
+| `EscalationPolicy.form(raw: JsonValue) -> JsonValue` | Check what an agent files, and return the form to store. |
+| `EscalationPolicy.draft(asked: EscalationView) -> JsonValue` | The form of an escalation that piloop itself files, from what it asks: no rule of wording applies to it. |
+| `EscalationPolicy.guide() -> str` | What `piloop escalate --guide` prints: the fields, their limits, and an example. |
+| `EscalationPolicy.body(form: JsonValue) -> str` | The plain text of `form`, which `comments.body` keeps for a reader of SQL. |
+| `EscalationPolicy.reach(item: Escalated, now: datetime) -> ToHuman` | When `item` goes to a human through the notifiers, while nobody has acknowledged it. |
+| `EscalationPolicy.view(item: Escalated) -> EscalationView` | How every surface shows `item`. |
+| `EscalationPolicy.choose(item: Escalated, choice: str) -> str` | The text of the `decision` that answers `item` with the choice `choice`. |
+| `EscalationView.headline: str` | The decision that is needed, in one sentence. |
+| `EscalationView.why: str` | Why it is needed, in a few short sentences. Empty when the escalation says nothing more. |
+| `EscalationView.choices: tuple[Choice, ...]` | The answers it offers. Empty: the human answers in words, with a reply. |
+| `EscalationView.recommended: str \| None` | The id of the choice that its author recommends, or None. |
+| `EscalationView.details: str` | The evidence: ids, hashes, paths, logs. A surface shows it second, or on demand. |

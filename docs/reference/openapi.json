@@ -712,6 +712,224 @@
         }
       }
     },
+    "/v1/escalations": {
+      "post": {
+        "summary": "Escalate",
+        "description": "File an escalation: the campaign's ``[plugins.escalation]`` provider checks its form, and says what to fix.",
+        "operationId": "escalate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EscalateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Filed"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/escalations/guide": {
+      "get": {
+        "summary": "Escalation Guide",
+        "description": "How to fill the escalation form of the target's campaign: its provider's fields, limits and an example.",
+        "operationId": "escalation_guide",
+        "parameters": [
+          {
+            "name": "target",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Ref"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Guide"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/inbox/{comment}/choose": {
+      "post": {
+        "summary": "Choose",
+        "description": "Answer an escalation with one of its choices: a ``decision`` reply signed by the caller, and an ack.",
+        "operationId": "choose",
+        "parameters": [
+          {
+            "name": "comment",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Comment"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChooseBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Replied"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/campaigns": {
       "post": {
         "summary": "Register Campaign",
@@ -5277,6 +5495,44 @@
         "title": "Checkout",
         "description": "A checkout on the daemon's machine, registered where it is."
       },
+      "Choice": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "result": {
+            "type": "string",
+            "title": "Result"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "result"
+        ],
+        "title": "Choice",
+        "description": "One answer that an escalation offers."
+      },
+      "ChooseBody": {
+        "properties": {
+          "choice": {
+            "type": "string",
+            "title": "Choice"
+          }
+        },
+        "type": "object",
+        "required": [
+          "choice"
+        ],
+        "title": "ChooseBody",
+        "description": "The answer to an escalation: one of the choices that it offers, by its id."
+      },
       "Clone": {
         "properties": {
           "clone": {
@@ -5769,6 +6025,70 @@
         "title": "Envelope",
         "description": "One event, as every reader sees it."
       },
+      "EscalateBody": {
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/Ref"
+          },
+          "form": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/Priority",
+            "default": 2
+          }
+        },
+        "type": "object",
+        "required": [
+          "target",
+          "form"
+        ],
+        "title": "EscalateBody",
+        "description": "An escalation on a target, with the form that the campaign's ``[plugins.escalation]`` provider takes."
+      },
+      "EscalationView": {
+        "properties": {
+          "headline": {
+            "type": "string",
+            "title": "Headline"
+          },
+          "why": {
+            "type": "string",
+            "title": "Why"
+          },
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/Choice"
+            },
+            "type": "array",
+            "title": "Choices",
+            "default": []
+          },
+          "recommended": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended"
+          },
+          "details": {
+            "type": "string",
+            "title": "Details",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "headline",
+          "why"
+        ],
+        "title": "EscalationView",
+        "description": "An escalation as every surface shows it: Slack, a webhook, ``piloop inbox show``, a console."
+      },
       "EvaluationQueue": {
         "properties": {
           "evaluations": {
@@ -5907,6 +6227,24 @@
         "title": "Figures",
         "description": "Named values, in order."
       },
+      "Filed": {
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor"
+          },
+          "comment": {
+            "$ref": "#/components/schemas/CommentView"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cursor",
+          "comment"
+        ],
+        "title": "Filed",
+        "description": "An escalation as piloop stored it, read at ``cursor``."
+      },
       "Fork": {
         "properties": {
           "fork": {
@@ -6021,6 +6359,20 @@
         ],
         "title": "Graph",
         "description": "A campaign as its provider sees it: the vocabulary, the nodes, the spine and its steps.\n\nIt is checked when it is made: every name refers to an entry, every parent comes before its child, and the spine\nand the series are paths of the graph. A graph that breaks a rule is a provider's bug."
+      },
+      "Guide": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "Guide",
+        "description": "How to fill the escalation form of a campaign: its provider's fields, limits and example."
       },
       "HTTPValidationError": {
         "properties": {
@@ -7834,6 +8186,9 @@
         "title": "Reasoned",
         "description": "A change to an idea, with why: it goes into the event or a note on the idea."
       },
+      "Ref": {
+        "$ref": "#/components/schemas/TargetRef"
+      },
       "Registered": {
         "properties": {
           "cursor": {
@@ -9007,6 +9362,25 @@
         "title": "TargetKind",
         "description": "What a comment or an event points at."
       },
+      "TargetRef": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/TargetKind"
+          },
+          "id": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "TargetRef",
+        "description": "What a comment or an event is about: ``target_kind`` and ``target_id``, written ``idea#12``.\n\nA dataclass, so that it maps the two columns as one composite attribute."
+      },
       "Text": {
         "properties": {
           "kind": {
@@ -9040,6 +9414,17 @@
             "type": "array",
             "title": "Linked",
             "description": "The replies, oldest first, then the other comments that cite the root or that it cites, oldest first."
+          },
+          "escalation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EscalationView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the root shows, when it is an escalation: its campaign's ``[plugins.escalation]`` provider says."
           }
         },
         "type": "object",

@@ -19,6 +19,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
+from piloop.plugins.escalation.contract import EscalationView
 from piloop.plugins.memory.contract import Synced
 from piloop.text import CELL_CHARS, NONE, age, block, cell, metric
 
@@ -486,6 +487,8 @@ class Thread(View):
     """The root of the thread: the comment itself, or the comment that its target is."""
     linked: list[Linked]
     """The replies, oldest first, then the other comments that cite the root or that it cites, oldest first."""
+    escalation: EscalationView | None = None
+    """How the root shows, when it is an escalation: its campaign's ``[plugins.escalation]`` provider says."""
 
 
 class CommentNews(View):
@@ -737,6 +740,19 @@ class Replied(View):
     comment: CommentView
 
 
+class Filed(View):
+    """An escalation as piloop stored it, read at ``cursor``."""
+
+    cursor: int
+    comment: CommentView
+
+
+class Guide(View):
+    """How to fill the escalation form of a campaign: its provider's fields, limits and example."""
+
+    text: str
+
+
 class Messaged(View):
     """A message to a campaign's orchestrator, read at ``cursor``."""
 
@@ -757,9 +773,23 @@ def thread_lines(thread: Thread, now: datetime) -> tuple[str, list[str]]:
     else:
         state = f'p{c.priority}, acknowledged by {c.acked_by} {age(datetime.fromisoformat(c.acked_at), now)} ago'
     title = f'comment#{c.id} {c.kind} on {c.target} by {c.author}, {age(datetime.fromisoformat(c.created), now)} ago · {state}'
-    lines = c.body.strip().splitlines() + ([''] if thread.linked else [])
+    lines = (escalation_lines(thread.escalation, c.id) if thread.escalation else c.body.strip().splitlines()) + (
+        [''] if thread.linked else []
+    )
     for other in thread.linked:
         when = age(datetime.fromisoformat(other.created), now)
         head = f'- comment#{other.id} {other.kind} by {other.author}, {when} ago, {other.how()}: '
         lines += (head + block(other.body).replace('\n', '\n  ')).splitlines()
     return title, lines
+
+
+def escalation_lines(view: EscalationView, comment: CommentId) -> list[str]:
+    """An escalation as ``piloop inbox show`` prints it: the ask, why, each choice, then the details."""
+    lines = [view.headline, *([''] + view.why.splitlines() if view.why else [])]
+    if view.choices:
+        lines.append('')
+        for choice in view.choices:
+            mark = ' (recommended)' if choice.id == view.recommended else ''
+            lines.append(f'{choice.id}. {choice.label}{mark} → {choice.result}')
+        lines.append(f'Answer: `piloop inbox choose {comment} <{"|".join(c.id for c in view.choices)}>`')
+    return lines + (['', 'Details:', *view.details.splitlines()] if view.details else [])

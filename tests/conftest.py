@@ -36,7 +36,7 @@ from piloop.daemon.api import Handlers, daemon_state, with_api
 from piloop.daemon.main import ACTOR
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database, migrate
 from piloop.ids import AgentSessionId, CampaignId, RoleName
 from piloop.net.server import Server, app, local_listener, url
@@ -406,6 +406,15 @@ def store_config(db: Database, campaign_id: CampaignId, raw: dict[str, object]) 
     with db.session() as s:
         s.connection().exec_driver_sql('UPDATE campaigns SET config = ? WHERE id = ?', (json.dumps(raw), campaign_id))
         s.commit()
+
+
+def details(comment: Comment) -> str:
+    """The evidence of an escalation that piloop filed: ``details`` of its ``structured`` form."""
+    form = comment.form
+    assert isinstance(form, dict), form
+    found = form['details']
+    assert isinstance(found, str), form
+    return found
 
 
 def reconfigured(cfg: CampaignConfig, **keys: object) -> CampaignConfig:

@@ -232,3 +232,7 @@ from piloop.plugins.notifier.contract import Reply, Ack, FileSeed, Edit, Accepte
 from piloop.plugins.notifier.kit.slack import SlackText
 from piloop.plugins.notifier.slack import Slack
 from piloop.plugins.notifier.slack_app import SlackApp, SocketListener
+
+from piloop.plugins.escalation.contract import ESCALATIONS, EscalationPolicy, EscalationView, Choice, Escalated
+from piloop.plugins.escalation.contract import ToHuman, Now, At, Never
+from piloop.plugins.escalation.structured import Structured

@@ -15,11 +15,14 @@ from pydantic import Field, model_validator
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
+from piloop.actor import System
+from piloop.campaign import escalations
 from piloop.db.events import has, latest, payload_of
 from piloop.db.models import Campaign, Comment, Event, EventModel
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.verdicts.judge import last_keep_at
+from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactReadError, FactSource
 from piloop.plugins.fact_source.facts import Fact, FactValue, reading, since_keep
 
@@ -116,8 +119,19 @@ class Readings(FactSource):
                 )
             )
             if last is None or last[1].values.get(failing) is not None:
-                body = f'Fact source {FACT_SOURCES.name_of(self)} ({", ".join(self.names())}): the reading failed ({values}).'
-                s.add(Comment(target=on, author=DAEMON_ACTOR, kind=CommentKind.ESCALATION, priority=0, body=body))
+                asked = EscalationView(
+                    headline='A fact source cannot read its facts. Do you fix it?',
+                    why='The stop rule can read these facts. Without them, it can hold the campaign.',
+                    choices=(
+                        Choice(id='A', label="Fix the source's command.", result='The next reading records the facts.'),
+                        Choice(
+                            id='B', label='Take the source out of the campaign.', result='Nothing reads these facts.'
+                        ),
+                    ),
+                    details=f'Fact source {FACT_SOURCES.name_of(self)} ({", ".join(self.names())}): the reading'
+                    f' failed ({values}).',
+                )
+                escalations.escalate(s, on, asked, author=System.DAEMON, priority=0)
             return
         before = {name: _last_known(s, campaign, name) for name in self.notices}
         s.add(Event(target=on, actor=DAEMON_ACTOR, payload=FactRead(values=dict(values))))

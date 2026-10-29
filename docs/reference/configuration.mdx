@@ -138,6 +138,21 @@ climb of a run's own version stops when `stop` says so, and piloop ends the eval
 
 `[plugins]` of `piloop.toml` holds the plugins of the campaign. A capability that has one instance takes `[plugins.<capability>]`: `provider`, the name of its entry point (the default without it), and the keys of that provider. One that has several takes `[plugins.<capability>.<name>]` for each: its `provider` is the one called `<name>` when the table has none, and each provider that needs no keys is an instance of its own name with its defaults. `[plugins.<capability>]` itself holds the settings of such a capability: `use` names the instances that the campaign uses, and is unset for the providers that are on by default (`DEFAULT`). No instance is called `use`.
 
+### `[plugins.escalation]`
+
+The escalation policy. Without a table: `structured`.
+
+With `provider = "structured"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `grace` | duration | `"PT30M"` | How long an agent's escalation waits for the orchestrator before it goes to a human too. 0: at once. |
+| `ask_words` | integer | `25` | The most words that the ask has. |
+| `why_sentences` | integer | `3` | The most sentences that the why has. |
+| `sentence_words` | integer | `20` | The most words of each sentence of the why. |
+| `choice_words` | integer | `20` | The most words of each choice and of each result. |
+| `max_options` | integer | `5` | The most options that an escalation offers. |
+
 ### `[plugins.fact_source] use`
 
 The fact source instances that the campaign uses, by name, in order. Unset: `campaign`, `optimization`.
@@ -855,7 +870,7 @@ With `provider = "slack"`:
 | `timeout` | duration | `"PT10S"` | How long a post may take. The daemon's loop waits for it. |
 | `max_items` | integer | `20` | How many items one message shows. It names how many more there are. |
 | `body_chars` | integer | `300` | How much of an item's text a message shows, in whole lines. |
-| `template` | string | `"{mark} *{campaign}* \u00b7 {kind} comment#{comment} \u00b7 P{priority} \u00b7 from {author}{mention}\n{body}\n{link}"` | How the message shows one item. Each `{name}` is filled in: `{mark}` is `:rotating_light:`, or `:alarm_clock: reminder ·` for a reminder, or `:speech_balloon:` for an answer in a thread; `{campaign}` the campaign's name; `{kind}` the item's kind; `{comment}` its id; `{priority}` 0 to 4, or `–`; `{author}` who wrote it; `{mention}` ` · <@member>` for an owner in `people`, else nothing; `{body}` its text, up to `body_chars`; `{link}` its `link`, else the command that shows it. Write `{{` and `}}` for a brace. |
+| `template` | string | `"{mark} *{campaign}* \u00b7 {kind} comment#{comment} \u00b7 P{priority} \u00b7 from {author}{mention}\n{body}\n{link}"` | How the message shows one item. Each `{name}` is filled in: `{mark}` is `:rotating_light:`, or `:alarm_clock: reminder ·` for a reminder, or `:speech_balloon:` for an answer in a thread; `{campaign}` the campaign's name; `{kind}` the item's kind; `{comment}` its id; `{priority}` 0 to 4, or `–`; `{author}` who wrote it; `{mention}` ` · <@member>` for an owner in `people`, else nothing; `{body}` its text, up to `body_chars` (an escalation's ask, why and choices, as its provider shows them); `{link}` its `link`, else the command that shows it. Write `{{` and `}}` for a brace. |
 | `webhook` | [SecretRef](#secretref) | `{}` | The secret that holds the webhook's URL: `SLACK_WEBHOOK_URL` unless set (`piloop secret set`). |
 
 #### SecretRef
@@ -878,7 +893,7 @@ With `provider = "slack_app"`:
 | `timeout` | duration | `"PT10S"` | How long a post may take. The daemon's loop waits for it. |
 | `max_items` | integer | `20` | How many items one message shows. It names how many more there are. |
 | `body_chars` | integer | `300` | How much of an item's text a message shows, in whole lines. |
-| `template` | string | `"{mark} *{campaign}* \u00b7 {kind} comment#{comment} \u00b7 P{priority} \u00b7 from {author}{mention}\n{body}\n{link}"` | How the message shows one item. Each `{name}` is filled in: `{mark}` is `:rotating_light:`, or `:alarm_clock: reminder ·` for a reminder, or `:speech_balloon:` for an answer in a thread; `{campaign}` the campaign's name; `{kind}` the item's kind; `{comment}` its id; `{priority}` 0 to 4, or `–`; `{author}` who wrote it; `{mention}` ` · <@member>` for an owner in `people`, else nothing; `{body}` its text, up to `body_chars`; `{link}` its `link`, else the command that shows it. Write `{{` and `}}` for a brace. |
+| `template` | string | `"{mark} *{campaign}* \u00b7 {kind} comment#{comment} \u00b7 P{priority} \u00b7 from {author}{mention}\n{body}\n{link}"` | How the message shows one item. Each `{name}` is filled in: `{mark}` is `:rotating_light:`, or `:alarm_clock: reminder ·` for a reminder, or `:speech_balloon:` for an answer in a thread; `{campaign}` the campaign's name; `{kind}` the item's kind; `{comment}` its id; `{priority}` 0 to 4, or `–`; `{author}` who wrote it; `{mention}` ` · <@member>` for an owner in `people`, else nothing; `{body}` its text, up to `body_chars` (an escalation's ask, why and choices, as its provider shows them); `{link}` its `link`, else the command that shows it. Write `{{` and `}}` for a brace. |
 | `channel` | string | required | The channel to post in, by its id (`C0123ABC`): the app's bot must be in it, or it hears no replies. |
 | `token` | [SecretRef](#secretref) | `{}` | The secret that holds the bot token (`xoxb-…`; `chat:write`, `channels:history`, `groups:history`, `reactions:read`): `SLACK_BOT_TOKEN` unless set. |
 | `app_token` | [SecretRef](#secretref) | `{}` | The secret that holds the app-level token (`xapp-…`; `connections:write`) that opens the socket: `SLACK_APP_TOKEN` unless set. |

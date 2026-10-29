@@ -8,6 +8,7 @@ import httpx2 as httpx
 from pydantic import Field, field_validator
 
 from piloop.actor import Person
+from piloop.plugins.escalation.contract import EscalationView
 from piloop.plugins.notifier.contract import NotDelivered, Notice, NoticeKind, Notifier
 from piloop.text import block
 
@@ -35,7 +36,7 @@ class SlackText(Notifier):
     ``:alarm_clock: reminder ·`` for a reminder, or ``:speech_balloon:`` for an answer in a thread; ``{campaign}`` the
     campaign's name; ``{kind}`` the item's kind; ``{comment}`` its id; ``{priority}`` 0 to 4, or ``–``; ``{author}`` who wrote
     it; ``{mention}`` `` · <@member>`` for an owner in ``people``, else nothing; ``{body}`` its text, up to
-    ``body_chars``; ``{link}`` its ``link``, else the command that shows it. Write ``{{`` and ``}}`` for a brace."""
+    ``body_chars`` (an escalation's ask, why and choices, as its provider shows them); ``{link}`` its ``link``, else the command that shows it. Write ``{{`` and ``}}`` for a brace."""
 
     @field_validator('template')
     @classmethod
@@ -76,13 +77,22 @@ class SlackText(Notifier):
             'priority': str(notice.priority) if notice.priority is not None else '–',
             'author': escaped(notice.author),
             'mention': f' · <@{member}>' if member is not None else '',
-            'body': escaped(block(notice.body, self.body_chars)),
+            'body': escaped(block(plain(notice.view) if notice.view else notice.body, self.body_chars)),
             'link': f'<{notice.link}|open>' if notice.link else f'`piloop inbox show {notice.comment}`',
         }
 
     def person(self, member: str) -> Person | None:
         """The person whose Slack member id is ``member``, in ``people``, or None."""
         return next((Person(name=name) for name, found in self.people.items() if found == member), None)
+
+
+def plain(view: EscalationView) -> str:
+    """An escalation in plain text, the evidence left out: the ask, why, and each choice."""
+    lines = [view.headline, *(['', view.why] if view.why else [])]
+    if view.choices:
+        mark = {view.recommended: ' (recommended)'}
+        lines += ['', *(f'{c.id}. {c.label}{mark.get(c.id, "")} → {c.result}' for c in view.choices)]
+    return '\n'.join(lines)
 
 
 def escaped(text: str) -> str:

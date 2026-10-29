@@ -13,6 +13,7 @@ import ContractFactSource from '/snippets/generated/contract-fact-source.mdx';
 import ContractPriceList from '/snippets/generated/contract-price-list.mdx';
 import ContractLaunchPolicy from '/snippets/generated/contract-launch-policy.mdx';
 import ContractHarnessChoice from '/snippets/generated/contract-harness-choice.mdx';
+import ContractEscalation from '/snippets/generated/contract-escalation.mdx';
 import StopAnswers from '/snippets/generated/stop-answers.mdx';
 import Facts from '/snippets/generated/facts.mdx';
 
@@ -253,3 +254,33 @@ resume comes first, and a full harness passes its turn. A harness pinned on an i
 `piloop agent launch --harness` is never replaced.
 
 <ContractHarnessChoice />
+
+## Escalation policies
+
+An **escalation policy** decides what an escalation holds, who sees it when, and how it shows. `[plugins.escalation]`
+in `piloop.toml` chooses it. `structured`, built in and the default, asks for one decision in plain words, and sends an
+agent's escalation to the orchestrator first ([Escalations](/concepts/orchestrator#escalations)). A provider that sends
+every escalation to a human at once changes one method:
+
+```python
+from datetime import datetime
+
+from piloop.capabilities import Escalated, Now, Structured, ToHuman
+
+
+class AtOnce(Structured):
+    """``at_once``: the form of ``structured``, and every escalation reaches a human at once."""
+
+    def reach(self, item: Escalated, now: datetime) -> ToHuman:
+        return Now()
+```
+
+```toml
+[project.entry-points."piloop.escalations"]
+at_once = "my_package:AtOnce"
+```
+
+piloop stores the form that `form` returns, and never reads it. The notifiers, `piloop inbox show` and the API show
+the `EscalationView` that `view` returns, so a provider with other fields shows on every surface.
+
+<ContractEscalation />

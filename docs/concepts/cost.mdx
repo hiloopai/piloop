@@ -134,6 +134,15 @@ facts = ["gpu_usd"]                           # add "compute_usd" and "models_us
 
 ```text
 comment#5 escalation on campaign#1 by daemon, 35s ago · p0, unacknowledged
+The stop rule needs your decision before the campaign goes on.
+
+spend reached its hold_at of 1000: nothing launches until you raise it and run piloop init
+
+A. Change the rule in piloop.toml, then run piloop init. → The campaign goes on under the new rule.
+B. Keep the rule as it is. → Nothing new starts until the rule lets it.
+Answer: `piloop inbox choose 5 <A|B>`
+
+Details:
 Stop rule limits: spend reached its hold_at of 1000: nothing launches until you raise it and run piloop init
 ```
 

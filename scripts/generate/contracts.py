@@ -28,6 +28,7 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
 )
 from piloop.plugins.cas.contract import Cas, CasProvider, Evictable, Upkeep
 from piloop.plugins.contribution import Contributes, Contribution
+from piloop.plugins.escalation.contract import EscalationPolicy, EscalationView
 from piloop.plugins.executor.contract import Executor, ExecutorConfig
 from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource
@@ -85,6 +86,7 @@ CONTRACTS: dict[str, Contract] = {
     'archive': Contract((ArchiveConfig, Archiver), '`piloop/plugins/archive/contract.py`'),
     'vcs': Contract((Vcs, Repository), '`piloop/plugins/vcs/contract.py`'),
     'secrets': Contract((SecretsProvider,), '`piloop/plugins/secrets/contract.py`'),
+    'escalation': Contract((EscalationPolicy, EscalationView), '`piloop/plugins/escalation/contract.py`'),
     'notifier': Contract((Notifier, Notice), '`piloop/plugins/notifier/contract.py`'),
     'provisioner': Contract((ProvisionerConfig, Provisioning), '`piloop/plugins/provisioner/contract.py`'),
 }
