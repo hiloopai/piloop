@@ -282,7 +282,8 @@ def _imports(path: Path) -> set[str]:
 def test_each_capability_is_a_package_of_its_contract_its_built_in_providers_and_its_kit() -> None:
     """``plugins/<capability>/``: ``contract.py`` declares the capability, ``facts.py`` the facts that it supplies
     (pure, so that a pure provider reads them), ``consumers.py`` its machinery in the daemon (``piloop.contributors``),
-    ``api.py`` the routes that its providers share (``lineage``), ``wire.py`` their client for a UI, every other module is a built-in provider by the name
+    ``api.py`` the routes that its providers share (``lineage``), ``wire.py`` their client for a UI, ``bridges.py`` the
+    bridges of its old keys (``piloop.bridges``), every other module is a built-in provider by the name
     of its entry point, ``kit/`` holds what any provider of the capability may use, and a directory without Python holds the
     providers' resources (``role/prompts/``).
 
@@ -317,6 +318,7 @@ def test_each_capability_is_a_package_of_its_contract_its_built_in_providers_and
                 'facts.py',
                 'api.py',
                 'wire.py',
+                'bridges.py',
                 'kit',
             }
             resources = {p.name for p in package.iterdir() if p.is_dir() and not any(p.rglob('*.py'))}

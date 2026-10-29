@@ -307,8 +307,9 @@ The test also fails on a malformed marker, and on a comment or docstring that sa
 
 ## Deprecate a configuration key
 
-To rename or remove a key of `piloop.toml`, add a bridge in `piloop/deprecated.py` and mark it. The module docstring
-explains how, and [Mark compat code](#mark-compat-code) says until which release. The old key keeps working, with a
+To rename or remove a key of `piloop.toml`, add a bridge next to its capability, in `<capability>/bridges.py`, name it
+in the `piloop.bridges` entry points, and mark it. `piloop/deprecated.py` explains how, and
+[Mark compat code](#mark-compat-code) says until which release. The old key keeps working, with a
 warning, until then. The release notes list it
 under `Deprecated` when the pull request title says that the key is deprecated.
 

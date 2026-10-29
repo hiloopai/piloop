@@ -43,6 +43,7 @@ from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.contribution import Contributes
 from piloop.plugins.harness.contract import HARNESSES, Harness
 from piloop.plugins.host import Capability, One, Parameters, Scope, Slot
+from piloop.plugins.mcp_server.bridges import MCP_PROVIDERS
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer
 from piloop.plugins.network.contract import Network
 from piloop.plugins.runtime.contract import AgentExit, AgentStart
@@ -213,7 +214,7 @@ class AgentJob(BaseModel):
             'the servers of a job of protocol 13 or older (0.3.1 is 7) have no provider: delete AgentJob._servers',
         )
         tables = {name: dict(t) if isinstance(t, dict) else t for name, t in servers.items()}
-        for step in deprecated.MCP_PROVIDERS:
+        for step in MCP_PROVIDERS:
             step.apply({'plugins': {'mcp_server': tables}})
         return {**data, 'servers': tables}
 

@@ -393,7 +393,7 @@ def config_file(home: Path) -> dict[str, object]:
     if not path.is_file():
         return {}
     raw = tomllib.loads(path.read_text())
-    deprecated.apply(path, raw, deprecated.CONFIG_BRIDGES)
+    deprecated.apply(path, raw, deprecated.bridges(Scope.HOME))
     return raw
 
 

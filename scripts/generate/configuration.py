@@ -6,7 +6,7 @@ from typing import get_args
 from pydantic import BaseModel, RootModel
 
 from piloop.config import CampaignConfig
-from piloop.deprecated import BRIDGES, CONFIG_BRIDGES
+from piloop.deprecated import bridges
 from piloop.plugins.harness.contract import HARNESSES
 from piloop.plugins.host import Capability, Many, One, Parameters, Pick, Scope, declared
 from piloop.plugins.role.contract import ROLES
@@ -135,7 +135,8 @@ def global_section() -> str:
 def deprecated_section() -> str:
     """Return the keys that ``piloop.deprecated`` still accepts, one bullet per bridge; nothing when there are none."""
     bullets = '\n'.join(
-        f'- {mdx(" ".join(str(inspect.getdoc(b.rewrite)).split()))}' for b in (*BRIDGES, *CONFIG_BRIDGES)
+        f'- {mdx(" ".join(str(inspect.getdoc(b.rewrite)).split()))}'
+        for b in (*bridges(Scope.CAMPAIGN), *bridges(Scope.HOME))
     )
     return (
         '\n## Deprecated keys\n\nThese keys still work. Each one shows a `PiloopDeprecationWarning` that names the file,'

@@ -538,7 +538,7 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f'{toml} is not valid TOML: {e}') from e
     old = deprecated.old_instances(raw)
-    deprecated.apply(toml, raw)
+    deprecated.apply(toml, raw, deprecated.bridges(Scope.CAMPAIGN))
     defaults = settings.campaign_defaults
     raw['plugins'] = merged(defaults, raw.get('plugins', {}))
 

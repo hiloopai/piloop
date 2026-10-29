@@ -9,10 +9,13 @@ import ast
 import importlib
 import io
 import re
+import subprocess
+import sys
 import tokenize
 import tomllib
 import warnings
 from dataclasses import dataclass
+from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
@@ -31,6 +34,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.campaign_type.optimization.fact_source.optimization import OptimizationFacts
 from piloop.plugins.executor.contract import AgentJob
+from piloop.plugins.fact_source.bridges import SPEND_COMMAND
 from piloop.plugins.fact_source.campaign import CampaignFacts
 from piloop.plugins.fact_source.command import Command
 from piloop.plugins.fact_source.contract import FACT_SOURCES
@@ -38,6 +42,8 @@ from piloop.plugins.fact_source.spend import SpendFacts
 from piloop.plugins.harness.codex import Codex
 from piloop.plugins.harness.contract import each_provider
 from piloop.plugins.harness.pi import Pi
+from piloop.plugins.host import PluginError, Scope
+from piloop.plugins.mcp_server.bridges import MCP_TABLES
 from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.mcp_server.stdio import StdioServer
 from piloop.plugins.memory.contract import MEMORY
@@ -48,11 +54,10 @@ from piloop.plugins.stop_rule.limits import Limits
 from piloop.settings import config_file
 from piloop.version import Version
 from tests.conftest import AGENT_TIMEOUT, HARNESS_APPEND, role_of, write_toml
+from tests.daemon.test_roles import installed
 
-TEST_BRIDGES: list[deprecated.Bridge] = []
 
-
-@deprecated.bridge('9.0.0', 'size is width: delete rename_size', TEST_BRIDGES)
+@deprecated.bridge('9.0.0', 'size is width: delete rename_size')
 def rename_size(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """``size = …`` is ``width = …``."""
     if 'size' in raw:
@@ -64,9 +69,8 @@ def test_a_bridge_rewrites_the_key_and_warns_at_the_line_that_set_it(tmp_path: P
     toml = tmp_path / 'piloop.toml'
     toml.write_text('name = "p"\nsize = 3\n')
     raw: dict[str, object] = {'name': 'p', 'size': 3}
-    assert [rename_size] == TEST_BRIDGES, 'the declaration registers it'
     with pytest.warns(PiloopDeprecationWarning) as record:
-        deprecated.apply(toml, raw, TEST_BRIDGES)
+        deprecated.apply(toml, raw, [rename_size])
     assert raw == {'name': 'p', 'width': 3}
     assert [(w.filename, w.lineno, str(w.message)) for w in record] == [
         (str(toml), 2, 'size is deprecated; write width instead; removed in piloop 9.0.0')
@@ -163,8 +167,8 @@ def test_memory_documents_are_the_documents_of_plugins_memory_whose_own_value_wi
     assert MEMORY.selected(cfg.plugins) == LocalMemory(documents=['docs/*.md']), 'the [memory] table goes with its keys'
     line = toml.read_text().splitlines().index('[memory]') + 2
     assert [(str(w.message).partition(';')[0], w.lineno) for w in record] == [
-        ('wake_budget is deprecated', line + 1),
         ('[memory] documents is deprecated', line),
+        ('wake_budget is deprecated', line + 1),
     ]
     toml.write_text(text + '\n[plugins.memory]\ndocuments = ["notes/*.md"]\n\n[memory]\ndocuments = ["docs/*.md"]\n')
     with pytest.warns(PiloopDeprecationWarning, match=r'\[memory\] documents is deprecated'):
@@ -556,7 +560,7 @@ def test_a_prune_drops_the_keys_that_hold_nothing_and_has_nothing_to_undo() -> N
     stored: dict[str, object] = {
         'mcp': {'xai': {'url': None, 'headers_env': {}, 'bearer_token_env': None, 'command': ['x'], 'env': []}}
     }
-    for step in deprecated.MCP_TABLES:
+    for step in MCP_TABLES:
         step.apply(stored)
     assert stored == {'plugins': {'mcp_server': {'xai': {'command': ['x'], 'provider': 'stdio'}}}}
 
@@ -593,11 +597,11 @@ class Marker:
 
 
 def _is_marker(node: ast.Call, module: str) -> bool:
-    """Whether ``node`` calls ``until``: ``x.until(…)`` under any name ``x``, or ``until(…)`` or ``bridge(…)`` in its own
-    module."""
+    """Whether ``node`` calls ``until`` or ``bridge``: ``x.until(…)`` or ``x.bridge(…)`` under any name ``x``, or
+    ``until(…)`` or ``bridge(…)`` in their own module."""
     func = node.func
     if isinstance(func, ast.Attribute):
-        return func.attr == 'until'
+        return func.attr in ('until', 'bridge')
     return module == 'piloop/deprecated.py' and isinstance(func, ast.Name) and func.id in ('until', 'bridge')
 
 
@@ -614,8 +618,8 @@ def _marker(node: ast.Call, where: str) -> Marker | str:
         isinstance(node.func.value, ast.Name) and node.func.value.id == 'deprecated'
     ):
         return f'{where}: write deprecated.until(...), so that the scan finds it'
-    match node.args, node.keywords:
-        case [ast.Constant(value=str(version)), ast.Constant(value=str(reason)), *_], [] if reason.strip():
+    match node.args, node.keywords:  # a bridge's file and order are keywords
+        case [ast.Constant(value=str(version)), ast.Constant(value=str(reason)), *_], _ if reason.strip():
             try:
                 return Marker(where, Version.parse(version), reason)
             except ValueError as e:
@@ -818,7 +822,7 @@ def test_spend_is_a_command_source_whose_fact_is_all_of_the_spend_and_closing_re
     ):
         cfg = load_campaign_config(campaign_path)
     [campaign, optimization, billing, spend] = cfg.fact_sources()
-    command = [*deprecated.SPEND_COMMAND, 'cat', str(tmp_path / 'bill')]
+    command = [*SPEND_COMMAND, 'cat', str(tmp_path / 'bill')]
     assert (campaign, optimization, billing, spend) == (
         CampaignFacts(),
         OptimizationFacts(),
@@ -949,3 +953,61 @@ def test_a_campaign_still_reads_its_ideas_and_its_evaluator_with_a_warning(db: D
             assert [i.title for i in row.ideas] == ['t']
     with pytest.raises(ValueError, match='in no session'), pytest.warns(PiloopDeprecationWarning):
         _ = Campaign(name='gone').ideas
+
+
+@deprecated.bridge('9.0.0', 'shade is tint: delete shade', after=('plugin_tables',))
+def shade(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """A package's bridge of ``piloop.toml``: ``[plugins.role.<name>] shade`` is ``tint``."""
+    for role in (deprecated.table_at(raw, 'plugins', 'role') or {}).values():
+        if isinstance(role, dict) and 'shade' in role:
+            role['tint'] = role.pop('shade')
+
+
+@deprecated.bridge('9.0.0', 'a cycle: delete first', after=('second',))
+def first(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """Runs after ``second``."""
+
+
+@deprecated.bridge('9.0.0', 'a cycle: delete second', after=('first',))
+def second(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """Runs after ``first``."""
+
+
+def test_a_package_s_bridge_runs_on_its_file_after_the_bridges_it_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It reads ``[plugins.role]``, which ``plugin_tables`` writes from ``[roles]``; a cycle or a missing name is refused."""
+    installed(monkeypatch, [EntryPoint('shade', f'{__name__}:shade', deprecated.BRIDGES.group)])
+    order = deprecated.bridges(Scope.CAMPAIGN)
+    assert order.index(shade) > order.index(deprecated.plugin_tables)
+    assert shade not in deprecated.bridges(Scope.HOME), 'config.toml has no roles'
+    raw: dict[str, object] = {'roles': {'research': {'shade': 2}}}
+    toml = tmp_path / 'piloop.toml'
+    toml.write_text('[roles.research]\nshade = 2\n')
+    with pytest.warns(PiloopDeprecationWarning, match='roles.<name>. is deprecated'):
+        deprecated.apply(toml, raw, deprecated.bridges(Scope.CAMPAIGN))
+    assert deprecated.table_at(raw, 'plugins', 'role', 'research') == {'tint': 2}
+    cycle = [EntryPoint(n, f'{__name__}:{n}', deprecated.BRIDGES.group) for n in ('first', 'second')]
+    installed(monkeypatch, cycle)
+    with pytest.raises(PluginError, match='in a cycle: first -> second -> first|in a cycle: second -> first -> second'):
+        deprecated.bridges(Scope.CAMPAIGN)
+    installed(monkeypatch, cycle[:1])
+    with pytest.raises(PluginError, match='the bridge first runs after or before no bridge called second'):
+        deprecated.bridges(Scope.CAMPAIGN)
+
+
+def test_the_bridges_load_without_any_provider() -> None:
+    """The bridges run before the providers load: a capability's bridges module imports only piloop's machinery."""
+    code = (
+        'import sys; from piloop import deprecated; from piloop.plugins.host import Scope;'
+        ' [deprecated.bridges(s) for s in Scope];'
+        " print(*sorted(m for m in sys.modules if m.startswith('piloop')))"
+    )
+    loaded = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, check=True).stdout.split()
+    machinery = {'piloop', 'piloop.deprecated', 'piloop.version', 'piloop.plugins.host'}
+    others = [m for m in loaded if m not in machinery and not m.endswith('.bridges') and not _package(m)]
+    assert others == [], 'a bridges module imports a provider'
+
+
+def _package(module: str) -> bool:
+    return (ROOT / module.replace('.', '/') / '__init__.py').is_file()

@@ -6,7 +6,10 @@ marker and fails once ``pyproject.toml`` reaches its release, so the code goes b
 A deprecated key still loads, with a warning, until that release. To deprecate a key, write a bridge: a function that
 takes the file path, the parsed TOML and the release that removes the key, changes the old key to the new form in place
 and calls ``warn`` with that release. A key that only moved is a ``Move``: ``moved`` applies a list of them to the
-file and to its environment variables, and the revision that rewrites the stored copies applies the same list. Declare it with ``bridge``, which marks it as ``until`` does and registers it.
+file and to its environment variables, and the revision that rewrites the stored copies applies the same list. Declare
+it with ``bridge``, which marks it as ``until`` does, next to its capability in a ``bridges`` module that imports no
+provider, and name it in the ``piloop.bridges`` entry points (``BRIDGES``). A bridge that reads what another wrote says
+so with ``after`` or ``before``. A bridge of several capabilities, such as ``plugin_tables``, is here.
 Its docstring is its entry under "Deprecated keys" in the generated configuration reference
 (``docs/reference/configuration.mdx``). The release notes list it under ``Deprecated``.
 
@@ -18,6 +21,7 @@ marked with ``until`` for the release after: a key that would load as something 
 role), one that would silently change nothing (a ``PILOOP_PROJECT_<KEY>`` variable), or a key of a removed feature.
 """
 
+import graphlib
 import os
 import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -26,6 +30,9 @@ from itertools import count
 from pathlib import Path
 from typing import Literal, Protocol, assert_never
 
+from pydantic import InstanceOf, TypeAdapter
+
+from piloop.plugins.host import PluginError, Scope, Slot
 from piloop.version import Version
 
 
@@ -61,35 +68,65 @@ type Rewrite = Callable[[Path, dict[str, object], Version], None]
 
 @dataclass(frozen=True)
 class Bridge:
-    """A bridge that ``apply`` runs on a parsed file: its rewrite, and the release that removes it."""
+    """A bridge that ``apply`` runs on a parsed file: its rewrite, the release that removes it, and its file."""
 
     rewrite: Rewrite
     removed_in: Version
+    scope: Scope = Scope.CAMPAIGN
+    """Which file it rewrites: ``piloop.toml``, or ``config.toml`` (``Scope.HOME``)."""
+    after: tuple[str, ...] = ()
+    """The bridges whose result it reads, by name: it runs after them. Django's ``dependencies`` of a migration."""
+    before: tuple[str, ...] = ()
+    """The bridges that read its result, by name: it runs before them. Django's ``run_before``."""
 
     def __call__(self, toml: Path, raw: dict[str, object]) -> None:
         self.rewrite(toml, raw, self.removed_in)
 
 
-BRIDGES: list[Bridge] = []
-"""The bridges of ``piloop.toml``, in the order that they run: the order of their definitions."""
-CONFIG_BRIDGES: list[Bridge] = []
-"""The bridges of ``config.toml``, the global settings file (``piloop.settings.config_file``)."""
+BRIDGES: Slot[Bridge] = Slot('bridges', TypeAdapter(InstanceOf[Bridge]), 'bridge')
+"""Every bridge, by its name: piloop's and a package's.
+
+A capability declares its bridges next to it, in a module that imports no provider (``<capability>/bridges.py``):
+they run before any provider loads.
+"""
 
 
-def bridge(version: str, reason: str, into: list[Bridge] = BRIDGES) -> Callable[[Rewrite], Bridge]:
-    """Declare a bridge that piloop keeps until release ``version``, as ``until`` marks code, and register it in ``into``.
+def bridge(
+    version: str, reason: str, scope: Scope = Scope.CAMPAIGN, after: tuple[str, ...] = (), before: tuple[str, ...] = ()
+) -> Callable[[Rewrite], Bridge]:
+    """Declare a bridge of the file of ``scope`` that piloop keeps until release ``version``, as ``until`` marks code.
 
-    The bridge gets ``version`` to pass to ``warn``. ``tests/test_deprecated.py`` reads every call, as it does
-    ``until``'s.
+    The bridge gets ``version`` to pass to ``warn``. An entry point in ``piloop.bridges`` names it (``BRIDGES``).
+    ``tests/test_deprecated.py`` reads every call, as it does ``until``'s.
     """
     removed_in = Version.parse(version)
 
-    def register(rewrite: Rewrite) -> Bridge:
-        found = Bridge(rewrite, removed_in)
-        into.append(found)
-        return found
+    def declared(rewrite: Rewrite) -> Bridge:
+        return Bridge(rewrite, removed_in, scope, after, before)
 
-    return register
+    return declared
+
+
+def bridges(scope: Scope) -> list[Bridge]:
+    """The bridges of the file of ``scope``, each after those whose result it reads, else in the order of their names.
+
+    Raises:
+        PluginError: An entry point does not load or names no ``Bridge``, a bridge runs after or before one that there
+            is not, or the bridges run after each other in a cycle.
+    """
+    found = BRIDGES.loaded()
+    order: graphlib.TopologicalSorter[str] = graphlib.TopologicalSorter()
+    for name, b in sorted(found.items()):
+        if unknown := [n for n in (*b.after, *b.before) if n not in found]:
+            raise PluginError(f'the bridge {name} runs after or before no bridge called {", ".join(unknown)}')
+        order.add(name, *b.after)
+        for later in b.before:
+            order.add(later, name)
+    try:
+        names = list(order.static_order())
+    except graphlib.CycleError as e:
+        raise PluginError(f'the bridges run after each other in a cycle: {" -> ".join(e.args[1])}') from e
+    return [found[name] for name in names if found[name].scope is scope]
 
 
 @dataclass(frozen=True)
@@ -285,7 +322,7 @@ class Entries:
         params = {k: v for k, v in entry.items() if k != 'provider'}
         if not params:
             return provider
-        taken = _table(raw, *self.tables.split('.')) or {}
+        taken = table_at(raw, *self.tables.split('.')) or {}
         base = f'{owner}_{provider}' if owner else provider
         table = params if base == provider else {'provider': provider, **params}
         name = next(n for i in count(1) if taken.get(n := base if i == 1 else f'{base}_{i}', table) == table)
@@ -309,7 +346,7 @@ class Listed:
     def apply(self, raw: dict[str, object]) -> list[str]:
         """Turn each list at ``new`` back into entries at ``old``, in place. Return the new keys, dotted."""
         e = self.entries
-        known = _table(raw, *e.tables.split('.')) or {}
+        known = table_at(raw, *e.tables.split('.')) or {}
         found = list(_matches(raw, e.new.split('.'), ()))
         for names in found:
             listed = _pop(raw, _filled(e.new, names))
@@ -412,7 +449,7 @@ class PiloopDeprecationWarning(DeprecationWarning):
     """A deprecated piloop key that still works until the release that removes it. The CLI shows each one once."""
 
 
-def _table(raw: dict[str, object], *path: str) -> dict[str, object] | None:
+def table_at(raw: dict[str, object], *path: str) -> dict[str, object] | None:
     """Return the table at ``path`` in the parsed file, or None. A value that is not a table is left to validation."""
     table: object = raw
     for key in path:
@@ -420,7 +457,7 @@ def _table(raw: dict[str, object], *path: str) -> dict[str, object] | None:
     return table if isinstance(table, dict) else None
 
 
-def _nth(toml: Path, table: str, key: str) -> int:
+def nth(toml: Path, table: str, key: str) -> int:
     """How many lines of ``toml`` set ``key`` before the header of ``table``: ``warn``'s ``nth`` for ``table.key``."""
     lines = toml.read_text().splitlines()
     header = next((n for n, line in enumerate(lines) if line.strip() == f'[{table}]'), len(lines))
@@ -451,48 +488,21 @@ def plugin_tables(toml: Path, raw: dict[str, object], removed_in: Version) -> No
     moved(toml, raw, PLUGIN_TABLES, 'PILOOP_CAMPAIGN_', removed_in)
 
 
-MCP_PROVIDERS: tuple[Step, ...] = (
-    Prune('plugins.mcp_server.*'),
-    Tag('plugins.mcp_server.*', 'provider', (('url', 'http'), ('command', 'stdio'))),
-)
-"""Each MCP server of 0.3 under ``[plugins.mcp_server]`` gets the provider that its keys say, without the other's."""
-MCP_TABLES: tuple[Step, ...] = (Move('mcp.*', 'plugins.mcp_server.*'), *MCP_PROVIDERS)
-"""The MCP servers, as ``[plugins.mcp_server.<name>]`` with the provider that their keys say."""
-
-
-@bridge('0.5.0', '[mcp.<name>] is [plugins.mcp_server.<name>]: delete mcp_tables and MCP_TABLES')
-def mcp_tables(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``[mcp.<name>]`` is ``[plugins.mcp_server.<name>]``, with the provider that its keys say.
-
-    ``provider = "http"`` with ``url``, ``provider = "stdio"`` with ``command``. Its
-    ``PILOOP_CAMPAIGN_MCP__<NAME>__<KEY>`` variables move with it.
-    """
-    moved(toml, raw, MCP_TABLES, 'PILOOP_CAMPAIGN_', removed_in)
-
-
-def _roles(raw: dict[str, object]) -> dict[str, object] | None:
+def roles(raw: dict[str, object]) -> dict[str, object] | None:
     """``[plugins.role]`` of the parsed file, added when it is missing. None when a value on its way is not a table."""
     plugins = raw.setdefault('plugins', {})
     roles = plugins.setdefault('role', {}) if isinstance(plugins, dict) else None
     return roles if isinstance(roles, dict) else None
 
 
-def _into(raw: dict[str, object], rule: str, keys: Mapping[str, object]) -> None:
+def into(raw: dict[str, object], rule: str, keys: Mapping[str, object]) -> None:
     """Add ``keys`` to ``[plugins.<rule>]`` of the parsed file, under the keys that the table sets."""
-    if (table := _rule(raw, rule)) is not None:
+    if (table := plugin_table(raw, rule)) is not None:
         for key, value in keys.items():
             table.setdefault(key, value)
 
 
-def _held(raw: dict[str, object], limit: object) -> None:
-    """Hold the campaign at ``limit`` of the fact ``spend``: ``[plugins.stop_rule] hold_at``, under what it sets."""
-    found = _rule(raw, 'stop_rule')
-    rule = found if found is not None else {}  # None: a value on the way is not a table, which the validation refuses
-    held = rule.get('hold_at', {})
-    rule['hold_at'] = {'spend': limit, **held} if isinstance(held, dict) else held
-
-
-def _rule(raw: dict[str, object], rule: str) -> dict[str, object] | None:
+def plugin_table(raw: dict[str, object], rule: str) -> dict[str, object] | None:
     """``[plugins.<rule>]`` of the parsed file, added when it is missing.
 
     None when a value on its way is not a table: the validation refuses it.
@@ -502,151 +512,13 @@ def _rule(raw: dict[str, object], rule: str) -> dict[str, object] | None:
     return table if isinstance(table, dict) else None
 
 
-INCIDENT_TRIGGERS = ('run_failed', 'dead_at_startup')
-"""What the ``anomaly`` trigger found: a failed run, and an agent dead at its start."""
-
-
-@bridge('0.5.0', 'the anomaly trigger is run_failed and dead_at_startup: delete anomaly_trigger and INCIDENT_TRIGGERS')
-def anomaly_trigger(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """The ``anomaly`` trigger is two triggers: ``run_failed`` and ``dead_at_startup``, in its place in the list."""
-    for name, role in (_table(raw, 'plugins', 'role') or {}).items():
-        triggers = role.get('triggers') if isinstance(role, dict) else None
-        if not isinstance(role, dict) or not isinstance(triggers, list):
-            continue
-        old = [t for t in triggers if isinstance(t, dict) and t.get('provider') == 'anomaly']
-        if not old:
-            continue
-        role['triggers'] = [
-            new for t in triggers for new in ([{'provider': n} for n in INCIDENT_TRIGGERS] if t in old else [t])
-        ]
-        warn(
-            toml,
-            f'plugins.role.{name}.triggers',
-            'the anomaly trigger is deprecated; write "run_failed", "dead_at_startup"',
-            removed_in=removed_in,
-            nth=_nth(toml, f'plugins.role.{name}', 'triggers'),
-        )
-
-
-@bridge('0.5.0', 'max_spend is hold_at of the spend: delete the max_spend bridge')
-def max_spend(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``[plugins.stop_rule] max_spend`` is ``hold_at = { spend = <value> }``. A value that ``hold_at`` sets too wins."""
-    plugins = raw.get('plugins')
-    rule = plugins.get('stop_rule') if isinstance(plugins, dict) else None
-    if not isinstance(rule, dict) or 'max_spend' not in rule:
-        return
-    _held(raw, rule.pop('max_spend'))
-    warn(
-        toml,
-        'plugins.stop_rule.max_spend',
-        'max_spend is deprecated; write hold_at = { spend = ... }',
-        removed_in=removed_in,
-    )
-
-
-LESSONS = 'lessons'
-"""The section that ``wake_budget`` sized."""
-OLD_BUDGETS = {'watchdog': 0}
-"""The roles whose ``wake_budget`` had another default than ``[memory]``'s."""
-
-
-@bridge('0.5.0', 'wake_budget is the budget of the lessons section: delete wake_budget, LESSONS and OLD_BUDGETS')
-def wake_budget(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``[memory] wake_budget`` and ``[plugins.role.<name>] wake_budget`` are the ``budget`` of the ``lessons`` section.
-
-    A role's own value wins over ``[memory]``'s. A budget that differs from the role's old default sets the role's
-    ``sections`` to its defaults with the lessons at that budget, or without them at 0. A role that sets ``sections``
-    keeps them. The watchdog's old default was 0: it now reads the lessons too.
-    """
-    from piloop.plugins.role.contract import ROLES, new_role  # here: the roles import this module
-    from piloop.plugins.section.contract import defaults  # here: the sections import this module
-
-    shared = _popped(raw, 'memory', 'wake_budget')
-    if (roles := _roles(raw)) is None:
-        return
-    owned = {n: t.pop('wake_budget') for n, t in roles.items() if isinstance(t, dict) and 'wake_budget' in t}
-    if shared is not None:
-        warn(toml, 'memory.wake_budget', _MOVED, removed_in=removed_in)
-    for name in owned:
-        warn(
-            toml,
-            f'plugins.role.{name}.wake_budget',
-            _MOVED,
-            removed_in=removed_in,
-            nth=_nth(toml, f'plugins.role.{name}', 'wake_budget'),
-        )
-    for name in dict.fromkeys([*ROLES.providers(), *roles]):
-        table = roles.setdefault(name, {})
-        budget = owned.get(name, None if name in OLD_BUDGETS else shared)
-        if not isinstance(table, dict) or 'sections' in table or budget in (None, OLD_BUDGETS.get(name, 400)):
-            continue
-        model = ROLES.model_of(name) if name in ROLES.providers() else new_role(name, table)
-        # a role of its own sections, which wake_budget never sized
-        if model.model_fields['sections'].default is not None:
-            continue
-        listed = [{'provider': name} for name in defaults(model.SURFACE)]
-        others = [e for e in listed if e['provider'] != LESSONS]
-        table['sections'] = [{'provider': LESSONS, 'budget': budget}, *others] if budget else others
-
-
-_MOVED = "wake_budget is deprecated; set budget in a [plugins.section.<name>] of lessons, in the role's sections"
-
-
-@bridge('0.5.0', '[memory] documents is [plugins.memory] documents: delete the memory_documents bridge')
-def memory_documents(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``[memory] documents`` is ``documents`` in ``[plugins.memory]``, of the ``local`` provider.
-
-    A value that ``[plugins.memory]`` sets too wins.
-    """
-    memory = _table(raw, 'memory')
-    if memory is None or 'documents' not in memory:
-        return
-    _into(raw, 'memory', {'documents': _popped(raw, 'memory', 'documents')})
-    warn(
-        toml,
-        'memory.documents',
-        '[memory] documents is deprecated; write documents in [plugins.memory]',
-        removed_in=removed_in,
-        nth=_nth(toml, 'memory', 'documents'),
-    )
-
-
-def _popped(raw: dict[str, object], table: str, key: str) -> object:
+def popped(raw: dict[str, object], table: str, key: str) -> object:
     """Pop ``key`` from ``[table]`` of the parsed file, or None, and the table too once it is empty."""
-    found = _table(raw, table)
+    found = table_at(raw, table)
     value = found.pop(key, None) if found is not None else None
     if found == {}:
         del raw[table]
     return value
-
-
-OLD_HARNESSES = ('pi', 'claude', 'codex')
-"""The built-in harnesses of 0.3, whose tables named their own renderer and tally."""
-
-
-@bridge('0.5.0', 'mcp and usage of a [harness.<name>] table are its provider: delete the harness_providers bridge')
-def harness_providers(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``mcp`` and ``[plugins.harness.<name>.usage]`` are the harness's provider: it renders the servers, reads usage.
-
-    A table named after a built-in harness drops them: the provider's own come from ``home``. A table with a new name
-    gets ``provider``: its usage's ``tally``, else its ``mcp``. A table that sets neither runs its argv and does
-    nothing else, as before.
-    """
-    tables = _table(raw, 'plugins', 'harness')
-    for name, table in tables.items() if tables is not None else ():
-        if not isinstance(table, dict) or not {'mcp', 'usage'} & table.keys():
-            continue
-        mcp, usage = table.pop('mcp', None), table.pop('usage', None)
-        tally = usage.get('tally') if isinstance(usage, dict) else None
-        if name in OLD_HARNESSES:
-            message = (
-                f'mcp and usage of [plugins.harness.{name}] are deprecated: the harness renders its servers and reads'
-                ' its usage itself, under its home'
-            )
-        else:
-            table['provider'] = named = tally or mcp
-            message = f'mcp and usage of [plugins.harness.{name}] are deprecated; write provider = "{named}"'
-        warn(toml, f'plugins.harness.{name}', message, removed_in=removed_in)
 
 
 PLUGIN_LISTS = (
@@ -658,7 +530,11 @@ PLUGIN_LISTS = (
 """The lists of inline entries of the triggers, the sections and the fact sources, as lists of names."""
 
 
-@bridge('0.5.0', 'the lists of triggers, sections and facts name their instances: delete plugin_lists and PLUGIN_LISTS')
+@bridge(
+    '0.5.0',
+    'the lists of triggers, sections and facts name their instances: delete plugin_lists and PLUGIN_LISTS',
+    after=('plugin_tables',),
+)
 def plugin_lists(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """A list of ``{ provider = "…", … }`` entries names instances: ``[plugins.<capability>.<name>]`` tables.
 
@@ -668,101 +544,6 @@ def plugin_lists(toml: Path, raw: dict[str, object], removed_in: Version) -> Non
     One with parameters gets a table, named after its role (``research_low_water``) or ``status`` first.
     """
     entries(toml, raw, PLUGIN_LISTS, removed_in)
-
-
-BILLING = 'billing'
-"""The ``command`` source that a ``[spend] command`` is."""
-BILLED = 'billing_usd'
-"""The fact that ``BILLING`` reads, which is the ``spend`` that ``[spend]`` was."""
-SPEND_COMMAND = (
-    'sh',
-    '-c',
-    'out=$("$@") && printf \'{"metrics": {"billing_usd": %s}}\\n\' "$out" >> "$PILOOP_RESULT_FILE"',
-    'sh',
-)
-"""What runs a ``[spend] command``, which prints one number, so that it reports ``{"metrics": {"billing_usd": …}}``."""
-DEFAULT_SOURCES = ['campaign', 'optimization']
-"""The fact sources of a campaign that does not set ``[plugins.fact_source] use``."""
-
-
-@bridge(
-    '0.5.0',
-    '[spend] is a command source and the facts of the spend source: delete spend_table, SPEND_COMMAND, BILLING,'
-    ' BILLED and DEFAULT_SOURCES',
-)
-def spend_table(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``[spend]`` is the ``command`` source ``billing``, which reads ``billing_usd``, and ``spend`` sums only that.
-
-    So ``spend`` and ``hold_at = { spend = … }`` mean what they meant. The command prints one number, so it runs in
-    ``SPEND_COMMAND``. ``notices`` are those of ``billing_usd``, and ``closing_review`` is ``while_held`` of
-    ``[plugins.stop_rule]``. Both sources join ``[plugins.fact_source] use``, after its own sources. A table of either
-    name that the file has wins. It runs after ``plugin_lists``, so a ``[[facts]]`` is a ``use`` already.
-    """
-    spend = raw.get('spend')
-    if not isinstance(spend, dict):
-        return
-    del raw['spend']
-    review = spend.pop('closing_review', None)
-    command = spend.get('command')
-    source: dict[str, object] = {
-        'provider': 'command',
-        'command': [*SPEND_COMMAND, *command] if isinstance(command, list) else command,
-        'metrics': [BILLED],
-    }
-    if 'interval' in spend:
-        source['interval'] = spend['interval']
-    if 'notices' in spend:
-        source['notices'] = {BILLED: spend['notices']}
-    if (sources := _rule(raw, 'fact_source')) is not None:
-        match sources.get('use', DEFAULT_SOURCES):
-            case list() as used:
-                sources['use'] = [*used, *(name for name in (BILLING, 'spend') if name not in used)]
-            case _:
-                pass  # not a list: the validation refuses it
-        sources.setdefault(BILLING, source)
-        sources.setdefault('spend', {'facts': [BILLED]})
-    if review is not None:
-        _into(raw, 'stop_rule', {'while_held': review})
-    warn(
-        toml,
-        'spend',
-        '[spend] is deprecated; write a [plugins.fact_source.<name>] source with provider = "command" that reports'
-        ' <fact>, and name the fact in [plugins.fact_source.spend] facts',
-        removed_in=removed_in,
-    )
-
-
-RUNTIME_TABLES = (Move('runtimes.*', 'plugins.runtime.*'),)
-"""The settings of each runtime, as ``[plugins.runtime.<name>]``."""
-
-
-@bridge(
-    '0.5.0', '[runtimes.<name>] is [plugins.runtime.<name>]: delete runtime_tables and RUNTIME_TABLES', CONFIG_BRIDGES
-)
-def runtime_tables(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """In ``config.toml``, ``[runtimes.<name>]`` is ``[plugins.runtime.<name>]``.
-
-    ``PILOOP_RUNTIMES__<NAME>__<KEY>`` is ``PILOOP_PLUGINS__RUNTIME__<NAME>__<KEY>``.
-    """
-    moved(toml, raw, RUNTIME_TABLES, 'PILOOP_', removed_in)
-
-
-@bridge('0.5.0', 'name_claim of the proxy network is name_claims: delete the name_claim bridge', CONFIG_BRIDGES)
-def name_claim(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """In ``config.toml``, ``[plugins.network] name_claim`` of the ``proxy`` network is ``name_claims``, a list of one.
-
-    A ``name_claims`` that the table sets too wins.
-    """
-    network = _table(raw, 'plugins', 'network')
-    if network is None or network.get('provider') != 'proxy' or 'name_claim' not in network:
-        return
-    network.setdefault('name_claims', [network.pop('name_claim')])
-    warn(
-        toml,
-        'plugins.network.name_claim',
-        'name_claim is deprecated; write name_claims = ["<claim>"]',
-        removed_in=removed_in,
-    )
 
 
 type MessageFormat = Literal['lines', 'claude-hook']
@@ -841,7 +622,10 @@ def _lines(toml: Path, key: str) -> list[int]:
     ]
 
 
-def apply(toml: Path, raw: dict[str, object], bridges: list[Bridge] = BRIDGES) -> None:
-    """Run every bridge on the parsed file. ``config.load_campaign_config`` calls this before it validates the file."""
-    for b in bridges:
+def apply(toml: Path, raw: dict[str, object], found: Sequence[Bridge]) -> None:
+    """Run each bridge of ``found`` on the parsed file, in order, before the file is validated.
+
+    ``config.load_campaign_config`` runs ``bridges(Scope.CAMPAIGN)``, and ``settings`` runs ``bridges(Scope.HOME)``.
+    """
+    for b in found:
         b(toml, raw)

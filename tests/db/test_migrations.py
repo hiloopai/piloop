@@ -23,7 +23,6 @@ from git import Repo
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.exc import IntegrityError
 
-from piloop import deprecated
 from piloop.actor import System
 from piloop.config import CampaignConfig
 from piloop.db import session
@@ -57,6 +56,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
 from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
+from piloop.plugins.fact_source.bridges import SPEND_COMMAND
 from piloop.plugins.harness.claude import Claude
 from piloop.plugins.harness.codex import CodexMcp
 from piloop.plugins.memory.contract import MEMORY
@@ -2762,7 +2762,7 @@ def test_0067_reports_the_spend_of_a_command_source_as_billing_usd_which_the_spe
             )
     stored = 'SELECT config FROM campaigns ORDER BY id'
     command.upgrade(cfg, '0067')
-    billed = [*deprecated.SPEND_COMMAND, 'cat', 'bill']
+    billed = [*SPEND_COMMAND, 'cat', 'bill']
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         found = [loads(c) for (c,) in con.execute(stored)]
     assert found == [
@@ -2787,7 +2787,7 @@ def test_0067_reports_the_spend_of_a_command_source_as_billing_usd_which_the_spe
                     'use': ['campaign', 'billing', 'spend'],
                     'billing': {
                         'provider': 'command',
-                        'command': [*deprecated.SPEND_COMMAND, 'x'],
+                        'command': [*SPEND_COMMAND, 'x'],
                         'metrics': ['billing_usd'],
                     },
                     'spend': {'facts': ['billing_usd']},
