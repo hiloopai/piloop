@@ -98,10 +98,9 @@ class Roles:
         return {**mine, IMPLEMENTER: implementer}
 
 
-class CampaignConfig(BaseModel):
+# config as class arguments: a model_config attribute would clash with BaseSettings' in load_campaign_config's loader
+class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docstrings=True):
     """Everything piloop needs to know about a campaign repo."""
-
-    model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
 
     name: str
     """A short name for the campaign: letters, digits, ``.``, ``_`` and ``-``, not all digits. A campaign gets it when
