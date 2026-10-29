@@ -4,17 +4,21 @@ import sys
 from collections.abc import Iterator
 
 import pytest
+from inline_snapshot import snapshot
 from pydantic import SecretStr
 
 from piloop.actor import Person, System
 from piloop.db.session import Database
 from piloop.ids import CommentId, CommentKind
 from piloop.plugins.contribution import Leaving
+from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.host import Check
 from piloop.plugins.notifier.contract import (
     Accepted,
     Ack,
     Again,
+    Answered,
+    Choose,
     Declined,
     Edit,
     FileSeed,
@@ -102,6 +106,233 @@ def test_a_post_that_cannot_connect_or_has_no_token_is_not_delivered(db: Databas
         NotDelivered, match='^the home has no secret NO_TOKEN: set it with `piloop secret set NO_TOKEN`'
     ):
         SlackApp.model_validate({'channel': 'C1', 'token': {'secret': 'NO_TOKEN'}}).send([notice(7)], secrets)
+
+
+ASKED = EscalationView(
+    headline='Do you raise the timeout?',
+    why='Each run takes 3 hours. The timeout is 1 hour.',
+    choices=(
+        Choice(id='A', label='Raise it to 4 hours.', result='Each run costs more.'),
+        Choice(id='B', label='Keep it.', result='The idea stops.'),
+    ),
+    recommended='A',
+    details='run#41 timed out at a1b2c3d <after> 1 h & more.',
+)
+
+
+def escalation(comment: int, view: EscalationView | None = ASKED, kind: NoticeKind = NoticeKind.NEW) -> Notice:
+    return Notice(
+        kind,
+        CommentId(comment),
+        CommentKind.ESCALATION,
+        1,
+        'enwik8',
+        'orchestrator',
+        'x',
+        Person(name='alice'),
+        None,
+        view=view,
+    )
+
+
+def test_an_escalation_with_choices_is_block_kit_with_a_button_for_each_and_the_ids_out_of_the_main_text(
+    slack: FakeSlackApp, secrets: HomeSecrets
+) -> None:
+    app = app_of(slack)
+    assert app.blocks(escalation(7, kind=NoticeKind.REMINDER), ASKED) == snapshot(
+        [
+            {'type': 'header', 'text': {'type': 'plain_text', 'text': 'Do you raise the timeout?'}},
+            {'type': 'section', 'text': {'type': 'mrkdwn', 'text': 'Each run takes 3 hours. The timeout is 1 hour.'}},
+            {
+                'type': 'section',
+                'text': {
+                    'type': 'mrkdwn',
+                    'text': """\
+*A.* Raise it to 4 hours. _(recommended)_ → Each run costs more.
+*B.* Keep it. → The idea stops.\
+""",
+                },
+            },
+            {
+                'type': 'actions',
+                'elements': [
+                    {
+                        'type': 'button',
+                        'text': {'type': 'plain_text', 'text': 'A: Raise it to 4 hours.'},
+                        'action_id': 'piloop.choose.A',
+                        'value': 'A',
+                        'style': 'primary',
+                    },
+                    {
+                        'type': 'button',
+                        'text': {'type': 'plain_text', 'text': 'B: Keep it.'},
+                        'action_id': 'piloop.choose.B',
+                        'value': 'B',
+                    },
+                ],
+            },
+            {
+                'type': 'context',
+                'elements': [
+                    {
+                        'type': 'mrkdwn',
+                        'text': ':alarm_clock: reminder · *enwik8* · P1 · escalation comment#7 · from orchestrator · <@UALICE> · `piloop inbox show 7`',
+                    }
+                ],
+            },
+            {
+                'type': 'section',
+                'text': {
+                    'type': 'mrkdwn',
+                    'text': """\
+*Details*
+run#41 timed out at a1b2c3d &lt;after&gt; 1 h &amp; more.\
+""",
+                },
+            },
+        ]
+    )
+    free_text = ASKED.model_copy(update={'choices': (), 'recommended': None})
+    app.send([escalation(7), escalation(8, free_text), escalation(9, None)], secrets)
+    posted = [body for _, body, _ in slack.calls]
+    assert [('blocks' in body, str(body['text']).split(' · ')[0]) for body in posted] == [
+        (True, ':rotating_light: *enwik8*'),
+        (False, ':rotating_light: *enwik8*'),
+        (False, ':rotating_light: *enwik8*'),
+    ], 'text stays the fallback; only an escalation that offers choices has buttons'
+
+
+def test_the_blocks_keep_within_slack_s_limits() -> None:
+    long = 'word ' * 700
+    view = EscalationView(
+        headline=long,
+        why=long,
+        choices=tuple(Choice(id=c, label=long, result=long) for c in 'AB'),
+        details=long,
+    )
+    blocks = SlackApp(channel='C1').blocks(escalation(7, view), view)
+    header, why, choices, actions, _, details = blocks
+    assert [len(text_of(b)) for b in (header, why, choices, details)] == [150, 3000, 3000, 3000]
+    match actions:
+        case {'elements': [dict(a), dict(b)]}:
+            assert [len(text_of(a)), len(text_of(b))] == [75, 75]
+        case _:
+            pytest.fail(f'no two buttons: {actions}')
+
+
+def test_an_escalation_without_a_why_or_details_has_no_block_for_them() -> None:
+    view = ASKED.model_copy(update={'why': '', 'details': ''})
+    blocks = SlackApp(channel='C1').blocks(escalation(7, view), view)
+    assert [b['type'] for b in blocks] == ['header', 'section', 'actions', 'context']
+
+
+def text_of(block: dict[str, object]) -> str:
+    match block:
+        case {'text': {'text': str(text)}}:
+            return text
+        case _:
+            raise AssertionError(f'no text: {block}')
+
+
+CLICK: dict[str, object] = {
+    'type': 'block_actions',
+    'user': {'id': 'UALICE'},
+    'container': {'type': 'message', 'channel_id': 'C1', 'message_ts': '5.1'},
+    'message': {'text': 'fallback', 'blocks': [{'type': 'header'}, {'type': 'actions', 'elements': []}]},
+    'actions': [{'action_id': 'piloop.choose.A', 'value': 'A', 'action_ts': '9.9', 'type': 'button'}],
+}
+
+
+@pytest.mark.parametrize(
+    ('payload', 'found'),
+    [
+        (
+            CLICK,
+            Inbound(MessageRef('C1/5.1'), MessageRef('C1/5.1/choose/UALICE/9.9'), 'UALICE', Choose('A')),
+        ),
+        ({**CLICK, 'actions': [{'action_id': 'other', 'value': 'A', 'action_ts': '9.9'}]}, None),
+        ({**CLICK, 'type': 'view_submission'}, None),
+    ],
+)
+def test_a_click_on_a_choice_s_button_chooses_it(payload: dict[str, object], found: Inbound | None) -> None:
+    click = SlackApp(channel='C1').clicked(payload)
+    assert (click.inbound() if click is not None else None) == found
+
+
+@pytest.mark.parametrize(
+    ('receipt', 'updated'),
+    [
+        (Accepted('piloop recorded comment#3, Chose A: Raise it.'), ':white_check_mark: <@UALICE> chose *A*'),
+        (
+            Answered('comment#1 was answered already', 'human:bob', 'Chose B: Keep <it> & go.'),
+            ':white_check_mark: Answered by human:bob: Chose B: Keep &lt;it&gt; &amp; go.',
+        ),
+        (
+            Answered('comment#1 was acknowledged already', 'orchestrator', None),
+            ':white_check_mark: Answered by orchestrator',
+        ),
+        (Declined('you are not in people'), None),
+    ],
+)
+def test_a_choice_replaces_the_buttons_with_who_answered_and_the_person_is_told(
+    slack: FakeSlackApp, secrets: HomeSecrets, receipt: Accepted | Answered | Declined, updated: str | None
+) -> None:
+    heard = Heard(secrets, receipt)
+    listener = app_of(slack).listen(heard.host)
+    listener.start()
+    try:
+        wait_until(lambda: slack.connections == 1, 'the socket')
+        slack.push({'envelope_id': 'env-1', 'type': 'interactive', 'payload': CLICK})
+        wait_until(lambda: any(m == 'chat.postEphemeral' for m, _, _ in slack.calls), 'the receipt')
+        assert {'envelope_id': 'env-1'} in slack.frames
+        assert [i.act for i in heard.inbound] == [Choose('A')]
+        calls = {m: body for m, body, _ in slack.calls}
+        assert (calls['chat.postEphemeral']['user'], calls['chat.postEphemeral']['text']) == ('UALICE', _said(receipt))
+        assert 'thread_ts' not in calls['chat.postEphemeral'], 'beside the post, where the person clicked'
+        if updated is not None:
+            assert calls['chat.update'] == {
+                'channel': 'C1',
+                'ts': '5.1',
+                'text': 'fallback',
+                'blocks': [{'type': 'header'}, {'type': 'context', 'elements': [{'type': 'mrkdwn', 'text': updated}]}],
+            }
+        else:
+            assert 'chat.update' not in calls
+    finally:
+        listener.stop(Leaving.STOP, 1)
+
+
+def test_a_post_that_cannot_be_updated_is_a_failure_of_the_listener(slack: FakeSlackApp, secrets: HomeSecrets) -> None:
+    heard = Heard(secrets, Accepted('recorded'))
+    slack.answers['chat.update'] = [(200, {'ok': False, 'error': 'cant_update_message'})]
+    listener = app_of(slack).listen(heard.host)
+    listener.start()
+    try:
+        wait_until(lambda: slack.connections == 1, 'the socket')
+        slack.push({'envelope_id': 'env-1', 'type': 'interactive', 'payload': {'type': 'shortcut'}})
+        slack.push({'envelope_id': 'env-2', 'type': 'interactive', 'payload': CLICK})
+        wait_until(lambda: heard.failures != [], 'the failure')
+        assert heard.failures == ['could not answer in Slack: chat.update: cant_update_message']
+        assert len(heard.inbound) == 1, 'an action that is no choice is acked, and does nothing'
+    finally:
+        listener.stop(Leaving.STOP, 1)
+
+
+def test_a_redelivered_click_changes_nothing_in_slack(slack: FakeSlackApp, secrets: HomeSecrets) -> None:
+    heard = Heard(secrets, Again())
+    listener = app_of(slack).listen(heard.host)
+    listener.start()
+    try:
+        wait_until(lambda: slack.connections == 1, 'the socket')
+        slack.push({'envelope_id': 'env-1', 'type': 'interactive', 'payload': CLICK})
+        wait_until(lambda: len(heard.inbound) == 1, 'the click')
+        assert [m for m, _, _ in slack.calls] == ['apps.connections.open']
+    finally:
+        listener.stop(Leaving.STOP, 1)
+
+
+def _said(receipt: Accepted | Answered | Declined) -> str:
+    return receipt.reason if isinstance(receipt, Declined) else receipt.said
 
 
 @pytest.mark.parametrize(

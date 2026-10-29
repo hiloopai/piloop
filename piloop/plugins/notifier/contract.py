@@ -208,7 +208,15 @@ class Edit:
     text: str
 
 
-type Act = Reply | Ack | FileSeed | Edit
+@dataclass(frozen=True)
+class Choose:
+    """Answer the escalation with one of the choices that it offers, as ``piloop inbox choose`` does."""
+
+    choice: str
+    """The choice's id, such as ``A`` (``Choice.id``)."""
+
+
+type Act = Reply | Ack | FileSeed | Edit | Choose
 """What a person does from a chat service: the provider maps the service's gestures to one."""
 
 
@@ -250,7 +258,21 @@ class Foreign:
     """The thread is no post of the notifier's, such as a talk in its channel: piloop wrote nothing, and says nothing."""
 
 
-type Receipt = Accepted | Again | Declined | Foreign
+@dataclass(frozen=True)
+class Answered:
+    """Someone answered or acknowledged the escalation before this choice: piloop wrote nothing.
+
+    ``said`` tells the person by whom.
+    """
+
+    said: str
+    by: str
+    """Who answered it, or acknowledged it: their signature."""
+    answer: str | None
+    """The text of the decision that answered it, or None when it was only acknowledged."""
+
+
+type Receipt = Accepted | Again | Declined | Foreign | Answered
 
 
 @dataclass(frozen=True)

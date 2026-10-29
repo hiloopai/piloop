@@ -5,6 +5,8 @@ checks the form, writes its plain text, says when it reaches a human, and how it
 comment (``comments.form``) and never reads it.
 """
 
+from dataclasses import dataclass
+
 from pydantic import JsonValue, ValidationError
 from sqlalchemy import literal, select
 from sqlalchemy.orm import Session
@@ -109,6 +111,26 @@ def _drafted(s: Session, target: TargetRef, asked: Asked) -> tuple[JsonValue, st
             except ValueError as e:
                 raise Refused(f'the form is refused: {e}. `piloop escalate {target} --guide` shows the form') from e
     return form, chosen.body(form)
+
+
+@dataclass(frozen=True)
+class Settled:
+    """An escalation that someone answered, or acknowledged, already."""
+
+    by: str
+    """The signature of whoever wrote its latest decision, else of whoever acknowledged it."""
+    decision: str | None
+    """The text of its latest decision, or None when it was only acknowledged."""
+
+
+def settled(s: Session, item: Comment) -> Settled | None:
+    """Whether ``item`` has a ``decision`` reply, or an acknowledgement: then a choice would be a second answer."""
+    latest = select(Comment).where(Comment.in_reply_to == item.id, Comment.kind == CommentKind.DECISION)
+    if (decision := s.scalars(latest.order_by(Comment.id.desc()).limit(1)).first()) is not None:
+        return Settled(decision.author, decision.body)
+    if item.acked_by is not None:
+        return Settled(item.acked_by, None)
+    return None
 
 
 def choose(s: Session, comment_id: CommentId, choice: str, *, author: Actor) -> Comment:

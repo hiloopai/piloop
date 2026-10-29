@@ -39,6 +39,8 @@ from piloop.plugins.notifier.contract import (
     Accepted,
     Ack,
     Again,
+    Answered,
+    Choose,
     Declined,
     Edit,
     FileSeed,
@@ -255,8 +257,10 @@ def received(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inb
     """Write what a person did in the thread of a post of a route of ``shared``, signed as them, and say how it went.
 
     The thread maps to its item through the ``notification.sent`` event that names the post, and the route of that
-    item says who the person is. A post that no route of ``shared`` made is ``Foreign``. A redelivered post is accepted
-    once: its ``notification.received`` is there already.
+    item says who the person is. A choice answers an escalation through ``escalations.choose``, unless someone answered
+    or acknowledged it already: then it writes nothing (``Answered``). A post that no route
+    of ``shared`` made is ``Foreign``. A redelivered post is accepted once: its ``notification.received`` is there
+    already.
     """
     names = tuple(sorted({r.name for r in shared}))
     if isinstance(inbound.act, Edit):
@@ -312,12 +316,31 @@ def received(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inb
                     return Declined(str(e))
                 target = TargetRef(IDEA, seed.id)
                 said = f'piloop filed this as seed idea#{seed.id}, for research'
+            case Choose(choice=choice):
+                if (done := escalations.settled(s, item)) is not None:
+                    return _answered(item.id, done)
+                try:
+                    decision = escalations.choose(s, item.id, choice, author=person)
+                except escalations.Refused as e:
+                    return Declined(str(e))
+                target = TargetRef(TargetKind.COMMENT, decision.id)
+                said = f'piloop recorded comment#{decision.id}, {decision.body}'
             case _:
                 assert_never(inbound.act)
         emit(s, NotificationReceived(notifier=route.name, message=inbound.message.id), target, person)
         s.commit()
     tracer.event('notification.received', notifier=route.name, act=type(inbound.act).__name__, target=str(target))
     return Accepted(said)
+
+
+def _answered(item: CommentId, done: escalations.Settled) -> Answered:
+    """What a choice on ``item``, which ``done`` settled before, tells the person: it records nothing."""
+    match done.decision:
+        case None:
+            said = f'comment#{item} was acknowledged already, by {done.by}. piloop recorded nothing.'
+        case decision:
+            said = f'comment#{item} was answered already, by {done.by}: {decision} piloop recorded nothing.'
+    return Answered(said, done.by, done.decision)
 
 
 def _route_of(s: Session, shared: Sequence[Route], name: str, comment: CommentId) -> Route:

@@ -69,7 +69,10 @@ The [configuration reference](/reference/configuration#plugins) lists every key 
 
 ## Answer from Slack
 
-`slack_app` posts as a Slack app, and reads the answers in the thread of each post. A reply in the thread is your
+`slack_app` posts as a Slack app, and reads the answers in the thread of each post. An escalation that offers choices
+has a button for each: a click answers it as `piloop inbox choose` does, signed as you, and the post then shows who
+chose what. A click on an escalation that someone answered or acknowledged already records nothing: the post then
+shows who answered it. Its details are last, folded when they are long. A reply in the thread is your
 message to the orchestrator on that item, signed as you. A :white_check_mark: on the post acknowledges the item. `idea: <hunch>` files a
 seed. An edit of your reply changes it, and the orchestrator gets the new text as news. piloop's own answers in the thread go back to it.
 
@@ -85,7 +88,8 @@ people = { "alice@example.com" = "U0123ABC" }
 
 1. Install the extra: `uv tool install --reinstall 'piloop[slack]'`.
 2. Create a Slack app with Socket Mode on. Give its bot the scopes `chat:write`, `channels:history`, `groups:history`
-   and `reactions:read`, and subscribe it to `message.channels`, `message.groups` and `reaction_added`.
+   and `reactions:read`, and subscribe it to `message.channels`, `message.groups` and `reaction_added`. Turn on
+   Interactivity, for the buttons: Socket Mode delivers the clicks, so it needs no request URL.
 3. Store its two tokens: `piloop secret set SLACK_BOT_TOKEN` (`xoxb-…`) and `piloop secret set SLACK_APP_TOKEN`
    (`xapp-…`, with `connections:write`).
 4. Invite the bot to the channel: `/invite @<app>`. Slack sends it no replies from a channel it is not in.

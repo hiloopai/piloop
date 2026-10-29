@@ -32,7 +32,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, Lifecycle
-from piloop.plugins.escalation.contract import Escalated, Never, ToHuman
+from piloop.plugins.escalation.contract import Choice, Escalated, EscalationView, Never, ToHuman
 from piloop.plugins.escalation.structured import Structured
 from piloop.plugins.executor.kit.tables import INSTANCE
 from piloop.plugins.executor.workers import Workers
@@ -56,6 +56,8 @@ from piloop.plugins.notifier.contract import (
     Ack,
     Act,
     Again,
+    Answered,
+    Choose,
     Declined,
     Edit,
     FileSeed,
@@ -640,6 +642,80 @@ def test_a_reaction_acks_the_item_and_a_seed_is_filed_in_its_campaign(
             TargetRef(TargetKind.COMMENT, item),
             TargetRef(IDEA, seed.id),
         ]
+
+
+ASKED = EscalationView(
+    headline='Do you raise the timeout?',
+    why='Runs take 3 hours.',
+    choices=(
+        Choice(id='A', label='Raise it.', result='Runs cost more.'),
+        Choice(id='B', label='Keep it.', result='The idea stops.'),
+    ),
+)
+
+
+def test_a_button_answers_the_escalation_with_its_choice_as_the_person_who_clicked(
+    db: Database, campaign: Campaign, tmp_path: Path, tracer: Tracer
+) -> None:
+    with db.session() as s:
+        item = escalations.escalate(
+            s, TargetRef(TargetKind.CAMPAIGN, campaign.id), ASKED, author=System.ORCHESTRATOR, priority=1
+        ).id
+        s.commit()
+    chat = Chat()
+    send_due(host_of(db, tmp_path, tracer, {}), route_of(db, campaign, 'chat', chat), utcnow())
+    post, route = MessageRef(f'C/{item}.1'), [route_of(db, campaign, 'chat', chat)]
+    assert received(db, tracer, route, inbound(post, Choose('Z'), 'C/z')) == Declined(
+        f"comment#{item} offers no choice 'Z'; it offers A, B"
+    )
+    assert received(db, tracer, route, inbound(post, Choose('A'), 'C/a', 'UNOBODY')) == Declined(
+        'you are not in [plugins.notifier.chat] people: ask whoever runs piloop to add you'
+    )
+    assert received(db, tracer, route, inbound(post, Choose('A'), 'C/a')) == Accepted(
+        f'piloop recorded comment#{item + 1}, Chose A: Raise it. → Runs cost more.'
+    )
+    assert received(db, tracer, route, inbound(post, Choose('A'), 'C/a')) == Again(), 'a redelivery'
+    with db.session() as s:
+        answered = s.get_one(Comment, item)
+        [decision] = s.scalars(select(Comment).where(Comment.kind == CommentKind.DECISION)).all()
+        assert (answered.acked_by, decision.author, decision.in_reply_to, decision.body) == (
+            'human:alice',
+            'human:alice',
+            item,
+            'Chose A: Raise it. → Runs cost more.',
+        )
+        [(event, _)] = in_order(s, NotificationReceived)
+        assert event.target == TargetRef(TargetKind.COMMENT, decision.id), 'the decision never goes back to Slack'
+    assert received(db, tracer, route, inbound(post, Choose('B'), 'C/b', 'UBOB')) == Answered(
+        f'comment#{item} was answered already, by human:alice: Chose A: Raise it. → Runs cost more. piloop recorded'
+        ' nothing.',
+        'human:alice',
+        'Chose A: Raise it. → Runs cost more.',
+    ), 'a second click records no second decision'
+    with db.session() as s:
+        assert len(s.scalars(select(Comment).where(Comment.kind == CommentKind.DECISION)).all()) == 1
+
+
+def test_a_click_on_an_escalation_acknowledged_without_an_answer_records_nothing(
+    db: Database, campaign: Campaign, tmp_path: Path, tracer: Tracer
+) -> None:
+    with db.session() as s:
+        item = escalations.escalate(
+            s, TargetRef(TargetKind.CAMPAIGN, campaign.id), ASKED, author=System.ORCHESTRATOR, priority=1
+        ).id
+        s.commit()
+    chat = Chat()
+    send_due(host_of(db, tmp_path, tracer, {}), route_of(db, campaign, 'chat', chat), utcnow())
+    with db.session() as s:
+        ack(s, [item], System.DAEMON)
+        s.commit()
+    post, route = MessageRef(f'C/{item}.1'), [route_of(db, campaign, 'chat', chat)]
+    assert received(db, tracer, route, inbound(post, Choose('A'), 'C/a')) == Answered(
+        f'comment#{item} was acknowledged already, by daemon. piloop recorded nothing.', 'daemon', None
+    )
+    with db.session() as s:
+        assert s.scalars(select(Comment).where(Comment.kind == CommentKind.DECISION)).all() == []
+        assert list(in_order(s, NotificationReceived)) == []
 
 
 def test_an_item_of_no_campaign_takes_no_seed(db: Database, tmp_path: Path, tracer: Tracer) -> None:
