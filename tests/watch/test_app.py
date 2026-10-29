@@ -19,6 +19,7 @@ from inline_snapshot import snapshot
 from rich.console import Console
 from rich.text import Text
 from sqlalchemy import func, select
+from textual.app import App, ComposeResult
 from textual.pilot import Pilot
 from textual.widgets import DataTable, HelpPanel
 from textual.worker import Worker, WorkerCancelled, WorkerState
@@ -43,7 +44,17 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.settings import Settings, WatchSettings
-from piloop.watch.app import CampaignScreen, CampaignsScreen, CandidatesTable, Follower, Lost, Shown, Started, Watch
+from piloop.watch.app import (
+    CampaignScreen,
+    CampaignsScreen,
+    CandidatesTable,
+    Follower,
+    Lost,
+    Shown,
+    Started,
+    Table,
+    Watch,
+)
 from piloop.watch.panels import Api, Part, read_frame, sparkline, touched
 from tests.campaign.test_inbox import news_lines
 from tests.conftest import RESEARCH, WATCHDOG, has_lines, reconfigured, register, serving_api, spent, store_config
@@ -62,7 +73,7 @@ OPEN = frozenset({WorkerState.PENDING, WorkerState.RUNNING})
 """The states of a worker that has not ended."""
 
 
-def screen_text(app: Watch) -> str:
+def screen_text(app: App[None]) -> str:
     """The screen as plain text, as a terminal would show it."""
     width, height = app.size
     console = Console(
@@ -308,7 +319,6 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
     return campaign
 
 
-@pytest.mark.quarantine(issue=536)
 def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, live_campaign: Campaign) -> None:
     shots: list[str] = []
 
@@ -1022,3 +1032,26 @@ def test_a_refusal_other_than_an_unknown_campaign_is_not_taken_for_one(db: Datab
     posing = Agent(role='implementer', session=AgentSessionId(99))
     with serving_api(cfg), socket_http(cfg.socket_file, posing) as http, pytest.raises(Refused, match='may not act'):
         read_frame(Api.over(http), 'demo', utcnow())
+
+
+def test_a_row_drawn_before_its_table_sized_its_columns_shows_at_their_width() -> None:
+    """A table sizes its columns to new rows when it is idle; a row that it drew before keeps no older width."""
+
+    class One(App[None]):
+        def compose(self) -> ComposeResult:
+            table = Table()
+            table.add_columns('campaign', 'head')
+            yield table
+
+    async def run() -> tuple[str, str]:
+        app = One()
+        async with app.run_test(size=(60, 10)) as pilot:
+            table = app.query_one(Table)
+            table.add_row(Text('demo'), Text('4 score'))
+            before = table.render_line(1).text  # drawn at the headers' widths, before the idle sizes the columns
+            await pilot.pause()
+            return before, screen_text(app)
+
+    before, after = asyncio.run(run())
+    assert '4 score' not in before, 'drawn before the sizing'
+    assert ' demo      4 score' in after.splitlines()

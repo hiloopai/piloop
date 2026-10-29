@@ -2,8 +2,5 @@
 # `unmeasured`: the files that only its tests cover, left out of the required run's coverage while they are quarantined.
 # The fix of an issue deletes its table and its marks; tests/test_quarantine.py keeps the two in step.
 
-[536]
-title = "the campaigns screen test sometimes fails on its table's columns"
-
 [555]
 title = "the daemon shutdown test sometimes captures a remote worker's lines from another test on macOS"

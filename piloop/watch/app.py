@@ -16,7 +16,7 @@ holds a key.
 """
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import ClassVar, assert_never
@@ -31,6 +31,7 @@ from textual.markup import escape
 from textual.message import Message
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, HelpPanel, Input, Label, Select, Static
+from textual.widgets.data_table import RowKey
 
 from piloop.api.client import NoDaemon, Refused
 from piloop.api.contract import PRIORITIES, AckBody, EventsQuery, PromptBody, ReplyBody, Selection
@@ -230,7 +231,19 @@ class ReplyBox(ModalScreen[tuple[str, int] | None]):
         self.dismiss(None)
 
 
-class Pane(DataTable[Text]):
+class Table(DataTable[Text]):
+    """A ``DataTable`` that draws its cells again once it sized its columns to new rows.
+
+    It sizes them when it is idle, and keeps a line that it drew before at the widths that its columns had then
+    (textual 8.2.8): a row drawn between ``add_row`` and that idle stayed cut, as ``4 sc`` for ``4 score``.
+    """
+
+    def _update_dimensions(self, new_rows: Iterable[RowKey]) -> None:
+        super()._update_dimensions(new_rows)
+        self._clear_caches()
+
+
+class Pane(Table):
     """What the campaign screen asks of each numbered panel, whatever the type of its keys."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
@@ -439,7 +452,7 @@ class CampaignsScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Static(id='header')
-        table: DataTable[Text] = DataTable(cursor_type='row', id='campaigns')
+        table = Table(cursor_type='row', id='campaigns')
         table.add_columns(*CAMPAIGN_COLUMNS)
         yield table
         yield Footer()
