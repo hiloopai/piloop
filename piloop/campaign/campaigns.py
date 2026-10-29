@@ -25,7 +25,6 @@ from piloop.config import BRIEF_FILE, CONFIG_FILE, CampaignConfig, ConfigError, 
 from piloop.db.events import emit, latest
 from piloop.db.models import NOT_RETIRED, Campaign, Event, EventModel
 from piloop.db.session import Database
-from piloop.db.sql import sql_error
 from piloop.ids import (
     LISTED,
     CampaignId,
@@ -44,7 +43,6 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import RepoId, Source, Workspace
-from piloop.plugins.role.contract import ideas_taken
 from piloop.plugins.stop_rule.contract import STOP_RULES
 from piloop.plugins.vcs.contract import VCS, Repository, UnknownRevision, Vcs, Version
 from piloop.proc import child_env
@@ -281,10 +279,10 @@ def long_brief(path: Path, budget: int) -> LongBrief | None:
 
 
 def check_takes(path: Path, cfg: CampaignConfig) -> None:
-    """Refuse the ``takes`` condition of a role that does not run on the ``ideas`` table.
+    """Refuse the ``takes`` condition of a role that does not run on the ``ideas`` table (``refused_takes``).
 
     The check reads the schema, whose models type ``campaigns.config`` with the config models, so it runs here and
-    not in the role's model.
+    not in the role's validation.
 
     Raises:
         ConfigError: one line for each bad condition, as ``load_campaign_config`` gives one for each bad key.
@@ -292,7 +290,7 @@ def check_takes(path: Path, cfg: CampaignConfig) -> None:
     bad = [
         f'  plugins.role.{name}.takes = {role.takes!r}: the condition does not run on the ideas table: {error}'
         for name, role in cfg.roles.doing_runs().items()
-        if role.takes is not None and (error := sql_error(ideas_taken(role.takes))) is not None
+        if (error := role.refused_takes()) is not None
     ]
     if bad:
         raise ConfigError(

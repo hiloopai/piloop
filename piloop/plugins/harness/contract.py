@@ -11,6 +11,7 @@ new harness: with ``provider = "<name>"`` it is that provider over its defaults,
 its argv and does nothing else. The rotation (``[plugins.harness] use``) defaults to the providers that are ``DEFAULT``.
 """
 
+import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -21,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from piloop import deprecated
 from piloop.ids import EnvName
-from piloop.plugins.host import Capability, Many, Parameters, Pick, Scope, Use
+from piloop.plugins.host import Capability, Check, Many, Parameters, Pick, Scope, Severity, Use
 from piloop.plugins.mcp_server.contract import McpServer
 from piloop.settings import Settings
 from piloop.usage import ModelId, Usage
@@ -300,6 +301,31 @@ class Harness(Parameters):
     def needs_session_id(self) -> bool:
         """Whether the agent's session id is needed when it ends: ``usage`` finds the session file by it."""
         return self.usage() is not None
+
+    def checks(self) -> list[Check]:
+        """Its ``executable`` is on ``PATH``."""
+        name = f'harness {self.executable}'
+        if shutil.which(self.executable) is None:
+            fix = (
+                'install it, or take it out of `[plugins.harness] use` and the roles in piloop.toml, and `piloop init`'
+            )
+            return [Check(name, 'not on PATH', f'{fix} the campaign'), *self._login()]
+        return [Check(name, 'on PATH'), *self._login()]
+
+    @deprecated.until('0.5.0', "auth keys of a user's harness settings pass to an isolated agent: delete _login")
+    def _login(self) -> list[Check]:
+        """Warn when its isolated agents take their login from the user's own settings on this machine."""
+        if (carried := self.carried(self.expanded(self.headless), [])) is None:
+            return []
+        return [
+            Check(
+                f'login of {self.executable}',
+                f"its agents ignore the user's settings, but take {', '.join(carried.names)} from them",
+                'set them in its `env` in piloop.toml (a key as `{ secret = "NAME" }`) and `piloop init` the campaign:'
+                ' piloop stops passing them at 0.5.0',
+                Severity.WARN,
+            )
+        ]
 
     def refuses_servers(self) -> str | None:
         """Return why ``headless`` cannot take MCP servers, or None when it can."""

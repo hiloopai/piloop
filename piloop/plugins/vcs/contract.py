@@ -27,7 +27,7 @@ from piloop.ids import Revision
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.cas.contract import BlobAddress, Cas
-from piloop.plugins.host import Capability, Check, One, Parameters, Scope
+from piloop.plugins.host import Capability, One, Parameters, Scope
 
 
 @dataclass(frozen=True)
@@ -333,11 +333,6 @@ class Vcs(Parameters, ABC):
     @abstractmethod
     def prompt(self, part: Part) -> str:
         """What the built-in prompts say about ``part`` for this provider (``prompted``)."""
-
-    @classmethod
-    @abstractmethod
-    def checks(cls) -> list[Check]:
-        """Check that the provider can work on this machine. ``piloop doctor`` shows the result. Read only."""
 
 
 def prompted(text: str, vcs: Vcs) -> str:

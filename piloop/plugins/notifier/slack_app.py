@@ -16,6 +16,7 @@ from pydantic import Field
 
 from piloop.plugins.contribution import Leaving
 from piloop.plugins.harness.contract import SecretRef
+from piloop.plugins.host import Check, extra
 from piloop.plugins.notifier.contract import (
     Accepted,
     Ack,
@@ -79,6 +80,10 @@ class SlackApp(SlackText):
                 case _:
                     raise NotDelivered('chat.postMessage: the answer names no channel and ts', None, posted)
         return posted
+
+    def checks(self) -> list[Check]:
+        """The ``slack`` extra, which the listener imports."""
+        return [extra('slack app', 'slack_sdk', 'slack')]
 
     def listen(self, host: ListenHost) -> SocketListener:
         return SocketListener(self, host)

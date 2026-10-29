@@ -27,6 +27,7 @@ from piloop.plugins.executor.workers import Workers
 from piloop.plugins.fact_source.contract import FACT_SOURCES
 from piloop.plugins.fact_source.models import ModelFacts
 from piloop.plugins.harness.contract import Harness, each_provider
+from piloop.plugins.host import Check
 from piloop.plugins.metric import Direction
 from piloop.plugins.role.contract import Files, ImplementerRole
 from piloop.plugins.role.orchestrator import OrchestratorRole
@@ -595,6 +596,19 @@ def test_a_table_with_runs_defines_a_role_that_does_runs_with_the_implementer_de
         'priority >>= 3'
     )
     assert 'no such column: nope' in refused('nope = 1')
+    role = load_campaign_config(campaign_path, plugins={'role': {'quick': {'runs': True, 'takes': 'nope = 1'}}})
+    assert role.roles.doing_runs()[RoleName('quick')].checks() == [
+        Check(
+            "takes 'nope = 1'",
+            'does not run on the ideas table: no such column: nope',
+            'fix it in piloop.toml, then `piloop init`',
+        )
+    ], 'piloop doctor runs it on the stored config, which an upgrade can leave behind the schema'
+    assert role.roles.doing_runs()[IMPLEMENTER].checks() == [], 'it takes every idea'
+    taking = load_campaign_config(campaign_path, plugins={'role': {'quick': {'runs': True, 'takes': 'priority > 1'}}})
+    assert taking.roles.doing_runs()[RoleName('quick')].checks() == [
+        Check("takes 'priority > 1'", 'runs on the ideas table')
+    ]
     assert 'You did not supply a value for binding parameter :campaign' in refused('campaign_id = :campaign')
     assert 'plugins.role.quick.triggers: Extra inputs are not permitted' in fails(
         {'quick': {'runs': True, 'triggers': []}}

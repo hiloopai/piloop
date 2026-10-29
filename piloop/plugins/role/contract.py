@@ -17,7 +17,7 @@ from pydantic import Field, model_validator
 
 from piloop.ids import ROLE_NAME, CommentKind
 from piloop.plugins.harness.contract import HarnessKey, HarnessName
-from piloop.plugins.host import Capability, Many, Parameters, Reach, Scope
+from piloop.plugins.host import Capability, Check, Many, Parameters, Reach, Scope
 from piloop.plugins.mcp_server.contract import McpServerName
 from piloop.plugins.runtime.contract import RuntimeName
 from piloop.plugins.section.contract import SectionName, Surface, defaults
@@ -177,6 +177,23 @@ class ImplementerRole(RoleConfig):
     """How long free slots of this role may sit with no runnable idea for them while ideas that the role would take
     wait in ``proposed``. Then piloop raises one escalation of priority 1, which the notifiers send. piloop
     acknowledges it when the slots fill, or when no such idea waits. 0 turns this off."""
+
+    def refused_takes(self) -> str | None:
+        """Why ``takes`` does not run on the ideas table of this piloop's schema, or None when it runs or is unset."""
+        from piloop.db.sql import sql_error  # here: the schema's models type the config with the roles
+
+        return None if self.takes is None else sql_error(ideas_taken(self.takes))
+
+    def checks(self) -> list[Check]:
+        """``takes`` runs on the ideas table: an upgrade can drop a column that it names."""
+        if self.takes is None:
+            return []
+        name = f'takes {self.takes!r}'
+        if (error := self.refused_takes()) is not None:
+            return [
+                Check(name, f'does not run on the ideas table: {error}', 'fix it in piloop.toml, then `piloop init`')
+            ]
+        return [Check(name, 'runs on the ideas table')]
 
 
 def ideas_taken(takes: str) -> str:

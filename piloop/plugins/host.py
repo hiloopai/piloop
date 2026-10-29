@@ -46,6 +46,7 @@ from datetime import datetime, timedelta
 from enum import Enum, StrEnum
 from functools import cache
 from importlib.metadata import EntryPoint, entry_points
+from importlib.util import find_spec
 from pathlib import Path
 from threading import RLock
 from types import UnionType
@@ -105,6 +106,43 @@ class MissingProvider(ValueError):
     """A capability has no provider of that name. A ``ValueError``, so that a config validator reports it on its key."""
 
 
+class Severity(StrEnum):
+    """What a check that did not pass means: a failure of ``piloop doctor``, or a warning that changes nothing now."""
+
+    FAIL = 'FAIL'
+    WARN = 'WARN'
+
+
+@dataclass(frozen=True)
+class Check:
+    """One line of the report of ``piloop doctor``: what was checked, what was found and, when it did not pass, the fix.
+
+    An instance that checks the machine it works on returns these (``Parameters.checks``).
+    """
+
+    name: str
+    found: str
+    fix: str | None = None
+    """None when the check passed."""
+    severity: Severity = Severity.FAIL
+    """What a check with a fix means."""
+
+    @property
+    def fails(self) -> bool:
+        return self.fix is not None and self.severity is Severity.FAIL
+
+
+def extra(name: str, module: str, extra: str) -> Check:
+    """Check that ``module`` of piloop's optional ``extra`` is installed: a provider imports it only when it opens."""
+    try:
+        found = find_spec(module) is not None
+    except ModuleNotFoundError:  # a parent package is missing
+        found = False
+    if found:
+        return Check(name, f'{module} is installed')
+    return Check(name, f'{module} is not installed', f"`uv tool install --reinstall 'piloop[{extra}]'`")
+
+
 class Parameters(BaseModel):
     """The base of every contract that a ``[plugins.<name>]`` table chooses, so of each of its providers.
 
@@ -113,6 +151,13 @@ class Parameters(BaseModel):
     """
 
     model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
+
+    def checks(self) -> list[Check]:
+        """Check that this instance can work on this machine, read only. ``piloop doctor`` runs it (``in_use``).
+
+        None, by default: a provider that needs a program, an extra or a login on the machine says so here.
+        """
+        return []
 
 
 @dataclass(frozen=True)
@@ -135,32 +180,6 @@ class PythonSource:
 
     def __str__(self) -> str:
         return self.release if self.built_in else f'{self.release}, entry point {self.entry_point}'
-
-
-class Severity(StrEnum):
-    """What a check that did not pass means: a failure of ``piloop doctor``, or a warning that changes nothing now."""
-
-    FAIL = 'FAIL'
-    WARN = 'WARN'
-
-
-@dataclass(frozen=True)
-class Check:
-    """One line of the report of ``piloop doctor``: what was checked, what was found and, when it did not pass, the fix.
-
-    A provider that checks the machine it works on returns these (``Vcs.checks``).
-    """
-
-    name: str
-    found: str
-    fix: str | None = None
-    """None when the check passed."""
-    severity: Severity = Severity.FAIL
-    """What a check with a fix means."""
-
-    @property
-    def fails(self) -> bool:
-        return self.fix is not None and self.severity is Severity.FAIL
 
 
 class Live:
@@ -928,6 +947,46 @@ def unreached(plugins: Plugins, named: Sequence[Reference]) -> list[Unreached]:
             case _:
                 pass
     return found
+
+
+def in_use(plugins: Plugins, scope: Scope, named: Sequence[Reference]) -> list[Parameters]:
+    """The instances of ``plugins``, the ``[plugins]`` of the file of ``scope``, that are in use, and those they hold.
+
+    In use is the one instance of a ``One``, else its default, and each instance of a ``Many`` that a name of ``named``
+    puts in use, or every one (``Reach.EVERY``). An instance that one holds (``Entry``), such as the remote of a cache
+    or the provisioner of a pool, follows it.
+    """
+    uses = {(ref.capability.name, ref.name) for ref in named if ref.naming is Naming.USES}
+    found: list[Parameters] = []
+    for capability in declared():
+        match capability.table:
+            case One(scope=here, default=default) if here is scope and (
+                capability.name in plugins or default is not None
+            ):
+                found.append(capability.selected(plugins))
+            case Many(scope=here, reach=reach) if here is scope:
+                found += [
+                    p
+                    for name, p in capability.instances(plugins).items()
+                    if reach is Reach.EVERY or (capability.name, name) in uses
+                ]
+            case _:
+                pass
+    return [held for p in found for held in _held(p)]
+
+
+def _held(value: object) -> list[Parameters]:
+    """``value`` when it is an instance, and every instance in its fields, depth first."""
+    match value:
+        case BaseModel():
+            own = [value] if isinstance(value, Parameters) else []
+            return [*own, *(p for name, _ in _referring(type(value)) for p in _held(getattr(value, name)))]
+        case list() | tuple():
+            return [p for v in value for p in _held(v)]
+        case dict():
+            return [p for v in value.values() for p in _held(v)]
+        case _:
+            return []
 
 
 def refs(value: object, annotation: object = None, at: tuple[str | int, ...] = ()) -> list[Reference]:

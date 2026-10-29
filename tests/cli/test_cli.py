@@ -1964,8 +1964,6 @@ def test_upgrade_reinstalls_migrates_and_restarts_the_daemon(
         IsStr(regex=r'ok    plugins: (\d+ [\w ]+, )*\d+ [\w ]+; all built in'),
         'ok    secrets: from `piloop secret set` (no secrets_command)',
         f'ok    skills (pi): current in {common.settings.agent_skills_dir}',
-        'ok    harnesses: on PATH: none configured',
-        git_check(),
     ], 'the new code checks the install last'
     assert calls() == [['uv', 'tool', 'upgrade', '--reinstall-package', 'piloop', 'piloop']]
     terminal = capfd.readouterr().out.splitlines()
@@ -1992,8 +1990,6 @@ def test_upgrade_of_a_checkout_install_without_a_daemon_creates_the_schema(fake_
         IsStr(regex=r'ok    plugins: (\d+ [\w ]+, )*\d+ [\w ]+; all built in'),
         'ok    secrets: from `piloop secret set` (no secrets_command)',
         f'ok    skills (Agent Skills): current in {common.settings.agent_skills_dir}',
-        'ok    harnesses: on PATH: none configured',
-        git_check(),
     ]
     assert (
         calls() == [['uv', 'tool', 'upgrade', '--reinstall-package', 'piloop', 'piloop']]

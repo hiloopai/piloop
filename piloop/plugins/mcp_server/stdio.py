@@ -5,6 +5,7 @@ import shutil
 from pydantic import Field
 
 from piloop.ids import EnvName
+from piloop.plugins.host import Check
 from piloop.plugins.mcp_server.contract import McpServer
 
 
@@ -20,9 +21,12 @@ class StdioServer(McpServer):
     def env_names(self) -> list[str]:
         return list(self.env)
 
-    def missing(self) -> str | None:
-        """Its program, when it is not on PATH."""
-        return None if shutil.which(self.command[0]) else self.command[0]
+    def checks(self) -> list[Check]:
+        """Its program is on PATH."""
+        name = f'mcp server {self.command[0]}'
+        if shutil.which(self.command[0]) is None:
+            return [Check(name, 'not on PATH', 'install it, or fix its [plugins.mcp_server.*] table in piloop.toml')]
+        return [Check(name, 'on PATH')]
 
     def expanded_env(self) -> dict[str, str]:
         """The server's environment as ``${NAME}`` references, for Claude Code and pi-mcp-adapter."""

@@ -2,13 +2,13 @@
 
 The checks note a newer piloop at the source of the CLI, and find what can break after an upgrade: a daemon that still
 runs the old code, a database behind the code, a secrets command that fails, a ``piloop.toml`` that the new code refuses,
-an MCP server that cannot start, skills that are missing or out of date, a missing harness, and what each vcs provider
-checks itself (``Vcs.checks``). Nothing here writes: the database is opened read-only, and nothing starts. The check of the source asks the network (``git ls-remote`` or the package index). The commands that the
-lines name use ``Settings.cli``. ``piloop upgrade`` runs the checks last.
+a secret that an agent needs and nobody set, skills that are missing or out of date, and what each instance in use
+checks itself (``Parameters.checks``), such as a harness or an MCP server that is not on PATH. Nothing here writes: the
+database is opened read-only, and nothing starts. The check of the source asks the network (``git ls-remote`` or the
+package index). The commands that the lines name use ``Settings.cli``. ``piloop upgrade`` runs the checks last.
 """
 
 import json
-import shutil
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
@@ -21,9 +21,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from piloop import deprecated
 from piloop.actor import Actor
-from piloop.campaign.campaigns import REWRITE_BRIEF, check_takes, long_brief
+from piloop.campaign.campaigns import REWRITE_BRIEF, long_brief
 from piloop.cli import skills, upgrade
 from piloop.config import CampaignConfig, ConfigError, ConfigMissing, explain, load_campaign_config
 from piloop.daemon.main import preflight, unbound_failures
@@ -31,9 +30,8 @@ from piloop.daemon.serve import SECRETS_COMMAND_ENV, SecretsError, running_pid, 
 from piloop.db.models import utcnow
 from piloop.db.session import described, heads, schema_mismatch, stamps
 from piloop.ids import CampaignId, CampaignStatus
-from piloop.plugins.host import Check, PluginError, Severity, declared
+from piloop.plugins.host import Check, PluginError, Scope, Severity, declared, in_use, refs
 from piloop.plugins.secrets.contract import SECRETS, SecretKey
-from piloop.plugins.vcs.contract import VCS
 from piloop.proc import child_env, environment
 from piloop.settings import Settings, config_file
 from piloop.text import age
@@ -62,7 +60,7 @@ class StoredCampaign:
 def checks(cfg: Settings) -> list[Check]:
     """Run every check, in the best order to debug a broken upgrade: daemon, database, plugins, configs, skills, tools.
 
-    When the plugins do not compose, the checks of the campaigns, harnesses and vcs providers, which use them, do not
+    When the plugins do not compose, the checks of the campaigns and of the instances in use, which use them, do not
     run.
     """
     composed = _plugins(cfg)
@@ -94,19 +92,12 @@ def checks(cfg: Settings) -> list[Check]:
                 and (long := long_brief(Path(c.path), c.config.agents.over(cfg.agents).brief_words)) is not None
             ),
             *(
-                _mcp(c.name, c.config)
-                for c in campaigns
-                if isinstance(c.config, CampaignConfig) and c.config.mcp_servers
-            ),
-            *(
                 _secrets_of(c, needed, held, env, daemon)
                 for c in campaigns
                 if isinstance(c.config, CampaignConfig) and (needed := _needed(c.config))
             ),
             *_skills(cfg),
-            _harnesses(stored),
-            *_logins(stored),
-            *(check for provider in VCS.providers().values() for check in provider.model.checks()),
+            *_instances(cfg, stored),
         ]
     # the commands that the lines name are this install's, which a second install (piloop-canary) runs under its name
     return [replace(c, found=_named(c.found, cfg), fix=c.fix and _named(c.fix, cfg)) for c in found]
@@ -200,7 +191,7 @@ def _campaign(campaign: StoredCampaign) -> Check:
     reread = f'fix {path}/piloop.toml, then `piloop init {path}` re-reads it'
     severity = campaign.severity
     try:
-        check_takes(Path(path), load_campaign_config(Path(path)))
+        load_campaign_config(Path(path))
     except ConfigMissing:
         return Check(what, f'no piloop.toml in {path}', f'restore it, then `piloop init {path}`', severity)
     except ConfigError as e:
@@ -272,20 +263,6 @@ def _secrets(whose: str, command: str | None) -> tuple[Check, set[str]]:
     ), names
 
 
-def _mcp(name: str, config: CampaignConfig) -> Check:
-    """Check that the commands of the campaign's MCP servers are on PATH. ``_secrets_of`` checks their keys."""
-    what = f'mcp {name}'
-    servers = config.mcp_servers.values()
-    if missing := sorted({found for s in servers if (found := s.missing()) is not None}):
-        return Check(
-            what, f'not on PATH: {", ".join(missing)}', 'install them, or fix the [plugins.mcp_server.*] tables'
-        )
-    roles = '; '.join(
-        f'{kind}: {", ".join(listed)}' for kind, role in config.roles.all().items() if (listed := role.mcp)
-    )
-    return Check(what, f'{len(config.mcp_servers)} server(s) ({roles or "no role lists one"})')
-
-
 def _needed(config: CampaignConfig) -> list[str]:
     """The secrets that the agents of the campaign's roles get, on each harness of their rotation."""
     return sorted(
@@ -346,41 +323,17 @@ def _skills(cfg: Settings) -> list[Check]:
     ]
 
 
-@deprecated.until('0.5.0', "auth keys of a user's harness settings pass to an isolated agent: delete _logins")
-def _logins(configs: list[CampaignConfig]) -> list[Check]:
-    """Warn of each harness whose isolated agents take their login from the user's own settings on this machine."""
-    found = {
-        h: carried.names
-        for c in configs
-        for kind in c.roles.all()
-        for h in c.role_harnesses(kind)
-        if (d := c.harness_for(h)) and (carried := d.carried(d.expanded(d.headless), [])) is not None
-    }
-    return [
-        Check(
-            f'login of {h}',
-            f"its agents ignore the user's settings, but take {', '.join(names)} from them",
-            f'set them in `[plugins.harness.{h}] env` (a key as `{{ secret = "NAME" }}`) and `piloop init` the'
-            ' campaign: piloop stops passing them at 0.5.0',
-            Severity.WARN,
-        )
-        for h, names in sorted(found.items())
+def _instances(cfg: Settings, campaigns: list[CampaignConfig]) -> list[Check]:
+    """What each instance in use checks itself (``Parameters.checks``): the home's, then each campaign's, once each.
+
+    An instance of the home is in use when ``config.toml`` or a campaign names it, such as a campaign's runtime.
+    """
+    named = [*refs(cfg.providers), *(r for c in campaigns for r in refs(c))]
+    found = [
+        *in_use(cfg.providers, Scope.HOME, named),
+        *(p for c in campaigns for p in in_use(c.plugins, Scope.CAMPAIGN, refs(c))),
     ]
-
-
-def _harnesses(configs: list[CampaignConfig]) -> Check:
-    """Check that each harness that a role of a campaign can launch has its executable on PATH."""
-    executables = {
-        c.harness_for(h).executable: h for c in configs for kind in c.roles.all() for h in c.role_harnesses(kind)
-    }
-    missing = sorted(f'{h} ({exe})' for exe, h in executables.items() if shutil.which(exe) is None)
-    if missing:
-        return Check(
-            'harnesses',
-            f'not on PATH: {", ".join(missing)}',
-            'install them, or take them out of `[plugins.harness] use` in piloop.toml and `piloop init` the campaign',
-        )
-    return Check('harnesses', f'on PATH: {", ".join(sorted(executables.values())) or "none configured"}')
+    return list(dict.fromkeys(check for p in found for check in p.checks()))
 
 
 def stored_campaigns(path: Path) -> list[StoredCampaign]:

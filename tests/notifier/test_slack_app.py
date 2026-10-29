@@ -10,6 +10,7 @@ from piloop.actor import Person, System
 from piloop.db.session import Database
 from piloop.ids import CommentId, CommentKind
 from piloop.plugins.contribution import Leaving
+from piloop.plugins.host import Check
 from piloop.plugins.notifier.contract import (
     Accepted,
     Ack,
@@ -334,3 +335,7 @@ def test_a_listener_needs_the_slack_extra_and_both_tokens(
         'Socket Mode did not open: the home has no secret SLACK_APP_TOKEN: set it with'
         ' `piloop secret set SLACK_APP_TOKEN`, then `piloop restart`'
     ]
+
+
+def test_the_doctor_checks_the_slack_extra_that_the_listener_imports() -> None:
+    assert SlackApp(channel='C1').checks() == [Check('slack app', 'slack_sdk is installed')]

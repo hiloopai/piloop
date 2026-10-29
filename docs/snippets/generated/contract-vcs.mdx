@@ -11,7 +11,6 @@
 | `Vcs.root(path: Path) -> Path \| None` | The main checkout that `path` is in, also from a checkout that `Repository.checkout` made. None: none. |
 | `Vcs.changed(path: Path, ignore: Sequence[str]) -> bool` | Whether an agent changed the checkout at `path`: a saved version, or a changed file outside `ignore`. |
 | `Vcs.prompt(part: Part) -> str` | What the built-in prompts say about `part` for this provider (`prompted`). |
-| `Vcs.checks() -> list[Check]` | Check that the provider can work on this machine. `piloop doctor` shows the result. Read only. |
 | `Repository.close() -> None` | Release what the open repository holds. Later calls do nothing. |
 | `Repository.head() -> Version` | The version that the checkout is at. |
 | `Repository.version(native: str) -> Version` | The version that `native` names in the provider's own terms: a revision, or under `git` a branch or tag. |

@@ -6,13 +6,14 @@ import sys
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from itertools import count
+from pathlib import Path
 
 import modal
 import pytest
 from pydantic import SecretStr
 
 from piloop.otel import Tracer
-from piloop.plugins.host import ContractBroken
+from piloop.plugins.host import Check, ContractBroken
 from piloop.plugins.provisioner.contract import (
     PROVISIONERS,
     Instance,
@@ -224,3 +225,21 @@ class Broken:
 def test_the_conformance_check_names_the_rule_that_a_provider_breaks(sdk: FakeModal, broken: str, rule: str) -> None:
     with pytest.raises(ContractBroken, match=re.escape(rule)):
         check_provisioning(lambda owner: Broken(opened(owner), sdk, broken), LAUNCH, timeout=0.05)
+
+
+def test_the_doctor_finds_modal_s_login_in_the_environment_else_in_its_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / 'modal.toml'
+    monkeypatch.setenv('MODAL_CONFIG_PATH', str(config))
+    monkeypatch.setenv('MODAL_TOKEN_ID', 'ak-1')
+    monkeypatch.setenv('MODAL_TOKEN_SECRET', 'as-1')
+    provider = Modal(image='ghcr.io/acme/worker:1')
+    assert provider.checks() == [
+        Check('modal', 'modal is installed'),
+        Check('modal login', 'MODAL_TOKEN_ID and MODAL_TOKEN_SECRET are set'),
+    ]
+    monkeypatch.delenv('MODAL_TOKEN_SECRET')
+    config.write_text('[default]\n')
+    assert provider.checks()[1] == Check('modal login', f'in {config}')
+    assert 'as-1' not in str(provider.checks())

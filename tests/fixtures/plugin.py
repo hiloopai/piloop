@@ -162,13 +162,13 @@ class NoUnitRegression(VerdictCheck):
 
 
 class Checked(Bootstrap):
-    """``checked``: what ``bootstrap`` decides, but a keep that one of ``checks`` refuses is ``interesting``."""
+    """``checked``: what ``bootstrap`` decides, but a keep that one of ``vetoes`` refuses is ``interesting``."""
 
-    checks: list[Annotated[VerdictCheck, VERDICT_CHECKS.entry]]
+    vetoes: list[Annotated[VerdictCheck, VERDICT_CHECKS.entry]]
 
     def decide(self, case: Case) -> Judgement:
         judged = super().decide(case)
-        held = [f'{VERDICT_CHECKS.name_of(c)}: {why}' for c in self.checks if (why := c.check(case)) is not None]
+        held = [f'{VERDICT_CHECKS.name_of(c)}: {why}' for c in self.vetoes if (why := c.check(case)) is not None]
         if judged.verdict is not Outcome.KEEP or not held:
             return judged
         return Judgement(Outcome.INTERESTING, f'{judged.reason}; held by {"; ".join(held)}')

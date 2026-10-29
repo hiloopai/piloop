@@ -74,7 +74,7 @@ def test_a_healthy_install_passes_every_check(
         'ok    secrets: from `piloop secret set` (no secrets_command)',
         f'ok    campaign demo: {campaign.path}/piloop.toml loads',
         f'ok    skills (pi): current in {cfg.agent_skills_dir}',
-        'ok    harnesses: on PATH: script',
+        f'ok    harness {Path(campaign.path).parent}/harness.sh: on PATH',
         git_check(),
     ]
 
@@ -95,8 +95,9 @@ def test_a_campaign_brief_over_its_word_budget_is_a_warning_that_says_to_rewrite
 
 
 def test_a_git_older_than_piloop_needs_or_one_that_does_not_run_fails_with_the_fix(
-    cfg: Settings, tmp_path: Path
+    cfg: Settings, campaign: Campaign, tmp_path: Path
 ) -> None:
+    assert 'git' not in by_name(Settings(home=tmp_path / 'empty')), 'no campaign uses a vcs'
     git = tmp_path / 'bin' / 'git'
     git.unlink()
     fix = 'install git 2.40 or later'
@@ -197,7 +198,7 @@ def test_a_campaign_whose_toml_is_gone_invalid_or_whose_stored_copy_no_longer_va
         '  evaluate: Field required. Fix: add the key; https://piloop.autoresearch.inc/reference/configuration says what it takes',
         f'`piloop init {campaign.path}`',
     )
-    assert by_name(cfg)['harnesses'].found == 'on PATH: none configured', 'no valid stored config, no harness to check'
+    assert not [c for c in checks(cfg) if c.name.startswith('harness')], 'no valid stored config, no harness to check'
 
 
 def test_the_toml_of_a_stopped_campaign_that_does_not_load_is_a_warning(
@@ -254,19 +255,44 @@ def test_a_secret_that_a_stopped_campaign_lacks_is_a_warning(
     )
 
 
-def test_a_missing_harness_is_named(cfg: Settings, db: Database, campaign: Campaign) -> None:
-    with db.session() as s:
-        row = s.get_one(Campaign, campaign.id)
-        row.config = reconfigured(
-            row.config,
-            plugins={'harness': {'use': ['script', 'codex'], 'script': {'model': 'm'}, 'codex': {'model': 'm'}}},
-        )
-        s.commit()
-    assert by_name(cfg)['harnesses'] == Check(
-        'harnesses',
-        'not on PATH: codex (codex)',
-        'install them, or take them out of `[plugins.harness] use` in piloop.toml and `piloop init` the campaign',
+def test_a_missing_harness_is_named_only_while_a_campaign_uses_it(
+    cfg: Settings, db: Database, campaign: Campaign
+) -> None:
+    def use(rotation: list[str]) -> None:
+        with db.session() as s:
+            row = s.get_one(Campaign, campaign.id)
+            row.config = reconfigured(
+                row.config,
+                plugins={'harness': {'use': rotation, 'script': {'model': 'm'}, 'codex': {'model': 'm'}}},
+            )
+            s.commit()
+
+    use(['script', 'codex'])
+    assert by_name(cfg)['harness codex'] == Check(
+        'harness codex',
+        'not on PATH',
+        'install it, or take it out of `[plugins.harness] use` and the roles in piloop.toml, and `piloop init` the'
+        ' campaign',
     )
+    use(['script'])
+    assert 'harness codex' not in by_name(cfg), 'configured, and nothing uses it'
+
+
+def test_an_instance_of_the_home_is_checked_and_so_is_one_that_it_holds(
+    cfg: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provisioner is a table in a pool of the executor: the doctor finds it there, with its own checks."""
+    monkeypatch.delenv('MODAL_TOKEN_ID', raising=False)
+    monkeypatch.setenv('MODAL_CONFIG_PATH', str(tmp_path / 'modal.toml'))
+    compute = {'provider': 'modal', 'image': 'ghcr.io/acme/worker:1'}
+    pool = {'runners': ['local'], 'provisioner': {'max': 1, 'compute': compute}}
+    home = Settings(home=cfg.home, uv_tool_dir=cfg.uv_tool_dir, plugins={'executor': {'pools': {'gpu': pool}}})
+    assert by_name(home)['modal login'] == Check(
+        'modal login',
+        f'MODAL_TOKEN_ID and MODAL_TOKEN_SECRET are not both set, and there is no {tmp_path}/modal.toml',
+        '`modal token new`, or set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET where the daemon runs',
+    )
+    assert 'modal login' not in by_name(cfg), 'no pool, no provisioner'
 
 
 def test_mcp_servers_are_checked_for_their_commands_and_their_secrets_by_name_only(
@@ -281,12 +307,12 @@ def test_mcp_servers_are_checked_for_their_commands_and_their_secrets_by_name_on
     )
     for name in ('EXA_API_KEY', 'XAI_API_KEY', 'TEAM_KEY'):
         monkeypatch.delenv(name, raising=False)
-    assert 'mcp demo' not in by_name(Settings(home=tmp_path / 'empty')), 'no campaigns, nothing to check'
-    assert by_name(cfg)['mcp demo'] == Check(
-        'mcp demo', 'not on PATH: xai-server', 'install them, or fix the [plugins.mcp_server.*] tables'
+    assert 'mcp server xai-server' not in by_name(Settings(home=tmp_path / 'empty')), 'no campaigns, nothing to check'
+    assert by_name(cfg)['mcp server xai-server'] == Check(
+        'mcp server xai-server', 'not on PATH', 'install it, or fix its [plugins.mcp_server.*] table in piloop.toml'
     )
     on_path(tmp_path, 'xai-server')
-    assert by_name(cfg)['mcp demo'] == Check('mcp demo', '2 server(s) (watchdog: exa, xai)')
+    assert by_name(cfg)['mcp server xai-server'] == Check('mcp server xai-server', 'on PATH')
     fix = '`piloop serve --detach`, then `piloop secret set <NAME>` for each: secrets go through the daemon'
     assert by_name(cfg)['secrets demo'] == Check('secrets demo', 'not set: EXA_API_KEY, TEAM_KEY, XAI_API_KEY', fix)
     with db.session() as s:
@@ -510,7 +536,7 @@ def test_a_claude_login_in_the_user_s_settings_warns_until_it_moves_to_the_harne
     assert by_name(cfg)['login of claude'] == Check(
         'login of claude',
         "its agents ignore the user's settings, but take apiKeyHelper, env.ANTHROPIC_BASE_URL from them",
-        'set them in `[plugins.harness.claude] env` (a key as `{ secret = "NAME" }`) and `piloop init` the campaign:'
+        'set them in its `env` in piloop.toml (a key as `{ secret = "NAME" }`) and `piloop init` the campaign:'
         ' piloop stops passing them at 0.5.0',
         Severity.WARN,
     )

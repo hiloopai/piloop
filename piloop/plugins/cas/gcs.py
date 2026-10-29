@@ -21,6 +21,7 @@ from pydantic import field_validator
 from piloop.plugins.cas.contract import Cas, CasProvider
 from piloop.plugins.cas.kit.objects import ObjectsCas
 from piloop.plugins.cas.s3 import TMP
+from piloop.plugins.host import Check, extra
 
 if TYPE_CHECKING:
     from google.cloud.storage import Bucket
@@ -54,6 +55,13 @@ class Gcs(CasProvider):
 
     def where(self, home: Path) -> str:
         return f'gs://{self.bucket}/{self.prefix.strip("/")}'.rstrip('/')
+
+    def checks(self) -> list[Check]:
+        """The ``gcs`` extra, and the key file when one is named."""
+        found = [extra('gcs', 'google.cloud.storage', 'gcs')]
+        if (key := self.credentials_file) is not None and not key.is_file():
+            found.append(Check('gcs key', f'no file {key}', 'fix credentials_file in [plugins.cas]'))
+        return found
 
 
 class GcsObjects:

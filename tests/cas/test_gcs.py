@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from piloop.plugins.cas.gcs import Gcs
 from piloop.plugins.cas.kit.objects import key
+from piloop.plugins.host import Check
 from tests.cas.test_selection import provider
 
 
@@ -104,3 +105,10 @@ def test_without_the_gcs_extra_the_store_says_how_to_install_it(
     monkeypatch.delattr(google.cloud, 'storage')
     with pytest.raises(ImportError, match=r"needs the gcs extra: uv tool install --reinstall 'piloop\[gcs\]'"):
         Gcs(bucket='b').open(tmp_path)
+
+
+def test_the_doctor_checks_the_extra_and_a_key_file_that_is_named(tmp_path: Path) -> None:
+    assert Gcs(bucket='b').checks() == [Check('gcs', 'google.cloud.storage is installed')]
+    assert Gcs(bucket='b', credentials_file=tmp_path / 'key.json').checks()[1] == Check(
+        'gcs key', f'no file {tmp_path}/key.json', 'fix credentials_file in [plugins.cas]'
+    )

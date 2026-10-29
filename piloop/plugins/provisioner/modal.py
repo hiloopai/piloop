@@ -25,11 +25,14 @@ The server needs Modal's credentials (``MODAL_TOKEN_ID`` and ``MODAL_TOKEN_SECRE
 ``modal`` extra (``uv tool install 'piloop[modal]'``), imported when the pool's provisioner opens.
 """
 
+import os
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from piloop.plugins.host import Check, extra
 from piloop.plugins.provisioner.contract import (
     Instance,
     InstanceState,
@@ -44,6 +47,8 @@ if TYPE_CHECKING:
 
 OWNER, NAME, POOL = 'piloop-owner', 'piloop-name', 'piloop-pool'
 """The tags of a sandbox."""
+TOKEN = ('MODAL_TOKEN_ID', 'MODAL_TOKEN_SECRET')
+"""The variables of Modal's credentials. Without them, its client reads its config file."""
 
 
 class Registry(BaseModel):
@@ -87,6 +92,24 @@ class Modal(ProvisionerConfig):
 
     def open(self, host: ProvisionerHost) -> ModalProvisioning:
         return ModalProvisioning(self, host.owner)
+
+    def checks(self) -> list[Check]:
+        """The ``modal`` extra, and Modal's credentials: in the environment, else in Modal's config file."""
+        return [extra('modal', 'modal', 'modal'), _login()]
+
+
+def _login() -> Check:
+    """Modal's credentials, as its client finds them: both variables of ``TOKEN``, else its config file."""
+    if all(os.environ.get(name) for name in TOKEN):
+        return Check('modal login', f'{" and ".join(TOKEN)} are set')
+    config = Path(os.environ.get('MODAL_CONFIG_PATH') or Path.home() / '.modal.toml')
+    if config.is_file():
+        return Check('modal login', f'in {config}')
+    return Check(
+        'modal login',
+        f'{" and ".join(TOKEN)} are not both set, and there is no {config}',
+        f'`modal token new`, or set {" and ".join(TOKEN)} where the daemon runs',
+    )
 
 
 class ModalProvisioning:

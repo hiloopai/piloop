@@ -265,8 +265,7 @@ class Git(Vcs):
         """The text of ``prompts/<part>.md``."""
         return (PROMPTS / f'{part}.md').read_text().removesuffix('\n')
 
-    @classmethod
-    def checks(cls) -> list[Check]:
+    def checks(self) -> list[Check]:
         """The git on ``PATH``, which every campaign and the daemon run, is at least ``NEEDED``."""
         fix = 'install git 2.40 or later'
         try:

@@ -39,6 +39,7 @@ from piloop.plugins.harness.claude import Claude
 from piloop.plugins.harness.contract import HARNESSES, HarnessName
 from piloop.plugins.host import (
     Capability,
+    Check,
     ContractBroken,
     Instances,
     MissingProvider,
@@ -46,6 +47,7 @@ from piloop.plugins.host import (
     Parameters,
     PluginError,
     PythonSource,
+    Reference,
     Scope,
     Tier,
     compose,
@@ -494,11 +496,11 @@ def test_a_plugin_declares_a_capability_calls_its_providers_and_another_package_
     with pytest.raises(
         ConfigError, match=re.escape("unknown verdict check 'none'; registered verdict checks: no_unit")
     ):
-        none = {'provider': 'checked', 'checks': [{'provider': 'none'}]}
+        none = {'provider': 'checked', 'vetoes': [{'provider': 'none'}]}
         load_campaign_config(campaign_path, plugins={'verdict_rule': none})
-    table = {'provider': 'checked', 'checks': [{'provider': 'no_unit_regression'}]}
+    table = {'provider': 'checked', 'vetoes': [{'provider': 'no_unit_regression'}]}
     rule = VERDICT_RULES.selected(load_campaign_config(campaign_path, plugins={'verdict_rule': table}).plugins)
-    assert rule == Checked(checks=[NoUnitRegression()])
+    assert rule == Checked(vetoes=[NoUnitRegression()])
     units = {f'u{i}': 1.0 for i in range(30)}
     better = {**units, **{f'u{i}': 2.0 for i in range(1, 30)}}
 
@@ -654,3 +656,21 @@ def test_the_instances_of_a_capability_of_several_by_name(monkeypatch: pytest.Mo
     needy = RUNTIMES.instances(HOME_PLUGINS.validate_python({'runtime': {'needy': {'level': 2}}}))
     assert needy['needy'] == Needy(level=2)
     forget_loaded()
+
+
+def test_a_missing_extra_says_how_to_install_it() -> None:
+    assert plugins.extra('modal', 'modal', 'modal') == Check('modal', 'modal is installed')
+    assert plugins.extra('gcs', 'no_such_package.storage', 'gcs') == Check(
+        'gcs', 'no_such_package.storage is not installed', "`uv tool install --reinstall 'piloop[gcs]'`"
+    )
+
+
+def test_in_use_is_the_one_instance_each_named_instance_and_what_they_hold() -> None:
+    home = HOME_PLUGINS.validate_python(
+        {'cas': {'provider': 'cached', 'remote': {'provider': 'http', 'url': 'https://cas.example.com'}}}
+    )
+    found = [type(p).__name__ for p in plugins.in_use(home, Scope.HOME, [])]
+    assert found[found.index('Cached') :][:3] == ['Cached', 'Http', 'Disk'], 'the remote and the local tier follow it'
+    assert 'Subprocess' not in found, 'no campaign names the runtime'
+    named = [Reference(RUNTIMES, 'subprocess', ('plugins', 'runtime', 'use'))]
+    assert 'Subprocess' in [type(p).__name__ for p in plugins.in_use(home, Scope.HOME, named)]

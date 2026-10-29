@@ -53,6 +53,9 @@ A provider is a class that subclasses its capability's contract. Its fields are 
 are the contract. Import the contract, its types and the built-in providers from one module,
 `piloop.capabilities`. The entry point's name is the provider's name.
 
+A provider that needs something on the machine, such as a program on `PATH`, an extra or a login, returns it from
+`checks()`, read only. `piloop doctor` runs it on every instance in use.
+
 ## Select a provider
 
 A table selects a provider: `provider` is its name, and the other keys are its parameters.
@@ -108,12 +111,12 @@ class VerdictCheck(Parameters, ABC):
 VERDICT_CHECKS = Capability('verdict_check', VerdictCheck, tier=Tier.PURE)  # providers: piloop.verdict_checks
 
 
-class Checked(Bootstrap):  # a verdict rule that calls the checks of its field `checks`
-    checks: list[Annotated[VerdictCheck, VERDICT_CHECKS.entry]]
+class Checked(Bootstrap):  # a verdict rule that calls the checks of its field `vetoes`
+    vetoes: list[Annotated[VerdictCheck, VERDICT_CHECKS.entry]]
 
     def decide(self, case: Case) -> Judgement:
         judged = super().decide(case)
-        held = [why for check in self.checks if (why := check.check(case)) is not None]
+        held = [why for check in self.vetoes if (why := check.check(case)) is not None]
         return Judgement(Outcome.INTERESTING, '; '.join(held)) if judged.verdict is Outcome.KEEP and held else judged
 ```
 

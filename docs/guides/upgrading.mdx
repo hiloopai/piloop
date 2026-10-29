@@ -68,12 +68,12 @@ catches up with an upgrade that you already made.
 - `PILOOP_SECRETS_COMMAND`, when it is set, runs and prints `NAME=value` lines. The check shows the names only, and
   warns that the command is deprecated.
 - The `piloop.toml` of every campaign loads.
-- The commands of each campaign's stdio MCP servers are on your `PATH`. The check does not start the servers.
 - The secrets that each campaign's MCP servers and harnesses need are set. One that only the environment of the
   daemon has is a warning.
 - Every harness on your `PATH` has the skills of this CLI.
-- The harnesses that your campaigns use are on your `PATH`.
-- git on your `PATH` is 2.40 or later.
+- What each provider in use checks itself, for example: the harnesses and the commands of the stdio MCP servers that
+  your campaigns use are on your `PATH`, git is 2.40 or later, a role's `takes` runs on the schema, and the extra and
+  the login of a Modal provisioner are there. No check starts anything.
 
 Each failure says how to fix it, often with the command to run.
 

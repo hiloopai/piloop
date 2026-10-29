@@ -35,10 +35,6 @@ class McpServer(Parameters, ABC):
     def env_names(self) -> list[str]:
         """Every environment variable that this server needs."""
 
-    def missing(self) -> str | None:
-        """The program that starts the server, when it is not on PATH, else None. ``piloop doctor`` names it."""
-        return None
-
 
 MCP_SERVERS = Capability(
     'mcp_server', McpServer, table=Many(Scope.CAMPAIGN), group='piloop.mcp_servers', noun='MCP server provider'
