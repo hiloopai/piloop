@@ -25,7 +25,7 @@ from piloop.daemon.loop import Consumer, Phase, Turn
 from piloop.daemon.main import DECLARED
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import in_order
-from piloop.db.models import TARGET_KINDS, Campaign, Comment, utcnow
+from piloop.db.models import TARGET_KINDS, Campaign, Comment
 from piloop.db.session import Database, migrate
 from piloop.db.triggers.changelog import COMMENT_KINDS, Commented
 from piloop.ids import CommentKind, TargetKind, TargetRef
@@ -112,7 +112,6 @@ def test_the_machinery_of_a_capability_adds_no_routes(db: Database, tmp_path: Pa
         tmp_path,
         controller,
         make_runtime,
-        utcnow,
         idle_name,
         DaemonSettings(),
         AgentSettings(),

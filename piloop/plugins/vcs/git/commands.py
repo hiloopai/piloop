@@ -37,6 +37,10 @@ the variable, never its value. GitHub and GitLab take a token as the password of
 
 KEPT: Final = 'refs/piloop/'
 """Where piloop keeps the versions that it needs: a clone brings them too."""
+NO_PROMPT: Final = {'GIT_TERMINAL_PROMPT': '0', 'GIT_ASKPASS': '', 'SSH_ASKPASS_REQUIRE': 'never'}
+"""The environment of a git that reaches a remote and must fail rather than ask for a password. An empty ``GIT_ASKPASS``
+also hides ``core.askPass`` and ``SSH_ASKPASS`` from git; ``SSH_ASKPASS_REQUIRE`` keeps ssh's own prompt from
+``SSH_ASKPASS``."""
 CLONE_TIMEOUT: Final = timedelta(minutes=10)
 """The longest that ``clone`` waits for git, so that a remote that stalls ends the clone instead of holding its thread."""
 
@@ -103,7 +107,7 @@ def _remote(argv: list[str], cwd: Path | None, credential: SecretStr | None, wha
     git = subprocess.Popen(
         ['git', *config, *argv],
         cwd=cwd,
-        env={**os.environ, 'GIT_TERMINAL_PROMPT': '0', **env},
+        env={**os.environ, **NO_PROMPT, **env},
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -213,13 +217,6 @@ def pin_all(repo: Repo, refs: Mapping[str, str]) -> None:
     if refs:
         lines = ''.join(f'update {ref} {sha}\n' for ref, sha in refs.items())
         subprocess.run(['git', 'update-ref', '--stdin'], cwd=repo.common_dir, input=lines.encode(), check=True)
-
-
-def pinned(repo: Repo, prefix: str) -> list[str]:
-    """The commits pinned as ``<prefix><n>``, in ``n`` order."""
-    lines = repo.git.for_each_ref('--format=%(refname) %(objectname)', prefix).splitlines()
-    refs = [line.split() for line in lines]
-    return [sha for _, sha in sorted(refs, key=lambda ref: int(ref[0].removeprefix(prefix)))]
 
 
 def merge(repo: Repo, onto: str, sha: str, message: str, by: Identity) -> str | list[str]:

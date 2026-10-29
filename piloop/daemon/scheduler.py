@@ -81,7 +81,6 @@ class Scheduler:
             home,
             controller,
             runtime_factory,
-            now,
             lambda name: self.loop.wake(name),
             daemon,
             agents if agents is not None else AgentSettings(),

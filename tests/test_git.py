@@ -436,6 +436,30 @@ def test_a_clone_that_the_server_refuses_fails_without_a_prompt(
     assert not (tmp_path / 'clone').exists()
 
 
+@pytest.mark.parametrize(
+    'asker',
+    [
+        {'GIT_ASKPASS': '{helper}'},
+        {'SSH_ASKPASS': '{helper}'},
+        {'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'core.askPass', 'GIT_CONFIG_VALUE_0': '{helper}'},
+    ],
+    ids=['GIT_ASKPASS', 'SSH_ASKPASS', 'core.askPass'],
+)
+def test_a_clone_that_the_server_refuses_asks_no_askpass_helper_of_the_daemon(
+    served: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, asker: dict[str, str]
+) -> None:
+    """A helper that the daemon's environment names could open a dialog, or answer from a keyring, for the remote."""
+    asked = tmp_path / 'asked'
+    helper = tmp_path / 'askpass'
+    helper.write_text(f'#!/bin/sh\necho "$1" >> {asked}\necho guess\n')
+    helper.chmod(0o755)
+    for name, value in asker.items():
+        monkeypatch.setenv(name, value.format(helper=helper))
+    with pytest.raises(CloneFailed, match='clone of http'):
+        Git().clone(served, tmp_path / 'clone', None)
+    assert not asked.exists()
+
+
 def test_a_clone_from_a_remote_that_stalls_is_stopped_at_its_bound_and_leaves_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

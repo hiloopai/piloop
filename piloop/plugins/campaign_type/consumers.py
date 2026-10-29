@@ -203,7 +203,7 @@ class Campaigns:
 
     def __init__(self, host: DaemonHost) -> None:
         self._host = host
-        self._db, self._now, self._tracer, self._home = host.db, host.now, host.tracer, host.home
+        self._db, self._tracer, self._home = host.db, host.tracer, host.home
         self._agents = host.agents
         self._launch_policy = LAUNCH_POLICIES.selected(host.plugins)
         self._controller = host.controller

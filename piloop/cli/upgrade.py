@@ -94,6 +94,7 @@ def _output(argv: list[str], **env: str) -> str:
     """
     quiet = {
         'GIT_TERMINAL_PROMPT': '0',
+        'GIT_ASKPASS': '',  # empty: git also skips core.askPass and SSH_ASKPASS, and runs no helper
         'GIT_SSH_COMMAND': f'{os.environ.get("GIT_SSH_COMMAND", "ssh")} -o BatchMode=yes',
     }
     try:

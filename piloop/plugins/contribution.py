@@ -12,7 +12,6 @@ with the core services.
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -70,8 +69,6 @@ class DaemonHost:
     controller: RunController
     """The daemon's executor, launcher, sources and CAS, and the runs that it executes."""
     runtime_factory: RuntimeFactory
-    now: Callable[[], datetime]
-    """The clock."""
     wake: Callable[[str], None]
     """Runs the consumer of this name in the next turn of the loop: a thread of the daemon ended (``Loop.wake``)."""
     daemon: DaemonSettings

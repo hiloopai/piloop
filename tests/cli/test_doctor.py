@@ -509,17 +509,21 @@ def test_a_pinned_index_install_is_not_reported_behind_because_uv_tool_upgrade_k
         upgrade.newer(cfg.uv_tool_dir, None)
 
 
-def test_the_source_check_never_waits_for_a_password(cfg: Settings, tmp_path: Path) -> None:
-    """No stdin, no git prompt, ssh in batch mode: a private repo without credentials fails at once."""
+def test_the_source_check_never_waits_for_a_password(
+    cfg: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No stdin, no git prompt or askpass helper, ssh in batch mode: a private repo without credentials fails at once."""
     seen = tmp_path / 'seen'
+    monkeypatch.setenv('GIT_ASKPASS', '/usr/bin/a-keyring')
     fake(
         tmp_path,
         'git',
-        f'read answer; echo "stdin=[$answer] prompt=$GIT_TERMINAL_PROMPT ssh=$GIT_SSH_COMMAND" > {seen}; exit 128',
+        f'read answer; echo "stdin=[$answer] prompt=$GIT_TERMINAL_PROMPT askpass=[$GIT_ASKPASS] ssh=$GIT_SSH_COMMAND"'
+        f' > {seen}; exit 128',
     )
     with pytest.raises(upgrade.InstallError, match='failed: exit 128'):
         upgrade.newer(cfg.uv_tool_dir, git_install('main'))
-    assert seen.read_text().strip() == 'stdin=[] prompt=0 ssh=ssh -o BatchMode=yes'
+    assert seen.read_text().strip() == 'stdin=[] prompt=0 askpass=[] ssh=ssh -o BatchMode=yes'
 
 
 def test_a_claude_login_in_the_user_s_settings_warns_until_it_moves_to_the_harness_env(

@@ -442,6 +442,13 @@ def bare_config(name: str) -> CampaignConfig:
     )
 
 
+def pinned(repo: Repo, prefix: str) -> list[str]:
+    """The commits pinned as ``<prefix><n>``, in ``n`` order."""
+    lines = repo.git.for_each_ref('--format=%(refname) %(objectname)', prefix).splitlines()
+    refs = [line.split() for line in lines]
+    return [sha for _, sha in sorted(refs, key=lambda ref: int(ref[0].removeprefix(prefix)))]
+
+
 def baseline(db: Database, campaign_id: CampaignId) -> Candidate:
     with db.session() as s:
         return s.scalars(

@@ -155,7 +155,6 @@ def host_of(
         tmp_path,
         controller,
         make_runtime,
-        utcnow,
         no_wake,
         DaemonSettings(),
         AgentSettings(),

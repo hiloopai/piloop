@@ -25,6 +25,7 @@ from opentelemetry.trace import StatusCode
 from pytest_mock import MockerFixture
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from piloop import proc
 from piloop.actor import System
@@ -92,6 +93,7 @@ from piloop.plugins.executor.kit.leases import SERVE
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.host import Plugins
 from piloop.plugins.launch_policy.fewest_live import FewestLive
+from piloop.plugins.role.consumers import Agents
 from piloop.plugins.role.contract import ImplementerRole
 from piloop.plugins.runtime.contract import Handle
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
@@ -116,6 +118,7 @@ from tests.conftest import (
     events,
     factory,
     home_cas,
+    pinned,
     reconfigured,
     register,
     role_of,
@@ -1168,7 +1171,7 @@ def test_stop_keeps_the_work_of_the_runs_it_cuts_and_the_next_run_of_the_idea_st
     scheduler.stop(timeout=10)
 
     repo = Repo(campaign.path)
-    step, head = git.pinned(repo, 'refs/piloop/demo/r1/')
+    step, head = pinned(repo, 'refs/piloop/demo/r1/')
     assert repo.commit(step).summary == 'step'
     recovered = repo.commit(head)
     assert recovered.summary == UNCOMMITTED and recovered.tree['solve.txt'].data_stream.read().endswith(
@@ -1252,7 +1255,7 @@ def test_a_stop_after_the_implementer_left_its_finding_scores_its_run_on_the_nex
         assert s.get_one(Idea, idea).status is IdeaStatus.SCHEDULED, 'not ready: a second run would redo the work'
         notes = s.scalars(select(Comment).where(Comment.author == DAEMON_ACTOR)).all()
         assert notes == [], 'its commits are scored, so no note sends the next run to them'
-    [step] = git.pinned(Repo(campaign.path), 'refs/piloop/demo/r1/')
+    [step] = pinned(Repo(campaign.path), 'refs/piloop/demo/r1/')
     assert Repo(campaign.path).commit(step).summary == 'step'
 
     restarted = make_scheduler(db, runtime, tmp_path)
@@ -2884,6 +2887,38 @@ def test_an_implementer_is_ended_a_minute_after_its_finding(db: Database, campai
     run_all(scheduler)
     assert (revoked(db), runtime.prompts) == (['implementer-1'], [])
     assert settled(db, 'agent_session.stop_ended') == [(1, AgentEnded(reason='left its finding', end=RunEnd.FINISHED))]
+    scheduler.stop(timeout=5)
+
+
+@pytest.mark.parametrize('closed', [AgentSessionState.EXITED, AgentSessionState.KILLED])
+def test_a_wind_down_that_read_the_implementer_before_its_report_closed_the_row_leaves_it_closed(
+    db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, closed: AgentSessionState
+) -> None:
+    """The pass reads the implementer as running, then its report closes the row, then the pass ends it.
+
+    Set ``ending`` again, the row would never close: no report is left to close it, and its run and saved work wait.
+    """
+    idea = running_agent_session(db, campaign, 'build')
+    lease_running(db)
+    scheduler = make_scheduler(db, PromptingRuntime(), tmp_path)
+    found = comment(db, 'finding', 'idea', idea, 'done', author='implementer#1')
+    with db.session() as s:
+        s.get_one(Comment, found).created_at = utcnow() - timedelta(seconds=61)
+        s.commit()
+    end = Agents._end
+
+    def reported_first(agents: Agents, s: Session, agent_session: AgentSession, reason: str, how: RunEnd) -> None:
+        with db.session() as other:
+            row = other.get_one(AgentSession, agent_session.id)
+            row.state, row.ended_at = closed, utcnow()
+            other.commit()
+        end(agents, s, agent_session, reason, how)
+
+    monkeypatch.setattr(Agents, '_end', reported_first)
+    run_all(scheduler)
+    with db.session() as s:
+        assert s.get_one(AgentSession, idea).state is closed
+    assert settled(db, 'agent_session.stop_ended') == []
     scheduler.stop(timeout=5)
 
 

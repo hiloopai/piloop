@@ -127,6 +127,7 @@ from tests.conftest import (
     example,
     factory,
     home_cas,
+    pinned,
     serving,
     span_named,
     wait_until,
@@ -3474,7 +3475,7 @@ def test_a_stop_that_comes_just_after_the_report_leaves_the_run_to_the_stop(
     run_id = make_run(db, campaign)
     execute(ex, db, run_id)
     assert run_row(db, run_id).status is RunStatus.RUNNING, 'stop() writes the row, not the run thread'
-    assert git.pinned(git.open_repo(Path(campaign.path)), f'refs/piloop/{campaign.config.name}/r{run_id}/'), (
+    assert pinned(git.open_repo(Path(campaign.path)), f'refs/piloop/{campaign.config.name}/r{run_id}/'), (
         'its commit is kept'
     )
 
