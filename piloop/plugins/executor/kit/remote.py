@@ -34,7 +34,6 @@ from covalence import Cid
 from pydantic import BaseModel, Field, RootModel, ValidationError
 
 from piloop.api.contract import MAX_POLL_SECONDS, Polled
-from piloop.db.models import NoLease
 from piloop.ids import Revision
 from piloop.net import Changed, Refusal, Route
 from piloop.net.tokens import Caller
@@ -70,6 +69,7 @@ from piloop.plugins.executor.kit.leases import (
     Work,
 )
 from piloop.plugins.executor.kit.relay import LeaseCall, Run
+from piloop.plugins.executor.kit.tables import NoLease
 from piloop.plugins.executor.kit.transfers import Send
 from piloop.plugins.vcs.contract import MAX_HAVE
 

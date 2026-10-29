@@ -280,6 +280,7 @@ idea = "piloop.plugins.campaign_type.kit.backlog.tables:Idea"
 run = "piloop.plugins.campaign_type.kit.runs.tables:Run"
 candidate = "piloop.plugins.campaign_type.kit.candidates.tables:Candidate"
 measurement = "piloop.plugins.campaign_type.kit.evaluation.tables:Measurement"
+instance = "piloop.plugins.executor.kit.tables:WorkerInstance"
 
 # The tables of each plugin that has its own, by schema name (piloop.db.schema.SCHEMAS); the others are core's.
 [project.entry-points."piloop.schemas"]
@@ -287,6 +288,7 @@ optimization = "piloop.plugins.campaign_type.optimization.tables:SCHEMA"
 "memory/local" = "piloop.plugins.memory.local.tables:SCHEMA"
 "archive/local" = "piloop.plugins.archive.local.tables:SCHEMA"
 "secrets/local" = "piloop.plugins.secrets.local.tables:SCHEMA"
+"executor/workers" = "piloop.plugins.executor.kit.tables:SCHEMA"
 
 # The parts of the orchestrator skills, by name (piloop.cli.skills.SKILLS).
 [project.entry-points."piloop.skills"]

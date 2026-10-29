@@ -22,14 +22,11 @@ from piloop.db.models import (
     Campaign,
     Comment,
     Event,
-    FirstTransfer,
     KnownKind,
     Lease,
-    LeaseWorker,
     Limit,
     Migration,
     Token,
-    WorkerInstance,
 )
 from piloop.db.triggers import Trigger, on
 from piloop.plugins.host import PluginError, Slot
@@ -80,9 +77,6 @@ CORE_TABLES = (
     Event,
     Comment,
     Lease,
-    LeaseWorker,
-    WorkerInstance,
-    FirstTransfer,
     Limit,
     Token,
     Migration,
@@ -92,7 +86,7 @@ CORE_SCHEMA = Schema(
     tables=CORE_TABLES,
     versions=Path(__file__).parent / 'migrations' / 'versions',
     triggers=on(CORE_TABLES),
-    internal=(Lease, LeaseWorker, WorkerInstance, FirstTransfer, Limit, Token, Migration),
+    internal=(Lease, Limit, Token, Migration),
     protected=(Token, Migration),  # an agent that could write a token could call the server as a worker
 )
 

@@ -15,12 +15,12 @@ from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from piloop.db.events import has
-from piloop.db.models import AgentSession, Campaign, Event, Lease, LeaseWorker, WorkerInstance
+from piloop.db.models import AgentSession, Campaign, Event, Lease
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.executor.contract import EXECUTORS
 from piloop.plugins.executor.kit.capacity import Pool
-from piloop.plugins.executor.kit.leases import LeaseQueued
+from piloop.plugins.executor.kit.leases import LeaseQueued, pools_of
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.fact_source.contract import FactSource
 from piloop.plugins.fact_source.facts import COMPUTE_USD, Fact, FactValue
@@ -57,7 +57,7 @@ def compute_usd(s: Session, campaign: Campaign, pools: Mapping[str, Pool], now: 
     held: dict[str, list[Holding]] = defaultdict(list)
     for lease, worker, start, end in rows:
         held[worker].append((start, end or now, lease in ours))
-    of = _pool_of(s, set(held))
+    of = pools_of(s, set(held))
     usd = 0.0
     for worker, jobs in held.items():
         if (pool := pools.get(of.get(worker, ''))) is None or pool.usd_per_hour is None:
@@ -74,13 +74,6 @@ def _leases_of(campaign: Campaign) -> Select[int]:
         has(LeaseQueued), Event.target_kind == CANDIDATE, Event.target_id.in_(candidates)
     )
     return select(Lease.id).where(or_(Lease.agent_session_id.in_(agents), Lease.id.in_(evaluations)))
-
-
-def _pool_of(s: Session, workers: set[str]) -> dict[str, str]:
-    """The pool of each worker: that of its instance, which outlives it, else that of its row."""
-    joined = s.execute(select(LeaseWorker.id, LeaseWorker.pool).where(LeaseWorker.id.in_(workers)))
-    provisioned = s.execute(select(WorkerInstance.name, WorkerInstance.pool).where(WorkerInstance.name.in_(workers)))
-    return {**dict(joined.all()), **dict(provisioned.all())}
 
 
 def _share(jobs: list[Holding]) -> float:

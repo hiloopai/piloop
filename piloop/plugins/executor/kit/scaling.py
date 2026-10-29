@@ -45,21 +45,9 @@ from piloop.campaign import escalations
 from piloop.db import feed
 from piloop.db.events import emit
 from piloop.db.feed import Topic
-from piloop.db.models import (
-    LIVE_LEASES,
-    EventModel,
-    InstanceEnd,
-    Lease,
-    LeaseKind,
-    LeaseState,
-    LeaseWorker,
-    ReadBy,
-    WorkerInstance,
-    WorkerInstanceState,
-    utcnow,
-)
+from piloop.db.models import LIVE_LEASES, EventModel, Lease, LeaseKind, LeaseState, ReadBy, utcnow
 from piloop.db.session import Database, read_transaction, write_transaction
-from piloop.ids import TargetKind, TargetRef
+from piloop.ids import TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.escalation.contract import Choice, EscalationView
@@ -67,6 +55,7 @@ from piloop.plugins.executor.contract import Capacity
 from piloop.plugins.executor.kit import leases
 from piloop.plugins.executor.kit.capacity import HostSample, Pool, Provisioner, add, admits, less, slots, times
 from piloop.plugins.executor.kit.leases import KINDS, LeaseExpired, LeaseQueued, LeaseUnreachable, Timing, WorkerDrained
+from piloop.plugins.executor.kit.tables import INSTANCE, InstanceEnd, LeaseWorker, WorkerInstance, WorkerInstanceState
 from piloop.plugins.network.contract import Network, NotEnrolled
 from piloop.plugins.provisioner.contract import (
     Instance,
@@ -511,7 +500,7 @@ class Scaler:
 
 
 def _on(row: WorkerInstance) -> TargetRef:
-    return TargetRef(TargetKind.INSTANCE, row.id)
+    return TargetRef(INSTANCE, row.id)
 
 
 def _read(db: Database, now: datetime) -> Seen:

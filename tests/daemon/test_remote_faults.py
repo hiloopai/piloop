@@ -24,7 +24,7 @@ from sqlalchemy import func, select
 from piloop.agents.results import PromptOutcome, queue_prompt
 from piloop.api.contract import Access
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, Campaign, Comment, Event, Lease, LeaseKind, LeaseState, LeaseWorker
+from piloop.db.models import AgentSession, Campaign, Comment, Event, Lease, LeaseKind, LeaseState
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind
 from piloop.net import tokens
@@ -38,6 +38,7 @@ from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.door import AgentCall, Call
 from piloop.plugins.executor.kit.leases import StaleLease, StaleReport, read_job
 from piloop.plugins.executor.kit.remote import Remote
+from piloop.plugins.executor.kit.tables import LeaseWorker
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import PILOOP
 from piloop.proc import alive

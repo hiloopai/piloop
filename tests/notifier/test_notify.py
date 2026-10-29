@@ -33,6 +33,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, Lifecycle
 from piloop.plugins.escalation.contract import Escalated, Never, ToHuman
 from piloop.plugins.escalation.structured import Structured
+from piloop.plugins.executor.kit.tables import INSTANCE
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.host import PluginError, Plugins
 from piloop.plugins.notifier import consumers
@@ -229,7 +230,7 @@ def configure(db: Database, campaign: Campaign, notifier: Mapping[str, object]) 
 def of_no_campaign(db: Database) -> CommentId:
     with db.session() as s:
         item = Comment(
-            target=TargetRef(TargetKind.INSTANCE, 1), author='daemon', kind=CommentKind.ESCALATION, priority=0, body='x'
+            target=TargetRef(INSTANCE, 1), author='daemon', kind=CommentKind.ESCALATION, priority=0, body='x'
         )
         s.add(item)
         s.commit()
@@ -820,7 +821,7 @@ def test_a_provider_decides_whether_an_escalation_reaches_a_human_and_a_broken_c
     with db.session() as s:
         s.add(
             Comment(
-                target=TargetRef(TargetKind.INSTANCE, 1),
+                target=TargetRef(INSTANCE, 1),
                 author='daemon',
                 kind=CommentKind.ESCALATION,
                 priority=0,

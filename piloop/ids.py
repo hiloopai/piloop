@@ -64,8 +64,6 @@ class TargetKind(str):
     CAMPAIGN: ClassVar[TargetKind]
     AGENT_SESSION: ClassVar[TargetKind]
     COMMENT: ClassVar[TargetKind]
-    INSTANCE: ClassVar[TargetKind]
-    """A worker that a provisioner started (``worker_instances``)."""
     HOME: ClassVar[TargetKind]
     """The whole home, for an event about no row: a limit, a worker. Its one id is 1 (``HOME``). No comment is on it."""
 
@@ -80,11 +78,8 @@ KIND_NAME = re.compile(rf'^{KIND}$')
 TargetKind.CAMPAIGN = TargetKind('campaign')
 TargetKind.AGENT_SESSION = TargetKind('agent_session')
 TargetKind.COMMENT = TargetKind('comment')
-TargetKind.INSTANCE = TargetKind('instance')
 TargetKind.HOME = TargetKind('home')
-CORE_KINDS: Final = frozenset(
-    {TargetKind.CAMPAIGN, TargetKind.AGENT_SESSION, TargetKind.COMMENT, TargetKind.INSTANCE, TargetKind.HOME}
-)
+CORE_KINDS: Final = frozenset({TargetKind.CAMPAIGN, TargetKind.AGENT_SESSION, TargetKind.COMMENT, TargetKind.HOME})
 """Core's kinds. A plugin's kind takes none of their names."""
 
 

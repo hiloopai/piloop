@@ -40,22 +40,6 @@ CREATE TABLE campaigns (
 	FOREIGN KEY(parent_id) REFERENCES campaigns (id)
 );
 CREATE UNIQUE INDEX ix_campaigns_name ON campaigns (name) WHERE status != 'retired';
-CREATE TABLE lease_workers (
-	id VARCHAR NOT NULL,
-	pool VARCHAR NOT NULL,
-	version VARCHAR NOT NULL,
-	runners JSON DEFAULT '[]' NOT NULL,
-	sample JSON DEFAULT '{}' NOT NULL,
-	seen_at DATETIME NOT NULL,
-	no_lease VARCHAR(16),
-	cursor INTEGER DEFAULT 0 NOT NULL,
-	drained_at DATETIME,
-	PRIMARY KEY (id),
-	CONSTRAINT "lease_workers.id must be a text value" CHECK (typeof(id) IN ('text')),
-	CONSTRAINT "lease_workers.pool must be a text value" CHECK (typeof(pool) IN ('text')),
-	CONSTRAINT "lease_workers.version must be a text value" CHECK (typeof(version) IN ('text')),
-	CONSTRAINT nolease CHECK (no_lease IN ('draining', 'memory', 'load', 'slots', 'nothing', 'unreachable'))
-);
 CREATE TABLE limits (
 	"key" VARCHAR NOT NULL,
 	value JSON NOT NULL,
@@ -91,24 +75,6 @@ CREATE TABLE tokens (
 	UNIQUE (sha256),
 	UNIQUE (agent_session_id)
 );
-CREATE TABLE worker_instances (
-	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-	name VARCHAR NOT NULL,
-	pool VARCHAR NOT NULL,
-	state VARCHAR(16) DEFAULT 'starting' NOT NULL,
-	handle JSON DEFAULT '{}' NOT NULL,
-	requested_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-	registered_at DATETIME,
-	ended_at DATETIME,
-	"end" VARCHAR(16),
-	CONSTRAINT "worker_instances.an ended one says why" CHECK ((state = 'ended') = ("end" IS NOT NULL)),
-	CONSTRAINT "worker_instances.name must be a text value" CHECK (typeof(name) IN ('text')),
-	CONSTRAINT "worker_instances.pool must be a text value" CHECK (typeof(pool) IN ('text')),
-	UNIQUE (name),
-	CONSTRAINT workerinstancestate CHECK (state IN ('starting', 'running', 'draining', 'ended')),
-	CONSTRAINT instanceend CHECK ("end" IN ('drained', 'register_timeout', 'start_refused', 'lost', 'gone'))
-);
-CREATE INDEX ix_worker_instances_state ON worker_instances (state);
 CREATE TABLE agent_sessions (
 	id INTEGER NOT NULL,
 	kind VARCHAR NOT NULL,
@@ -183,15 +149,6 @@ CREATE TABLE events (
 );
 CREATE INDEX ix_events_kind ON events (kind, target_kind, target_id, id);
 CREATE INDEX ix_events_target ON events (target_kind, target_id, id);
-CREATE TABLE first_transfers (
-	campaign_id INTEGER NOT NULL,
-	revision VARCHAR NOT NULL,
-	blob VARCHAR NOT NULL,
-	PRIMARY KEY (campaign_id),
-	CONSTRAINT "first_transfers.revision must be a text value" CHECK (typeof(revision) IN ('text')),
-	CONSTRAINT "first_transfers.blob must be a text value" CHECK (typeof(blob) IN ('text')),
-	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE
-);
 CREATE TABLE leases (
 	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	kind VARCHAR(16) NOT NULL,
@@ -245,6 +202,54 @@ CREATE TABLE archives (
 	CONSTRAINT targetkind FOREIGN KEY(subject_kind) REFERENCES target_kinds (id)
 );
 CREATE INDEX ix_archives_campaign_subject ON archives (campaign_id, subject_kind, subject_id);
+```
+
+## executor/workers
+
+```sql
+CREATE TABLE lease_workers (
+	id VARCHAR NOT NULL,
+	pool VARCHAR NOT NULL,
+	version VARCHAR NOT NULL,
+	runners JSON DEFAULT '[]' NOT NULL,
+	sample JSON DEFAULT '{}' NOT NULL,
+	seen_at DATETIME NOT NULL,
+	no_lease VARCHAR(16),
+	cursor INTEGER DEFAULT 0 NOT NULL,
+	drained_at DATETIME,
+	PRIMARY KEY (id),
+	CONSTRAINT "lease_workers.id must be a text value" CHECK (typeof(id) IN ('text')),
+	CONSTRAINT "lease_workers.pool must be a text value" CHECK (typeof(pool) IN ('text')),
+	CONSTRAINT "lease_workers.version must be a text value" CHECK (typeof(version) IN ('text')),
+	CONSTRAINT nolease CHECK (no_lease IN ('draining', 'memory', 'load', 'slots', 'nothing', 'unreachable'))
+);
+CREATE TABLE worker_instances (
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+	name VARCHAR NOT NULL,
+	pool VARCHAR NOT NULL,
+	state VARCHAR(16) DEFAULT 'starting' NOT NULL,
+	handle JSON DEFAULT '{}' NOT NULL,
+	requested_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	registered_at DATETIME,
+	ended_at DATETIME,
+	"end" VARCHAR(16),
+	CONSTRAINT "worker_instances.an ended one says why" CHECK ((state = 'ended') = ("end" IS NOT NULL)),
+	CONSTRAINT "worker_instances.name must be a text value" CHECK (typeof(name) IN ('text')),
+	CONSTRAINT "worker_instances.pool must be a text value" CHECK (typeof(pool) IN ('text')),
+	UNIQUE (name),
+	CONSTRAINT workerinstancestate CHECK (state IN ('starting', 'running', 'draining', 'ended')),
+	CONSTRAINT instanceend CHECK ("end" IN ('drained', 'register_timeout', 'start_refused', 'lost', 'gone'))
+);
+CREATE INDEX ix_worker_instances_state ON worker_instances (state);
+CREATE TABLE first_transfers (
+	campaign_id INTEGER NOT NULL,
+	revision VARCHAR NOT NULL,
+	blob VARCHAR NOT NULL,
+	PRIMARY KEY (campaign_id),
+	CONSTRAINT "first_transfers.revision must be a text value" CHECK (typeof(revision) IN ('text')),
+	CONSTRAINT "first_transfers.blob must be a text value" CHECK (typeof(blob) IN ('text')),
+	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE
+);
 ```
 
 ## memory/local

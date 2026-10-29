@@ -17,18 +17,9 @@ import pytest
 from sqlalchemy import select
 
 from piloop.api.contract import Access
-from piloop.db.models import (
-    Campaign,
-    Comment,
-    InstanceEnd,
-    LeaseWorker,
-    NoLease,
-    WorkerInstance,
-    WorkerInstanceState,
-    utcnow,
-)
+from piloop.db.models import Campaign, Comment, utcnow
 from piloop.db.session import Database
-from piloop.ids import CommentKind, TargetKind
+from piloop.ids import CommentKind
 from piloop.net.tokens import Caller, Tokens
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
@@ -40,6 +31,14 @@ from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.client import Local
 from piloop.plugins.executor.kit.leases import Drain, Grant, Leases, WorkerDrained
 from piloop.plugins.executor.kit.scaling import InstanceEnded, InstanceRegistered, Scaler
+from piloop.plugins.executor.kit.tables import (
+    INSTANCE,
+    InstanceEnd,
+    LeaseWorker,
+    NoLease,
+    WorkerInstance,
+    WorkerInstanceState,
+)
 from piloop.plugins.executor.workers import _worker_argv
 from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import TOKEN_ENV, Https
@@ -312,7 +311,7 @@ def test_three_refused_starts_in_a_row_escalate_and_the_pool_backs_off_between_t
     assert {row.end for row in s.rows()} == {InstanceEnd.START_REFUSED}
     with db.session() as session:
         [escalation] = session.scalars(select(Comment)).all()
-    assert (escalation.kind, escalation.target_kind) == (CommentKind.ESCALATION, TargetKind.INSTANCE)
+    assert (escalation.kind, escalation.target_kind) == (CommentKind.ESCALATION, INSTANCE)
     assert 'no GPU in the region' in escalation.body and 'provisioner.max=0' in escalation.body
 
 

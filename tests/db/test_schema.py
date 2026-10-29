@@ -84,7 +84,14 @@ def test_every_table_of_a_migrated_database_is_in_one_schema(db: Database) -> No
             if not row[0].startswith(('sqlite_', 'alembic_')) and '_fts' not in row[0]
         }
     assert {t.name for t in tables()} == made
-    assert list(schemas()) == [CORE, 'archive/local', 'memory/local', 'optimization', 'secrets/local']
+    assert list(schemas()) == [
+        CORE,
+        'archive/local',
+        'executor/workers',
+        'memory/local',
+        'optimization',
+        'secrets/local',
+    ]
 
 
 def schema_of(monkeypatch: pytest.MonkeyPatch, name: str, attribute: str) -> None:
@@ -136,3 +143,11 @@ def test_a_core_table_that_references_a_plugin_s_table_is_refused(monkeypatch: p
     monkeypatch.setattr(schema_module, 'CORE_SCHEMA', replace(core, tables=(*core.tables, OnIdea)))
     with pytest.raises(PluginError, match="test_schema_on_ideas.idea_id references ideas.id of 'optimization': core's"):
         schemas()
+
+
+def test_a_kind_whose_table_moved_to_a_plugin_s_schema_is_owned_by_it(db: Database) -> None:
+    """``instance`` was core's at 0069, and its table is the workers executor's: ``migrate`` moves its owner."""
+    with db.engine.connect() as con:
+        owners = dict(con.exec_driver_sql('SELECT id, owner FROM target_kinds').all())
+    assert owners['instance'] == 'executor/workers'
+    assert owners['campaign'] == CORE

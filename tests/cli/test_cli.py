@@ -50,17 +50,7 @@ from piloop.daemon.main import Daemon
 from piloop.daemon.serve import acquire, running_pid
 from piloop.db import feed as db_feed, session, sql
 from piloop.db.events import emit, has
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Comment,
-    Event,
-    InstanceEnd,
-    WorkerInstance,
-    WorkerInstanceState,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.schema import CORE
 from piloop.db.session import Database, alembic_config, described, heads, migrate
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged
@@ -80,6 +70,7 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.kit.capacity import GB, HostSample
 from piloop.plugins.executor.kit.leases import Leases
+from piloop.plugins.executor.kit.tables import InstanceEnd, WorkerInstance, WorkerInstanceState
 from piloop.plugins.runtime.kit import tags
 from piloop.settings import Settings
 from piloop.store.chunks import Chunked

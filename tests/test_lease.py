@@ -19,18 +19,7 @@ from piloop.actor import System
 from piloop.agents.results import PromptOutcome
 from piloop.db import feed
 from piloop.db.events import emit, has, in_order
-from piloop.db.models import (
-    PROCESS,
-    AgentSession,
-    Campaign,
-    Event,
-    EventModel,
-    Lease,
-    LeaseState,
-    LeaseWorker,
-    NoLease,
-    utcnow,
-)
+from piloop.db.models import PROCESS, AgentSession, Campaign, Event, EventModel, Lease, LeaseState, utcnow
 from piloop.db.session import Database, write_transaction
 from piloop.ids import CommentId, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
@@ -82,6 +71,7 @@ from piloop.plugins.executor.kit.leases import (
     read_job,
     revoke,
 )
+from piloop.plugins.executor.kit.tables import LeaseWorker, NoLease
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.runtime.contract import AgentExit, AgentStart, ExitStatus
 from piloop.plugins.vcs.git import Git

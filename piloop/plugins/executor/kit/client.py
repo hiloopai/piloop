@@ -11,7 +11,6 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
-from piloop.db.models import NoLease
 from piloop.plugins.cas.contract import BlobAddress
 from piloop.plugins.executor.contract import AgentJob, AgentReport, EvaluationReport, HarnessSession, JobSecrets
 from piloop.plugins.executor.kit.capacity import HostSample
@@ -29,6 +28,7 @@ from piloop.plugins.executor.kit.leases import (
     UnknownWorker,
     Work,
 )
+from piloop.plugins.executor.kit.tables import NoLease
 
 PROTOCOL = 16
 """The version of the ``LeaseClient`` calls on the wire."""

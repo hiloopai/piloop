@@ -13,8 +13,9 @@ from typing import Annotated
 import psutil
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from piloop.db.models import LeaseKind, NoLease, utcnow
+from piloop.db.models import LeaseKind, utcnow
 from piloop.plugins.executor.contract import Capacity
+from piloop.plugins.executor.kit.tables import NoLease
 from piloop.plugins.host import Live
 from piloop.plugins.provisioner.contract import PROVISIONERS, ProvisionerConfig
 

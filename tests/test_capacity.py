@@ -6,11 +6,12 @@ from uuid import uuid4
 
 import pytest
 
-from piloop.db.models import AgentSession, Campaign, LeaseKind, LeaseWorker, NoLease, utcnow
+from piloop.db.models import AgentSession, Campaign, LeaseKind, utcnow
 from piloop.db.session import Database
 from piloop.plugins.executor.contract import Capacity
 from piloop.plugins.executor.kit.capacity import GB, HostSample, Pool, admits, sample
 from piloop.plugins.executor.kit.leases import SERVE, Grant, Leases
+from piloop.plugins.executor.kit.tables import LeaseWorker, NoLease
 from piloop.plugins.executor.workers import Workers
 from tests.conftest import RESEARCH, home_cas
 from tests.test_lease import TIMING, Recorder, agent_job, evaluation_job, granted, queue

@@ -12,7 +12,7 @@ from covalence import Cid
 from git import Repo
 
 from piloop.api.contract import MAX_POLL_SECONDS
-from piloop.db.models import Campaign, FirstTransfer
+from piloop.db.models import Campaign
 from piloop.db.session import Database
 from piloop.ids import Revision
 from piloop.net.server import Server, app, executor_router
@@ -23,6 +23,7 @@ from piloop.plugins.executor.contract import RepoId
 from piloop.plugins.executor.kit.clones import NotSent
 from piloop.plugins.executor.kit.leases import Leases
 from piloop.plugins.executor.kit.remote import Remote, lease_routes
+from piloop.plugins.executor.kit.tables import FirstTransfer
 from piloop.plugins.executor.kit.transfers import FirstTransfers
 from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import Https

@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.daemon.loop import Consumer, Phase, Turn
-from piloop.db.models import LIVE_LEASES, EventModel, Lease, LeaseKind, LeaseWorker, WorkerInstance, WorkerInstanceState
+from piloop.db.models import LIVE_LEASES, EventModel, Lease, LeaseKind
 from piloop.net.server import executor_router
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import Cas
@@ -50,6 +50,7 @@ from piloop.plugins.executor.kit.leases import (
 from piloop.plugins.executor.kit.relay import Relay, Runner
 from piloop.plugins.executor.kit.remote import Remote, lease_routes
 from piloop.plugins.executor.kit.scaling import Scaler
+from piloop.plugins.executor.kit.tables import LeaseWorker, WorkerInstance, WorkerInstanceState
 from piloop.plugins.executor.kit.transfers import FirstTransfers
 from piloop.plugins.executor.workers.worker import Worker
 from piloop.settings import RELAY_SOCKET, socket_at

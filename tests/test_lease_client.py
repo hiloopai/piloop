@@ -20,7 +20,7 @@ from pytest_mock import MockerFixture
 
 from piloop.actor import Agent, System
 from piloop.api.contract import MAX_POLL_SECONDS, Access
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, LeaseState, LeaseWorker, NoLease
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, LeaseState
 from piloop.db.session import Database
 from piloop.ids import CampaignId, CommentId, Revision
 from piloop.net import tokens
@@ -45,6 +45,7 @@ from piloop.plugins.executor.kit.leases import (
     Work,
 )
 from piloop.plugins.executor.kit.remote import Acquire, Heartbeat, Remote, SendAsked, lease_routes
+from piloop.plugins.executor.kit.tables import LeaseWorker, NoLease
 from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import Https, HttpsNetwork
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets, set_secret

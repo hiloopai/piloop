@@ -30,8 +30,8 @@ JetStream consumer moves its ack floor. So a message survives a restart of the d
 
 The fence is the executor's, not core's: core checks only the domain (``Settled``). Every operation that checks it
 runs in one write transaction with the core operation that it guards (``Results``), so a report, a heartbeat and an
-expiry never both apply. The ``leases`` and ``lease_workers`` tables belong here, but their models and migrations stay in
-core's schema until the plugin host gives a plugin tables of its own: one schema, one migration chain.
+expiry never both apply. The ``leases`` table is core's; ``lease_workers`` is the schema ``executor/workers``'s
+(``piloop.plugins.executor.kit.tables``).
 """
 
 import contextlib
@@ -62,8 +62,6 @@ from piloop.db.models import (
     Lease,
     LeaseKind,
     LeaseState,
-    LeaseWorker,
-    NoLease,
     ReadBy,
     utcnow,
 )
@@ -94,6 +92,7 @@ from piloop.plugins.executor.contract import (
     job_secrets,
 )
 from piloop.plugins.executor.kit.capacity import HostSample, Pool, add, admits, less, pressure, slots, times
+from piloop.plugins.executor.kit.tables import LeaseWorker, NoLease, WorkerInstance
 from piloop.plugins.secrets.contract import SECRETS, SecretsProvider
 
 SERVE = 'serve'
@@ -1088,3 +1087,10 @@ def _held_back(s: Session, kind: LeaseKind, runners: Sequence[str]) -> bool:
         case _:
             assert_never(kind)
     return s.scalar(query.limit(1)) is not None
+
+
+def pools_of(s: Session, workers: set[str]) -> dict[str, str]:
+    """The pool of each worker: that of its instance, which outlives it, else that of its row."""
+    joined = s.execute(select(LeaseWorker.id, LeaseWorker.pool).where(LeaseWorker.id.in_(workers)))
+    provisioned = s.execute(select(WorkerInstance.name, WorkerInstance.pool).where(WorkerInstance.name.in_(workers)))
+    return {**dict(joined.all()), **dict(provisioned.all())}

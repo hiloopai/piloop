@@ -558,12 +558,13 @@ def fingerprints(script: ScriptDirectory) -> dict[str, int]:
 def _kinds(connection: Connection) -> None:
     """Write each kind that an installed plugin declares (``TARGET_KINDS``) into ``target_kinds``, once.
 
-    Its owner is the schema of its table. A kind of a plugin that is no longer installed stays: its rows point at it.
+    Its owner is the schema of its table, also when that table moved to another schema. A kind of a plugin that is no
+    longer installed stays: its rows point at it.
     """
     owner = {table.__tablename__: name for name, schema in schemas().items() for table in schema.tables}
     for kind, table in TARGET_KINDS.loaded().items():
         row = insert(KnownKind).values(id=kind, owner=owner[table.__tablename__])
-        connection.execute(row.on_conflict_do_nothing(index_elements=[KnownKind.id]))
+        connection.execute(row.on_conflict_do_update(index_elements=[KnownKind.id], set_={'owner': row.excluded.owner}))
 
 
 def _record(connection: Connection, name: str, package: str) -> None:

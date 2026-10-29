@@ -20,13 +20,13 @@ from time import monotonic
 
 from covalence import Cid
 
-from piloop.db.models import FirstTransfer
 from piloop.db.session import Database
 from piloop.ids import Revision
 from piloop.otel import Tracer
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import RepoId
 from piloop.plugins.executor.kit.clones import NotSent
+from piloop.plugins.executor.kit.tables import FirstTransfer
 from piloop.plugins.vcs.contract import Repository
 
 type Send = Callable[[RepoId, Sequence[Revision], Sequence[Revision]], list[Cid] | None]

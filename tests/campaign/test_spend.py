@@ -19,23 +19,14 @@ from piloop.actor import System
 from piloop.campaign.stop import gather
 from piloop.config import CampaignConfig
 from piloop.db.events import emit
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Lease,
-    LeaseKind,
-    LeaseState,
-    LeaseWorker,
-    WorkerInstance,
-    utcnow,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Lease, LeaseKind, LeaseState, utcnow
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.executor.contract import EXECUTORS, Executor, ExecutorConfig, Host
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.leases import LeaseQueued
+from piloop.plugins.executor.kit.tables import LeaseWorker, WorkerInstance
 from piloop.plugins.fact_source.command import Command
 from piloop.plugins.fact_source.facts import COMPUTE_USD, MODELS_USD, SPEND, since_keep
 from piloop.plugins.fact_source.leases import LeaseFacts, compute_usd

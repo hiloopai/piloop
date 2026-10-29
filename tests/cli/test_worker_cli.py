@@ -10,7 +10,6 @@ from covalence import Cid
 
 from piloop.api.contract import Access
 from piloop.cli import common, worker as worker_cli
-from piloop.db.models import LeaseWorker
 from piloop.db.session import Database
 from piloop.ids import Revision
 from piloop.net import tokens
@@ -21,6 +20,7 @@ from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.door import Call, Relayed
 from piloop.plugins.executor.kit.leases import Leases
 from piloop.plugins.executor.kit.remote import lease_routes
+from piloop.plugins.executor.kit.tables import LeaseWorker
 from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import TOKEN_ENV, Https
 from piloop.plugins.secrets.contract import HomeSecrets

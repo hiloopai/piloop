@@ -30,7 +30,6 @@ from typing import assert_never
 from covalence import Cid
 from pydantic import BaseModel, ConfigDict
 
-from piloop.db.models import NoLease
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.evaluation.measure import evaluator_runners
 from piloop.plugins.executor.contract import (
@@ -64,6 +63,7 @@ from piloop.plugins.executor.kit.leases import (
     read_job,
 )
 from piloop.plugins.executor.kit.relay import Relay
+from piloop.plugins.executor.kit.tables import NoLease
 from piloop.plugins.runtime.contract import Handle, Runtime
 from piloop.proc import Started, alive, kill_group, started
 from piloop.runtime.factory import RuntimeFactory, make_runtime

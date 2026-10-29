@@ -27,7 +27,7 @@ from piloop.agents.results import CampaignResults, DaemonStopped, Ended, Lost, N
 from piloop.campaign.campaigns import checkout_of, record_of
 from piloop.db import feed
 from piloop.db.events import emit, in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event, Lease, LeaseState, LeaseWorker, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event, Lease, LeaseState, utcnow
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.otel import Tracer
@@ -74,6 +74,7 @@ from piloop.plugins.executor.kit.leases import (
     revoke,
 )
 from piloop.plugins.executor.kit.relay import Relay
+from piloop.plugins.executor.kit.tables import INSTANCE, LeaseWorker
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.executor.workers.worker import WORKER_ANOMALY, Unsent, Worker
 from piloop.plugins.runtime.contract import QUEUE, AgentSpec, Deadline, ExitStatus, Handle, put, take
@@ -1375,7 +1376,7 @@ def test_a_drained_worker_reports_its_job_takes_no_other_and_ends(
     worker.start()
     wait_until(lambda: lease_states(db) == [LeaseState.RUNNING])
     with db.session() as s:
-        drain(s, SERVE, TargetRef(TargetKind.INSTANCE, 1))
+        drain(s, SERVE, TargetRef(INSTANCE, 1))
         s.commit()
     leases.submit(job.model_copy(update={'evaluation': job.evaluation + 1000}))
     hold.unlink()
@@ -1404,7 +1405,7 @@ def test_a_worker_drained_before_it_starts_takes_no_job_and_ends(
     )
     leases.submit(started_evaluation(db, campaign, tmp_path))
     leases.register(SERVE, SERVE, '0.2.0', ['process'], sample(tmp_path))
-    on = TargetRef(TargetKind.INSTANCE, 1)
+    on = TargetRef(INSTANCE, 1)
     with db.session() as s:
         drain(s, 'never-registered', on)
         drain(s, SERVE, on)
