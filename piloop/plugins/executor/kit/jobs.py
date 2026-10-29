@@ -431,41 +431,48 @@ def _finish(
     unrestored: Unrestored | None,
 ) -> AgentFinished:
     """Take the last snapshot of the session file, read the usage, bring the versions back, and return the report."""
-    report = AgentFinished(process=outcome, session_id=session_id)
-    if unrestored is not None:
-        report.unrestored = unrestored.reason
     span.set(session_id=session_id)
     log_dir, cwd = site.log_dir(job), site.cwd(job)
+    session_file, usage = None, None
     if file is not None:
         file.session_id = session_id
         try:
             file.snapshot(time.monotonic())
         except Exception as e:  # a file gone, a CAS that does not answer: the report names the snapshot before
             span.event(SESSION_UNSAVED, agent_session=job.agent_session, error=f'{type(e).__name__}: {e}')
-        report.session_file = file.latest
-    if file is not None:
+        session_file = file.latest
         try:
             usage = file.reader.read(session_id, cwd, log_dir).since(inherited(job, session_id, file.reader, site))
-            report.usage = usage
             span.set(tokens=usage.total)
         except Exception as e:  # an unreadable file or a bug in a reader must not stop the report
             error = str(e) if isinstance(e, UsageError) else f'{type(e).__name__}: {e}'
             span.event('agent_session.usage_unknown', agent_session=job.agent_session, error=error)
+    changed, captured, workspace = True, None, {}
     try:
-        report.changed = job.artifact.vcs.changed(cwd, site.clones.ignored(job.artifact))
+        changed = job.artifact.vcs.changed(cwd, site.clones.ignored(job.artifact))
         if job.capture is not None:
             captured = site.clones.bring_back(job.artifact, cwd, job.capture)
-            report.work, report.unsaved = captured.work, captured.unsaved
-        report.workspace = site.clones.changed(job.artifact, cwd)
+        workspace = site.clones.changed(job.artifact, cwd)
     except Exception as e:  # a worktree that is gone: the report says what is known
         span.error(e)
-        report.process = replace(report.process, error=report.process.error or f'{type(e).__name__}: {e}')
-    report.read, report.unread = _reads(control.queued(), log_dir)
-    report.files = site.files(job)
-    process = report.process
-    head = report.work.head if report.work is not None else None
-    span.set(status=process.status, error=process.error, head=head)
-    return report
+        outcome = replace(outcome, error=outcome.error or f'{type(e).__name__}: {e}')
+    read, unread = _reads(control.queued(), log_dir)
+    work = captured.work if captured is not None else None
+    span.set(status=outcome.status, error=outcome.error, head=work.head if work is not None else None)
+    return AgentFinished(
+        process=outcome,
+        session_id=session_id,
+        session_file=session_file,
+        usage=usage,
+        unrestored=unrestored.reason if unrestored is not None else None,
+        changed=changed,
+        work=work,
+        unsaved=captured.unsaved if captured is not None else None,
+        read=read,
+        unread=unread,
+        workspace=workspace,
+        files=site.files(job),
+    )
 
 
 def _reads(queued: list[list[Prompt]], log_dir: Path) -> tuple[list[CommentId], list[CommentId]]:

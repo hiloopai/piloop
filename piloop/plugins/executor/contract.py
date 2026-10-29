@@ -265,6 +265,8 @@ AGENT: Final = 'agent'
 class Report(BaseModel):
     """How a job ended, as its executor saw it: of the kind of its job. Each kind adds its own fields."""
 
+    model_config = ConfigDict(frozen=True)
+
     kind: str
     files: dict[str, BlobAddress] = Field(default_factory=dict)
     """Its log directory's files by relative path: core puts them in the job's place under its own home."""
