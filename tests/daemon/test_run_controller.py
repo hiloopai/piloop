@@ -347,8 +347,8 @@ def test_successful_run_scores_the_commit(
             'measurement.recorded',
             'candidate.judged',
             'candidate.verdict',
-            'subject.settled',
             'idea.status',
+            'subject.settled',
         ]
     ), 'the run closes when its implementer ends; the idea settles once the commit is judged'
 

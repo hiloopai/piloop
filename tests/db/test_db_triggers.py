@@ -10,13 +10,13 @@ import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from inline_snapshot import snapshot
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
 
 from piloop.actor import System
 from piloop.daemon.main import ACTOR
 from piloop.db import sql, triggers
 from piloop.db.events import SubjectSettled, in_order
-from piloop.db.models import Campaign
+from piloop.db.models import Campaign, Event
 from piloop.db.schema import schemas, tables
 from piloop.db.session import Database, migrate
 from piloop.db.triggers import PERSISTENT, TEMP, Trigger, changelog, provenance
@@ -121,7 +121,6 @@ def test_every_trigger_is_one_statement_named_table_what_and_references_real_col
             'limits_set_event',
             'limits_updated_event',
             'limits_unset_event',
-            'ideas_settled_event',
             'runs_settled_event',
             'comments_no_late_finding',
             'events_checked',
@@ -132,10 +131,11 @@ def test_every_trigger_is_one_statement_named_table_what_and_references_real_col
 
 def test_the_change_log_is_the_event_kinds_the_feed_documents() -> None:
     events = [t for t in (*TEMP, *PERSISTENT) if t.body.startswith('INSERT INTO events')]
-    kinds = [m[1] for t in events if (m := re.search(r"json_object\('kind', (.+?), ", t.body))]
+    kinds = [kind for t in events for kind in re.findall(r"json_object\('kind', (.+?), ", t.body)]
     assert kinds == snapshot(
         [
             "'idea.status'",
+            "'subject.settled'",
             "'idea.priority'",
             "'idea.track'",
             "'idea.base_candidate_id'",
@@ -159,7 +159,6 @@ def test_the_change_log_is_the_event_kinds_the_feed_documents() -> None:
             "'limit.set'",
             "'limit.set'",
             "'limit.unset'",
-            "'subject.settled'",
             "'subject.settled'",
             "'comment.' || NEW.kind",
         ]
@@ -247,6 +246,9 @@ def test_an_idea_settles_when_it_is_newly_done_with_no_run_open_whoever_writes_i
         raw(f"UPDATE ideas SET status = 'done' WHERE id = {ids[0]}")
         raw(f"UPDATE ideas SET status = 'done' WHERE id = {ids[0]}")
         assert settled(db) == [(System.HUMAN, ids[0], campaign.id)], 'a raw UPDATE settles it, once'
+        with db.session() as s:
+            kinds = s.scalars(select(Event.kind).where(Event.target_id == ids[0]).order_by(Event.id)).all()
+        assert kinds[-2:] == ['idea.status', 'subject.settled'], 'the status change, then what it caused'
         raw(f"UPDATE ideas SET status = 'done' WHERE id = {ids[1]}")
         raw(f"UPDATE runs SET status = 'failed', \"end\" = 'failed' WHERE id = {first}")
         assert len(settled(db)) == 1, 'done, but a run is still open'
@@ -262,14 +264,18 @@ def test_an_idea_settles_when_it_is_newly_done_with_no_run_open_whoever_writes_i
         assert settled(db)[2:] == [(System.HUMAN, ids[0], campaign.id)], 'done again: it settles again'
     finally:
         sql.close()
-    assert [t.sql() for t in changelog.SETTLED] == snapshot(
+    [status] = [t for t in changelog.CHANGES if t.name == 'ideas_status_event']
+    assert [t.sql() for t in (status, changelog.RUN_SETTLED)] == snapshot(
         [
             """\
-CREATE TEMP TRIGGER ideas_settled_event AFTER UPDATE OF status ON ideas
-WHEN OLD.status IS NOT 'done' AND NEW.status = 'done' AND NOT EXISTS (SELECT 1 FROM runs WHERE idea_id = NEW.id AND status IN ('queued', 'running'))
+CREATE TEMP TRIGGER ideas_status_event AFTER UPDATE OF status ON ideas
+WHEN OLD.status IS NOT NEW.status
 BEGIN
   INSERT INTO events (at, actor, target_kind, target_id, payload)
-  VALUES (strftime('%Y-%m-%d %H:%M:%f', 'now'), (SELECT actor FROM temp.session_actor), 'idea', NEW.id, json_object('kind', 'subject.settled', 'campaign', NEW.campaign_id));
+  VALUES (strftime('%Y-%m-%d %H:%M:%f', 'now'), (SELECT actor FROM temp.session_actor), 'idea', NEW.id, json_object('kind', 'idea.status', 'old', CASE typeof(OLD.status) WHEN 'blob' THEN NULL ELSE OLD.status END, 'new', CASE typeof(NEW.status) WHEN 'blob' THEN NULL ELSE NEW.status END));
+  INSERT INTO events (at, actor, target_kind, target_id, payload)
+  SELECT strftime('%Y-%m-%d %H:%M:%f', 'now'), (SELECT actor FROM temp.session_actor), 'idea', NEW.id, json_object('kind', 'subject.settled', 'campaign', NEW.campaign_id)
+  WHERE OLD.status IS NOT 'done' AND NEW.status = 'done' AND NOT EXISTS (SELECT 1 FROM runs WHERE idea_id = NEW.id AND status IN ('queued', 'running'));
 END;\
 """,
             """\

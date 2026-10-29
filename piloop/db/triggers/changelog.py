@@ -257,22 +257,25 @@ def payload(model: type[EventModel], row: Row, kind: str | None = None, **fields
     return f'json_object({", ".join(pairs)})'
 
 
-def event_insert(actor: str, target_kind: str, target_id: str, payload: str) -> str:
+def event_insert(actor: str, target_kind: str, target_id: str, payload: str, where: str | None = None) -> str:
     """The INSERT that every event trigger runs. Each argument is a SQL expression. The kind is in the payload.
 
-    The time has milliseconds, as an event that the ORM writes has microseconds.
+    With ``where``, the event is written only when that holds. The time has milliseconds, as an event that the ORM
+    writes has microseconds.
     """
-    return (
-        'INSERT INTO events (at, actor, target_kind, target_id, payload)\n'
-        f'VALUES ({NOW}, {actor}, {target_kind}, {target_id}, {payload})'
-    )
+    values = f'{NOW}, {actor}, {target_kind}, {target_id}, {payload}'
+    row = f'VALUES ({values})' if where is None else f'SELECT {values}\nWHERE {where}'
+    return f'INSERT INTO events (at, actor, target_kind, target_id, payload)\n{row}'
 
 
-def changed[T](model: type[Changed[T]]) -> Trigger:
-    """TEMP: log a change of the column that ``model``'s kind names, ``<singular>.<column>``.
+def changed[T](model: type[Changed[T]], *then: str) -> Trigger:
+    """TEMP: log a change of the column that ``model``'s kind names, ``<singular>.<column>``, then run ``then``.
 
     ``AFTER UPDATE OF`` fires only when a statement names the column, so the ``updated_at`` and ``updated_by`` triggers
     (which SET their own column) never fire it. The WHEN clause ignores a SET to the value already there.
+
+    ``then`` are the statements of the events that the change causes. They follow its event because they are in its
+    trigger: SQLite fires the triggers of one statement in an order that depends on its hash tables, so on the platform.
     """
     (kind,) = model.kinds()
     subject, column = kind.split('.')
@@ -283,11 +286,16 @@ def changed[T](model: type[Changed[T]]) -> Trigger:
         'AFTER UPDATE',
         of=(column,),
         when=f'OLD.{column} IS NOT NEW.{column}',
-        body=event_insert(
-            SESSION_ACTOR,
-            f"'{subject}'",
-            'NEW.id',
-            payload(model, 'NEW', old=_json(f'OLD.{column}'), new=_json(f'NEW.{column}')),
+        body=';\n'.join(
+            (
+                event_insert(
+                    SESSION_ACTOR,
+                    f"'{subject}'",
+                    'NEW.id',
+                    payload(model, 'NEW', old=_json(f'OLD.{column}'), new=_json(f'NEW.{column}')),
+                ),
+                *then,
+            )
         ),
         temp=True,
     )
@@ -399,37 +407,31 @@ def _no_open_run(idea: str, besides: str | None = None) -> str:
     return f'NOT EXISTS (SELECT 1 FROM runs WHERE idea_id = {idea}{other} AND status IN {OPEN})'
 
 
-SETTLED = (
-    Trigger(
-        'ideas_settled_event',
-        'ideas',
-        'AFTER UPDATE',
-        of=('status',),
-        when=f'OLD.status IS NOT {DONE} AND NEW.status = {DONE} AND {_no_open_run("NEW.id")}',
-        body=event_insert(
-            SESSION_ACTOR, "'idea'", 'NEW.id', payload(SubjectSettled, 'NEW', campaign='NEW.campaign_id')
-        ),
-        temp=True,
-    ),
-    Trigger(
-        'runs_settled_event',
-        'runs',
-        'AFTER UPDATE',
-        of=('status',),
-        when=f'OLD.status IN {OPEN} AND NEW.status NOT IN {OPEN}'
-        f' AND (SELECT status FROM ideas WHERE id = NEW.idea_id) = {DONE}'
-        f' AND {_no_open_run("NEW.idea_id", "NEW.id")}',
-        body=event_insert(
-            SESSION_ACTOR,
-            "'idea'",
-            'NEW.idea_id',
-            payload(SubjectSettled, 'NEW', campaign='(SELECT campaign_id FROM ideas WHERE id = NEW.idea_id)'),
-        ),
-        temp=True,
-    ),
+IDEA_SETTLED = event_insert(
+    SESSION_ACTOR,
+    "'idea'",
+    'NEW.id',
+    payload(SubjectSettled, 'NEW', campaign='NEW.campaign_id'),
+    where=f'OLD.status IS NOT {DONE} AND NEW.status = {DONE} AND {_no_open_run("NEW.id")}',
 )
-"""``subject.settled`` on an idea that is newly done with no run open: it becomes ``done`` with none open, or its last
-open run ends while it is ``done``."""
+"""``subject.settled`` on an idea that becomes ``done`` with no run open: a statement of its ``idea.status`` trigger."""
+RUN_SETTLED = Trigger(
+    'runs_settled_event',
+    'runs',
+    'AFTER UPDATE',
+    of=('status',),
+    when=f'OLD.status IN {OPEN} AND NEW.status NOT IN {OPEN}'
+    f' AND (SELECT status FROM ideas WHERE id = NEW.idea_id) = {DONE}'
+    f' AND {_no_open_run("NEW.idea_id", "NEW.id")}',
+    body=event_insert(
+        SESSION_ACTOR,
+        "'idea'",
+        'NEW.idea_id',
+        payload(SubjectSettled, 'NEW', campaign='(SELECT campaign_id FROM ideas WHERE id = NEW.idea_id)'),
+    ),
+    temp=True,
+)
+"""``subject.settled`` on a ``done`` idea whose last open run ends."""
 
 OUTBOX = (
     inserted(AgentSessionRequested, 'agent_sessions', ("'agent_session'", 'NEW.id'), when="NEW.state = 'requested'"),
@@ -469,12 +471,12 @@ OUTBOX = (
         body=event_insert(SESSION_ACTOR, *HOME_TARGET, payload(LimitUnset, 'OLD')),
         temp=True,
     ),
-    *SETTLED,
+    RUN_SETTLED,
 )
 """The writes that the daemon reacts to and that no decision above logs, so that it wakes on the event."""
 
 CHANGES = (
-    changed(IdeaStatusChanged),
+    changed(IdeaStatusChanged, IDEA_SETTLED),
     changed(IdeaPriorityChanged),
     changed(IdeaTrackChanged),
     changed(IdeaBaseChanged),

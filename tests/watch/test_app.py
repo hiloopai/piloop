@@ -98,7 +98,7 @@ def drive(
 ) -> Watch:
     """Serve the API of the fixture database, run the app headless against it, and play ``scenario``."""
     cfg = Settings(home=Path(str(db.engine.url.database)).parent)
-    with serving_api(cfg), socket_http(cfg.socket_file, actor) as http:
+    with serving_api(cfg) as servers, socket_http(cfg.socket_file, actor) as http:
         app = Watch(Api.over(http), ref, actor.signature, settings)
 
         async def run() -> None:
@@ -107,9 +107,13 @@ def drive(
                 await scenario(pilot, app)
 
         asyncio.run(run())
-    if app.follower is not None:  # its long poll answers once the server closes
-        app.follower.join(10)
-        assert not app.follower.is_alive()
+        # The follower's long poll answers once the server closes, and it must end before its client closes: on macOS a
+        # read stays blocked for good when another thread closes its socket.
+        for server in servers:
+            server.close()
+        if app.follower is not None:
+            app.follower.join(10)
+            assert not app.follower.is_alive()
     return app
 
 
@@ -839,6 +843,20 @@ def test_the_follower_says_when_the_feed_fails_and_reads_again_from_its_cursor(m
     follower.run()
     assert asked == ['7', '7'] and [type(m).__name__ for m in posted] == ['Lost'], 'a batch after the stop is dropped'
     assert follower.after == 8
+
+
+def test_a_read_that_fails_once_the_app_closed_ends_the_follower_quietly(monkeypatch: pytest.MonkeyPatch) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        follower.stop.set()
+        raise httpx.ReadError('the app closed the client')
+
+    http = httpx.Client(transport=httpx.MockTransport(answer), base_url='http://piloop')
+    app = Watch(Api.over(http), None, 'human', DEFAULTS)
+    posted: list[object] = []
+    monkeypatch.setattr(app, 'post_message', posted.append)
+    follower = Follower(app, 7)
+    follower.run()
+    assert posted == []
 
 
 @pytest.mark.quarantine(issue=523)

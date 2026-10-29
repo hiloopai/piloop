@@ -91,9 +91,10 @@ def fake_slack_app() -> Generator[FakeSlackApp]:
     listener = socket.create_server(('127.0.0.1', 0))
     server = ThreadingHTTPServer(('127.0.0.1', 0), _api(fake, listener.getsockname()[1]))
     fake.api = f'http://127.0.0.1:{server.server_port}/api/'
+    stop = threading.Event()
     threads = [
         threading.Thread(target=server.serve_forever, daemon=True),
-        threading.Thread(target=_accept, args=(fake, listener), daemon=True),
+        threading.Thread(target=_accept, args=(fake, listener, stop), daemon=True),
     ]
     for thread in threads:
         thread.start()
@@ -102,10 +103,13 @@ def fake_slack_app() -> Generator[FakeSlackApp]:
     finally:
         server.shutdown()
         server.server_close()
-        listener.shutdown(socket.SHUT_RDWR)  # wakes the accept: a close alone does not, on Linux
-        listener.close()
+        stop.set()
+        # A connection wakes the accept: a close alone does not, on Linux, and macOS refuses to shut down a listener. The
+        # accept takes it before the listener closes, as macOS aborts an accept pending on a closed listener.
+        socket.create_connection(listener.getsockname()).close()
         for thread in threads:
             thread.join()
+        listener.close()
 
 
 def _api(fake: FakeSlackApp, ws_port: int) -> type[BaseHTTPRequestHandler]:
@@ -138,11 +142,11 @@ def _api(fake: FakeSlackApp, ws_port: int) -> type[BaseHTTPRequestHandler]:
     return Api
 
 
-def _accept(fake: FakeSlackApp, listener: socket.socket) -> None:
+def _accept(fake: FakeSlackApp, listener: socket.socket, stop: threading.Event) -> None:
     while True:
-        try:
-            conn, _ = listener.accept()
-        except OSError:  # the listener closed: the block ended
+        conn, _ = listener.accept()
+        if stop.is_set():  # the block ended, and this is the connection that wakes the accept
+            conn.close()
             return
         threading.Thread(target=_client, args=(fake, conn), daemon=True).start()
 

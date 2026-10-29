@@ -483,7 +483,7 @@ ideas: 6 · attempts: 2 · reached the evaluator: 1 · measured: 1 · keeps: 1
 - agent_session.requested agent_session#6 0s ago
 - idea.created idea#6 0s ago
 - idea.created idea#5 0s ago
-- idea.status idea#2 0s ago
+- subject.settled idea#2 0s ago
 
 """)
 
