@@ -64,8 +64,8 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.runs.ids import (
     RunId,
 )
+from piloop.plugins.harness.contract import Usage
 from piloop.plugins.host import Slot
-from piloop.usage import Usage
 
 if TYPE_CHECKING:  # the components' tables import this module
     from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -186,17 +186,21 @@ def by_value[E: StrEnum](enum: type[E]) -> Enum:
     )
 
 
-class KindText(TypeDecorator[TargetKind]):
-    """A ``TargetKind``, stored as its name. ``target_kinds`` says which names there are."""
+class KindText[K: str](TypeDecorator[K]):
+    """An open kind (``TargetKind``, ``CommentKind``), stored as its name. A table of the kinds says which there are."""
 
     impl = String(16)
     cache_ok = True
 
-    def process_bind_param(self, value: TargetKind | None, dialect: Dialect) -> str | None:
+    def __init__(self, kind: type[K]) -> None:
+        super().__init__()
+        self.kind = kind
+
+    def process_bind_param(self, value: K | None, dialect: Dialect) -> str | None:
         return None if value is None else str(value)
 
-    def process_result_value(self, value: str | None, dialect: Dialect) -> TargetKind | None:
-        return None if value is None else TargetKind(value)
+    def process_result_value(self, value: str | None, dialect: Dialect) -> K | None:
+        return None if value is None else self.kind(value)
 
 
 NOW = func.now()
@@ -339,6 +343,15 @@ EVENT: TypeAdapter[EventModel] = TypeAdapter(Annotated[EventModel, PlainValidato
 A registered kind validates strictly: a payload that does not fit its model raises."""
 
 
+class AfterEnd(StrEnum):
+    """Whether an agent whose session has ended may still write a comment of a kind (``ended.no_late_comment``)."""
+
+    KEPT = 'kept'
+    REFUSED = 'refused'
+    """It settles what the agent worked on, as a finding settles a run: once the daemon ended the agent, it would undo
+    a stop or a cancel."""
+
+
 class Base(DeclarativeBase):
     """The declarative base, with the mappings for JSON, UTC datetimes and enums stored by value."""
 
@@ -359,8 +372,9 @@ class Base(DeclarativeBase):
         list[str]: JSON,
         CampaignStatus: by_value(CampaignStatus),
         Pause: by_value(Pause),
-        TargetKind: KindText(),
-        CommentKind: by_value(CommentKind),
+        TargetKind: KindText(TargetKind),
+        CommentKind: KindText(CommentKind),
+        AfterEnd: by_value(AfterEnd),
         AgentSessionState: by_value(AgentSessionState),
         LeaseKind: by_value(LeaseKind),
         LeaseState: by_value(LeaseState),
@@ -592,6 +606,19 @@ class KnownKind(Base):
     """The schema that has the table of its rows: ``core``, or a plugin's, such as ``optimization``."""
 
 
+class KnownCommentKind(Base):
+    """A kind of comment: core's, or one that a plugin declared (``COMMENT_KINDS``).
+
+    ``migrate`` writes each installed kind. A kind of a plugin that is no longer installed stays, with its comments.
+    """
+
+    __tablename__ = 'comment_kinds'
+
+    id: Mapped[CommentKind] = mapped_column(primary_key=True)
+    """The kind's name, such as ``note``."""
+    after_end: Mapped[AfterEnd] = mapped_column(default=AfterEnd.KEPT, server_default=AfterEnd.KEPT)
+
+
 class Migration(Base):
     """Core or a plugin that migrated this database: one row each (``piloop.db.schema``). Only ``migrate`` writes it.
 
@@ -657,7 +684,9 @@ class Comment(Tracked, Base):
     """
     author: Mapped[str]
     """Who wrote the comment, for example ``human``, ``orchestrator`` or ``implementer#12``."""
-    kind: Mapped[CommentKind] = mapped_column(default=CommentKind.NOTE, server_default=CommentKind.NOTE.value)
+    kind: Mapped[CommentKind] = mapped_column(
+        ForeignKey('comment_kinds.id', name='commentkind'), default=CommentKind.NOTE, server_default=CommentKind.NOTE
+    )
     body: Mapped[str]
     priority: Mapped[int | None]
     """When set, the comment is for the human: 0 (urgent, notify now) to 4 (someday), as on ideas. NULL: forum only."""

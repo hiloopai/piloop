@@ -42,10 +42,9 @@ from piloop.plugins.harness.contract import HARNESSES
 from piloop.plugins.host import Capability, PluginError, compose
 from piloop.plugins.lineage.contract import LINEAGE
 from piloop.plugins.role.contract import ROLES
-from piloop.plugins.runtime.contract import RUNTIMES, Runtime, RuntimeConfig
+from piloop.plugins.runtime.contract import RUNTIMES, Runtime, RuntimeConfig, RuntimeFactory
 from piloop.plugins.section.contract import SECTIONS
 from piloop.plugins.trigger.contract import TRIGGERS, Quiet
-from piloop.runtime.factory import RuntimeFactory
 from piloop.settings import Settings
 from tests.conftest import (
     HARNESS_APPEND,

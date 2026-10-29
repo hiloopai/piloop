@@ -5,13 +5,15 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from pydantic_settings import EnvSettingsSource
 
-from piloop import settings as settings_module
+from piloop import deprecated, settings as settings_module
 from piloop.actor import Agent, System
 from piloop.config import CampaignAgents
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.harness.contract import cleared_env, each_provider
-from piloop.settings import UNDER_TEST_ENV, Settings, StorageSettings, TracingSettings, env_names, expand_env
+from piloop.plugins.host import campaign_defaults
+from piloop.settings import UNDER_TEST_ENV, MovedEnv, Settings, StorageSettings, TracingSettings, env_names, expand_env
 
 
 def test_the_test_session_runs_in_a_temporary_home() -> None:
@@ -141,14 +143,39 @@ def test_slow_write_is_one_ms_read_from_config_toml_and_the_environment_wins(
 def test_the_daemon_s_timings_are_read_from_config_toml_the_environment_wins_and_a_campaign_sets_its_graces(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / 'config.toml').write_text('[daemon]\nfeed_page = 5\n[agents]\nwrap_up_grace = 60\nfinding_grace = 5\n')
-    monkeypatch.setenv('PILOOP_AGENTS__FINDING_GRACE', 'PT30S')
+    (tmp_path / 'config.toml').write_text('[daemon]\nfeed_page = 5\n[agents]\nwrap_up_grace = 60\n')
+    monkeypatch.setenv('PILOOP_AGENTS__WRAP_UP_GRACE', 'PT30S')
     home = Settings(home=tmp_path)
-    assert (home.daemon.feed_page, home.agents.wrap_up_grace, home.agents.finding_grace) == (
-        5,
-        timedelta(seconds=60),
-        timedelta(seconds=30),
-    )
+    assert (home.daemon.feed_page, home.agents.wrap_up_grace) == (5, timedelta(seconds=30))
     campaign = CampaignAgents(wrap_up_grace=timedelta(minutes=20))
     assert campaign.over(home.agents) == home.agents.model_copy(update={'wrap_up_grace': timedelta(minutes=20)})
     assert CampaignAgents().over(home.agents) == home.agents, "unset: the home's"
+
+
+def test_the_implementer_s_timings_of_config_toml_are_its_role_s_with_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``[daemon] startup_relaunches`` and ``[agents] finding_grace`` and ``wrap_up_lead`` are the implementer's."""
+    (tmp_path / 'config.toml').write_text(
+        '[daemon]\nstartup_relaunches = 4\n[agents]\nfinding_grace = 5\nwrap_up_lead = 120\n'
+    )
+    monkeypatch.setenv('PILOOP_AGENTS__FINDING_GRACE', 'PT30S')
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        home = Settings(home=tmp_path)
+    assert [str(w.message).split('; removed')[0] for w in warned] == [
+        '`daemon.startup_relaunches` is deprecated; write `plugins.role.implementer.startup_relaunches`',
+        '`agents.finding_grace` is deprecated; write `plugins.role.implementer.finding_grace`',
+        '`agents.wrap_up_lead` is deprecated; write `plugins.role.implementer.wrap_up_lead`',
+        'PILOOP_AGENTS__FINDING_GRACE is deprecated; set PILOOP_PLUGINS__ROLE__IMPLEMENTER__FINDING_GRACE',
+    ]
+    assert campaign_defaults(home.plugins) == {
+        'role': {'implementer': {'startup_relaunches': 4, 'finding_grace': 'PT30S', 'wrap_up_lead': 120}}
+    }
+
+
+def test_a_moved_variable_source_reads_a_field_as_the_environment_does(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('PILOOP_MIGRATION_BACKUPS', '5')
+    env = EnvSettingsSource(Settings, env_prefix='PILOOP_')
+    moved = MovedEnv(env, deprecated.IMPLEMENTER_TIMINGS, 'PILOOP_', deprecated.implementer_timings)
+    field = Settings.model_fields['migration_backups']
+    assert moved.get_field_value(field, 'migration_backups') == env.get_field_value(field, 'migration_backups')

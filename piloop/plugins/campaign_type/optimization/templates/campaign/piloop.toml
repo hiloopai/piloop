@@ -74,6 +74,9 @@ max_concurrent = 4                        # the most runs at the same time, on a
 explore_every = 4                         # at least 1 run in 4 starts from a pinned idea, when one is ready; 0 = off
 recovery_requeues = 2                     # times an idea is requeued from the last commit of a failed implementer
 idle_alert = 1800                         # seconds free slots wait behind proposed ideas before an escalation; 0 = off
+# wrap_up_lead = 600                      # seconds before its timeout that an implementer is told to wrap up
+# finding_grace = 60                      # seconds after its finding before an implementer is ended
+# startup_relaunches = 2                  # new implementers for a run whose implementer failed to start
 
 [plugins.role.watchdog]                   # a watchdog investigates anomalies and reviews progress every `interval` seconds
 # harnesses = ["pi", "claude", "codex"]   # if not set: [plugins.harness] use
@@ -173,9 +176,8 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # timeout = 300
 # max_concurrent = 2
 
-# [agents]                                # the agents' timings and the brief's budget; if not set: the home's [agents]
+# [agents]                                # the agents' wrap-up and the brief's budget; if not set: the home's [agents]
 # wrap_up_grace = 600                     # seconds to save their work after a stop or a cancel with --wrap-up
-# finding_grace = 60                      # seconds after its finding before an implementer is ended
 # brief_words = 400                       # init and doctor warn when brief.md is longer
 
 # [plugins.trigger.new_keep]             # a trigger with parameters, which a role names in its triggers

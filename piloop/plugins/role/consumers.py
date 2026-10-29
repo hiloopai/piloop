@@ -56,7 +56,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd
 from piloop.plugins.campaign_type.kit.runs.tables import run_of
 from piloop.plugins.contribution import Contribution, DaemonHost
 from piloop.plugins.executor.contract import AgentKey, Prompt
-from piloop.plugins.role.contract import PUSHED_KINDS
+from piloop.plugins.role.contract import UNPUSHED_KINDS
 from piloop.settings import AgentSettings
 
 WRAP_UP_PROMPT = (
@@ -234,13 +234,15 @@ class Agents:
             own = (*own, *steering.signatures)
         on_agent_session = Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session.id)
         settled = {p.comment for _, p in in_order(s, PromptOutcome, on_agent_session)}
-        comments = s.scalars(select(Comment).where(pushed, Comment.kind.in_(PUSHED_KINDS)).order_by(Comment.id)).all()
+        comments = s.scalars(
+            select(Comment).where(pushed, Comment.kind.not_in(UNPUSHED_KINDS)).order_by(Comment.id)
+        ).all()
         return [c for c in comments if c.id not in settled and c.author not in own]
 
     def wind_down(self, turn: Turn) -> datetime | None:
         """End the implementers that left their finding, and wind down those of stopped campaigns and cancelled agents.
 
-        An implementer is ended ``finding_grace`` (``[agents]``) after its finding, with every process that it left running: it
+        An implementer is ended its role's ``finding_grace`` after its finding, with every process that it left running: it
         reported that it is done, and a job that it forgot must not hold its slot to the role timeout. Its run is
         finished (``run_outcome``).
 
@@ -357,9 +359,10 @@ class Agents:
         return s.get_one(Campaign, agent_session.campaign_id).config.agents.over(self._agents)
 
     def _finding_grace(self, s: Session, implementer: AgentSession) -> datetime | None:
-        """When the grace after the implementer's finding ends (``finding_grace``), or None without one."""
+        """When the grace after the implementer's finding ends (its role's ``finding_grace``), or None without one."""
         found = self._planner_by_id(s, implementer.campaign_id).found_at(s, implementer)
-        return None if found is None else found + self._timings(s, implementer).finding_grace
+        role = s.get_one(Campaign, implementer.campaign_id).config.roles.doing_runs().get(implementer.kind)
+        return None if found is None or role is None else found + role.finding_grace
 
     def _time_left(self, s: Session, implementer: AgentSession, now: datetime) -> TimeLeft | datetime | None:
         """What an implementer that was not told to wrap up has left, once it is ``wrap_up_lead`` or less.
@@ -380,7 +383,7 @@ class Agents:
         extended = extension(s, implementer.id)
         timeout = cut_at + extended
         left = timeout - (now - implementer.started_at).total_seconds()
-        lead = wrap_up_lead(timeout, self._agents.wrap_up_lead)
+        lead = wrap_up_lead(timeout, role.wrap_up_lead)
         if left > lead:
             return now + timedelta(seconds=left - lead)
         match extended, cut_at == role.timeout:

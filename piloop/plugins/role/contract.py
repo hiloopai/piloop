@@ -28,9 +28,9 @@ if TYPE_CHECKING:  # piloop.db.models types campaigns.config with the roles: onl
     from piloop.db.models import AgentSession
 
 
-PUSHED_KINDS = (CommentKind.NOTE, CommentKind.FINDING, CommentKind.DECISION)
-"""Comment kinds that are sent to a running implementer. Escalations are for the human, and messages for the
-orchestrator."""
+UNPUSHED_KINDS = (CommentKind.ESCALATION, CommentKind.MESSAGE)
+"""Comment kinds that are not sent to a running implementer: escalations are for the human, and messages for the
+orchestrator. Every other kind is, a plugin's included."""
 
 
 class Files(StrEnum):
@@ -198,7 +198,16 @@ class ImplementerRole(RoleConfig):
 
     timeout: float = 1800
     """The number of seconds one implementer may run before it is stopped. Its brief states it. A quarter of it before,
-    at most 10 minutes, the daemon tells the implementer to wrap up."""
+    at most ``wrap_up_lead``, the daemon tells the implementer to wrap up."""
+    wrap_up_lead: timedelta = Field(default=timedelta(minutes=10), ge=timedelta(0))
+    """How long before its ``timeout`` the daemon tells an implementer to wrap up, at most a quarter of the timeout."""
+    finding_grace: timedelta = Field(default=timedelta(seconds=60), ge=timedelta(0))
+    """How long after its finding the daemon ends an implementer, and every process that it left: a last commit takes
+    seconds."""
+    startup_relaunches: int = Field(default=2, ge=0)
+    """How many times a run is queued again with a new implementer after its implementer failed to start. Then the run
+    fails. A failure at startup is a fault of the host or the harness, not an attempt at the idea: it does not count
+    toward ``max_runs``."""
     max_concurrent: int = Field(default=4, ge=1)
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
     scored after its implementer ended does not count."""

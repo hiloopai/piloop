@@ -8,7 +8,7 @@ from piloop.campaign.inbox import campaign_of
 from piloop.db.models import Comment
 from piloop.ids import CommentKind
 from piloop.plugins.section.contract import Rendering, Section, Surface
-from piloop.reports.overview import DETAIL_CHARS
+from piloop.settings import settings
 from piloop.text import age, cell
 
 COMMENTS_SHOWN = 8
@@ -34,7 +34,7 @@ class Inbox(Section):
             .limit(COMMENTS_SHOWN)
         ).all()
         waiting = inbox.items(s, campaign_id=campaign.id)
-        asked = [c for c, _ in waiting if c.kind is CommentKind.ESCALATION]
+        asked = [c for c, _ in waiting if c.kind == CommentKind.ESCALATION]
         # an escalation that waits drops off the newest-first list below when more comments follow it, so count it here
         oldest = min(asked, key=attrgetter('id'), default=None)
         escalations = (
@@ -46,7 +46,7 @@ class Inbox(Section):
         lines = [
             f'- comment#{c.id} {c.kind}'
             f'{" (p" + str(c.priority) + ", unacknowledged)" if c.priority is not None and c.acked_at is None else ""}'
-            f' on {c.target} by {c.author}, {age(c.created_at, now)} ago: {cell(c.body, DETAIL_CHARS)}'
+            f' on {c.target} by {c.author}, {age(c.created_at, now)} ago: {cell(c.body, settings.agents.detail_chars)}'
             for c in rows
         ]
         title = f'Inbox ({len(waiting)} unacknowledged{escalations}), decisions and escalations'

@@ -26,13 +26,13 @@ from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.contract import RepoId, Resume
 from piloop.plugins.executor.kit import jobs
 from piloop.plugins.harness.claude import Claude
+from piloop.plugins.harness.contract import Usage
 from piloop.plugins.harness.pi import Pi
 from piloop.plugins.host import Instances
 from piloop.plugins.role.contract import Continuity
 from piloop.plugins.runtime.contract import AgentStart
 from piloop.plugins.vcs.contract import Repository
 from piloop.store.chunks import read as read_chunks
-from piloop.usage import Usage
 from tests.agents.test_launcher import agent_session, checkout, controller, request, use_harness
 from tests.conftest import (
     WATCHDOG,

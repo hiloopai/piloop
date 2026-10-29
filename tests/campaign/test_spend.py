@@ -31,9 +31,9 @@ from piloop.plugins.fact_source.command import Command
 from piloop.plugins.fact_source.facts import COMPUTE_USD, MODELS_USD, SPEND, since_keep
 from piloop.plugins.fact_source.leases import LeaseFacts, compute_usd
 from piloop.plugins.fact_source.models import ModelFacts
+from piloop.plugins.harness.contract import ModelId, Usage
 from piloop.plugins.price_list.genai_prices import GenaiPrices
 from piloop.settings import HOME_PLUGINS, Settings, settings
-from piloop.usage import ModelId, Usage
 from tests.campaign.test_stop import add_run
 from tests.conftest import bare_config, baseline, reconfigured, serving_api, store_config
 

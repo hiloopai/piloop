@@ -396,10 +396,10 @@ def test_the_shapes_of_0_1_0_are_rewritten_to_the_models(tmp_path: Path) -> None
                 'CandidateDeleted',
                 '{"tree_sha":"t","revision":"c","verdict":"crash","kind":"candidate.deleted","origin":"run"}',
             ),
-            ('Commented', '{"target_kind":"campaign","target_id":1,"kind":"comment.note"}'),
-            ('Commented', '{"target_kind":"run","target_id":1,"kind":"comment.finding"}'),
-            ('Commented', '{"target_kind":"idea","target_id":1,"kind":"comment.decision"}'),
-            ('Commented', '{"target_kind":"agent_session","target_id":1,"kind":"comment.escalation"}'),
+            ('CoreCommented', '{"target_kind":"campaign","target_id":1,"kind":"comment.note"}'),
+            ('FindingWritten', '{"target_kind":"run","target_id":1,"kind":"comment.finding"}'),
+            ('CoreCommented', '{"target_kind":"idea","target_id":1,"kind":"comment.decision"}'),
+            ('CoreCommented', '{"target_kind":"agent_session","target_id":1,"kind":"comment.escalation"}'),
         ]
     )
 

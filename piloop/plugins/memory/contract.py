@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
-from piloop.actor import Actor
+from piloop.actor import Actor, System
 from piloop.plugins.host import Capability, One, Parameters, Scope
 
 if TYPE_CHECKING:  # the API's views, which a light client loads, answer Synced: only the annotations name the database
@@ -39,10 +39,21 @@ class MemoryProvider(Parameters, ABC):
 
     @abstractmethod
     def sync(self, s: Session, campaign: Campaign, actor: Actor) -> Synced:
-        """Take in the campaign's documents. ``piloop init`` (campaign registration) and a campaign's stop call it.
+        """Take in the campaign's documents. ``piloop init`` (campaign registration) and a campaign's close call it.
 
         It only flushes.
         """
+
+    def closing(self, s: Session, campaign: Campaign) -> str:
+        """Sync the documents before the closing review searches them (``Closes``).
+
+        A repo that cannot be read leaves the memory as it was, and the review still happens.
+        """
+        try:
+            with s.begin_nested():
+                return self.sync(s, campaign, System.DAEMON).line()
+        except OSError as e:
+            return f'documents: not synced: {type(e).__name__}: {e}'
 
 
 MEMORY = Capability(

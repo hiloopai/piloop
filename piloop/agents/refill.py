@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from piloop.agents.roles import harness_of
 from piloop.db.models import AgentSession
-from piloop.usage import Usage, UsageError
+from piloop.plugins.harness.contract import Usage
+from piloop.usage import UsageError
 
 
 def usage_of(s: Session, agent_session: AgentSession, cwd: Path | None = None) -> Usage | UsageError | None:

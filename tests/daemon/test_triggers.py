@@ -10,13 +10,12 @@ import pytest
 from sqlalchemy import select
 
 from piloop.actor import System
-from piloop.campaign.anomaly import AnomalyReported
 from piloop.campaign.stop import left, request_cancel
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.main import ACTOR
 from piloop.daemon.scheduler import Scheduler
 from piloop.db import sql
-from piloop.db.events import in_order
+from piloop.db.events import AnomalyReported, in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, utcnow
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentKind, Ending, TargetKind, TargetRef

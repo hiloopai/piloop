@@ -21,15 +21,18 @@ from fastapi import APIRouter
 from pydantic import TypeAdapter, ValidationError
 
 from piloop.daemon.loop import Consumer
-from piloop.plugins.host import PluginError, Plugins, Scope, Slot, declared
+from piloop.plugins.host import One, PluginError, Plugins, Scope, Slot, declared
 from piloop.settings import AgentSettings, DaemonSettings
 
 if TYPE_CHECKING:  # the run controller and the database import the contracts that import this module
+    from sqlalchemy.orm import Session
+
+    from piloop.db.models import Campaign
     from piloop.db.session import Database
     from piloop.otel import Tracer
     from piloop.plugins.campaign_type.contract import Planner
     from piloop.plugins.campaign_type.kit.runs.controller import RunController
-    from piloop.runtime.factory import RuntimeFactory
+    from piloop.plugins.runtime.contract import RuntimeFactory
 
 
 class Leaving(StrEnum):
@@ -105,6 +108,34 @@ class Contributes(Protocol):
     def contribution(self) -> Contribution:
         """What it adds to core. The daemon asks once, after it opened the provider."""
         ...
+
+
+@runtime_checkable
+class Closes(Protocol):
+    """A provider that a campaign chooses, and that takes part in the campaign's close (``CampaignClosed``)."""
+
+    def closing(self, s: Session, campaign: Campaign) -> str:
+        """Do its share of the close of the stopped ``campaign``, before the closing sweeps are requested.
+
+        It only flushes, and returns what it did, for the trace. A failure that must not stop the close is in the line.
+        """
+        ...
+
+
+def closers(plugins: Plugins) -> dict[str, Closes]:
+    """The instance that a campaign's ``plugins`` chooses of each capability of one instance, where it ``Closes``.
+
+    By ``<capability> <provider>``, such as ``memory local``.
+    """
+    found: dict[str, Closes] = {}
+    for capability in declared():
+        match capability.table:
+            case One(scope=Scope.CAMPAIGN, default=default) if capability.name in plugins or default is not None:
+                if isinstance(chosen := capability.selected(plugins), Closes):
+                    found[f'{capability.name} {capability.name_of(chosen)}'] = chosen
+            case _:
+                pass
+    return found
 
 
 @dataclass(frozen=True)

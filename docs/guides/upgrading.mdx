@@ -191,6 +191,33 @@ SELECT id, owner FROM target_kinds
 The upgrade rebuilds `events` and `comments` once, with every row and id. It takes about 8 seconds per million events,
 so `piloop migrate` on a large home takes a while.
 
+### Kinds of comments
+
+`comments.kind` names a row of `comment_kinds`, and a plugin can declare a kind of its own with the event of such a
+comment, a subclass of `Commented`, in the entry point group `piloop.comment_kinds`. `finding` is the runs
+component's. A write of a kind that no installed piloop declared fails on the foreign key, where it failed on a CHECK
+before. The upgrade rebuilds `comments` once more.
+
+```sql
+SELECT id, after_end FROM comment_kinds
+```
+
+### `tokens` of a campaign's status
+
+The state of a campaign (`piloop status --json`, `GET /v1/status`) has no `tokens`: read the `tokens` fact, which the
+stop rule counts too.
+
+### The implementer's timings
+
+`startup_relaunches`, `finding_grace` and `wrap_up_lead` are keys of `[plugins.role.implementer]`, and so of each role
+that does runs. `[daemon] startup_relaunches` and `[agents] finding_grace` and `wrap_up_lead` of `config.toml`, and
+`[agents] finding_grace` of `piloop.toml`, still work until 0.6.0, with a warning:
+
+```toml
+[plugins.role.implementer]
+finding_grace = 60
+```
+
 ### An agent's subject
 
 `agent_sessions.subject_kind` and `subject_id` say what an agent works on, such as `run` and `12` for an implementer.

@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
-from piloop.campaign.ops import Refused, _get, pause
+from piloop.campaign.ops import Refused, existing, pause
 from piloop.campaign.stop import held
 from piloop.config import CampaignConfig
 from piloop.db.events import emit
@@ -67,7 +67,7 @@ def add_measurement(s: Session, candidate_id: CandidateId, report: Report, *, ac
         Refused: the campaign has no evaluator yet, the candidate is pending (the daemon is measuring and judging it),
             the report names a metric that ``piloop.toml`` does not, or a report without an error lacks one.
     """
-    candidate = _get(s, Candidate, candidate_id, 'candidate')
+    candidate = existing(s, Candidate, candidate_id, 'candidate')
     campaign = s.get_one(Campaign, candidate.campaign_id)
     if campaign.evaluator_id is None:
         raise Refused(f'campaign {campaign.name} has no evaluator yet: run `piloop init`')

@@ -17,7 +17,8 @@ from piloop.db.triggers import changelog
 from piloop.db.triggers.changelog import IdeaCreated
 from piloop.ids import CommentKind, Ref, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
-from piloop.plugins.campaign_type.kit.runs.ids import RUN
+from piloop.plugins.campaign_type.kit.runs.controller import FindingWritten
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RUN
 
 
 class Probed(EventModel):
@@ -109,7 +110,13 @@ def test_every_trigger_writes_an_event_that_loads_as_the_model_that_renders_it(
             *(
                 'INSERT INTO comments (target_kind, target_id, author, kind, body, priority)'
                 f" VALUES ('idea', 1, 'me', '{kind}', 'x', 2)"
-                for kind in CommentKind
+                for kind in (
+                    CommentKind.NOTE,
+                    FINDING,
+                    CommentKind.DECISION,
+                    CommentKind.ESCALATION,
+                    CommentKind.MESSAGE,
+                )
             ),
             "UPDATE comments SET acked_at = '2026-10-01 12:00:00', acked_by = 'human' WHERE id = 1",
             "UPDATE comments SET body = 'y' WHERE id = 1",
@@ -129,8 +136,10 @@ def test_every_trigger_writes_an_event_that_loads_as_the_model_that_renders_it(
     with db.session() as s:
         models = {e.kind: type(e.payload) for e in s.scalars(select(Event).where(Event.id > start))}
     rendered = [m for m in vars(changelog).values() if isinstance(m, type) and issubclass(m, EventModel) and m.kinds()]
-    assert models == {kind: model for model in rendered for kind in model.kinds()}, (
-        'each model of the change log has its trigger, and the row that it writes loads as the model'
+    found = {kind: model for model in rendered for kind in model.kinds()} | {'comment.finding': FindingWritten}
+    assert models == found, (
+        "each model of the change log has its trigger, and the row that it writes loads as the model: a plugin's"
+        ' comment kind too'
     )
 
 

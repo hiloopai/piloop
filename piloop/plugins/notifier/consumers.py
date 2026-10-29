@@ -469,7 +469,7 @@ def due(s: Session, route: Route, now: datetime) -> Due:
             or comment.id in threaded
         ):
             continue
-        if comment.kind is not CommentKind.ESCALATION:
+        if comment.kind != CommentKind.ESCALATION:
             wanted += [(comment, campaign)] if comment.priority == 0 else []
             continue
         match escalations.policy(s, campaign.id if campaign else None).reach(escalations.escalated(s, comment), now):
@@ -604,7 +604,7 @@ def _notice(
 
 def _view(s: Session, comment: Comment, campaign: Campaign | None) -> EscalationView | None:
     """How an escalation shows, as its campaign's provider says, or None for another comment."""
-    if comment.kind is not CommentKind.ESCALATION:
+    if comment.kind != CommentKind.ESCALATION:
         return None
     return escalations.policy(s, campaign.id if campaign else None).view(escalations.escalated(s, comment))
 

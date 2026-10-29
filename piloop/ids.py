@@ -115,16 +115,37 @@ type Ref = Annotated[TargetRef, BeforeValidator(_parsed), PlainSerializer(str, r
 """A ``TargetRef`` that a model holds as its text, ``idea#12``."""
 
 
-class CommentKind(StrEnum):
-    """Why a comment was written. An ``escalation`` asks for a decision and is always in the human's inbox."""
+class CommentKind(str):
+    """Why a comment was written: one of core's kinds, or one that a plugin declares.
 
-    NOTE = 'note'
-    FINDING = 'finding'
-    DECISION = 'decision'
-    ESCALATION = 'escalation'
-    MESSAGE = 'message'
+    A plugin declares a kind with the event model of its comments (entry points ``piloop.comment_kinds``). The database
+    refuses a kind that no installed piloop declared (``comment_kinds``), so a model takes any name of the form, as a
+    ``TargetKind`` does.
+    """
+
+    __slots__ = ()
+
+    NOTE: ClassVar[CommentKind]
+    DECISION: ClassVar[CommentKind]
+    ESCALATION: ClassVar[CommentKind]
+    """Asks for a decision, and is always in the human's inbox."""
+    MESSAGE: ClassVar[CommentKind]
     """Someone's word to the orchestrator on a campaign (``piloop message``). The orchestrator answers it with
     ``piloop inbox reply``."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source: object, _handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema(pattern=KIND_NAME.pattern))
+
+
+CommentKind.NOTE = CommentKind('note')
+CommentKind.DECISION = CommentKind('decision')
+CommentKind.ESCALATION = CommentKind('escalation')
+CommentKind.MESSAGE = CommentKind('message')
+CORE_COMMENT_KINDS: Final = frozenset(
+    {CommentKind.NOTE, CommentKind.DECISION, CommentKind.ESCALATION, CommentKind.MESSAGE}
+)
+"""Core's comment kinds. A plugin's kind takes none of their names."""
 
 
 class CampaignStatus(StrEnum):

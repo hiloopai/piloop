@@ -121,7 +121,7 @@ def test_every_trigger_is_one_statement_named_table_what_and_references_real_col
             'limits_updated_event',
             'limits_unset_event',
             'runs_settled_event',
-            'comments_no_late_finding',
+            'comments_no_late_comment',
             'events_checked',
             'events_next_id',
         ]

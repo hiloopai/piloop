@@ -73,8 +73,8 @@ or null) and `campaigns`. Each campaign has its `id`, `name`, `path`, `parent` (
 `status` and `stopped_reason`, `paused` (`launches`, `all` or null) and
 `paused_reason`, the current `evaluator`, the `head` (its candidate, and for each track the primary metric, its value
 and its delta against the baseline; null when there is no keep yet), the `kept` and `candidates` counts, the number of
-`ideas` in each status, the `runnable` ideas, the open `runs`, the live `agents`, the unacknowledged `inbox` items and
-the `tokens` spent. It covers the campaigns that `piloop status` would show.
+`ideas` in each status, the `runnable` ideas, the open `runs`, the live `agents` and the unacknowledged `inbox` items.
+The `tokens` fact has what its agents spent. It covers the campaigns that `piloop status` would show.
 
 `piloop inbox --json` has `cursor`, `items` and `seeds`, with the filters of `piloop inbox`. Each item and seed has its
 `campaign` and its `campaign_name`.

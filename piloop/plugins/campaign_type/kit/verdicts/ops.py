@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
 from piloop.campaign.campaigns import repository
-from piloop.campaign.ops import Refused, _get, _reason
+from piloop.campaign.ops import Refused, existing, required_reason
 from piloop.campaign.stop import request_cancel
 from piloop.db.events import emit
 from piloop.db.models import Campaign
@@ -70,8 +70,8 @@ def set_verdict(
             current evaluator does not score, or it is a keep off the head of a candidate that no run made, which no
             seed can compose.
     """
-    candidate = _get(s, Candidate, candidate_id, 'candidate')
-    why = _reason(reason)
+    candidate = existing(s, Candidate, candidate_id, 'candidate')
+    why = required_reason(reason)
     name = f'candidate#{candidate.id}'
     match refused := refusal(candidate, to, cause):
         case Refusal.PENDING:

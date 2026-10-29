@@ -31,14 +31,24 @@ class Refused(Exception):
     """An operation refused its input and changed nothing. The message says why."""
 
 
-def _get[M: Base](s: Session, model: type[M], key: int, name: str) -> M:
-    found = s.get(model, key)
-    if found is None:
+def existing[M: Base](s: Session, model: type[M], key: int, name: str) -> M:
+    """The row of ``model`` with the id ``key``.
+
+    Raises:
+        Refused: there is none: ``no <name>#<key>``.
+    """
+    row = s.get(model, key)
+    if row is None:
         raise Refused(f'no {name}#{key}')
-    return found
+    return row
 
 
-def _reason(reason: str) -> str:
+def required_reason(reason: str) -> str:
+    """``reason``, stripped.
+
+    Raises:
+        Refused: it is blank.
+    """
     if not reason.strip():
         raise Refused('a reason is required: say why, with ids')
     return reason.strip()
@@ -48,15 +58,15 @@ def pause(s: Session, campaign_id: CampaignId, *, evals: bool, reason: str) -> C
     """Pause the campaign: nothing launches, and with ``evals`` the daemon starts no measurement either.
 
     No run is queued, no role is requested and no requested row launches, so research files no ideas. A sweep that
-    runs already files its ideas as ``proposed`` (``review_first``). Running work goes on and its commits are scored.
+    runs already files its ideas as ``proposed`` (``backlog.ops.review_first``). Running work goes on and its commits are scored.
     Nothing is escalated. Without ``evals``, the daemon still measures what a new evaluator or a request needs, so the
     pause can end on a measured head. A pause is state in the database, so the daemon holds wherever the caller is.
 
     Raises:
         Refused: the reason is blank, or the campaign is paused that way already.
     """
-    campaign = _get(s, Campaign, campaign_id, 'campaign')
-    why = _reason(reason)
+    campaign = existing(s, Campaign, campaign_id, 'campaign')
+    why = required_reason(reason)
     scope = Pause.ALL if evals else Pause.LAUNCHES
     if campaign.paused is scope:
         raise Refused(f'campaign {campaign.name} is paused already ({scope}): {campaign.paused_reason}')
@@ -70,7 +80,7 @@ def resume(s: Session, campaign_id: CampaignId) -> Pause:
     Raises:
         Refused: the campaign is not paused.
     """
-    campaign = _get(s, Campaign, campaign_id, 'campaign')
+    campaign = existing(s, Campaign, campaign_id, 'campaign')
     if campaign.paused is None:
         raise Refused(f'campaign {campaign.name} is not paused')
     held = campaign.paused
@@ -86,7 +96,7 @@ def stop(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str, endi
     Raises:
         Refused: the campaign is stopped already, and the ending is not ``now``.
     """
-    campaign = _get(s, Campaign, campaign_id, 'campaign')
+    campaign = existing(s, Campaign, campaign_id, 'campaign')
     if campaign.status is CampaignStatus.STOPPED and ending is not Ending.NOW:
         raise Refused(
             f'{campaign.name} is stopped already ({campaign.stopped_reason});'
@@ -120,7 +130,7 @@ def _stopped(s: Session, campaign_id: CampaignId, verb: str) -> Campaign:
     """
     write_transaction(s)
     s.expire_all()  # read inside the lock what an earlier read of this session may have cached
-    campaign = _get(s, Campaign, campaign_id, 'campaign')
+    campaign = existing(s, Campaign, campaign_id, 'campaign')
     match campaign.status:
         case CampaignStatus.ACTIVE:
             raise Refused(
@@ -154,7 +164,7 @@ def retire(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str) ->
         Refused: the reason is blank, or the campaign is not stopped (``_stopped``).
         StillStopping: the stop is not over.
     """
-    why = _reason(reason)
+    why = required_reason(reason)
     campaign = _stopped(s, campaign_id, 'retire')
     campaign.status = CampaignStatus.RETIRED
     target = TargetRef(TargetKind.CAMPAIGN, campaign.id)
@@ -172,7 +182,7 @@ def reopen(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str) ->
         Refused: the reason is blank, the campaign is not stopped (``_stopped``), or its stop rule stops it at once.
         StillStopping: the stop is not over.
     """
-    why = _reason(reason)
+    why = required_reason(reason)
     campaign = _stopped(s, campaign_id, 'reopen')
     campaign.status, campaign.stopped_reason = CampaignStatus.ACTIVE, None
     emit(s, CampaignReopened(reason=why), TargetRef(TargetKind.CAMPAIGN, campaign.id), actor)
@@ -193,7 +203,7 @@ def request_agent(
     Raises:
         Refused: the campaign has no sweeping role ``role``.
     """
-    campaign = _get(s, Campaign, campaign_id, 'campaign')
+    campaign = existing(s, Campaign, campaign_id, 'campaign')
     roles = campaign.config.roles
     sweeping = roles.sweeping()
     if role not in sweeping:
@@ -220,8 +230,8 @@ def set_parent(s: Session, campaign_id: CampaignId, parent_id: CampaignId | None
         Refused: a campaign is missing, the parent is the campaign's already, or the parent is the campaign itself or
             one of its descendants.
     """
-    campaign = _get(s, Campaign, campaign_id, 'campaign')
-    parent = None if parent_id is None else _get(s, Campaign, parent_id, 'campaign')
+    campaign = existing(s, Campaign, campaign_id, 'campaign')
+    parent = None if parent_id is None else existing(s, Campaign, parent_id, 'campaign')
     if campaign.parent_id == parent_id:
         where = 'a root' if parent is None else f'under {parent.name}'
         raise Refused(f'{campaign.name} is {where} already')
@@ -234,23 +244,3 @@ def set_parent(s: Session, campaign_id: CampaignId, parent_id: CampaignId | None
     except IntegrityError as e:
         raise Refused(f'{campaign.name} cannot be under {parent.name}: {e.orig}') from e
     return campaign
-
-
-def review_first(campaign: Campaign, actor: Actor, *, new: bool) -> str | None:
-    """Return why an idea that ``actor`` adds (``new``) or develops waits for a review (``proposed``), or None.
-
-    Only an agent of a sweeping role waits: while the campaign is paused, and for a new idea while its role's
-    ``max_ideas`` is 0 (a sweep reads it once, in its brief; the operator may have set it to 0 since). The orchestrator
-    and humans paused the campaign themselves.
-    """
-    if (agent := actor.launched) is None:
-        return None
-    name = agent.role
-    role = campaign.config.roles.sweeping().get(name)
-    if role is None:
-        return None
-    if campaign.paused is not None:
-        return f'campaign {campaign.name} is paused'
-    if new and role.max_ideas == 0:
-        return f'[plugins.role.{name}] max_ideas = 0'
-    return None

@@ -2,6 +2,7 @@ import json
 import re
 import subprocess
 from collections.abc import Mapping
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import ANY
 
@@ -11,6 +12,7 @@ from inline_snapshot import snapshot
 from piloop import config as config_module
 from piloop.campaign.campaigns import check_takes
 from piloop.config import CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
+from piloop.deprecated import PiloopDeprecationWarning
 from piloop.ids import RoleName
 from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
 from piloop.plugins.campaign_type.kit.backlog.role.scout import ScoutRole
@@ -761,3 +763,19 @@ def test_config_toml_holds_defaults_of_each_campaign_s_plugins_which_piloop_toml
     assert 'fact_source' not in settings.providers, "the home's own [plugins] leave the campaigns' defaults out"
     executor = EXECUTORS.selected(settings.providers)
     assert isinstance(executor, Workers) and executor.pools['serve'].usd_per_hour == 0.5
+
+
+def test_a_campaign_s_finding_grace_is_its_implementer_s_with_a_warning(
+    campaign_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    toml = campaign_path / 'piloop.toml'
+    toml.write_text(toml.read_text() + '\n[agents]\nfinding_grace = 5\nwrap_up_grace = 7\n')
+    with pytest.warns(PiloopDeprecationWarning, match=r'`agents.finding_grace` is deprecated; write `plugins.role'):
+        cfg = load_campaign_config(campaign_path)
+    assert cfg.roles.doing_runs()[IMPLEMENTER].finding_grace == timedelta(seconds=5)
+    assert cfg.agents.wrap_up_grace == timedelta(seconds=7), 'wrap_up_grace stays the [agents] of every role'
+    monkeypatch.setenv('PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE', 'PT9S')
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        cfg = load_campaign_config(campaign_path)
+    assert any(str(w.message).startswith('PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE is deprecated; set') for w in warned)
+    assert cfg.roles.doing_runs()[IMPLEMENTER].finding_grace == timedelta(seconds=9), 'the variable wins'

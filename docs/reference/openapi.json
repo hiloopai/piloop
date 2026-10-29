@@ -284,7 +284,8 @@
             "schema": {
               "type": "array",
               "items": {
-                "$ref": "#/components/schemas/CommentKind"
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$"
               },
               "description": "Only the items of these kinds.",
               "default": [],
@@ -5178,10 +5179,6 @@
             "title": "Inbox",
             "description": "The unacknowledged inbox items that wait for the caller: those that it did not write."
           },
-          "tokens": {
-            "type": "integer",
-            "title": "Tokens"
-          },
           "files": {
             "$ref": "#/components/schemas/CampaignFiles",
             "description": "Where its files are: ``packing`` from its retire until they are in the CAS and off the disk."
@@ -5207,7 +5204,6 @@
           "agents",
           "roles",
           "inbox",
-          "tokens",
           "files"
         ],
         "title": "CampaignState",
@@ -5559,18 +5555,6 @@
         ],
         "title": "Clone",
         "description": "A repository that the daemon clones under its home, then registers."
-      },
-      "CommentKind": {
-        "type": "string",
-        "enum": [
-          "note",
-          "finding",
-          "decision",
-          "escalation",
-          "message"
-        ],
-        "title": "CommentKind",
-        "description": "Why a comment was written. An ``escalation`` asks for a decision and is always in the human's inbox."
       },
       "CommentNews": {
         "properties": {

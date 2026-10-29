@@ -45,7 +45,7 @@ from sqlalchemy.pool import ConnectionPoolEntry, NullPool, PoolProxiedConnection
 
 from piloop import deprecated
 from piloop.actor import Actor, Agent
-from piloop.db.models import TARGET_KINDS, KnownKind, Migration, utcnow
+from piloop.db.models import TARGET_KINDS, KnownCommentKind, KnownKind, Migration, utcnow
 from piloop.db.schema import CORE, SCHEMAS, schemas
 from piloop.db.sql import (
     CONNECTION_PRAGMAS,
@@ -56,6 +56,7 @@ from piloop.db.sql import (
     optimize,
     sign,
 )
+from piloop.db.triggers.changelog import COMMENT_KINDS
 from piloop.otel import Measures
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.host import BUILT_IN
@@ -556,15 +557,19 @@ def fingerprints(script: ScriptDirectory) -> dict[str, int]:
 
 
 def _kinds(connection: Connection) -> None:
-    """Write each kind that an installed plugin declares (``TARGET_KINDS``) into ``target_kinds``, once.
+    """Write each kind that an installed plugin declares into ``target_kinds`` and ``comment_kinds``.
 
-    Its owner is the schema of its table, also when that table moved to another schema. A kind of a plugin that is no
-    longer installed stays: its rows point at it.
+    A target kind's owner is the schema of its table, also when that table moved to another schema. A kind of a plugin
+    that is no longer installed stays: its rows point at it.
     """
     owner = {table.__tablename__: name for name, schema in schemas().items() for table in schema.tables}
     for kind, table in TARGET_KINDS.loaded().items():
         row = insert(KnownKind).values(id=kind, owner=owner[table.__tablename__])
         connection.execute(row.on_conflict_do_update(index_elements=[KnownKind.id], set_={'owner': row.excluded.owner}))
+    for comment_kind, model in COMMENT_KINDS.loaded().items():
+        found = insert(KnownCommentKind).values(id=comment_kind, after_end=model.AFTER_END)
+        update = {'after_end': model.AFTER_END}
+        connection.execute(found.on_conflict_do_update(index_elements=[KnownCommentKind.id], set_=update))
 
 
 def _record(connection: Connection, name: str, package: str) -> None:

@@ -271,17 +271,22 @@ def moved(toml: Path, raw: dict[str, object], steps: Sequence[Step], env: str, r
 
 def _move(toml: Path, raw: dict[str, object], move: Move, env: str, removed_in: Version) -> None:
     """Apply ``move`` to the parsed file and to the variables of its keys, and warn at the first old key it moved."""
-    if found := move.apply(raw):
-        parts = found[0].split('.')
-        # an inline table sets none of its keys on a line of its own: warn at the key that holds it
-        key = next((k for n in range(len(parts), 0, -1) if _lines(toml, k := '.'.join(parts[:n]))), found[0])
-        warn(toml, key, f'{_written(move.old)} is deprecated; write {_written(move.new)}', removed_in=removed_in)
+    move_keys(toml, raw, move, removed_in)
     for name, value in sorted(os.environ.items()):
         if not name.upper().startswith(env) or (path := move.rebased(name[len(env) :].lower().split('__'))) is None:
             continue
         _put(raw, path, value, wins=True)
         new = env + '__'.join(path).upper()
         warn(toml, name, f'{name} is deprecated; set {new}', removed_in=removed_in)
+
+
+def move_keys(toml: Path, raw: dict[str, object], move: Move, removed_in: Version) -> None:
+    """Apply ``move`` to the parsed file, and warn at the first old key it moved."""
+    if found := move.apply(raw):
+        parts = found[0].split('.')
+        # an inline table sets none of its keys on a line of its own: warn at the key that holds it
+        key = next((k for n in range(len(parts), 0, -1) if _lines(toml, k := '.'.join(parts[:n]))), found[0])
+        warn(toml, key, f'{_written(move.old)} is deprecated; write {_written(move.new)}', removed_in=removed_in)
 
 
 @dataclass(frozen=True)
@@ -563,6 +568,69 @@ def context_listed(shown: list[Section], found: Mapping[str, Section]) -> list[S
         return shown
     guides = [section for section in shown if isinstance(section, Guide)]
     return [*guides, found['context'], *(section for section in shown if not isinstance(section, Guide))]
+
+
+IMPLEMENTER_TIMINGS = (
+    Move('daemon.startup_relaunches', 'plugins.role.implementer.startup_relaunches'),
+    Move('agents.finding_grace', 'plugins.role.implementer.finding_grace'),
+    Move('agents.wrap_up_lead', 'plugins.role.implementer.wrap_up_lead'),
+)
+"""The implementer's timings of ``config.toml``, as the defaults of its role in every campaign of the home."""
+
+
+@bridge(
+    '0.6.0',
+    "[daemon] startup_relaunches and [agents] finding_grace and wrap_up_lead are the implementer role's: delete"
+    ' implementer_timings and IMPLEMENTER_TIMINGS',
+    Scope.HOME,
+)
+def implementer_timings(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """In ``config.toml``, ``[daemon] startup_relaunches``, ``[agents] finding_grace`` and ``wrap_up_lead`` are the role's.
+
+    They are keys of ``[plugins.role.implementer]``, the defaults of every campaign's implementer, and their variables
+    move the same way (``moved_env``). A role of your own that does runs gets the role's defaults, not these.
+    """
+    for move in IMPLEMENTER_TIMINGS:
+        move_keys(toml, raw, move, removed_in)
+
+
+CAMPAIGN_FINDING_GRACE = (Move('agents.finding_grace', 'plugins.role.implementer.finding_grace'),)
+"""A campaign's ``[agents] finding_grace``, as its implementer's."""
+
+
+@bridge(
+    '0.6.0',
+    "[agents] finding_grace is the implementer role's: delete campaign_finding_grace and CAMPAIGN_FINDING_GRACE",
+    after=('plugin_tables',),
+)
+def campaign_finding_grace(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """A ``piloop.toml``'s ``[agents] finding_grace`` is ``[plugins.role.implementer] finding_grace``.
+
+    ``PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE`` moves the same way (``moved_env``).
+    """
+    for move in CAMPAIGN_FINDING_GRACE:
+        move_keys(toml, raw, move, removed_in)
+
+
+@until('0.6.0', "the implementer's timings are its role's: delete moved_env")
+def moved_env(found: dict[str, object], moves: Sequence[Move], env: str, removed_in: Version) -> dict[str, object]:
+    """``found``, the settings that the variables of ``env`` give, with the keys of ``moves`` at their new keys.
+
+    ``PILOOP_AGENTS__FINDING_GRACE`` is ``PILOOP_PLUGINS__ROLE__IMPLEMENTER__FINDING_GRACE``, with a warning. The
+    environment wins over the file for the new key, as it did for the old one. A move inside a model of the settings
+    needs this, as the settings refuse the old key; ``moved`` moves the variables of the others.
+    """
+    for move in moves:
+        for old in move.apply(found):
+            new = move.rebased(old.split('.'))
+            assert new is not None  # apply moved it: old matches
+            warnings.warn(
+                f'{env}{"__".join(old.split(".")).upper()} is deprecated; set {env}{"__".join(new).upper()};'
+                f' removed in piloop {removed_in}',
+                PiloopDeprecationWarning,
+                stacklevel=2,
+            )
+    return found
 
 
 type MessageFormat = Literal['lines', 'claude-hook']

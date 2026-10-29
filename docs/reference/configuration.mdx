@@ -49,7 +49,7 @@ section.
 | `ladder` | list\[[Rung](#rung)\] | `[]` | `[[ladder]]`: the rungs that a run's evaluation of its own version climbs before the full panel, cheapest first. The climb stops at the first rung whose `stop` holds. A baseline, a head, a bar, a reference and a remeasure climb every rung and never stop. |
 | `link` | list\[string\] | `[]` | Repo-relative paths, ignored by git, that piloop puts into every worktree read-only, for example data or virtual environments. Each job gets them as they are when it is made. |
 | `context` | list\[string\] | `[]` | Repo-relative files or globs (for example `docs/error-analysis-*.md`) that hold the campaign's analysis: error analyses, comparisons with a reference, evaluation reports. The research pack lists each one with its outline, newest first, so that every sweep that reads the pack reads them before it proposes work. |
-| `agents` | [CampaignAgents](#campaignagents) | `{}` | `[agents]`: how long the campaign's agents get to wrap up and to leave after their finding. |
+| `agents` | [CampaignAgents](#campaignagents) | `{}` | `[agents]`: how long the campaign's agents get to wrap up, and its brief's budget. |
 | `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "leases": {}, "models": {}, "optimization": {}, "spend": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "notifier": {"slack": {}}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "scout": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "comments": {}, "concepts": {}, "context": {}, "cost": {}, "database": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idea_comments": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "judging": {}, "lessons": {}, "links": {}, "long_jobs": {}, "orchestration": {}, "pack": {}, "past_campaigns": {}, "priorities": {}, "provenance": {}, "queries": {}, "queue": {}, "reported": {}, "research_commands": {}, "runs": {}, "same_as_parent": {}, "search": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "yields", "candidates", "same_as_parent", "reported", "inbox", "events"], "workspace": {}, "yields": {}}, "trigger": {"cron": {}, "dead_at_startup": {}, "leaking_funnel": {}, "low_water": {}, "low_yield": {}, "news": {}, "run_failed": {}, "seed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
 
 ## Tolerance
@@ -126,12 +126,11 @@ climb of a run's own version stops when `stop` says so, and piloop ends the eval
 
 ## CampaignAgents
 
-`[agents]`: the timings of the campaign's agents and its brief's budget, over the home's `[agents]`.
+`[agents]`: how long the campaign's agents get to wrap up, and its brief's budget, over the home's `[agents]`.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `wrap_up_grace` | duration \| null | `null` | How long an agent that was told to wrap up, because the campaign stopped or someone cancelled it, has to save its work before the daemon ends it. Unset: the home's. Seconds, or an ISO 8601 duration such as `PT20M`. |
-| `finding_grace` | duration \| null | `null` | How long after its finding the daemon ends an implementer, and every process that it left. Unset: the home's. |
 | `brief_words` | integer \| null | `null` | How many words `brief.md` may have before `piloop init` and `piloop doctor` warn. Unset: the home's. |
 
 ## `[plugins]`
@@ -550,12 +549,15 @@ scored and judged when it ends. A new role of this kind takes the implementer's 
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `timeout` | number | `1800` | The number of seconds one implementer may run before it is stopped. Its brief states it. A quarter of it before, at most 10 minutes, the daemon tells the implementer to wrap up. |
+| `timeout` | number | `1800` | The number of seconds one implementer may run before it is stopped. Its brief states it. A quarter of it before, at most `wrap_up_lead`, the daemon tells the implementer to wrap up. |
 | `max_concurrent` | integer | `4` | The maximum number of implementers that run at the same time, on all workers together. A run that is being scored after its implementer ended does not count. |
 | `writes` | list\[string\] | `["versions", "comments(finding) on your idea", "comments(note) on your run"]` | What an implementer may write, as its brief states it. |
 | `files` | `nothing` \| `seeds` \| `ideas` | `"nothing"` | An implementer files no ideas and no seeds. Its hunches go in its finding, which research reads. |
 | `runs` | boolean | `true` | The agents of this role do runs. A table without `runs = true` is a sweeping role. |
 | `takes` | string \| null | `null` | The ideas that this role takes: an SQL condition on the `ideas` table, without parameters, for example `priority >= 3` or `track = 'speed'`. When unset, the role takes every runnable idea. A free slot of a role that you define is filled before a slot of the implementer, so the implementer takes what the other roles leave. |
+| `wrap_up_lead` | duration | `"PT10M"` | How long before its `timeout` the daemon tells an implementer to wrap up, at most a quarter of the timeout. |
+| `finding_grace` | duration | `"PT1M"` | How long after its finding the daemon ends an implementer, and every process that it left: a last commit takes seconds. |
+| `startup_relaunches` | integer | `2` | How many times a run is queued again with a new implementer after its implementer failed to start. Then the run fails. A failure at startup is a fault of the host or the harness, not an attempt at the idea: it does not count toward `max_runs`. |
 | `recovery_requeues` | integer | `2` | How many times one idea goes back to the queue from the last version of a run that did not succeed: a new implementer then starts from that version to finish the work, also when the idea has no attempts left. When the head moved past the version, it starts on the head, and a note names the change to take. After that, the idea settles as after any failed run, so an idea whose implementers keep dying is not run forever. 0 never requeues. |
 | `explore_every` | integer | `4` | At least one run of this role in this many starts from an alternative starting point. When none of the role's last `explore_every - 1` runs did, the next slot goes to the most urgent ready idea that is pinned to a base other than the head (a reference, an older keep or a note), whatever its priority. Nothing changes while no such idea is ready. 0 turns this off. |
 | `idle_alert` | duration | `"PT30M"` | How long free slots of this role may sit with no runnable idea for them while ideas that the role would take wait in `proposed`. Then piloop raises one escalation of priority 1, which the notifiers send. piloop acknowledges it when the slots fill, or when no such idea waits. 0 turns this off. |
@@ -673,23 +675,24 @@ Experimental: the scout.
 | `prompt_retry` | duration | `"PT2S"` | How soon a comment that the executor did not take, because its database was locked, goes to its agent again. |
 | `kill_retry` | duration | `"PT10S"` | How soon the kill of an agent that the daemon ended goes again while the agent has not ended: a kill can fail. |
 | `home_check` | duration | `"PT10S"` | How often the daemon checks that its home is still there. A daemon whose home is gone stops: no client can find it there to stop it. |
-| `startup_relaunches` | integer | `2` | How many times a run is queued again with a new implementer after its implementer failed to start. Then the run fails. A failure at startup is a fault of the host or the harness, not an attempt at the idea: it does not count toward `max_runs`. |
+| `inbox_page` | integer | `500` | How many events one read of the inbox's news examines at most (`piloop inbox wait`). A read with more reads again at once. |
 
 ### `[agents]`
 
 `[agents]`: how the daemon steers and ends the agents of this home.
 
-A campaign's `[agents]` in its `piloop.toml` can set `wrap_up_grace`, `finding_grace` and `brief_words`
-for its own agents.
+A campaign's `[agents]` in its `piloop.toml` can set `wrap_up_grace` and `brief_words` for its own agents.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `wrap_up_grace` | duration | `"PT10M"` | How long an agent that was told to wrap up, because its campaign stopped or someone cancelled it, has to save its work before the daemon ends it. |
-| `finding_grace` | duration | `"PT1M"` | How long after its finding the daemon ends an implementer, and every process that it left: a last commit takes seconds. |
-| `wrap_up_lead` | duration | `"PT10M"` | How long before its role timeout the daemon tells an implementer to wrap up, at most a quarter of the timeout. |
 | `steer_line_chars` | integer | `200` | How many characters of a comment's first line a running agent gets, in the one line that the daemon sends it for the comment. The agent can read the rest with SQL. |
 | `brief_words` | integer | `400` | How many words a campaign's `brief.md` may have before `piloop init` and `piloop doctor` warn. A brief that grows rule by rule teaches agents caution instead of saving scored versions: rewrite it to this size. |
 | `exit_output_chars` | integer | `500` | How many characters of its last output lines an agent that exits non-zero leaves in its error, which `piloop status` and the escalation of paused launches show, and one that exits 0 early with nothing done in the escalation. The values of its secrets read as their names. 0 leaves none. |
+| `startup_seconds` | number | `120` | An agent that ends this soon after its start and left nothing (no change and no comment) never worked: it failed at startup, a fault of the host or the harness, not an attempt. |
+| `detail_chars` | integer | `160` | How many characters of a comment or an error one line of a brief shows: an inbox item, an incident. |
+| `attach_lines` | integer | `40` | How many lines of an agent's output `piloop attach` prints. |
+| `wake_budget` | integer | `2000` | The tokens that `piloop wake` prints when `--budget` is not given. |
 
 ### `[watch]`
 
@@ -893,9 +896,11 @@ These keys still work. Each one shows a `PiloopDeprecationWarning` that names th
 - `[mcp.<name>]` is `[plugins.mcp_server.<name>]`, with the provider that its keys say. `provider = "http"` with `url`, `provider = "stdio"` with `command`. Its `PILOOP_CAMPAIGN_MCP__<NAME>__<KEY>` variables move with it.
 - `[memory] documents` is `documents` in `[plugins.memory]`, of the `local` provider. A value that `[plugins.memory]` sets too wins.
 - The `anomaly` trigger is two triggers: `run_failed` and `dead_at_startup`, in its place in the list.
+- A `piloop.toml`'s `[agents] finding_grace` is `[plugins.role.implementer] finding_grace`. `PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE` moves the same way (`moved_env`).
 - `mcp` and `[plugins.harness.<name>.usage]` are the harness's provider: it renders the servers, reads usage. A table named after a built-in harness drops them: the provider's own come from `home`. A table with a new name gets `provider`: its usage's `tally`, else its `mcp`. A table that sets neither runs its argv and does nothing else, as before.
 - `[memory] wake_budget` and `[plugins.role.<name>] wake_budget` are the `budget` of the `lessons` section. A role's own value wins over `[memory]`'s. A budget that differs from the role's old default sets the role's `sections` to its defaults with the lessons at that budget, or without them at 0. A role that sets `sections` keeps them. The watchdog's old default was 0: it now reads the lessons too.
 - A list of `{ provider = "…", … }` entries names instances: `[plugins.<capability>.<name>]` tables. `[plugins.role.<name>] triggers` and `sections` name `[plugins.trigger.<name>]` and `[plugins.section.<name>]`. `[status] sections` is `[plugins.section] use`, and `[[facts]]` is `[plugins.fact_source] use` with a table for each source. An entry without parameters is the name of its provider. One with parameters gets a table, named after its role (`research_low_water`) or `status` first.
 - `[spend]` is the `command` source `billing`, which reads `billing_usd`, and `spend` sums only that. So `spend` and `hold_at = { spend = … }` mean what they meant. The command prints one number, so it runs in `SPEND_COMMAND`. `notices` are those of `billing_usd`, and `closing_review` is `while_held` of `[plugins.stop_rule]`. Both sources join `[plugins.fact_source] use`, after its own sources. A table of either name that the file has wins. It runs after `plugin_lists`, so a `[[facts]]` is a `use` already.
+- In `config.toml`, `[daemon] startup_relaunches`, `[agents] finding_grace` and `wrap_up_lead` are the role's. They are keys of `[plugins.role.implementer]`, the defaults of every campaign's implementer, and their variables move the same way (`moved_env`). A role of your own that does runs gets the role's defaults, not these.
 - In `config.toml`, `[plugins.network] name_claim` of the `proxy` network is `name_claims`, a list of one. A `name_claims` that the table sets too wins.
 - In `config.toml`, `[runtimes.<name>]` is `[plugins.runtime.<name>]`. `PILOOP_RUNTIMES__<NAME>__<KEY>` is `PILOOP_PLUGINS__RUNTIME__<NAME>__<KEY>`.

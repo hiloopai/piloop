@@ -10,14 +10,14 @@ from piloop.actor import Agent
 from piloop.config import CampaignConfig
 from piloop.db.models import AgentSession, Campaign, Comment, utcnow
 from piloop.db.session import Database
-from piloop.ids import CommentKind, Revision, TargetKind, TargetRef
+from piloop.ids import Revision, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING, IMPLEMENTER, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.campaign_type.optimization.history import FIRST_LINE_CHARS, comment_line, history, newest
 from piloop.plugins.campaign_type.optimization.section.history import History
@@ -94,7 +94,7 @@ def scored(
 
 
 def comment(s: Session, kind: TargetKind, target: int, body: str, author: str = 'implementer#1') -> None:
-    s.add(Comment(target=TargetRef(kind, target), author=author, kind=CommentKind.FINDING, body=body))
+    s.add(Comment(target=TargetRef(kind, target), author=author, kind=FINDING, body=body))
 
 
 def render(db: Database, campaign: Campaign) -> str:

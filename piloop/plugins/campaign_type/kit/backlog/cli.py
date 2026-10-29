@@ -276,5 +276,5 @@ def idea_track(
 
 
 def waits(held: str | None) -> str:
-    """Return `` (<why>: it waits for a review)`` for an idea that ``ops.review_first`` holds, else nothing."""
+    """Return `` (<why>: it waits for a review)`` for an idea that ``review_first`` holds, else nothing."""
     return f' ({held}: it waits for a review)' if held is not None else ''

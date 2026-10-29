@@ -7,8 +7,8 @@ from decimal import Decimal
 
 from genai_prices import Usage as Tokens, calc_price
 
+from piloop.plugins.harness.contract import ModelId, Usage
 from piloop.plugins.price_list.contract import PriceList
-from piloop.usage import ModelId, Usage
 
 
 class GenaiPrices(PriceList):

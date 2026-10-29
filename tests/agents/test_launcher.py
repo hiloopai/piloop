@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 from piloop.actor import Agent, System
 from piloop.agents.launcher import Launcher, fill
 from piloop.agents.results import (
-    NEVER_WORKED,
     AgentSessionFinished,
     AgentSessionRunning,
     AgentSessionStarted,
@@ -32,6 +31,7 @@ from piloop.agents.results import (
     SessionSaved,
     StartupAnomaly,
     WrapUp,
+    never_worked,
 )
 from piloop.agents.roles import (
     PILOOP_HINT,
@@ -60,7 +60,7 @@ from piloop.plugins.executor.kit.capacity import HostSample
 from piloop.plugins.executor.kit.leases import SERVE, Answer, LeaseQueued, Leases, LeaseWorkerJoined, read_job
 from piloop.plugins.executor.kit.sessions import SessionFile
 from piloop.plugins.executor.workers import Workers
-from piloop.plugins.harness.contract import MCP, each_provider
+from piloop.plugins.harness.contract import MCP, Usage, each_provider
 from piloop.plugins.harness.kit.jsonl import dash_separators_wrapped
 from piloop.plugins.role.contract import FIRST_MESSAGE
 from piloop.plugins.runtime.contract import AgentExit, AgentSpec, ExitStatus
@@ -71,7 +71,6 @@ from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import Git
 from piloop.settings import AgentSettings, Settings
 from piloop.store.chunks import read
-from piloop.usage import Usage
 from tests.conftest import (
     HARNESS_FAILS,
     HARNESS_PROMPT_TO_FILE,
@@ -135,6 +134,10 @@ def request(db: Database, campaign: Campaign, kind: RoleName = WATCHDOG, **field
         s.add(agent_session)
         s.commit()
         return agent_session.id
+
+
+NEVER = never_worked(AgentSettings().startup_seconds)
+"""The error of an agent that ended at once and left nothing."""
 
 
 def controller(
@@ -556,7 +559,7 @@ def test_an_agent_that_ends_early_with_exit_0_and_nothing_done_says_its_last_out
     put_secret(db, campaign.id, 'TEAM_KEY', 'sk-live-123')
     agent_session_id = request(db, campaign)
     ended = launch(db, runtime, tmp_path, agent_session_id, agents=AgentSettings(exit_output_chars=200))
-    said = f'{NEVER_WORKED}: starting | error: helper binary not found at [secret TEAM_KEY]'
+    said = f'{NEVER}: starting | error: helper binary not found at [secret TEAM_KEY]'
     assert [a.error for _, a in anomalies(db)] == [said], 'what the escalation of a pause lists'
     assert (ended, agent_session(db, agent_session_id).error) == (NotStarted(said), None), 'the agent itself exited 0'
 
@@ -653,11 +656,13 @@ def test_an_agent_that_never_got_going_is_an_anomaly(
     use_harness(db, campaign, HARNESS_PROMPT_TO_FILE, **counted)
     idle_at_once = request(db, campaign)
     outcome = launch(db, runtime, tmp_path, idle_at_once)
-    assert (outcome, agent_session(db, idle_at_once).state) == (NotStarted(NEVER_WORKED), AgentSessionState.EXITED)
+    assert (outcome, agent_session(db, idle_at_once).state) == (NotStarted(NEVER), AgentSessionState.EXITED)
     assert [w for w, _ in anomalies(db)] == [dialog, idle_at_once], 'ended within a minute without a token'
 
-    monkeypatch.setattr('piloop.agents.results.STARTUP_SECONDS', 0)
-    assert not isinstance(launch(db, runtime, tmp_path, request(db, campaign)), NotStarted), 'past the startup window'
+    worked = AgentSettings(startup_seconds=0)
+    assert not isinstance(launch(db, runtime, tmp_path, request(db, campaign), agents=worked), NotStarted), (
+        'past the startup window'
+    )
     monkeypatch.undo()
     use_harness(db, campaign, HARNESS_PROMPT_TO_FILE)
     assert not isinstance(launch(db, runtime, tmp_path, request(db, campaign)), NotStarted), (

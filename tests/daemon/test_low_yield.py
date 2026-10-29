@@ -6,8 +6,8 @@ from typing import Never
 from inline_snapshot import snapshot
 from sqlalchemy import select
 
-from piloop.campaign.anomaly import AnomalyReported
 from piloop.campaign.inbox import items
+from piloop.db.events import AnomalyReported
 from piloop.db.models import Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.ids import CampaignStatus, CommentKind, TargetKind, TargetRef

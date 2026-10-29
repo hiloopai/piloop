@@ -65,7 +65,7 @@ from piloop.plugins.executor.kit.clones import Clones, Fetch, of_record, own_rep
 from piloop.plugins.executor.kit.relay import RELAY_ARGV
 from piloop.plugins.executor.kit.sessions import POLL_SECONDS, SessionFile
 from piloop.plugins.executor.kit.transfers import send_of_record
-from piloop.plugins.harness.contract import MCP, McpLaunch, UsageReader, expand
+from piloop.plugins.harness.contract import MCP, McpLaunch, Usage, UsageReader, expand
 from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.runtime.contract import (
     AgentExit,
@@ -82,7 +82,7 @@ from piloop.proc import AGENT_TOKEN_ENV, PILOOP_ARGV, child_env, kill_group
 from piloop.settings import INPUTS_DIR
 from piloop.store.chunks import read as read_chunks
 from piloop.store.tree import Materialised, Seen, evict_unlinked, put_tree
-from piloop.usage import Usage, UsageError
+from piloop.usage import UsageError
 
 TRANSCRIPT_LINES = 2000
 STOPPED = 'the worker stopped before the job started'

@@ -363,7 +363,7 @@ def thread(s: Reading, comment: CommentId) -> Thread:
         raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_COMMENT, f'no comment#{comment}')
     found_thread = inbox_module.thread_of(s, found)
     root = s.get_one(Comment, found_thread.comment.id)
-    if root.kind is not CommentKind.ESCALATION or root.form is None:  # free text shows as it was filed
+    if root.kind != CommentKind.ESCALATION or root.form is None:  # free text shows as it was filed
         return found_thread
     item = escalations.escalated(s, root)
     return found_thread.model_copy(update={'escalation': escalations.policy(s, item.campaign).view(item)})

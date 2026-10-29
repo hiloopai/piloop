@@ -22,6 +22,7 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign
 from piloop.db.schema import tables
 from piloop.db.session import Database
 from piloop.ids import CommentKind
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.memory.local.tables import JOURNAL_LINE_BYTES
 from tests.conftest import WRITER, bare_config
 
@@ -80,6 +81,7 @@ def test_schema_ddl_lists_every_table_with_its_indexes_and_runs(tmp_path: Path) 
             'archives',
             'campaigns',
             'candidates',
+            'comment_kinds',
             'comments',
             'documents',
             'evaluations',
@@ -439,7 +441,7 @@ def test_deletes_leave_tombstones_and_cascades_too(con: sqlite3.Connection) -> N
 
 
 def test_every_comment_kind_is_an_event_shaped_like_the_escalation_one(con: sqlite3.Connection) -> None:
-    for kind in CommentKind:
+    for kind in (CommentKind.NOTE, FINDING, CommentKind.DECISION, CommentKind.ESCALATION, CommentKind.MESSAGE):
         sql.run(
             con,
             'INSERT INTO comments (target_kind, target_id, author, kind, body, priority)'
@@ -502,13 +504,13 @@ def test_an_agent_whose_session_has_ended_leaves_no_finding(db: Database, tmp_pa
         with closing(sql.connect(tmp_path / 'piloop.db', actor=Agent(role='implementer', session=session))) as agent:
             sql.run(agent, finding.format(CommentKind.NOTE))
             try:
-                sql.run(agent, finding.format(CommentKind.FINDING))
+                sql.run(agent, finding.format(FINDING))
             except sqlite3.IntegrityError as e:
                 assert str(e) == 'the agent session of this connection has ended: its finding is refused'
                 refused.append(state)
     assert refused == [AgentSessionState.ENDING, AgentSessionState.EXITED, AgentSessionState.KILLED]
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.ORCHESTRATOR)) as orchestrator:
-        sql.run(orchestrator, finding.format(CommentKind.FINDING))
+        sql.run(orchestrator, finding.format(FINDING))
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
         kinds = con.execute('SELECT kind, count(*) FROM comments GROUP BY kind ORDER BY kind').fetchall()
     assert [tuple(row) for row in kinds] == [('finding', 4), ('note', 6)], (

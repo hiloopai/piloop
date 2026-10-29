@@ -60,10 +60,9 @@ from piloop.plugins.host import (
 )
 from piloop.plugins.metric import Direction
 from piloop.plugins.role.contract import ROLES
-from piloop.plugins.runtime.contract import RUNTIMES, RuntimeName
+from piloop.plugins.runtime.contract import RUNTIMES, RuntimeName, make_runtime, runtimes
 from piloop.plugins.runtime.subprocess import Subprocess
 from piloop.plugins.trigger.contract import TRIGGERS
-from piloop.runtime.factory import make_runtime, runtimes
 from piloop.settings import HOME_PLUGINS, Settings
 from tests.conftest import example, package
 from tests.daemon.test_roles import PLUGIN, forget_loaded, installed

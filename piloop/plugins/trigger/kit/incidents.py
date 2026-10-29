@@ -4,16 +4,13 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from piloop.campaign.anomaly import AnomalyReported
-from piloop.db.events import in_order
+from piloop.db.events import AnomalyReported, in_order
 from piloop.db.models import AgentSession, Event
-from piloop.ids import TargetKind, TargetRef
+from piloop.ids import AgentSessionId, TargetKind, TargetRef
 from piloop.plugins.trigger.contract import TRIGGERS, Fire, Pass, Trigger
 from piloop.text import age
-
-DETAIL_CHARS = 160
-"""How much of an error an incident's line shows."""
 
 
 @dataclass(frozen=True)
@@ -62,3 +59,9 @@ def report(p: Pass, trigger: Trigger, new: list[Incident]) -> Fire | None:
     ordered = sorted(new, key=lambda i: i.at)
     events = tuple(AnomalyReported(subject=i.subject, trigger=name, line=i.line(p.now)) for i in ordered)
     return Fire(f'{name}: ' + ', '.join(f'{i.subject} {i.what}' for i in ordered), alone=True, events=events)
+
+
+def assigned(s: Session, agent_session_id: AgentSessionId) -> list[str]:
+    """Return the incident lines that an agent got, in order. A routine sweep got none."""
+    rows = in_order(s, AnomalyReported, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
+    return [a.line for _, a in rows]

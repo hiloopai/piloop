@@ -13,8 +13,8 @@ from pytest_mock import MockerFixture
 from piloop import otel
 from piloop.db.models import AgentSession, AgentSessionState
 from piloop.otel import Tracer
+from piloop.plugins.runtime.contract import handle_for
 from piloop.plugins.vcs.git import commands as git
-from piloop.runtime.factory import handle_for
 from piloop.settings import Settings
 from tests.conftest import RESEARCH, console_lines
 

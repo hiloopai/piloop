@@ -1,48 +1,4 @@
-"""Token usage of each agent, kept in ``agent_sessions.usage``.
-
-piloop reads the usage from the files that the agent's harness leaves when the agent ends (``Harness.usage``). The
-result is a ``Usage``, with the same meaning for every harness, so one ``json_extract`` reads it in SQL and the
-harnesses compare. ``input`` is the uncached input, ``cache_read`` and ``cache_write`` are the input read from and
-written to the prompt cache. ``total`` is what the harness itself counts as the session's tokens.
-"""
-
-from dataclasses import dataclass
-
-from pydantic import BaseModel, ConfigDict
-
-
-class Usage(BaseModel):
-    """The token usage of one agent session, as ``agent_sessions.usage`` stores it. A harness's ``usage`` returns it."""
-
-    model_config = ConfigDict(frozen=True, use_attribute_docstrings=True)
-
-    input: int
-    """The input tokens that the prompt cache did not serve."""
-    output: int
-    cache_read: int
-    """The input tokens that the prompt cache served."""
-    cache_write: int
-    """The input tokens written to the prompt cache."""
-    total: int
-    """What the harness counts as the session's tokens."""
-    turns: int
-    """The number of model responses (API calls) in the session."""
-
-    def since(self, before: Usage | None) -> Usage:
-        """The usage after ``before``, the usage of the same session file when its agent resumed it. None: all of it."""
-        if before is None:
-            return self
-        return Usage.model_validate({k: getattr(self, k) - getattr(before, k) for k in Usage.model_fields})
-
-
-@dataclass(frozen=True)
-class ModelId:
-    """A model as its vendor's API names it, which a price list looks up (``Harness.model_id``)."""
-
-    vendor: str | None
-    """The API that serves it, such as ``anthropic`` or ``openai``. None: its name alone says it."""
-    name: str
-    """Its id at the vendor, such as ``claude-sonnet-4-5``."""
+"""Reading the token usage of agents: why it failed, and how a count is shown. The ``Usage`` is the harnesses'."""
 
 
 class UsageError(RuntimeError):

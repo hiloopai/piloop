@@ -13,6 +13,7 @@ from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import Yield, source, yields
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.campaign_type.optimization.pack import OUTLINE_CHARS, pack
 from piloop.plugins.role.contract import Files
 from tests.conftest import has_lines
@@ -73,10 +74,10 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Path:
         idea(s, campaign, 'ask the human', IdeaStatus.PROPOSED, created_by='human')
         idea(s, campaign, 'parked lines', IdeaStatus.PARKED, family='padding', created_by='watchdog#3')
         comment(s, IDEA, worse.id, 'NEGATIVE: fewer lines lose score\nbecause score counts lines')
-        note(s, campaign, 'orchestrator', CommentKind.FINDING, 'digest: best #2 +2 over the start\nby slice: …')
+        note(s, campaign, 'orchestrator', FINDING, 'digest: best #2 +2 over the start\nby slice: …')
         note(s, campaign, 'human', CommentKind.DECISION, 'no external data')
-        note(s, campaign, 'research#4', CommentKind.FINDING, 'batch 1: rejected deleting')
-        note(s, campaign, 'daemon', CommentKind.FINDING, 'not a digest')
+        note(s, campaign, 'research#4', FINDING, 'batch 1: rejected deleting')
+        note(s, campaign, 'daemon', FINDING, 'not a digest')
         s.commit()
     return workspace
 
@@ -156,7 +157,7 @@ def test_the_pack_is_bounded(db: Database, campaign: Campaign, tmp_path: Path) -
             row = idea(s, campaign, f'idea {n} ' + 't' * 200, IdeaStatus.SEED, provenance='p' * 500, family='f' * 80)
             comment(s, IDEA, row.id, '\n'.join(['w' * 79] * 30))
         for _ in range(SHOWN.digests + 2):
-            note(s, campaign, 'orchestrator', CommentKind.FINDING, '\n'.join(['d' * 79] * 30))
+            note(s, campaign, 'orchestrator', FINDING, '\n'.join(['d' * 79] * 30))
         s.commit()
     text = render(db, campaign, workspace)
     assert '- … and 2 older files.' in text and '- … and 3 older files.' in text

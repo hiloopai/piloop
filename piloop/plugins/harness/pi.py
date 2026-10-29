@@ -6,7 +6,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-from piloop.plugins.harness.contract import EFFORT, MCP, PROMPT, SESSION_ID, USER_CONFIG, Harness, McpArgs, McpLaunch
+from piloop.plugins.harness.contract import (
+    EFFORT,
+    MCP,
+    PROMPT,
+    SESSION_ID,
+    USER_CONFIG,
+    Harness,
+    McpArgs,
+    McpLaunch,
+    ModelId,
+)
 from piloop.plugins.harness.kit.jsonl import (
     Counts,
     JsonlSessions,
@@ -23,7 +33,6 @@ from piloop.plugins.mcp_server.contract import McpServer
 from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.mcp_server.stdio import StdioServer
 from piloop.settings import expand_env
-from piloop.usage import ModelId
 
 ARGV = [
     '-p',

@@ -142,7 +142,7 @@ from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchPolicy,
 from piloop.plugins.launch_policy.fewest_live import FewestLive
 from piloop.plugins.harness_choice.contract import HARNESS_CHOICES, HarnessChoice, HarnessCase
 from piloop.plugins.harness_choice.round_robin import RoundRobin
-from piloop.usage import ModelId
+from piloop.plugins.harness.contract import ModelId
 from piloop.plugins.fact_source.leases import LeaseFacts
 from piloop.plugins.fact_source.models import ModelFacts, Price
 from piloop.plugins.fact_source.spend import SpendFacts, Spend, SpendPart
@@ -194,8 +194,9 @@ from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.proc import Channel, kill_group
 from piloop.plugins.executor.workers import Workers, WorkersExecutor
 from piloop.otel import Tracer, Span, ConsoleProcessor
-from piloop.runtime.factory import RuntimeFactory
-from piloop.usage import Usage, UsageError
+from piloop.plugins.runtime.contract import RuntimeFactory
+from piloop.usage import UsageError
+from piloop.plugins.harness.contract import Usage
 from piloop.net import Route
 from piloop.net.server import executor_router
 

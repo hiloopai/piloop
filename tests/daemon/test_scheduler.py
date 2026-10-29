@@ -92,6 +92,7 @@ from piloop.plugins.executor.kit.leases import SERVE
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.host import Plugins
 from piloop.plugins.launch_policy.fewest_live import FewestLive
+from piloop.plugins.role.contract import ImplementerRole
 from piloop.plugins.runtime.contract import Handle
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
 from piloop.plugins.trigger.sql import SqlTrigger
@@ -2398,7 +2399,7 @@ def test_a_finding_that_lands_after_a_cancel_ended_the_implementer_is_refused_an
 def test_an_implementer_cancelled_before_it_did_anything_is_not_a_failed_start(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """An agent that the daemon ends on request within ``STARTUP_SECONDS``, with no commit and no comment, did not
+    """An agent that the daemon ends on request within ``[agents] startup_seconds``, with no commit and no comment, did not
     fail to start: no ``anomaly.startup`` and no count toward the startup breaker. Its row is ``killed``."""
     write_toml(Path(campaign.path), '#!/bin/sh\nexec sleep 30\n', implementer_timeout=60)
     set_config(db, campaign)
@@ -2755,7 +2756,7 @@ def test_an_implementer_is_told_once_to_wrap_up_before_its_timeout(
     fake = prompted(db, scheduler, mocker)
     with db.session() as s:
         timeout = s.get_one(Campaign, campaign.id).config.role(IMPLEMENTER).timeout
-    lead = wrap_up_lead(timeout, AgentSettings().wrap_up_lead)
+    lead = wrap_up_lead(timeout, ImplementerRole().wrap_up_lead)
 
     def started(ago: float) -> None:
         with db.session() as s:
@@ -2794,7 +2795,7 @@ def test_an_extension_reaches_the_executor_once_for_each_total_and_an_implemente
     extended = mocker.patch.object(scheduler._controller.executor, 'extend')
     with db.session() as s:
         timeout = s.get_one(Campaign, campaign.id).config.role(IMPLEMENTER).timeout
-    lead = wrap_up_lead(timeout, AgentSettings().wrap_up_lead)
+    lead = wrap_up_lead(timeout, ImplementerRole().wrap_up_lead)
     with db.session() as s:
         s.get_one(AgentSession, 1).started_at = utcnow() - timedelta(seconds=timeout - lead)
         s.commit()
@@ -2899,7 +2900,10 @@ def test_an_implementer_that_left_a_job_running_after_its_finding_succeeds_and_t
     write_toml(Path(campaign.path), harness, implementer_timeout=300)
     set_config(db, campaign)
     (idea,) = add_ideas(db, campaign, 'long')
-    timings(db, campaign, finding_grace=0)
+    with db.session() as s:
+        stored = s.get_one(Campaign, campaign.id)
+        stored.config = reconfigured(stored.config, plugins={'role': {'implementer': {'finding_grace': 0}}})
+        s.commit()
     scheduler = make_scheduler(db, runtime, tmp_path)
     assert run_all(scheduler) == [1]
     pid_file = tmp_path / 'runs' / '1' / 'child.pid'

@@ -47,6 +47,7 @@ from piloop.campaign.stop import run_cancel, seconds, timeout as agent_timeout
 from piloop.config import TRANSCRIPT, CampaignConfig
 from piloop.db.events import emit, has, in_order, latest
 from piloop.db.models import (
+    AfterEnd,
     AgentSession,
     AgentSessionState,
     Campaign,
@@ -59,6 +60,7 @@ from piloop.db.models import (
 )
 from piloop.db.session import Database, write_transaction
 from piloop.db.triggers import DAEMON_ACTOR
+from piloop.db.triggers.changelog import Commented
 from piloop.ids import AgentSessionId, CampaignId, CommentId, CommentKind, Revision, RoleName, TargetKind, TargetRef
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, Tracer
@@ -80,7 +82,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
 )
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RUN, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import attempts, settle_cancelled
 from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session, working_on
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
@@ -126,13 +128,12 @@ from piloop.plugins.executor.contract import (
     Sample,
 )
 from piloop.plugins.network.contract import NETWORKS, Network, NetworkHost
-from piloop.plugins.runtime.contract import ExitStatus
+from piloop.plugins.runtime.contract import ExitStatus, RuntimeFactory, make_runtime
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets, SecretsProvider
 from piloop.plugins.section.contract import Rendering, markdown
 from piloop.plugins.stop_rule.contract import Stop
 from piloop.plugins.vcs.contract import Repository, RunVersion, Transfer, Version
-from piloop.runtime.factory import RuntimeFactory, make_runtime
-from piloop.settings import AgentSettings, DaemonSettings, EvaluationSettings, StorageSettings
+from piloop.settings import AgentSettings, EvaluationSettings, StorageSettings
 
 RECOVERED_REASON = 'recovered: what the implementer of run#{run} left unsaved, never declared ready; not measured'
 CUT_REASON = 'recovered: where run#{run} was when a daemon stop cut it, never declared ready; not measured'
@@ -189,6 +190,13 @@ class RunReceived(EventModel):
     revisions: list[Revision]
 
 
+class FindingWritten(Commented):
+    """An implementer wrote its finding: the comment kind ``finding``, which this component declares."""
+
+    AFTER_END: ClassVar[AfterEnd] = AfterEnd.REFUSED
+    kind: Literal['comment.finding'] = 'comment.finding'
+
+
 class RunFinished(EventModel):
     """A run closed (``close_run``): how it ended, and the text that says why."""
 
@@ -215,7 +223,6 @@ class RunController:
         cas: Cas | None = None,
         reserve: int = StorageSettings().reserve,
         evaluation: EvaluationSettings | None = None,
-        daemon: DaemonSettings | None = None,
         agents: AgentSettings | None = None,
         network: Network | None = None,
         secrets: SecretsProvider | None = None,
@@ -226,7 +233,6 @@ class RunController:
         self._home = home
         self._units_dir = home / 'units'
         self._evaluation = evaluation if evaluation is not None else EvaluationSettings()
-        self._daemon = daemon if daemon is not None else DaemonSettings()
         self._agents = agents if agents is not None else AgentSettings()
         self.cas = cas if cas is not None else CAS.selected({}).open(home)
         self.sources = Sources(self.cas, home, db)
@@ -244,6 +250,7 @@ class RunController:
             lambda: self.launcher.cancelled.is_set(),
             secrets=secrets,
             exit_output_chars=self._agents.exit_output_chars,
+            startup_seconds=self._agents.startup_seconds,
         )
         if network is None:
             network = NETWORKS.selected({}).open(NetworkHost(Tokens(db), HomeSecrets(db, secrets)))
@@ -599,7 +606,7 @@ class RunController:
         self._settle(span, run_id, idea_id, end, startup_failed=False, last=last)
 
     def _relaunch(self, span: Span, run_id: RunId, agent_session_id: AgentSessionId, log_dir: Path) -> bool:
-        """Queue the run again with a new implementer, up to ``startup_relaunches`` times, after its implementer failed to start.
+        """Queue the run again with a new implementer, up to its role's ``startup_relaunches``, after it failed to start.
 
         The run stays open, so it keeps its slot, attempt number and brief. The ``implementer#<id>`` in the brief becomes the
         new implementer's id. The new implementer signs its notes and finding with its own id, and only its own finding counts
@@ -610,8 +617,9 @@ class RunController:
         with self.launcher.lock:
             with self._db.session() as s:
                 run = s.get_one(Run, run_id)
+                role = run.idea.campaign.config.roles.doing_runs().get(run.role)
                 launches = s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) or 0
-                if launches > self._daemon.startup_relaunches or run_cancel(s, run_id) is not None:
+                if role is None or launches > role.startup_relaunches or run_cancel(s, run_id) is not None:
                     return False
                 run.status = RunStatus.QUEUED
                 agent_session = AgentSession(
@@ -1267,6 +1275,7 @@ class RunController:
         The comments on the idea and its runs are a section of their own (``idea_comments``).
         """
         author = reader.signature
+        lead = wrap_up_lead(timeout, cfg.roles.doing_runs()[run.role].wrap_up_lead)
         idea = run.idea
         track = cfg.track(idea.track)
         evaluator_id = idea.campaign.evaluator_id
@@ -1275,8 +1284,8 @@ class RunController:
             '- Your cwd is your checkout: edit, run and save every version there. Only its versions are scored.'
             f' The campaign repo, {idea.campaign.path}, is read-only for you.',
             f'- Your session ends {round(timeout / 60, 1):g} minutes after it starts, at `${DEADLINE_ENV}` (Unix time).'
-            f' The daemon tells you to wrap up {round(wrap_up_lead(timeout, self._agents.wrap_up_lead) / 60, 1):g}'
-            ' minutes before, between two tool calls: start no command that can run past the deadline.',
+            f' The daemon tells you to wrap up {round(lead / 60, 1):g} minutes before, between two tool calls: start'
+            ' no command that can run past the deadline.',
             f'- Starting from candidate#{base.id}: {at_base} — {base.summary}',
         ]
         if base.run_id is not None and s.get_one(Run, base.run_id).idea_id == idea.id:
@@ -1365,7 +1374,7 @@ def finding_of(s: Session, run: Run, agent_session: AgentSession) -> Comment | N
     signed = (Agent(role=agent_session.kind, session=agent_session.id).signature, f'run#{run.id}')
     return s.scalars(
         select(Comment)
-        .where(on_idea | on_run, Comment.kind == CommentKind.FINDING, Comment.author.in_(signed))
+        .where(on_idea | on_run, Comment.kind == FINDING, Comment.author.in_(signed))
         .order_by(Comment.id)
         .limit(1)
     ).first()

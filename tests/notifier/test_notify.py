@@ -30,6 +30,7 @@ from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, Lifecycle
 from piloop.plugins.escalation.contract import Escalated, Never, ToHuman
 from piloop.plugins.escalation.structured import Structured
@@ -73,6 +74,7 @@ from piloop.plugins.notifier.contract import (
 )
 from piloop.plugins.notifier.slack import Slack
 from piloop.plugins.notifier.slack_app import SlackApp
+from piloop.plugins.runtime.contract import make_runtime
 from piloop.plugins.secrets.contract import (
     CampaignSecrets,
     HomeSecrets,
@@ -82,7 +84,6 @@ from piloop.plugins.secrets.contract import (
     set_secret,
 )
 from piloop.plugins.secrets.local import LocalSecrets
-from piloop.runtime.factory import make_runtime
 from piloop.settings import AgentSettings, DaemonSettings, Settings
 from tests.conftest import reconfigured, store_config, wait_until
 from tests.fixtures.slack import FakeSlack, fake_slack, fake_slack_app
@@ -324,7 +325,7 @@ def test_an_escalation_or_a_p0_item_that_waits_and_that_no_person_wrote_is_due(
     due_ones = [
         write(db, campaign, CommentKind.DECISION, 0, 'orchestrator'),
         write(db, campaign, CommentKind.NOTE, 0, 'orchestrator via human:alice'),
-        write(db, campaign, CommentKind.FINDING, 0, 'not a signature #'),
+        write(db, campaign, FINDING, 0, 'not a signature #'),
     ]
     write(db, campaign, CommentKind.NOTE, 1)
     write(db, campaign, CommentKind.NOTE, None)

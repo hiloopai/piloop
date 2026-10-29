@@ -22,6 +22,7 @@ from piloop.db.models import (
     Campaign,
     Comment,
     Event,
+    KnownCommentKind,
     KnownKind,
     Lease,
     Limit,
@@ -81,6 +82,7 @@ CORE_TABLES = (
     Token,
     Migration,
     KnownKind,
+    KnownCommentKind,
 )
 CORE_SCHEMA = Schema(
     tables=CORE_TABLES,

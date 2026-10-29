@@ -60,7 +60,6 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run
 from piloop.plugins.campaign_type.kit.verdicts.judge import head_scores, keeps
 from piloop.reports.overview import live_agent_sessions
 from piloop.text import iso
-from piloop.usage.totals import campaign_tokens
 
 
 def read(
@@ -205,7 +204,6 @@ def _state(s: Session, campaign: Campaign, cfg: CampaignConfig, me: Actor) -> Ca
         ],
         roles=roles_of(s, campaign),
         inbox=len(inbox.waiting_for(s, me.party, campaign_id=campaign.id)),
-        tokens=campaign_tokens(s, campaign.id),
         files=files_of(s, campaign),
     )
 

@@ -6,8 +6,8 @@ source asks it for each agent of a campaign, after its own ``prices``.
 
 from abc import ABC, abstractmethod
 
+from piloop.plugins.harness.contract import ModelId, Usage
 from piloop.plugins.host import Capability, One, Parameters, Scope, Tier
-from piloop.usage import ModelId, Usage
 
 
 class PriceList(Parameters, ABC):

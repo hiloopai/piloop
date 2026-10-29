@@ -196,18 +196,21 @@ def test_a_raw_pause_needs_a_reason_and_a_known_scope(me: Database, tmp_path: Pa
 def test_only_a_sweeping_agent_files_its_ideas_for_review_while_the_campaign_is_paused(me: Database) -> None:
     with me.session() as s:
         campaign = s.get_one(Campaign, 1)
-        assert ops.review_first(campaign, Agent(role='research', session=4), new=False) is None, 'not paused'
+        assert backlog_ops.review_first(campaign, Agent(role='research', session=4), new=False) is None, 'not paused'
         assert (
-            ops.review_first(campaign, Agent(role='research', session=4), new=True)
+            backlog_ops.review_first(campaign, Agent(role='research', session=4), new=True)
             == '[plugins.role.research] max_ideas = 0'
         ), 'the test file'
         ops.pause(s, CampaignId(1), evals=False, reason='why')
-        assert ops.review_first(campaign, Agent(role='watchdog', session=5), new=False) == 'campaign demo is paused'
         assert (
-            ops.review_first(campaign, ACTOR, new=True) is None
-            and ops.review_first(campaign, System.HUMAN, new=True) is None
+            backlog_ops.review_first(campaign, Agent(role='watchdog', session=5), new=False)
+            == 'campaign demo is paused'
         )
-        assert ops.review_first(campaign, Agent(role='implementer', session=6), new=True) is None, (
+        assert (
+            backlog_ops.review_first(campaign, ACTOR, new=True) is None
+            and backlog_ops.review_first(campaign, System.HUMAN, new=True) is None
+        )
+        assert backlog_ops.review_first(campaign, Agent(role='implementer', session=6), new=True) is None, (
             'an implementer files no ideas anyway'
         )
 

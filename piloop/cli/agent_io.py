@@ -12,12 +12,9 @@ from piloop.plugins.harness.contract import HARNESSES, Harness
 from piloop.plugins.runtime.contract import MESSAGES_ENV, take
 from piloop.reports.overview import agent_output
 
-ATTACH_LINES = 40
-"""How many lines of the agent's output ``piloop attach`` prints."""
-
 
 def attach(agent_session_id: Annotated[AgentSessionId, cyclopts.Parameter(help='The id of the agent.')], /) -> None:
-    """Print the last lines that an agent wrote, running or ended.
+    """Print the last lines that an agent wrote, running or ended: `[agents] attach_lines` of them.
 
     An agent is a background process, with no terminal to type into: `piloop prompt` sends it a message.
     A running agent's lines come from the latest snapshot of its session, on any machine: a few seconds old, 30 at most.
@@ -26,7 +23,10 @@ def attach(agent_session_id: Annotated[AgentSessionId, cyclopts.Parameter(help='
         agent_session = s.get(AgentSession, agent_session_id)
         if agent_session is None:
             raise SystemExit(f'no agent_session#{agent_session_id}')
-        output, state = agent_output(s, agent_session, ATTACH_LINES, local.cas()), agent_session.state
+        output, state = (
+            agent_output(s, agent_session, common.settings.agents.attach_lines, local.cas()),
+            agent_session.state,
+        )
     if not output:
         raise SystemExit(f'agent_session#{agent_session_id} is {state} and has written nothing yet')
     common.console.print('\n'.join(output), markup=False, highlight=False, soft_wrap=True)

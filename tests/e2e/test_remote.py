@@ -504,7 +504,7 @@ def test_stop(server: Server) -> None:
     assert state.agents == [], state.agents
     orchestrator = state.roles[RoleName('orchestrator')]
     assert (orchestrator.requested, orchestrator.live) == (0, 0), orchestrator
-    print(f'{server.name}: {state.tokens} tokens, head {state.head}; orchestrator#{report} reported the stop')
+    print(f'{server.name}: head {state.head}; orchestrator#{report} reported the stop')
 
 
 @needs(test_stop)

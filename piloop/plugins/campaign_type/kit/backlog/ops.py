@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
 from piloop.agents.roles import files_of
-from piloop.campaign.ops import Refused, _get, _reason, review_first
+from piloop.campaign.ops import Refused, existing, required_reason
 from piloop.db.models import Campaign, Comment
 from piloop.ids import CampaignId, CommentKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import Definition, NotASeed, develop
@@ -19,6 +19,26 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.role.contract import Files
+
+
+def review_first(campaign: Campaign, actor: Actor, *, new: bool) -> str | None:
+    """Return why an idea that ``actor`` adds (``new``) or develops waits for a review (``proposed``), or None.
+
+    Only an agent of a sweeping role waits: while the campaign is paused, and for a new idea while its role's
+    ``max_ideas`` is 0 (a sweep reads it once, in its brief; the operator may have set it to 0 since). The orchestrator
+    and humans paused the campaign themselves.
+    """
+    if (agent := actor.launched) is None:
+        return None
+    name = agent.role
+    role = campaign.config.roles.sweeping().get(name)
+    if role is None:
+        return None
+    if campaign.paused is not None:
+        return f'campaign {campaign.name} is paused'
+    if new and role.max_ideas == 0:
+        return f'[plugins.role.{name}] max_ideas = 0'
+    return None
 
 
 def files(campaign: Campaign, actor: Actor) -> Files | None:
@@ -82,7 +102,7 @@ def add_idea(
         Refused: the actor files only seeds or nothing, the base or the track is not the campaign's, or a link is
             refused (``link``).
     """
-    campaign = _get(s, Campaign, campaign_id, 'campaign')
+    campaign = existing(s, Campaign, campaign_id, 'campaign')
     if files(campaign, actor) is Files.SEEDS:
         raise Refused(
             f'{actor} files seeds, not ideas: `piloop idea seed {campaign.name} "<hunch>" --from "<pointers>"`.'
@@ -126,7 +146,7 @@ def file_seed(
     Raises:
         Refused: the actor files nothing, the pointers are blank, or the base or the track is not the campaign's.
     """
-    campaign = _get(s, Campaign, campaign_id, 'campaign')
+    campaign = existing(s, Campaign, campaign_id, 'campaign')
     files(campaign, actor)
     if not provenance.strip():
         raise Refused('a seed needs pointers: --from "<ids, paths, numbers>"')
@@ -166,7 +186,7 @@ def develop_seed(
         Refused: the actor files only seeds or nothing, the idea is not a seed, the definition lacks a part, the base
             is not the campaign's, or a link is refused (``link``): a link from a seed can close a cycle.
     """
-    idea = _get(s, Idea, idea_id, 'idea')
+    idea = existing(s, Idea, idea_id, 'idea')
     if files(idea.campaign, actor) is Files.SEEDS:
         raise Refused(f'{actor} files seeds; research develops them')
     check_base(s, idea.campaign, base)
@@ -248,8 +268,8 @@ def set_idea_status(s: Session, idea_id: IdeaId, status: IdeaStatus, *, reason: 
     Raises:
         Refused: the reason is blank, or ``check_status`` refuses.
     """
-    idea = _get(s, Idea, idea_id, 'idea')
-    why = _reason(reason)
+    idea = existing(s, Idea, idea_id, 'idea')
+    why = required_reason(reason)
     check_status(idea, status)
     old = idea.status
     _note(s, idea, f'{old} → {status}: {why}', actor)
@@ -266,8 +286,8 @@ def link(s: Session, idea_id: IdeaId, kind: LinkKind, target_id: IdeaId, *, reas
     Raises:
         Refused: the reason is blank, or ``_link`` refuses.
     """
-    idea = _get(s, Idea, idea_id, 'idea')
-    why = _reason(reason)
+    idea = existing(s, Idea, idea_id, 'idea')
+    why = required_reason(reason)
     _link(s, idea, kind, target_id)
     _note(s, idea, f'{kind} idea#{target_id}: {why}', actor)
 
@@ -280,7 +300,7 @@ def _link(s: Session, idea: Idea, kind: LinkKind, target_id: IdeaId) -> None:
             scheduled or has an open run (an ``after`` link comes too late for its run), or the link closes a cycle of
             its kind.
     """
-    target = _get(s, Idea, target_id, 'idea')
+    target = existing(s, Idea, target_id, 'idea')
     if idea.id == target.id:
         raise Refused(f'idea#{idea.id} cannot link to itself')
     if idea.campaign_id != target.campaign_id:
@@ -313,8 +333,8 @@ def unlink(s: Session, idea_id: IdeaId, kind: LinkKind, target_id: IdeaId, *, re
     Raises:
         Refused: the reason is blank, the idea is missing, or it has no such link.
     """
-    idea = _get(s, Idea, idea_id, 'idea')
-    why = _reason(reason)
+    idea = existing(s, Idea, idea_id, 'idea')
+    why = required_reason(reason)
     found = next((lk for lk in idea.links if lk.kind is kind and lk.target_id == target_id), None)
     if found is None:
         raise Refused(f'idea#{idea.id} has no {kind} link to idea#{target_id}')
@@ -333,8 +353,8 @@ def set_base(
     Raises:
         Refused: the reason is blank, the idea is missing, the candidate is not one of its campaign, or it is the base.
     """
-    idea = _get(s, Idea, idea_id, 'idea')
-    why = _reason(reason)
+    idea = existing(s, Idea, idea_id, 'idea')
+    why = required_reason(reason)
     check_base(s, idea.campaign, candidate_id)
     old = idea.base_candidate_id
     if old == candidate_id:
@@ -369,8 +389,8 @@ def set_track(s: Session, idea_id: IdeaId, track: TrackName, *, reason: str, act
         Refused: the reason is blank, the idea is missing, the track is not in ``piloop.toml``, it is the idea's track,
             or the idea is scheduled or has an open run: the run's commits are judged on the idea's track.
     """
-    idea = _get(s, Idea, idea_id, 'idea')
-    why = _reason(reason)
+    idea = existing(s, Idea, idea_id, 'idea')
+    why = required_reason(reason)
     track = track_for(idea.campaign, track)
     if idea.track == track:
         raise Refused(f'idea#{idea.id} is on track {track} already')
@@ -390,7 +410,7 @@ def set_priority(s: Session, idea_id: IdeaId, priority: int) -> int:
     Raises:
         Refused: the idea is missing.
     """
-    idea = _get(s, Idea, idea_id, 'idea')
+    idea = existing(s, Idea, idea_id, 'idea')
     old, idea.priority = idea.priority, priority
     return old
 

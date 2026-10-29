@@ -340,7 +340,6 @@ STILL_IMPORT_THE_TYPE_KIT = frozenset(
         'campaign/ops.py',
         'campaign/stop.py',
         'cli/campaign.py',
-        'cli/store.py',
         'config.py',
         'daemon/api.py',
         'daemon/main.py',

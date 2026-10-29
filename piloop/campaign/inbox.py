@@ -36,8 +36,8 @@ from piloop.api.views import (
     Thread,
     VerdictNews,
 )
-from piloop.campaign.anomaly import AnomalyReported
 from piloop.db import feed as db_feed
+from piloop.db.events import AnomalyReported
 from piloop.db.models import NOT_RETIRED, AgentSession, Campaign, Comment, Event, utcnow
 from piloop.db.triggers.changelog import CampaignStatusChanged, Commented, CommentEdited, IdeaCreated
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
@@ -50,6 +50,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
+from piloop.settings import settings
 from piloop.text import iso
 
 type Column[T] = Mapped[T] | ColumnElement[T]
@@ -126,7 +127,6 @@ WAKES: Final = tuple(
     for m in (Commented, CommentEdited, CampaignStatusChanged, AnomalyReported, IdeaCreated, CandidateJudged)
 )
 """The events that ``news`` reports: what ends ``piloop inbox wait``."""
-PAGE = 500
 
 
 def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party: str, upto: int | None = None) -> News:
@@ -149,7 +149,7 @@ def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party
     waiting = waiting_for(s, party, campaign_id=campaign_id)
     cursor, found, more = after, list[NewsItem](), True
     while more and not found:
-        page = db_feed.after(s, cursor, WAKES, limit=PAGE)
+        page = db_feed.after(s, cursor, WAKES, limit=settings.daemon.inbox_page)
         cursor, more = page.next, page.more
         events = s.scalars(select(Event).where(Event.id.in_(page.ids)).order_by(Event.id)).all()
         found = _news(s, events, waiting, campaign_id, party)
@@ -164,7 +164,7 @@ def unanswered(s: Session, waiting: Sequence[tuple[Comment, Campaign | None]]) -
     An answer is a comment on the root of the escalation's thread (``reply``) that is ``in_reply_to`` it, or that is on
     it and answers nothing else.
     """
-    asked = {c.id: c for c, _ in waiting if c.kind is CommentKind.ESCALATION}
+    asked = {c.id: c for c, _ in waiting if c.kind == CommentKind.ESCALATION}
     roots = {c.target_id if c.target_kind == TargetKind.COMMENT else c.id for c in asked.values()}
     on_roots = (Comment.target_kind == TargetKind.COMMENT) & Comment.target_id.in_(roots)
     answered = set[CommentId]()

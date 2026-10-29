@@ -10,11 +10,10 @@ import pytest
 
 from piloop.plugins.harness.claude import Claude
 from piloop.plugins.harness.codex import Codex
-from piloop.plugins.harness.contract import Custom
+from piloop.plugins.harness.contract import Custom, ModelId, Usage
 from piloop.plugins.harness.pi import Pi
 from piloop.plugins.price_list.contract import PRICE_LISTS
 from piloop.plugins.price_list.genai_prices import GenaiPrices
-from piloop.usage import ModelId, Usage
 
 M = 1_000_000
 

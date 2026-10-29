@@ -370,7 +370,6 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
             'watchdog': {'triggered': True, 'requested': 0, 'live': 0, 'last_ended': '2026-10-26T07:00:00.000000Z'},
         },
         'inbox': 1,
-        'tokens': 0,
         'files': 'kept',
     }, 'the escalation written after the cursor is not in the snapshot'
     [item] = inbox['items']

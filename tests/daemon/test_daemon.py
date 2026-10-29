@@ -18,12 +18,12 @@ from piloop.daemon.main import ACTOR, Daemon
 from piloop.daemon.serve import RESTART_SIGNAL, SERVE_ARGV
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database, migrate
-from piloop.ids import CommentKind, TargetRef
+from piloop.ids import TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.proc import Inherited, alive, started
 from piloop.settings import Settings
@@ -50,7 +50,7 @@ from tests.conftest import (
 def test_daemon_end_to_end(
     campaign_path: Path, tmp_path: Path, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr('piloop.agents.results.STARTUP_SECONDS', 0)  # the failing implementer worked, then left nothing
+    monkeypatch.setenv('PILOOP_AGENTS__STARTUP_SECONDS', '0')  # the failing implementer worked, then left nothing
     home = tmp_path / 'home'
     runtime = ScriptRuntime()
     daemon = Daemon(Settings(home=home))
@@ -386,7 +386,7 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
     wait_until((cfg.home / 'runs' / '1' / 'agent.pid').exists)
     if finding:
         with first.db.session() as s:
-            s.add(Comment(target=TargetRef(IDEA, 1), author='implementer#1', kind=CommentKind.FINDING, body='done'))
+            s.add(Comment(target=TargetRef(IDEA, 1), author='implementer#1', kind=FINDING, body='done'))
             s.commit()
     locked = mocker.patch.object(CampaignResults, 'finished', side_effect=OperationalError('', {}, Exception('locked')))
     mocker.patch.object(workers_of(first.controller).leases, 'end_unreported')  # it dies while it waits for the report

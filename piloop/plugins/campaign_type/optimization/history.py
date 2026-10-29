@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign, Comment, count
-from piloop.ids import CommentKind, TargetKind, TargetRef
+from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import links, superseded_by
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.references import references
@@ -33,6 +33,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.measure import climb, score
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.campaign_type.kit.runs.sessions import session_tokens
 from piloop.plugins.campaign_type.kit.verdicts.judge import fallback_track, keeps, track_of
 from piloop.plugins.campaign_type.kit.verdicts.verdict import label
@@ -99,7 +100,7 @@ def renderables(
     campaign_findings = s.scalars(
         select(Comment)
         .where(Comment.target == TargetRef(TargetKind.CAMPAIGN, campaign.id))
-        .where(Comment.kind == CommentKind.FINDING, Comment.author.like('%#%'))
+        .where(Comment.kind == FINDING, Comment.author.like('%#%'))
         .order_by(Comment.id.desc())
         .limit(findings)
     ).all()[::-1]

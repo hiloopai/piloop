@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
-from piloop.campaign.ops import _get
+from piloop.campaign.ops import existing
 from piloop.db.models import Campaign
 from piloop.plugins.campaign_type.kit.backlog.ops import files, track_for
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -33,7 +33,7 @@ def note_candidate(
         Refused: the candidate is missing or not a measured discard or interesting, the reason is blank, the actor
             files nothing and gave follow-ups, or the track is not the campaign's.
     """
-    candidate = _get(s, Candidate, candidate_id, 'candidate')
+    candidate = existing(s, Candidate, candidate_id, 'candidate')
     campaign = s.get_one(Campaign, candidate.campaign_id)
     if follow_ups:
         files(campaign, actor)

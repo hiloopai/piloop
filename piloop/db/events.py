@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
 from piloop.db.models import Event, EventModel
-from piloop.ids import CampaignId, TargetRef
+from piloop.ids import CampaignId, Ref, TargetRef
 
 
 class SubjectSettled(EventModel):
@@ -21,6 +21,21 @@ class SubjectSettled(EventModel):
     campaign: CampaignId
 
 
+class AnomalyReported(EventModel):
+    """An incident that an agent was requested for, on the agent's row: one event for each incident.
+
+    The incident triggers write it (``piloop.plugins.trigger.kit.incidents``), and the inbox reports it.
+    """
+
+    kind: Literal['anomaly.reported'] = 'anomaly.reported'
+    subject: Ref
+    """The row that the incident is about."""
+    trigger: str
+    """The trigger that found it, by name: ``run_failed``."""
+    line: str
+    """The incident as the agent's brief shows it."""
+
+
 def emit(s: Session, event: EventModel, target: TargetRef, actor: Actor) -> Event:
     """Add ``event`` on ``target``, signed by ``actor``, to the session. The caller commits."""
     row = Event(actor=actor.signature, target=target, payload=event)
@@ -29,12 +44,14 @@ def emit(s: Session, event: EventModel, target: TargetRef, actor: Actor) -> Even
 
 
 def has(model: type[EventModel], **fields: object) -> ColumnElement[bool]:
-    """The events of ``model``'s kinds whose payload has each value of ``fields``, or one of the values of a tuple.
+    """The events of ``model``'s kinds, and of its subclasses', whose payload has each value of ``fields``.
+
+    A tuple is one of its values.
 
     Raises:
         TypeError: ``model`` has no such field.
     """
-    clauses = [Event.kind.in_(model.kinds())]
+    clauses = [Event.kind.in_([kind for kind, m in EventModel.registered().items() if issubclass(m, model)])]
     for name, wanted in fields.items():
         field = model.model_fields.get(name)
         if field is None:

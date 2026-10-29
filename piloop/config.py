@@ -45,7 +45,7 @@ from piloop.plugins.runtime.contract import RUNTIMES
 from piloop.plugins.section.contract import SECTIONS, Section
 from piloop.plugins.stop_rule.contract import STOP_RULES, Shape
 from piloop.plugins.trigger.contract import TRIGGERS, Trigger
-from piloop.settings import AgentSettings, settings
+from piloop.settings import AgentSettings, MovedEnv, settings
 
 CONFIG_FILE = 'piloop.toml'
 BRIEF_FILE = 'brief.md'
@@ -54,15 +54,13 @@ TRANSCRIPT = 'transcript.txt'
 
 
 class CampaignAgents(BaseModel):
-    """``[agents]``: the timings of the campaign's agents and its brief's budget, over the home's ``[agents]``."""
+    """``[agents]``: how long the campaign's agents get to wrap up, and its brief's budget, over the home's ``[agents]``."""
 
     model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
 
     wrap_up_grace: timedelta | None = Field(default=None, ge=timedelta(0))
     """How long an agent that was told to wrap up, because the campaign stopped or someone cancelled it, has to save
     its work before the daemon ends it. Unset: the home's. Seconds, or an ISO 8601 duration such as ``PT20M``."""
-    finding_grace: timedelta | None = Field(default=None, ge=timedelta(0))
-    """How long after its finding the daemon ends an implementer, and every process that it left. Unset: the home's."""
     brief_words: int | None = Field(default=None, ge=1)
     """How many words ``brief.md`` may have before ``piloop init`` and ``piloop doctor`` warn. Unset: the home's."""
 
@@ -130,7 +128,7 @@ class CampaignConfig(BaseModel):
     error analyses, comparisons with a reference, evaluation reports. The research pack lists each one with its
     outline, newest first, so that every sweep that reads the pack reads them before it proposes work."""
     agents: CampaignAgents = CampaignAgents()
-    """``[agents]``: how long the campaign's agents get to wrap up and to leave after their finding."""
+    """``[agents]``: how long the campaign's agents get to wrap up, and its brief's budget."""
     plugins: Annotated[Plugins, PluginTables(Scope.CAMPAIGN)] = Field(default={}, validate_default=True)
     """``[plugins]``: the campaign's plugins, a table for each capability (``PluginTables``)."""
 
@@ -547,7 +545,9 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
             dotenv_settings: PydanticBaseSettingsSource,
             file_secret_settings: PydanticBaseSettingsSource,
         ) -> tuple[PydanticBaseSettingsSource, ...]:
-            return init_settings, env_settings, InitSettingsSource(settings_cls, raw)
+            finding_grace = deprecated.CAMPAIGN_FINDING_GRACE
+            moved = MovedEnv(env_settings, finding_grace, 'PILOOP_CAMPAIGN_', deprecated.campaign_finding_grace)
+            return init_settings, moved, InitSettingsSource(settings_cls, raw)
 
     # pydantic validates the values; the cast only tells the type checker to let them through
     kwargs = cast(dict[str, Any], {k: v for k, v in overrides.items() if v is not None})

@@ -44,6 +44,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import MetricRole
 from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.campaign_type.kit.verdicts.judge import head
 from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
@@ -362,7 +363,7 @@ def _agent_session_findings(
     rows = s.scalars(
         select(Comment)
         .join(Idea, (Comment.target_kind == IDEA) & (Comment.target_id == Idea.id))
-        .where(Idea.campaign_id == campaign.id, Comment.kind == CommentKind.FINDING, by_runs)
+        .where(Idea.campaign_id == campaign.id, Comment.kind == FINDING, by_runs)
         .order_by(Comment.id.desc())
         .limit(count)
     ).all()
@@ -377,7 +378,7 @@ def _digests(s: Session, campaign: Campaign, heading: str, count: int) -> list[R
         select(Comment)
         .where(
             campaign_of(Comment.target_kind, Comment.target_id) == campaign.id,
-            Comment.kind.in_((CommentKind.FINDING, CommentKind.DECISION)),
+            Comment.kind.in_((FINDING, CommentKind.DECISION)),
             Comment.author.not_like('%#%'),
             Comment.author != DAEMON_ACTOR,
         )

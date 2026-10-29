@@ -31,7 +31,6 @@ from piloop.agents.results import (
 )
 from piloop.agents.roles import briefing, compose_brief, compose_resumed, render_sections, role_of
 from piloop.campaign import escalations
-from piloop.campaign.anomaly import AnomalyReported, assigned
 from piloop.campaign.campaigns import WORKSPACE, CampaignAdded, workspace_dir
 from piloop.campaign.launches import choose_harness, close, earlier, full_harnesses, remove_checkouts, resumed_on
 from piloop.campaign.stop import (
@@ -53,7 +52,7 @@ from piloop.campaign.stop import (
 )
 from piloop.config import CampaignConfig
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
-from piloop.db.events import emit, has, in_order
+from piloop.db.events import AnomalyReported, emit, has, in_order
 from piloop.db.models import (
     LIVE,
     NOT_RETIRED,
@@ -105,7 +104,7 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import (
     RejudgeRequested,
     checkout_candidate,
 )
-from piloop.plugins.contribution import Contribution, DaemonHost, Leaving
+from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, closers
 from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.executor.consumers import LIMITS
 from piloop.plugins.executor.contract import AgentKey, LeftJob
@@ -113,12 +112,12 @@ from piloop.plugins.fact_source.contract import FACT_SOURCES
 from piloop.plugins.fact_source.facts import Facts
 from piloop.plugins.host import ContractBroken
 from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchCase, LaunchPolicy, Share
-from piloop.plugins.memory.contract import MEMORY
-from piloop.plugins.role.contract import PUSHED_KINDS, Continuity, ImplementerRole, SweepRole
+from piloop.plugins.role.contract import UNPUSHED_KINDS, Continuity, ImplementerRole, SweepRole
+from piloop.plugins.runtime.contract import handle_for, runtime_for
 from piloop.plugins.section.contract import Rendering
 from piloop.plugins.stop_rule.contract import GO, STOP_RULES, Go, Hold, Stop, WhileHeld
 from piloop.plugins.trigger.contract import TRIGGERS, Backlog, Fire, Quiet, Steer
-from piloop.runtime.factory import handle_for, runtime_for
+from piloop.plugins.trigger.kit.incidents import assigned
 
 AGENT_SESSIONS = 'agent_sessions'
 """The directory under the home of each sweep's place: ``agent_sessions/<id>``."""
@@ -427,20 +426,16 @@ class Campaigns:
     def _close_campaign(
         self, s: Session, campaign: Campaign, cfg: CampaignConfig, sweeping: Mapping[RoleName, SweepRole], now: datetime
     ) -> None:
-        """Close a stopped campaign: sync its documents into its memory, fire the ``stopped`` triggers of ``sweeping``.
+        """Close a stopped campaign: each provider that ``Closes`` does its share, then the triggers of ``sweeping`` fire.
 
         The pass closes a campaign that the daemon stopped once it ``settled``, with every sweeping role: by default,
         the watchdog's closing review, which can then search the campaign's reports. A stop rule with
         ``while_held = "skip"`` closes it at the stop, with none. The stop and the close are events (``unclosed``), so a daemon that
         restarts in between still closes it, once.
         """
-        try:
-            with s.begin_nested():
-                synced = MEMORY.selected(cfg.plugins).sync(s, campaign, DAEMON_ACTOR)
-        except OSError as e:  # the repo could not be read: the closing review still happens
-            self._tracer.event('documents.sync_failed', campaign=campaign.name, error=f'{type(e).__name__}: {e}')
-        else:
-            self._tracer.event('documents.synced', campaign=campaign.name, result=synced.line())
+        for provider, closer in closers(cfg.plugins).items():
+            result = closer.closing(s, campaign)
+            self._tracer.event('campaign.closing', campaign=campaign.name, provider=provider, result=result)
         for name, role in sweeping.items():
             self._request(s, campaign, cfg, name, role, now, Facts(), stopping=True)
         s.flush()  # the status change's event first: the close comes after the stop
@@ -804,7 +799,7 @@ class Campaigns:
             notes = s.scalars(
                 select(Comment)
                 .where(Comment.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
-                .where(Comment.kind.in_(PUSHED_KINDS))
+                .where(Comment.kind.not_in(UNPUSHED_KINDS))
                 .order_by(Comment.id)
             ).all()
             role_pass = self._pass(s, campaign, cfg, agent_session.kind, table, now, left_now(s, campaign, cfg))

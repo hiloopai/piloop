@@ -8,7 +8,8 @@ from piloop.db.events import in_order
 from piloop.db.models import AgentSession, Event
 from piloop.ids import TargetKind
 from piloop.plugins.trigger.contract import Fire, Pass, Trigger
-from piloop.plugins.trigger.kit.incidents import DETAIL_CHARS, Incident, investigate
+from piloop.plugins.trigger.kit.incidents import Incident, investigate
+from piloop.settings import settings
 from piloop.text import cell
 
 
@@ -35,7 +36,7 @@ class DeadAtStartup(Trigger):
                 e.target,
                 e.at,
                 'dead at startup',
-                f'{a.role} on {a.harness} failed to start ({a.seconds}s): {cell(a.error or "no error recorded", DETAIL_CHARS)}',
+                f'{a.role} on {a.harness} failed to start ({a.seconds}s): {cell(a.error or "no error recorded", settings.agents.detail_chars)}',
             )
             for e, a in events
             if a.role not in investigators

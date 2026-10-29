@@ -4,12 +4,15 @@ from enum import StrEnum
 from typing import Final, NewType
 
 from piloop.ids import (
+    CommentKind,
     RoleName,
     TargetKind,
 )
 
 RUN: Final = TargetKind('run')
 """A run (``runs``). What its comments and events point at."""
+FINDING: Final = CommentKind('finding')
+"""An implementer's report on its idea: it settles the run as finished (``FindingWritten``)."""
 
 RunId = NewType('RunId', int)
 

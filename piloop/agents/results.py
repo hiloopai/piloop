@@ -62,10 +62,13 @@ from piloop.proc import Channel
 from piloop.settings import TMP_DIR, UNITS_DIR, AgentSettings
 from piloop.store.tree import Manifest, Staged, merge, stage, write_files
 
-STARTUP_SECONDS = 120
-"""An agent that ends sooner than this and leaves nothing did not start to work: a crash, broken tools, no quota."""
-NEVER_WORKED = f'it ended within {STARTUP_SECONDS}s and left nothing'
-"""Why an agent that ended with no error did not start to work (``_never_worked``)."""
+
+def never_worked(startup_seconds: float) -> str:
+    """The error of an agent that ended within ``startup_seconds`` (``[agents]``) and left nothing.
+
+    It did not start to work: a crash, broken tools, no quota.
+    """
+    return f'it ended within {startup_seconds:g}s and left nothing'
 
 
 class AgentSessionStarted(EventModel):
@@ -277,7 +280,7 @@ class Ran:
 class NotStarted:
     """The agent did not start to work: a fault of the host or the harness, not an attempt.
 
-    Its job did not start (``AgentNotStarted``), or it ended within ``STARTUP_SECONDS`` and left nothing
+    Its job did not start (``AgentNotStarted``), or it ended within ``startup_seconds`` (``[agents]``) and left nothing
     (``_never_worked``).
     """
 
@@ -434,6 +437,7 @@ class CampaignResults:
         *,
         secrets: SecretsProvider | None = None,
         exit_output_chars: int = AgentSettings().exit_output_chars,
+        startup_seconds: float = AgentSettings().startup_seconds,
     ) -> None:
         self._db = db
         self._tracer = tracer
@@ -446,6 +450,8 @@ class CampaignResults:
         self._secrets = secrets if secrets is not None else SECRETS.selected({})
         self._exit_output_chars = exit_output_chars
         """``[agents] exit_output_chars``: how much of its last output a failed or early end says."""
+        self._startup_seconds = startup_seconds
+        """``[agents] startup_seconds``: an agent that ends sooner and left nothing never worked."""
 
     def _apply(self, guard: Guard | None, change: Callable[[Session], None]) -> None:
         """Run ``guard``, then ``change``, in one write transaction, and commit. Nothing changes when one raises."""
@@ -546,13 +552,13 @@ class CampaignResults:
         self._tracer.event(outcome.kind, comment=prompt, agent_session=key.agent_session, error=error)
 
     def _last_output(self, report: AgentReport | EvaluationReport) -> str | None:
-        """The transcript of an agent that exited non-zero or within ``STARTUP_SECONDS``, from the CAS, or None.
+        """The transcript of an agent that exited non-zero or within ``startup_seconds`` (``[agents]``), from the CAS, or None.
 
         Read it before the write lock. Whether an early end did any work is known only in the transaction.
         """
         match report:
             case AgentFinished(process=AgentExit(exit_code=int(code), seconds=seconds), files=files) if (
-                code != 0 or seconds < STARTUP_SECONDS
+                code != 0 or seconds < self._startup_seconds
             ) and TRANSCRIPT in files:
                 data = self._cas.get(files[TRANSCRIPT])
                 assert data is not None  # finished checked that the CAS holds every file of the report
@@ -564,8 +570,8 @@ class CampaignResults:
         """Close the row from the report, and emit ``AgentSessionFinished``, ``JobEnded`` and ``StartupAnomaly``.
 
         The anomaly only when the agent did not start to work (``NotStarted``): its job did not start, or it ended
-        within ``STARTUP_SECONDS`` and left nothing (``_never_worked``), unless the daemon told it to stop or ended it.
-        An agent that a daemon stop ended (``stopped_by_daemon``) closes as killed by the stop
+        within ``startup_seconds`` (``[agents]``) and left nothing (``_never_worked``), unless the daemon told it to stop
+        or ended it. An agent that a daemon stop ended (``stopped_by_daemon``) closes as killed by the stop
         (``RunEnd.DAEMON_STOPPED``), with the usage that was read, whichever daemon process reads its report.
         The ``output`` of an agent that exited non-zero ends its error (``explained``), and the reason of one that exited 0
         and did not start to work.
@@ -610,16 +616,19 @@ class CampaignResults:
                 )
                 w.error = w.error if ending else process.error
                 seconds = process.seconds
-                match asked or not _never_worked(s, w, report), process.error:
+                match asked or not _never_worked(s, w, report, self._startup_seconds), process.error:
                     case True, _:
                         ended = Ran(process, report.work)
                     case False, str() as error:
                         ended = NotStarted(error)
                     case _:  # it exited 0, so what it said last is all that says why
                         said = explained(
-                            replace(process, error=NEVER_WORKED), output or '', found, self._exit_output_chars
+                            replace(process, error=never_worked(self._startup_seconds)),
+                            output or '',
+                            found,
+                            self._exit_output_chars,
                         )
-                        ended = NotStarted(said.error or NEVER_WORKED)
+                        ended = NotStarted(said.error or never_worked(self._startup_seconds))
             case _:
                 assert_never(report)
         session_finished(s, w)
@@ -811,8 +820,8 @@ def _asked_to_end(s: Session, agent_session_id: AgentSessionId) -> bool:
     return s.scalar(asked.limit(1)) is not None
 
 
-def _never_worked(s: Session, w: AgentSession, report: AgentFinished) -> bool:
-    """Return whether a started agent ended within ``STARTUP_SECONDS`` and left nothing behind.
+def _never_worked(s: Session, w: AgentSession, report: AgentFinished, startup_seconds: float) -> bool:
+    """Return whether a started agent ended within ``startup_seconds`` (``[agents]``) and left nothing behind.
 
     Nothing behind means no change to its checkout (``AgentFinished.changed``: no commit, no uncommitted change outside
     the links) and no comment signed by it.
@@ -823,7 +832,7 @@ def _never_worked(s: Session, w: AgentSession, report: AgentFinished) -> bool:
     harness's usage is read is judged. The tokens can be unknown for a sweep that worked too, when its session id
     was not found.
     """
-    if report.process.status is ExitStatus.TIMED_OUT or report.process.seconds >= STARTUP_SECONDS or report.changed:
+    if report.process.status is ExitStatus.TIMED_OUT or report.process.seconds >= startup_seconds or report.changed:
         return False
     if run_of(w) is None:
         definition = harness_of(s, w)

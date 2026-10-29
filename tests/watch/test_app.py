@@ -313,7 +313,7 @@ def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, 
 
     drive(db, None, scenario)
     assert shots[0].startswith(' piloop: 2 campaigns\n')
-    assert {'active', '4 score', '+3', '2 agents', '1 ready', '2 inbox', '1.2M tok', 'comment.note 1m ago'} <= set(
+    assert {'active', '4 score', '+3', '2 agents', '1 ready', '2 inbox', 'comment.note 1m ago'} <= set(
         cells(shots[0], 'demo')
     )
     assert cells(shots[0], 'other')[1] == 'stopped: max_runs: 50 runs, and more wo…'

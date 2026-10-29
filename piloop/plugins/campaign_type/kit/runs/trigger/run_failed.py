@@ -5,7 +5,8 @@ from piloop.ids import TargetRef
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
 from piloop.plugins.trigger.contract import Fire, Pass, Trigger
-from piloop.plugins.trigger.kit.incidents import DETAIL_CHARS, Incident, investigate
+from piloop.plugins.trigger.kit.incidents import Incident, investigate
+from piloop.settings import settings
 from piloop.text import cell
 
 
@@ -24,7 +25,7 @@ class RunFailed(Trigger):
                 TargetRef(RUN, run.id),
                 run.finished_at or run.created_at,
                 'failed',
-                f'{run.end} on {run.harness} (idea#{run.idea_id}): {cell(run.error or "no error recorded", DETAIL_CHARS)}',
+                f'{run.end} on {run.harness} (idea#{run.idea_id}): {cell(run.error or "no error recorded", settings.agents.detail_chars)}',
             )
             for run in failed
         ]

@@ -41,17 +41,15 @@ from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.contribution import Contributes
-from piloop.plugins.harness.contract import HARNESSES, Harness
+from piloop.plugins.harness.contract import HARNESSES, Harness, Usage
 from piloop.plugins.host import Capability, One, Parameters, Scope, Slot
 from piloop.plugins.mcp_server.bridges import MCP_PROVIDERS
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer
 from piloop.plugins.network.contract import Network
-from piloop.plugins.runtime.contract import AgentExit, AgentStart
+from piloop.plugins.runtime.contract import AgentExit, AgentStart, RuntimeFactory
 from piloop.plugins.secrets.contract import SecretsProvider, values
 from piloop.plugins.vcs.contract import VCS, Repository, Transfer, Unsaved, Vcs
 from piloop.proc import Channel
-from piloop.runtime.factory import RuntimeFactory
-from piloop.usage import Usage
 
 
 def _relative(place: str) -> str:

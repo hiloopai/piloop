@@ -103,6 +103,7 @@ def test_head_has_every_table_and_trigger_and_matches_the_models(tmp_path: Path)
             'archives',
             'campaigns',
             'candidates',
+            'comment_kinds',
             'comments',
             'comments_fts',
             'comments_fts_config',
@@ -2939,3 +2940,42 @@ def test_0070_turns_run_id_into_the_subject_rewrites_the_events_and_downgrades(t
             (3, None),
         ]
         assert [loads(p) for (p,) in con.execute(payloads)] == old
+
+
+def test_0071_points_each_comment_at_comment_kinds_and_downgrades(tmp_path: Path) -> None:
+    """The kinds are rows; a kind that no piloop declared is refused; the downgrade drops what 0070 cannot hold."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0070')
+    comment = (
+        "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('run', 2, 'human', 'finding', 'hm')"
+    )
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute(comment)
+    command.upgrade(cfg, '0071')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute('PRAGMA foreign_keys=ON')
+        assert {k for (k,) in con.execute('SELECT id FROM comment_kinds')} == {
+            'note',
+            'decision',
+            'escalation',
+            'message',
+            'finding',
+        }
+        assert con.execute('SELECT id, kind FROM comments').fetchall() == [(1, 'finding')]
+        with pytest.raises(sqlite3.IntegrityError, match='FOREIGN KEY'):
+            con.execute(comment.replace("'finding'", "'praise'"))
+        con.execute("INSERT INTO comment_kinds (id) VALUES ('praise')")
+        con.execute(comment.replace("'finding'", "'praise'"))
+        escalation = comment.replace("'finding', 'hm')", "'escalation', 'help')").replace('body)', 'body, priority)')
+        con.execute(escalation.replace("'help')", "'help', 1)"))
+        assert con.execute("SELECT kind FROM events WHERE target_kind = 'comment'").fetchall() == [
+            ('comment.escalation',)
+        ], "the rebuild keeps the table's persistent trigger"
+    command.downgrade(cfg, '0070')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT id, kind FROM comments').fetchall() == [(1, 'finding'), (3, 'escalation')], (
+            'praise is not of 0070'
+        )
+        with pytest.raises(sqlite3.IntegrityError, match='commentkind'):
+            con.execute(comment.replace("'finding'", "'praise'"))

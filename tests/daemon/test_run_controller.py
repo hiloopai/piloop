@@ -27,13 +27,13 @@ from sqlalchemy import func, insert, select
 from piloop.actor import System
 from piloop.agents.launcher import Launcher
 from piloop.agents.results import (
-    NEVER_WORKED,
     Ended,
     Lost,
     NotStarted,
     PromptOutcome,
     StartupAnomaly,
     WorkUnsaved,
+    never_worked,
 )
 from piloop.agents.roles import PILOOP_HINT, read_brief
 from piloop.campaign import stop
@@ -105,7 +105,7 @@ from piloop.plugins.runtime.contract import AgentExit, Deadline, Handle
 from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, commands as git
 from piloop.plugins.vcs.git.commands import pin as git_pin
-from piloop.settings import Settings
+from piloop.settings import AgentSettings, Settings
 from piloop.store.tree import FICLONE
 from tests.conftest import (
     HARNESS_APPEND,
@@ -195,8 +195,20 @@ def execute(ex: RunController, db: Database, run_id: RunId) -> None:
     ex.execute(run_id, agent_session_id)
 
 
-def controller(db: Database, runtime: ScriptRuntime, tmp_path: Path, tracer: Tracer | None = None) -> RunController:
-    return serving(RunController(db, tracer or Tracer(None), tmp_path, factory(runtime), executor=Workers()))
+def controller(
+    db: Database,
+    runtime: ScriptRuntime,
+    tmp_path: Path,
+    tracer: Tracer | None = None,
+    agents: AgentSettings | None = None,
+) -> RunController:
+    return serving(
+        RunController(db, tracer or Tracer(None), tmp_path, factory(runtime), executor=Workers(), agents=agents)
+    )
+
+
+WORKED = AgentSettings(startup_seconds=0)
+"""An implementer that ends at once has worked: it is judged by what it left."""
 
 
 def test_an_implementer_whose_launch_the_stop_rule_stops_never_starts_and_its_run_stays_queued(
@@ -804,11 +816,10 @@ def test_the_role_of_the_run_caps_its_recovery_requeues(
 def test_no_changes_fails_the_run_and_retries_the_idea(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr('piloop.agents.results.STARTUP_SECONDS', 0)  # an implementer that worked, then left nothing
     write_toml(Path(campaign.path), HARNESS_NOOP)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign, max_runs=2)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    execute(controller(db, runtime, tmp_path, agents=WORKED), db, run_id)
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.FAILED, NO_CHANGES)
     with db.session() as s:
@@ -818,11 +829,10 @@ def test_no_changes_fails_the_run_and_retries_the_idea(
 def test_implementer_failure_after_max_runs_finishes_the_idea(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr('piloop.agents.results.STARTUP_SECONDS', 0)  # an implementer that worked, then left nothing
     write_toml(Path(campaign.path), HARNESS_FAILS)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign, max_runs=1)
-    execute(controller(db, runtime, tmp_path), db, run_id)
+    execute(controller(db, runtime, tmp_path, agents=WORKED), db, run_id)
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.FAILED, 'agent exit 3')
     with db.session() as s:
@@ -1522,9 +1532,9 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
     run = run_row(db, run_id)
     assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.NOT_STARTED)
     with db.session() as s:
-        assert [a.error for _, a in in_order(s, StartupAnomaly)] == [f'{NEVER_WORKED}: Welcome'] * 3, (
-            'each says why it failed, with its last output'
-        )
+        assert [a.error for _, a in in_order(s, StartupAnomaly)] == [
+            f'{never_worked(AgentSettings().startup_seconds)}: Welcome'
+        ] * 3, 'each says why it failed, with its last output'
         assert runs_stop.attempts(s.get_one(Idea, run_row(db, run_id).idea_id)) == 0
 
     mocker.patch.object(runtime, 'start', side_effect=RuntimeError('no server'))

@@ -11,18 +11,28 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, ClassVar, Literal
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from piloop.db.events import SubjectSettled
-from piloop.db.models import EventModel, Pause, ReadBy
+from piloop.db.models import AfterEnd, EventModel, Pause, ReadBy
 from piloop.db.triggers.ddl import Event, Trigger
 from piloop.db.triggers.provenance import DAEMON_ACTOR, NOW, SESSION_ACTOR
-from piloop.ids import HOME, CampaignId, CampaignStatus, CommentId, CommentKind, RoleName, TargetKind
+from piloop.ids import (
+    CORE_COMMENT_KINDS,
+    HOME,
+    CampaignId,
+    CampaignStatus,
+    CommentId,
+    CommentKind,
+    RoleName,
+    TargetKind,
+)
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.cas.contract import BlobAddress
+from piloop.plugins.host import Slot
 
 type Row = Literal['NEW', 'OLD']
 
@@ -178,13 +188,42 @@ class CandidateDeleted(EventModel):
 
 
 class Commented(EventModel):
-    """A comment was written: ``comment.<its kind>``, on the comment, with what the comment is about."""
+    """A comment was written: ``comment.<its kind>``, on the comment, with what the comment is about.
 
-    kind: Literal['comment.note', 'comment.finding', 'comment.decision', 'comment.escalation', 'comment.message']
+    The base of the event of each comment kind: core's (``CoreCommented``), and each one that a plugin declares with its
+    own subclass (``COMMENT_KINDS``). A reader of this model reads them all.
+    """
+
+    AFTER_END: ClassVar[AfterEnd] = AfterEnd.KEPT
+    """Whether an agent whose session has ended may still write a comment of the kind."""
+
     target_kind: TargetKind
     target_id: int
     in_reply_to: CommentId | None = None
     """The comment that a reply answers (``comments.in_reply_to``). Missing from the events before piloop recorded it."""
+
+
+class CoreCommented(Commented):
+    """A comment of one of core's kinds was written."""
+
+    kind: Literal['comment.note', 'comment.decision', 'comment.escalation', 'comment.message']
+
+
+def _not_a_comment_kind(name: str, model: type[Commented]) -> str | None:
+    if CommentKind(name) in CORE_COMMENT_KINDS:
+        return f"comments of the kind {name!r} are piloop's already"
+    if model.kinds() != (f'comment.{name}',):
+        return f'its event is {", ".join(model.kinds()) or "of no kind"}, not comment.{name}'
+    if extra := sorted(set(model.model_fields) - set(Commented.model_fields)):
+        return f'its event has fields that a comment has not: {", ".join(extra)}'
+    return None
+
+
+COMMENT_KINDS: Slot[type[Commented]] = Slot(
+    'comment_kinds', TypeAdapter(type[Commented]), 'comment kind', _not_a_comment_kind
+)
+"""What else a comment may be, by name: the event of such a comment, ``comment.<name>``. The daemon checks them when it
+starts, and ``migrate`` writes each into ``comment_kinds``."""
 
 
 class AgentSessionRequested(EventModel):

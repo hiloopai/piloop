@@ -13,13 +13,14 @@ from piloop.config import load_campaign_config
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database
-from piloop.ids import CommentKind, TargetKind
+from piloop.ids import TargetKind
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.executor.workers import Workers
 from piloop.settings import Settings
 from tests.conftest import RESEARCH, SETTLE, ScriptRuntime, factory, run_all, serving, serving_api
@@ -70,7 +71,7 @@ def test_research_sweep_inserts_ideas_signed_with_its_implementer_id(
         )
         assert (idea.family, idea.provenance) == ('encoding', 'loss table workspace/research/losses.md')
         [finding] = s.scalars(select(Comment).where(Comment.target_kind == TargetKind.CAMPAIGN)).all()
-        assert (finding.target_id, finding.author, finding.kind) == (campaign.id, 'research#1', CommentKind.FINDING)
+        assert (finding.target_id, finding.author, finding.kind) == (campaign.id, 'research#1', FINDING)
     workspace = tmp_path / 'projects' / str(campaign.id) / 'workspace'
     brief = (workspace / 'brief-seen.txt').read_text()
     assert brief.startswith('# Research sweep') and '- Seeds to develop first: 0, listed in the research pack' in brief

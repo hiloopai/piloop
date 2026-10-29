@@ -8,8 +8,8 @@ from inline_snapshot import snapshot
 from sqlalchemy.orm import Session
 
 from piloop.agents.results import StartupAnomaly
-from piloop.campaign.anomaly import AnomalyReported
 from piloop.config import load_campaign_config
+from piloop.db.events import AnomalyReported
 from piloop.db.models import AgentSessionState, Campaign, CampaignStatus, Event, Pause
 from piloop.db.session import Database
 from piloop.ids import TargetKind, TargetRef

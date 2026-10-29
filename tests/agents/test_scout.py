@@ -26,7 +26,7 @@ from piloop.plugins.campaign_type.kit.backlog.role.scout import (
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, Technique
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.trigger.cron import CronTrigger
 from piloop.settings import Settings
@@ -126,7 +126,7 @@ def test_a_scout_sweep_reads_its_context_signs_as_a_scout_and_files_only_seeds_a
         assert (seed.created_by, seed.title) == ('scout#1', 'CTC beam search with a digit lexicon')
         [technique] = s.scalars(select(Technique)).all()
         assert (technique.created_by, technique.title) == ('scout#1', 'value prior')
-        [finding] = s.scalars(select(Comment).where(Comment.kind == CommentKind.FINDING)).all()
+        [finding] = s.scalars(select(Comment).where(Comment.kind == FINDING)).all()
         assert (finding.author, finding.priority) == ('scout#1', 3)
         assert 'scout 1 ideas, 0 ran' in '; '.join(y.line() for y in yields(s, campaign.id))
         campaign_row = s.get_one(Campaign, campaign.id)

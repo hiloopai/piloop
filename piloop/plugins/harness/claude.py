@@ -17,6 +17,7 @@ from piloop.plugins.harness.contract import (
     Harness,
     McpArgs,
     McpLaunch,
+    ModelId,
     UserConfig,
 )
 from piloop.plugins.harness.kit.jsonl import (
@@ -34,7 +35,6 @@ from piloop.plugins.mcp_server.contract import McpServer
 from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.mcp_server.stdio import StdioServer
 from piloop.settings import Settings, expand_env
-from piloop.usage import ModelId
 
 TAKE_MESSAGES = 'if [ -s "$PILOOP_MESSAGES" ]; then exec "$PILOOP_BIN" agent messages --harness claude; fi'
 """The ``PostToolUse`` hook of every Claude agent: it hands the agent the messages that wait for it, in its turn.

@@ -11,12 +11,11 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor, Agent, Orchestrating, Person, Service, System, party_of
 from piloop.api.views import AckOutcome, News, Relation, thread_lines
 from piloop.campaign import inbox
-from piloop.campaign.anomaly import AnomalyReported
 from piloop.db import feed as db_feed
-from piloop.db.events import emit, in_order
+from piloop.db.events import AnomalyReported, emit, in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.db.triggers.changelog import CommentAcked, Commented, IdeaCreated
+from piloop.db.triggers.changelog import CommentAcked, Commented, CoreCommented, IdeaCreated
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -24,9 +23,10 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT, TrackName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import RUN
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
+from piloop.settings import DaemonSettings
 from tests.conftest import WATCHDOG
 from tests.reports.test_history import idea
 from tests.reports.test_overview import render
@@ -60,7 +60,7 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
                 Comment(target=TargetRef(TargetKind.AGENT_SESSION, 1), body='on implementer', **escalation),
                 Comment(target=TargetRef(IDEA, theirs.id), body='other campaign', **escalation),
                 Comment(target=TargetRef(TargetKind.CAMPAIGN, other.id), body='other campaign too', **escalation),
-                Comment(target=TargetRef(RUN, run.id), author='w', kind=CommentKind.FINDING, body='no'),
+                Comment(target=TargetRef(RUN, run.id), author='w', kind=FINDING, body='no'),
                 Comment(target=TargetRef(IDEA, mine.id), author='h', kind=CommentKind.DECISION, body='park'),
                 Comment(target=TargetRef(TargetKind.COMMENT, 1), body='on a comment of the campaign', **escalation),
                 Comment(target=TargetRef(TargetKind.COMMENT, 7), body='on a comment of the other', **escalation),
@@ -116,7 +116,7 @@ def test_most_urgent_first_narrowed_by_kind_until_acknowledged(db: Database, cam
                 Comment(kind=CommentKind.DECISION, priority=3, body='requeued idea#4', **on_campaign),
                 Comment(kind=CommentKind.ESCALATION, priority=1, body='SSO expired', **on_campaign),
                 Comment(kind=CommentKind.DECISION, priority=0, body='lowered the floor', **on_campaign),
-                Comment(kind=CommentKind.FINDING, priority=3, body='half the sweeps add nothing', **on_campaign),
+                Comment(kind=FINDING, priority=3, body='half the sweeps add nothing', **on_campaign),
             ]
         )
         s.commit()
@@ -224,7 +224,7 @@ def test_thread_follows_citations_both_ways_and_the_replies_not_the_rest_of_the_
         on_campaign = dict(target=TargetRef(TargetKind.CAMPAIGN, campaign.id))
         s.add_all(
             [
-                Comment(author='research#2', kind=CommentKind.FINDING, body='a sweep', **on_campaign),
+                Comment(author='research#2', kind=FINDING, body='a sweep', **on_campaign),
                 Comment(
                     author='research#2', kind=CommentKind.ESCALATION, priority=1, body='floor exact?', **on_campaign
                 ),
@@ -254,7 +254,7 @@ def test_thread_follows_citations_both_ways_and_the_replies_not_the_rest_of_the_
 def test_each_comment_of_a_thread_has_the_thread_of_its_root(db: Database, campaign: Campaign) -> None:
     on_campaign = TargetRef(TargetKind.CAMPAIGN, campaign.id)
     with db.session() as s:
-        s.add(Comment(target=on_campaign, author='research#2', kind=CommentKind.FINDING, body='the login expires'))
+        s.add(Comment(target=on_campaign, author='research#2', kind=FINDING, body='the login expires'))
         root = Comment(
             target=on_campaign, author='watchdog#1', kind=CommentKind.ESCALATION, priority=1, body='SSO, see comment#1'
         )
@@ -315,7 +315,7 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
                     author='watchdog#1', kind=CommentKind.ESCALATION, priority=1, body='SSO\nlog in', **on(campaign)
                 ),
                 Comment(author='orchestrator', kind=CommentKind.DECISION, priority=3, body='mine', **on(campaign)),
-                Comment(author='research#2', kind=CommentKind.FINDING, body='the forum', **on(campaign)),
+                Comment(author='research#2', kind=FINDING, body='the forum', **on(campaign)),
                 Comment(
                     author='human',
                     kind=CommentKind.DECISION,
@@ -384,7 +384,8 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
 def test_news_reads_only_what_wakes_a_page_at_a_time_until_a_page_has_a_line(
     db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(inbox, 'PAGE', 1)
+    paged = inbox.settings.model_copy(update={'daemon': DaemonSettings(inbox_page=1)})
+    monkeypatch.setattr(inbox, 'settings', paged)
     with db.session() as s:
         cursor = s.scalar(select(func.max(Event.id))) or 0
         on_campaign = TargetRef(TargetKind.CAMPAIGN, campaign.id)
@@ -436,7 +437,7 @@ def test_a_reply_answers_the_root_of_the_thread_and_wakes_the_orchestrator_but_n
             'Revert it: the floor moved.',
         ), 'a reply to a reply goes to the root, one level from a campaign, and says what it answers'
         assert [p for e, p in in_order(s, Commented) if e.target_id == answer.id] == [
-            Commented(
+            CoreCommented(
                 kind='comment.decision', target_kind=TargetKind.COMMENT, target_id=item.id, in_reply_to=follow_up.id
             )
         ]

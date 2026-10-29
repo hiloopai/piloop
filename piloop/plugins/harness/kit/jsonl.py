@@ -15,8 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from piloop.plugins.harness.contract import Usage
 from piloop.settings import expand_env
-from piloop.usage import Usage, UsageError
+from piloop.usage import UsageError
 
 type Record = dict[str, object]
 """One line of a session file, as ``json.loads`` gives it. The shapes inside are the harness's own."""

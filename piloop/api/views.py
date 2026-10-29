@@ -175,7 +175,6 @@ class CampaignState(View):
     """Each sweeping role, by name."""
     inbox: int
     """The unacknowledged inbox items that wait for the caller: those that it did not write."""
-    tokens: int
     files: CampaignFiles
     """Where its files are: ``packing`` from its retire until they are in the CAS and off the disk."""
 

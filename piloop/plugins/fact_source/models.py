@@ -15,8 +15,8 @@ from piloop.config import CampaignConfig
 from piloop.db.models import AgentSession, Campaign
 from piloop.plugins.fact_source.contract import FactSource
 from piloop.plugins.fact_source.facts import MODELS_USD, Fact, FactValue
+from piloop.plugins.harness.contract import ModelId, Usage
 from piloop.plugins.price_list.contract import PRICE_LISTS
-from piloop.usage import ModelId, Usage
 
 PER = 1_000_000
 """A price is for this many tokens."""

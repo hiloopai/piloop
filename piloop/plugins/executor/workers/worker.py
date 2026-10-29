@@ -64,9 +64,8 @@ from piloop.plugins.executor.kit.leases import (
 )
 from piloop.plugins.executor.kit.relay import Relay
 from piloop.plugins.executor.kit.tables import NoLease
-from piloop.plugins.runtime.contract import Handle, Runtime
+from piloop.plugins.runtime.contract import Handle, Runtime, RuntimeFactory, make_runtime
 from piloop.proc import Started, alive, kill_group, started
-from piloop.runtime.factory import RuntimeFactory, make_runtime
 
 GONE = 'worker lost: the worker restarted and could not find its {what}'
 WORKER_ANOMALY = 'anomaly.worker'

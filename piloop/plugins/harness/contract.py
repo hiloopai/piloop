@@ -25,7 +25,6 @@ from piloop.ids import EnvName
 from piloop.plugins.host import Capability, Check, Many, Parameters, Pick, Scope, Severity, Use
 from piloop.plugins.mcp_server.contract import McpServer
 from piloop.settings import Settings
-from piloop.usage import ModelId, Usage
 
 SESSION_ID = '{session_id}'
 PROMPT = '{prompt}'
@@ -47,6 +46,43 @@ def fill(template: str, **values: str) -> str:
 def takes_session_id(args: list[str]) -> bool:
     """Whether an argument list passes a piloop-minted session id to the agent."""
     return any(SESSION_ID in a for a in args)
+
+
+class Usage(BaseModel):
+    """The token usage of one agent session, as ``agent_sessions.usage`` stores it. A harness's ``usage`` returns it.
+
+    It has the same meaning for every harness, so one ``json_extract`` reads it in SQL and the harnesses compare.
+    """
+
+    model_config = ConfigDict(frozen=True, use_attribute_docstrings=True)
+
+    input: int
+    """The input tokens that the prompt cache did not serve."""
+    output: int
+    cache_read: int
+    """The input tokens that the prompt cache served."""
+    cache_write: int
+    """The input tokens written to the prompt cache."""
+    total: int
+    """What the harness counts as the session's tokens."""
+    turns: int
+    """The number of model responses (API calls) in the session."""
+
+    def since(self, before: Usage | None) -> Usage:
+        """The usage after ``before``, the usage of the same session file when its agent resumed it. None: all of it."""
+        if before is None:
+            return self
+        return Usage.model_validate({k: getattr(self, k) - getattr(before, k) for k in Usage.model_fields})
+
+
+@dataclass(frozen=True)
+class ModelId:
+    """A model as its vendor's API names it, which a price list looks up (``Harness.model_id``)."""
+
+    vendor: str | None
+    """The API that serves it, such as ``anthropic`` or ``openai``. None: its name alone says it."""
+    name: str
+    """Its id at the vendor, such as ``claude-sonnet-4-5``."""
 
 
 class SecretRef(BaseModel):

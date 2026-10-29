@@ -19,6 +19,10 @@ erDiagram
         datetime updated_at
         varchar updated_by
     }
+    comment_kinds {
+        varchar id PK
+        AfterEnd after_end
+    }
     lease_workers {
         varchar id PK
         varchar pool
@@ -106,7 +110,7 @@ erDiagram
         integer target_id
         integer in_reply_to FK
         varchar author
-        CommentKind kind
+        varchar kind FK
         varchar body
         integer priority
         datetime acked_at
@@ -293,6 +297,7 @@ erDiagram
     target_kinds |o--o{ archives : "subject_kind"
     target_kinds ||--o{ comments : "target_kind"
     comments |o--o{ comments : "in_reply_to"
+    comment_kinds ||--o{ comments : "kind"
     campaigns ||--o{ documents : "campaign_id"
     campaigns ||--o{ evaluators : "campaign_id"
     target_kinds ||--o{ events : "target_kind"

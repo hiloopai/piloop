@@ -62,20 +62,18 @@ from piloop.plugins.contribution import collect, contributions_of, installed
 from piloop.plugins.executor.kit.leases import Timing
 from piloop.plugins.executor.workers import Workers, WorkersExecutor
 from piloop.plugins.executor.workers.worker import Worker
-from piloop.plugins.harness.contract import each_provider
+from piloop.plugins.harness.contract import Usage, each_provider
 from piloop.plugins.lineage.wire import LineageClient
 from piloop.plugins.network.contract import NetworkConfig, NetworkHost
 from piloop.plugins.network.https import TOKEN_ENV, Https
 from piloop.plugins.role.contract import RoleConfig
-from piloop.plugins.runtime.contract import Handle, Runtime
+from piloop.plugins.runtime.contract import Handle, Runtime, RuntimeFactory, make_runtime
 from piloop.plugins.runtime.subprocess import SubprocessRuntime
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
-from piloop.runtime.factory import RuntimeFactory, make_runtime
 from piloop.settings import Settings, env_names
 from piloop.store import tree as tree_module
 from piloop.text import iso
-from piloop.usage import Usage
 
 # Harness stand-ins: any argv that edits the worktree and commits.
 HARNESS_APPEND = '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "add a line"\n'

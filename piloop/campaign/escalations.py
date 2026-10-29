@@ -121,7 +121,7 @@ def choose(s: Session, comment_id: CommentId, choice: str, *, author: Actor) -> 
         Refused: The comment is no escalation, or it offers no such choice.
     """
     item = s.get_one(Comment, comment_id)
-    if item.kind is not CommentKind.ESCALATION:
+    if item.kind != CommentKind.ESCALATION:
         raise Refused(f'comment#{comment_id} is a {item.kind}, not an escalation: answer it with `piloop inbox reply`')
     found = escalated(s, item)
     try:

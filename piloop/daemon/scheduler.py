@@ -31,7 +31,7 @@ from piloop.plugins.contribution import (
     machinery,
 )
 from piloop.plugins.host import Plugins
-from piloop.runtime.factory import RuntimeFactory, make_runtime
+from piloop.plugins.runtime.contract import RuntimeFactory, make_runtime
 from piloop.settings import AgentSettings, DaemonSettings
 
 HOME_CHECK = 'home_check'

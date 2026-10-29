@@ -26,13 +26,13 @@ from piloop.api.contract import Access
 from piloop.db.events import in_order
 from piloop.db.models import AgentSession, Campaign, Comment, Event, Lease, LeaseKind, LeaseState
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind
+from piloop.ids import AgentSessionId, CommentId, TargetKind
 from piloop.net import tokens
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RunStatus
 from piloop.plugins.executor.contract import AgentKey, Prompt
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.door import AgentCall, Call
@@ -378,7 +378,7 @@ def finding(db: Database) -> list[tuple[str, str]]:
         rows = s.execute(
             select(Comment.body, Event.actor)
             .join(Event, (Event.target_kind == TargetKind.COMMENT) & (Event.target_id == Comment.id))
-            .where(Comment.kind == CommentKind.FINDING, Event.kind == 'comment.finding')
+            .where(Comment.kind == FINDING, Event.kind == 'comment.finding')
         ).all()
     return [(body, actor) for body, actor in rows]
 

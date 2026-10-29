@@ -894,8 +894,9 @@ def test_a_stop_syncs_the_memory_documents_before_the_closing_watchdog_whose_bri
         assert s.get_one(AgentSession, watchdog).reason == 'campaign stopped: max_runs: 1 runs'
         [document] = s.scalars(select(Document)).all()
         assert (document.path, document.title, document.created_by) == ('docs/report.md', 'Closing report', 'daemon')
-    assert dict(span_named(spans, 'documents.synced').attributes or {}) == {
+    assert dict(span_named(spans, 'campaign.closing').attributes or {}) == {
         'campaign': 'demo',
+        'provider': 'memory local',
         'result': 'documents: 1 added, 0 unchanged',
     }
     brief = (tmp_path / 'agent_sessions' / str(watchdog) / 'brief.md').read_text()
@@ -935,8 +936,8 @@ def test_a_stop_whose_document_sync_fails_still_stops_and_launches_the_closing_w
     with db.session() as s:
         assert s.get_one(Campaign, campaign.id).status is CampaignStatus.STOPPED
         assert s.get_one(AgentSession, watchdog).reason == 'campaign stopped: max_runs: 1 runs'
-    error = dict(span_named(spans, 'documents.sync_failed').attributes or {})['error']
-    assert isinstance(error, str) and error.startswith('PermissionError: [Errno 13]')
+    result = dict(span_named(spans, 'campaign.closing').attributes or {})['result']
+    assert isinstance(result, str) and result.startswith('documents: not synced: PermissionError: [Errno 13]')
 
 
 def test_the_contract_of_a_stop_rule_is_data_in_data_out() -> None:

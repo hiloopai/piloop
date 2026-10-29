@@ -14,10 +14,10 @@ from piloop.config import CampaignConfig
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.ids import RoleName
 from piloop.otel import Tracer
+from piloop.plugins.harness.contract import Usage
 from piloop.plugins.harness_choice.contract import HARNESS_CHOICES, HarnessCase, chosen
 from piloop.plugins.role.contract import Continuity, RoleConfig, SweepRole
 from piloop.plugins.vcs.contract import NotARepository
-from piloop.usage import Usage
 
 
 def choose_harness(

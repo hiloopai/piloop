@@ -1,10 +1,12 @@
 """Contributions: what a provider that the daemon opened, or an installed package, adds to the kernel."""
 
+import re
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future
 from datetime import datetime
 from importlib.metadata import EntryPoint
 from pathlib import Path
+from typing import Literal
 
 import cyclopts
 import httpx2 as httpx
@@ -22,8 +24,11 @@ from piloop.daemon.api import Handlers, daemon_state, openapi, with_api
 from piloop.daemon.loop import Consumer, Phase, Turn
 from piloop.daemon.main import DECLARED
 from piloop.daemon.scheduler import Scheduler
-from piloop.db.models import TARGET_KINDS, Campaign, utcnow
-from piloop.db.session import Database
+from piloop.db.events import in_order
+from piloop.db.models import TARGET_KINDS, Campaign, Comment, utcnow
+from piloop.db.session import Database, migrate
+from piloop.db.triggers.changelog import COMMENT_KINDS, Commented
+from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.net import Route
 from piloop.net.server import app, executor_router
 from piloop.net.tokens import Caller, Tokens
@@ -41,14 +46,14 @@ from piloop.plugins.fact_source.spend import api as spend_api
 from piloop.plugins.host import PluginError
 from piloop.plugins.lineage import api as lineage_api
 from piloop.plugins.memory.contract import MEMORY, MemoryProvider, Synced
-from piloop.plugins.memory.local import api as local_api
+from piloop.plugins.memory.local import LocalMemory, api as local_api
 from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import Https
+from piloop.plugins.runtime.contract import make_runtime
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
-from piloop.runtime.factory import make_runtime
 from piloop.settings import AgentSettings, DaemonSettings, Settings
-from tests.conftest import disk, serving_api
+from tests.conftest import bare_config, disk, serving_api
 from tests.daemon.test_roles import forget_loaded, installed
 from tests.fixtures.route_plugin import Greeting
 from tests.net.test_api import token
@@ -290,3 +295,52 @@ def test_a_package_s_target_kind_is_checked_when_the_daemon_starts_and_one_of_pi
         PluginError, match="piloop.target_kinds: comments and events point at 'campaign' of piloop already"
     ):
         check_declared()
+
+
+class Praised(Commented):
+    """A comment of the kind ``praise``, which a package declares."""
+
+    kind: Literal['comment.praise'] = 'comment.praise'
+
+
+class Loud(Commented):
+    """A comment kind whose event has a field that a comment has not."""
+
+    kind: Literal['comment.loud'] = 'comment.loud'
+    volume: int = 0
+
+
+def test_a_package_s_comment_kind_is_checked_when_the_daemon_starts_and_one_of_piloop_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    installed(monkeypatch, [EntryPoint('praise', f'{__name__}:Praised', COMMENT_KINDS.group)])
+    check_declared()
+    assert set(COMMENT_KINDS.loaded()) == {'finding', 'praise'}, "beside the runs component's finding"
+    db = Database(f'sqlite:///{tmp_path / "piloop.db"}', actor=System.DAEMON)
+    migrate(db.engine, cas=disk(tmp_path), backups=0, daemon=None)
+    with db.session() as s:
+        comment = Comment(
+            target=TargetRef(TargetKind.CAMPAIGN, 1), author='human', kind=CommentKind('praise'), body='x'
+        )
+        s.add(Campaign(name='p', path='/p', config=bare_config('p')))
+        s.flush()
+        s.add(comment)
+        s.commit()
+        [(_, event)] = in_order(s, Commented)
+    db.close()
+    assert event == Praised(target_kind=TargetKind.CAMPAIGN, target_id=1), 'its event, which readers of Commented see'
+    for name, model, refused in (
+        ('note', 'Praised', "comments of the kind 'note' are piloop's already"),
+        ('cheer', 'Praised', 'its event is comment.praise, not comment.cheer'),
+        ('loud', 'Loud', 'its event has fields that a comment has not: volume'),
+    ):
+        installed(monkeypatch, [EntryPoint(name, f'{__name__}:{model}', COMMENT_KINDS.group)])
+        with pytest.raises(PluginError, match=f'piloop.comment_kinds: {re.escape(refused)}'):
+            check_declared()
+
+
+def test_the_providers_that_take_part_in_a_close_are_those_that_the_campaign_chooses() -> None:
+    """The memory capability's contract syncs the documents at the close: core names no capability for it."""
+    found = contribution.closers({'memory': LocalMemory(documents=['docs/*.md'])})
+    assert found == {'memory local': LocalMemory(documents=['docs/*.md'])}
+    assert list(contribution.closers({})) == ['memory local'], 'the default memory provider closes too'

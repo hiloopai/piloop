@@ -41,7 +41,6 @@ from piloop.plugins.lineage.contract import Graph, Lineage, LineageNode, NodeId,
 from piloop.plugins.lineage.wire import LineageClient
 from piloop.settings import WatchSettings
 from piloop.text import NONE, age, cell, metric
-from piloop.usage import human
 
 SPARKS = '▁▂▃▄▅▆▇█'
 STATUS_CHARS = 40
@@ -179,13 +178,13 @@ def status_of(state: CampaignState | InvalidConfig, chars: int | None) -> str:
     return said if chars is None else cell(said, chars)
 
 
-CAMPAIGN_COLUMNS = ('campaign', 'status', 'head', 'vs baseline', 'agents', 'ready', 'inbox', 'tokens', 'last event')
+CAMPAIGN_COLUMNS = ('campaign', 'status', 'head', 'vs baseline', 'agents', 'ready', 'inbox', 'last event')
 
 
 def campaigns(
     states: Sequence[CampaignState | InvalidConfig], latest: Mapping[CampaignId, Envelope], now: datetime
 ) -> list[Item[str]]:
-    """Return one row per campaign, active ones first: status, head, delta to baseline, agents, queue, inbox, tokens.
+    """Return one row per campaign, active ones first: status, head, delta to baseline, agents, queue, inbox.
 
     ``latest`` is the last event of each campaign that the feed showed, by the campaign's id.
     """
@@ -202,10 +201,9 @@ def campaigns(
                     f'{len(c.agents)} agents',
                     f'{c.ideas.get("ready", 0)} ready',
                     f'{c.inbox} inbox',
-                    f'{human(c.tokens)} tok' if c.tokens else NONE,
                 )
             case InvalidConfig():
-                cells = (NONE,) * 6
+                cells = (NONE,) * 5
             case _:
                 assert_never(c)
         rows.append(Item(c.name, (c.name, status_of(c, STATUS_CHARS), *cells, seen)))

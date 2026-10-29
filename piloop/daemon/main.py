@@ -22,6 +22,7 @@ from piloop.daemon.serve import (
 from piloop.db.models import TARGET_KINDS, utcnow
 from piloop.db.schema import schemas
 from piloop.db.session import BackupFailed, Database, OlderDaemon, SchemaMismatch, WriteSpans, migrate
+from piloop.db.triggers.changelog import COMMENT_KINDS
 from piloop.net.server import Server, app, local_listener, url
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, tracer
@@ -32,14 +33,14 @@ from piloop.plugins.cas import contract as cas
 from piloop.plugins.contribution import CONTRIBUTORS
 from piloop.plugins.executor.contract import EXECUTORS, JOB_KINDS
 from piloop.plugins.network import contract as network
+from piloop.plugins.runtime.contract import make_runtime, runtimes
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets
 from piloop.proc import Inherited
-from piloop.runtime.factory import make_runtime, runtimes
 from piloop.settings import CONFIG_FILE, Settings, settings
 from piloop.text import iso
 from piloop.version import code_digest
 
-DECLARED = (JOB_KINDS, TARGET_KINDS, CONTRIBUTORS)
+DECLARED = (JOB_KINDS, TARGET_KINDS, COMMENT_KINDS, CONTRIBUTORS)
 """The slots of what packages add that the daemon reads, which it checks before it starts."""
 ACTOR = System.DAEMON
 """The actor that the daemon's connections record in ``updated_by``. The change-log triggers use this name."""
@@ -152,7 +153,6 @@ class Daemon:
             cas=self._cas,
             reserve=cfg.storage.reserve,
             evaluation=cfg.evaluation,
-            daemon=cfg.daemon,
             agents=cfg.agents,
             runtime_factory=opened,
             network=self.network,

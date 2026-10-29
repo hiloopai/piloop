@@ -9,17 +9,17 @@ from piloop.cli.common import CampaignRef
 from piloop.db.models import utcnow
 from piloop.reports.wake import orchestrator_overview
 
-WAKE_BUDGET = 2000
-"""The tokens that `piloop wake` prints by default."""
-
 
 def wake(
     ref: CampaignRef | None = None,
     /,
     *,
     budget: Annotated[
-        int, cyclopts.Parameter(help='Tokens to print, about 4 characters each. 0 prints nothing.')
-    ] = WAKE_BUDGET,
+        int | None,
+        cyclopts.Parameter(
+            help='Tokens to print, about 4 characters each. 0 prints nothing. Default: `[agents] wake_budget`.'
+        ),
+    ] = None,
 ) -> None:
     """Print what the orchestrator of a campaign needs first, in a fixed budget.
 
@@ -33,6 +33,7 @@ def wake(
                 campaign = one
             case _:
                 campaign = None
+        budget = common.settings.agents.wake_budget if budget is None else budget
         text = orchestrator_overview(s, campaign, budget, utcnow())
     if text:
         common.console.print(text, markup=False, highlight=False, soft_wrap=True)

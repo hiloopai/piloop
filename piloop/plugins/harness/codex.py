@@ -21,6 +21,7 @@ from piloop.plugins.harness.contract import (
     McpArgs,
     McpError,
     McpLaunch,
+    ModelId,
 )
 from piloop.plugins.harness.kit.jsonl import (
     Counts,
@@ -38,7 +39,6 @@ from piloop.plugins.mcp_server.contract import McpServer, env_names
 from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.mcp_server.stdio import StdioServer
 from piloop.settings import expand_env
-from piloop.usage import ModelId
 
 NO_MEMORY = 'features.memories=false'
 """``-c`` for every Codex agent. Codex keeps memories per repo, so the notes of one agent would load into every later

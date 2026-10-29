@@ -1,8 +1,7 @@
 from sqlalchemy import select
 
 from piloop.api.views import Lines, Rendered
-from piloop.campaign.anomaly import AnomalyReported
-from piloop.db.events import in_order
+from piloop.db.events import AnomalyReported, in_order
 from piloop.db.models import AgentSession, Event
 from piloop.ids import TargetKind
 from piloop.plugins.section.contract import Rendering, Section, Surface

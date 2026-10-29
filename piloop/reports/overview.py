@@ -24,12 +24,10 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.harness.contract import UsageReader
 from piloop.plugins.role.contract import Files
-from piloop.runtime.factory import handle_for, runtime_for
+from piloop.plugins.runtime.contract import handle_for, runtime_for
 from piloop.store import chunks
 from piloop.store.tree import Missing
 from piloop.text import NONE, cell, metric
-
-DETAIL_CHARS = 160
 
 
 def holds(campaign: Campaign) -> str:

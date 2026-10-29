@@ -40,6 +40,12 @@ CREATE TABLE campaigns (
 	FOREIGN KEY(parent_id) REFERENCES campaigns (id)
 );
 CREATE UNIQUE INDEX ix_campaigns_name ON campaigns (name) WHERE status != 'retired';
+CREATE TABLE comment_kinds (
+	id VARCHAR(16) NOT NULL,
+	after_end VARCHAR(16) DEFAULT 'kept' NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT afterend CHECK (after_end IN ('kept', 'refused'))
+);
 CREATE TABLE limits (
 	"key" VARCHAR NOT NULL,
 	value JSON NOT NULL,
@@ -132,7 +138,7 @@ CREATE TABLE comments (
 	CONSTRAINT "comments.body must be a text value" CHECK (typeof(body) IN ('text')),
 	CONSTRAINT targetkind FOREIGN KEY(target_kind) REFERENCES target_kinds (id),
 	FOREIGN KEY(in_reply_to) REFERENCES comments (id) ON DELETE SET NULL,
-	CONSTRAINT commentkind CHECK (kind IN ('note', 'finding', 'decision', 'escalation', 'message'))
+	CONSTRAINT commentkind FOREIGN KEY(kind) REFERENCES comment_kinds (id)
 );
 CREATE INDEX ix_comments_inbox ON comments (priority, id) WHERE priority IS NOT NULL AND acked_at IS NULL;
 CREATE INDEX ix_comments_target ON comments (target_kind, target_id);

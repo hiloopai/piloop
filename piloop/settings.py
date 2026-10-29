@@ -13,12 +13,14 @@ import re
 import stat
 import sys
 import tomllib
+from collections.abc import Sequence
 from datetime import timedelta
 from functools import cached_property
 from pathlib import Path
 from typing import Annotated, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr, TypeAdapter, model_validator
+from pydantic.fields import FieldInfo
 from pydantic_settings import (
     BaseSettings,
     InitSettingsSource,
@@ -108,17 +110,15 @@ class DaemonSettings(BaseModel):
     home_check: timedelta = Field(default=timedelta(seconds=10), gt=timedelta(0))
     """How often the daemon checks that its home is still there. A daemon whose home is gone stops: no client can find
     it there to stop it."""
-    startup_relaunches: int = Field(default=2, ge=0)
-    """How many times a run is queued again with a new implementer after its implementer failed to start. Then the run
-    fails. A failure at startup is a fault of the host or the harness, not an attempt at the idea: it does not count
-    toward ``max_runs``."""
+    inbox_page: int = Field(default=500, gt=0)
+    """How many events one read of the inbox's news examines at most (``piloop inbox wait``). A read with more reads
+    again at once."""
 
 
 class AgentSettings(BaseModel):
     """``[agents]``: how the daemon steers and ends the agents of this home.
 
-    A campaign's ``[agents]`` in its ``piloop.toml`` can set ``wrap_up_grace``, ``finding_grace`` and ``brief_words``
-    for its own agents.
+    A campaign's ``[agents]`` in its ``piloop.toml`` can set ``wrap_up_grace`` and ``brief_words`` for its own agents.
     """
 
     model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
@@ -126,11 +126,6 @@ class AgentSettings(BaseModel):
     wrap_up_grace: timedelta = Field(default=timedelta(minutes=10), ge=timedelta(0))
     """How long an agent that was told to wrap up, because its campaign stopped or someone cancelled it, has to save
     its work before the daemon ends it."""
-    finding_grace: timedelta = Field(default=timedelta(seconds=60), ge=timedelta(0))
-    """How long after its finding the daemon ends an implementer, and every process that it left: a last commit takes
-    seconds."""
-    wrap_up_lead: timedelta = Field(default=timedelta(minutes=10), ge=timedelta(0))
-    """How long before its role timeout the daemon tells an implementer to wrap up, at most a quarter of the timeout."""
     steer_line_chars: int = Field(default=200, gt=1)
     """How many characters of a comment's first line a running agent gets, in the one line that the daemon sends it
     for the comment. The agent can read the rest with SQL."""
@@ -141,6 +136,15 @@ class AgentSettings(BaseModel):
     """How many characters of its last output lines an agent that exits non-zero leaves in its error, which
     ``piloop status`` and the escalation of paused launches show, and one that exits 0 early with nothing done in the
     escalation. The values of its secrets read as their names. 0 leaves none."""
+    startup_seconds: float = Field(default=120, ge=0)
+    """An agent that ends this soon after its start and left nothing (no change and no comment) never worked: it failed
+    at startup, a fault of the host or the harness, not an attempt."""
+    detail_chars: int = Field(default=160, gt=1)
+    """How many characters of a comment or an error one line of a brief shows: an inbox item, an incident."""
+    attach_lines: int = Field(default=40, gt=0)
+    """How many lines of an agent's output ``piloop attach`` prints."""
+    wake_budget: int = Field(default=2000, ge=0)
+    """The tokens that ``piloop wake`` prints when ``--budget`` is not given."""
 
 
 class WatchSettings(BaseModel):
@@ -308,7 +312,8 @@ class Settings(BaseSettings):
         """Arguments, then the environment, then ``config.toml`` under the home the arguments or environment name."""
         given = init_settings.init_kwargs.get('home') if isinstance(init_settings, InitSettingsSource) else None
         home = Path(given) if given else home_of_env()
-        return init_settings, env_settings, InitSettingsSource(settings_cls, config_file(home))
+        moved = MovedEnv(env_settings, deprecated.IMPLEMENTER_TIMINGS, 'PILOOP_', deprecated.implementer_timings)
+        return init_settings, moved, InitSettingsSource(settings_cls, config_file(home))
 
     @model_validator(mode='after')
     def _not_a_real_home_under_test(self) -> Self:
@@ -375,6 +380,27 @@ class Settings(BaseSettings):
 HOME_PLUGINS: TypeAdapter[Plugins] = TypeAdapter(
     Annotated[Plugins, PluginTables(Scope.HOME)], config=ConfigDict(title='[plugins]')
 )
+
+
+@deprecated.until('0.6.0', "the implementer's timings are its role's: delete MovedEnv")
+class MovedEnv(PydanticBaseSettingsSource):
+    """The settings of the variables of ``env``, with the keys of ``moves`` at their new keys (``moved_env``)."""
+
+    def __init__(
+        self, inner: PydanticBaseSettingsSource, moves: Sequence[deprecated.Move], env: str, bridge: deprecated.Bridge
+    ) -> None:
+        """``bridge`` moves the keys of the file, and says when the variables go too."""
+        super().__init__(inner.settings_cls)
+        self.inner = inner
+        self.moves = moves
+        self.env = env
+        self.removed_in = bridge.removed_in
+
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[object, str, bool]:
+        return self.inner.get_field_value(field, field_name)
+
+    def __call__(self) -> dict[str, object]:
+        return deprecated.moved_env(self.inner(), self.moves, self.env, self.removed_in)
 
 
 def home_of_env() -> Path:

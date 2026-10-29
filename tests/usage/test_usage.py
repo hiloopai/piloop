@@ -16,11 +16,11 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.session import Database
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.harness import pi
-from piloop.plugins.harness.contract import Custom, Harness, each_provider
+from piloop.plugins.harness.contract import Custom, Harness, Usage, each_provider
 from piloop.plugins.harness.kit import jsonl as jsonl_module
 from piloop.plugins.harness.kit.jsonl import JsonlSessions, dash_non_alnum, dash_separators_wrapped, no_cwd
 from piloop.settings import env_names, expand_env
-from piloop.usage import Usage, UsageError, human
+from piloop.usage import UsageError, human
 from tests.conftest import WATCHDOG, bare_config
 
 SESSIONS = Path(__file__).parent.parent / 'fixtures' / 'sessions'
