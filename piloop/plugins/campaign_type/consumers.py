@@ -98,6 +98,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
 )
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.stop import runs_without_keep, settled
+from piloop.plugins.campaign_type.kit.runs.tables import run_of
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     CandidateJudged,
     Rebased,
@@ -257,7 +258,7 @@ class Campaigns:
             # lock held meanwhile would make every command that writes fail with "database is locked"
             with self._db.session() as s:
                 live = s.scalars(select(AgentSession).where(AgentSession.state.in_(LIVE))).all()
-                runs = {w.id: w.run_id for w in live}
+                runs = {w.id: run_of(w) for w in live}
                 left = [LeftJob(AgentKey(w.id)) for w in live]
             with self._db.session() as s:
                 s.execute(delete(Evaluation))
@@ -297,7 +298,7 @@ class Campaigns:
                 # a ``starting`` row that its daemon left before its start window has no process
                 if reaped and agent_session.runtime is not None:
                     self._kill_stale(s, agent_session)
-                if reaped and agent_session.run_id is None and agent_session.campaign_id is not None:
+                if reaped and run_of(agent_session) is None and agent_session.campaign_id is not None:
                     campaign = s.get_one(Campaign, agent_session.campaign_id)
                     remove_checkouts(self._agent_sessions_dir / str(agent_session.id), campaign, self._tracer)
                 close(s, agent_session, end, self._tracer)
@@ -718,7 +719,7 @@ class Campaigns:
                         continue
                     agent_session.harness = harness
                 agent_session.state = AgentSessionState.STARTING
-                taken.append((agent_session.id, agent_session.run_id))
+                taken.append((agent_session.id, run_of(agent_session)))
                 full = full_harnesses(s, campaign, cfg)
         return taken
 

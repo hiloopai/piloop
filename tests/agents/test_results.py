@@ -29,12 +29,12 @@ from piloop.agents.results import (
 from piloop.db.events import in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId
+from piloop.ids import AgentSessionId, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.executor.contract import (
     AgentFinished,
@@ -367,7 +367,7 @@ def implementer_of(
         s.add(run)
         s.commit()
         run_id, idea_id = run.id, idea.id
-    return request(db, campaign, IMPLEMENTER, run_id=run_id, **fields), run_id, idea_id
+    return request(db, campaign, IMPLEMENTER, subject=TargetRef(RUN, run_id), **fields), run_id, idea_id
 
 
 def agent_job(campaign: Campaign, agent_session_id: AgentSessionId, tmp_path: Path) -> AgentJob:
@@ -398,9 +398,9 @@ def test_an_implementer_with_a_minted_session_id_is_identified_at_launch_with_th
             'role': 'implementer',
             'model': 'test-model',
             'campaign': 'demo',
-            'run': run,
-            'idea': idea,
-            'proposed_by': {
+            'subject': f'run#{run}',
+            'groups': [f'idea#{idea}'],
+            'parent': {
                 'actor': f'research#{research}',
                 'harness': 'claude',
                 'executable': 'claude',
@@ -433,9 +433,9 @@ def test_a_reported_session_id_is_identified_once_whatever_repeats_it(
         'role': 'research',
         'model': None,
         'campaign': 'demo',
-        'run': None,
-        'idea': None,
-        'proposed_by': None,
+        'subject': None,
+        'groups': [],
+        'parent': None,
     }
 
 
@@ -480,7 +480,7 @@ def test_the_proposer_is_an_agent_only(
     expected = (
         None if proposed_by is None else {**proposed_by, 'actor': str(proposed_by['actor']).format(research=research)}
     )
-    assert event['proposed_by'] == expected
+    assert event['parent'] == expected
 
 
 def test_the_event_commits_with_the_session_id_or_not_at_all(campaign: Campaign, db: Database) -> None:

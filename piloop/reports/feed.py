@@ -56,7 +56,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.tables import produced
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
-from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of
 from piloop.plugins.campaign_type.kit.verdicts.judge import head_scores, keeps
 from piloop.reports.overview import live_agent_sessions
 from piloop.text import iso
@@ -196,7 +196,7 @@ def _state(s: Session, campaign: Campaign, cfg: CampaignConfig, me: Actor) -> Ca
                 state=str(w.state),
                 harness=w.harness,
                 model=w.model,
-                run=w.run_id,
+                run=run_of(w),
                 started=w.started_at,
                 runtime=w.runtime,
                 reason=w.reason,

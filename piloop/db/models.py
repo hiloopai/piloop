@@ -49,6 +49,7 @@ from piloop.api.contract import Access
 from piloop.config import CampaignConfig
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.ids import (
+    CORE_KINDS,
     AgentSessionId,
     CampaignId,
     CampaignStatus,
@@ -233,20 +234,14 @@ def by_value[E: StrEnum](enum: type[E]) -> Enum:
     )
 
 
-class CommentTarget(TypeDecorator[TargetKind]):
-    """A comment's ``TargetKind``, stored by value. Its CHECK leaves out ``home``: no comment is on the whole home."""
+class KindText(TypeDecorator[TargetKind]):
+    """A ``TargetKind``, stored as its name. ``target_kinds`` says which names there are."""
 
-    impl = Enum(
-        *(k.value for k in TargetKind if k is not TargetKind.HOME),
-        name='targetkind',
-        native_enum=False,
-        length=16,
-        create_constraint=True,
-    )
+    impl = String(16)
     cache_ok = True
 
     def process_bind_param(self, value: TargetKind | None, dialect: Dialect) -> str | None:
-        return None if value is None else TargetKind(value).value
+        return None if value is None else str(value)
 
     def process_result_value(self, value: str | None, dialect: Dialect) -> TargetKind | None:
         return None if value is None else TargetKind(value)
@@ -412,7 +407,7 @@ class Base(DeclarativeBase):
         list[str]: JSON,
         CampaignStatus: by_value(CampaignStatus),
         Pause: by_value(Pause),
-        TargetKind: by_value(TargetKind),
+        TargetKind: KindText(),
         CommentKind: by_value(CommentKind),
         AgentSessionState: by_value(AgentSessionState),
         LeaseKind: by_value(LeaseKind),
@@ -425,12 +420,17 @@ class Base(DeclarativeBase):
 
 
 def _pointed_at_already(name: str, _rows: type[Base]) -> str | None:
-    return f'comments and events point at {name!r} of piloop already' if name in TargetKind else None
+    return f'comments and events point at {name!r} of piloop already' if name in CORE_KINDS else None
 
 
 TARGET_KINDS: Slot[type[Base]] = Slot('target_kinds', TypeAdapter(type[Base]), 'target kind', _pointed_at_already)
 """What else comments and events may point at, by name: the table of its rows. The daemon checks them when it
-starts, and a ``TargetRef`` points only at a ``TargetKind``."""
+starts, and ``migrate`` writes each into ``target_kinds``."""
+
+
+def known_kinds() -> frozenset[TargetKind]:
+    """Core's kinds and the installed plugins' (``TARGET_KINDS``), by their entry points: nothing is imported."""
+    return CORE_KINDS | {TargetKind(name) for name in TARGET_KINDS.paths()}
 
 
 class Tracked:
@@ -545,13 +545,6 @@ def count[*Ts](s: Session, query: Select[*Ts]) -> int:
     return s.scalar(select(func.count()).select_from(query.subquery())) or 0
 
 
-def latest_agent_session(s: Session, run_id: RunId) -> AgentSession | None:
-    """The latest agent row that did run ``run_id``. A relaunch after the agent failed to start is a second row."""
-    return s.scalars(
-        select(AgentSession).where(AgentSession.run_id == run_id).order_by(AgentSession.id.desc()).limit(1)
-    ).first()
-
-
 class Lease(Base):
     """A lease (``piloop.plugins.executor.kit.leases``): a time-limited claim on one job by one worker (``piloop.plugins.executor.kit.leases``).
 
@@ -634,6 +627,20 @@ class Token(Base):
     at its start (``mint_agent``), in place of the old one.
     """
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
+
+
+class KnownKind(Base):
+    """A kind that events and comments may point at: core's, or one that a plugin declared (``TARGET_KINDS``).
+
+    ``migrate`` writes each installed kind. A kind of a plugin that is no longer installed stays, with its rows.
+    """
+
+    __tablename__ = 'target_kinds'
+
+    id: Mapped[TargetKind] = mapped_column(primary_key=True)
+    """The kind's name, such as ``idea``."""
+    owner: Mapped[str]
+    """The schema that has the table of its rows: ``core``, or a plugin's, such as ``optimization``."""
 
 
 class Migration(Base):
@@ -765,11 +772,12 @@ class Comment(Tracked, Base):
         Index('ix_comments_inbox', 'priority', 'id', sqlite_where=text('priority IS NOT NULL AND acked_at IS NULL')),
         CheckConstraint("kind != 'escalation' OR priority IS NOT NULL", name='escalation_needs_priority'),
         CheckConstraint("in_reply_to IS NULL OR target_kind = 'comment'", name='reply_is_on_a_comment'),
+        CheckConstraint("target_kind != 'home'", name='comment_not_on_home'),
         *text_checks('comments', 'author', 'body'),
     )
 
     id: Mapped[CommentId] = mapped_column(primary_key=True)
-    target_kind: Mapped[TargetKind] = mapped_column(CommentTarget())
+    target_kind: Mapped[TargetKind] = mapped_column(ForeignKey('target_kinds.id', name='targetkind'))
     target_id: Mapped[int]
     target: Mapped[TargetRef] = composite('target_kind', 'target_id')
     in_reply_to: Mapped[CommentId | None] = mapped_column(ForeignKey('comments.id', ondelete='SET NULL'))
@@ -804,8 +812,9 @@ class AgentSession(Tracked, Base):
     __table_args__ = (
         # the launch queue of the pass: the requested and active rows of a campaign for each role, and its latest row
         Index('ix_agent_sessions_campaign_kind_state', 'campaign_id', 'kind', 'state'),
-        # the session behind the candidates of a run (every kept-lineage row), and the FK action when a run is deleted
-        Index('ix_agent_sessions_run', 'run_id'),
+        # the sessions of a subject: those of a run, behind its candidates (every kept-lineage row)
+        Index('ix_agent_sessions_subject', 'subject_kind', 'subject_id'),
+        CheckConstraint('(subject_kind IS NULL) = (subject_id IS NULL)', name='agent_sessions_subject'),
         *text_checks('agent_sessions', 'kind', nullable=('reason', 'harness', 'model')),
     )
 
@@ -815,8 +824,11 @@ class AgentSession(Tracked, Base):
     names."""
     campaign_id: Mapped[CampaignId | None] = mapped_column(ForeignKey('campaigns.id', ondelete='CASCADE'))
     """The campaign the agent works for. piloop always sets it, but readers must accept NULL."""
-    run_id: Mapped[RunId | None] = mapped_column(ForeignKey('runs.id', ondelete='SET NULL'))
-    """The run that the row does, for a role that does runs. Sweeping roles have none."""
+    subject_kind: Mapped[TargetKind | None] = mapped_column(ForeignKey('target_kinds.id', name='agent_sessions_kind'))
+    subject_id: Mapped[int | None]
+    subject: Mapped[TargetRef | None] = composite('subject_kind', 'subject_id')
+    """What the agent works on, such as ``run#12`` for an implementer. NULL for a sweep. No foreign key to the row: an
+    agent session outlives the work that a plugin deletes."""
     harness: Mapped[str | None]
     model: Mapped[str | None]
     runtime: Mapped[str | None]
@@ -872,7 +884,7 @@ class Event(Base):
     """``<subject>.<what>``, for example ``run.started``, ``candidate.judged``, ``idea.status``, ``comment.decision``
     or ``idea.deleted``: the payload's ``kind``."""
     actor: Mapped[str]
-    target_kind: Mapped[TargetKind]
+    target_kind: Mapped[TargetKind] = mapped_column(ForeignKey('target_kinds.id', name='targetkind'))
     target_id: Mapped[int]
     target: Mapped[TargetRef] = composite('target_kind', 'target_id')
     payload: Mapped[EventModel]

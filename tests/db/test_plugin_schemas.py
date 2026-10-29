@@ -12,6 +12,7 @@ from sqlalchemy import create_engine
 from piloop.actor import System
 from piloop.cli.doctor import _database as database_check
 from piloop.db import sql
+from piloop.db.models import TARGET_KINDS
 from piloop.db.schema import CORE, SCHEMAS
 from piloop.db.session import SchemaAhead, alembic_config, migrate, schema_mismatch, stamps
 from tests.conftest import disk
@@ -37,6 +38,30 @@ def rows(path: Path, query: str) -> list[tuple[object, ...]]:
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         con.execute('PRAGMA foreign_keys = ON')
         return con.execute(query).fetchall()
+
+
+def test_a_kind_that_a_package_declares_on_a_home_at_its_heads_is_written_by_the_next_migrate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / 'piloop.db'
+    install(monkeypatch, 'SCHEMA')
+    migrated(path)
+    on_note = (
+        "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('human', 'note', 1, '{\"kind\": \"x.y\"}')"
+    )
+    with pytest.raises(sqlite3.IntegrityError, match='FOREIGN KEY'):
+        rows(path, on_note)
+
+    entries = [EntryPoint('notes', f'{NOTES}:SCHEMA', SCHEMAS.group)]
+    installed(monkeypatch, [*entries, EntryPoint('note', f'{NOTES}:Note', TARGET_KINDS.group)])
+    sql.declared.cache_clear()
+    migrated(path)
+    migrated(path)
+    assert stamps(path)['notes'] == '0001', 'no chain moved'
+    assert rows(path, "SELECT owner FROM target_kinds WHERE id = 'note'") == [('notes',)], (
+        'written though no chain moved, and once'
+    )
+    rows(path, on_note)
 
 
 def test_an_uninstalled_package_leaves_its_tables_and_a_home_that_migrates_and_opens(

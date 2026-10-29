@@ -45,7 +45,7 @@ from sqlalchemy.pool import ConnectionPoolEntry, NullPool, PoolProxiedConnection
 
 from piloop import deprecated
 from piloop.actor import Actor, Agent
-from piloop.db.models import Migration, utcnow
+from piloop.db.models import TARGET_KINDS, KnownKind, Migration, utcnow
 from piloop.db.schema import CORE, SCHEMAS, schemas
 from piloop.db.sql import (
     CONNECTION_PRAGMAS,
@@ -294,6 +294,9 @@ def migrate(engine: Engine, *, cas: Cas, backups: int, daemon: int | None) -> Pa
                 ' it with `piloop stop`.'
             )
         if not late:
+            # A plugin installed on a home at its heads moves no chain, and its kinds are written here.
+            with engine.begin() as connection:
+                _kinds(connection)
             return None
         if backups and (at := revision(path)) is not None:
             copy = _backup(path, at, backups)
@@ -328,6 +331,7 @@ def _upgrade(url: str, cas: Cas) -> None:
                 cfg.attributes[CONNECTION_ATTRIBUTE] = connection
                 command.upgrade(cfg, 'head')
                 _record(connection, name, packages.get(name, BUILT_IN))
+            _kinds(connection)
     finally:
         engine.dispose()
 
@@ -549,6 +553,17 @@ def fingerprints(script: ScriptDirectory) -> dict[str, int]:
         history.update(f'{Path(rev.path).stem}\n'.encode())
         found[rev.revision] = int.from_bytes(history.digest()[:4]) >> 1 or 1
     return found
+
+
+def _kinds(connection: Connection) -> None:
+    """Write each kind that an installed plugin declares (``TARGET_KINDS``) into ``target_kinds``, once.
+
+    Its owner is the schema of its table. A kind of a plugin that is no longer installed stays: its rows point at it.
+    """
+    owner = {table.__tablename__: name for name, schema in schemas().items() for table in schema.tables}
+    for kind, table in TARGET_KINDS.loaded().items():
+        row = insert(KnownKind).values(id=kind, owner=owner[table.__tablename__])
+        connection.execute(row.on_conflict_do_nothing(index_elements=[KnownKind.id]))
 
 
 def _record(connection: Connection, name: str, package: str) -> None:

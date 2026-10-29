@@ -47,7 +47,7 @@ HOT_INDEXES = (
     'ix_candidates_run',
     'ix_candidates_parent',
     'ix_agent_sessions_campaign_kind_state',
-    'ix_agent_sessions_run',
+    'ix_agent_sessions_subject',
     'ix_comments_inbox',
 )
 """The indexes that the hot paths need. ``tests/test_plans.py`` drops them to prove that its check finds a SCAN, and
@@ -234,9 +234,9 @@ def _agent_sessions(con: sqlite3.Connection, v: Volume, rng: random.Random) -> N
         state = rng.choice(['exited'] * 90 + ['killed'] * 10)
         rows.append((w, kind, p, run, 'pi', 'm', 'subprocess', '{}', state, f'2026-01-{1 + w % 28:02d} 12:00:00'))
     con.executemany(
-        'INSERT INTO agent_sessions (id, kind, campaign_id, run_id, harness, model, runtime, handle, state, ended_at)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        rows,
+        'INSERT INTO agent_sessions (id, kind, campaign_id, subject_kind, subject_id, harness, model, runtime, handle,'
+        ' state, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [(w, kind, p, None if run is None else 'run', run, *rest) for w, kind, p, run, *rest in rows],
     )
 
 

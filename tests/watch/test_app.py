@@ -34,12 +34,13 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.net import tokens
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.settings import Settings, WatchSettings
 from piloop.watch.app import CampaignScreen, CampaignsScreen, CandidatesTable, Follower, Lost, Shown, Started, Watch
@@ -218,7 +219,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
                 AgentSession(
                     kind=IMPLEMENTER,
                     campaign_id=p.id,
-                    run_id=live_run.id,
+                    subject=TargetRef(RUN, live_run.id),
                     harness='pi',
                     model='m',
                     runtime='subprocess',
@@ -248,7 +249,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
         s.add_all(
             [
                 Comment(
-                    target=TargetRef(TargetKind.RUN, run.id),
+                    target=TargetRef(RUN, run.id),
                     kind=CommentKind.ESCALATION,
                     priority=1,
                     acked_at=ago(minutes=20),
@@ -257,7 +258,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
                     **comment,
                 ),
                 Comment(
-                    target=TargetRef(TargetKind.RUN, run.id),
+                    target=TargetRef(RUN, run.id),
                     author='pi',
                     kind=CommentKind.DECISION,
                     priority=2,
@@ -273,7 +274,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
                 ),
                 Comment(target=TargetRef(TargetKind.CAMPAIGN, p.id), kind=CommentKind.NOTE, body='a note', **comment),
                 Comment(
-                    target=TargetRef(TargetKind.RUN, run.id),
+                    target=TargetRef(RUN, run.id),
                     author='human',
                     priority=2,
                     body='Why keep it?\nRe: comment#2',
@@ -611,7 +612,7 @@ def test_ideas_keys_approve_park_reject_with_a_reason_and_move_the_priority(
     ]
     with db.session() as s:
         assert s.get_one(Idea, 4).status is IdeaStatus.REJECTED
-        assert [c.body for c in s.scalars(select(Comment).where(Comment.target_kind == TargetKind.IDEA))] == [
+        assert [c.body for c in s.scalars(select(Comment).where(Comment.target_kind == IDEA))] == [
             'proposed → ready: worth a run',
             'ready → parked: later',
             'parked → rejected: never',
@@ -654,7 +655,7 @@ def test_a_review_that_the_api_refuses_says_why(db: Database, live_campaign: Cam
 
 def test_the_ideas_detail(db: Database, live_campaign: Campaign) -> None:
     with db.session() as s:
-        s.add(Comment(target=TargetRef(TargetKind.IDEA, 2), author='human', body='go on'))
+        s.add(Comment(target=TargetRef(IDEA, 2), author='human', body='go on'))
         s.get_one(Idea, 2).plan = 'step one\nstep two'
         s.commit()
     shots: list[str] = []
@@ -790,7 +791,7 @@ def test_an_event_touches_the_parts_of_its_row_s_kind_on_the_screen_of_its_campa
     mine = CampaignId(1)
     assert touched(batch((TargetKind.COMMENT, CampaignId(2))), mine) is None, 'another campaign: draw again'
     assert touched(batch((TargetKind.HOME, None)), mine) == frozenset(), 'the state and the overview'
-    assert touched(batch((TargetKind.COMMENT, mine), (TargetKind.MEASUREMENT, mine)), mine) == {
+    assert touched(batch((TargetKind.COMMENT, mine), (MEASUREMENT, mine)), mine) == {
         Part.INBOX,
         Part.LINEAGE,
     }

@@ -25,7 +25,7 @@
 | `NodeStatus.name: StatusName` | What a node's `status` says, such as `kept`. |
 | `NodeStatus.label: str` | How a legend names it, such as `Kept`. |
 | `NodeStatus.tone: Tone` | How a client colours it. |
-| `SessionLink.kind: Literal[TargetKind.AGENT_SESSION]` | Always `agent_session`. |
+| `SessionLink.kind: Literal['agent_session']` | Always `agent_session`. |
 | `SessionLink.id: AgentSessionId` | The agent session's id (`agent_sessions.id`). |
 | `SessionLink.harness: str \| None` | The `[plugins.harness.<name>]` that ran it. Null when its row has none. |
 | `SessionLink.session_id: str \| None` | The harness's own session id. Null until piloop knows it (`agent_session.identified`). |

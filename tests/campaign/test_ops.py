@@ -31,16 +31,16 @@ from piloop.db.triggers.changelog import (
 )
 from piloop.ids import CampaignId, CampaignStatus, CommentKind, Ending, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, wire as evaluation_api
-from piloop.plugins.campaign_type.kit.evaluation.ids import MeasurementId, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT, MeasurementId, TrackName
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import settle_cancelled
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
@@ -229,7 +229,7 @@ def test_a_verdict_override_is_the_actors_with_the_reason_in_its_event(me: Datab
     payload = VerdictChanged(
         old=Outcome.DISCARD, new=Outcome.KEEP, verdict_by=ACTOR.signature, verdict_reason='measured by hand: +3'
     )
-    assert kinds(me, TargetKind.CANDIDATE, c) == [('candidate.verdict', ACTOR.signature, payload)]
+    assert kinds(me, CANDIDATE, c) == [('candidate.verdict', ACTOR.signature, payload)]
     pending = run_candidate(me, campaign, None, by=None)
     with me.session() as s:
         with pytest.raises(ops.Refused, match=r'candidate#\d+ is keep already \(measured by hand: \+3\)'):
@@ -335,11 +335,11 @@ def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_i
         s.commit()
         assert [r.id for r in done.cancelled] == [queued, running]
         for run_id in (queued, running):
-            assert [k for k, _, _ in kinds(me, TargetKind.RUN, run_id)] == ['run.cancel_requested', 'run.head_replaced']
+            assert [k for k, _, _ in kinds(me, RUN, run_id)] == ['run.cancel_requested', 'run.head_replaced']
             [(event, cancel)] = in_order(s, CancelRequested, Event.target_id == run_id)
             assert (event.actor, cancel.ending) == (ACTOR.signature, Ending.WRAP_UP)
         for run_id in (pinned, branch):
-            assert kinds(me, TargetKind.RUN, run_id) == []
+            assert kinds(me, RUN, run_id) == []
         run = s.get_one(Run, running)
         run.status, run.end = RunStatus.FAILED, RunEnd.CANCELLED
         settle_cancelled(s, run)
@@ -408,7 +408,7 @@ def test_a_measurement_by_hand_is_recorded_and_asks_the_daemon_to_judge_its_cand
         assert (added.rejudged, added.effect) == (True, 'the daemon judges it again with all its measurements')
         assert (measurement.evaluator_id, measurement.metrics, measurement.seconds) == (1, report.metrics, 12.5)
         assert [x.id for x in rejudges(s, s.get_one(Campaign, 1))] == [c]
-    assert kinds(me, TargetKind.MEASUREMENT, measurement.id) == [
+    assert kinds(me, MEASUREMENT, measurement.id) == [
         (
             'measurement.recorded',
             ACTOR.signature,
@@ -416,7 +416,7 @@ def test_a_measurement_by_hand_is_recorded_and_asks_the_daemon_to_judge_its_cand
         )
     ], 'shaped like the daemon event'
     requested = RejudgeRequested(measurement=measurement.id)
-    assert kinds(me, TargetKind.CANDIDATE, c) == [('candidate.rejudge_requested', ACTOR.signature, requested)]
+    assert kinds(me, CANDIDATE, c) == [('candidate.rejudge_requested', ACTOR.signature, requested)]
     with me.session() as s:
         answer_rejudge(s, c)
         s.commit()
@@ -436,7 +436,7 @@ def test_another_campaigns_rejudge_requests_and_idea_titles_are_not_this_ones(me
         theirs = Candidate(campaign_id=other.id, tree_sha='t', revision='c')
         s.add_all([theirs, Idea(campaign_id=other.id, track='score', title='try', hypothesis='h', created_by='t')])
         s.flush()
-        emit(s, RejudgeRequested(measurement=MeasurementId(1)), TargetRef(TargetKind.CANDIDATE, theirs.id), ACTOR)
+        emit(s, RejudgeRequested(measurement=MeasurementId(1)), TargetRef(CANDIDATE, theirs.id), ACTOR)
         mine = s.get_one(Campaign, 1)
         assert rejudges(s, mine) == []
         [seed] = follow_up(s, s.get_one(Candidate, 1), ['try'], 'why', ACTOR, track=TrackName('score'))
@@ -547,7 +547,7 @@ def test_an_idea_status_takes_a_reason_in_a_note_and_refuses_what_is_not_set_by_
             (seed, ACTOR.signature, CommentKind.NOTE, 'seed → rejected: dup of idea#1'),
             (running, ACTOR.signature, CommentKind.NOTE, 'scheduled → parked: redundant'),
         ]
-    assert [e[:2] for e in kinds(me, TargetKind.IDEA, idea)] == [CREATED[:2], ('idea.status', ACTOR.signature)], (
+    assert [e[:2] for e in kinds(me, IDEA, idea)] == [CREATED[:2], ('idea.status', ACTOR.signature)], (
         'the trigger, once'
     )
     other = add_idea(me, CampaignId(1), 'other', IdeaStatus.SEED)
@@ -586,7 +586,7 @@ def test_links_are_validated_kept_acyclic_and_leave_events(me: Database, campaig
             (b, LinkKind.AFTER, c),
             (running, LinkKind.SUPERSEDES, c),
         ]
-    assert kinds(me, TargetKind.IDEA, a) == [
+    assert kinds(me, IDEA, a) == [
         CREATED,
         ('idea.linked', ACTOR.signature, IdeaLinked(kind='idea.linked', target=b, link_kind=LinkKind.AFTER)),
     ], 'a trigger'
@@ -620,7 +620,7 @@ def test_links_are_validated_kept_acyclic_and_leave_events(me: Database, campaig
             backlog_ops.unlink(s, a, LinkKind.AFTER, b, reason='again', actor=ACTOR)
         with pytest.raises(ops.Refused, match='a reason is required'):
             backlog_ops.unlink(s, b, LinkKind.AFTER, c, reason='', actor=ACTOR)
-    assert kinds(me, TargetKind.IDEA, a)[-1] == (
+    assert kinds(me, IDEA, a)[-1] == (
         'idea.unlinked',
         ACTOR.signature,
         IdeaLinked(kind='idea.unlinked', target=b, link_kind=LinkKind.AFTER),
@@ -634,7 +634,7 @@ def test_a_raw_sql_link_or_base_change_is_logged_like_the_commands(me: Database,
         s.execute(text(f'DELETE FROM idea_links WHERE idea_id = {a}'))
         s.execute(text(f'UPDATE ideas SET base_candidate_id = 1 WHERE id = {a}'))
         s.commit()
-    assert kinds(me, TargetKind.IDEA, a) == [
+    assert kinds(me, IDEA, a) == [
         CREATED,
         ('idea.linked', ACTOR.signature, IdeaLinked(kind='idea.linked', target=b, link_kind=LinkKind.AFTER)),
         ('idea.unlinked', ACTOR.signature, IdeaLinked(kind='idea.unlinked', target=b, link_kind=LinkKind.AFTER)),
@@ -659,7 +659,7 @@ def test_a_base_pins_a_candidate_of_the_campaign_or_clears_the_pin(me: Database,
             backlog_ops.set_base(s, idea, CandidateId(99), reason='why', actor=ACTOR)
         with pytest.raises(ops.Refused, match='a reason is required'):
             backlog_ops.set_base(s, idea, None, reason='', actor=ACTOR)
-    assert kinds(me, TargetKind.IDEA, idea) == [
+    assert kinds(me, IDEA, idea) == [
         CREATED,
         ('idea.base_candidate_id', ACTOR.signature, IdeaBaseChanged(old=None, new=CandidateId(1))),
         ('idea.base_candidate_id', ACTOR.signature, IdeaBaseChanged(old=CandidateId(1), new=None)),
@@ -706,7 +706,7 @@ def test_a_track_must_be_in_the_config_and_its_move_says_why(me: Database, campa
             backlog_ops.set_track(s, idea, TrackName('score'), reason='', actor=ACTOR)
         with pytest.raises(ops.Refused, match='demo has tracks score, size: name one with --track'):
             backlog_ops.track_for(s.get_one(Campaign, 1), None)
-    assert [(k, a, p) for k, a, p in kinds(me, TargetKind.IDEA, idea) if k == 'idea.track'] == [
+    assert [(k, a, p) for k, a, p in kinds(me, IDEA, idea) if k == 'idea.track'] == [
         ('idea.track', ACTOR.signature, IdeaTrackChanged(old=TrackName('score'), new=TrackName('size')))
     ]
 

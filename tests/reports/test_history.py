@@ -11,14 +11,14 @@ from piloop.config import CampaignConfig
 from piloop.db.models import AgentSession, Campaign, Comment, utcnow
 from piloop.db.session import Database
 from piloop.ids import CommentKind, Revision, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.campaign_type.optimization.history import FIRST_LINE_CHARS, comment_line, history, newest
 from piloop.plugins.campaign_type.optimization.section.history import History
 from piloop.plugins.campaign_type.optimization.section.pack import Pack
@@ -72,7 +72,7 @@ def scored(
     s.add(run)
     s.flush()
     usage = None if tokens is None else spent(tokens, 3)
-    s.add(AgentSession(kind=IMPLEMENTER, campaign_id=row.campaign_id, run_id=run.id, usage=usage))
+    s.add(AgentSession(kind=IMPLEMENTER, campaign_id=row.campaign_id, subject=TargetRef(RUN, run.id), usage=usage))
     evaluator_id = row.campaign.evaluator_id
     assert evaluator_id is not None
     parent = base
@@ -133,13 +133,13 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
             (Outcome.KEEP, {'score': 3, 'size': 12}, None),
             tokens=234_444,
         )
-        comment(s, TargetKind.IDEA, kept.id, 'appending works | keep appending\nsecond line is not shown')
+        comment(s, IDEA, kept.id, 'appending works | keep appending\nsecond line is not shown')
         worse = idea(s, campaign, 'fewer lines', family='appending', created_by='implementer#4')
         scored(s, worse, e2.id, (Outcome.DISCARD, {'score': 2, 'size': 8}, None))
         crashed = idea(s, campaign, 'delete solve.txt', IdeaStatus.REJECTED, priority=3)
         scored(s, crashed, e2.id, (Outcome.CRASH, {}, 'no such file'))
-        comment(s, TargetKind.IDEA, crashed.id, 'first attempt: evaluate needs the file')
-        comment(s, TargetKind.IDEA, crashed.id, 'second attempt agrees; rejected', author='watchdog#2')
+        comment(s, IDEA, crashed.id, 'first attempt: evaluate needs the file')
+        comment(s, IDEA, crashed.id, 'second attempt agrees; rejected', author='watchdog#2')
         mixed = idea(s, campaign, 'two commits', after=(kept.id,))
         scored(s, mixed, e2.id, (Outcome.CRASH, {}, 'syntax'), (Outcome.KEEP, {'score': 4, 'size': 16}, None))
         idea(s, campaign, 'a' * 200, IdeaStatus.READY, 'h' * 200, priority=0, after=(crashed.id, kept.id))
@@ -203,7 +203,7 @@ def test_history_worst_case_stays_under_the_documented_size(db: Database, campai
             links = (previous.id,) if previous is not None else ()
             row = idea(s, campaign, f'{n} ' + 't' * 200, IdeaStatus.REJECTED, 'h' * 200, after=links, supersedes=links)
             scored(s, row, 1, (Outcome.DISCARD, {'score': 0.123456, 'size': 1}, None))
-            comment(s, TargetKind.IDEA, row.id, 'f' * 200)
+            comment(s, IDEA, row.id, 'f' * 200)
             previous = row
         for _ in range(SHOWN.campaign_findings):
             comment(s, TargetKind.CAMPAIGN, campaign.id, '\n'.join(['r' * 79] * 30), author='research#1')
@@ -263,7 +263,7 @@ def test_an_implementers_history_shows_its_family_then_the_keeps_then_the_newest
             idea(s, campaign, f'filler {n}', family='other')
         mine = idea(s, campaign, 'mine', IdeaStatus.READY, family='cache')
         scored(s, mine, 1, (Outcome.DISCARD, {'score': 0.1, 'size': 1}, None))
-        reader = s.scalars(select(AgentSession.id).where(AgentSession.run_id == mine.runs[0].id)).one()
+        reader = s.scalars(select(AgentSession.id).where(working_on(mine.runs[0].id))).one()
         s.commit()
         p = s.get_one(Campaign, campaign.id)
         section = History(budget=900, findings=0)

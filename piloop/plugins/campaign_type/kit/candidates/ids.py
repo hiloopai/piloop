@@ -3,6 +3,11 @@
 from enum import StrEnum
 from typing import Final, NewType
 
+from piloop.ids import TargetKind
+
+CANDIDATE: Final = TargetKind('candidate')
+"""A candidate (``candidates``). What its comments and events point at."""
+
 CandidateId = NewType('CandidateId', int)
 
 

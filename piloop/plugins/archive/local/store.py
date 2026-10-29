@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from piloop.actor import System
 from piloop.campaign.campaigns import WORKSPACE, campaign_dir, cloned, vcs_of, workspace_dir
 from piloop.db.events import SubjectSettled, emit, has, latest
-from piloop.db.models import ENDED, AgentSession, Campaign, Event, count, utcnow
+from piloop.db.models import ENDED, AgentSession, Campaign, Event, count, known_kinds, utcnow
 from piloop.db.session import Database
 from piloop.ids import CampaignId, CampaignStatus, Revision, TargetKind, TargetRef
 from piloop.plugins.archive.contract import CampaignArchived, CampaignFilesFreed, PackedCheckout, Restored, Summary
@@ -67,7 +67,7 @@ class NotArchived(RuntimeError):
 def subject_of(name: str) -> TargetRef | None:
     """The subject that a top-level workspace entry is named after, or None."""
     m = SUBJECT_NAME.match(name)
-    return TargetRef(TargetKind(m['kind']), int(m['id'])) if m and m['kind'] in TargetKind else None
+    return TargetRef(TargetKind(m['kind']), int(m['id'])) if m and m['kind'] in known_kinds() else None
 
 
 def owners(s: Session, campaign_id: CampaignId, names: Iterable[str]) -> dict[str, TargetRef]:

@@ -45,7 +45,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin,
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import NO_CHANGES, SKIPPED_REASON, RunFinished
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import runs, runs_without_keep
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
@@ -575,7 +575,11 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
         run = Run(idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
-        s.add(AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, run_id=run.id, harness='script', model='m'))
+        s.add(
+            AgentSession(
+                kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), harness='script', model='m'
+            )
+        )
         s.add(AgentSession(kind=RESEARCH, campaign_id=campaign.id, reason='low_water before the stop'))
         s.commit()
     sched = make_scheduler(db, runtime, tmp_path)
@@ -615,7 +619,11 @@ def test_a_requested_stop_ends_the_campaign_as_a_stop_condition_does(
         run = Run(idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
-        s.add(AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, run_id=run.id, harness='script', model='m'))
+        s.add(
+            AgentSession(
+                kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), harness='script', model='m'
+            )
+        )
         request_stop(s, s.get_one(Campaign, campaign.id), System.HUMAN, reason='machine needed', ending=Ending.WRAP_UP)
         s.commit()
     sched = make_scheduler(db, runtime, tmp_path)

@@ -18,12 +18,13 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment,
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CommentAcked, Commented, IdeaCreated
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT, TrackName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from tests.conftest import WATCHDOG
@@ -52,15 +53,15 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
         s.add_all(
             [
                 Comment(target=TargetRef(TargetKind.CAMPAIGN, campaign.id), body='on campaign', **escalation),
-                Comment(target=TargetRef(TargetKind.IDEA, mine.id), body='on idea', **escalation),
-                Comment(target=TargetRef(TargetKind.RUN, run.id), body='on run', **escalation),
-                Comment(target=TargetRef(TargetKind.CANDIDATE, 1), body='on candidate', **escalation),
-                Comment(target=TargetRef(TargetKind.MEASUREMENT, 1), body='on measurement', **escalation),
+                Comment(target=TargetRef(IDEA, mine.id), body='on idea', **escalation),
+                Comment(target=TargetRef(RUN, run.id), body='on run', **escalation),
+                Comment(target=TargetRef(CANDIDATE, 1), body='on candidate', **escalation),
+                Comment(target=TargetRef(MEASUREMENT, 1), body='on measurement', **escalation),
                 Comment(target=TargetRef(TargetKind.AGENT_SESSION, 1), body='on implementer', **escalation),
-                Comment(target=TargetRef(TargetKind.IDEA, theirs.id), body='other campaign', **escalation),
+                Comment(target=TargetRef(IDEA, theirs.id), body='other campaign', **escalation),
                 Comment(target=TargetRef(TargetKind.CAMPAIGN, other.id), body='other campaign too', **escalation),
-                Comment(target=TargetRef(TargetKind.RUN, run.id), author='w', kind=CommentKind.FINDING, body='no'),
-                Comment(target=TargetRef(TargetKind.IDEA, mine.id), author='h', kind=CommentKind.DECISION, body='park'),
+                Comment(target=TargetRef(RUN, run.id), author='w', kind=CommentKind.FINDING, body='no'),
+                Comment(target=TargetRef(IDEA, mine.id), author='h', kind=CommentKind.DECISION, body='park'),
                 Comment(target=TargetRef(TargetKind.COMMENT, 1), body='on a comment of the campaign', **escalation),
                 Comment(target=TargetRef(TargetKind.COMMENT, 7), body='on a comment of the other', **escalation),
                 Comment(target=TargetRef(TargetKind.COMMENT, 11), body='two levels deep', **escalation),
@@ -178,13 +179,13 @@ def test_every_agent_of_a_role_and_the_outside_orchestrator_are_one_party_for_wh
         emit(
             s,
             CandidateJudged(verdict=Outcome.INTERESTING, score=1.0, reason='mine'),
-            TargetRef(TargetKind.CANDIDATE, 1),
+            TargetRef(CANDIDATE, 1),
             earlier,
         )
         emit(
             s,
             CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='the daemon'),
-            TargetRef(TargetKind.CANDIDATE, 1),
+            TargetRef(CANDIDATE, 1),
             System.DAEMON,
         )
         s.commit()
@@ -204,7 +205,7 @@ def test_a_candidate_judged_on_every_track_is_news_once_with_the_verdict_that_it
     with db.session() as s:
         cursor = db_feed.newest(s)
         s.get_one(Candidate, 1).track = TrackName('cost')
-        on = TargetRef(TargetKind.CANDIDATE, 1)
+        on = TargetRef(CANDIDATE, 1)
         emit(
             s,
             CandidateJudged(verdict=Outcome.DISCARD, score=1.0, reason='no gain', track='accuracy'),
@@ -234,7 +235,7 @@ def test_thread_follows_citations_both_ways_and_the_replies_not_the_rest_of_the_
                 Comment(
                     author='pi', kind=CommentKind.DECISION, priority=3, body='see comment#20, not #2', **on_campaign
                 ),
-                Comment(target=TargetRef(TargetKind.IDEA, 4), author='pi', body='as comment#4 decided, comment#2.'),
+                Comment(target=TargetRef(IDEA, 4), author='pi', body='as comment#4 decided, comment#2.'),
             ]
         )
         s.commit()
@@ -272,7 +273,7 @@ def test_each_comment_of_a_thread_has_the_thread_of_its_root(db: Database, campa
         s.add_all(
             [
                 Comment(target=TargetRef(TargetKind.COMMENT, root.id), author='pi', body='an old reply\nsays nothing'),
-                Comment(target=TargetRef(TargetKind.IDEA, 1), author='pi', body='as comment#2 said'),
+                Comment(target=TargetRef(IDEA, 1), author='pi', body='as comment#2 said'),
             ]
         )
         s.commit()
@@ -347,11 +348,11 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
         ]
         s.add_all(seeds)  # each insert emits idea.created, signed by its creator
         s.flush()
-        run3 = TargetRef(TargetKind.RUN, 3)
+        run3 = TargetRef(RUN, 3)
         reported = AnomalyReported(subject=run3, trigger='run_failed', line='run#3 failed: boom')
         emit(s, reported, TargetRef(TargetKind.AGENT_SESSION, watchdog.id), System.DAEMON)
         judged = CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='score +1 over candidate#1\nmore')
-        candidate = TargetRef(TargetKind.CANDIDATE, 1)
+        candidate = TargetRef(CANDIDATE, 1)
         emit(s, judged, candidate, System.DAEMON)
         s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
         s.get_one(Campaign, campaign.id).stopped_reason = 'max_tokens 100 reached'
@@ -389,7 +390,7 @@ def test_news_reads_only_what_wakes_a_page_at_a_time_until_a_page_has_a_line(
         on_campaign = TargetRef(TargetKind.CAMPAIGN, campaign.id)
         for n in range(3):
             s.add(Comment(target=on_campaign, author='watchdog#1', priority=1, body=f'acked {n}', acked_at=utcnow()))
-        emit(s, IdeaCreated(), TargetRef(TargetKind.IDEA, 99), System.HUMAN)  # a deleted idea: no line
+        emit(s, IdeaCreated(), TargetRef(IDEA, 99), System.HUMAN)  # a deleted idea: no line
         s.add(Comment(target=on_campaign, author='watchdog#1', priority=1, body='open'))
         s.add(Comment(target=on_campaign, author='watchdog#1', body='a note: an event, but not of the inbox'))
         s.commit()
@@ -404,7 +405,7 @@ def test_a_reply_answers_the_root_of_the_thread_and_wakes_the_orchestrator_but_n
 ) -> None:
     with db.session() as s:
         item = Comment(
-            target=TargetRef(TargetKind.CANDIDATE, 1),
+            target=TargetRef(CANDIDATE, 1),
             author='orchestrator',
             kind=CommentKind.DECISION,
             priority=1,
@@ -478,7 +479,7 @@ def test_an_escalation_left_unacknowledged_comes_back_with_its_age_on_each_wait_
             emit(
                 s,
                 CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='+1'),
-                TargetRef(TargetKind.CANDIDATE, 1),
+                TargetRef(CANDIDATE, 1),
                 System.DAEMON,
             )
             s.commit()

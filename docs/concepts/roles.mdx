@@ -253,7 +253,7 @@ piloop keeps each agent's **session**, the harness's file of its prompts, tool c
 session that made candidate 2:
 
 ```bash
-piloop sql "SELECT s.id, s.session_file FROM agent_sessions s JOIN candidates c ON c.run_id = s.run_id WHERE c.id = 2"
+piloop sql "SELECT s.id, s.session_file FROM agent_sessions s JOIN candidates c ON s.subject_kind = 'run' AND c.run_id = s.subject_id WHERE c.id = 2"
 piloop cas get <session_file> > session.jsonl
 ```
 

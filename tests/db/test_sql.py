@@ -97,6 +97,7 @@ def test_schema_ddl_lists_every_table_with_its_indexes_and_runs(tmp_path: Path) 
             'migrations',
             'runs',
             'secrets',
+            'target_kinds',
             'techniques',
             'tokens',
             'worker_instances',

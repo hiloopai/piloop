@@ -16,7 +16,6 @@ from pydantic import ConfigDict, TypeAdapter
 from sqlalchemy import Column, Table
 from sqlalchemy.orm import InstrumentedAttribute
 
-from piloop import deprecated
 from piloop.db.models import (
     AgentSession,
     Base,
@@ -24,6 +23,7 @@ from piloop.db.models import (
     Comment,
     Event,
     FirstTransfer,
+    KnownKind,
     Lease,
     LeaseWorker,
     Limit,
@@ -86,6 +86,7 @@ CORE_TABLES = (
     Limit,
     Token,
     Migration,
+    KnownKind,
 )
 CORE_SCHEMA = Schema(
     tables=CORE_TABLES,
@@ -106,10 +107,6 @@ def _misnamed(name: str, _schema: Schema) -> str | None:
 
 SCHEMAS: Slot[Schema] = Slot('schemas', TypeAdapter(Schema), 'schema', _misnamed)
 """The schema of each plugin that has tables, by its name. The daemon checks them when it starts."""
-
-CORE_REFERENCES = frozenset({('agent_sessions', 'run_id')})
-"""Core's references to a plugin's table, as (table, column)."""
-deprecated.until('0.5.0', 'agent_sessions.subject replaces agent_sessions.run_id: delete CORE_REFERENCES')
 
 
 def schemas() -> dict[str, Schema]:
@@ -149,8 +146,6 @@ def _crossing(name: str, source: str, to: str | None, target: Column[object]) ->
         case _ if to == name:
             return None
         case 'core' if target.name == 'id':
-            return None
-        case _ if name == CORE and tuple(source.split('.')) in CORE_REFERENCES:
             return None
         case _ if name == CORE:
             return f"references {referenced} of {to!r}: core's tables reference only core's"

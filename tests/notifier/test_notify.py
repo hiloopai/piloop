@@ -27,7 +27,7 @@ from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged, Commented, CommentEdited
 from piloop.ids import HOME, CampaignId, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, Lifecycle
@@ -602,7 +602,7 @@ def test_a_reaction_acks_the_item_and_a_seed_is_filed_in_its_campaign(
         )
         assert [e.target for e, _ in in_order(s, NotificationReceived)] == [
             TargetRef(TargetKind.COMMENT, item),
-            TargetRef(TargetKind.IDEA, seed.id),
+            TargetRef(IDEA, seed.id),
         ]
 
 

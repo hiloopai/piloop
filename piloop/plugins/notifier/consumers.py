@@ -29,6 +29,7 @@ from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged, Commented
 from piloop.ids import HOME, CampaignId, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.backlog.ops import file_seed
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, Lifecycle
 from piloop.plugins.escalation.contract import At, EscalationView, Never, Now
@@ -309,7 +310,7 @@ def received(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inb
                     )
                 except BacklogRefused as e:
                     return Declined(str(e))
-                target = TargetRef(TargetKind.IDEA, seed.id)
+                target = TargetRef(IDEA, seed.id)
                 said = f'piloop filed this as seed idea#{seed.id}, for research'
             case _:
                 assert_never(inbound.act)
@@ -342,7 +343,7 @@ def _edit(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inboun
     names = tuple(sorted({r.name for r in shared}))
     with db.session() as s:
         found = latest(s, NotificationReceived, has(NotificationReceived, notifier=names, message=inbound.message.id))
-        if found is None or found[0].target_kind is not TargetKind.COMMENT:
+        if found is None or found[0].target_kind != TargetKind.COMMENT:
             return Foreign()
         comment = s.get_one(Comment, found[0].target_id)
         route = _route_of(s, shared, found[1].notifier, comment.id)

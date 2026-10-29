@@ -140,7 +140,7 @@ FROM agent_sessions WHERE campaign_id = <p> GROUP BY kind, harness, model;
 -- Runs left open after their implementer exited
 SELECT r.id run, w.id implementer, w.ended_at, r.finished_at,
        ROUND((julianday(COALESCE(r.finished_at, 'now')) - julianday(w.ended_at)) * 1440) open_min
-FROM runs r JOIN agent_sessions w ON w.run_id = r.id JOIN ideas i ON i.id = r.idea_id
+FROM runs r JOIN agent_sessions w ON w.subject_kind = 'run' AND w.subject_id = r.id JOIN ideas i ON i.id = r.idea_id
 WHERE i.campaign_id = <p> AND w.ended_at IS NOT NULL ORDER BY open_min DESC LIMIT 10;
 
 -- Work after the last stop of the campaign (agents still running, measurements nobody used)

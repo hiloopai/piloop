@@ -1,3 +1,4 @@
+from dataclasses import replace
 from importlib.metadata import EntryPoint
 from pathlib import Path
 
@@ -127,12 +128,11 @@ def test_core_references_a_plugin_s_table_only_where_it_is_allowed() -> None:
         for k in t.foreign_keys
         if k.column.table.name not in {table.__tablename__ for table in schemas()[CORE].tables}
     }
-    assert crossing == {('agent_sessions', 'run_id')}
+    assert crossing == set(), "an agent session's subject has no foreign key to its row"
 
 
-def test_core_s_tables_reference_only_core_s_but_where_it_is_allowed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(schema_module, 'CORE_REFERENCES', frozenset())
-    with pytest.raises(PluginError, match="agent_sessions.run_id references runs.id of 'optimization': core's tables"):
+def test_a_core_table_that_references_a_plugin_s_table_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    core = schema_module.CORE_SCHEMA
+    monkeypatch.setattr(schema_module, 'CORE_SCHEMA', replace(core, tables=(*core.tables, OnIdea)))
+    with pytest.raises(PluginError, match="test_schema_on_ideas.idea_id references ideas.id of 'optimization': core's"):
         schemas()

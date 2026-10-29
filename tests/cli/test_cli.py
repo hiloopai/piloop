@@ -69,13 +69,13 @@ from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by, runnable
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import CandidateImported
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRequested
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.kit.capacity import GB, HostSample
@@ -962,7 +962,7 @@ def test_candidate_remeasure_asks_the_daemon_to_measure_a_candidate_again_and_re
         [event] = s.scalars(select(Event).where(has(RemeasureRequested))).all()
         assert (event.actor, event.target_kind, event.target_id, event.payload) == (
             'human',
-            TargetKind.CANDIDATE,
+            CANDIDATE,
             1,
             RemeasureRequested(repeats=3),
         )
@@ -1359,7 +1359,7 @@ def test_prompt_is_a_note_on_the_agent_and_says_whether_it_arrived(
             AgentSession(
                 kind='implementer',
                 campaign_id=1,
-                run_id=1,
+                subject=TargetRef(RUN, 1),
                 harness='script',
                 model='m',
                 runtime='subprocess',
@@ -1421,8 +1421,12 @@ def test_campaign_stop_and_cancels_are_requests_that_the_daemon_acts_on(campaign
         s.flush()
         s.add_all(
             [
-                AgentSession(kind='implementer', campaign_id=1, run_id=1, state=AgentSessionState.RUNNING),
-                AgentSession(kind='implementer', campaign_id=1, run_id=1, state=AgentSessionState.EXITED),
+                AgentSession(
+                    kind='implementer', campaign_id=1, subject=TargetRef(RUN, 1), state=AgentSessionState.RUNNING
+                ),
+                AgentSession(
+                    kind='implementer', campaign_id=1, subject=TargetRef(RUN, 1), state=AgentSessionState.EXITED
+                ),
                 AgentSession(kind='research', campaign_id=1, state=AgentSessionState.RUNNING),
             ]
         )
@@ -1486,7 +1490,9 @@ def test_run_extend_gives_the_running_implementer_more_time_and_says_how_much_in
             Run(idea_id=idea.id, attempt=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING)
         )
         s.flush()
-        s.add(AgentSession(kind='implementer', campaign_id=1, run_id=1, state=AgentSessionState.RUNNING))
+        s.add(
+            AgentSession(kind='implementer', campaign_id=1, subject=TargetRef(RUN, 1), state=AgentSessionState.RUNNING)
+        )
         s.commit()
     db.close()
     out()
@@ -1776,7 +1782,7 @@ def test_status_without_results(campaign_path: Path, out, mocker: MockerFixture)
             AgentSession(
                 kind='implementer',
                 campaign_id=1,
-                run_id=1,
+                subject=TargetRef(RUN, 1),
                 harness='script',
                 model='m',
                 runtime='subprocess',
@@ -1786,7 +1792,13 @@ def test_status_without_results(campaign_path: Path, out, mocker: MockerFixture)
             )
         )
         s.add(
-            AgentSession(kind='implementer', campaign_id=1, run_id=1, harness='script', state=AgentSessionState.RUNNING)
+            AgentSession(
+                kind='implementer',
+                campaign_id=1,
+                subject=TargetRef(RUN, 1),
+                harness='script',
+                state=AgentSessionState.RUNNING,
+            )
         )
         s.commit()
     db.close()

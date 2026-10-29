@@ -11,7 +11,7 @@ from piloop.db.models import Campaign, Comment
 from piloop.db.session import Database
 from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import Yield, source, yields
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.optimization.pack import OUTLINE_CHARS, pack
 from piloop.plugins.role.contract import Files
@@ -72,7 +72,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Path:
         idea(s, campaign, 'pad lines', IdeaStatus.SEED, family='padding', created_by='watchdog#7', provenance='run#1')
         idea(s, campaign, 'ask the human', IdeaStatus.PROPOSED, created_by='human')
         idea(s, campaign, 'parked lines', IdeaStatus.PARKED, family='padding', created_by='watchdog#3')
-        comment(s, TargetKind.IDEA, worse.id, 'NEGATIVE: fewer lines lose score\nbecause score counts lines')
+        comment(s, IDEA, worse.id, 'NEGATIVE: fewer lines lose score\nbecause score counts lines')
         note(s, campaign, 'orchestrator', CommentKind.FINDING, 'digest: best #2 +2 over the start\nby slice: …')
         note(s, campaign, 'human', CommentKind.DECISION, 'no external data')
         note(s, campaign, 'research#4', CommentKind.FINDING, 'batch 1: rejected deleting')
@@ -154,7 +154,7 @@ def test_the_pack_is_bounded(db: Database, campaign: Campaign, tmp_path: Path) -
     with db.session() as s:
         for n in range(max(SHOWN.seeds, SHOWN.findings) + 2):
             row = idea(s, campaign, f'idea {n} ' + 't' * 200, IdeaStatus.SEED, provenance='p' * 500, family='f' * 80)
-            comment(s, TargetKind.IDEA, row.id, '\n'.join(['w' * 79] * 30))
+            comment(s, IDEA, row.id, '\n'.join(['w' * 79] * 30))
         for _ in range(SHOWN.digests + 2):
             note(s, campaign, 'orchestrator', CommentKind.FINDING, '\n'.join(['d' * 79] * 30))
         s.commit()

@@ -18,7 +18,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement, evaluator_of
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.runs.trigger.leaking_funnel import LeakingFunnel
 from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
@@ -107,7 +107,7 @@ def test_an_agent_dead_at_startup_is_an_incident_unless_its_role_investigates(db
         agent(s, p, WATCHDOG, 0, 5)  # a short life, without the launcher's event: no incident
         for kind in (WATCHDOG, RESEARCH):
             dead = agent(s, p, kind, 0, 35, state=AgentSessionState.KILLED)
-            payload = StartupAnomaly(role=kind, harness='script', run=None, seconds=35.0, error='prompt_lost')
+            payload = StartupAnomaly(role=kind, harness='script', subject=None, seconds=35.0, error='prompt_lost')
             s.add(Event(actor='daemon', target=TargetRef(TargetKind.AGENT_SESSION, dead.id), payload=payload))
         s.commit()
         assert subjects(fired(s, campaign, DeadAtStartup())) == ['agent_session#3']
@@ -118,7 +118,7 @@ def test_the_incidents_given_to_agents_are_listed_newest_first(db: Database, cam
         assert shown(s, campaign, 'reported') == '## Incidents given to agents\n\n- None.'
         watchdog = agent(s, s.get_one(Campaign, campaign.id), WATCHDOG, 0, 5)
         for run_id in range(3, 3 + REPORTED_SHOWN + 1):
-            subject = TargetRef(TargetKind.RUN, run_id)
+            subject = TargetRef(RUN, run_id)
             reported = AnomalyReported(subject=subject, trigger='run_failed', line=f'- {subject}')
             s.add(
                 Event(actor='daemon', target=TargetRef(TargetKind.AGENT_SESSION, watchdog.id), payload=reported, at=NOW)

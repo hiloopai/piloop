@@ -11,8 +11,8 @@ from piloop.campaign.stop import held
 from piloop.config import CampaignConfig
 from piloop.db.events import emit
 from piloop.db.models import Campaign, Pause
-from piloop.ids import TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.ids import TargetRef
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.measure import record
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
@@ -92,7 +92,7 @@ def add_measurement(s: Session, candidate_id: CandidateId, report: Report, *, ac
     if not rejudgeable(candidate):
         return Added(measurement, False, _stays(candidate))
     asked = RejudgeRequested(measurement=measurement.id)
-    emit(s, asked, TargetRef(TargetKind.CANDIDATE, candidate.id), actor)
+    emit(s, asked, TargetRef(CANDIDATE, candidate.id), actor)
     later = measuring_held(s, campaign, cfg)
     return Added(measurement, True, f'the daemon judges it again with all its measurements{later}')
 

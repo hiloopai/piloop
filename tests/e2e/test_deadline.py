@@ -61,7 +61,9 @@ def test_the_wrap_up_reaches_the_turn_and_the_run_finishes_before_its_timeout(ca
     wait_until(lambda: campaign.run_in('long', OPEN, within=False) is not None, timeout=TIMEOUT + 120)
     run = campaign.run_of('long')
     assert run is not None
-    [implementer] = campaign.sql('SELECT * FROM agent_sessions WHERE run_id = ?', run['id'])
+    [implementer] = campaign.sql(
+        "SELECT * FROM agent_sessions WHERE subject_kind = 'run' AND subject_id = ?", run['id']
+    )
     delivered = campaign.sql(
         "SELECT kind FROM events WHERE target_kind = 'agent_session' AND target_id = ? AND kind LIKE 'comment.%'",
         implementer['id'],

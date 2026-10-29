@@ -24,10 +24,10 @@ from piloop.db.models import (
     EventModel,
     ReadBy,
 )
-from piloop.ids import CampaignStatus, TargetKind, TargetRef
+from piloop.ids import CampaignStatus, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, Track
@@ -306,9 +306,7 @@ def rejudges(s: Session, campaign: Campaign) -> list[Candidate]:
 
 def answer_rejudge(s: Session, candidate_id: CandidateId) -> None:
     """Answer the pending request to judge the candidate again: the daemon judged it, or found that it cannot."""
-    for asked, _ in requests.pending(
-        s, RejudgeRequested, Event.target == TargetRef(TargetKind.CANDIDATE, candidate_id)
-    ):
+    for asked, _ in requests.pending(s, RejudgeRequested, Event.target == TargetRef(CANDIDATE, candidate_id)):
         requests.answer(s, asked)
 
 
@@ -559,7 +557,7 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
                 f'{candidate.verdict_reason}; its merge onto the head is candidate#{found.id} already ({label(found)})'
             )
             rebased = Rebased(head=onto.id, known=found.id)
-    emit(s, rebased, TargetRef(TargetKind.CANDIDATE, candidate.id), System.DAEMON)
+    emit(s, rebased, TargetRef(CANDIDATE, candidate.id), System.DAEMON)
     return rebased
 
 
@@ -570,7 +568,7 @@ def supersede_composed(s: Session, repo: Repository, candidate: Candidate, seed:
     four chained commits that each conflict on the head then leaves one seed, not four.
     """
     earlier = select(Candidate).where(Candidate.run_id == candidate.run_id, Candidate.id != candidate.id)
-    by_provenance = {str(TargetRef(TargetKind.CANDIDATE, c.id)): c for c in s.scalars(earlier)}
+    by_provenance = {str(TargetRef(CANDIDATE, c.id)): c for c in s.scalars(earlier)}
     composes = select(Idea).where(
         Idea.campaign_id == candidate.campaign_id,
         Idea.status == IdeaStatus.SEED,

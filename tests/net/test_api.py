@@ -89,7 +89,7 @@ from piloop.net import tokens
 from piloop.net.server import OPENAPI, Server, app, local_listener
 from piloop.net.tokens import Tokens
 from piloop.plugins.campaign_type.kit.backlog import api as backlog_api
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient, IdeaBody, IdeasQuery, PriorityBody, StatusBody
 from piloop.plugins.campaign_type.kit.candidates import api as candidates_api
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
@@ -101,7 +101,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecor
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import CancelledBy, EvaluationClient, RungResult, RunningSince
 from piloop.plugins.campaign_type.kit.runs import api as runs_api
-from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.runs.wire import ExtendBody, RunsClient
 from piloop.plugins.campaign_type.kit.verdicts import api as verdicts_api
@@ -1338,8 +1338,12 @@ def test_an_extension_gives_a_running_run_s_implementer_more_time_signed_tells_i
     add_run(db, campaign, status=RunStatus.RUNNING, measured=False)
     add_run(db, campaign, measured=False)
     with db.session() as s:
-        s.add(AgentSession(kind='implementer', campaign_id=1, run_id=1, state=AgentSessionState.RUNNING))
-        s.add(AgentSession(kind='implementer', campaign_id=1, run_id=2, state=AgentSessionState.EXITED))
+        s.add(
+            AgentSession(kind='implementer', campaign_id=1, subject=TargetRef(RUN, 1), state=AgentSessionState.RUNNING)
+        )
+        s.add(
+            AgentSession(kind='implementer', campaign_id=1, subject=TargetRef(RUN, 2), state=AgentSessionState.EXITED)
+        )
         s.commit()
     with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
         first = client.extend_run(RunId(1), ExtendBody(by=timedelta(hours=1)))
@@ -1507,7 +1511,7 @@ def test_the_reads_of_a_ui_answer_agents_their_output_ideas_and_comments(
                 started_at=utcnow(),
             )
         )
-        s.add(Comment(target=TargetRef(TargetKind.IDEA, newer.id), author='human', body='worth a try'))
+        s.add(Comment(target=TargetRef(IDEA, newer.id), author='human', body='worth a try'))
         s.commit()
     with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         [state] = client.status(Selection(campaign='demo')).campaigns
@@ -1536,7 +1540,7 @@ def test_the_reads_of_a_ui_answer_agents_their_output_ideas_and_comments(
         assert (moved.was, moved.idea.priority) == (1, 4)
         [event] = client.events(EventsQuery(after=listed.cursor, kind=('idea.priority',))).events
         assert (event.subject.id, event.actor) == (newer.id, 'human')
-        [note] = client.comments(CommentsQuery(kind=TargetKind.IDEA, id=newer.id)).comments
+        [note] = client.comments(CommentsQuery(kind=IDEA, id=newer.id)).comments
         assert (note.author, note.body) == ('human', 'worth a try')
         assert [n.id for n in client.lineage('demo').graph.nodes] == ['candidate#1', 'candidate#2']
         for refused, error in [

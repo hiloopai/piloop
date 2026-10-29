@@ -37,8 +37,8 @@ from piloop.campaign.inbox import campaign_of
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign, Comment
 from piloop.db.triggers import DAEMON_ACTOR
-from piloop.ids import CommentKind, TargetKind
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.ids import CommentKind
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -361,7 +361,7 @@ def _agent_session_findings(
     by_runs = or_(*(Comment.author.startswith(f'{name}#', autoescape=True) for name in cfg.roles.doing_runs()))
     rows = s.scalars(
         select(Comment)
-        .join(Idea, (Comment.target_kind == TargetKind.IDEA) & (Comment.target_id == Idea.id))
+        .join(Idea, (Comment.target_kind == IDEA) & (Comment.target_id == Idea.id))
         .where(Idea.campaign_id == campaign.id, Comment.kind == CommentKind.FINDING, by_runs)
         .order_by(Comment.id.desc())
         .limit(count)

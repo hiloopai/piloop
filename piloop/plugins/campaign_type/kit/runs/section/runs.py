@@ -1,7 +1,6 @@
 from piloop.api.views import Lines, Rendered
-from piloop.db.models import latest_agent_session
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
-from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, latest_agent_session
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.text import age, cell
 

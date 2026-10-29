@@ -2411,8 +2411,10 @@
             "in": "query",
             "required": true,
             "schema": {
-              "$ref": "#/components/schemas/TargetKind",
-              "description": "The kind of the row, such as ``idea``."
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "description": "The kind of the row, such as ``idea``.",
+              "title": "Kind"
             },
             "description": "The kind of the row, such as ``idea``."
           },
@@ -9346,26 +9348,12 @@
         "title": "Target",
         "description": "The row that a comment is about."
       },
-      "TargetKind": {
-        "type": "string",
-        "enum": [
-          "campaign",
-          "idea",
-          "run",
-          "candidate",
-          "measurement",
-          "agent_session",
-          "comment",
-          "instance",
-          "home"
-        ],
-        "title": "TargetKind",
-        "description": "What a comment or an event points at."
-      },
       "TargetRef": {
         "properties": {
           "kind": {
-            "$ref": "#/components/schemas/TargetKind"
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "title": "Kind"
           },
           "id": {
             "type": "integer",

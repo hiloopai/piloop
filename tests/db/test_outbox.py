@@ -20,7 +20,9 @@ from piloop.db.triggers.changelog import (
     LimitUnset,
 )
 from piloop.ids import HOME, CampaignId, RoleName, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from tests.conftest import baseline
@@ -51,7 +53,7 @@ def test_a_requested_agent_emits_its_request_from_piloop_sql_and_no_other_insert
             con, f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('research', {campaign.id}, 'exited')"
         )
     [(actor, target, event)] = emitted(db, start)
-    assert actor == 'human' and target.kind is TargetKind.AGENT_SESSION
+    assert actor == 'human' and target.kind == TargetKind.AGENT_SESSION
     assert event == AgentSessionRequested(role=RoleName('research'), campaign=CampaignId(campaign.id), reason='by hand')
 
 
@@ -61,7 +63,7 @@ def test_a_new_idea_emits_its_creation_signed_by_who_created_it(db: Database, ca
         idea = Idea(campaign_id=campaign.id, track='score', title='t', hypothesis='h', created_by='research#4')
         s.add(idea)
         s.commit()
-    assert emitted(db, start) == [('research#4', TargetRef(TargetKind.IDEA, idea.id), IdeaCreated())]
+    assert emitted(db, start) == [('research#4', TargetRef(IDEA, idea.id), IdeaCreated())]
 
 
 def test_a_changed_config_emits_a_config_event_and_the_same_config_none(db: Database, campaign: Campaign) -> None:
@@ -91,7 +93,7 @@ def test_a_cancel_of_a_running_evaluation_emits_it_on_the_candidate(db: Database
         s.commit()
     cancelled = [(t, e) for _, t, e in emitted(db, start) if isinstance(e, EvaluationCancelled)]
     assert cancelled == [
-        (TargetRef(TargetKind.CANDIDATE, candidate.id), EvaluationCancelled(evaluation=evaluation.id, by='human'))
+        (TargetRef(CANDIDATE, candidate.id), EvaluationCancelled(evaluation=evaluation.id, by='human'))
     ]
 
 
@@ -117,6 +119,14 @@ def test_a_limit_set_changed_and_unset_emits_its_events_on_the_home(db: Database
 def test_no_comment_is_on_the_home(db: Database, tmp_path: Path) -> None:
     with (
         closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con,
-        pytest.raises(sqlite3.IntegrityError, match='targetkind'),
+        pytest.raises(sqlite3.IntegrityError, match='comment_not_on_home'),
     ):
         sql.run(con, "INSERT INTO comments (target_kind, target_id, author, body) VALUES ('home', 1, 'human', 'x')")
+
+
+def test_a_comment_on_a_kind_that_no_installed_piloop_declared_is_refused(db: Database, tmp_path: Path) -> None:
+    with (
+        closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con,
+        pytest.raises(sqlite3.IntegrityError, match='FOREIGN KEY constraint failed'),
+    ):
+        sql.run(con, "INSERT INTO comments (target_kind, target_id, author, body) VALUES ('worker', 1, 'human', 'x')")

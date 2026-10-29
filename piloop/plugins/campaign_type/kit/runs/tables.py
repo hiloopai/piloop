@@ -1,22 +1,30 @@
 """The table of the ``runs`` component: an agent's unit of work on an idea."""
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from covalence import Cid
 from sqlalchemy import (
     CheckConstraint,
+    ColumnElement,
     ForeignKey,
     Index,
     Integer,
+    ScalarSelect,
     Select,
     UniqueConstraint,
+    and_,
     select,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from piloop.db.models import NOW, Base, CidText, Tracked, by_value, utcnow
-from piloop.ids import CampaignId, RoleName
+from piloop.db.models import NOW, AgentSession, Base, CidText, Tracked, by_value, utcnow
+from piloop.ids import (
+    CampaignId,
+    RoleName,
+    TargetRef,
+)
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
@@ -26,10 +34,14 @@ from piloop.plugins.campaign_type.kit.runs.ids import (
     FINISHED_RUNS,
     IMPLEMENTER,
     OPEN_RUNS,
+    RUN,
     RunEnd,
     RunId,
     RunStatus,
 )
+
+if TYPE_CHECKING:  # the components' tables import this module
+    from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 
 # the types of its columns, beside core's in Base.type_annotation_map
 Base.registry.update_type_annotation_map(
@@ -108,3 +120,22 @@ class Run(Tracked, Base):
 def campaign_runs(campaign_id: CampaignId) -> Select[Run]:
     """Every run of the campaign. A run has no ``campaign_id``, but its idea has one."""
     return select(Run).join(Idea).where(Idea.campaign_id == campaign_id)
+
+
+def latest_agent_session(s: Session, run_id: RunId) -> AgentSession | None:
+    """The latest agent row that did run ``run_id``. A relaunch after the agent failed to start is a second row."""
+    return s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id.desc()).limit(1)).first()
+
+
+def run_of(agent_session: AgentSession) -> RunId | None:
+    """The run that ``agent_session`` works on (its subject ``run#N``), or None: a sweep, or other work."""
+    match agent_session.subject:
+        case TargetRef(kind=kind, id=id) if kind == RUN:
+            return RunId(id)
+        case _:
+            return None
+
+
+def working_on(run: RunId | ColumnElement[int] | ScalarSelect[int | None]) -> ColumnElement[bool]:
+    """Whether an agent session works on ``run``: its subject is ``run#<run>``."""
+    return and_(AgentSession.subject_kind == RUN, AgentSession.subject_id == run)

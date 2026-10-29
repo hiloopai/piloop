@@ -17,7 +17,7 @@ from piloop.db import feed as db_feed
 from piloop.db.models import AgentSession, AgentSessionState
 from piloop.net import Refusal
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RunId
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.campaign_type.kit.runs.wire import ExtendBody, Extension, RunAnswer
 
 router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUSALS_DOCUMENTED)
@@ -48,7 +48,7 @@ def cancel_run(s: Writing, me: Acting, run: AddressedRun, body: CancelBody) -> R
 @router.post('/runs/{run}/extend', operation_id='extend_run', dependencies=[Depends(actor_access)])
 def extend_run(s: Writing, me: Acting, run: AddressedRun, body: ExtendBody) -> Extension:
     """Give a running run's implementer more time: its deadline moves by ``by``, and a note tells it so."""
-    running = (AgentSession.run_id == run.id) & (AgentSession.state == AgentSessionState.RUNNING)
+    running = (working_on(run.id)) & (AgentSession.state == AgentSessionState.RUNNING)
     agent = s.scalars(select(AgentSession).where(running)).first()
     if agent is None:
         raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, f'run#{run.id} has no running implementer')

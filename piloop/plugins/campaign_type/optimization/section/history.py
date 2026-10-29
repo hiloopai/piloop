@@ -8,7 +8,7 @@ from piloop.api.views import Rendered, Text
 from piloop.db.models import AgentSession, Campaign
 from piloop.ids import AgentSessionId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.campaign_type.kit.verdicts.judge import keeps
 from piloop.plugins.campaign_type.optimization.history import history
 from piloop.plugins.section.contract import Rendering, Section, Surface
@@ -48,9 +48,9 @@ class History(Section):
 
 def _idea_of(s: Session, reader: AgentSessionId | None) -> Idea | None:
     """The idea of the reader's run, or None for a reader without one."""
-    if reader is None or (agent := s.get(AgentSession, reader)) is None or agent.run_id is None:
+    if reader is None or (agent := s.get(AgentSession, reader)) is None or run_of(agent) is None:
         return None
-    return s.get_one(Run, agent.run_id).idea
+    return s.get_one(Run, run_of(agent)).idea
 
 
 def _ranked(s: Session, campaign: Campaign, mine: Idea | None) -> list[Idea]:

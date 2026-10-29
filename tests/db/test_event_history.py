@@ -326,7 +326,7 @@ def test_the_shapes_of_0_1_0_are_rewritten_to_the_models(tmp_path: Path) -> None
             ),
             (
                 'StartupAnomaly',
-                '{"harness":"codex","run":36,"seconds":41.3,"error":null,"role":"implementer","kind":"anomaly.startup"}',
+                '{"harness":"codex","seconds":41.3,"error":null,"role":"implementer","kind":"anomaly.startup","subject":"run#36"}',
             ),
             ('CampaignAdded', '{"baseline":1,"kind":"campaign.added"}'),
             ('IdeaCreated', '{"kind":"idea.created"}'),
@@ -421,7 +421,7 @@ def test_the_shapes_of_0_2_0_are_rewritten_to_the_models(tmp_path: Path) -> None
             ),
             (
                 'StartupAnomaly',
-                '{"harness":"codex","run":null,"seconds":3.1,"error":"exit 1","role":"watchdog","kind":"anomaly.startup"}',
+                '{"harness":"codex","seconds":3.1,"error":"exit 1","role":"watchdog","kind":"anomaly.startup","subject":null}',
             ),
             ('CampaignAdded', '{"baseline":1,"kind":"campaign.added"}'),
             (
@@ -476,7 +476,7 @@ def test_the_shapes_of_main_before_typed_events_are_rewritten_to_the_models(tmp_
             ),
             (
                 'Identified',
-                '{"session_id":"s-1","harness":"claude","executable":"claude","role":"implementer","model":"opus","campaign":"p","run":1,"idea":1,"proposed_by":{"actor":"research#3","harness":"pi","executable":null,"session_id":null},"kind":"agent_session.identified"}',
+                '{"session_id":"s-1","harness":"claude","executable":"claude","role":"implementer","model":"opus","campaign":"p","kind":"agent_session.identified","subject":"run#1","groups":["idea#1"],"parent":{"actor":"research#3","harness":"pi","executable":null,"session_id":null}}',
             ),
             (
                 'JobEnded',

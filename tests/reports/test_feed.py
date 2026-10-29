@@ -20,10 +20,11 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment,
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import IdeaCreated
 from piloop.ids import CampaignId, CommentKind, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.reports import feed
 
@@ -57,7 +58,7 @@ def newest(db: Database) -> int:
 def test_a_read_transaction_sees_one_state_and_refuses_unflushed_changes(db: Database, campaign: Campaign) -> None:
     with db.session() as s, db.session() as other:
         with db_feed.snapshot(s) as cursor:
-            emit(other, IdeaCreated(), TargetRef(TargetKind.IDEA, 1), System.DAEMON)
+            emit(other, IdeaCreated(), TargetRef(IDEA, 1), System.DAEMON)
             other.commit()
             assert db_feed.newest(s) == cursor, 'a commit after the first read is not seen'
         assert db_feed.newest(s) == cursor + 1, 'the transaction ended: the commit is seen'
@@ -124,7 +125,7 @@ def test_every_event_has_one_time_format_whoever_wrote_it(db: Database, campaign
         idea = make_idea(campaign.id, 'try it')
         s.add(idea)
         s.flush()
-        emit(s, IdeaCreated(), TargetRef(TargetKind.IDEA, idea.id), System.DAEMON)
+        emit(s, IdeaCreated(), TargetRef(IDEA, idea.id), System.DAEMON)
         s.commit()
         idea.status = IdeaStatus.PARKED
         s.commit()
@@ -201,16 +202,16 @@ def test_a_campaign_filter_follows_each_subject_to_its_campaign(
         run = Run(idea_id=mine.id, attempt=1, base_candidate_id=candidate.id, harness='script', model='m')
         s.add(run)
         s.flush()
-        agent_session = AgentSession(kind='implementer', campaign_id=campaign.id, run_id=run.id)
+        agent_session = AgentSession(kind='implementer', campaign_id=campaign.id, subject=TargetRef(RUN, run.id))
         s.add(agent_session)
         s.flush()
         start = s.scalar(select(func.max(Event.id))) or 0
         for kind, target in (
-            (TargetKind.IDEA, mine.id),
-            (TargetKind.IDEA, theirs.id),
-            (TargetKind.RUN, run.id),
+            (IDEA, mine.id),
+            (IDEA, theirs.id),
+            (RUN, run.id),
             (TargetKind.AGENT_SESSION, agent_session.id),
-            (TargetKind.CANDIDATE, candidate.id),
+            (CANDIDATE, candidate.id),
             (TargetKind.CAMPAIGN, other.id),
         ):
             emit(s, IdeaCreated(), TargetRef(kind, target), System.DAEMON)
@@ -303,7 +304,7 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
         agent_session = AgentSession(
             kind='implementer',
             campaign_id=campaign.id,
-            run_id=run.id,
+            subject=TargetRef(RUN, run.id),
             state=AgentSessionState.RUNNING,
             harness='script',
         )

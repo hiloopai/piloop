@@ -266,9 +266,11 @@ class Smoke:
         if not self.db.is_file():
             return lines
         rows = self.sql(
-            'SELECT w.id, w.kind, w.run_id, w.state, w.log_dir, w.usage, r.status, r.error, i.title,'
+            "SELECT w.id, w.kind, CASE WHEN w.subject_kind = 'run' THEN w.subject_id END AS run_id, w.state,"
+            ' w.log_dir, w.usage, r.status, r.error, i.title,'
             ' (julianday(w.ended_at) - julianday(w.started_at)) * 86400 AS seconds'
-            ' FROM agent_sessions w LEFT JOIN runs r ON r.id = w.run_id LEFT JOIN ideas i ON i.id = r.idea_id ORDER BY w.id'
+            " FROM agent_sessions w LEFT JOIN runs r ON w.subject_kind = 'run' AND r.id = w.subject_id LEFT JOIN"
+            ' ideas i ON i.id = r.idea_id ORDER BY w.id'
         )
         lines += [
             '',

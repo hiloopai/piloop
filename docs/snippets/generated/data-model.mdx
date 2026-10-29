@@ -19,31 +19,6 @@ erDiagram
         datetime updated_at
         varchar updated_by
     }
-    comments {
-        integer id PK
-        varchar target_kind
-        integer target_id
-        integer in_reply_to FK
-        varchar author
-        CommentKind kind
-        varchar body
-        integer priority
-        datetime acked_at
-        varchar acked_by
-        json form
-        datetime created_at
-        datetime updated_at
-        varchar updated_by
-    }
-    events {
-        integer id PK
-        datetime at
-        varchar kind
-        varchar actor
-        TargetKind target_kind
-        integer target_id
-        json payload
-    }
     lease_workers {
         varchar id PK
         varchar pool
@@ -67,6 +42,10 @@ erDiagram
         varchar package
         integer fingerprint
     }
+    target_kinds {
+        varchar id PK
+        varchar owner
+    }
     tokens {
         integer id PK
         varchar name UK
@@ -86,10 +65,33 @@ erDiagram
         datetime ended_at
         InstanceEnd end
     }
+    agent_sessions {
+        integer id PK
+        varchar kind
+        integer campaign_id FK
+        varchar subject_kind FK
+        integer subject_id
+        varchar harness
+        varchar model
+        varchar runtime
+        json handle
+        AgentSessionState state
+        varchar reason
+        varchar log_dir
+        datetime started_at
+        datetime ended_at
+        varchar error
+        varchar session_id
+        varchar machine
+        varchar session_file
+        json usage
+        datetime updated_at
+        varchar updated_by
+    }
     archives {
         integer id PK
         integer campaign_id FK
-        TargetKind subject_kind
+        varchar subject_kind FK
         integer subject_id
         varchar manifest
         integer files
@@ -97,6 +99,22 @@ erDiagram
         datetime created_at
         datetime pruned_at
         boolean complete
+    }
+    comments {
+        integer id PK
+        varchar target_kind FK
+        integer target_id
+        integer in_reply_to FK
+        varchar author
+        CommentKind kind
+        varchar body
+        integer priority
+        datetime acked_at
+        varchar acked_by
+        json form
+        datetime created_at
+        datetime updated_at
+        varchar updated_by
     }
     documents {
         integer id PK
@@ -117,6 +135,15 @@ erDiagram
         json definition
         varchar runner
         datetime created_at
+    }
+    events {
+        integer id PK
+        datetime at
+        varchar kind
+        varchar actor
+        varchar target_kind FK
+        integer target_id
+        json payload
     }
     first_transfers {
         integer campaign_id PK,FK
@@ -180,6 +207,26 @@ erDiagram
         integer target_id PK,FK
         LinkKind kind PK
     }
+    leases {
+        integer id PK
+        LeaseKind kind
+        integer agent_session_id FK
+        integer evaluation_id
+        LeaseState state
+        varchar worker
+        varchar job_cid
+        json handle
+        datetime created_at
+        datetime acquired_at
+        datetime started_at
+        datetime renewed_at
+        datetime expires_at
+        datetime revoked_at
+        datetime ended_at
+        varchar acquire_request
+        varchar report_request
+        json receipt
+    }
     runs {
         integer id PK
         integer idea_id FK
@@ -198,28 +245,6 @@ erDiagram
         varchar error
         varchar log_dir
         datetime created_at
-        datetime updated_at
-        varchar updated_by
-    }
-    agent_sessions {
-        integer id PK
-        varchar kind
-        integer campaign_id FK
-        integer run_id FK
-        varchar harness
-        varchar model
-        varchar runtime
-        json handle
-        AgentSessionState state
-        varchar reason
-        varchar log_dir
-        datetime started_at
-        datetime ended_at
-        varchar error
-        varchar session_id
-        varchar machine
-        varchar session_file
-        json usage
         datetime updated_at
         varchar updated_by
     }
@@ -249,26 +274,6 @@ erDiagram
         datetime started_at
         varchar cancelled_by
     }
-    leases {
-        integer id PK
-        LeaseKind kind
-        integer agent_session_id FK
-        integer evaluation_id
-        LeaseState state
-        varchar worker
-        varchar job_cid
-        json handle
-        datetime created_at
-        datetime acquired_at
-        datetime started_at
-        datetime renewed_at
-        datetime expires_at
-        datetime revoked_at
-        datetime ended_at
-        varchar acquire_request
-        varchar report_request
-        json receipt
-    }
     measurements {
         integer id PK
         integer candidate_id FK
@@ -282,10 +287,15 @@ erDiagram
         datetime created_at
     }
     campaigns |o--o{ campaigns : "parent_id"
-    comments |o--o{ comments : "in_reply_to"
+    campaigns |o--o{ agent_sessions : "campaign_id"
+    target_kinds |o--o{ agent_sessions : "subject_kind"
     campaigns ||--o{ archives : "campaign_id"
+    target_kinds |o--o{ archives : "subject_kind"
+    target_kinds ||--o{ comments : "target_kind"
+    comments |o--o{ comments : "in_reply_to"
     campaigns ||--o{ documents : "campaign_id"
     campaigns ||--o{ evaluators : "campaign_id"
+    target_kinds ||--o{ events : "target_kind"
     campaigns ||--o{ first_transfers : "campaign_id"
     campaigns ||--o{ ideas : "campaign_id"
     campaigns |o--o{ journal : "campaign_id"
@@ -294,15 +304,13 @@ erDiagram
     campaigns ||--o{ techniques : "campaign_id"
     ideas ||--o{ idea_links : "idea_id"
     ideas ||--o{ idea_links : "target_id"
+    agent_sessions |o--o{ leases : "agent_session_id"
     ideas ||--o{ runs : "idea_id"
-    campaigns |o--o{ agent_sessions : "campaign_id"
-    runs |o--o{ agent_sessions : "run_id"
     campaigns ||--o{ candidates : "campaign_id"
     runs |o--o{ candidates : "run_id"
     candidates |o--o{ candidates : "parent_id"
     candidates ||--o{ evaluations : "candidate_id"
     evaluators ||--o{ evaluations : "evaluator_id"
-    agent_sessions |o--o{ leases : "agent_session_id"
     candidates ||--o{ measurements : "candidate_id"
     evaluators ||--o{ measurements : "evaluator_id"
     measurements |o--o{ measurements : "pair_id"

@@ -8,15 +8,14 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Agent
 from piloop.db.models import AgentSession, Campaign, Event
-from piloop.ids import TargetKind
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import JUDGED, CandidateId, Origin
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, JUDGED, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Track
 from piloop.plugins.campaign_type.kit.evaluation.measure import derive, full_clause, means, ratios
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import RunId
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged, head, trunk_keeps
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Outcome
@@ -162,16 +161,18 @@ def _scores(s: Session, campaign: Campaign, tracks: Sequence[Track]) -> dict[Can
 def _sessions(s: Session, campaign: Campaign) -> dict[RunId, list[SessionLink]]:
     """The agent sessions of each run of the campaign, oldest first. It reads columns: a campaign has thousands."""
     rows = s.execute(
-        select(AgentSession.id, AgentSession.kind, AgentSession.run_id, AgentSession.harness, AgentSession.session_id)
-        .where(AgentSession.campaign_id == campaign.id, AgentSession.run_id.is_not(None))
+        select(
+            AgentSession.id, AgentSession.kind, AgentSession.subject_id, AgentSession.harness, AgentSession.session_id
+        )
+        .where(AgentSession.campaign_id == campaign.id, (AgentSession.subject_kind == RUN))
         .order_by(AgentSession.id)
     )
     found: dict[RunId, list[SessionLink]] = {}
     for agent, role, run, harness, session in rows:
         assert run is not None  # the query selects these only
         label = Agent(role=role, session=agent).signature
-        found.setdefault(run, []).append(
-            SessionLink(kind=TargetKind.AGENT_SESSION, id=agent, harness=harness, session_id=session, label=label)
+        found.setdefault(RunId(run), []).append(
+            SessionLink(kind='agent_session', id=agent, harness=harness, session_id=session, label=label)
         )
     return found
 
@@ -180,9 +181,9 @@ def _links(
     c: CandidateId, run: RunId | None, idea: IdeaId | None, title: str | None, sessions: dict[RunId, list[SessionLink]]
 ) -> list[NodeLink]:
     """The candidate itself, then its run's idea, the run and the run's agent sessions."""
-    found: list[NodeLink] = [RowLink(kind=TargetKind.CANDIDATE, id=c, label=None)]
+    found: list[NodeLink] = [RowLink(kind='candidate', id=c, label=None)]
     if run is not None and idea is not None:
-        found += [RowLink(kind=TargetKind.IDEA, id=idea, label=title), RowLink(kind=TargetKind.RUN, id=run, label=None)]
+        found += [RowLink(kind='idea', id=idea, label=title), RowLink(kind='run', id=run, label=None)]
         found += sessions.get(run, [])
     return found
 
@@ -202,7 +203,7 @@ def _series(s: Session, keeps: Iterable[Candidate], spine: set[CandidateId]) -> 
         s.execute(
             select(Event.target_id, func.max(Event.at))
             .where(
-                Event.target_kind == TargetKind.CANDIDATE,
+                Event.target_kind == CANDIDATE,
                 Event.target_id.in_([c.id for c in on]),
                 Event.kind.in_(CandidateJudged.kinds()),
             )

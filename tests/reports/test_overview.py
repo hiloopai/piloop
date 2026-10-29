@@ -12,14 +12,14 @@ from piloop.config import CampaignConfig, load_campaign_config
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
 from piloop.ids import CampaignStatus, CommentKind, RoleName, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.section.queue import BLOCKED_SHOWN
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.section.contract import SECTIONS, Rendering, Surface, defaults, markdown
 from piloop.reports import overview as overview_module
@@ -84,7 +84,7 @@ def agent(
     row = AgentSession(
         kind=kind,
         campaign_id=campaign.id,
-        run_id=run_id,
+        subject=None if run_id is None else TargetRef(RUN, run_id),
         harness='script',
         runtime='subprocess',
         started_at=at(start),
@@ -137,7 +137,9 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
         bad = idea(s, p, 'crash it', IdeaStatus.REJECTED)
         failed = run(s, bad, RunStatus.FAILED, 1, 30, 40, error='boom\nand the rest')
         dead = agent(s, p, IMPLEMENTER, 30, 5, run_id=failed.id, state=AgentSessionState.KILLED, error='dialog')
-        startup = StartupAnomaly(role=IMPLEMENTER, harness='script', run=failed.id, seconds=5.0, error='dialog')
+        startup = StartupAnomaly(
+            role=IMPLEMENTER, harness='script', subject=TargetRef(RUN, failed.id), seconds=5.0, error='dialog'
+        )
         s.add(
             Event(
                 actor='daemon',
@@ -154,7 +156,7 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
         s.add_all(
             [
                 Comment(
-                    target=TargetRef(TargetKind.RUN, failed.id),
+                    target=TargetRef(RUN, failed.id),
                     author='watchdog#9',
                     kind=CommentKind.ESCALATION,
                     priority=1,
@@ -169,7 +171,7 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
                     created_at=at(46),
                 ),
                 Comment(
-                    target=TargetRef(TargetKind.IDEA, good.id),
+                    target=TargetRef(IDEA, good.id),
                     author='implementer#1',
                     body='a note',
                     created_at=at(47),
@@ -236,7 +238,7 @@ def test_the_overview_of_a_campaign(db: Database, campaign: Campaign) -> None:
     assert '- Agents so far: 3 implementer (1 killed),' in lay
     assert 'evaluations: 3 · crashed: 0 · median: 3 min' in lay
     assert tools.startswith('- `piloop sql "<one statement>"`')
-    assert '  - agent_sessions(id, kind, campaign_id, run_id,' in tools, (
+    assert '  - agent_sessions(id, kind, campaign_id, subject_kind, subject_id, harness,' in tools, (
         'the schema is listed, so an agent does not need PRAGMA table_info'
     )
     assert '  - leases(' not in tools and '  - evaluators(' not in tools, 'not the tables that only piloop reads'
@@ -314,7 +316,11 @@ def test_open_runs_say_how_far_they_got(db: Database, campaign: Campaign) -> Non
         waiting = run(s, idea(s, p, 'waiting', IdeaStatus.SCHEDULED), RunStatus.QUEUED, 1, 100, None)
         waiting.started_at = None
         going = run(s, idea(s, p, 'going', IdeaStatus.SCHEDULED), RunStatus.RUNNING, 1, 110, None)
-        s.add(AgentSession(kind=IMPLEMENTER, campaign_id=p.id, run_id=going.id, state=AgentSessionState.RUNNING))
+        s.add(
+            AgentSession(
+                kind=IMPLEMENTER, campaign_id=p.id, subject=TargetRef(RUN, going.id), state=AgentSessionState.RUNNING
+            )
+        )
         s.commit()
     cfg = load_campaign_config(Path(campaign.path), plugins={'role': {'implementer': {'max_concurrent': 2}}})
     lines = render(db, campaign, cfg).splitlines()

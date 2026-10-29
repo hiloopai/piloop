@@ -6,10 +6,18 @@ Each id is a ``NewType`` of ``int``, so an idea's id does not type-check where a
 
 import re
 from enum import StrEnum
-from typing import Annotated, Final, NewType
+from typing import Annotated, ClassVar, Final, NewType
 
-from pydantic import AfterValidator, BeforeValidator, PlainSerializer, PositiveInt, StringConstraints
+from pydantic import (
+    AfterValidator,
+    BeforeValidator,
+    GetCoreSchemaHandler,
+    PlainSerializer,
+    PositiveInt,
+    StringConstraints,
+)
 from pydantic.dataclasses import dataclass
+from pydantic_core import CoreSchema, core_schema
 
 type EnvName = Annotated[str, StringConstraints(pattern=r'^[A-Za-z_][A-Za-z0-9_]*$')]
 """A POSIX environment variable name: a secret's, or one that an agent or a server reads. Every harness's ``${NAME}``
@@ -43,20 +51,41 @@ type CampaignName = Annotated[str, AfterValidator(checked_campaign_name)]
 """A campaign's name: ``CAMPAIGN_NAME``, and not all digits."""
 
 
-class TargetKind(StrEnum):
-    """What a comment or an event points at."""
+class TargetKind(str):
+    """What a comment or an event points at: one of core's kinds, or one that a plugin declares.
 
-    CAMPAIGN = 'campaign'
-    IDEA = 'idea'
-    RUN = 'run'
-    CANDIDATE = 'candidate'
-    MEASUREMENT = 'measurement'
-    AGENT_SESSION = 'agent_session'
-    COMMENT = 'comment'
-    INSTANCE = 'instance'
+    A plugin declares a kind with the table of its rows (entry points ``piloop.target_kinds``). The database refuses a
+    kind that no installed piloop declared (``target_kinds``), so a model takes any name of the form, and a stored row
+    of a plugin that is no longer installed still loads.
+    """
+
+    __slots__ = ()
+
+    CAMPAIGN: ClassVar[TargetKind]
+    AGENT_SESSION: ClassVar[TargetKind]
+    COMMENT: ClassVar[TargetKind]
+    INSTANCE: ClassVar[TargetKind]
     """A worker that a provisioner started (``worker_instances``)."""
-    HOME = 'home'
+    HOME: ClassVar[TargetKind]
     """The whole home, for an event about no row: a limit, a worker. Its one id is 1 (``HOME``). No comment is on it."""
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source: object, _handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema(pattern=KIND_NAME.pattern))
+
+
+KIND = r'[a-z][a-z0-9_]*'
+KIND_NAME = re.compile(rf'^{KIND}$')
+"""The form of a ``TargetKind``: a table's singular name, such as ``agent_session``."""
+TargetKind.CAMPAIGN = TargetKind('campaign')
+TargetKind.AGENT_SESSION = TargetKind('agent_session')
+TargetKind.COMMENT = TargetKind('comment')
+TargetKind.INSTANCE = TargetKind('instance')
+TargetKind.HOME = TargetKind('home')
+CORE_KINDS: Final = frozenset(
+    {TargetKind.CAMPAIGN, TargetKind.AGENT_SESSION, TargetKind.COMMENT, TargetKind.INSTANCE, TargetKind.HOME}
+)
+"""Core's kinds. A plugin's kind takes none of their names."""
 
 
 @dataclass(frozen=True)
@@ -76,7 +105,7 @@ class TargetRef:
 HOME: Final = TargetRef(TargetKind.HOME, 1)
 """The target of an event about the whole home."""
 
-REF_PATTERN = re.compile(r'(?P<kind>[a-z_]+)#(?P<id>[0-9]+)')
+REF_PATTERN = re.compile(rf'(?P<kind>{KIND})#(?P<id>[0-9]+)')
 
 
 def _parsed(value: object) -> object:

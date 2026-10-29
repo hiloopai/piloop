@@ -55,7 +55,6 @@ from piloop.db.models import (
     EventModel,
     Limit,
     ReadBy,
-    latest_agent_session,
     utcnow,
 )
 from piloop.db.session import Database, write_transaction
@@ -64,9 +63,9 @@ from piloop.ids import AgentSessionId, CampaignId, CommentId, CommentKind, Revis
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, Tracer
 from piloop.plugins import limits
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
@@ -81,9 +80,9 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
 )
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import attempts, settle_cancelled
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session, working_on
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     MOVED,
     CandidateJudged,
@@ -442,7 +441,7 @@ class RunController:
                 emit(
                     s,
                     RunStarted(harness=run.harness, model=run.model),
-                    TargetRef(TargetKind.RUN, run_id),
+                    TargetRef(RUN, run_id),
                     System.DAEMON,
                 )
                 s.commit()
@@ -611,16 +610,14 @@ class RunController:
         with self.launcher.lock:
             with self._db.session() as s:
                 run = s.get_one(Run, run_id)
-                launches = (
-                    s.scalar(select(func.count()).select_from(AgentSession).where(AgentSession.run_id == run_id)) or 0
-                )
+                launches = s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) or 0
                 if launches > self._daemon.startup_relaunches or run_cancel(s, run_id) is not None:
                     return False
                 run.status = RunStatus.QUEUED
                 agent_session = AgentSession(
                     kind=run.role,
                     campaign_id=run.idea.campaign_id,
-                    run_id=run_id,
+                    subject=TargetRef(RUN, run_id),
                     harness=run.harness,
                     model=run.model,
                     reason=f'run#{run_id} relaunched: {run.role}#{agent_session_id} failed to start',
@@ -633,7 +630,7 @@ class RunController:
                 resigned = re.sub(signed, rf'\g<1>#{agent_session.id}', read_brief(self.cas, run.brief_cid))
                 run.brief_cid = self.cas.put(resigned.encode())
                 relaunched = RunRelaunched(agent_session=agent_session_id, launches=launches)
-                emit(s, relaunched, TargetRef(TargetKind.RUN, run_id), System.DAEMON)
+                emit(s, relaunched, TargetRef(RUN, run_id), System.DAEMON)
                 s.commit()
             transcript = log_dir / TRANSCRIPT
             if transcript.exists():
@@ -681,7 +678,7 @@ class RunController:
         versions = repo.receive(self.cas, work, base_revision) if work is not None else []
         with self._db.session() as s:
             received = RunReceived(revisions=[v.revision for v in versions])
-            emit(s, received, TargetRef(TargetKind.RUN, run_id), System.DAEMON)
+            emit(s, received, TargetRef(RUN, run_id), System.DAEMON)
             s.commit()
         return versions
 
@@ -707,7 +704,7 @@ class RunController:
                 campaign = run.idea.campaign
                 end, idea_id, campaign_id = run.end, run.idea_id, campaign.id
                 vcs, campaign_path = vcs_of(campaign), Path(campaign.path)
-                received = latest(s, RunReceived, Event.target == TargetRef(TargetKind.RUN, run_id))
+                received = latest(s, RunReceived, Event.target == TargetRef(RUN, run_id))
             last = None
             try:
                 with closing(vcs.open(campaign_path)) as repo:
@@ -783,7 +780,7 @@ class RunController:
         except Exception as e:
             with self._db.session() as s:
                 failed = RejudgeFailed(error=f'{type(e).__name__}: {e}')
-                emit(s, failed, TargetRef(TargetKind.CANDIDATE, candidate_id), System.DAEMON)
+                emit(s, failed, TargetRef(CANDIDATE, candidate_id), System.DAEMON)
                 answer_rejudge(s, candidate_id)
                 s.commit()
             self._tracer.event(failed.kind, candidate=candidate_id, error=str(e))
@@ -1116,7 +1113,7 @@ class RunController:
                             moved = True
                             rebased = on_moved(s, scope.cfg, scope.repo, candidate, onto)
                             merged = rebased.rebased if rebased is not None else None
-                        target = TargetRef(TargetKind.CANDIDATE, candidate_id)
+                        target = TargetRef(CANDIDATE, candidate_id)
                         for j in (*others, replace(best, reason=candidate.verdict_reason or best.reason)):
                             on = CandidateJudged(
                                 verdict=j.verdict,
@@ -1235,7 +1232,7 @@ class RunController:
                         idea.status = IdeaStatus.PARKED
                         s.add(
                             Comment(
-                                target=TargetRef(TargetKind.IDEA, idea.id),
+                                target=TargetRef(IDEA, idea.id),
                                 author=DAEMON_ACTOR,
                                 kind=CommentKind.NOTE,
                                 body=f'parked: run#{run_id} ended while its escalation comment#{asked} waits for an'
@@ -1249,7 +1246,7 @@ class RunController:
                         idea.status = IdeaStatus.PARKED
                         s.add(
                             Comment(
-                                target=TargetRef(TargetKind.IDEA, idea.id),
+                                target=TargetRef(IDEA, idea.id),
                                 author=DAEMON_ACTOR,
                                 kind=CommentKind.NOTE,
                                 body=f'parked: no agent of run#{run_id} started to work; fix what stopped them (the'
@@ -1363,8 +1360,8 @@ def finding_of(s: Session, run: Run, agent_session: AgentSession) -> Comment | N
     A finding is the implementer's report that it is done. Only the implementer's own finding counts: a relaunched run's dead
     implementer did not finish it.
     """
-    on_idea = Comment.target == TargetRef(TargetKind.IDEA, run.idea_id)
-    on_run = Comment.target == TargetRef(TargetKind.RUN, run.id)
+    on_idea = Comment.target == TargetRef(IDEA, run.idea_id)
+    on_run = Comment.target == TargetRef(RUN, run.id)
     signed = (Agent(role=agent_session.kind, session=agent_session.id).signature, f'run#{run.id}')
     return s.scalars(
         select(Comment)
@@ -1441,7 +1438,7 @@ def close_run(s: Session, run: Run, end: RunEnd, error: str | None) -> Run:
     Every writer of a run's end goes through here.
     """
     run.status, run.end, run.error, run.finished_at = end.status, end, error, utcnow()
-    emit(s, RunFinished(end=end, error=error), TargetRef(TargetKind.RUN, run.id), System.DAEMON)
+    emit(s, RunFinished(end=end, error=error), TargetRef(RUN, run.id), System.DAEMON)
     return run
 
 
@@ -1459,10 +1456,10 @@ def open_escalation(s: Session, run: Run) -> CommentId | None:
     (``comment.delivered``). An implementer signs as ``<role>#<id>`` or ``run#<id>``. Escalations of other agents on the
     same idea do not block the run.
     """
-    sessions = s.scalars(select(AgentSession).where(AgentSession.run_id == run.id)).all()
+    sessions = s.scalars(select(AgentSession).where(working_on(run.id))).all()
     signed = [Agent(role=w.kind, session=w.id).signature for w in sessions]
-    on_idea = Comment.target == TargetRef(TargetKind.IDEA, run.idea_id)
-    on_run = Comment.target == TargetRef(TargetKind.RUN, run.id)
+    on_idea = Comment.target == TargetRef(IDEA, run.idea_id)
+    on_run = Comment.target == TargetRef(RUN, run.id)
     asked = s.scalars(
         select(Comment)
         .where(
@@ -1480,7 +1477,7 @@ def open_escalation(s: Session, run: Run) -> CommentId | None:
 
 def _requeues(s: Session, idea: Idea) -> int:
     """How many times ``_settle`` requeued the idea from a run's commits (its ``RecoveryRequeued`` events)."""
-    query = select(func.count()).where(Event.target == TargetRef(TargetKind.IDEA, idea.id), has(RecoveryRequeued))
+    query = select(func.count()).where(Event.target == TargetRef(IDEA, idea.id), has(RecoveryRequeued))
     return s.scalar(query) or 0
 
 
@@ -1505,7 +1502,7 @@ def _requeue(s: Session, run: Run, last: Candidate, end: RunEnd) -> None:
     trunk = head(s, idea.campaign)
     moved = not run.branch and trunk is not None and branches(s, idea.campaign, last, trunk)
     idea.status, idea.base_candidate_id = IdeaStatus.READY, None if moved else last.id
-    emit(s, RecoveryRequeued(run=run.id, candidate=last.id), TargetRef(TargetKind.IDEA, idea.id), System.DAEMON)
+    emit(s, RecoveryRequeued(run=run.id, candidate=last.id), TargetRef(IDEA, idea.id), System.DAEMON)
     body = (
         f'requeued on the head: run#{run.id} ended {end} after its versions, and the head moved past them. To start'
         f' from them, take the change from {bar_of(s, run.base).revision} to {last.revision} onto the head'
@@ -1513,7 +1510,7 @@ def _requeue(s: Session, run: Run, last: Candidate, end: RunEnd) -> None:
         else f'requeued from candidate#{last.id}: run#{run.id} ended {end} after its versions; the next run starts'
         ' from its last one to finish the work'
     )
-    s.add(Comment(target=TargetRef(TargetKind.IDEA, idea.id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
+    s.add(Comment(target=TargetRef(IDEA, idea.id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
 
 
 def unmeasured_of(version: Version) -> Unmeasured | None:
@@ -1532,7 +1529,5 @@ def run_place(run_id: int) -> str:
 
 def implementer_of(s: Session, run_id: RunId) -> Actor:
     """The run's newest implementer, which a note from its finding is by; the daemon for a run that has none."""
-    w = s.scalars(
-        select(AgentSession).where(AgentSession.run_id == run_id).order_by(AgentSession.id.desc()).limit(1)
-    ).first()
+    w = s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id.desc()).limit(1)).first()
     return Agent(role=w.kind, session=w.id) if w is not None else System.DAEMON

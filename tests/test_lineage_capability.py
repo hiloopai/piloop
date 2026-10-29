@@ -22,10 +22,12 @@ from piloop.db.events import emit
 from piloop.db.models import AgentSession, Campaign
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Outcome
@@ -114,7 +116,7 @@ def _match(name: str, home: str, away: str, winner: str) -> LineageNode:
         created=T0 + timedelta(hours=1),
         judged=Judged(by='referee', reason=f'{winner} scored more'),
         scores={},
-        links=[RowLink(kind=TargetKind.COMMENT, id=7, label='the report')],
+        links=[RowLink(kind='comment', id=7, label='the report')],
         summary=None,
     )
 
@@ -173,7 +175,7 @@ def test_a_link_is_a_row_or_an_agent_session_with_its_harness_session() -> None:
     session = {'kind': 'agent_session', 'id': 3, 'harness': 'claude', 'session_id': 'abc', 'label': None}
     [link] = LineageNode.model_validate(_node(0, links=[session])).links
     assert link == SessionLink(
-        kind=TargetKind.AGENT_SESSION, id=AgentSessionId(3), harness='claude', session_id='abc', label=None
+        kind='agent_session', id=AgentSessionId(3), harness='claude', session_id='abc', label=None
     )
     with pytest.raises(ValidationError, match='union_tag_invalid'):
         LineageNode.model_validate(_node(0, links=[{'kind': 'home', 'id': 1, 'label': None}]))
@@ -230,7 +232,15 @@ def grow(db: Database, campaign: Campaign, verdicts: Sequence[Outcome | None]) -
             run = Run(idea_id=idea.id, attempt=1, base_candidate_id=bar, harness='pi', model='m')
             s.add(run)
             s.flush()
-            s.add(AgentSession(kind='implementer', campaign_id=row.id, run_id=run.id, harness='pi', session_id=f's{n}'))
+            s.add(
+                AgentSession(
+                    kind='implementer',
+                    campaign_id=row.id,
+                    subject=TargetRef(RUN, run.id),
+                    harness='pi',
+                    session_id=f's{n}',
+                )
+            )
             judged = {} if verdict is None else {'verdict_by': 'daemon', 'verdict_reason': f'{verdict} on score'}
             c = Candidate(
                 campaign_id=row.id,
@@ -247,7 +257,7 @@ def grow(db: Database, campaign: Campaign, verdicts: Sequence[Outcome | None]) -
             s.add(Measurement(candidate_id=c.id, evaluator_id=row.evaluator_id, metrics={'score': 2.0 + n}))
             if verdict is not None:
                 event = CandidateJudged(verdict=verdict, score=2.0 + n, reason=c.verdict_reason)
-                emit(s, event, TargetRef(TargetKind.CANDIDATE, c.id), System.DAEMON)
+                emit(s, event, TargetRef(CANDIDATE, c.id), System.DAEMON)
             bar = c.id if verdict is Outcome.KEEP else bar
             found.append(c.id)
         s.commit()
@@ -293,9 +303,9 @@ def test_optimization_draws_the_candidates_with_the_head_s_ancestry_as_the_spine
         Judged(by='daemon', reason='keep on score'),
     )
     assert [(link.kind, link.label) for link in kept.links] == [
-        (TargetKind.CANDIDATE, None),
-        (TargetKind.IDEA, 'idea 0'),
-        (TargetKind.RUN, None),
+        (CANDIDATE, None),
+        (IDEA, 'idea 0'),
+        (RUN, None),
         (TargetKind.AGENT_SESSION, f'implementer#{kept.links[3].id}'),
     ]
     assert isinstance(kept.links[3], SessionLink) and (kept.links[3].harness, kept.links[3].session_id) == ('pi', 's0')

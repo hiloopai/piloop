@@ -27,7 +27,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization.planner import NO_RUN_ERROR
@@ -176,7 +176,7 @@ def test_an_anomaly_requests_an_incident_sweep_once_and_collapses_while_one_is_p
     assert run_all(sched) == [1], 'requested and launched on the same tick'
     assert run_all(sched) == [], 'the same failure does not fire twice'
     [(agent_session, payload)] = reported_events(db)
-    assert (agent_session, payload.subject, payload.trigger) == (1, TargetRef(TargetKind.RUN, 1), 'run_failed')
+    assert (agent_session, payload.subject, payload.trigger) == (1, TargetRef(RUN, 1), 'run_failed')
     line = payload.line
     assert line.startswith('- run#1 failed, ') and line.endswith(' ago: failed on h (idea#1): no error recorded')
 

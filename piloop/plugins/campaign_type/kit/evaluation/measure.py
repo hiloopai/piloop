@@ -35,12 +35,12 @@ from piloop.ids import (
     TargetKind,
     TargetRef,
 )
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import config
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import UNITS, Units
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, RungName
+from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT, EvaluatorId, MeasurementId, RungName
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import REPEATS, RungResult
@@ -222,19 +222,19 @@ def request_remeasure(s: Session, candidate: Candidate, actor: Actor, repeats: i
     """
     if pending(candidate):
         raise RemeasureRefused(f'candidate#{candidate.id} is pending: the daemon measures and judges it already')
-    emit(s, RemeasureRequested(repeats=repeats), TargetRef(TargetKind.CANDIDATE, candidate.id), actor)
+    emit(s, RemeasureRequested(repeats=repeats), TargetRef(CANDIDATE, candidate.id), actor)
 
 
 def remeasure_asked(s: Session, candidate: Candidate) -> RemeasureRequested | None:
     """Return the pending request to measure ``candidate`` again, or None."""
-    found = requests.pending(s, RemeasureRequested, Event.target == TargetRef(TargetKind.CANDIDATE, candidate.id))
+    found = requests.pending(s, RemeasureRequested, Event.target == TargetRef(CANDIDATE, candidate.id))
     return found[0][1] if found else None
 
 
 def candidates_of(campaign: Campaign) -> ColumnElement[bool]:
     """Select the events on the candidates of ``campaign``."""
     of_campaign = select(Candidate.id).where(Candidate.campaign_id == campaign.id)
-    return (Event.target_kind == TargetKind.CANDIDATE) & Event.target_id.in_(of_campaign)
+    return (Event.target_kind == CANDIDATE) & Event.target_id.in_(of_campaign)
 
 
 def requested(s: Session, campaign: Campaign) -> list[tuple[Candidate, Event]]:
@@ -282,11 +282,9 @@ def record(
     recorded = MeasurementRecorded(
         candidate=candidate.id, metrics=metrics, error=error, run=run, pair=pair, rung=rung, stopped=stopped
     )
-    emit(s, recorded, TargetRef(TargetKind.MEASUREMENT, measurement.id), actor)
+    emit(s, recorded, TargetRef(MEASUREMENT, measurement.id), actor)
     if rung is None and evaluator_id == s.get_one(Campaign, candidate.campaign_id).evaluator_id:
-        for asked, _ in requests.pending(
-            s, RemeasureRequested, Event.target == TargetRef(TargetKind.CANDIDATE, candidate.id)
-        ):
+        for asked, _ in requests.pending(s, RemeasureRequested, Event.target == TargetRef(CANDIDATE, candidate.id)):
             requests.answer(s, asked)
     return measurement
 

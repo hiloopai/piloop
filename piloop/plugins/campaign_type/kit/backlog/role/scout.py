@@ -23,8 +23,8 @@ from sqlalchemy.orm import Session
 from piloop.db.events import has
 from piloop.db.models import AgentSession, Event, EventModel, count
 from piloop.db.triggers.changelog import IdeaStatusChanged
-from piloop.ids import AgentSessionId, CampaignId, RoleName, TargetKind
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.ids import AgentSessionId, CampaignId, RoleName
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, Technique
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -85,7 +85,7 @@ def watch_list(s: Session, campaign_id: CampaignId, role: RoleName) -> list[Watc
         for idea_id, at in s.execute(
             select(Event.target_id, Event.at).where(
                 has(IdeaStatusChanged, old=IdeaStatus.SEED, new=(IdeaStatus.READY, IdeaStatus.PROPOSED)),
-                Event.target_kind == TargetKind.IDEA,
+                Event.target_kind == IDEA,
                 Event.target_id.in_([i.id for i in seeds]),
             )
         )

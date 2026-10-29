@@ -641,7 +641,7 @@ def test_an_agent_that_never_got_going_is_an_anomaly(
         {
             'role': 'watchdog',
             'harness': 'script',
-            'run': None,
+            'subject': None,
             'seconds': IsFloat(ge=0),
             'error': 'RuntimeError: no such harness',
         },

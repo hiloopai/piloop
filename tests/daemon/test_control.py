@@ -15,9 +15,9 @@ from piloop.campaign import ops
 from piloop.db.events import in_order
 from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database
-from piloop.ids import CampaignId, CampaignStatus, TargetKind
+from piloop.ids import CampaignId, CampaignStatus
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
-from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, wire as evaluation_api
@@ -226,7 +226,7 @@ def test_a_judgement_again_that_fails_answers_the_request_with_the_error(
     with db.session() as s:
         [(failed, payload)] = in_order(s, RejudgeFailed)
         assert (failed.target_kind, failed.target_id, payload) == (
-            TargetKind.CANDIDATE,
+            CANDIDATE,
             worse.id,
             RejudgeFailed(error='OSError: the repo is gone'),
         )

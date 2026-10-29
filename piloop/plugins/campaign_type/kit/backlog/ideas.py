@@ -30,8 +30,8 @@ from piloop.db.events import has
 from piloop.db.models import Campaign, Comment, Event
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import IdeaStatusChanged
-from piloop.ids import CampaignId, CommentKind, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.ids import CampaignId, CommentKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.backlog.wire import IdeaRow, IdeaView
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
@@ -168,7 +168,7 @@ def park_stranded(s: Session, campaign_id: CampaignId) -> dict[IdeaId, IdeaId]:
                 f' {idea.id} after {prerequisite.id}) to run it without that change, or set it ready once'
                 f' idea#{prerequisite.id} is ready again',
             )
-            escalations.escalate(s, TargetRef(TargetKind.IDEA, idea.id), asked, author=System.DAEMON, priority=2)
+            escalations.escalate(s, TargetRef(IDEA, idea.id), asked, author=System.DAEMON, priority=2)
             parked[idea.id] = prerequisite.id
         s.flush()
     return parked
@@ -209,7 +209,7 @@ def supersede(s: Session, campaign_id: CampaignId) -> dict[IdeaId, IdeaId]:
         idea.status = IdeaStatus.REJECTED
         s.add(
             Comment(
-                target=TargetRef(TargetKind.IDEA, idea.id),
+                target=TargetRef(IDEA, idea.id),
                 author=DAEMON_ACTOR,
                 kind=CommentKind.NOTE,
                 body=f'rejected: superseded by idea#{by}. It does not run, even if idea#{by} has not run yet.',
@@ -333,7 +333,7 @@ def defined_by(s: Session, campaign_id: CampaignId) -> set[str]:
     The agent that filed a seed did not define anything. A research sweep that did neither added no ideas, whatever
     else it wrote.
     """
-    from_seed = (Event.target_kind == TargetKind.IDEA) & has(IdeaStatusChanged, old=IdeaStatus.SEED)
+    from_seed = (Event.target_kind == IDEA) & has(IdeaStatusChanged, old=IdeaStatus.SEED)
     was_seed = exists().where(from_seed, Event.target_id == Idea.id)
     inserted = select(Idea.created_by).where(Idea.campaign_id == campaign_id, Idea.status != IdeaStatus.SEED, ~was_seed)
     developed = (

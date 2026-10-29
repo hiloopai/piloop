@@ -24,15 +24,15 @@ from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import AgentSessionId, CommentKind, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, TypeHost
 from piloop.plugins.campaign_type.kit.backlog.ideas import park_stranded, runnable, supersede, waiting
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, finding_of, handed_off
-from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import attempts, settle_cancelled
-from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of, working_on
 from piloop.plugins.campaign_type.kit.verdicts.judge import branches, due, head, head_unmeasured, rejudges
 from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.facts import Facts
@@ -134,15 +134,15 @@ class OptimizationPlanner:
 
     def ended(self, s: Session, agent_session: AgentSession, end: RunEnd) -> None:
         """A requested agent closed without starting, for ``end``: its queued run fails."""
-        if agent_session.run_id is not None:
-            self._fail_run(s, s.get_one(Run, agent_session.run_id), end)
+        if run_of(agent_session) is not None:
+            self._fail_run(s, s.get_one(Run, run_of(agent_session)), end)
 
     def take(self, s: Session, agent_session: AgentSession, rotation: list[str], full: set[str]) -> Take | CannotLaunch:
         """Whether a requested implementer launches now.
 
         One without a run is refused, and one whose harness is at its cap waits (``_reroute``).
         """
-        if agent_session.run_id is None:
+        if run_of(agent_session) is None:
             return CannotLaunch(NO_RUN_ERROR)
         cfg = s.get_one(Campaign, agent_session.campaign_id).config
         return Take.LAUNCH if self._reroute(s, cfg, agent_session, rotation, full) else Take.WAIT
@@ -155,10 +155,10 @@ class OptimizationPlanner:
         while an evaluator still runs in it is worse than leaving it a moment longer.
         """
         spared = AgentSession.id.in_(sparing)
-        launched = select(AgentSession.run_id).where(
-            AgentSession.state.in_(LIVE), AgentSession.run_id.is_not(None), ~spared
+        launched = select(AgentSession.subject_id).where(
+            AgentSession.state.in_(LIVE), (AgentSession.subject_kind == RUN), ~spared
         )
-        kept = select(AgentSession.run_id).where(spared, AgentSession.run_id.is_not(None))
+        kept = select(AgentSession.subject_id).where(spared, (AgentSession.subject_kind == RUN))
         in_flight = (Run.status == RunStatus.RUNNING) & Run.id.not_in(kept)
         for run in s.scalars(select(Run).where(in_flight | Run.id.in_(launched))).all():
             self._fail_run(s, run, end)
@@ -167,18 +167,18 @@ class OptimizationPlanner:
 
     def steered_by(self, s: Session, agent_session: AgentSession) -> Steering | None:
         """An implementer's run and idea, since the run started: it signs as ``run#<id>`` too."""
-        run = s.get(Run, agent_session.run_id) if agent_session.run_id is not None else None
+        run = s.get(Run, run_of(agent_session)) if run_of(agent_session) is not None else None
         if run is None:
             return None
-        targets = (TargetRef(TargetKind.RUN, run.id), TargetRef(TargetKind.IDEA, run.idea_id))
+        targets = (TargetRef(RUN, run.id), TargetRef(IDEA, run.idea_id))
         since = run.started_at or agent_session.started_at
         assert since is not None, 'a running implementer started'
         return Steering(targets, since, (f'run#{run.id}',))
 
     def found_at(self, s: Session, agent_session: AgentSession) -> datetime | None:
         """When the implementer left its finding on its run."""
-        assert agent_session.run_id is not None
-        finding = finding_of(s, s.get_one(Run, agent_session.run_id), agent_session)
+        assert run_of(agent_session) is not None
+        finding = finding_of(s, s.get_one(Run, run_of(agent_session)), agent_session)
         return None if finding is None else finding.created_at
 
     def resume_unscored(self) -> None:
@@ -187,7 +187,7 @@ class OptimizationPlanner:
             unscored = s.scalars(select(Run.id).where(Run.scoring).order_by(Run.id)).all()
         for run_id in unscored:
             self._tracer.event('run.unscored', run=run_id)
-            self._scoring[TargetKind.RUN, run_id] = self._host.submit(partial(self._controller.resume, run_id))
+            self._scoring[RUN, run_id] = self._host.submit(partial(self._controller.resume, run_id))
 
     def in_flight(self) -> dict[str, Future[None]]:
         """The scoring in flight, by what it scores, after it forgets what ended. Scoring never raises."""
@@ -201,7 +201,7 @@ class OptimizationPlanner:
         ``ready``. A running run whose implementer left its finding is not failed: it is handed off (``_hand_off``).
         """
         agent_session = s.scalars(
-            select(AgentSession).where(AgentSession.run_id == run.id).order_by(AgentSession.id.desc()).limit(1)
+            select(AgentSession).where(working_on(run.id)).order_by(AgentSession.id.desc()).limit(1)
         ).first()
         if (
             run.status is RunStatus.RUNNING
@@ -335,7 +335,7 @@ class OptimizationPlanner:
             idea.status = IdeaStatus.PARKED
             s.add(
                 Comment(
-                    target=TargetRef(TargetKind.IDEA, idea.id),
+                    target=TargetRef(IDEA, idea.id),
                     author=DAEMON_ACTOR,
                     kind=CommentKind.NOTE,
                     body=f'parked: its track {idea.track!r} is not in piloop.toml (tracks: {", ".join(names)}); set'
@@ -456,12 +456,12 @@ class OptimizationPlanner:
             pinned_base=base.id if pin is not None else None,
             computed_base=computed.id if pin is not None and computed is not None else None,
         )
-        emit(s, queued, TargetRef(TargetKind.RUN, run.id), System.DAEMON)
+        emit(s, queued, TargetRef(RUN, run.id), System.DAEMON)
         s.add(
             AgentSession(
                 kind=role,
                 campaign_id=campaign.id,
-                run_id=run.id,
+                subject=TargetRef(RUN, run.id),
                 harness=harness,
                 model=model,
                 reason=f'idea#{idea.id} is ready',
@@ -478,13 +478,13 @@ class OptimizationPlanner:
         rotation later. A harness that the idea pins does not change. Returns False, and the implementer stays requested,
         while every harness of the rotation is at its cap.
         """
-        run = s.get_one(Run, agent_session.run_id)
+        run = s.get_one(Run, run_of(agent_session))
         if run.idea.harness is not None or run.harness in rotation:
             return True
         harness = choose_harness(cfg, agent_session.kind, full, earlier(s, agent_session))
         if harness is None:
             return False
-        emit(s, RunRerouted(from_=run.harness, to=harness), TargetRef(TargetKind.RUN, run.id), System.DAEMON)
+        emit(s, RunRerouted(from_=run.harness, to=harness), TargetRef(RUN, run.id), System.DAEMON)
         run.harness = agent_session.harness = harness
         run.model = agent_session.model = cfg.role_models(agent_session.kind)[harness]
         return True

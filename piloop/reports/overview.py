@@ -20,7 +20,7 @@ from piloop.campaign.inbox import campaign_of
 from piloop.campaign.stop import describe, held
 from piloop.config import TRANSCRIPT, CampaignConfig
 from piloop.db.models import LIVE, AgentSession, Campaign, Event, Pause
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.harness.contract import UsageReader
 from piloop.plugins.role.contract import Files
@@ -60,8 +60,8 @@ def live_agent_sessions(s: Session, campaign: Campaign) -> Sequence[AgentSession
 
 def on(s: Session, w: AgentSession) -> str:
     """Describe what the agent works on: the idea of its run, or else the reason for its request."""
-    if w.run_id is not None:
-        idea = s.get_one(Run, w.run_id).idea
+    if run_of(w) is not None:
+        idea = s.get_one(Run, run_of(w)).idea
         return f'idea#{idea.id} {cell(idea.title)}'
     return cell(w.reason or NONE)
 

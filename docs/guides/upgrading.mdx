@@ -178,6 +178,32 @@ A notifier plugin changes:
 | `Inbound(thread, message, person, act)` | `Inbound(thread, message, member, act)`: the service's user id. `Listens.person(member)` says who it is. |
 | `Listens.listen(host)` | Also `Listens.connection(secrets)`: what identifies its connection, never a secret. The instances with the same one share one listener. |
 
+### Kinds of what events and comments point at
+
+`events.target_kind`, `comments.target_kind` and `archives.subject_kind` name a row of `target_kinds`, and a plugin
+can declare a kind of its own. A write of a kind that no installed piloop declared fails on the foreign key, where it
+failed on a CHECK before:
+
+```sql
+SELECT id, owner FROM target_kinds
+```
+
+The upgrade rebuilds `events` and `comments` once, with every row and id. It takes about 8 seconds per million events,
+so `piloop migrate` on a large home takes a while.
+
+### An agent's subject
+
+`agent_sessions.subject_kind` and `subject_id` say what an agent works on, such as `run` and `12` for an implementer.
+They are NULL for a sweep. `agent_sessions.run_id` is gone: change your own SQL to read the subject.
+
+```sql
+SELECT id, session_file FROM agent_sessions WHERE subject_kind = 'run' AND subject_id = <run>
+```
+
+`agent_session.identified` carries `subject`, `groups` (the run's idea) and `parent` (the agent that proposed it) in
+place of `run`, `idea` and `proposed_by`, and `anomaly.startup` carries `subject` in place of `run`. The upgrade
+rewrites the stored events, so a reader of the feed sees only the new keys. Upgrade hiloop-traces with piloop.
+
 ## Upgrading to 0.4.0
 
 ### Removed keys

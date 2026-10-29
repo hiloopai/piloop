@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Annotated, ClassVar, Literal, NewType, Self
 from pydantic import AwareDatetime, Field, model_validator
 
 from piloop.api.views import View
-from piloop.ids import AgentSessionId, TargetKind
+from piloop.ids import AgentSessionId
 from piloop.plugins.host import Capability, Many, Parameters, Pick, Scope, Use
 from piloop.plugins.metric import Direction
 
@@ -97,7 +97,7 @@ class Judged(View):
 class RowLink(View):
     """A row of piloop that a client opens from a node, with the API's route for its kind."""
 
-    kind: Literal[TargetKind.IDEA, TargetKind.RUN, TargetKind.CANDIDATE, TargetKind.MEASUREMENT, TargetKind.COMMENT]
+    kind: Literal['idea', 'run', 'candidate', 'measurement', 'comment']
     """The table of the row: ``idea``, ``run``, ``candidate``, ``measurement`` or ``comment``."""
     id: int
     """The row's id in its table."""
@@ -108,7 +108,7 @@ class RowLink(View):
 class SessionLink(View):
     """An agent session that worked on a node, with the harness's own session id, so that a trace link is exact."""
 
-    kind: Literal[TargetKind.AGENT_SESSION]
+    kind: Literal['agent_session']
     """Always ``agent_session``."""
     id: AgentSessionId
     """The agent session's id (``agent_sessions.id``)."""

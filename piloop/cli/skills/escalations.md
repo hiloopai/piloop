@@ -25,7 +25,7 @@ writer gave it a priority.
 1. **Read** the thread and the target.
    - `piloop inbox show <id>`.
    - For a run: `SELECT status, end, error, log_dir FROM runs WHERE id = <t>`, and the end of `<log_dir>/transcript.txt`.
-   - The agent's own session, the harness's file: `SELECT session_file FROM agent_sessions WHERE run_id = <t>`, then
+   - The agent's own session, the harness's file: `SELECT session_file FROM agent_sessions WHERE subject_kind = 'run' AND subject_id = <t>`, then
      `piloop cas get <session_file>`.
    - Verify before you build on a theory: the agent's own transcript, `ps`, a new query. Do not guess the mechanism.
 2. **Decide.**

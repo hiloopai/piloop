@@ -2,12 +2,13 @@
 
 from sqlalchemy.orm import Session
 
-from piloop.db.models import AgentSession, latest_agent_session
+from piloop.db.models import AgentSession
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.runs.tables import latest_agent_session
 
 
 def session_agent_session(s: Session, candidate: Candidate) -> AgentSession | None:
-    """Return the implementer whose session made ``candidate`` (through ``agent_sessions.run_id``). None for the baseline."""
+    """Return the implementer whose session made ``candidate`` (the session whose subject is its run). None for the baseline."""
     return latest_agent_session(s, candidate.run_id) if candidate.run_id is not None else None
 
 

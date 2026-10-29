@@ -35,7 +35,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.contract import HARNESSES
@@ -259,7 +259,7 @@ def runs_by_role(db: Database) -> list[tuple[int, str, int, str]]:
                 run.id,
                 run.role,
                 run.idea_id,
-                s.scalars(select(AgentSession.kind).where(AgentSession.run_id == run.id)).one(),
+                s.scalars(select(AgentSession.kind).where(working_on(run.id))).one(),
             )
             for run in s.scalars(select(Run).order_by(Run.id))
         ]

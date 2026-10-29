@@ -52,7 +52,8 @@ from piloop.plugins.campaign_type.contract import Planner
 from piloop.plugins.campaign_type.kit.runs.controller import (
     wrap_up_lead,
 )
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd
+from piloop.plugins.campaign_type.kit.runs.tables import run_of
 from piloop.plugins.contribution import Contribution, DaemonHost
 from piloop.plugins.executor.contract import AgentKey, Prompt
 from piloop.plugins.role.contract import PUSHED_KINDS
@@ -104,7 +105,7 @@ def steer_line(comment: Comment, chars: int) -> str:
     ``chars`` (``[agents] steer_line_chars``). The implementer can read the full text with the SQL tool that its brief
     names, so a long decision does not fill its turn.
     """
-    if comment.target_kind is TargetKind.AGENT_SESSION:
+    if comment.target_kind == TargetKind.AGENT_SESSION:
         return comment.body
     body = comment.body.strip()
     first = body.splitlines()[0] if body else ''
@@ -277,10 +278,12 @@ class Agents:
             stopping = (
                 select(AgentSession.id)
                 .join(Campaign, AgentSession.campaign_id == Campaign.id)
-                .where(AgentSession.run_id.is_not(None), AgentSession.state == AgentSessionState.RUNNING)
+                .where((AgentSession.subject_kind == RUN), AgentSession.state == AgentSessionState.RUNNING)
                 .where(Campaign.status == CampaignStatus.STOPPED)
             )
-            implementers = select(AgentSession).where(AgentSession.run_id.is_not(None), AgentSession.state.in_(winding))
+            implementers = select(AgentSession).where(
+                (AgentSession.subject_kind == RUN), AgentSession.state.in_(winding)
+            )
             graces = {w.id: self._finding_grace(s, w) for w in s.scalars(implementers)}
             found = [i for i, at in graces.items() if at is not None and at <= now]
             soonest.add(*graces.values())
@@ -305,7 +308,7 @@ class Agents:
                 if (cancel := cancels.get(agent_session.id)) is not None:
                     request, asked = cancel
                     reason, end = f'cancelled by {request.actor}', RunEnd.CANCELLED
-                    what = 'Your run was cancelled' if agent_session.run_id is not None else 'This sweep was cancelled'
+                    what = 'Your run was cancelled' if run_of(agent_session) is not None else 'This sweep was cancelled'
                     cause, ending = f'by {request.actor}', asked.ending
                 else:
                     campaign = s.get_one(Campaign, agent_session.campaign_id)
@@ -316,7 +319,7 @@ class Agents:
                     ending = Ending.NOW if at_once else Ending.WRAP_UP
                 if agent_session.state is AgentSessionState.REQUESTED:
                     close(s, agent_session, reason, self._tracer)
-                    if agent_session.run_id is not None:
+                    if run_of(agent_session) is not None:
                         self._planner_by_id(s, agent_session.campaign_id).ended(s, agent_session, end)
                     continue
                 told = s.scalar(

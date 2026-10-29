@@ -16,11 +16,10 @@ from piloop.actor import System
 from piloop.daemon.main import ACTOR
 from piloop.db import sql, triggers
 from piloop.db.events import SubjectSettled, in_order
-from piloop.db.models import Campaign, Event
+from piloop.db.models import Campaign, Event, known_kinds
 from piloop.db.schema import schemas, tables
 from piloop.db.session import Database, migrate
 from piloop.db.triggers import PERSISTENT, TEMP, Trigger, changelog, provenance
-from piloop.ids import TargetKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -164,7 +163,7 @@ def test_the_change_log_is_the_event_kinds_the_feed_documents() -> None:
         ]
     )
     targets = {m[1] for t in events if (m := re.search(r"VALUES \(.+?, '(\w+)', ", t.body))}
-    assert len(targets) > 1 and targets <= {k.value for k in TargetKind}, (
+    assert len(targets) > 1 and targets <= known_kinds(), (
         'the event target_kind (the table singular, or the idea of a link) must pass the CHECK constraint'
     )
     assert changelog.RUN_BRIEF in changelog.CHANGES and f"= '{provenance.DAEMON_ACTOR}'" in (

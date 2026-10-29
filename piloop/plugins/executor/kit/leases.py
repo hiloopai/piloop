@@ -69,6 +69,7 @@ from piloop.db.models import (
 )
 from piloop.db.session import Database, read_transaction, write_transaction
 from piloop.ids import HOME, AgentSessionId, CommentId, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.executor.contract import (
@@ -471,7 +472,7 @@ def _target(cas: Cas, lease: Lease) -> TargetRef:
         return TargetRef(TargetKind.AGENT_SESSION, lease.agent_session_id)
     job = read_job(cas, lease.id, lease.job_cid)
     assert isinstance(job, EvaluationJob)
-    return TargetRef(TargetKind.CANDIDATE, job.candidate)
+    return TargetRef(CANDIDATE, job.candidate)
 
 
 def _job_of(lease: Lease) -> ColumnElement[bool]:

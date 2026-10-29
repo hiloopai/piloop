@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor
 from piloop.db.events import emit
 from piloop.db.models import Campaign, EventModel
-from piloop.ids import CampaignId, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.candidates.ids import Origin
+from piloop.ids import CampaignId, TargetRef
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.campaign_type.kit.verdicts.verdict import label
@@ -106,5 +106,5 @@ def import_reference(
     candidate.verdict_reason = f'imported from {ref} ({revision[:7]})'
     repo.keep(revision, ReferenceVersion(campaign.name, candidate.id))
     imported = CandidateImported(ref=ref, revision=revision)
-    emit(s, imported, TargetRef(TargetKind.CANDIDATE, candidate.id), actor)
+    emit(s, imported, TargetRef(CANDIDATE, candidate.id), actor)
     return candidate

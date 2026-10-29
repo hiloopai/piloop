@@ -33,6 +33,7 @@ from piloop.db.models import (
 )
 from piloop.db.session import Database, write_transaction
 from piloop.ids import CommentId, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.executor.contract import (
@@ -322,7 +323,7 @@ def test_a_report_with_an_old_fencing_token_is_refused_and_kept_as_a_stale_repor
     assert Local(leases, 'w1').heartbeat({first: HarnessSession()}, HOST) == {first: Answer.STALE}
     assert [c[0] for c in recorder.calls] == ['lost'], 'nothing of the late report applied'
     [(kind, target, payload)] = events(db, StaleReport)
-    assert (kind, target, payload.lease, payload.worker) == (TargetKind.CANDIDATE, job.candidate, first, 'w1')
+    assert (kind, target, payload.lease, payload.worker) == (CANDIDATE, job.candidate, first, 'w1')
     assert payload.report == MEASURED
     assert Local(leases, 'w2').report(second.lease, 'r', MEASURED) == {'reported': 'evaluation'}
 

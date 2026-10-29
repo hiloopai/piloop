@@ -1,6 +1,11 @@
 """The ids and names of the ``evaluation`` component: its evaluators, measurements, rungs and tracks."""
 
-from typing import NewType
+from typing import Final, NewType
+
+from piloop.ids import TargetKind
+
+MEASUREMENT: Final = TargetKind('measurement')
+"""A measurement of a candidate (``measurements``). What its comments and events point at."""
 
 MeasurementId = NewType('MeasurementId', int)
 

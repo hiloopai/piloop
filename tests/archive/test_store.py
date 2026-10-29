@@ -15,7 +15,7 @@ from piloop.campaign.campaigns import campaign_dir, fork, workspace_dir
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers import changelog
-from piloop.ids import AgentSessionId, CampaignFiles, CampaignId, CampaignStatus, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CampaignFiles, CampaignId, CampaignStatus, RoleName, TargetRef
 from piloop.plugins.archive import contract as archive_contract
 from piloop.plugins.archive.contract import CampaignArchived, CampaignFilesFreed, Restored, Summary
 from piloop.plugins.archive.local import store as archive_module
@@ -37,10 +37,10 @@ from piloop.plugins.archive.local.store import (
     summary,
 )
 from piloop.plugins.archive.local.tables import Archive
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.cas.kit.objects import ObjectsCas, key
@@ -57,7 +57,7 @@ REAL_FREE = tree_module.free
 
 
 def ref(idea_id: int) -> TargetRef:
-    return TargetRef(TargetKind.IDEA, idea_id)
+    return TargetRef(IDEA, idea_id)
 
 
 def add_idea(db: Database, campaign_id: CampaignId, title: str, status: IdeaStatus = IdeaStatus.DONE) -> IdeaId:
@@ -86,7 +86,12 @@ def add_run(
         s.flush()
         state = AgentSessionState.EXITED if finished is not None else AgentSessionState.RUNNING
         agent_session = AgentSession(
-            kind=kind, campaign_id=owner.campaign_id, run_id=run.id, state=state, ended_at=finished, harness='script'
+            kind=kind,
+            campaign_id=owner.campaign_id,
+            subject=TargetRef(RUN, run.id),
+            state=state,
+            ended_at=finished,
+            harness='script',
         )
         s.add(agent_session)
         s.commit()

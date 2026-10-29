@@ -10,4 +10,4 @@ When your run ends, the daemon kills every process that you started, also one in
   the full run needs.
 - Watch each job: is it advancing, at a fair cost, without NaNs, errors or stalls? Kill or fix a bad one at once.
 - While a long job runs, post a short `note` on your run now and then: the ETA, the metric, the throughput.
-  `target_id` is `(SELECT run_id FROM agent_sessions WHERE id = <your agent session id>)`.
+  `target_id` is `(SELECT subject_id FROM agent_sessions WHERE id = <your agent session id>)`.

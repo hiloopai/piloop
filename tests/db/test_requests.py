@@ -23,7 +23,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.measure import record, request_remeasure, requested
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunId
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from tests.conftest import WATCHDOG
 
@@ -58,7 +58,7 @@ def queued_run(db: Database, campaign: Campaign, state: AgentSessionState) -> tu
         run = Run(idea_id=idea.id, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
-        agent = AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, run_id=run.id, state=state)
+        agent = AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), state=state)
         s.add(agent)
         s.commit()
         return run.id, agent

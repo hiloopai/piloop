@@ -33,7 +33,7 @@ class Archive(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     campaign_id: Mapped[CampaignId] = mapped_column(ForeignKey('campaigns.id', ondelete='CASCADE'))
-    subject_kind: Mapped[TargetKind | None]
+    subject_kind: Mapped[TargetKind | None] = mapped_column(ForeignKey('target_kinds.id', name='targetkind'))
     subject_id: Mapped[int | None]
     subject: Mapped[TargetRef | None] = composite('subject_kind', 'subject_id')
     """The settled subject whose entries this is; NULL for what a stopped campaign left. No foreign key: the archive

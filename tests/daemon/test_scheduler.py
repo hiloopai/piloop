@@ -68,7 +68,7 @@ from piloop.otel import Tracer
 from piloop.plugins import host as plugins
 from piloop.plugins.campaign_type.contract import CAMPAIGNS
 from piloop.plugins.campaign_type.kit.backlog.ideas import waiting
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
@@ -79,9 +79,9 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRequested, current_evaluator, request_remeasure
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController, wrap_up_lead
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import runs
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.campaign_type.kit.verdicts.judge import due, head
@@ -269,7 +269,7 @@ def test_ready_ideas_become_runs_in_priority_order(
         agent_session = s.get_one(AgentSession, 1)
         assert (
             agent_session.kind,
-            agent_session.run_id,
+            run_of(agent_session),
             agent_session.harness,
             agent_session.model,
             agent_session.reason,
@@ -847,7 +847,7 @@ def test_reap(
             AgentSession(
                 kind='implementer',
                 campaign_id=campaign.id,
-                run_id=1,
+                subject=TargetRef(RUN, 1),
                 harness='script',
                 model='m',
                 runtime='subprocess',
@@ -1880,7 +1880,7 @@ def running_agent_session(
             AgentSession(
                 kind=IMPLEMENTER,
                 campaign_id=campaign.id,
-                run_id=run.id,
+                subject=TargetRef(RUN, run.id),
                 harness='script',
                 model='m',
                 runtime='subprocess',
@@ -1984,7 +1984,7 @@ def test_comments_for_a_running_agent_go_to_its_executor_once_each_until_they_ha
     coming_up = running_agent_session(db, campaign, 'coming up', state=AgentSessionState.STARTING)
     with db.session() as s:
         before = utcnow() - timedelta(minutes=5)
-        s.add(Comment(target=TargetRef(TargetKind.IDEA, idea), author='human', body='in the brief', created_at=before))
+        s.add(Comment(target=TargetRef(IDEA, idea), author='human', body='in the brief', created_at=before))
         s.commit()
     scheduler = make_scheduler(db, runtime, tmp_path, tracer)
     executor = prompted(db, scheduler, mocker)
@@ -2364,7 +2364,7 @@ def test_a_cancelled_implementer_closes_its_run_as_cancelled_scores_its_commits_
         verdicts = [c.verdict for c in s.scalars(select(Candidate).where(Candidate.run_id == 1))]
         assert verdicts == [Outcome.KEEP], 'what it committed is scored'
         assert s.get_one(Idea, idea).status is IdeaStatus.PARKED
-        [note] = s.scalars(select(Comment).where(Comment.target_kind == TargetKind.IDEA)).all()
+        [note] = s.scalars(select(Comment).where(Comment.target_kind == IDEA)).all()
         assert note.body == 'parked: run#1 was cancelled by human; set the idea ready to run it again'
         assert runs(s, s.get_one(Campaign, campaign.id)) == 0, 'not an attempt: no run limit counts it'
 
@@ -2430,7 +2430,9 @@ def test_a_cancelled_request_never_launches_and_a_cancelled_sweep_is_ended(
         run = Run(idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
-        queued = AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, run_id=run.id, harness='script', model='m')
+        queued = AgentSession(
+            kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), harness='script', model='m'
+        )
         sweep = AgentSession(
             kind=RESEARCH,
             campaign_id=campaign.id,
@@ -2475,7 +2477,7 @@ def died_at_startup(db: Database, campaign: Campaign, kind: RoleName, minutes_ag
         payload = StartupAnomaly(
             role=kind,
             harness='script',
-            run=None,
+            subject=None,
             seconds=35.0,
             error=f'FileNotFoundError: {kind}-{agent_session.id}: no such harness',
         )

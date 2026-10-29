@@ -18,12 +18,12 @@ from piloop.db.models import (
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import CampaignStatusChanged
 from piloop.ids import CampaignStatus, CommentKind, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import ATTEMPTS, FINISHED_RUNS, OPEN_RUNS
+from piloop.plugins.campaign_type.kit.runs.ids import ATTEMPTS, FINISHED_RUNS, OPEN_RUNS, RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import keeps, last_keep_at
 from piloop.plugins.campaign_type.kit.verdicts.verdict import pending_clause
@@ -89,7 +89,7 @@ def settle_cancelled(s: Session, run: Run) -> None:
     """
     cancel = run_cancel(s, run.id)
     by = f' by {cancel[0].actor}' if cancel is not None else ''
-    replaced = latest(s, HeadReplaced, Event.target == TargetRef(TargetKind.RUN, run.id))
+    replaced = latest(s, HeadReplaced, Event.target == TargetRef(RUN, run.id))
     if replaced is None:
         run.idea.status = IdeaStatus.PARKED
         body = f'parked: run#{run.id} was cancelled{by}; set the idea ready to run it again'
@@ -100,9 +100,7 @@ def settle_cancelled(s: Session, run: Run) -> None:
             f'ready: run#{run.id} was cancelled{by}: it started from candidate#{run.base_candidate_id}, which a'
             f' verdict override replaced as the head with {now}; the next run starts from the head'
         )
-    s.add(
-        Comment(target=TargetRef(TargetKind.IDEA, run.idea_id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body)
-    )
+    s.add(Comment(target=TargetRef(IDEA, run.idea_id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
 
 
 def kept(s: Session, campaign: Campaign) -> int:

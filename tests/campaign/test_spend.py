@@ -31,8 +31,8 @@ from piloop.db.models import (
     utcnow,
 )
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.ids import AgentSessionId, TargetRef
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.executor.contract import EXECUTORS, Executor, ExecutorConfig, Host
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.leases import LeaseQueued
@@ -111,7 +111,7 @@ def hold(
     s.add(lease)
     s.flush()
     if candidate is not None:
-        on = TargetRef(TargetKind.CANDIDATE, candidate)
+        on = TargetRef(CANDIDATE, candidate)
         emit(s, LeaseQueued(lease=lease.id, lease_kind=LeaseKind.EVALUATION), on, System.DAEMON)
 
 

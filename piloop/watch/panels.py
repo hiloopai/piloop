@@ -32,9 +32,10 @@ from piloop.api.views import (
     thread_lines,
 )
 from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentId, TargetKind
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient, IdeaRow, Ideas, IdeasQuery
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT
 from piloop.plugins.campaign_type.kit.evaluation.wire import CandidateDetail, EvaluationClient
 from piloop.plugins.lineage.contract import Graph, Lineage, LineageNode, NodeId, NodeLink, RowLink
 from piloop.plugins.lineage.wire import LineageClient
@@ -99,9 +100,9 @@ class Part(StrEnum):
 ALSO: dict[str, frozenset[Part]] = {
     TargetKind.CAMPAIGN: frozenset(Part),
     TargetKind.COMMENT: frozenset({Part.INBOX}),
-    TargetKind.IDEA: frozenset({Part.IDEAS}),
-    TargetKind.CANDIDATE: frozenset({Part.LINEAGE}),
-    TargetKind.MEASUREMENT: frozenset({Part.LINEAGE}),
+    IDEA: frozenset({Part.IDEAS}),
+    CANDIDATE: frozenset({Part.LINEAGE}),
+    MEASUREMENT: frozenset({Part.LINEAGE}),
 }
 """What an event about a row of each kind touches, beside the campaign's state and overview."""
 
@@ -289,7 +290,7 @@ class IdeasPanel:
 
     def detail(self, api: Api, frame: Frame, key: IdeaId) -> RenderableType:
         found = api.backlog.idea(key)
-        notes = api.core.comments(CommentsQuery(kind=TargetKind.IDEA, id=key)).comments
+        notes = api.core.comments(CommentsQuery(kind=IDEA, id=key)).comments
         idea = found.idea
         body = [
             f'status {idea.status} · priority {idea.priority} · by {idea.created_by} {age(idea.created, frame.now)} ago'
@@ -388,7 +389,7 @@ class CandidatesPanel:
             *(node.summary or NONE).strip().splitlines(),
         ]
         for link in node.links:
-            if isinstance(link, RowLink) and link.kind is TargetKind.CANDIDATE:
+            if isinstance(link, RowLink) and link.kind == CANDIDATE:
                 body += ['', *measured(api.evaluation.candidate(CandidateId(link.id)))]
         return Group(Text(f'{node.id} {node.label}', style='bold'), lines(*body))
 

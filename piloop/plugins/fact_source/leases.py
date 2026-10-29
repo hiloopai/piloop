@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from piloop.db.events import has
 from piloop.db.models import AgentSession, Campaign, Event, Lease, LeaseWorker, WorkerInstance
-from piloop.ids import TargetKind
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.executor.contract import EXECUTORS
 from piloop.plugins.executor.kit.capacity import Pool
@@ -71,7 +71,7 @@ def _leases_of(campaign: Campaign) -> Select[int]:
     agents = select(AgentSession.id).where(AgentSession.campaign_id == campaign.id)
     candidates = select(Candidate.id).where(Candidate.campaign_id == campaign.id)
     evaluations = select(func.json_extract(Event.payload, '$.lease')).where(
-        has(LeaseQueued), Event.target_kind == TargetKind.CANDIDATE, Event.target_id.in_(candidates)
+        has(LeaseQueued), Event.target_kind == CANDIDATE, Event.target_id.in_(candidates)
     )
     return select(Lease.id).where(or_(Lease.agent_session_id.in_(agents), Lease.id.in_(evaluations)))
 

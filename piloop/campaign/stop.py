@@ -31,8 +31,8 @@ from piloop.db.requests import answer, pending
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
 from piloop.ids import CampaignStatus, Ending, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.runs.ids import RunId
-from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId
+from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of, working_on
 from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.fact_source.facts import HOURS, Fact, Facts, FactValue
 from piloop.plugins.stop_rule.contract import STOP_RULES, Escalate, Go, Hold, Stop, StopCase, WhileHeld
@@ -119,7 +119,7 @@ def request_cancel(s: Session, target: Run | AgentSession, actor: Actor, *, endi
     """Ask the daemon to cancel a run or an agent (``CancelRequested``). The caller commits."""
     match target:
         case Run():
-            on = TargetRef(TargetKind.RUN, target.id)
+            on = TargetRef(RUN, target.id)
             cancel = CancelRequested(kind='run.cancel_requested', ending=ending)
         case AgentSession():
             on = TargetRef(TargetKind.AGENT_SESSION, target.id)
@@ -133,10 +133,14 @@ def cancelled(ask: Event, cancel: CancelRequested) -> ColumnElement[bool]:
     """Select the agents that a cancel acts on: a run's agents, or an agent and the other agents of its run."""
     match cancel.kind:
         case 'run.cancel_requested':
-            return AgentSession.run_id == ask.target_id
+            return working_on(RunId(ask.target_id))
         case 'agent_session.cancel_requested':
-            run = select(AgentSession.run_id).where(AgentSession.id == ask.target_id).scalar_subquery()
-            return (AgentSession.id == ask.target_id) | (AgentSession.run_id == run)
+            run = (
+                select(AgentSession.subject_id)
+                .where(AgentSession.id == ask.target_id, AgentSession.subject_kind == RUN)
+                .scalar_subquery()
+            )
+            return (AgentSession.id == ask.target_id) | (working_on(run))
         case _:
             assert_never(cancel.kind)
 
@@ -147,15 +151,15 @@ def run_cancel(s: Session, run_id: RunId) -> tuple[Event, CancelRequested] | Non
     A cancel on an agent holds for its run, so an implementer that a relaunch puts in the place of one that failed to start
     is cancelled too.
     """
-    agents = select(AgentSession.id).where(AgentSession.run_id == run_id)
+    agents = select(AgentSession.id).where(working_on(run_id))
     on_agent = (Event.target_kind == TargetKind.AGENT_SESSION) & Event.target_id.in_(agents)
-    return latest(s, CancelRequested, (Event.target == TargetRef(TargetKind.RUN, run_id)) | on_agent)
+    return latest(s, CancelRequested, (Event.target == TargetRef(RUN, run_id)) | on_agent)
 
 
 def agent_cancel(s: Session, agent_session: AgentSession) -> tuple[Event, CancelRequested] | None:
     """Return the latest cancel of an agent, or None: its run's (``run_cancel``) for an implementer, its own for a sweep."""
-    if agent_session.run_id is not None:
-        return run_cancel(s, agent_session.run_id)
+    if (run := run_of(agent_session)) is not None:
+        return run_cancel(s, run)
     return latest(s, CancelRequested, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session.id))
 
 
@@ -181,7 +185,7 @@ def answer_done(s: Session) -> None:
                 running = (AgentSessionState.STARTING, AgentSessionState.RUNNING)
                 implementers = select(AgentSession).where(
                     AgentSession.campaign_id == campaign.id,
-                    AgentSession.run_id.is_not(None),
+                    (AgentSession.subject_kind == RUN),
                     AgentSession.state.in_(running),
                 )
                 done = not count(s, implementers)

@@ -23,7 +23,7 @@ from piloop.db.events import emit, in_order
 from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Outcome
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.plugins.campaign_type.optimization.section.research_commands import ResearchCommands
 from piloop.plugins.role.orchestrator import OrchestratorRole
@@ -250,7 +250,7 @@ def test_routine_news_waits_for_its_interval_and_only_urgent_news_wakes_a_paused
     def judged() -> None:
         with db.session() as s:
             verdict = CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='score +1')
-            emit(s, verdict, TargetRef(TargetKind.CANDIDATE, 1), System.DAEMON)
+            emit(s, verdict, TargetRef(CANDIDATE, 1), System.DAEMON)
             s.commit()
 
     judged()

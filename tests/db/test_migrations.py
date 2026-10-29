@@ -136,6 +136,7 @@ def test_head_has_every_table_and_trigger_and_matches_the_models(tmp_path: Path)
             'runs',
             'secrets',
             'sqlite_sequence',
+            'target_kinds',
             'techniques',
             'tokens',
             'worker_instances',
@@ -2847,3 +2848,94 @@ def spend_wrapper(fact: str) -> list[str]:
     """The wrapper of a ``[spend] command`` that reports its number as ``fact`` on the result line."""
     printed = f'out=$("$@") && printf \'{{"metrics": {{"{fact}": %s}}}}\\n\' "$out" >> "$PILOOP_RESULT_FILE"'
     return ['sh', '-c', printed, 'sh']
+
+
+def test_0069_keeps_every_event_and_comment_points_them_at_target_kinds_and_downgrades(tmp_path: Path) -> None:
+    """The kinds are rows; a kind that no piloop declared is refused; the downgrade drops what 0068 cannot hold."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0068')
+    on_idea = (
+        "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('human', 'idea', 4, '{\"kind\": \"x.y\"}')"
+    )
+    on_run = "INSERT INTO comments (target_kind, target_id, author, body) VALUES ('run', 2, 'human', 'hm')"
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute(on_idea)
+        con.execute(on_run)
+    command.upgrade(cfg, '0069')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute('PRAGMA foreign_keys=ON')
+        assert dict(con.execute('SELECT id, owner FROM target_kinds')) == {
+            **dict.fromkeys(('campaign', 'agent_session', 'comment', 'instance', 'home'), 'core'),
+            **dict.fromkeys(('idea', 'run', 'candidate', 'measurement'), 'optimization'),
+        }
+        assert con.execute('SELECT id, target_kind, target_id FROM events').fetchall() == [(1, 'idea', 4)]
+        assert con.execute('SELECT id, target_kind, target_id FROM comments').fetchall() == [(1, 'run', 2)]
+        with pytest.raises(sqlite3.IntegrityError, match='FOREIGN KEY'):
+            con.execute(on_idea.replace("'idea'", "'notion'"))
+        con.execute("INSERT INTO target_kinds (id, owner) VALUES ('notion', 'notes')")
+        con.execute(on_idea.replace("'idea'", "'notion'"))
+    command.downgrade(cfg, '0068')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT id, target_kind FROM events').fetchall() == [(1, 'idea')], 'notion is not of 0068'
+        assert con.execute('SELECT id, target_kind FROM comments').fetchall() == [(1, 'run')]
+        with pytest.raises(sqlite3.IntegrityError, match='targetkind'):
+            con.execute(on_idea.replace("'idea'", "'notion'"))
+
+
+def test_0070_turns_run_id_into_the_subject_rewrites_the_events_and_downgrades(tmp_path: Path) -> None:
+    """Each run becomes a subject, the events name it with the new keys, and the downgrade gives back both."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0069')
+    proposer = {'actor': 'research#1', 'harness': 'claude', 'executable': 'claude', 'session_id': 's'}
+    identified = {'kind': 'agent_session.identified', 'session_id': 'x', 'harness': 'claude', 'executable': None}
+    identified |= {'role': 'implementer', 'model': None, 'campaign': 'c'}
+    old = [
+        identified | {'run': 7, 'idea': 4, 'proposed_by': proposer},
+        identified | {'role': 'research', 'run': None, 'idea': None, 'proposed_by': None},
+        {'kind': 'anomaly.startup', 'role': 'implementer', 'harness': None, 'run': 7, 'seconds': 1.0, 'error': 'x'},
+    ]
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        roles = '{"plugins": {"role": {"implementer": {}, "research": {}}}}'
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('c', '/c', ?)", (roles,))
+        con.execute("INSERT INTO agent_sessions (kind, campaign_id, run_id) VALUES ('implementer', 1, 7)")
+        con.execute("INSERT INTO agent_sessions (kind, campaign_id) VALUES ('research', 1)")
+        for payload in old:
+            con.execute(
+                "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('daemon', 'agent_session', 1, ?)",
+                (dumps(payload),),
+            )
+    command.upgrade(cfg, '0070')
+    payloads = 'SELECT payload FROM events ORDER BY id'
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT id, subject_kind, subject_id FROM agent_sessions ORDER BY id').fetchall() == [
+            (1, 'run', 7),
+            (2, None, None),
+        ]
+        assert 'run_id' not in [c for _, c, *_ in con.execute('PRAGMA table_info(agent_sessions)')]
+        assert [loads(p) for (p,) in con.execute(payloads)] == [
+            identified | {'subject': 'run#7', 'groups': ['idea#4'], 'parent': proposer},
+            identified | {'role': 'research', 'subject': None, 'groups': [], 'parent': None},
+            {
+                'kind': 'anomaly.startup',
+                'role': 'implementer',
+                'harness': None,
+                'seconds': 1.0,
+                'error': 'x',
+                'subject': 'run#7',
+            },
+        ]
+        with pytest.raises(sqlite3.IntegrityError, match='agent_sessions_subject'):
+            con.execute("INSERT INTO agent_sessions (kind, campaign_id, subject_kind) VALUES ('research', 1, 'run')")
+        con.execute(
+            "INSERT INTO agent_sessions (kind, campaign_id, subject_kind, subject_id) VALUES ('research', 1, 'idea', 3)"
+        )
+    command.downgrade(cfg, '0069')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT id, run_id FROM agent_sessions ORDER BY id').fetchall() == [
+            (1, 7),
+            (2, None),
+            (3, None),
+        ]
+        assert [loads(p) for (p,) in con.execute(payloads)] == old

@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor, System
 from piloop.db.events import emit, latest
 from piloop.db.models import Event, EventModel, ReadBy
-from piloop.ids import TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.candidates.ids import JUDGED, Cause, Origin, Outcome
+from piloop.ids import TargetRef
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, JUDGED, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateView
 
@@ -142,12 +142,12 @@ def note(s: Session, c: Candidate, reason: str, *, by: Actor) -> None:
             c.cause, c.verdict_reason = Cause.NOTE, noted
         case _:
             write(c, Outcome.INTERESTING, cause=Cause.NOTE, reason=noted, by=by)
-    emit(s, CandidateNoted(reason=reason), TargetRef(TargetKind.CANDIDATE, c.id), by)
+    emit(s, CandidateNoted(reason=reason), TargetRef(CANDIDATE, c.id), by)
 
 
 def noted_by(s: Session, c: Candidate) -> str | None:
     """Who noted ``c`` last: the actor of its last ``candidate.noted``. Before that event, a note signed the verdict."""
-    found = latest(s, CandidateNoted, Event.target == TargetRef(TargetKind.CANDIDATE, c.id))
+    found = latest(s, CandidateNoted, Event.target == TargetRef(CANDIDATE, c.id))
     return c.verdict_by if found is None else found[0].actor
 
 

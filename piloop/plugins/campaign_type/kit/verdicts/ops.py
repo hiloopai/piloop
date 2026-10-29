@@ -13,12 +13,12 @@ from piloop.campaign.ops import Refused, _get, _reason
 from piloop.campaign.stop import request_cancel
 from piloop.db.events import emit
 from piloop.db.models import Campaign
-from piloop.ids import Ending, TargetKind, TargetRef
+from piloop.ids import Ending, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
-from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
+from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN
 from piloop.plugins.campaign_type.kit.runs.stop import HeadReplaced
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import MOVED, Rebased, head, node, on_moved, verdict_rule
@@ -143,7 +143,7 @@ def cancel_replaced(s: Session, campaign: Campaign, was: Candidate | None, actor
     for run in runs:
         request_cancel(s, run, actor, ending=Ending.WRAP_UP)
         replaced = HeadReplaced(head=now.id if now is not None else None)
-        emit(s, replaced, TargetRef(TargetKind.RUN, run.id), actor)
+        emit(s, replaced, TargetRef(RUN, run.id), actor)
     return tuple(runs)
 
 

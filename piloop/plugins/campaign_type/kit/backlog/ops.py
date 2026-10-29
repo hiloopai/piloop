@@ -9,9 +9,9 @@ from piloop.actor import Actor
 from piloop.agents.roles import files_of
 from piloop.campaign.ops import Refused, _get, _reason, review_first
 from piloop.db.models import Campaign, Comment
-from piloop.ids import CampaignId, CommentKind, TargetKind, TargetRef
+from piloop.ids import CampaignId, CommentKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import Definition, NotASeed, develop
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -411,4 +411,4 @@ def track_for(campaign: Campaign, track: TrackName | None) -> TrackName:
 
 
 def _note(s: Session, idea: Idea, body: str, actor: Actor) -> None:
-    s.add(Comment(target=TargetRef(TargetKind.IDEA, idea.id), author=actor.signature, kind=CommentKind.NOTE, body=body))
+    s.add(Comment(target=TargetRef(IDEA, idea.id), author=actor.signature, kind=CommentKind.NOTE, body=body))

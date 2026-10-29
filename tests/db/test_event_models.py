@@ -16,6 +16,8 @@ from piloop.db.session import Database
 from piloop.db.triggers import changelog
 from piloop.db.triggers.changelog import IdeaCreated
 from piloop.ids import CommentKind, Ref, TargetKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
+from piloop.plugins.campaign_type.kit.runs.ids import RUN
 
 
 class Probed(EventModel):
@@ -55,8 +57,10 @@ def test_a_kind_that_nothing_registers_loads_as_an_unknown_event_and_dumps_as_st
 def test_a_reference_is_its_text() -> None:
     refs: TypeAdapter[Ref] = TypeAdapter(Ref)
     assert refs.validate_python('agent_session#12') == TargetRef(TargetKind.AGENT_SESSION, 12)
-    assert refs.dump_python(TargetRef(TargetKind.RUN, 3), mode='json') == 'run#3'
-    for text in ('run#', 'run 3', 'worker#3'):
+    assert refs.dump_python(TargetRef(RUN, 3), mode='json') == 'run#3'
+    assert refs.validate_python('worker#3') == TargetRef(TargetKind('worker'), 3), 'a plugin may declare a kind'
+    assert refs.validate_python('s3_object#4') == TargetRef(TargetKind('s3_object'), 4), 'in the form of any kind'
+    for text in ('run#', 'run 3', 'Run#3', 'agent-session#3', '3d#1'):
         with pytest.raises(ValidationError):
             refs.validate_python(text)
 
@@ -66,7 +70,7 @@ def test_has_finds_the_events_of_a_model_by_their_fields_and_the_readers_type_th
     with db.session() as s:
         for level in (1, 2, 3):
             emit(s, Probed(level=level), on, System.DAEMON)
-        emit(s, IdeaCreated(), TargetRef(TargetKind.IDEA, 1), System.HUMAN)
+        emit(s, IdeaCreated(), TargetRef(IDEA, 1), System.HUMAN)
         s.commit()
         assert [p.level for _, p in in_order(s, Probed, has(Probed, level=(1, 3)))] == [1, 3]
         found = latest(s, Probed, Event.target == on)

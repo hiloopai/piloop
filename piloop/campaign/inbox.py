@@ -41,10 +41,13 @@ from piloop.db import feed as db_feed
 from piloop.db.models import NOT_RETIRED, AgentSession, Campaign, Comment, Event, utcnow
 from piloop.db.triggers.changelog import CampaignStatusChanged, Commented, CommentEdited, IdeaCreated
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.text import iso
@@ -162,7 +165,7 @@ def unanswered(s: Session, waiting: Sequence[tuple[Comment, Campaign | None]]) -
     it and answers nothing else.
     """
     asked = {c.id: c for c, _ in waiting if c.kind is CommentKind.ESCALATION}
-    roots = {c.target_id if c.target_kind is TargetKind.COMMENT else c.id for c in asked.values()}
+    roots = {c.target_id if c.target_kind == TargetKind.COMMENT else c.id for c in asked.values()}
     on_roots = (Comment.target_kind == TargetKind.COMMENT) & Comment.target_id.in_(roots)
     answered = set[CommentId]()
     for answer in s.scalars(select(Comment).where(on_roots)):
@@ -271,7 +274,7 @@ def message(s: Session, campaign_id: CampaignId, body: str, *, author: Actor, pr
 
 def root_of(s: Session, comment: Comment) -> Comment:
     """The root of ``comment``'s thread: the first comment up the chain of targets that is not on a comment."""
-    while comment.target_kind is TargetKind.COMMENT and (parent := s.get(Comment, comment.target_id)) is not None:
+    while comment.target_kind == TargetKind.COMMENT and (parent := s.get(Comment, comment.target_id)) is not None:
         comment = parent
     return comment
 
@@ -349,17 +352,17 @@ def _owner_branches(
     return [
         *through,
         (target_kind == TargetKind.CAMPAIGN, target_id),
-        (target_kind == TargetKind.IDEA, select(Idea.campaign_id).where(Idea.id == target_id).scalar_subquery()),
+        (target_kind == IDEA, select(Idea.campaign_id).where(Idea.id == target_id).scalar_subquery()),
         (
-            target_kind == TargetKind.RUN,
+            target_kind == RUN,
             select(Idea.campaign_id).join(Run.idea).where(Run.id == target_id).scalar_subquery(),
         ),
         (
-            target_kind == TargetKind.CANDIDATE,
+            target_kind == CANDIDATE,
             select(Candidate.campaign_id).where(Candidate.id == target_id).scalar_subquery(),
         ),
         (
-            target_kind == TargetKind.MEASUREMENT,
+            target_kind == MEASUREMENT,
             select(Candidate.campaign_id)
             .join(Measurement.candidate)
             .where(Measurement.id == target_id)

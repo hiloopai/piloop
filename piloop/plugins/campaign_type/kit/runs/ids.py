@@ -5,7 +5,11 @@ from typing import Final, NewType
 
 from piloop.ids import (
     RoleName,
+    TargetKind,
 )
+
+RUN: Final = TargetKind('run')
+"""A run (``runs``). What its comments and events point at."""
 
 RunId = NewType('RunId', int)
 

@@ -40,45 +40,6 @@ CREATE TABLE campaigns (
 	FOREIGN KEY(parent_id) REFERENCES campaigns (id)
 );
 CREATE UNIQUE INDEX ix_campaigns_name ON campaigns (name) WHERE status != 'retired';
-CREATE TABLE comments (
-	id INTEGER NOT NULL,
-	target_kind VARCHAR(16) NOT NULL,
-	target_id INTEGER NOT NULL,
-	in_reply_to INTEGER,
-	author VARCHAR NOT NULL,
-	kind VARCHAR(16) DEFAULT 'note' NOT NULL,
-	body VARCHAR NOT NULL,
-	priority INTEGER,
-	acked_at DATETIME,
-	acked_by VARCHAR,
-	form JSON,
-	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-	updated_by VARCHAR,
-	PRIMARY KEY (id),
-	CONSTRAINT escalation_needs_priority CHECK (kind != 'escalation' OR priority IS NOT NULL),
-	CONSTRAINT reply_is_on_a_comment CHECK (in_reply_to IS NULL OR target_kind = 'comment'),
-	CONSTRAINT "comments.author must be a text value" CHECK (typeof(author) IN ('text')),
-	CONSTRAINT "comments.body must be a text value" CHECK (typeof(body) IN ('text')),
-	CONSTRAINT targetkind CHECK (target_kind IN ('campaign', 'idea', 'run', 'candidate', 'measurement', 'agent_session', 'comment', 'instance')),
-	FOREIGN KEY(in_reply_to) REFERENCES comments (id) ON DELETE SET NULL,
-	CONSTRAINT commentkind CHECK (kind IN ('note', 'finding', 'decision', 'escalation', 'message'))
-);
-CREATE INDEX ix_comments_inbox ON comments (priority, id) WHERE priority IS NOT NULL AND acked_at IS NULL;
-CREATE INDEX ix_comments_target ON comments (target_kind, target_id);
-CREATE TABLE events (
-	id INTEGER NOT NULL,
-	at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-	kind VARCHAR NOT NULL GENERATED ALWAYS AS (json_extract(payload, '$.kind')),
-	actor VARCHAR NOT NULL,
-	target_kind VARCHAR(16) NOT NULL,
-	target_id INTEGER NOT NULL,
-	payload JSON NOT NULL,
-	PRIMARY KEY (id),
-	CONSTRAINT targetkind CHECK (target_kind IN ('campaign', 'idea', 'run', 'candidate', 'measurement', 'agent_session', 'comment', 'instance', 'home'))
-);
-CREATE INDEX ix_events_kind ON events (kind, target_kind, target_id, id);
-CREATE INDEX ix_events_target ON events (target_kind, target_id, id);
 CREATE TABLE lease_workers (
 	id VARCHAR NOT NULL,
 	pool VARCHAR NOT NULL,
@@ -112,6 +73,11 @@ CREATE TABLE migrations (
 	fingerprint INTEGER NOT NULL,
 	PRIMARY KEY (name)
 );
+CREATE TABLE target_kinds (
+	id VARCHAR(16) NOT NULL,
+	owner VARCHAR NOT NULL,
+	PRIMARY KEY (id)
+);
 CREATE TABLE tokens (
 	id INTEGER NOT NULL,
 	name VARCHAR NOT NULL,
@@ -143,20 +109,12 @@ CREATE TABLE worker_instances (
 	CONSTRAINT instanceend CHECK ("end" IN ('drained', 'register_timeout', 'start_refused', 'lost', 'gone'))
 );
 CREATE INDEX ix_worker_instances_state ON worker_instances (state);
-CREATE TABLE first_transfers (
-	campaign_id INTEGER NOT NULL,
-	revision VARCHAR NOT NULL,
-	blob VARCHAR NOT NULL,
-	PRIMARY KEY (campaign_id),
-	CONSTRAINT "first_transfers.revision must be a text value" CHECK (typeof(revision) IN ('text')),
-	CONSTRAINT "first_transfers.blob must be a text value" CHECK (typeof(blob) IN ('text')),
-	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE
-);
 CREATE TABLE agent_sessions (
 	id INTEGER NOT NULL,
 	kind VARCHAR NOT NULL,
 	campaign_id INTEGER,
-	run_id INTEGER,
+	subject_kind VARCHAR(16),
+	subject_id INTEGER,
 	harness VARCHAR,
 	model VARCHAR,
 	runtime VARCHAR,
@@ -174,16 +132,66 @@ CREATE TABLE agent_sessions (
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_by VARCHAR,
 	PRIMARY KEY (id),
+	CONSTRAINT agent_sessions_subject CHECK ((subject_kind IS NULL) = (subject_id IS NULL)),
 	CONSTRAINT "agent_sessions.kind must be a text value" CHECK (typeof(kind) IN ('text')),
 	CONSTRAINT "agent_sessions.reason must be a text value" CHECK (typeof(reason) IN ('text', 'null')),
 	CONSTRAINT "agent_sessions.harness must be a text value" CHECK (typeof(harness) IN ('text', 'null')),
 	CONSTRAINT "agent_sessions.model must be a text value" CHECK (typeof(model) IN ('text', 'null')),
 	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
-	FOREIGN KEY(run_id) REFERENCES runs (id) ON DELETE SET NULL,
+	CONSTRAINT agent_sessions_kind FOREIGN KEY(subject_kind) REFERENCES target_kinds (id),
 	CONSTRAINT agentsessionstate CHECK (state IN ('requested', 'starting', 'running', 'ending', 'exited', 'killed'))
 );
 CREATE INDEX ix_agent_sessions_campaign_kind_state ON agent_sessions (campaign_id, kind, state);
-CREATE INDEX ix_agent_sessions_run ON agent_sessions (run_id);
+CREATE INDEX ix_agent_sessions_subject ON agent_sessions (subject_kind, subject_id);
+CREATE TABLE comments (
+	id INTEGER NOT NULL,
+	target_kind VARCHAR(16) NOT NULL,
+	target_id INTEGER NOT NULL,
+	in_reply_to INTEGER,
+	author VARCHAR NOT NULL,
+	kind VARCHAR(16) DEFAULT 'note' NOT NULL,
+	body VARCHAR NOT NULL,
+	priority INTEGER,
+	acked_at DATETIME,
+	acked_by VARCHAR,
+	form JSON,
+	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	updated_by VARCHAR,
+	PRIMARY KEY (id),
+	CONSTRAINT escalation_needs_priority CHECK (kind != 'escalation' OR priority IS NOT NULL),
+	CONSTRAINT reply_is_on_a_comment CHECK (in_reply_to IS NULL OR target_kind = 'comment'),
+	CONSTRAINT comment_not_on_home CHECK (target_kind != 'home'),
+	CONSTRAINT "comments.author must be a text value" CHECK (typeof(author) IN ('text')),
+	CONSTRAINT "comments.body must be a text value" CHECK (typeof(body) IN ('text')),
+	CONSTRAINT targetkind FOREIGN KEY(target_kind) REFERENCES target_kinds (id),
+	FOREIGN KEY(in_reply_to) REFERENCES comments (id) ON DELETE SET NULL,
+	CONSTRAINT commentkind CHECK (kind IN ('note', 'finding', 'decision', 'escalation', 'message'))
+);
+CREATE INDEX ix_comments_inbox ON comments (priority, id) WHERE priority IS NOT NULL AND acked_at IS NULL;
+CREATE INDEX ix_comments_target ON comments (target_kind, target_id);
+CREATE TABLE events (
+	id INTEGER NOT NULL,
+	at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	kind VARCHAR NOT NULL GENERATED ALWAYS AS (json_extract(payload, '$.kind')),
+	actor VARCHAR NOT NULL,
+	target_kind VARCHAR(16) NOT NULL,
+	target_id INTEGER NOT NULL,
+	payload JSON NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT targetkind FOREIGN KEY(target_kind) REFERENCES target_kinds (id)
+);
+CREATE INDEX ix_events_kind ON events (kind, target_kind, target_id, id);
+CREATE INDEX ix_events_target ON events (target_kind, target_id, id);
+CREATE TABLE first_transfers (
+	campaign_id INTEGER NOT NULL,
+	revision VARCHAR NOT NULL,
+	blob VARCHAR NOT NULL,
+	PRIMARY KEY (campaign_id),
+	CONSTRAINT "first_transfers.revision must be a text value" CHECK (typeof(revision) IN ('text')),
+	CONSTRAINT "first_transfers.blob must be a text value" CHECK (typeof(blob) IN ('text')),
+	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE
+);
 CREATE TABLE leases (
 	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	kind VARCHAR(16) NOT NULL,
@@ -234,7 +242,7 @@ CREATE TABLE archives (
 	PRIMARY KEY (id),
 	CONSTRAINT archives_subject CHECK ((subject_kind IS NULL) = (subject_id IS NULL)),
 	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
-	CONSTRAINT targetkind CHECK (subject_kind IN ('campaign', 'idea', 'run', 'candidate', 'measurement', 'agent_session', 'comment', 'instance', 'home'))
+	CONSTRAINT targetkind FOREIGN KEY(subject_kind) REFERENCES target_kinds (id)
 );
 CREATE INDEX ix_archives_campaign_subject ON archives (campaign_id, subject_kind, subject_id);
 ```

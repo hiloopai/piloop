@@ -1,7 +1,12 @@
 """The ids and states of the ``backlog`` component: its ideas and their links."""
 
 from enum import StrEnum
-from typing import NewType
+from typing import Final, NewType
+
+from piloop.ids import TargetKind
+
+IDEA: Final = TargetKind('idea')
+"""An idea of the backlog (``ideas``). What its comments and events point at."""
 
 IdeaId = NewType('IdeaId', int)
 

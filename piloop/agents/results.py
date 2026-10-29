@@ -25,9 +25,9 @@ from piloop.config import TRANSCRIPT
 from piloop.db.events import emit, has, in_order, latest
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Comment, Event, EventModel, ReadBy, utcnow
 from piloop.db.session import Database, write_transaction
-from piloop.ids import AgentSessionId, CommentId, CommentKind, EnvName, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CommentId, CommentKind, EnvName, Ref, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -36,7 +36,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measure
 from piloop.plugins.campaign_type.kit.evaluation.measure import save_units
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.executor.contract import (
     AgentFinished,
@@ -108,7 +108,8 @@ class StartupAnomaly(EventModel):
     kind: Literal['anomaly.startup'] = 'anomaly.startup'
     role: RoleName
     harness: str | None
-    run: RunId | None
+    subject: Ref | None
+    """What the agent was to work on, such as ``run#12``. None for a sweep."""
     seconds: float
     error: str | None
     """Why it did not start. None only in an event of 0.1.0, which did not always know."""
@@ -348,11 +349,13 @@ class Identified(EventModel):
     model: str | None
     campaign: str | None
     """The campaign's name."""
-    run: RunId | None
-    idea: IdeaId | None
-    proposed_by: Proposer | None
-    """The agent that proposed the run's idea (``ideas.created_by``). None when a person or the orchestrator did, or
-    without a run."""
+    subject: Ref | None
+    """What the agent works on, such as ``run#12``. None for a sweep."""
+    groups: tuple[Ref, ...]
+    """What its work belongs to, such as the run's ``idea#4``."""
+    parent: Proposer | None
+    """The agent whose work this one carries out: the agent that proposed the run's idea (``ideas.created_by``). None
+    when a person or the orchestrator did, or without a run."""
 
 
 class Unresumed(StrEnum):
@@ -624,7 +627,7 @@ class CampaignResults:
             anomaly = StartupAnomaly(
                 role=w.kind,
                 harness=w.harness,
-                run=w.run_id,
+                subject=w.subject,
                 seconds=round(seconds, 1),
                 error=ended.reason,
             )
@@ -721,7 +724,7 @@ def learn(s: Session, w: AgentSession, session_id: str | None) -> None:
         return
     w.session_id = session_id
     assert w.harness is not None  # the launcher picks the harness before it launches the agent
-    run = None if w.run_id is None else s.get(Run, w.run_id)
+    run = None if (run_id := run_of(w)) is None else s.get(Run, run_id)
     idea = None if run is None else s.get_one(Idea, run.idea_id)
     definition = harness_of(s, w)
     identified = Identified(
@@ -731,9 +734,9 @@ def learn(s: Session, w: AgentSession, session_id: str | None) -> None:
         role=w.kind,
         model=w.model,
         campaign=None if w.campaign_id is None else s.get_one(Campaign, w.campaign_id).name,
-        run=w.run_id,
-        idea=None if idea is None else idea.id,
-        proposed_by=None if idea is None else _proposer(s, idea.created_by),
+        subject=w.subject,
+        groups=() if idea is None else (TargetRef(IDEA, idea.id),),
+        parent=None if idea is None else _proposer(s, idea.created_by),
     )
     emit(s, identified, TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
 
@@ -822,7 +825,7 @@ def _never_worked(s: Session, w: AgentSession, report: AgentFinished) -> bool:
     """
     if report.process.status is ExitStatus.TIMED_OUT or report.process.seconds >= STARTUP_SECONDS or report.changed:
         return False
-    if w.run_id is None:
+    if run_of(w) is None:
         definition = harness_of(s, w)
         if definition is None or definition.usage() is None or (report.usage is not None and report.usage.total > 0):
             return False

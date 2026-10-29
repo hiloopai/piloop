@@ -12,9 +12,11 @@ from sqlalchemy import select
 from piloop.campaign.campaigns import workspace_dir
 from piloop.cli import common, local
 from piloop.cli.common import CampaignRef
+from piloop.db.models import known_kinds
 from piloop.ids import REF_PATTERN, TargetKind, TargetRef
 from piloop.plugins.archive.contract import ARCHIVES
 from piloop.plugins.archive.local.tables import Archive
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.cas.contract import CAS, Integrity, Upkeep, integrity
 from piloop.store.tree import Manifest
 
@@ -25,9 +27,9 @@ app = cyclopts.App(
 
 def _target(given: str | None) -> TargetRef | str | None:
     """What ``piloop restore`` writes back: a subject (``idea#12``, or ``12`` for ``idea#12``), else a path, else all."""
-    spelled = f'{TargetKind.IDEA}#{given}' if given is not None and given.isdigit() else given
+    spelled = f'{IDEA}#{given}' if given is not None and given.isdigit() else given
     ref = REF_PATTERN.fullmatch(spelled or '')
-    return TargetRef(TargetKind(ref['kind']), int(ref['id'])) if ref and ref['kind'] in TargetKind else given
+    return TargetRef(TargetKind(ref['kind']), int(ref['id'])) if ref and ref['kind'] in known_kinds() else given
 
 
 def restore(

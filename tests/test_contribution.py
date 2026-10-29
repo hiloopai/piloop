@@ -281,9 +281,12 @@ def test_a_package_s_target_kind_is_checked_when_the_daemon_starts_and_one_of_pi
         monkeypatch, [EntryPoint('notion', 'piloop.plugins.campaign_type.kit.backlog.tables:Idea', TARGET_KINDS.group)]
     )
     check_declared()
-    assert TARGET_KINDS.loaded() == {'notion': Idea}
+    assert TARGET_KINDS.loaded()['notion'] is Idea, "beside piloop's own: optimization's four"
     installed(
-        monkeypatch, [EntryPoint('idea', 'piloop.plugins.campaign_type.kit.backlog.tables:Idea', TARGET_KINDS.group)]
+        monkeypatch,
+        [EntryPoint('campaign', 'piloop.plugins.campaign_type.kit.backlog.tables:Idea', TARGET_KINDS.group)],
     )
-    with pytest.raises(PluginError, match="piloop.target_kinds: comments and events point at 'idea' of piloop already"):
+    with pytest.raises(
+        PluginError, match="piloop.target_kinds: comments and events point at 'campaign' of piloop already"
+    ):
         check_declared()

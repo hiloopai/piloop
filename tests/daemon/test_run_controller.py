@@ -48,7 +48,7 @@ from piloop.ids import CampaignId, CampaignStatus, CommentId, Ending, Revision, 
 from piloop.otel import Span, Tracer
 from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.backlog.ideas import park_stranded, runnable, supersede
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference, resolve
@@ -80,8 +80,8 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
     RunRelaunched,
     run_outcome,
 )
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, working_on
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     CandidateJudged,
     Rebased,
@@ -174,7 +174,7 @@ def make_run(
             AgentSession(
                 kind=IMPLEMENTER,
                 campaign_id=campaign.id,
-                run_id=run.id,
+                subject=TargetRef(RUN, run.id),
                 harness='script',
                 model='test-model',
                 reason=f'idea#{idea.id} is ready',
@@ -187,9 +187,7 @@ def make_run(
 def execute(ex: RunController, db: Database, run_id: RunId) -> None:
     """Run ``run_id`` through its requested agent session row, the way the scheduler does: it takes the row, then executes."""
     with db.session() as s:
-        requested = select(AgentSession).where(
-            AgentSession.run_id == run_id, AgentSession.state == AgentSessionState.REQUESTED
-        )
+        requested = select(AgentSession).where(working_on(run_id), AgentSession.state == AgentSessionState.REQUESTED)
         agent_session = s.scalars(requested).one()
         agent_session.state = AgentSessionState.STARTING
         s.commit()
@@ -215,7 +213,7 @@ def test_an_implementer_whose_launch_the_stop_rule_stops_never_starts_and_its_ru
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
         run = s.get_one(Run, run_id)
-        [agent] = s.scalars(select(AgentSession).where(AgentSession.run_id == run_id)).all()
+        [agent] = s.scalars(select(AgentSession).where(working_on(run_id))).all()
         assert (run.status, run.end, run.brief_cid, agent.state, agent.session_id) == (
             RunStatus.QUEUED,
             None,
@@ -328,7 +326,7 @@ def test_successful_run_scores_the_commit(
     with db.session() as s:
         assert s.get_one(Idea, run.idea_id).status is IdeaStatus.DONE
         [agent_session] = s.scalars(select(AgentSession)).all()
-        assert (agent_session.state, agent_session.run_id) == (AgentSessionState.EXITED, run_id)
+        assert (agent_session.state, run_of(agent_session)) == (AgentSessionState.EXITED, run_id)
         kinds = [ev.kind for ev in s.scalars(select(Event)).all()]
     assert kinds == snapshot(
         [
@@ -560,7 +558,7 @@ def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_a_new_run_
         recovered = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
         idea = s.get_one(Idea, run_row(db, run_id).idea_id)
         assert (idea.status, idea.base_candidate_id) == (IdeaStatus.READY, recovered.id), 'max_runs=1 is spent'
-        [note] = s.scalars(select(Comment).where(Comment.target_kind == TargetKind.IDEA)).all()
+        [note] = s.scalars(select(Comment).where(Comment.target_kind == IDEA)).all()
         assert note.body.startswith(f'requeued from candidate#{recovered.id}: run#{run_id} ended failed')
         trunk = head(s, s.get_one(Campaign, campaign.id))
         assert trunk is not None and trunk.id == baseline(db, campaign.id).id, 'the head did not move'
@@ -579,7 +577,13 @@ def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_a_new_run_
         s.add(run)
         s.flush()
         s.add(
-            AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, run_id=run.id, harness='script', model='test-model')
+            AgentSession(
+                kind=IMPLEMENTER,
+                campaign_id=campaign.id,
+                subject=TargetRef(RUN, run.id),
+                harness='script',
+                model='test-model',
+            )
         )
         s.commit()
         finishing = run.id
@@ -624,7 +628,7 @@ def test_a_run_that_timed_out_after_its_commits_is_retried_from_its_last_commit(
     with db.session() as s:
         idea = s.get_one(Idea, run_row(db, run_id).idea_id)
         assert (idea.status, idea.base_candidate_id) == (IdeaStatus.READY, second.id), 'max_runs=1 is spent'
-        [note] = s.scalars(select(Comment).where(Comment.target_kind == TargetKind.IDEA)).all()
+        [note] = s.scalars(select(Comment).where(Comment.target_kind == IDEA)).all()
         assert note.body == (
             f'requeued from candidate#{second.id}: run#{run_id} ended timed_out after its versions; the next run starts'
             ' from its last one to finish the work'
@@ -661,7 +665,7 @@ def test_a_failed_run_whose_commits_the_head_moved_past_is_retried_on_the_head_w
         assert moved is not None and moved.summary == 'add a line'
         idea = s.get_one(Idea, run_row(db, slow).idea_id)
         assert (idea.status, idea.base_candidate_id) == (IdeaStatus.READY, None), 'on the head'
-        [note] = s.scalars(select(Comment).where(Comment.target == TargetRef(TargetKind.IDEA, idea.id))).all()
+        [note] = s.scalars(select(Comment).where(Comment.target == TargetRef(IDEA, idea.id))).all()
         base = baseline(db, campaign.id).revision
         assert note.body == (
             f'requeued on the head: run#{slow} ended failed after its versions, and the head moved past them. To start'
@@ -744,7 +748,7 @@ def test_an_idea_whose_implementers_keep_dying_is_requeued_from_its_recovered_wo
                 AgentSession(
                     kind=IMPLEMENTER,
                     campaign_id=campaign.id,
-                    run_id=run.id,
+                    subject=TargetRef(RUN, run.id),
                     harness='script',
                     model='test-model',
                 )
@@ -1134,9 +1138,9 @@ def test_brief_carries_history_and_comments(
     second = make_run(db, campaign, title='second idea')
     with db.session() as s:
         idea_id = s.get_one(Run, second).idea_id
-        s.add(Comment(target=TargetRef(TargetKind.IDEA, idea_id), author='human:t', body='try harder'))
-        s.add(Comment(target=TargetRef(TargetKind.RUN, second), author='pi', kind='decision', body='and faster'))
-        s.add(Comment(target=TargetRef(TargetKind.RUN, first), author='pi', body='about another idea'))
+        s.add(Comment(target=TargetRef(IDEA, idea_id), author='human:t', body='try harder'))
+        s.add(Comment(target=TargetRef(RUN, second), author='pi', kind='decision', body='and faster'))
+        s.add(Comment(target=TargetRef(RUN, first), author='pi', body='about another idea'))
         s.commit()
     execute(controller(db, runtime, tmp_path), db, second)
     brief = brief_of(db, second)
@@ -1189,7 +1193,7 @@ def test_the_comments_on_an_idea_are_capped_by_their_section(
         )
         idea_id = s.get_one(Run, run_id).idea_id
         for body in ('first and oldest', 'second', 'third, which runs on and on'):
-            s.add(Comment(target=TargetRef(TargetKind.IDEA, idea_id), author='human:t', body=body))
+            s.add(Comment(target=TargetRef(IDEA, idea_id), author='human:t', body=body))
         s.commit()
     execute(controller(db, runtime, tmp_path), db, run_id)
     brief = brief_of(db, run_id)
@@ -1495,7 +1499,7 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
         with db.session() as s:
             run = s.get_one(Run, run_id)
             assert (run.status, run.finished_at, run.idea.status) == (RunStatus.QUEUED, None, IdeaStatus.SCHEDULED)
-            rows = s.scalars(select(AgentSession).where(AgentSession.run_id == run_id).order_by(AgentSession.id)).all()
+            rows = s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id)).all()
             assert [w.state for w in rows] == [*[AgentSessionState.EXITED] * launches, AgentSessionState.REQUESTED]
             assert (rows[-1].harness, rows[-1].model) == ('script', 'test-model')
             assert rows[-1].reason == f'run#{run_id} relaunched: implementer#{rows[-2].id} failed to start', 'its role'
@@ -1509,7 +1513,7 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
         assert idea.status is IdeaStatus.PARKED, 'no agent of its run started to work'
         [note] = s.scalars(select(Comment).where(Comment.target_id == idea.id)).all()
         assert (note.target_kind, note.author, note.kind, note.body) == (
-            TargetKind.IDEA,
+            IDEA,
             'daemon',
             'note',
             f'parked: no agent of run#{run_id} started to work; fix what stopped them (the errors of its implementers, their'
@@ -1544,7 +1548,7 @@ def test_a_worktree_that_cannot_be_made_is_a_failed_start_that_frees_the_slot(
     for _ in range(3):
         execute(ex, db, run_id)
     with db.session() as s:
-        rows = s.scalars(select(AgentSession).where(AgentSession.run_id == run_id).order_by(AgentSession.id)).all()
+        rows = s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id)).all()
         assert [w.state for w in rows] == [AgentSessionState.KILLED] * 3
         assert all('Could not write new index file' in (w.error or '') for w in rows)
         assert s.scalars(select(Event.target_id).where(has(StartupAnomaly))).all() == [w.id for w in rows]
@@ -1560,7 +1564,7 @@ def test_a_run_that_fails_before_its_agent_starts_closes_its_implementer(
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
-        [w] = s.scalars(select(AgentSession).where(AgentSession.run_id == run_id)).all()
+        [w] = s.scalars(select(AgentSession).where(working_on(run_id))).all()
         assert (w.state, w.error, w.ended_at is not None) == (AgentSessionState.KILLED, 'RuntimeError: repo gone', True)
     assert (run_row(db, run_id).status, run_row(db, run_id).error) == (RunStatus.FAILED, 'RuntimeError: repo gone')
 
@@ -1584,9 +1588,7 @@ def test_an_implementer_that_spends_tokens_but_ends_at_once_with_nothing_did_not
     set_config(db, campaign, plugins={'harness': {'script': {**script, **counted}}})
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
-        dead, relaunched = s.scalars(
-            select(AgentSession).where(AgentSession.run_id == run_id).order_by(AgentSession.id)
-        ).all()
+        dead, relaunched = s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id)).all()
         assert (dead.state, dead.usage.total if dead.usage else None, relaunched.state) == (
             AgentSessionState.EXITED,
             16478,
@@ -1610,7 +1612,7 @@ def test_a_cancel_made_while_the_implementer_starts_survives_a_failed_start(
     def cancel_then_fail(spec: object) -> Handle:
         with db.session() as s:
             run = s.get_one(Run, run_id)
-            [agent_session] = s.scalars(select(AgentSession).where(AgentSession.run_id == run_id)).all()
+            [agent_session] = s.scalars(select(AgentSession).where(working_on(run_id))).all()
             if on == 'run':
                 stop.request_cancel(s, run, System.HUMAN, ending=Ending.NOW)
             else:
@@ -1623,7 +1625,7 @@ def test_a_cancel_made_while_the_implementer_starts_survives_a_failed_start(
     with db.session() as s:
         run = s.get_one(Run, run_id)
         assert (run.status, run.end, run.idea.status) == (RunStatus.FAILED, RunEnd.CANCELLED, IdeaStatus.PARKED)
-        assert [w.state for w in s.scalars(select(AgentSession).where(AgentSession.run_id == run_id))] == [
+        assert [w.state for w in s.scalars(select(AgentSession).where(working_on(run_id)))] == [
             AgentSessionState.KILLED
         ]
         assert s.scalars(select(Event).where(Event.kind == 'run.relaunched')).all() == []
@@ -1662,9 +1664,7 @@ def test_a_relaunched_implementer_signs_as_itself_and_its_finding_without_a_comm
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
     with db.session() as s:
-        dead, replacement = s.scalars(
-            select(AgentSession.id).where(AgentSession.run_id == run_id).order_by(AgentSession.id)
-        ).all()
+        dead, replacement = s.scalars(select(AgentSession.id).where(working_on(run_id)).order_by(AgentSession.id)).all()
         [author] = s.scalars(select(Comment.author).where(Comment.kind == 'finding')).all()
         assert author == f'implementer#{replacement}'
         assert f'implementer#{dead}' not in brief_of(db, run.id) and f'You are implementer#{replacement},' in brief_of(
@@ -1696,9 +1696,7 @@ def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
     with db.session() as s:
-        assert s.scalar(select(func.count()).select_from(AgentSession).where(AgentSession.run_id == run_id)) == 1, (
-            'no relaunch'
-        )
+        assert s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) == 1, 'no relaunch'
         assert not s.scalars(select(Event).where(has(RunRelaunched) | has(StartupAnomaly))).all()
 
 
@@ -1721,9 +1719,7 @@ def test_a_fast_implementer_that_left_uncommitted_work_started_and_its_work_is_r
     [(summary, verdict, *_)] = scored(db, run_id)
     assert (summary, verdict) == (UNCOMMITTED, Origin.RECOVERED)
     with db.session() as s:
-        assert s.scalar(select(func.count()).select_from(AgentSession).where(AgentSession.run_id == run_id)) == 1, (
-            'no relaunch'
-        )
+        assert s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) == 1, 'no relaunch'
         assert not s.scalars(select(Event).where(has(StartupAnomaly))).all()
 
 
@@ -1742,7 +1738,7 @@ def test_a_startup_death_during_a_stop_leaves_the_run_to_the_stop(
     execute(ex, db, run_id)
     with db.session() as s:
         assert s.get_one(Run, run_id).status is RunStatus.RUNNING, 'left for the stop to fail'
-        assert s.scalar(select(func.count()).select_from(AgentSession).where(AgentSession.run_id == run_id)) == 1
+        assert s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) == 1
 
 
 def test_a_finding_without_a_commit_is_a_result(
@@ -1975,7 +1971,7 @@ def test_an_escalation_is_answered_once_a_reply_reaches_the_implementer_not_once
     with db.session() as s:
         idea_id, agent_session_id = run_row(db, run_id).idea_id, s.scalars(select(AgentSession.id)).one()
         escalation = Comment(
-            target=TargetRef(TargetKind.RUN, run_id),
+            target=TargetRef(RUN, run_id),
             author=f'implementer#{agent_session_id}',
             kind='escalation',
             priority=1,
@@ -1986,7 +1982,7 @@ def test_an_escalation_is_answered_once_a_reply_reaches_the_implementer_not_once
         s.add(escalation)
         s.add(
             Comment(
-                target=TargetRef(TargetKind.IDEA, idea_id),
+                target=TargetRef(IDEA, idea_id),
                 author='watchdog#9',
                 kind='escalation',
                 priority=1,
@@ -2001,9 +1997,7 @@ def test_an_escalation_is_answered_once_a_reply_reaches_the_implementer_not_once
         on_agent = TargetRef(TargetKind.AGENT_SESSION, agent_session_id)
         emit(s, PromptOutcome(kind='comment.delivered', comment=wrap_up.id), on_agent, System.DAEMON)
         if reply is not None:
-            answer = Comment(
-                target=TargetRef(TargetKind.IDEA, idea_id), author='orchestrator', kind='decision', body='yes'
-            )
+            answer = Comment(target=TargetRef(IDEA, idea_id), author='orchestrator', kind='decision', body='yes')
             s.add(answer)
             s.flush()
             emit(s, PromptOutcome(kind=reply, comment=answer.id), on_agent, System.DAEMON)
@@ -2064,7 +2058,7 @@ def test_an_implementers_own_commit_is_by_the_implementer_on_a_machine_with_no_g
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
-        session = s.scalars(select(AgentSession.id).where(AgentSession.run_id == run_id)).one()
+        session = s.scalars(select(AgentSession.id).where(working_on(run_id))).one()
     [e] = candidates(db, run_id)
     repo = Repo(campaign.path)
     assert (e.summary, run_row(db, run_id).status) == ('a line', RunStatus.SUCCEEDED)
@@ -2095,17 +2089,17 @@ def test_uncommitted_changes_without_a_finding_are_scored_but_not_an_attempt_tha
     with db.session() as s:
         idea_id, agent_session_id = (
             run_row(db, run_id).idea_id,
-            s.scalars(select(AgentSession.id).where(AgentSession.run_id == run_id)).one(),
+            s.scalars(select(AgentSession.id).where(working_on(run_id))).one(),
         )
         s.add(
             Comment(
-                target=TargetRef(TargetKind.RUN, run_id),
+                target=TargetRef(RUN, run_id),
                 author=f'implementer#{agent_session_id}',
                 kind='finding',
                 body='x',
             )
         )
-        s.add(Comment(target=TargetRef(TargetKind.IDEA, idea_id), author='watchdog#9', kind='finding', body='y'))
+        s.add(Comment(target=TargetRef(IDEA, idea_id), author='watchdog#9', kind='finding', body='y'))
         s.commit()
     write_toml(Path(campaign.path), '#!/bin/sh\necho other >> solve.txt\n')
     reload_campaign(db, campaign)
@@ -2974,7 +2968,7 @@ def test_the_ideas_that_wait_for_a_run_whose_merge_conflicts_wait_for_its_compos
         assert [lk.target_id for lk in s.get_one(Idea, started_id).links] == [first], 'it began without the change'
         assert park_stranded(s, campaign.id) == {}, 'not stranded: the change comes with the seed'
         assert s.scalars(select(Idea.id).where(runnable())).all() == [], 'it waits until the compose is done'
-        moves = in_order(s, IdeaLinked, Event.target == TargetRef(TargetKind.IDEA, later_id))
+        moves = in_order(s, IdeaLinked, Event.target == TargetRef(IDEA, later_id))
         assert {(e.actor, p.kind, p.target) for e, p in moves[1:]} == {
             (System.DAEMON, 'idea.unlinked', first),
             (System.DAEMON, 'idea.linked', seed.id),
