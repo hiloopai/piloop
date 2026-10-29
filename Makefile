@@ -6,6 +6,7 @@ SUITE_MEMORY ?= 24G
 install:  ## Install deps and pre-commit hooks
 	uv sync --frozen
 	uv run pre-commit install --install-hooks
+	git config merge.generated.driver true
 
 .PHONY: format
 format:  ## Format the code

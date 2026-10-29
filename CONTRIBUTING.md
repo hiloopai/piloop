@@ -204,6 +204,9 @@ To add a generated file, add a module and list it in `scripts/generate_all.py`.
 
 `make docs-check` (`--mode check`) fails on the first stale file and shows its diff. The pre-commit hook `docs` runs it
 on every commit, and CI runs the hooks on every file.
+
+These files never conflict in a merge or a rebase: `.gitattributes` keeps the current side of each, through the merge
+driver that `make install` sets up. Run `make docs` after the merge, and commit what it writes.
 `--mode dry-run` prints every file and writes nothing.
 
 ## Documentation

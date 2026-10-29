@@ -5,6 +5,7 @@ The pre-commit hook `docs` (`make docs-check`) checks that every generated file 
 The diff tests follow the tests of ``generated_file_diff`` in ruff's ``crates/ruff_dev/src/generate_all.rs`` (MIT).
 """
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -78,3 +79,11 @@ def test_each_generated_mdx_file_starts_with_the_warning() -> None:
             text = generator.generate()
             body = text.split('\n---\n', 1)[1].lstrip('\n') if text.startswith('---\n') else text
             assert body.startswith(WARNING) and body.splitlines()[0].endswith(' */}'), generator.PATH.relative_to(ROOT)
+
+
+def test_each_generated_file_keeps_the_current_side_in_a_merge() -> None:
+    """A merge never stops on a generated file: `make docs` writes it again from the merged code."""
+    paths = [str(g.PATH.relative_to(ROOT)) for g in generate_all.GENERATORS]
+    paths += [str(p.relative_to(ROOT)) for p in generate_all.contracts.generate_each()]
+    attrs = subprocess.run(['git', 'check-attr', 'merge', '--', *paths], cwd=ROOT, capture_output=True, text=True)
+    assert attrs.stdout.splitlines() == [f'{p}: merge: generated' for p in paths]
