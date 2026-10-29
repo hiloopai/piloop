@@ -135,13 +135,13 @@ def test_a_session_written_back_where_its_provider_restores_it_is_found_and_read
     harness: str, session_id: str, home: Path
 ) -> None:
     left = store(home, harness, session_id, cwd=Path('/another/machine/worktree'))
-    usage = reader_of(harness).read(session_id, None, None)
+    usage, data = reader_of(harness).read(session_id, None, None), left.read_bytes()
+    left.unlink()  # the file is on another machine
     provider = each_provider()[harness]
     path = provider.restore(session_id, CWD)
     assert path is not None and path.is_relative_to(home) and not path.exists()
     path.parent.mkdir(parents=True)
-    path.write_bytes(provider.relocated(left.read_bytes(), CWD))
-    left.unlink()
+    path.write_bytes(provider.relocated(data, CWD))
     assert reader_of(harness).session_file(session_id, CWD) == path, 'what the snapshots and the usage find'
     assert reader_of(harness).read(session_id, CWD, None) == usage
 

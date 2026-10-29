@@ -1,6 +1,9 @@
 """A role with ``continuity = "resume"``: each agent continues the last agent's harness session, from the CAS."""
 
+import json
 import shutil
+import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -11,13 +14,14 @@ from sqlalchemy import select
 
 from piloop.actor import Agent
 from piloop.agents.launcher import resumable
-from piloop.agents.results import AgentSessionStarted, SessionNotResumed, Unresumed
+from piloop.agents.results import AgentSessionStarted, Ran, SessionNotResumed, Unresumed
 from piloop.agents.roles import compose_brief, compose_resumed, role
 from piloop.db.events import in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, TargetKind, TargetRef
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.contract import RepoId, Resume
 from piloop.plugins.executor.kit import jobs
@@ -27,9 +31,19 @@ from piloop.plugins.host import Instances
 from piloop.plugins.role.contract import Continuity
 from piloop.plugins.runtime.contract import AgentStart
 from piloop.plugins.vcs.contract import Repository
+from piloop.store.chunks import read as read_chunks
 from piloop.usage import Usage
 from tests.agents.test_launcher import agent_session, checkout, controller, request, use_harness
-from tests.conftest import WATCHDOG, ScriptRuntime, events, home_cas, reconfigured, role_timeout
+from tests.conftest import (
+    WATCHDOG,
+    ScriptRuntime,
+    events,
+    home_cas,
+    reconfigured,
+    role_timeout,
+    wait_until,
+    workers_of,
+)
 from tests.test_lease import agent_job
 from tests.usage.test_usage import SESSIONS
 
@@ -76,13 +90,20 @@ def resuming(db: Database, campaign: Campaign) -> None:
 def wake(db: Database, runtime: ScriptRuntime, tmp_path: Path, campaign: Campaign) -> AgentSessionId:
     """Launch one watchdog with both briefs, as the scheduler launches a sweep of a resuming role."""
     agent_session_id = request(db, campaign)
+    ctl = controller(db, runtime, tmp_path, Tracer(None))
+    launch(db, ctl, campaign, agent_session_id)
+    ctl.stop(5)
+    return agent_session_id
+
+
+def launch(db: Database, ctl: RunController, campaign: Campaign, agent_session_id: AgentSessionId) -> None:
+    """Launch the watchdog ``agent_session_id`` on ``ctl``, and wait for its end."""
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
         agent = Agent(role=WATCHDOG, session=agent_session_id)
         watchdog = role(row.config, WATCHDOG, Path(row.path))
         brief = compose_brief(watchdog, row, agent, reason='news', context='- the whole brief')
         resumed = compose_resumed(watchdog, row, agent, reason='news', context=f'- news for {agent}')
-    ctl = controller(db, runtime, tmp_path, Tracer(None))
     ctl.launcher.launch(
         agent_session_id,
         brief=ctl.cas.put(brief.encode()),
@@ -91,8 +112,6 @@ def wake(db: Database, runtime: ScriptRuntime, tmp_path: Path, campaign: Campaig
         timeout=role_timeout(db, agent_session_id),
         resumed_brief=ctl.cas.put(resumed.encode()),
     )
-    ctl.stop(5)
-    return agent_session_id
 
 
 def not_resumed(db: Database, agent_session_id: AgentSessionId) -> list[SessionNotResumed]:
@@ -208,6 +227,151 @@ def test_a_pi_agent_resumes_the_last_session_on_another_worker_in_its_own_cwd(
     assert two.usage is not None and two.usage.turns == 1, 'the tokens after the resume'
 
 
+CODEX_HARNESS = {
+    'provider': 'codex',
+    'home': '~/codex-home',
+    'headless': ['{prompt}'],
+    'resume': ['resume', '{session_id}', '{prompt}'],
+}
+"""The ``codex`` provider over the test script: it reads and restores Codex rollouts under ``~/codex-home``."""
+CODEX = f'''#!{sys.executable}
+"""Codex as 0.165 behaves: a resume continues the rollout that its state names, else the one its thread id finds.
+
+Each response adds 1000 tokens to the thread's running total, which a resume continues from the rollout it loads.
+The response comes after a delay, as Codex's own start takes seconds.
+"""
+import json, os, sys, time, uuid
+from pathlib import Path
+
+home = Path(os.environ['HOME']) / 'codex-home'
+if sys.argv[1] == 'resume':
+    thread = sys.argv[2]
+    state = home / 'state' / thread
+    found = sorted((home / 'sessions').glob(f'*/*/*/rollout-*-{{thread}}.jsonl'))
+    rollout = Path(state.read_text()) if state.exists() and Path(state.read_text()).exists() else found[0]
+else:
+    thread = str(uuid.uuid4())
+    rollout = home / 'sessions/2026/10/28' / f'rollout-2026-10-28T00-00-00-{{thread}}.jsonl'
+    rollout.parent.mkdir(parents=True, exist_ok=True)
+    rollout.write_text(json.dumps({{'type': 'session_meta', 'payload': {{'id': thread}}}}) + '\\n')
+print(json.dumps({{'type': 'thread.started', 'thread_id': thread}}, separators=(',', ':')), flush=True)
+state = home / 'state' / thread
+state.parent.mkdir(exist_ok=True)
+state.write_text(str(rollout))
+time.sleep(float(os.environ.get('CODEX_START_SECONDS', '0')))
+while os.path.exists(os.environ.get('CODEX_HOLD', '')):
+    time.sleep(0.05)
+counts = [json.loads(line)['payload']['info']['total_token_usage']['total_tokens']
+          for line in rollout.read_text().splitlines() if '"token_count"' in line]
+total = (counts[-1] if counts else 0) + 1000
+usage = {{'input_tokens': total - total // 10, 'cached_input_tokens': 0, 'output_tokens': total // 10,
+         'total_tokens': total}}
+with rollout.open('a') as f:
+    f.write(json.dumps({{'type': 'event_msg', 'payload': {{'type': 'token_count', 'info': {{'total_token_usage': usage}}}}}}) + '\\n')
+'''
+
+
+def rollout_total(path: Path) -> int:
+    """The running total of the last ``token_count`` of a rollout: what its thread spent in all."""
+    counts = [line for line in path.read_text().splitlines() if '"token_count"' in line]
+    return json.loads(counts[-1])['payload']['info']['total_token_usage']['total_tokens']
+
+
+def totals(db: Database, *agent_sessions: AgentSessionId) -> list[int]:
+    found = [agent_session(db, a).usage for a in agent_sessions]
+    return [-1 if usage is None else usage.total for usage in found]
+
+
+@pytest.fixture
+def codex(db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch, home: Path) -> Path:
+    """The fake Codex for a resuming watchdog. It starts after the job code's first look at its session file."""
+    monkeypatch.setattr(jobs, 'POLL_SECONDS', 0.05)
+    monkeypatch.setenv('CODEX_START_SECONDS', '0.3')
+    use_harness(db, campaign, CODEX, **CODEX_HARNESS)
+    resuming(db, campaign)
+    return home / 'codex-home'
+
+
+def test_codex_resumes_count_each_agents_own_tokens_and_add_up_to_the_rollouts_total(
+    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path, codex: Path
+) -> None:
+    agents = [wake(db, runtime, tmp_path, campaign) for _ in range(3)]
+    assert [started(db, a).resumes for a in agents] == [None, *agents[:2]]
+    (rollout,) = codex.glob('sessions/*/*/*/rollout-*.jsonl')
+    assert rollout_total(rollout) == 3000, 'Codex continued its own rollout, which the state names'
+    assert totals(db, *agents) == [1000, 1000, 1000]
+    last = agent_session(db, agents[-1]).session_file
+    assert last is not None and read_chunks(home_cas(db), last) == rollout.read_bytes(), 'the CAS has the rollout'
+
+
+def test_codex_resumes_on_other_machines_continue_the_cas_session_and_count_each_agents_own_tokens(
+    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path, codex: Path
+) -> None:
+    """Machine A starts the session, B resumes it from the CAS alone, then A resumes it again with its old rollout."""
+    first = wake(db, runtime, tmp_path, campaign)
+    codex.rename(tmp_path / 'machine-a')
+    second = wake(db, runtime, tmp_path, campaign)
+    (on_b,) = codex.glob('sessions/*/*/*/rollout-*.jsonl')
+    assert rollout_total(on_b) == 2000
+    shutil.rmtree(codex)
+    (tmp_path / 'machine-a').rename(codex)
+    third = wake(db, runtime, tmp_path, campaign)
+    (on_a,) = codex.glob('sessions/*/*/*/rollout-*.jsonl')
+    assert rollout_total(on_a) == 3000, 'A continued the session as B left it, in the rollout that its state names'
+    assert totals(db, first, second, third) == [1000, 1000, 1000]
+
+
+def test_a_resumed_codex_agent_that_a_restarted_worker_re_attaches_counts_only_its_own_tokens(
+    campaign: Campaign,
+    db: Database,
+    runtime: ScriptRuntime,
+    tmp_path: Path,
+    codex: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = wake(db, runtime, tmp_path, campaign)
+    hold = tmp_path / 'hold'
+    hold.touch()
+    monkeypatch.setenv('CODEX_HOLD', str(hold))
+    second = request(db, campaign)
+    before = controller(db, runtime, tmp_path, Tracer(None))
+    launching = threading.Thread(target=launch, args=(db, before, campaign, second))
+    launching.start()
+    wait_until(lambda: agent_session(db, second).state is AgentSessionState.RUNNING)
+    before.hand_over()
+    launching.join(30)
+    after = controller(db, runtime, tmp_path, Tracer(None))
+    workers_of(after).leases.renew_all()
+    workers_of(after).worker.start()
+    hold.unlink()
+    assert isinstance(after.launcher.reattach(second), Ran)
+    after.stop(5)
+    (rollout,) = codex.glob('sessions/*/*/*/rollout-*.jsonl')
+    assert (rollout_total(rollout), totals(db, first, second)) == (2000, [1000, 1000])
+
+
+def test_the_tokens_that_a_resumed_session_held_are_found_again_from_the_job_alone(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """A re-attached agent knows only its job: the session file in its ``resume`` says what was not the agent's."""
+    cas = home_cas(db)
+    site = jobs.local_site(tmp_path / 'worker', cas, lambda _: Path(campaign.path), unread, 0)
+    reader = Claude(home=HOME).sessions()
+    session = cas.put(SESSION.read_bytes())
+    resume = Resume(session_id='s1', file=session, brief=cas.put(b'# new'), args=['--resume', 's1'])
+    job = agent_job(db, campaign, tmp_path).model_copy(update={'harness': Claude(home=HOME), 'resume': resume})
+    assert jobs.inherited(job, 's1', reader, site) == reader.usage(SESSION.read_bytes())
+    assert jobs.inherited(job, 'fresh', reader, site) is None, 'a session that could not be written back is new'
+    assert jobs.inherited(job.model_copy(update={'resume': None}), 's1', reader, site) is None
+    no_response = resume.model_copy(update={'file': cas.put(b'{"type":"session"}\n')})
+    assert jobs.inherited(job.model_copy(update={'resume': no_response}), 's1', reader, site) is None, (
+        "every token is the agent's"
+    )
+    lost = resume.model_copy(update={'file': Cid.of(b'never put')})
+    with pytest.raises(LookupError, match='the CAS lacks the resumed session file'):
+        jobs.inherited(job.model_copy(update={'resume': lost}), 's1', reader, site)
+
+
 def home_cas_disk(db: Database) -> DiskCas:
     cas = home_cas(db)
     assert isinstance(cas, DiskCas)
@@ -277,7 +441,7 @@ def test_no_session_is_resumed_after_a_resume_that_failed_or_on_a_harness_that_c
         assert s.scalar(select(AgentSession.state).where(AgentSession.id == after)) is AgentSessionState.EXITED
 
 
-def test_a_worker_that_cannot_restore_says_why_and_a_session_without_a_response_yet_counts_every_token(
+def test_a_worker_that_cannot_restore_says_why(
     db: Database, campaign: Campaign, tmp_path: Path, home: Path, tracer: Tracer, spans: InMemorySpanExporter
 ) -> None:
     cas = home_cas(db)
@@ -290,7 +454,7 @@ def test_a_worker_that_cannot_restore_says_why_and_a_session_without_a_response_
     with tracer.span('test') as span:
         (site.log_dir(job)).mkdir(parents=True)
         restored, resumed_start, outcome = jobs.restore_session(job, start, site, span)
-        assert (restored.session_id, resumed_start.args, outcome) == ('s1', ['--resume', 's1'], jobs.Restored(None))
+        assert (restored.session_id, resumed_start.args, outcome) == ('s1', ['--resume', 's1'], None)
         cases = {
             'the harness has no path': job.model_copy(update={'harness': None}),
             'no session header': job.model_copy(

@@ -146,6 +146,14 @@ class UsageReader(Protocol):
         """
         ...
 
+    def usage(self, session: bytes) -> Usage:
+        """The usage in ``session``, the bytes of a session file: what a resumed session held before its agent.
+
+        Raises:
+            UsageError: There is none in it.
+        """
+        ...
+
     def said(self, session: bytes, lines: int = 1) -> list[str]:
         """The last ``lines`` lines of text that the agent wrote in ``session``, the bytes of its session file.
 

@@ -292,9 +292,11 @@ class Codex(Harness):
         return JsonlSessions(f'{self.home}/sessions/*/*/*/rollout-*-{{session_id}}.jsonl', no_cwd, tally, said)
 
     def restore(self, session_id: str, cwd: Path) -> Path:
-        """A rollout under a date folder, with a timestamped name.
+        """The thread's rollout on this machine, else a new one under a date folder, with a timestamped name.
 
-        ``exec resume`` takes no other (measured with Codex 0.164.0). The date says nothing; the thread id finds the file.
+        ``exec resume`` continues the rollout that Codex's state database names for the thread, else the one that the
+        thread id finds: a second copy would not get the agent's output. It takes no file outside a date folder. The
+        date says nothing (measured with Codex 0.165.0).
         """
         name = f'sessions/2000/01/01/rollout-2000-01-01T00-00-00-{session_id}.jsonl'
-        return Path(expand_env(f'{self.home}/{name}')).expanduser()
+        return self.sessions().session_file(session_id, cwd) or Path(expand_env(f'{self.home}/{name}')).expanduser()

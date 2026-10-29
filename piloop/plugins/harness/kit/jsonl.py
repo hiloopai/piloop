@@ -102,9 +102,20 @@ class JsonlSessions:
         path = self.session_file(session_id, cwd)
         if path is None:
             raise UsageError(f'no session file for {session_id}: nothing matches {self.pattern(session_id)}')
-        counts, turns = self.tally(records(path))
+        try:
+            return self.usage(path.read_bytes())
+        except UsageError as e:
+            raise UsageError(f'{e} in {path}') from e
+
+    def usage(self, session: bytes) -> Usage:
+        """Add up ``session``, the bytes of a session file.
+
+        Raises:
+            UsageError: There is no usage in it.
+        """
+        counts, turns = self.tally(records(session))
         if not turns:
-            raise UsageError(f'no usage records in {path}')
+            raise UsageError('no usage records')
         return Usage(
             input=counts.input,
             output=counts.output,
@@ -153,9 +164,9 @@ class JsonlSessions:
         return expanded.replace('{cwd}', folder).replace('{session_id}', glob.escape(session_id))
 
 
-def records(path: Path) -> Iterator[Record]:
+def records(session: bytes) -> Iterator[Record]:
     """The JSON objects of a JSONL file. Other lines are skipped, such as the incomplete last line of a killed agent."""
-    for line in path.read_text(errors='replace').splitlines():
+    for line in session.decode(errors='replace').splitlines():
         try:
             rec = json.loads(line)
         except ValueError:
