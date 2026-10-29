@@ -247,6 +247,10 @@ ideas: 4 · attempts: 2 · reached the evaluator: 1 · measured: 1 · keeps: 1
 |---|---|
 | failed | 1 |
 
+## Yield
+
+- 1 of the last 2 runs scored, 1 kept; the others: 1 crashed.
+
 ## Recent candidates (3 of 3; score)
 
 | candidate | verdict | score | vs parent | run | age | summary |
@@ -290,8 +294,8 @@ def test_stop_conditions_say_how_far_each_one_is(db: Database, campaign: Campaig
     cfg = load_campaign_config(Path(campaign.path), plugins={'stop_rule': stop})
     [line] = [x for x in render(db, campaign, cfg).splitlines() if x.startswith('- Campaign:')]
     assert line == snapshot(
-        '- Campaign: active. Progress: run 2/10 · 1.9h/4h · 4k/1.0M tok · 0/3 runs without a keep · target ≥ 5 (head 3).'
-    ), 'run#2 failed before it committed: it counts toward neither limit'
+        '- Campaign: active. Progress: run 2/10 · 1.9h/4h · 4k/1.0M tok · 1/3 runs without a keep · target ≥ 5 (head 3).'
+    ), 'run#2 failed before it committed: plateau counts it, max_runs does not'
     with db.session() as s:
         s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
         s.get_one(Campaign, campaign.id).stopped_reason = 'plateau: 3 runs without a keep'
@@ -461,6 +465,10 @@ ideas: 6 · attempts: 2 · reached the evaluator: 1 · measured: 1 · keeps: 1
 | ended | unmeasured attempts |
 |---|---|
 | failed | 1 |
+
+## Yield
+
+- 1 of the last 2 runs scored, 1 kept; the others: 1 crashed.
 
 ## Recent candidates (3 of 3; score)
 

@@ -317,7 +317,7 @@ def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, 
 │                                                                                      ││                                                                      │
 │                                                                                      ││                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯│                                                                      │
-╭─ [5] Status 12 ──────────────────────────────────────────────────────────────────────╮│                                                                      │
+╭─ [5] Status 13 ──────────────────────────────────────────────────────────────────────╮│                                                                      │
 │ Campaign                                                                             ││                                                                      │
 │ Goal                                                                                 ││                                                                      │
 │ Trajectory                                                                           ││                                                                      │
@@ -325,9 +325,9 @@ def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, 
 │ Queue                                                                                ││                                                                      │
 │ Agents                                                                               ││                                                                      │
 │ Evaluations                                                                          ││                                                                      │
-│ Funnel                                                                               ││                                                                      │
-│ Recent candidates (4 of 4; score)                                                  ▅▅││                                                                      │
-│ Incidents given to agents                                                            ││                                                                      │
+│ Funnel                                                                             ▂▂││                                                                      │
+│ Yield                                                                                ││                                                                      │
+│ Recent candidates (4 of 4; score)                                                    ││                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯
  a ack  A ack all shown  r reply  / filter  esc campaigns  q quit  ? keys
 """)

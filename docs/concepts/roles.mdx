@@ -71,6 +71,27 @@ turns a role's triggers off. These are built in:
 
 <Triggers />
 
+### Low yield
+
+`low_yield` catches a campaign whose runs reach nothing:
+
+```toml
+[plugins.trigger.low_yield]
+window = 20      # the latest finished runs
+min_scored = 0.25
+keepless = 15
+```
+
+When fewer than 5 of the last 20 runs scored, or 15 scored and none is kept, the watchdog gets the breakdown to
+investigate. piloop also posts one escalation of priority 1, also when no role names the trigger:
+
+```text
+Few runs reach scoring: 1 of the last 20 runs scored, 0 kept; the others: 15 no candidate, 2 skipped scoring, 2
+crashed; fewer than 25% scored. Find out why the runs end without a scored version …
+```
+
+piloop acknowledges it when the yield recovers or the campaign stops. `piloop status` shows the yield in `## Yield`.
+
 ## Define a role
 
 A table with a new name defines a sweep. It needs `prompt`, the file that starts its brief, and `triggers`. This

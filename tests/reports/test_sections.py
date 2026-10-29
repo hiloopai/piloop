@@ -111,7 +111,7 @@ def test_an_installed_section_shows_where_it_declares_in_its_order_unless_a_list
 
 def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     overview = ['headline', 'goal', 'tracks', 'trajectory', 'runs', 'queue', 'idle_queue', 'agents', 'evaluations']
-    overview += ['funnel', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
+    overview += ['funnel', 'yields', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
     assert defaults(Surface.SWEEP) == ['lessons', 'incidents', *overview, 'tools', 'pack']
     assert defaults(Surface.RUN) == ['idea_comments', 'lessons', 'history']

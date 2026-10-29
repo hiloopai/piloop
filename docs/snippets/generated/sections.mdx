@@ -28,6 +28,7 @@
 | `agents` | The agents: the live ones with their last line, the count of each role, the yield of each source, the tokens. | status, sweep | 160 | none |
 | `evaluations` | The evaluations under the current evaluator: how many crashed, their minutes, and the candidates without a verdict. | status, sweep | 170 | none |
 | `funnel` | The run funnel: ideas → attempts → reached the evaluator → measured → keeps, and how the unmeasured attempts ended. | status, sweep | 175 | none |
+| `yields` | How far the latest finished runs got, in the window of the `low_yield` trigger, and whether it is low. | status, sweep | 176 | none |
 | `candidates` | The latest candidates, oldest first, each with its verdict and its primary score against its parent's. | status, sweep | 180 | none |
 | `same_as_parent` | The candidates whose primary score is exactly their parent's: a cost, since the evaluation saw no change. | status, sweep | 185 | none |
 | `reported` | The latest incidents that the triggers gave to agents, newest first, each with the agent that got it. | status, sweep | 190 | none |

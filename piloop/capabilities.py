@@ -57,6 +57,7 @@ from piloop.plugins.trigger.contract import Backlog, TrackBacklog
 from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
 from piloop.plugins.campaign_type.kit.runs.trigger.leaking_funnel import LeakingFunnel
+from piloop.plugins.campaign_type.optimization.trigger.low_yield import LowYield
 from piloop.plugins.trigger.cron import CronTrigger
 from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
 from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
@@ -76,6 +77,7 @@ from piloop.plugins.campaign_type.kit.backlog.section.queue import Queue
 from piloop.plugins.section.agents import Agents
 from piloop.plugins.campaign_type.kit.evaluation.section.evaluations import Evaluations
 from piloop.plugins.campaign_type.kit.evaluation.section.funnel import RunFunnel
+from piloop.plugins.campaign_type.optimization.section.yields import Yields
 from piloop.plugins.section.cost import Cost
 from piloop.plugins.campaign_type.kit.verdicts.section.candidates import Candidates
 from piloop.plugins.campaign_type.kit.backlog.section.idle_queue import IdleQueue

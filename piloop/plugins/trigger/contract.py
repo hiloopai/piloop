@@ -172,7 +172,7 @@ class Pass(Protocol):
         ...
 
     def without_keep(self, before: datetime | None, /) -> int:
-        """The finished runs that count since the latest keep, or since the campaign was last set active again.
+        """The finished attempts since the latest keep, or since the campaign was last set active again: ``plateau``'s count.
 
         With ``before``, only the runs that finished by then count.
         """

@@ -427,6 +427,17 @@ measured.
 An `anomaly.reported` event names its `trigger` in place of `anomaly`. A plugin trigger no longer gets
 `Pass.incidents()`.
 
+### Plateau counts every run
+
+`plateau` counts every finished run without a keep, also one that never reached the evaluator. A campaign whose runs
+rarely submit now stops at `plateau`. `max_runs` still counts only the runs that reached the evaluator.
+
+### Low yield
+
+piloop escalates a campaign whose runs reach nothing, and the watchdog has the new
+[`low_yield`](/concepts/roles#low-yield) trigger by default. If your `piloop.toml` lists the watchdog's `triggers`,
+add `"low_yield"` to the list.
+
 ### The daemon registers campaigns
 
 `piloop init` starts the daemon and registers the campaign through it, so a `piloop serve --detach` after it fails

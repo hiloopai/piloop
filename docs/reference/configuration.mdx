@@ -50,7 +50,7 @@ section.
 | `link` | list\[string\] | `[]` | Repo-relative paths, ignored by git, that piloop puts into every worktree read-only, for example data or virtual environments. Each job gets them as they are when it is made. |
 | `context` | list\[string\] | `[]` | Repo-relative files or globs (for example `docs/error-analysis-*.md`) that hold the campaign's analysis: error analyses, comparisons with a reference, evaluation reports. The research pack lists each one with its outline, newest first, so that every sweep that reads the pack reads them before it proposes work. |
 | `agents` | [CampaignAgents](#campaignagents) | `{}` | `[agents]`: how long the campaign's agents get to wrap up and to leave after their finding. |
-| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "leases": {}, "models": {}, "optimization": {}, "spend": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "scout": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "comments": {}, "concepts": {}, "cost": {}, "database": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idea_comments": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "judging": {}, "lessons": {}, "links": {}, "long_jobs": {}, "orchestration": {}, "pack": {}, "past_campaigns": {}, "priorities": {}, "provenance": {}, "queries": {}, "queue": {}, "reported": {}, "runs": {}, "same_as_parent": {}, "search": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "candidates", "same_as_parent", "reported", "inbox", "events"], "workspace": {}}, "trigger": {"cron": {}, "dead_at_startup": {}, "leaking_funnel": {}, "low_water": {}, "news": {}, "run_failed": {}, "seed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
+| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "leases": {}, "models": {}, "optimization": {}, "spend": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "scout": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "comments": {}, "concepts": {}, "cost": {}, "database": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idea_comments": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "judging": {}, "lessons": {}, "links": {}, "long_jobs": {}, "orchestration": {}, "pack": {}, "past_campaigns": {}, "priorities": {}, "provenance": {}, "queries": {}, "queue": {}, "reported": {}, "runs": {}, "same_as_parent": {}, "search": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "yields", "candidates", "same_as_parent", "reported", "inbox", "events"], "workspace": {}, "yields": {}}, "trigger": {"cron": {}, "dead_at_startup": {}, "leaking_funnel": {}, "low_water": {}, "low_yield": {}, "news": {}, "run_failed": {}, "seed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
 
 ## Tolerance
 
@@ -251,7 +251,7 @@ The runtime instance that the campaign uses, by name. Unset: `subprocess`.
 
 ### `[plugins.section] use`
 
-The section instances that the campaign uses, by name, in order. Unset: `headline`, `goal`, `tracks`, `trajectory`, `runs`, `queue`, `idle_queue`, `agents`, `evaluations`, `funnel`, `candidates`, `same_as_parent`, `reported`, `inbox`, `events`.
+The section instances that the campaign uses, by name, in order. Unset: `headline`, `goal`, `tracks`, `trajectory`, `runs`, `queue`, `idle_queue`, `agents`, `evaluations`, `funnel`, `yields`, `candidates`, `same_as_parent`, `reported`, `inbox`, `events`.
 
 ### `[plugins.section.<name>]`
 
@@ -356,6 +356,8 @@ With `provider = "trajectory"`, the table has no other key.
 
 With `provider = "workspace"`, the table has no other key.
 
+With `provider = "yields"`, the table has no other key.
+
 ### `[plugins.stop_rule]`
 
 The stop rule. Without a table: `limits`.
@@ -369,7 +371,7 @@ With `provider = "limits"`:
 | `max_runs` | integer \| null | `null` | Stop after this many runs that count, once none is queued, running or being scored. A run counts when it reached the evaluator, and also while it is queued, running or being scored, so piloop never starts more runs than this. A finished run that does not count frees its place, and piloop starts another run in it. |
 | `max_hours` | number \| null | `null` | Stop after this many hours of wall-clock time since the first run of the campaign started. The time that the campaign was paused (`piloop pause`) does not count. An agent's timeout ends at the stop too. |
 | `max_tokens` | integer \| null | `null` | Stop when all the agents of the campaign together spent this many tokens (the `total` of `agent_sessions.usage`), summed over the agents that ended. |
-| `plateau` | integer \| null | `null` | Stop after this many finished runs that reached the evaluator without a new `keep` candidate. The count starts again at each keep, and when the campaign is set `active` after a stop (`piloop init`, or an UPDATE of `campaigns.status`), so a reactivated campaign gets this many runs again. A new evaluator alone does not reset it. |
+| `plateau` | integer \| null | `null` | Stop after this many finished runs without a new `keep` candidate, whether they reached the evaluator or not. A run that a stop ended, or whose agent never started, does not count. The count starts again at each keep, and when the campaign is set `active` after a stop (`piloop init`, or an UPDATE of `campaigns.status`), so a reactivated campaign gets this many runs again. A new evaluator alone does not reset it. |
 | `hold_at` | dict\[string, number\] | `{}` | Hold the campaign while a fact that a source reads, by its name, is at this value or above, and while it is unknown: the daemon launches no agent and starts no evaluation. Work that already runs finishes and is scored. Example: `{ spend = 1000 }`, with a source in `[plugins.fact_source] use` that reads `spend`. To resume, raise it and run `piloop init`. |
 
 ### `[plugins.trigger.<name>]`
@@ -396,6 +398,14 @@ With `provider = "low_water"`:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `buffer` | integer | `2` | The number of ready ideas to keep in addition to one for each run slot (the `max_concurrent` of every role that does runs). With this backlog, a free slot finds an idea at once and does not wait for a sweep. A larger value makes implementers wait less for the role, but the ideas they run are older. |
+
+With `provider = "low_yield"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `window` | integer | `20` | How many of the latest finished attempts it looks at. |
+| `min_scored` | number | `0.25` | The share of them that must reach the evaluator. 0 turns this check off. |
+| `keepless` | integer \| null | `15` | It fires when at least this many of them scored and none is kept. Unset turns this check off. |
 
 With `provider = "news"`:
 
@@ -488,7 +498,7 @@ The keys that every `[plugins.role.<name>]` table accepts. Each role's table bel
 | `writes` | list\[string\] | `[]` | What the agents of this role may write, as their brief states it. Only `files` is enforced. |
 | `files` | `nothing` \| `seeds` \| `ideas` | `"seeds"` | What the agents of this role may file with `piloop idea`: `nothing`, `seeds` or `ideas`. The CLI refuses the rest. |
 | `plan_words` | integer | `150` | The most words in the plan of an idea that an agent of this role adds or develops: steps that one run can follow, not a protocol. A longer plan is refused. |
-| `sections` | list\[string\] \| null | `null` | What the briefs of this role show: the names of sections, in order. A guide goes before the role's context, and every other section after it. When unset, the role's own guides, then every installed section that a brief of this kind of role shows by default, in their order (`Section.SHOWN_IN`, `Section.ORDER`). Built in: `agents`, `candidates`, `comments`, `concepts`, `cost`, `database`, `evaluations`, `events`, `funnel`, `goal`, `headline`, `history`, `idea_comments`, `idle_queue`, `inbox`, `incidents`, `judging`, `lessons`, `links`, `long_jobs`, `orchestration`, `pack`, `past_campaigns`, `priorities`, `provenance`, `queries`, `queue`, `reported`, `runs`, `same_as_parent`, `search`, `tools`, `tracks`, `trajectory`, `workspace`. |
+| `sections` | list\[string\] \| null | `null` | What the briefs of this role show: the names of sections, in order. A guide goes before the role's context, and every other section after it. When unset, the role's own guides, then every installed section that a brief of this kind of role shows by default, in their order (`Section.SHOWN_IN`, `Section.ORDER`). Built in: `agents`, `candidates`, `comments`, `concepts`, `cost`, `database`, `evaluations`, `events`, `funnel`, `goal`, `headline`, `history`, `idea_comments`, `idle_queue`, `inbox`, `incidents`, `judging`, `lessons`, `links`, `long_jobs`, `orchestration`, `pack`, `past_campaigns`, `priorities`, `provenance`, `queries`, `queue`, `reported`, `runs`, `same_as_parent`, `search`, `tools`, `tracks`, `trajectory`, `workspace`, `yields`. |
 
 ## ImplementerRole
 
@@ -519,7 +529,7 @@ name defines a new role, and needs `prompt` and `triggers`.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `runs` | boolean | `false` | The agents of this role do no runs. Set `runs = true` in a new table to define a role that does runs. |
-| `triggers` | list\[string\] | required | When the daemon requests an agent of this role: the names of triggers (`[plugins.trigger.<name>]`), checked in order on each pass. A package can add triggers. An empty list means that agents start only on request (`piloop launch`). Built in: `cron`, `dead_at_startup`, `leaking_funnel`, `low_water`, `news`, `run_failed`, `seed`, `sql`, `stalled`, `stopped`. |
+| `triggers` | list\[string\] | required | When the daemon requests an agent of this role: the names of triggers (`[plugins.trigger.<name>]`), checked in order on each pass. A package can add triggers. An empty list means that agents start only on request (`piloop launch`). Built in: `cron`, `dead_at_startup`, `leaking_funnel`, `low_water`, `low_yield`, `news`, `run_failed`, `seed`, `sql`, `stalled`, `stopped`. |
 | `interval` | number | `0` | The number of seconds between two routine sweeps of the `cron` trigger, counted from the start of the last one. A sweep that investigates an anomaly is not a routine sweep. 0 turns the timer off. |
 | `max_ideas` | integer | `1` | The maximum number of new ideas one sweep may insert, as its brief states it. The seeds it develops do not count. `low_water` requests enough sweeps to fill the backlog at this many ideas each. 0 pauses the role's new ideas: `low_water` is off, and an idea that a sweep of the role adds (`piloop idea add`) is `proposed`, so it waits for a review, also from a sweep that started before the change. |
 | `continuity` | `fresh` \| `resume` | `"fresh"` | `fresh`: each agent starts a new harness session. `resume`: each agent continues the session of the role's last agent, written back from the CAS, so it remembers what the agents before it did. The harness needs `resume`, and a provider that restores its session files (`Harness.restore`): every built-in one does. |
@@ -580,7 +590,7 @@ Experimental: the scout.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `writes` | list\[string\] | `["comments(escalation, finding, note)", "lessons on the campaign once it stopped", "seeds via idea seed"]` | What a watchdog may write, as its brief states it. |
-| `triggers` | list\[string\] | `["run_failed", "dead_at_startup", "leaking_funnel", "cron", "stopped"]` | A failed run, an agent dead at startup or a leaking funnel requests an incident sweep, the timer requests a progress review when something is new, and the campaign's stop requests the closing review. |
+| `triggers` | list\[string\] | `["run_failed", "dead_at_startup", "leaking_funnel", "low_yield", "cron", "stopped"]` | A failed run, an agent dead at startup, a leaking funnel or a low yield requests an incident sweep, the timer requests a progress review when something is new, and the campaign's stop requests the closing review. |
 | `interval` | number | `1800` | The number of seconds between two progress reviews, counted from the last review. A sweep that investigates an anomaly is not a review. 0 turns the reviews off. |
 
 ## Global settings: `config.toml`

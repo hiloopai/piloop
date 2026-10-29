@@ -451,8 +451,7 @@ def test_plateau_counts_finished_runs_since_the_last_keep(db: Database, campaign
 
 
 def test_only_runs_that_produced_a_measured_candidate_count_toward_max_runs(db: Database, campaign: Campaign) -> None:
-    """A run with no commit, or with only ``Piloop-Eval: skip`` commits, counts toward neither ``max_runs`` nor
-    ``plateau``.
+    """A run with no commit, or with only ``Piloop-Eval: skip`` commits, does not count toward ``max_runs``.
 
     A run in flight counts toward ``max_runs``, so the queue never starts more runs than ``max_runs`` allows. A run
     whose candidate waits for its measurement also counts.
@@ -462,7 +461,7 @@ def test_only_runs_that_produced_a_measured_candidate_count_toward_max_runs(db: 
     add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.SKIPPED, SKIPPED_REASON)
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        assert (runs(s, row), runs_without_keep(s, row)) == (0, 0)
+        assert (runs(s, row), runs_without_keep(s, row)) == (0, 2), 'plateau counts them'
     add_run(db, campaign)
     assert reason(db, campaign) is None, 'one measured run'
     add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.RUN)
@@ -472,24 +471,20 @@ def test_only_runs_that_produced_a_measured_candidate_count_toward_max_runs(db: 
         assert runs(s, s.get_one(Campaign, campaign.id)) == 3, 'a run in flight counts toward max_runs'
 
 
-def test_plateau_counts_the_runs_that_max_runs_counts(db: Database, campaign: Campaign) -> None:
-    """Only a run that reached the evaluator counts toward a run limit, ``plateau`` as ``max_runs``.
-
-    A run that stopped at a cheap check with no commit, or with only ``Piloop-Eval: skip`` commits, or that a harness
-    fault ended before it committed, says nothing about the metric. ``[spend]``, ``max_tokens`` and ``max_hours``
-    limit what such runs cost.
+def test_plateau_counts_every_finished_attempt_also_one_that_never_reached_the_evaluator(
+    db: Database, campaign: Campaign
+) -> None:
+    """A run without a keep counts toward ``plateau``, whether it scored or not: a campaign whose runs never submit
+    plateaus too. ``max_runs`` counts only the runs that reached the evaluator.
     """
-    configure(db, campaign, plateau=2)
+    configure(db, campaign, plateau=4)
     add_run(db, campaign, keep_score=5.0)
     add_run(db, campaign, status=RunStatus.FAILED, error=NO_CHANGES, measured=False)
     add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.SKIPPED, SKIPPED_REASON)
     add_run(db, campaign, status=RunStatus.SUCCEEDED, measured=False)
+    assert reason(db, campaign) is None, 'three runs without a keep'
     add_run(db, campaign, status=RunStatus.FAILED, error='agent exit 1', measured=False)
-    assert reason(db, campaign) is None, 'four runs without a keep, none of them measured'
-    add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.RUN)
-    assert reason(db, campaign) is None, 'one waits for its measurement'
-    add_run(db, campaign, status=RunStatus.FAILED, error='agent exit 1')
-    assert reason(db, campaign) == 'plateau: 2 runs without a keep', 'a failed run whose commit was measured counts'
+    assert reason(db, campaign) == 'plateau: 4 runs without a keep', 'none of them scored'
 
 
 def test_reactivating_a_stopped_campaign_starts_a_fresh_plateau_window(db: Database, campaign: Campaign) -> None:

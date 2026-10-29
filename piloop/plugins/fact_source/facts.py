@@ -75,7 +75,7 @@ TOKENS = Fact[int](
 )
 WITHOUT_KEEP = Fact[int](
     'without_keep',
-    'The finished runs that count since the latest keep, or since the campaign was last set active again.',
+    'The finished attempts since the latest keep, or since the campaign was last set active again: scored or not.',
 )
 KEEPS = Fact[int](
     'keeps', 'The candidates of runs that are kept, on the trunk or on a branch. The baseline is not one.'

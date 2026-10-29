@@ -48,12 +48,12 @@ def unsettled() -> ColumnElement[bool]:
 
 
 def counted() -> ColumnElement[bool]:
-    """Select the runs that count toward the run limits, ``max_runs`` and ``plateau``: those that reached the evaluator.
+    """Select the runs that count toward ``max_runs``: those that reached the evaluator.
 
     Such a run has a candidate that is measured or waiting for its verdict (``scored``). A run that stopped with no
     version, or with only versions that asked to be skipped, does not count: it stopped at a cheap check, or a harness
-    or host fault ended it before it saved one. It says nothing about the idea's effect on the metric. ``hold_at``,
-    ``max_tokens`` and ``max_hours`` limit what such runs cost. This is the one rule for both limits.
+    or host fault ended it before it saved one. It says nothing about the idea's effect on the metric. ``plateau``
+    counts it (``runs_without_keep``), and ``hold_at``, ``max_tokens`` and ``max_hours`` limit what it costs.
     """
     return attempt() & scored()
 
@@ -121,7 +121,9 @@ def runs(s: Session, campaign: Campaign) -> int:
 
 
 def runs_without_keep(s: Session, campaign: Campaign, before: datetime | None = None) -> int:
-    """Count the finished runs that count (``counted``) since the latest keep or reactivation. ``plateau`` uses this.
+    """Count the finished attempts since the latest keep or reactivation. ``plateau`` uses this.
+
+    An attempt that never reached the evaluator counts: a campaign whose runs never submit has a plateau too.
 
     With ``before``, only the runs of that window that finished by then count: 0 if the window opened later.
 
@@ -139,4 +141,4 @@ def runs_without_keep(s: Session, campaign: Campaign, before: datetime | None = 
     since = max((t for t in (last_keep, reactivated) if t is not None), default=None)
     after = (Run.finished_at > since,) if since is not None else ()
     by = (Run.finished_at <= before,) if before is not None else ()
-    return _over_runs(s, campaign, func.count(Run.id), Run.status.in_(FINISHED_RUNS), counted(), *after, *by) or 0
+    return _over_runs(s, campaign, func.count(Run.id), Run.status.in_(FINISHED_RUNS), attempt(), *after, *by) or 0

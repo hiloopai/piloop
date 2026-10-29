@@ -17,8 +17,8 @@ class WatchdogRole(SweepRole):
     ROUTINE_PROMPT = files(__package__) / 'prompts' / 'watchdog_progress.md'
     GUIDES = (*READER, 'priorities', 'search', 'past_campaigns')
 
-    triggers: list[TriggerName] = ['run_failed', 'dead_at_startup', 'leaking_funnel', 'cron', 'stopped']
-    """A failed run, an agent dead at startup or a leaking funnel requests an incident sweep, the timer requests a
+    triggers: list[TriggerName] = ['run_failed', 'dead_at_startup', 'leaking_funnel', 'low_yield', 'cron', 'stopped']
+    """A failed run, an agent dead at startup, a leaking funnel or a low yield requests an incident sweep, the timer requests a
     progress review when something is new, and the campaign's stop requests the closing review."""
     interval: float = Field(default=1800, ge=0)
     """The number of seconds between two progress reviews, counted from the last review. A sweep that investigates an

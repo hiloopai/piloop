@@ -37,7 +37,7 @@ LEAVES: dict[str, frozenset[str] | None] = {
         {'claude', 'codex', 'low_water', 'seed', 'stalled'}
     ),
     'plugins/campaign_type/kit/runs/role/watchdog.py': frozenset(
-        {'run_failed', 'dead_at_startup', 'leaking_funnel', 'cron', 'stopped'}
+        {'run_failed', 'dead_at_startup', 'leaking_funnel', 'low_yield', 'cron', 'stopped'}
     ),
     'plugins/campaign_type/kit/backlog/role/scout.py': frozenset({'cron'}),
     'deprecated.py': None,

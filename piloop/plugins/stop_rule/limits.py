@@ -47,11 +47,12 @@ class Limits(StopRule):
     the implementers are ended at once instead of told. ``piloop init`` resumes a stopped campaign when its limits
     changed.
 
-    ``max_runs`` and ``plateau`` count the same runs: those that reached the evaluator, with a candidate that is
-    measured or waits for its measurement. A run that ended at a cheap check with no version, with only versions that
-    asked to be skipped, or before it saved one because of a harness or host fault, says nothing about the metric, so
-    it counts toward neither. A run that a daemon stop, a daemon crash or a campaign stop ended does not
-    count either. ``hold_at``, ``max_tokens`` and ``max_hours`` stay hard limits on what all runs cost.
+    ``max_runs`` counts the runs that reached the evaluator, with a candidate that is measured or waits for its
+    measurement. A run that ended at a cheap check with no version, with only versions that asked to be skipped, or
+    before it saved one because of a harness or host fault, says nothing about the metric, so it does not count.
+    ``plateau`` counts every finished attempt without a keep, these too: a campaign whose runs never submit plateaus.
+    A run that a daemon stop, a daemon crash or a campaign stop ended counts toward neither. ``hold_at``,
+    ``max_tokens`` and ``max_hours`` stay hard limits on what all runs cost.
 
     The hold comes first: a limit does not stop a held campaign. A stop that someone requests still stops it
     (``piloop.campaign.stop.requested``). The stops come in the order of ``STOPS``. ``max_runs`` also waits until no
@@ -72,7 +73,8 @@ class Limits(StopRule):
     """Stop when all the agents of the campaign together spent this many tokens (the ``total`` of
     ``agent_sessions.usage``), summed over the agents that ended."""
     plateau: int | None = Field(default=None, ge=1)
-    """Stop after this many finished runs that reached the evaluator without a new ``keep`` candidate. The count starts
+    """Stop after this many finished runs without a new ``keep`` candidate, whether they reached the evaluator or not.
+    A run that a stop ended, or whose agent never started, does not count. The count starts
     again at each keep, and when the campaign is set ``active`` after a stop (``piloop init``, or an UPDATE of
     ``campaigns.status``), so a reactivated campaign gets this many runs again. A new evaluator alone does not reset
     it."""
