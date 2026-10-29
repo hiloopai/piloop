@@ -38,7 +38,7 @@ import pytest
 import tomli_w
 
 from piloop.api.views import CampaignState
-from piloop.db.models import EVENT, UnknownEvent
+from piloop.db.models import EVENT, LIVE_LEASES, UnknownEvent
 from piloop.plugins.campaign_type.kit.candidates.ids import JUDGED
 from piloop.plugins.runtime.kit.tags import tagged
 from tests.conftest import wait_until
@@ -66,14 +66,16 @@ CONFIG_REWRITES = (
     *(f'{key}.*' for key in ('harness', 'model', 'max_concurrent')),
     *(f'plugins.{key}.*' for key in ('harness', 'role', 'runtime', 'trigger', 'section', 'fact_source', 'memory')),
     'plugins.mcp_server.*',
+    'plugins.stop_rule.while_held',
 )
 """The keys of the stored ``piloop.toml`` that a migration may change, as patterns: it turns the ``anomaly`` trigger
-into ``run_failed`` and ``dead_at_startup`` (revision 0055), makes ``[spend]`` a ``command`` source (0056), moves
-``[memory] documents`` into ``plugins.memory`` (0061), drops a harness table's ``mcp`` and ``usage`` (0063), moves the
-harnesses, their ``model`` and ``max_concurrent``, the roles, ``harnesses`` and ``runtime`` under ``plugins`` (0065),
-names the instances of the lists of triggers, sections and fact sources and moves ``mcp`` to ``plugins.mcp_server``
-(0066), and makes the spend source's fact ``billing_usd``, which the ``spend`` source sums (0067). The keys that a
-later ``piloop init`` stores again, such as each role's defaults, are not a migration's."""
+into ``run_failed`` and ``dead_at_startup`` (revision 0055), makes ``[spend]`` a ``command`` source and its stored
+``closing_review`` the stop rule's ``while_held`` (0056), moves ``[memory] documents`` into ``plugins.memory`` (0061),
+drops a harness table's ``mcp`` and ``usage`` (0063), moves the harnesses, their ``model`` and ``max_concurrent``, the
+roles, ``harnesses`` and ``runtime`` under ``plugins`` (0065), names the instances of the lists of triggers, sections
+and fact sources and moves ``mcp`` to ``plugins.mcp_server`` (0066), and makes the spend source's fact ``billing_usd``,
+which the ``spend`` source sums (0067). The keys that a later ``piloop init`` stores again, such as each role's
+defaults, are not a migration's."""
 DROPPED = {f'campaigns.{c}' for c in ('spend_usd', 'spend_error', 'spend_at')}  # 0056 makes them fact.read events
 """The columns that this checkout dropped, as the upgrading guide lists them."""
 QUEUE = re.compile(r'evaluations#\d+: |home/runs/\d+/eval-\d+/')
@@ -620,13 +622,16 @@ def idea_status(smoke: Smoke, key: str) -> str:
 
 def opened(inventory: Inventory) -> set[tuple[str, object]]:
     """``(table, rowid)`` of the rows that the campaign still changes: open runs, live agents, scheduled ideas, pending
-    candidates, and the campaign row."""
+    candidates, the campaign row, the live leases, and the workers that renew them: a worker restarts on the new
+    piloop, says its version, and renews the leases of the agents in flight."""
     rows = {('campaigns', r['__rowid']) for r in inventory.tables['campaigns']}
+    rows |= {('lease_workers', r['__rowid']) for r in inventory.tables['lease_workers']}
     for table, column, values in (
         ('runs', 'status', OPEN),
         ('agent_sessions', 'state', LIVE_STATES),
         ('ideas', 'status', {'scheduled'}),
         ('candidates', 'verdict', {'pending'}),
+        ('leases', 'state', {str(s) for s in LIVE_LEASES}),
     ):
         rows |= {(table, r['__rowid']) for r in inventory.tables[table] if r[column] in values}
     return rows

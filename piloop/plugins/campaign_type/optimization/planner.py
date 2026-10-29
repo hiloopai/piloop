@@ -240,7 +240,7 @@ class OptimizationPlanner:
         someone measured by hand is judged again first (``rejudges``), in the same slot: a rebase can measure its merge.
         """
         key = (TargetKind.CAMPAIGN, campaign.id)
-        if key in self._scoring:
+        if (busy := self._scoring.get(key)) is not None and not busy.done():
             return
         if again := rejudges(s, campaign):
             self._tracer.event('candidate.rejudge', campaign=campaign.name, candidate=again[0].id, left=len(again))

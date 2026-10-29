@@ -59,6 +59,7 @@ from piloop.db.models import (
     Pause,
     utcnow,
 )
+from piloop.db.requests import answer, pending
 from piloop.db.session import Database
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import IdeaStatusChanged
@@ -74,7 +75,7 @@ from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, request_remeasure
+from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRequested, current_evaluator, request_remeasure
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController, wrap_up_lead
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
@@ -2928,6 +2929,28 @@ def test_a_stopped_campaign_is_measured_again_only_on_request(
     run_all(scheduler)
     scheduler.wait(SETTLE)
     measured.assert_called_once_with(1)
+
+
+def test_one_daemon_measures_again_each_time_someone_asks(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """A campaign's re-measure slot frees when its re-measure ends, on the next pass, with no drain in between."""
+    scheduler = make_scheduler(db, runtime, tmp_path)
+
+    def answered(candidate_id: CandidateId) -> None:
+        with db.session() as s:
+            for asked, _ in pending(s, RemeasureRequested):
+                answer(s, asked)
+            s.commit()
+
+    measured = mocker.patch.object(scheduler._controller, 'remeasure', side_effect=answered)
+    for times in (1, 2):
+        with db.session() as s:
+            request_remeasure(s, s.get_one(Candidate, 1), System.HUMAN)
+            s.commit()
+        wait_until(lambda n=times: (run_all(scheduler), measured.call_count)[1] == n)
+    scheduler.wait(SETTLE)
+    assert measured.call_count == 2
 
 
 def test_the_daemon_measures_a_candidate_again_when_someone_asks(

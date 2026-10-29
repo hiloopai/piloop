@@ -102,6 +102,10 @@ These still load, with a warning, until 0.5.0:
 - The API refuses with a typed answer instead of a 500.
 - The orchestrator is reminded of unacked escalations.
 - Every git repo that piloop opens is closed.
+- An agent that the daemon ends after its report closed its row stays closed, instead of holding a slot as `ending`
+  until a restart.
+- A campaign is measured again each time someone asks, not once per daemon.
+- A run that is being scored when the evaluator changes judges each commit and its bar under the new evaluator.
 - The save of a run's unsaved work never stages an excluded path, so a workspace file written meanwhile no longer
   loses the run's work.
 - A daemon stop is recorded on each agent, so a report read after a restart still closes the run as stopped.

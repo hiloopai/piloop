@@ -20,7 +20,7 @@ from covalence import Cid
 
 type Row = dict[str, object]
 
-SKIPPED_FILES = frozenset({'piloop.db', 'piloop.db-wal', 'piloop.db-shm', 'serve.log', 'serve.pid'})
+SKIPPED_FILES = frozenset({'piloop.db', 'piloop.db-wal', 'piloop.db-shm', 'serve.log', 'serve.pid', 'serve.code'})
 """Files of the home that change by design while a daemon runs, or that the database comparison covers."""
 SKIPPED_DIRS = frozenset({'.git', '.venv', 'data', '__pycache__', 'store'})
 """The git internals (the refs are compared instead), the linked data and venvs, and the store (``piloop store
