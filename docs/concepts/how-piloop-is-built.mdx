@@ -63,6 +63,7 @@ A plugin is a Python package that you install next to piloop. It declares what i
 | Providers | the capability's group, for example `piloop.verdict_rules` | an implementation of a capability |
 | Tables | `piloop.schemas` | its tables and its own chain of migrations |
 | Commands | `piloop.commands` | a command or a group of commands of `piloop` |
+| Skill parts | `piloop.skills` | a part of an orchestrator skill, such as `piloop-operate` |
 | A capability | `piloop.capabilities` | a capability of its own, that other plugins add providers to |
 
 A provider that the daemon opens also adds, through its `contribution()`, **consumers** (jobs of the daemon's loop

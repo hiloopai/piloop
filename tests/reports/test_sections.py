@@ -206,7 +206,7 @@ def test_each_role_has_guides_of_its_own_that_extend_a_shared_list() -> None:
     assert shown == snapshot(
         {
             'implementer': ['database'],
-            'orchestrator': ['database', 'concepts', 'judging', 'comments', 'priorities', 'links'],
+            'orchestrator': ['database', 'concepts', 'judging', 'comments', 'priorities', 'links', 'research_commands'],
             'research': ['database', 'concepts', 'judging', 'comments', 'search', 'past_campaigns', 'links'],
             'scout': ['database', 'concepts', 'search'],
             'watchdog': ['database', 'concepts', 'judging', 'comments', 'priorities', 'search', 'past_campaigns'],

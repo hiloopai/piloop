@@ -70,7 +70,7 @@ class OrchestratorRole(SweepRole):
         'journal lines',
         'ideas, seeds, verdicts and the campaign changes of the piloop commands in this brief',
     ]
-    GUIDES = (*READER, 'priorities', 'links')
+    GUIDES = (*READER, 'priorities', 'links', 'research_commands')
     sections: list[SectionName] | None = [*GUIDES, 'headline', 'trajectory', 'runs', 'queue', 'agents', 'candidates']
     """The guides, and the status that each brief shows after the news: lean, because each one stays in the resumed
     session."""

@@ -1,12 +1,12 @@
 ---
-title: Tables, commands, routes and consumers
+title: Tables, commands, skills, routes and consumers
 sidebarTitle: Tables, commands and routes
 description: What a plugin adds to piloop besides its providers, and where it declares each.
 ---
 
 import ContractContribution from '/snippets/generated/contract-contribution.mdx';
 
-A plugin can add tables, commands, routes and consumers, as piloop's own plugins do. The built-in memory provider,
+A plugin can add tables, commands, skill parts, routes and consumers, as piloop's own plugins do. The built-in memory provider,
 `local`, adds three tables, the `piloop journal` command and the route `POST /v1/campaigns/{campaign}/journal`:
 
 ```toml
@@ -87,6 +87,32 @@ lattice = "piloop_lattice.cli:app"
 
 `piloop` imports it only when the command runs, or when a help lists it. A name that a command of piloop has is
 refused.
+
+## Skills
+
+An entry point in `piloop.skills` adds a part to one of the orchestrator's [skills](/concepts/orchestrator). Its name is the
+part's, and it names a `SkillPart`:
+
+```toml
+[project.entry-points."piloop.skills"]
+lattice-triage = "piloop_lattice.skills:TRIAGE"
+```
+
+```python
+from importlib.resources import files
+
+from piloop.cli.skills import SkillPart
+
+TRIAGE = SkillPart('piloop-operate', 350, files(__package__) / 'triage.md')
+```
+
+- `piloop install-skills` writes each skill as its parts, by `order` and then by name, with a blank line between two.
+  piloop's own parts of `piloop-operate` have the orders 100 (the loop), 200 (ideas and runs), 250 (pause and stop),
+  300 (escalations), 400 (messages and decisions), 500 (candidates and verdicts) and 700 (rules). So 350 goes right after
+  the escalations.
+- `replaces=('review',)` puts the part in place of piloop's part `review`. To replace a whole skill, replace each of its
+  parts. The part that comes first starts with the skill's frontmatter.
+- `piloop doctor` reports a skill that differs from what the installed packages compose.
 
 ## Routes and consumers
 

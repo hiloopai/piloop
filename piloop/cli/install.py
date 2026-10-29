@@ -112,7 +112,7 @@ def install_skills() -> None:
     """
     for target, harnesses in skills.targets(common.settings).items():
         skills.install(target)
-        line = f'skills: {", ".join(skills.bundled())} → {target} ({skills.readers(harnesses)})'
+        line = f'skills: {", ".join(skills.composed())} → {target} ({skills.readers(harnesses)})'
         common.console.print(line, markup=False, highlight=False, soft_wrap=True)
 
 

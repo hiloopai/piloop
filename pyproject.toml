@@ -206,6 +206,7 @@ history = "piloop.plugins.campaign_type.optimization.section.history:History"
 lessons = "piloop.plugins.section.lessons:Lessons"
 database = "piloop.plugins.section.database:Database"
 concepts = "piloop.plugins.campaign_type.optimization.section.concepts:Concepts"
+research_commands = "piloop.plugins.campaign_type.optimization.section.research_commands:ResearchCommands"
 judging = "piloop.plugins.campaign_type.kit.verdicts.section.judging:Judging"
 comments = "piloop.plugins.section.comments:Comments"
 priorities = "piloop.plugins.section.priorities:Priorities"
@@ -272,6 +273,18 @@ optimization = "piloop.plugins.campaign_type.optimization.tables:SCHEMA"
 "archive/local" = "piloop.plugins.archive.local.tables:SCHEMA"
 "secrets/local" = "piloop.plugins.secrets.local.tables:SCHEMA"
 
+# The parts of the orchestrator skills, by name (piloop.cli.skills.SKILLS).
+[project.entry-points."piloop.skills"]
+operate = "piloop.cli.skills:OPERATE"
+optimization-operate = "piloop.plugins.campaign_type.optimization.skills:OPERATE"
+control = "piloop.cli.skills:CONTROL"
+escalations = "piloop.cli.skills:ESCALATIONS"
+decisions = "piloop.cli.skills:DECISIONS"
+optimization-verdicts = "piloop.plugins.campaign_type.optimization.skills:VERDICTS"
+rules = "piloop.cli.skills:RULES"
+setup = "piloop.plugins.campaign_type.optimization.skills:SETUP"
+review = "piloop.plugins.campaign_type.optimization.skills:REVIEW"
+
 [project.entry-points."piloop.roles"]
 implementer = "piloop.plugins.role.implementer:ImplementerRole"
 watchdog = "piloop.plugins.campaign_type.kit.runs.role.watchdog:WatchdogRole"
@@ -281,10 +294,6 @@ orchestrator = "piloop.plugins.role.orchestrator:OrchestratorRole"
 
 [tool.hatch.build.targets.wheel]
 packages = ["piloop"]
-
-[tool.hatch.build.targets.wheel.force-include]
-# the Agent Skills package at the repo root ships inside the CLI: `piloop install-skills` copies the installed version
-"skills" = "piloop/cli/agent_skills"
 
 [tool.uv]
 default-groups = ["dev", "lint"]

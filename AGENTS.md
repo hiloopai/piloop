@@ -12,18 +12,19 @@ what beats the head. You, the agent that the human talks to, set up the campaign
 
 ## The skills
 
-Each task has an [Agent Skill](https://agentskills.io). Read the one that matches the task. Each `SKILL.md` is
-complete on its own.
+Each task has an [Agent Skill](https://agentskills.io). Read the one that matches the task, as `piloop install-skills`
+wrote it: `~/.agents/skills/<skill>/SKILL.md`. Each `SKILL.md` is complete on its own.
 
 | Skill | Use it to |
 |---|---|
-| [piloop-setup](skills/piloop-setup/SKILL.md) | Set up or change a campaign in the current repo: check the machine, interview the human, write `brief.md` and `piloop.toml`, register the campaign, start the daemon. |
-| [piloop-operate](skills/piloop-operate/SKILL.md) | Orchestrate a running campaign: the inbox loop, ideas and priorities, escalations and decisions, sweeps, steering implementers. |
-| [piloop-review](skills/piloop-review/SKILL.md) | Review a campaign during or after a run: are the gains real, did an agent game the evaluation, where did the time and tokens go. |
+| `piloop-setup` | Set up or change a campaign in the current repo: check the machine, interview the human, write `brief.md` and `piloop.toml`, register the campaign, start the daemon. |
+| `piloop-operate` | Orchestrate a running campaign: the inbox loop, ideas and priorities, escalations and decisions, sweeps, steering implementers. |
+| `piloop-review` | Review a campaign during or after a run: are the gains real, did an agent game the evaluation, where did the time and tokens go. |
 
-`piloop install-skills` copies these skills into `~/.claude/skills` (Claude Code) and `~/.agents/skills` (Codex, pi,
-Gemini CLI, Cursor), for each of these harnesses on the `PATH`. The installer and `piloop upgrade` run it, so the
-skills always match the installed CLI. `piloop doctor` reports a missing or old copy.
+`piloop install-skills` composes these skills from the installed packages. It writes them into `~/.claude/skills`
+(Claude Code) and `~/.agents/skills` (Codex, pi, Gemini CLI, Cursor), for each of these harnesses on the `PATH`. The
+installer and `piloop upgrade` run it, so the skills always match the installed CLI and plugins. `piloop doctor` reports
+a missing or old copy.
 
 ## The interface is the CLI
 

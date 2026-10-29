@@ -1,15 +1,21 @@
-"""The orchestrator skills: an Agent Skills package at the repo root, copied into the skills directory of each
-harness on PATH, with drift reported."""
+"""The orchestrator skills: composed from the parts that the installed packages declare, written into the skills
+directory of each harness on PATH, with drift reported."""
 
 import os
 import re
+from collections.abc import Iterator
+from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
 from rich.console import Console
 
 from piloop.cli import common, install, main as cli, skills
+from piloop.cli.main import COMMANDS
+from piloop.cli.skills import SKILLS, SkillPart
+from piloop.plugins.host import PluginError
 from piloop.settings import Settings
+from tests.daemon.test_roles import forget_loaded, installed
 
 
 @pytest.fixture
@@ -40,20 +46,18 @@ COMMAND = re.compile(r'\bpiloop ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?')
 
 
 def test_every_skill_is_an_agent_skill_named_after_its_directory() -> None:
-    shipped = skills.bundled()
+    shipped = skills.composed()
     assert list(shipped) == ['piloop-operate', 'piloop-review', 'piloop-setup']
-    for name, path in shipped.items():
-        text = (path / 'SKILL.md').read_text()
+    for name, text in shipped.items():
         front = re.match(r'---\nname: (.+)\ndescription: (.+)\n---\n', text)
         assert front is not None and front[1] == name and len(front[2]) <= 1024, 'the frontmatter every harness reads'
         assert len(text.splitlines()) <= 500, 'the Agent Skills soft cap on a SKILL.md'
-        assert path == ROOT / 'skills' / name, 'a checkout ships its own skills/'
 
 
 def test_every_piloop_command_the_skills_name_exists() -> None:
     """A renamed or deleted command fails here, not in the shell of an orchestrator."""
-    files = [*sorted((ROOT / 'skills').glob('*/SKILL.md')), ROOT / 'AGENTS.md']
-    code = [part for f in files for part in f.read_text().split('`')[1::2]]  # inline spans and fenced blocks
+    texts = [*skills.composed().values(), (ROOT / 'AGENTS.md').read_text()]
+    code = [part for text in texts for part in text.split('`')[1::2]]  # inline spans and fenced blocks
     named = {m.groups() for part in code for m in COMMAND.finditer(part)}
     missing = sorted(
         f'piloop {" ".join(filter(None, (command, sub)))}'
@@ -68,13 +72,66 @@ def _subcommands(command: str) -> set[str]:
     return {name for name in cli.app[command] if not name.startswith('-')}
 
 
-def test_a_wheel_ships_the_skills_inside_the_package(tmp_path: Path) -> None:
-    package = tmp_path / 'piloop' / 'cli'
-    (tmp_path / 'skills').mkdir()
-    package.mkdir(parents=True)
-    assert skills.source(package) == tmp_path / 'skills', 'a checkout: the repo root'
-    (package / 'agent_skills').mkdir()
-    assert skills.source(package) == package / 'agent_skills', "a wheel: pyproject's force-include"
+CAMPAIGN_TYPES = 'piloop.plugins.campaign_type.'
+
+
+def test_the_core_parts_name_no_command_of_a_campaign_type() -> None:
+    """Ideas, candidates, runs and verdicts are the optimization campaign type's: its own parts teach them."""
+    typed = {name for name, path in COMMANDS.paths().items() if path.startswith(CAMPAIGN_TYPES)}
+    parts, paths = SKILLS.loaded(), SKILLS.paths()
+    core = [part.text.read_text() for name, part in parts.items() if not paths[name].startswith(CAMPAIGN_TYPES)]
+    named = {m[1] for text in core for part in text.split('`')[1::2] for m in COMMAND.finditer(part)}
+    assert {'idea', 'candidate', 'run', 'history'} <= typed
+    assert named & typed == set()
+    assert 'inbox' in named, 'the scan reads the core parts at all'
+
+
+TRIAGE = SkillPart('piloop-operate', 350, ROOT / 'tests' / 'fixtures' / 'skills' / 'triage.md')
+"""A package's part of the operate skill, right after its escalations."""
+REVIEW = SkillPart('piloop-review', 0, ROOT / 'tests' / 'fixtures' / 'skills' / 'review.md', replaces=('review',))
+"""A package's review skill, in place of piloop's."""
+
+
+@pytest.fixture
+def forgets() -> Iterator[None]:
+    yield
+    forget_loaded()
+
+
+def test_a_package_adds_a_part_to_a_skill_in_its_order_and_replaces_another(
+    monkeypatch: pytest.MonkeyPatch, forgets: None
+) -> None:
+    installed(
+        monkeypatch,
+        [
+            EntryPoint('triage', f'{__name__}:TRIAGE', SKILLS.group),
+            EntryPoint('their-review', f'{__name__}:REVIEW', SKILLS.group),
+        ],
+    )
+    shipped = skills.composed()
+    operate = shipped['piloop-operate']
+    assert operate.index('### Escalations') < operate.index('## Triage') < operate.index('### Messages')
+    assert shipped['piloop-review'] == REVIEW.text.read_text(), 'its part replaces the whole skill'
+
+
+def test_two_parts_that_replace_one_and_a_part_of_no_piloop_skill_are_refused(
+    monkeypatch: pytest.MonkeyPatch, forgets: None
+) -> None:
+    installed(
+        monkeypatch,
+        [
+            EntryPoint('their-review', f'{__name__}:REVIEW', SKILLS.group),
+            EntryPoint('other-review', f'{__name__}:REVIEW', SKILLS.group),
+        ],
+    )
+    with pytest.raises(PluginError, match="other-review and their-review both replace 'review'"):
+        skills.composed()
+    installed(monkeypatch, [EntryPoint('mine', f'{__name__}:MINE', SKILLS.group)])
+    with pytest.raises(PluginError, match="mine = .* in piloop.skills: 'mine' is no skill of piloop"):
+        skills.composed()
+
+
+MINE = SkillPart('mine', 0, TRIAGE.text)
 
 
 def test_install_skills_copies_into_each_harness_dir_once_and_replaces_only_piloops_own(

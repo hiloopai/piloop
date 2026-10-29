@@ -71,7 +71,8 @@ def test_an_agent_on_another_machine_may_run_the_commands_that_the_role_prompts_
     The prompts are those of the roles and every guide that a brief can point to (``piloop schema <guide>``).
     """
     roles = [p.read_text() for p in ROLE_PROMPTS if p.name != 'orchestrator.md']
-    prompts = [*roles, *(guide.TEXT.read_text() for name, guide in GUIDES.items() if name != 'orchestration')]
+    for_the_orchestrator = ('orchestration', 'research_commands')
+    prompts = [*roles, *(guide.TEXT.read_text() for name, guide in GUIDES.items() if name not in for_the_orchestrator)]
     briefs = [
         f'`{SQL_HINT} -`',
         f'`{PILOOP_HINT} schema <guide>`',

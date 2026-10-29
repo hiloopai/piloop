@@ -36,7 +36,7 @@ SOURCES = [
     ROOT / 'README.md',
     ROOT / 'AGENTS.md',
     ROOT / 'CONTRIBUTING.md',
-    *sorted((ROOT / 'skills').rglob('SKILL.md')),
+    *sorted((ROOT / 'piloop').glob('**/skills/*.md')),
     *sorted((ROOT / 'piloop').glob('**/section/prompts/*.md')),
 ]
 SNIPPET = re.compile(r"^import (?P<name>\w+) from '(?P<path>/snippets/[^']+)';$", re.MULTILINE)

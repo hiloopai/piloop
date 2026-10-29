@@ -47,15 +47,9 @@ escalation that a fact reached its `hold_at` belongs to the human.
 
 `--help` on each command gives its keys. Each takes `--reason '…'` where it changes something.
 
-- Ideas: `piloop idea add`, `piloop idea seed`, `piloop idea develop`, `piloop idea status <id> parked|rejected|ready`,
-  `piloop idea link <id> after|supersedes <target>`, `piloop idea unlink`, `piloop idea base <id> <candidate>|head`,
-  `piloop idea track <id> <track>`.
-- Candidates: `piloop candidate verdict <c> keep|interesting|discard|crash` when the number is not the full story,
-  `piloop candidate remeasure <c>`, `piloop candidate note <c> '<why>'`, `piloop candidate import`, `piloop measurement
-  add`, `piloop eval cancel <c>`.
-- Agents: `piloop prompt <agent_session> '<text>'`, `piloop launch <campaign> <role>`, `piloop run cancel <run>
-  --wrap-up`, `piloop agent cancel <agent_session> --wrap-up`.
+- Agents: `piloop prompt <agent_session> '<text>'`, `piloop launch <campaign> <role>`, `piloop agent cancel
+  <agent_session> --wrap-up`.
 - The campaign: `piloop pause <campaign>` and `piloop resume <campaign>` (scope decisions: record them), `piloop
   campaign stop <campaign>`.
-- Read: `piloop status`, `piloop history`, an agent's session (`piloop cas get <agent_sessions.session_file>`). Verify
-  before you build on a theory: do not guess the mechanism.
+- Read: `piloop status`, an agent's session (`piloop cas get <agent_sessions.session_file>`). Verify before you build
+  on a theory: do not guess the mechanism.

@@ -231,7 +231,7 @@ def test_a_brief_has_its_roles_guides_before_the_context_and_names_the_others(ca
         '## Link ideas',
     ]
     assert guides.rstrip().endswith(
-        f'`{PILOOP_HINT} schema <guide>` prints another guide: priorities, provenance, queries, orchestration, long_jobs, workspace.'
+        f'`{PILOOP_HINT} schema <guide>` prints another guide: priorities, research_commands, provenance, queries, orchestration, long_jobs, workspace.'
     )
     assert '# Guides' not in resumed, 'the resumed session has them already'
 

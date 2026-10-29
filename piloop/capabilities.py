@@ -92,6 +92,7 @@ from piloop.plugins.campaign_type.optimization.section.history import History
 from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.section.database import Database
 from piloop.plugins.campaign_type.optimization.section.concepts import Concepts
+from piloop.plugins.campaign_type.optimization.section.research_commands import ResearchCommands
 from piloop.plugins.campaign_type.kit.verdicts.section.judging import Judging
 from piloop.plugins.section.comments import Comments
 from piloop.plugins.section.priorities import Priorities

@@ -15,6 +15,7 @@ from piloop.agents.results import PromptOutcome, SessionNotResumed, Unresumed
 from piloop.api.views import CommentNews, CommentView, StoppedNews, VerdictNews
 from piloop.campaign import inbox, ops
 from piloop.campaign.stop import request_cancel
+from piloop.cli.main import COMMANDS
 from piloop.config import load_campaign_config
 from piloop.daemon.scheduler import Scheduler
 from piloop.db import feed as db_feed
@@ -24,8 +25,11 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
+from piloop.plugins.campaign_type.optimization.section.research_commands import ResearchCommands
+from piloop.plugins.role.orchestrator import OrchestratorRole
 from piloop.plugins.trigger.news import NewsTaken, Urgency, urgency
 from tests.agents.test_resume import HARNESS, SESSION
+from tests.cli.test_skills import CAMPAIGN_TYPES, COMMAND
 from tests.conftest import SETTLE, ScriptRuntime, run_all, wait_until, write_toml
 from tests.daemon.test_roles import configure, recording, scheduler
 from tests.daemon.test_triggers import agent_sessions
@@ -371,3 +375,16 @@ def test_messages_escalations_and_the_stop_are_urgent_and_the_rest_is_routine() 
     ]
     assert urgency(StoppedNews(campaign_name='demo', reason='done')) is Urgency.NOW
     assert urgency(VerdictNews(candidate=1, verdict='keep', reason='r')) is Urgency.ROUTINE
+
+
+def test_the_orchestrator_prompt_names_no_command_of_a_campaign_type_and_the_types_guide_teaches_them() -> None:
+    """The prompt is the role's: deciding, recording and answering. Ideas and candidates are the campaign type's."""
+    typed = {name for name, path in COMMANDS.paths().items() if path.startswith(CAMPAIGN_TYPES)}
+
+    def named(text: str) -> set[str]:
+        return {m[1] for part in text.split('`')[1::2] for m in COMMAND.finditer(part)}
+
+    assert OrchestratorRole.PROMPT is not None
+    assert named(OrchestratorRole.PROMPT.read_text()) & typed == set()
+    assert 'research_commands' in OrchestratorRole.GUIDES
+    assert {'idea', 'candidate', 'run', 'history'} <= named(ResearchCommands.TEXT.read_text())
