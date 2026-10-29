@@ -25,6 +25,7 @@ from piloop.agents.results import (
     PromptOutcome,
     SessionNotResumed,
     Unresumed,
+    end_agent,
     ended_of,
     learn,
     session_finished,
@@ -33,10 +34,10 @@ from piloop.agents.roles import harness_of
 from piloop.config import BRIEF_FILE, CampaignConfig
 from piloop.db.events import emit, latest
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, utcnow
-from piloop.db.session import Database
+from piloop.db.session import Database, write_transaction
 from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.otel import Span, Tracer
-from piloop.plugins.campaign_type.kit.runs.ids import RunId
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
 from piloop.plugins.executor.contract import AgentJob, AgentKey, Executor, ExecutorConfig, LeftJob, Resume, Source
 from piloop.plugins.harness.contract import SESSION_ID, cleared_env, fill, of_provider, takes_session_id
 from piloop.plugins.role.contract import Continuity, RoleConfig, SweepRole
@@ -59,10 +60,9 @@ class Launcher:
         self.home = home
         self.executor = executor
         self.cancelled = threading.Event()
-        """Set when the daemon stops. No job is submitted after it, and the results that come in then close their rows
-        as stopped (``RunEnd.DAEMON_STOPPED``)."""
+        """Set when the daemon stops (``stop``) or hands over. No job is submitted after it."""
         self.lock = threading.Lock()
-        """Held from the ``cancelled`` check to the job's submit, and by ``cancel``.
+        """Held from the ``cancelled`` check to the job's submit, and by ``cancel`` and ``stop``.
 
         So after ``cancel`` returns, every agent either is the executor's (and its stop ends it) or never gets to it.
         ``RunController`` shares the lock for the run row and the evaluation queue.
@@ -77,6 +77,21 @@ class Launcher:
     def cancel(self) -> None:
         """Submit no more jobs, and wake the waits that give up on it."""
         with self.lock:
+            self.cancelled.set()
+        self.db.notify()
+
+    def stop(self) -> None:
+        """``cancel``, and end every live agent as stopped by the daemon (``end_agent``), before the executor kills it.
+
+        The stop is on each agent's row, in the commit before its kill: whichever daemon process reads the agent's
+        report, also one after a restart, closes it as stopped (``stopped_by_daemon``).
+        """
+        with self.lock:
+            with self.db.session() as s:
+                write_transaction(s)
+                for w in s.scalars(select(AgentSession).where(AgentSession.state.in_(LIVE))).all():
+                    end_agent(s, w, RunEnd.DAEMON_STOPPED, RunEnd.DAEMON_STOPPED, self.tracer)
+                s.commit()
             self.cancelled.set()
         self.db.notify()
 

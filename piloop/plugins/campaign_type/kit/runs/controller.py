@@ -336,7 +336,7 @@ class RunController:
 
         Nothing submits a job after this (``launcher.lock``).
         """
-        self.launcher.cancel()
+        self.launcher.stop()
         self.executor.stop(timeout)
 
     def stop_cancelled(self) -> None:
@@ -478,12 +478,14 @@ class RunController:
             match ended:
                 case HandedOver():  # the next daemon waits for the agent again
                     span.set(status='handed_over')
-                case DaemonStopped(work=work):
-                    self._cut(span, run_id, idea_id, agent_session_id, name, repo, base_revision, work)
-                case Ran(work=work) if stopping:
+                case DaemonStopped(work=work) | Ran(work=work) if stopping:
                     self._cut(span, run_id, idea_id, agent_session_id, name, repo, base_revision, work)
                 case NotStarted() | Lost() if stopping:
                     self._cut(span, run_id, idea_id, agent_session_id, name, repo, base_revision, None)
+                case DaemonStopped(work=work):  # the stop of an earlier daemon process, which ended before the rows
+                    self._cut_by_earlier_stop(
+                        span, run_id, idea_id, campaign_id, agent_session_id, name, repo, base_revision, work, log_dir
+                    )
                 case Lost(reason=reason):
                     self._close(span, run_id, RunEnd.WORKER_LOST, reason)
                     self._settle(span, run_id, idea_id, RunEnd.WORKER_LOST, startup_failed=False, last=None)
@@ -513,6 +515,34 @@ class RunController:
         cut = not self._left_finding(run_id, idea_id, agent_session_id)  # else the stop closed it as handed off
         self._keep_cut_work(run_id, name, repo, self._received(run_id, repo, base_revision, work), cut=cut)
         self._stopped(span, run_id)
+
+    def _cut_by_earlier_stop(
+        self,
+        span: Span,
+        run_id: RunId,
+        idea_id: IdeaId,
+        campaign_id: CampaignId,
+        agent_session_id: AgentSessionId,
+        name: str,
+        repo: Repository,
+        base_revision: Revision,
+        work: Transfer | None,
+        log_dir: Path,
+    ) -> None:
+        """Keep the work of a run that the stop of an earlier daemon process cut, and write the rows that it did not.
+
+        That process ended before it read the agent's report, so the run is still open. It ends as the stop would have
+        ended it: ``RunEnd.DAEMON_STOPPED``, not an attempt, or handed off when the implementer left its finding, whose
+        commits are scored now.
+        """
+        finding = self._left_finding(run_id, idea_id, agent_session_id)
+        versions = self._received(run_id, repo, base_revision, work)
+        self._keep_cut_work(run_id, name, repo, versions, cut=not finding)
+        with self._db.session() as s:
+            end, error = handed_off(s, s.get_one(Run, run_id)) if finding else (RunEnd.DAEMON_STOPPED, None)
+        self._close(span, run_id, end, error)
+        last = self._score(run_id, campaign_id, repo, versions, log_dir) if finding and versions else None
+        self._settle(span, run_id, idea_id, end, startup_failed=False, last=last)
 
     def _stopped(self, span: Span, run_id: RunId) -> None:
         """Trace the end that a daemon stop writes on the run (``Scheduler._fail_run``), which owns the row."""

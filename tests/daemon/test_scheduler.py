@@ -1387,7 +1387,10 @@ def test_stop_waits_for_a_start_in_flight_then_kills_the_implementer(
     stopper.join(0.3)
     assert stopper.is_alive(), 'stop() waits for the handle to be published'
     with db.session() as s:
-        assert (s.get_one(AgentSession, 1).state, s.get_one(AgentSession, 1).handle) == (AgentSessionState.STARTING, {})
+        assert (s.get_one(AgentSession, 1).state, s.get_one(AgentSession, 1).handle) == (
+            AgentSessionState.ENDING,
+            {},
+        ), 'the stop is on the row before its kill'
     gate.release.set()
     stopper.join(10)
     assert not stopper.is_alive()
@@ -1816,10 +1819,10 @@ def test_stop_waits_for_a_sweep_start_in_flight_then_kills_it(
     with db.session() as s:
         agent_session = s.get_one(AgentSession, agent_session_id)
         assert (agent_session.state, agent_session.harness, agent_session.handle) == (
-            AgentSessionState.STARTING,
+            AgentSessionState.ENDING,
             'script',
             {},
-        )
+        ), 'the stop is on the row before its kill'
     gate.release.set()
     stopper.join(10)
     assert not stopper.is_alive()

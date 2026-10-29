@@ -15,8 +15,13 @@ from piloop.actor import System
 from piloop.agents.results import (
     AgentSessionFinished,
     CampaignResults,
+    DaemonStopped,
+    Ended,
     Identified,
+    Ran,
     WorkspaceConflict,
+    end_agent,
+    ended_of,
     explained,
     learn,
 )
@@ -28,7 +33,7 @@ from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunId
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.executor.contract import (
     AgentFinished,
@@ -174,6 +179,75 @@ def test_the_finished_event_of_an_agent_says_the_state_of_its_closed_row(
     with db.session() as s:
         [(_, finished)] = in_order(s, AgentSessionFinished)
         assert finished.state == s.get_one(AgentSession, agent_session_id).state == closed
+
+
+@pytest.mark.parametrize(
+    ('state', 'stop', 'report', 'closed', 'ended'),
+    [
+        (
+            AgentSessionState.RUNNING,
+            True,
+            AgentFinished(process=AgentExit(ExitStatus.EXITED, 200, -9, 'agent exit -9')),
+            (AgentSessionState.KILLED, RunEnd.DAEMON_STOPPED),
+            DaemonStopped(),
+        ),
+        (
+            AgentSessionState.STARTING,
+            True,
+            AgentNotStarted(reason='stopped while it started'),
+            (AgentSessionState.KILLED, RunEnd.DAEMON_STOPPED),
+            DaemonStopped(),
+        ),
+        (
+            AgentSessionState.RUNNING,
+            False,
+            AgentFinished(process=AgentExit(ExitStatus.EXITED, 200, 1, 'agent exit 1')),
+            (AgentSessionState.EXITED, 'agent exit 1'),
+            Ran(AgentExit(ExitStatus.EXITED, 200, 1, 'agent exit 1')),
+        ),
+        (
+            AgentSessionState.RUNNING,
+            False,
+            AgentFinished(process=AgentExit(ExitStatus.EXITED, 200, 0)),
+            (AgentSessionState.EXITED, None),
+            Ran(AgentExit(ExitStatus.EXITED, 200, 0)),
+        ),
+    ],
+    ids=['stopped', 'stopped while it started', 'agent error', 'normal exit'],
+)
+def test_a_report_read_after_a_restart_closes_the_agent_as_the_stop_on_its_row_says(
+    db: Database,
+    campaign: Campaign,
+    tmp_path: Path,
+    state: AgentSessionState,
+    stop: bool,
+    report: AgentReport,
+    closed: tuple[AgentSessionState, str | None],
+    ended: Ended,
+) -> None:
+    """The daemon that reads the report does not stop: only the stop that the earlier one recorded says it was cut."""
+    results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
+    with db.session() as s:
+        w = AgentSession(kind=WATCHDOG, campaign_id=campaign.id, state=state, reason='t')
+        s.add(w)
+        s.flush()
+        if stop:
+            end_agent(s, w, RunEnd.DAEMON_STOPPED, RunEnd.DAEMON_STOPPED, Tracer(None))
+        s.commit()
+        agent_session_id = w.id
+    job = AgentJob(
+        agent_session=agent_session_id,
+        runtime='subprocess',
+        artifact=Source(vcs=Git(), repo=RepoId(campaign.id), revision=baseline(db, campaign.id).revision),
+        place='agent',
+        timeout=60,
+        brief_cid=None,
+        spec=None,
+    )
+    results.finished(job, report)
+    with db.session() as s:
+        w = s.get_one(AgentSession, agent_session_id)
+        assert ((w.state, w.error), ended_of(s, agent_session_id)) == (closed, ended)
 
 
 def test_two_results_for_one_job_in_plain_sessions_close_its_row_once_and_measure_it_once(

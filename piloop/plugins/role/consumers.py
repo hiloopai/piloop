@@ -14,11 +14,11 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
 from piloop.agents.results import (
-    AgentEnded,
     AgentSessionExtended,
     AgentSessionRunning,
     PromptOutcome,
     WrapUp,
+    end_agent,
     extension,
     queue_prompt,
 )
@@ -404,15 +404,7 @@ class Agents:
         The row is ``ending``, with ``AgentEnded``, in a commit before the first kill. SQLite has one writer at a time,
         so a finding that the agent writes either committed before, and the agent finished first, or is refused.
         """
-        if agent_session.state is not AgentSessionState.ENDING:
-            agent_session.state, agent_session.error = AgentSessionState.ENDING, reason
-            emit(
-                s,
-                AgentEnded(reason=reason, end=end),
-                TargetRef(TargetKind.AGENT_SESSION, agent_session.id),
-                System.DAEMON,
-            )
-            self._tracer.event('agent_session.ended', agent_session=agent_session.id, reason=reason)
+        end_agent(s, agent_session, reason, end, self._tracer)
         self._kill(s, agent_session)
 
     def _kill(self, s: Session, agent_session: AgentSession) -> None:

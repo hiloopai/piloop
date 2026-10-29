@@ -14,11 +14,13 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import OperationalError
 
 from piloop.actor import System
+from piloop.agents.results import CampaignResults
 from piloop.config import load_campaign_config
 from piloop.daemon.main import ACTOR, Daemon
 from piloop.daemon.serve import RESTART_SIGNAL, SERVE_ARGV
-from piloop.db.models import AgentSession, AgentSessionState, Campaign
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database, migrate
+from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.plugins.archive.local.tables import Archive
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -372,6 +374,75 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
     second.shutdown(timeout=5)
     # In a real restart the exec ends the old thread. Here it lives on, sees its agent end, and leaves the run alone.
     first.scheduler.wait(SETTLE)
+
+
+@pytest.mark.parametrize(
+    ('finding', 'run_end', 'idea_status', 'verdict'),
+    [
+        (False, (RunStatus.FAILED, RunEnd.DAEMON_STOPPED), IdeaStatus.READY, None),
+        (True, (RunStatus.SUCCEEDED, RunEnd.FINISHED), IdeaStatus.DONE, Outcome.KEEP),
+    ],
+    ids=['cut', 'handed off'],
+)
+def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_next_daemon_reads_the_report(
+    campaign_path: Path,
+    tmp_path: Path,
+    mocker: MockerFixture,
+    finding: bool,
+    run_end: tuple[RunStatus, RunEnd],
+    idea_status: IdeaStatus,
+    verdict: Outcome | None,
+) -> None:
+    """The stop is on the agent's row before its kill, so the next daemon reads the report as the stop's.
+
+    The first daemon stops its agent, cannot apply the report (a locked database), and dies before it writes the rows.
+    The next daemon adopts the agent and applies the spooled report: the run is cut by the stop, not failed, and its
+    commit is kept unmeasured. A run whose implementer left its finding is handed off, and its commit is scored.
+    """
+    hold = tmp_path / 'hold'
+    hold.touch()
+    write_toml(campaign_path, HARNESS_HELD.format(hold=hold), implementer_timeout=60)
+    cfg = Settings(home=tmp_path / 'home')
+    first = Daemon(cfg)
+    campaign = register(first.db, campaign_path)
+    with first.db.session() as s:
+        s.add(Idea(track='score', campaign_id=campaign.id, title='two steps', hypothesis='x', created_by='t'))
+        s.commit()
+    first.scheduler.reap()
+    assert run_all(first.scheduler) == [1]
+    wait_until((cfg.home / 'runs' / '1' / 'agent.pid').exists)
+    if finding:
+        with first.db.session() as s:
+            s.add(
+                Comment(
+                    target=TargetRef(TargetKind.IDEA, 1), author='implementer#1', kind=CommentKind.FINDING, body='done'
+                )
+            )
+            s.commit()
+    locked = mocker.patch.object(CampaignResults, 'finished', side_effect=OperationalError('', {}, Exception('locked')))
+    mocker.patch.object(workers_of(first.controller).leases, 'end_unreported')  # it dies while it waits for the report
+    first.controller.stop(timeout=SETTLE)
+    assert locked.called, 'the killed agent reported, and its report waits in the spool'
+    mocker.stopall()
+    first.controller.launcher.handover.set()  # its run thread writes nothing either
+    first.db.notify()
+    first.scheduler.wait(SETTLE)
+    first.db.close()
+
+    second = Daemon(cfg)
+    second.scheduler.reap()
+    second.scheduler.wait(SETTLE)
+    with second.db.session() as s:
+        run, agent = s.get_one(Run, 1), s.get_one(AgentSession, 1)
+        assert ((run.status, run.end), agent.state, agent.error) == (
+            run_end,
+            AgentSessionState.KILLED,
+            RunEnd.DAEMON_STOPPED,
+        )
+        assert s.get_one(Idea, 1).status is idea_status, 'a cut run is not an attempt'
+        [kept] = s.scalars(select(Candidate).where(Candidate.run_id == 1)).all()
+        assert (kept.summary, kept.verdict) == ('first', verdict)
+    second.shutdown(timeout=5)
 
 
 def test_serve_refuses_when_a_daemon_holds_the_pid_file(

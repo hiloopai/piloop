@@ -145,6 +145,18 @@ class AgentEnded(EventModel):
     end: RunEnd
 
 
+def end_agent(s: Session, w: AgentSession, reason: str, end: RunEnd, tracer: Tracer) -> None:
+    """Set a live agent ``ending``, with ``AgentEnded``, before its executor stops it. The caller commits.
+
+    An agent that is ``ending`` already keeps the end that was first given: it is why the agent stops.
+    """
+    if w.state is AgentSessionState.ENDING:
+        return
+    w.state, w.error = AgentSessionState.ENDING, reason
+    emit(s, AgentEnded(reason=reason, end=end), TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
+    tracer.event('agent_session.ended', agent_session=w.id, reason=reason)
+
+
 class WorkspaceConflict(EventModel):
     """What an agent wrote in its workspace that another agent wrote too, meanwhile: the first one's stays."""
 
@@ -416,8 +428,8 @@ class CampaignResults:
         self._units_dir = home / UNITS_DIR
         self._cas = cas
         self._stopping = stopping
-        """Whether the daemon stops: an agent that ends then closes as killed by the stop, and a measurement is not
-        recorded (the next daemon measures it again)."""
+        """Whether the daemon stops: a measurement is not recorded then (the next daemon measures it again). An agent's
+        stop is on its row instead (``stopped_by_daemon``), for the daemon that reads its report after a restart."""
         self._secrets = secrets if secrets is not None else SECRETS.selected({})
         self._exit_output_chars = exit_output_chars
         """``[agents] exit_output_chars``: how much of its last output a failed or early end says."""
@@ -540,15 +552,17 @@ class CampaignResults:
 
         The anomaly only when the agent did not start to work (``NotStarted``): its job did not start, or it ended
         within ``STARTUP_SECONDS`` and left nothing (``_never_worked``), unless the daemon told it to stop or ended it.
-        While the daemon stops, the row closes as killed by the stop (``RunEnd.DAEMON_STOPPED``), with the usage that was read.
+        An agent that a daemon stop ended (``stopped_by_daemon``) closes as killed by the stop
+        (``RunEnd.DAEMON_STOPPED``), with the usage that was read, whichever daemon process reads its report.
         The ``output`` of an agent that exited non-zero ends its error (``explained``), and the reason of one that exited 0
         and did not start to work.
         """
         w = _open(s, AgentKey(job.agent_session))
         w.ended_at = utcnow()
+        stopped = stopped_by_daemon(s, w.id)
         match report:
             case AgentNotStarted(reason=reason, seconds=seconds):
-                if self._stopping():
+                if stopped:
                     self._stopped(s, w, None)
                     return
                 w.state, w.error = AgentSessionState.KILLED, reason
@@ -571,7 +585,7 @@ class CampaignResults:
                     event = WorkUnsaved(blob=unsaved.blob, error=unsaved.error)
                     emit(s, event, TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
                     self._tracer.event(event.kind, agent_session=w.id, blob=str(event.blob), error=event.error)
-                if self._stopping():
+                if stopped:
                     self._stopped(s, w, report.work)
                     return
                 asked = _asked_to_end(s, w.id)
@@ -769,6 +783,12 @@ def ended_of(s: Session, agent_session_id: AgentSessionId) -> Ended | None:
     """Return how the agent's job ended (``JobEnded``), or None when no result closed its row: a stop did."""
     found = latest(s, JobEnded, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
     return None if found is None else found[1].ended
+
+
+def stopped_by_daemon(s: Session, agent_session_id: AgentSessionId) -> bool:
+    """Whether a daemon stop ended the agent (``AgentEnded`` with ``RunEnd.DAEMON_STOPPED``, ``Launcher.stop``)."""
+    found = latest(s, AgentEnded, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
+    return found is not None and found[1].end is RunEnd.DAEMON_STOPPED
 
 
 def _asked_to_end(s: Session, agent_session_id: AgentSessionId) -> bool:
