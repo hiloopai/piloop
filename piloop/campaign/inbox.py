@@ -146,12 +146,14 @@ def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party
     The escalations that still wait for ``party`` (``unanswered``) come with it, but end no wait: an orchestrator that
     moved past one sees it again on each wait.
     """
-    waiting = waiting_for(s, party, campaign_id=campaign_id)
-    cursor, found, more = after, list[NewsItem](), True
+    cursor, found, more, waiting = after, list[NewsItem](), True, []
     while more and not found:
         page = db_feed.after(s, cursor, WAKES, limit=settings.daemon.inbox_page)
         cursor, more = page.next, page.more
         events = s.scalars(select(Event).where(Event.id.in_(page.ids)).order_by(Event.id)).all()
+        # Read after the page: each statement sees the latest commit, so an item read before it could miss a comment
+        # whose event the page then passes. Read after, it has every comment of the page.
+        waiting = waiting_for(s, party, campaign_id=campaign_id)
         found = _news(s, events, waiting, campaign_id, party)
     shown = {item.comment.id for item in found if isinstance(item, CommentNews)}
     escalations = [comment_view(c) for c in unanswered(s, waiting) if c.id not in shown]

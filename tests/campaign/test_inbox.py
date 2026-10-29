@@ -503,3 +503,35 @@ def news_lines(s: Session, after: int, *, campaign_id: CampaignId | None = None,
     """The news after ``after``, as ``piloop inbox wait`` prints it, and the next cursor."""
     found = inbox.news(s, after, campaign_id=campaign_id, party=me.party)
     return found.next, [item.text() for item in found.items]
+
+
+def test_an_item_that_lands_while_news_reads_is_news_now_or_after_its_cursor(
+    db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each statement of a session reads the latest commit, so the items and the page of events can disagree."""
+    waiting_for = inbox.waiting_for
+
+    def then_escalate(
+        s: Session, party: str, *, campaign_id: CampaignId | None = None
+    ) -> list[tuple[Comment, Campaign | None]]:
+        found = waiting_for(s, party, campaign_id=campaign_id)
+        if not found:
+            with db.session() as other:
+                other.add(
+                    Comment(
+                        target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
+                        author='watchdog#2',
+                        kind=CommentKind.ESCALATION,
+                        priority=1,
+                        body='SSO expired',
+                    )
+                )
+                other.commit()
+        return found
+
+    monkeypatch.setattr(inbox, 'waiting_for', then_escalate)
+    with db.session() as s:
+        start = db_feed.newest(s)
+        cursor, now = news_lines(s, start, campaign_id=campaign.id, me=System.ORCHESTRATOR)
+        _, then = news_lines(s, cursor, campaign_id=campaign.id, me=System.ORCHESTRATOR)
+    assert [*now, *then] == ['comment#1 escalation p1 on campaign#1 (demo) by watchdog#2: SSO expired']

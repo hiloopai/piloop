@@ -78,21 +78,30 @@ async def settle(pilot: Pilot[None]) -> None:
     A worker hands its answer to its screen before it ends, so once the workers ended a pause draws the answers. A
     drawn answer can start a read of its own, such as the detail of the row that the cursor lands on, and a pushed
     screen starts its read when it mounts: then wait again. A read that failed goes again with the next batch of the
-    feed: then wait for that batch.
+    feed: then wait for that batch. An answer can be drawn in any pause, and a table sizes its columns to it only at
+    its next idle, so it returns only once a whole pause brought nothing to wait for.
     """
     app = pilot.app
     assert isinstance(app, Watch)
+    quiet = False
     while True:
         await pilot.pause()
         if any(not screen.is_mounted for screen in app.screen_stack):
-            continue
-        if live := [w for w in app.workers if w.state in OPEN]:
+            quiet = False
+        elif live := [w for w in app.workers if w.state in OPEN]:
             await asyncio.wait([asyncio.ensure_future(ended(w)) for w in live])
+            quiet = False
         elif retries(app):
             await asyncio.to_thread(app.follower.read_after, app.follower.batches)
-        elif not any(table._require_update_dimensions for table in app.screen.query(DataTable)):
-            await pilot.pause()  # the repaint of what the last round drew and sized
-            return  # else a table sizes its columns to its new rows when it is idle: pause again
+            quiet = False
+        elif any(table._require_update_dimensions for table in app.screen.query(DataTable)):
+            quiet = False  # a table sizes its columns to its new rows when it is idle: pause again
+        elif any(node.message_queue_size for node in (app, *app.screen.walk_children(with_self=True))):
+            quiet = False  # an answer that a worker handed over before it ended, not drawn yet
+        elif quiet:
+            return
+        else:
+            quiet = True
 
 
 def retries(app: Watch) -> bool:
