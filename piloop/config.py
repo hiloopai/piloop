@@ -545,8 +545,7 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
             dotenv_settings: PydanticBaseSettingsSource,
             file_secret_settings: PydanticBaseSettingsSource,
         ) -> tuple[PydanticBaseSettingsSource, ...]:
-            finding_grace = deprecated.CAMPAIGN_FINDING_GRACE
-            moved = MovedEnv(env_settings, finding_grace, 'PILOOP_CAMPAIGN_', deprecated.campaign_finding_grace)
+            moved = MovedEnv(env_settings, deprecated.bridges(Scope.CAMPAIGN), 'PILOOP_CAMPAIGN_')
             return init_settings, moved, InitSettingsSource(settings_cls, raw)
 
     # pydantic validates the values; the cast only tells the type checker to let them through

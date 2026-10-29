@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import System
 from piloop.campaign import ops
+from piloop.db import feed as db_feed
 from piloop.db.events import in_order
 from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database
@@ -293,3 +294,29 @@ def test_a_campaign_retired_while_the_daemon_takes_its_request_launches_nothing(
     with db.session() as s:
         row = s.get_one(AgentSession, asked)
         assert (row.state, row.error) == (AgentSessionState.KILLED, 'its campaign is retired')
+
+
+def test_a_campaign_that_a_feed_read_finds_retired_during_the_pass_drops_out_of_it(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """A feed read (a news trigger's, say) reloads what the pass read: a retire that committed before it shows."""
+    with db.session() as s:
+        s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+        s.commit()
+    asked = request_watchdog(db, campaign)
+    scheduler = make_scheduler(db, runtime, tmp_path)
+    path = db.engine.url.database
+    assert path is not None
+    tidy = OptimizationPlanner.tidy
+
+    def retired_then_read(planner: OptimizationPlanner, s: Session, read: Campaign) -> None:
+        """The retire commits on its own connection, then the pass reads the feed, before its quiet phase."""
+        with closing(sqlite3.connect(path, timeout=0.2, isolation_level=None)) as con:
+            con.execute("UPDATE campaigns SET status = 'retired' WHERE id = ?", (read.id,))
+        db_feed.after(s, 0, limit=1)
+        tidy(planner, s, read)
+
+    mocker.patch.object(OptimizationPlanner, 'tidy', autospec=True, side_effect=retired_then_read)
+    assert run_all(scheduler) == []
+    with db.session() as s:
+        assert s.get_one(AgentSession, asked).state is AgentSessionState.REQUESTED, 'the pass left it alone'

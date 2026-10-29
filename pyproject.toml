@@ -274,6 +274,7 @@ runtime_tables = "piloop.plugins.runtime.bridges:runtime_tables"
 name_claim = "piloop.plugins.network.bridges:name_claim"
 implementer_timings = "piloop.deprecated:implementer_timings"
 campaign_finding_grace = "piloop.deprecated:campaign_finding_grace"
+startup_breaker = "piloop.plugins.launch_policy.bridges:startup_breaker"
 
 # The kinds that events and comments point at, beyond core's, by name: the table of their rows
 # (piloop.db.models.TARGET_KINDS).

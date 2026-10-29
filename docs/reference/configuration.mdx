@@ -904,3 +904,4 @@ These keys still work. Each one shows a `PiloopDeprecationWarning` that names th
 - In `config.toml`, `[daemon] startup_relaunches`, `[agents] finding_grace` and `wrap_up_lead` are the role's. They are keys of `[plugins.role.implementer]`, the defaults of every campaign's implementer, and their variables move the same way (`moved_env`). A role of your own that does runs gets the role's defaults, not these.
 - In `config.toml`, `[plugins.network] name_claim` of the `proxy` network is `name_claims`, a list of one. A `name_claims` that the table sets too wins.
 - In `config.toml`, `[runtimes.<name>]` is `[plugins.runtime.<name>]`. `PILOOP_RUNTIMES__<NAME>__<KEY>` is `PILOOP_PLUGINS__RUNTIME__<NAME>__<KEY>`.
+- In `config.toml`, `[daemon] startup_breaker` and `startup_window` are `[plugins.launch_policy]` keys. Their variables move the same way.

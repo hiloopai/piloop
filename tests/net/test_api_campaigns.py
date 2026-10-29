@@ -350,6 +350,25 @@ def test_a_sync_takes_a_private_repository_s_new_commit_with_a_token_that_nothin
         assert checkout.head.commit.hexsha == newer, "the home's secret fetched it"
 
 
+def test_a_sync_of_a_cloned_campaign_replaces_a_stored_config_that_no_longer_validates(
+    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path
+) -> None:
+    """``piloop doctor`` says to run ``piloop init`` again for such a copy, and on a server that is a sync of a clone."""
+    url = bare(campaign_path, tmp_path / 'demo.git')
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
+        added = client.register_campaign(Clone(clone=Remote(url=url)))
+        store_config(db, added.campaign.id, {'name': 'demo', 'removed': 'by an upgrade'})
+        checkout = Path(added.campaign.path)
+        (checkout / 'piloop.toml').write_text('name = "demo"\n')
+        with pytest.raises(Refused, match='is not a valid piloop config') as invalid:
+            client.sync_campaign(str(added.campaign.id))
+        assert invalid.value.error == Problem.REFUSED, 'neither copy says which vcs updates it: a 409 that says why'
+        subprocess.run(['git', 'checkout', '-q', 'piloop.toml'], cwd=checkout, check=True)
+        assert client.sync_campaign(str(added.campaign.id)).campaign.name == 'demo'
+    with db.session() as s:
+        assert s.get_one(Campaign, added.campaign.id).config.name == 'demo', 'the copy validates again'
+
+
 def test_a_sync_of_a_campaign_registered_by_path_refuses_a_credential(
     db: Database, campaign_path: Path, cfg: Settings
 ) -> None:

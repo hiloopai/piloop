@@ -107,7 +107,7 @@ from piloop.campaign.campaigns import (
     register_clone,
     selected,
     sync,
-    vcs_of,
+    updating_vcs,
     workspace_dir,
 )
 from piloop.campaign.stop import CANCELLABLE, request_cancel
@@ -457,7 +457,7 @@ def sync_campaign(
     """
     match cloned(api.cfg.home, campaign), None if body is None else body.credential:
         case True, credential:
-            with closing(vcs_of(campaign).open(FilePath(campaign.path))) as repo:
+            with closing(updating_vcs(campaign).open(FilePath(campaign.path))) as repo:
                 repo.update(_credential(api, credential))
         case False, None:
             pass

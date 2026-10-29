@@ -312,7 +312,7 @@ class Settings(BaseSettings):
         """Arguments, then the environment, then ``config.toml`` under the home the arguments or environment name."""
         given = init_settings.init_kwargs.get('home') if isinstance(init_settings, InitSettingsSource) else None
         home = Path(given) if given else home_of_env()
-        moved = MovedEnv(env_settings, deprecated.IMPLEMENTER_TIMINGS, 'PILOOP_', deprecated.implementer_timings)
+        moved = MovedEnv(env_settings, deprecated.bridges(Scope.HOME), 'PILOOP_')
         return init_settings, moved, InitSettingsSource(settings_cls, config_file(home))
 
     @model_validator(mode='after')
@@ -382,25 +382,27 @@ HOME_PLUGINS: TypeAdapter[Plugins] = TypeAdapter(
 )
 
 
-@deprecated.until('0.6.0', "the implementer's timings are its role's: delete MovedEnv")
+@deprecated.until(
+    '0.6.0', "the implementer's timings are its role's, the last keys that move out of the settings: delete MovedEnv"
+)
 class MovedEnv(PydanticBaseSettingsSource):
-    """The settings of the variables of ``env``, with the keys of ``moves`` at their new keys (``moved_env``)."""
+    """The settings of the variables of ``env``, with the keys that ``bridges`` move at their new keys (``moved_env``)."""
 
-    def __init__(
-        self, inner: PydanticBaseSettingsSource, moves: Sequence[deprecated.Move], env: str, bridge: deprecated.Bridge
-    ) -> None:
-        """``bridge`` moves the keys of the file, and says when the variables go too."""
+    def __init__(self, inner: PydanticBaseSettingsSource, bridges: Sequence[deprecated.Bridge], env: str) -> None:
+        """Each of ``bridges`` moves the keys of the file, and its ``env`` says which variables move too, and until when."""
         super().__init__(inner.settings_cls)
         self.inner = inner
-        self.moves = moves
+        self.bridges = bridges
         self.env = env
-        self.removed_in = bridge.removed_in
 
     def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[object, str, bool]:
         return self.inner.get_field_value(field, field_name)
 
     def __call__(self) -> dict[str, object]:
-        return deprecated.moved_env(self.inner(), self.moves, self.env, self.removed_in)
+        found = self.inner()
+        for b in self.bridges:
+            found = deprecated.moved_env(found, b.env, self.env, b.removed_in)
+        return found
 
 
 def home_of_env() -> Path:

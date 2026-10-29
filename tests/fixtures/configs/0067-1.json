@@ -1,0 +1,135 @@
+{
+  "agents": {
+    "brief_words": null,
+    "finding_grace": null,
+    "wrap_up_grace": null
+  },
+  "context": [],
+  "evaluate": [
+    "true"
+  ],
+  "evaluate_timeout": 600.0,
+  "ladder": [],
+  "link": [],
+  "metrics": [
+    {
+      "direction": "higher",
+      "floor": null,
+      "fraction": null,
+      "margin": null,
+      "name": "score",
+      "ratio": null,
+      "repeats": null,
+      "role": "primary",
+      "track": null
+    }
+  ],
+  "name": "demo",
+  "plugins": {
+    "fact_source": {
+      "campaign": {},
+      "leases": {},
+      "models": {},
+      "optimization": {},
+      "spend": {},
+      "use": [
+        "campaign",
+        "optimization"
+      ]
+    },
+    "harness": {
+      "claude": {},
+      "codex": {},
+      "pi": {
+        "model": "m"
+      },
+      "use": [
+        "pi"
+      ]
+    },
+    "lineage": {
+      "optimization": {},
+      "use": "optimization"
+    },
+    "mcp_server": {},
+    "role": {
+      "implementer": {},
+      "orchestrator": {},
+      "research": {},
+      "scout": {},
+      "watchdog": {}
+    },
+    "runtime": {
+      "use": "subprocess"
+    },
+    "section": {
+      "agents": {},
+      "candidates": {},
+      "comments": {},
+      "concepts": {},
+      "cost": {},
+      "database": {},
+      "evaluations": {},
+      "events": {},
+      "funnel": {},
+      "goal": {},
+      "headline": {},
+      "history": {},
+      "idea_comments": {},
+      "idle_queue": {},
+      "inbox": {},
+      "incidents": {},
+      "judging": {},
+      "lessons": {},
+      "links": {},
+      "long_jobs": {},
+      "orchestration": {},
+      "pack": {},
+      "past_campaigns": {},
+      "priorities": {},
+      "provenance": {},
+      "queries": {},
+      "queue": {},
+      "reported": {},
+      "runs": {},
+      "same_as_parent": {},
+      "search": {},
+      "tools": {},
+      "tracks": {},
+      "trajectory": {},
+      "use": [
+        "headline",
+        "goal",
+        "tracks",
+        "trajectory",
+        "runs",
+        "queue",
+        "idle_queue",
+        "agents",
+        "evaluations",
+        "funnel",
+        "yields",
+        "candidates",
+        "same_as_parent",
+        "reported",
+        "inbox",
+        "events"
+      ],
+      "workspace": {},
+      "yields": {}
+    },
+    "trigger": {
+      "cron": {},
+      "dead_at_startup": {},
+      "leaking_funnel": {},
+      "low_water": {},
+      "low_yield": {},
+      "news": {},
+      "run_failed": {},
+      "seed": {},
+      "stalled": {},
+      "stopped": {}
+    }
+  },
+  "tracks": {}
+}

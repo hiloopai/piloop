@@ -81,6 +81,8 @@ class Bridge:
     """The bridges whose result it reads, by name: it runs after them. Django's ``dependencies`` of a migration."""
     before: tuple[str, ...] = ()
     """The bridges that read its result, by name: it runs before them. Django's ``run_before``."""
+    env: tuple[Move, ...] = ()
+    """The keys that it moves out of a model of the settings, whose variables move too (``moved_env``)."""
 
     def __call__(self, toml: Path, raw: dict[str, object]) -> None:
         self.rewrite(toml, raw, self.removed_in)
@@ -95,7 +97,12 @@ they run before any provider loads.
 
 
 def bridge(
-    version: str, reason: str, scope: Scope = Scope.CAMPAIGN, after: tuple[str, ...] = (), before: tuple[str, ...] = ()
+    version: str,
+    reason: str,
+    scope: Scope = Scope.CAMPAIGN,
+    after: tuple[str, ...] = (),
+    before: tuple[str, ...] = (),
+    env: tuple[Move, ...] = (),
 ) -> Callable[[Rewrite], Bridge]:
     """Declare a bridge of the file of ``scope`` that piloop keeps until release ``version``, as ``until`` marks code.
 
@@ -105,7 +112,7 @@ def bridge(
     removed_in = Version.parse(version)
 
     def declared(rewrite: Rewrite) -> Bridge:
-        return Bridge(rewrite, removed_in, scope, after, before)
+        return Bridge(rewrite, removed_in, scope, after, before, env)
 
     return declared
 
@@ -583,6 +590,7 @@ IMPLEMENTER_TIMINGS = (
     "[daemon] startup_relaunches and [agents] finding_grace and wrap_up_lead are the implementer role's: delete"
     ' implementer_timings and IMPLEMENTER_TIMINGS',
     Scope.HOME,
+    env=IMPLEMENTER_TIMINGS,
 )
 def implementer_timings(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """In ``config.toml``, ``[daemon] startup_relaunches``, ``[agents] finding_grace`` and ``wrap_up_lead`` are the role's.
@@ -602,6 +610,7 @@ CAMPAIGN_FINDING_GRACE = (Move('agents.finding_grace', 'plugins.role.implementer
     '0.6.0',
     "[agents] finding_grace is the implementer role's: delete campaign_finding_grace and CAMPAIGN_FINDING_GRACE",
     after=('plugin_tables',),
+    env=CAMPAIGN_FINDING_GRACE,
 )
 def campaign_finding_grace(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """A ``piloop.toml``'s ``[agents] finding_grace`` is ``[plugins.role.implementer] finding_grace``.
@@ -612,7 +621,9 @@ def campaign_finding_grace(toml: Path, raw: dict[str, object], removed_in: Versi
         move_keys(toml, raw, move, removed_in)
 
 
-@until('0.6.0', "the implementer's timings are its role's: delete moved_env")
+@until(
+    '0.6.0', "the implementer's timings are its role's, the last keys that move out of the settings: delete moved_env"
+)
 def moved_env(found: dict[str, object], moves: Sequence[Move], env: str, removed_in: Version) -> dict[str, object]:
     """``found``, the settings that the variables of ``env`` give, with the keys of ``moves`` at their new keys.
 

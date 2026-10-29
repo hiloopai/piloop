@@ -570,6 +570,21 @@ def vcs_of(campaign: Campaign) -> Vcs:
     return VCS.selected(campaign.config.plugins)
 
 
+def updating_vcs(campaign: Campaign) -> Vcs:
+    """The vcs provider that updates a cloned campaign's checkout before a sync: its stored config's, or its checkout's.
+
+    A stored copy that no longer validates (an upgrade moved a key) names the provider of the checkout's ``piloop.toml``,
+    which the sync then stores in its place.
+
+    Raises:
+        ConfigError: The stored copy no longer validates, and nor does the checkout's ``piloop.toml``.
+    """
+    try:
+        return vcs_of(campaign)
+    except ValidationError:
+        return VCS.selected(load_campaign_config(Path(campaign.path)).plugins)
+
+
 def repository(campaign: Campaign) -> Repository:
     """The campaign's repo of record, opened with its vcs provider. The caller closes it.
 

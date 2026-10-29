@@ -355,6 +355,10 @@ class Campaigns:
                 if campaign.status is CampaignStatus.STOPPED and unclosed(s, campaign) and settled(s, campaign):
                     self._close_campaign(s, campaign, cfg, cfg.roles.sweeping(), turn.now)
                     held = held_now(s, campaign, cfg)  # a closing review may wait for the hold
+                if campaign.status is CampaignStatus.RETIRED:
+                    # A feed read before the pass's first write (``read_transaction``) reloads what the pass read, so
+                    # a retire that committed since shows here.
+                    continue
                 phase = quiet_phase(s, campaign, held)
                 awake = awake_roles(cfg, phase)
                 if phase is not None and awake:

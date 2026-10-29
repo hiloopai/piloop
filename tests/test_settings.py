@@ -12,7 +12,8 @@ from piloop.actor import Agent, System
 from piloop.config import CampaignAgents
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.harness.contract import cleared_env, each_provider
-from piloop.plugins.host import campaign_defaults
+from piloop.plugins.host import Scope, campaign_defaults
+from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES
 from piloop.settings import UNDER_TEST_ENV, MovedEnv, Settings, StorageSettings, TracingSettings, env_names, expand_env
 
 
@@ -173,9 +174,26 @@ def test_the_implementer_s_timings_of_config_toml_are_its_role_s_with_a_warning(
     }
 
 
+def test_the_startup_breaker_of_config_toml_is_the_launch_policy_s_with_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``[daemon] startup_breaker`` and ``startup_window``, which 0.4.0 read, are ``[plugins.launch_policy]`` keys."""
+    (tmp_path / 'config.toml').write_text('[daemon]\nstartup_breaker = 5\nstartup_window = "PT5M"\n')
+    monkeypatch.setenv('PILOOP_DAEMON__STARTUP_BREAKER', '7')
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        home = Settings(home=tmp_path)
+    assert [str(w.message).split('; removed')[0] for w in warned] == [
+        '`daemon.startup_breaker` is deprecated; write `plugins.launch_policy.startup_breaker`',
+        '`daemon.startup_window` is deprecated; write `plugins.launch_policy.startup_window`',
+        'PILOOP_DAEMON__STARTUP_BREAKER is deprecated; set PILOOP_PLUGINS__LAUNCH_POLICY__STARTUP_BREAKER',
+    ]
+    policy = LAUNCH_POLICIES.selected(home.providers)
+    assert (policy.startup_breaker, policy.startup_window) == (7, timedelta(minutes=5)), 'the variable wins'
+
+
 def test_a_moved_variable_source_reads_a_field_as_the_environment_does(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('PILOOP_MIGRATION_BACKUPS', '5')
     env = EnvSettingsSource(Settings, env_prefix='PILOOP_')
-    moved = MovedEnv(env, deprecated.IMPLEMENTER_TIMINGS, 'PILOOP_', deprecated.implementer_timings)
+    moved = MovedEnv(env, deprecated.bridges(Scope.HOME), 'PILOOP_')
     field = Settings.model_fields['migration_backups']
     assert moved.get_field_value(field, 'migration_backups') == env.get_field_value(field, 'migration_backups')

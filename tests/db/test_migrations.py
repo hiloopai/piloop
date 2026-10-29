@@ -2979,3 +2979,32 @@ def test_0071_points_each_comment_at_comment_kinds_and_downgrades(tmp_path: Path
         )
         with pytest.raises(sqlite3.IntegrityError, match='commentkind'):
             con.execute(comment.replace("'finding'", "'praise'"))
+
+
+def test_0072_moves_a_campaign_s_finding_grace_to_its_implementer_drops_0_4_s_nulls_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    """A copy that 0.4 stored has every key of ``agents``, null where the file set none, which no longer validates."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0071')
+    unset = {'agents': {'brief_words': None, 'finding_grace': None, 'wrap_up_grace': None}}
+    grace = {'agents': {'finding_grace': 'PT2M', 'brief_words': None}, 'plugins': {'role': {'implementer': {}}}}
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for name, config in (('p', unset), ('q', grace)):
+            con.execute(
+                'INSERT INTO campaigns (name, path, config) VALUES (?, ?, ?)', (name, f'/{name}', dumps(config))
+            )
+    stored = 'SELECT config FROM campaigns ORDER BY id'
+    command.upgrade(cfg, '0072')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == [
+            {'agents': {}},
+            {'plugins': {'role': {'implementer': {'finding_grace': 'PT2M'}}}},
+        ]
+    command.downgrade(cfg, '0071')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == [
+            {'agents': {}},
+            {'agents': {'finding_grace': 'PT2M'}},
+        ], 'the nulls held nothing: 0.4 reads their keys as unset'
