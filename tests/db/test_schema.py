@@ -72,6 +72,7 @@ STRAY = Schema(
 ON_IDEAS = Schema(tables=(OnIdea,), versions=NO_REVISIONS)
 ON_NAMES = Schema(tables=(OnName,), versions=NO_REVISIONS)
 TWICE = Schema(tables=(Idea,), versions=NO_REVISIONS)
+CLOSING = Schema(tables=(Note,), versions=NO_REVISIONS, hidden=(Loose.id,))
 
 
 def test_every_table_of_a_migrated_database_is_in_one_schema(db: Database) -> None:
@@ -82,7 +83,7 @@ def test_every_table_of_a_migrated_database_is_in_one_schema(db: Database) -> No
             if not row[0].startswith(('sqlite_', 'alembic_')) and '_fts' not in row[0]
         }
     assert {t.name for t in tables()} == made
-    assert list(schemas()) == [CORE, 'archive/local', 'memory/local', 'optimization']
+    assert list(schemas()) == [CORE, 'archive/local', 'memory/local', 'optimization', 'secrets/local']
 
 
 def schema_of(monkeypatch: pytest.MonkeyPatch, name: str, attribute: str) -> None:
@@ -107,6 +108,7 @@ def test_a_plugin_s_table_references_a_core_table_s_id(monkeypatch: pytest.Monke
         ('notes', 'Note', 'piloop.schemas is not a schema'),
         ('on_loose', 'ON_LOOSE', 'test_schema_on_loose.loose_id references test_schema_loose.id, which no schema has'),
         ('stray', 'STRAY', "the schema 'stray' has triggers on tables that are not its own: campaigns_noted"),
+        ('closing', 'CLOSING', "the schema 'closing' closes tables that are not its own: test_schema_loose"),
     ],
 )
 def test_a_schema_that_takes_a_table_or_crosses_schemas_is_refused(

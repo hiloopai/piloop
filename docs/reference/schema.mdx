@@ -151,16 +151,6 @@ CREATE TABLE first_transfers (
 	CONSTRAINT "first_transfers.blob must be a text value" CHECK (typeof(blob) IN ('text')),
 	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE
 );
-CREATE TABLE secrets (
-	id INTEGER NOT NULL,
-	campaign_id INTEGER,
-	name VARCHAR NOT NULL,
-	value VARCHAR NOT NULL,
-	PRIMARY KEY (id),
-	UNIQUE (campaign_id, name),
-	FOREIGN KEY(campaign_id) REFERENCES campaigns (id)
-);
-CREATE UNIQUE INDEX ux_secrets_home_name ON secrets (name) WHERE campaign_id IS NULL;
 CREATE TABLE agent_sessions (
 	id INTEGER NOT NULL,
 	kind VARCHAR NOT NULL,
@@ -478,4 +468,19 @@ CREATE TABLE measurements (
 );
 CREATE INDEX ix_measurements_candidate_evaluator ON measurements (candidate_id, evaluator_id);
 CREATE VIRTUAL TABLE ideas_fts USING fts5(title, hypothesis, plan, content='ideas', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2');
+```
+
+## secrets/local
+
+```sql
+CREATE TABLE secrets (
+	id INTEGER NOT NULL,
+	campaign_id INTEGER,
+	name VARCHAR NOT NULL,
+	value VARCHAR NOT NULL,
+	PRIMARY KEY (id),
+	UNIQUE (campaign_id, name),
+	FOREIGN KEY(campaign_id) REFERENCES campaigns (id)
+);
+CREATE UNIQUE INDEX ux_secrets_home_name ON secrets (name) WHERE campaign_id IS NULL;
 ```

@@ -67,6 +67,8 @@ SCHEMA = Schema(tables=(Rung,), versions=Path(__file__).parent / 'migrations')
   table that another schema has, before the daemon starts.
 - `Schema.triggers` holds the triggers on the plugin's tables. Every connection creates the TEMP ones, and the
   plugin's revisions create the others.
+- `Schema.protected` names the tables that `piloop sql` cannot write, and `Schema.hidden` the columns that it reads as
+  NULL, such as a secret's value.
 - When you uninstall the plugin, its tables, rows and revision stay, and piloop does not read them. `piloop doctor`
   names the package. When you install it again, it migrates from its own revision.
 

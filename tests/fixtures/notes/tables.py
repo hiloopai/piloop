@@ -1,4 +1,7 @@
-"""The table of ``notes``, its schema as a first release declares it (``SCHEMA``), and as a later one (``LATER``)."""
+"""The table of ``notes``, its schema as a first release declares it (``SCHEMA``), and as a later one (``LATER``).
+
+``SEALED`` is the first release with its table closed to ``piloop sql``: no write, and ``body`` reads as NULL.
+"""
 
 from pathlib import Path
 
@@ -21,3 +24,4 @@ class Note(Base):
 
 SCHEMA = Schema(tables=(Note,), versions=Path(__file__).parent / 'migrations')
 LATER = Schema(tables=(Note,), versions=Path(__file__).parent / 'later')
+SEALED = Schema(tables=(Note,), versions=Path(__file__).parent / 'migrations', protected=(Note,), hidden=(Note.body,))

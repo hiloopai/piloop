@@ -12,8 +12,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from sqlalchemy import Column, Table
+from sqlalchemy.orm import InstrumentedAttribute
 
 from piloop import deprecated
 from piloop.db.models import (
@@ -27,7 +28,6 @@ from piloop.db.models import (
     LeaseWorker,
     Limit,
     Migration,
-    Secret,
     Token,
     WorkerInstance,
 )
@@ -52,6 +52,8 @@ class Refusal:
 class Schema:
     """What core or a plugin adds to the database: its tables, its migrations and its triggers."""
 
+    __pydantic_config__ = ConfigDict(arbitrary_types_allowed=True)  # a column of hidden is SQLAlchemy's
+
     tables: tuple[type[Base], ...]
     """Subclasses of ``piloop.db.models.Base``: one registry, so that a foreign key to a core table resolves."""
     versions: Path
@@ -66,6 +68,10 @@ class Schema:
     """Why its chain does not migrate a database yet, read on a read-only connection, or None when it does. It is
     asked only while the chain is behind its head: what the revisions cannot tell, such as rows that an older
     release had still to rewrite."""
+    protected: tuple[type[Base], ...] = ()
+    """Its tables that ``piloop sql`` cannot write: only its provider's commands do, such as ``piloop secret``."""
+    hidden: tuple[InstrumentedAttribute[object], ...] = ()
+    """Its columns that ``piloop sql`` reads as NULL, such as a secret's value."""
 
 
 CORE_TABLES = (
@@ -78,7 +84,6 @@ CORE_TABLES = (
     WorkerInstance,
     FirstTransfer,
     Limit,
-    Secret,
     Token,
     Migration,
 )
@@ -86,7 +91,8 @@ CORE_SCHEMA = Schema(
     tables=CORE_TABLES,
     versions=Path(__file__).parent / 'migrations' / 'versions',
     triggers=on(CORE_TABLES),
-    internal=(Lease, LeaseWorker, WorkerInstance, FirstTransfer, Limit, Secret, Token, Migration),
+    internal=(Lease, LeaseWorker, WorkerInstance, FirstTransfer, Limit, Token, Migration),
+    protected=(Token, Migration),  # an agent that could write a token could call the server as a worker
 )
 
 
@@ -122,6 +128,9 @@ def schemas() -> dict[str, Schema]:
             holder[table.__tablename__] = name
         if strays := sorted(t.name for t in schema.triggers if holder.get(t.table) != name):
             raise PluginError(f'the schema {name!r} has triggers on tables that are not its own: {", ".join(strays)}')
+        closed = [*(t.__tablename__ for t in schema.protected), *(c.class_.__tablename__ for c in schema.hidden)]
+        if strays := sorted({t for t in closed if holder.get(t) != name}):
+            raise PluginError(f'the schema {name!r} closes tables that are not its own: {", ".join(strays)}')
     for name, schema in found.items():
         for table in schema.tables:
             for key in table.__table__.foreign_keys:

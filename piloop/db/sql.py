@@ -84,14 +84,8 @@ READ_ONLY_PRAGMAS = {
 }
 MIGRATION_TABLE = 'alembic_version'
 ACTOR_TABLE = 'session_actor'
-TOKENS_TABLE = 'tokens'
-"""An agent that could write a token could call the server as a worker."""
-SECRETS_TABLE = 'secrets'
-"""An agent writes its campaign's secrets through ``piloop secret``, which checks that the campaign is its own."""
-MIGRATIONS_TABLE = 'migrations'
-PROTECTED_TABLES = {MIGRATION_TABLE, ACTOR_TABLE, TOKENS_TABLE, SECRETS_TABLE, MIGRATIONS_TABLE}
-HIDDEN_COLUMNS = frozenset({(SECRETS_TABLE, 'value')})
-"""Columns that read as NULL: an agent gets a secret's value in its environment only."""
+MACHINERY = frozenset({MIGRATION_TABLE, ACTOR_TABLE})
+"""Tables of no schema that ``piloop sql`` cannot write. Each schema names its own too (``Schema.protected``)."""
 WRITES = {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE}
 BUSY_TIMEOUT_MS = 5000
 CONNECTION_PRAGMAS = (
@@ -137,9 +131,9 @@ def _authorize(action: int, arg1: str | None, arg2: str | None, _db: str | None,
         return sqlite3.SQLITE_DENY
     if action == sqlite3.SQLITE_PRAGMA:
         return sqlite3.SQLITE_OK if arg1 in READ_ONLY_PRAGMAS else sqlite3.SQLITE_DENY
-    if action in WRITES and (arg1 in PROTECTED_TABLES or (arg1 or '').startswith(f'{MIGRATION_TABLE}_')):
+    if action in WRITES and (arg1 in declared().protected or (arg1 or '').startswith(f'{MIGRATION_TABLE}_')):
         return sqlite3.SQLITE_DENY
-    if action == sqlite3.SQLITE_READ and (arg1, arg2) in HIDDEN_COLUMNS:
+    if action == sqlite3.SQLITE_READ and (arg1, arg2) in declared().hidden:
         return sqlite3.SQLITE_IGNORE
     if action in WRITES and arg1 in FTS_TABLES and source not in FTS_TRIGGER_NAMES:
         return sqlite3.SQLITE_DENY
@@ -178,19 +172,29 @@ def install_functions(con: sqlite3.Connection) -> None:
 
 @dataclass(frozen=True)
 class Declared:
-    """What every connection needs of the triggers of core and the plugins."""
+    """What every connection needs of the schemas of core and the plugins: their triggers, and what they close."""
 
     actor_sql: str
     """The actor table and every schema's TEMP triggers, which ``install_actor`` runs."""
     events: frozenset[str]
     """The triggers that write events: the only statements of ``piloop sql`` that the authorizer lets insert into them."""
+    protected: frozenset[str]
+    """The tables that ``piloop sql`` cannot write: ``MACHINERY`` and each schema's ``protected``."""
+    hidden: frozenset[tuple[str, str]]
+    """The columns, as (table, column), that ``piloop sql`` reads as NULL: each schema's ``hidden``."""
 
 
 @cache
 def declared() -> Declared:
-    """The triggers of every schema (``piloop.db.schema.schemas``), read once per process."""
-    triggers = [t for schema in schemas().values() for t in schema.triggers]
-    return Declared(temp_sql(triggers), frozenset(t.name for t in triggers if t.body.startswith('INSERT INTO events')))
+    """The triggers and the closed tables and columns of every schema (``piloop.db.schema.schemas``), once per process."""
+    found = schemas().values()
+    triggers = [t for schema in found for t in schema.triggers]
+    return Declared(
+        temp_sql(triggers),
+        frozenset(t.name for t in triggers if t.body.startswith('INSERT INTO events')),
+        MACHINERY | {table.__tablename__ for schema in found for table in schema.protected},
+        frozenset((column.class_.__tablename__, column.key) for schema in found for column in schema.hidden),
+    )
 
 
 def install_actor(con: sqlite3.Connection, actor: Actor) -> None:

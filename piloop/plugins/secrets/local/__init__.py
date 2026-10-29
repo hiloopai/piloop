@@ -1,6 +1,6 @@
 """``local``: the default secrets provider, the ``secrets`` table of the home's database.
 
-The values are plain text in the database. ``piloop sql`` cannot read them (``piloop.db.sql``), and its backups hold
+The values are plain text in the database. ``piloop sql`` cannot read them (``Schema.hidden``), and its backups hold
 them as it does. A provider that seals them wraps this one.
 """
 
@@ -10,9 +10,9 @@ from pydantic import SecretStr
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from piloop.db.models import Secret
 from piloop.ids import EnvName
 from piloop.plugins.secrets.contract import Owner, SecretKey, SecretsProvider
+from piloop.plugins.secrets.local.tables import Secret
 
 
 class LocalSecrets(SecretsProvider):

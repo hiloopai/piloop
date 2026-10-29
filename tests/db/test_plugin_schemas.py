@@ -79,3 +79,18 @@ def test_an_uninstalled_package_leaves_its_tables_and_a_home_that_migrates_and_o
     install(monkeypatch, 'SCHEMA')
     with pytest.raises(SchemaAhead, match='notes revision 0002 is not in the history of this'):
         migrated(path)
+
+
+def test_a_package_closes_its_tables_to_piloop_sql(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / 'piloop.db'
+    install(monkeypatch, 'SEALED')
+    migrated(path)
+    with closing(sql.connect(path, actor=System.HUMAN)) as con:
+        sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('c', '/c', '{}')")
+        with pytest.raises(sqlite3.DatabaseError, match='not authorized'):
+            sql.run(con, "INSERT INTO notes (campaign_id, body) VALUES (1, 'sealed')")
+    rows(path, "INSERT INTO notes (campaign_id, body) VALUES (1, 'sealed')")
+    with closing(sql.connect(path, actor=System.HUMAN)) as con:
+        assert sql.run(con, 'SELECT id, body FROM notes').rows == [(1, None)], (
+            'the package reads it, piloop sql does not'
+        )
