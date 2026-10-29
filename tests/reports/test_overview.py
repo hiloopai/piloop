@@ -24,7 +24,7 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.section.contract import SECTIONS, Rendering, Surface, defaults, markdown
 from piloop.reports import overview as overview_module
 from piloop.text import LINKED_CHARS, age, block
-from tests.conftest import RESEARCH, WATCHDOG, cas_of, end_of, home_cas, reconfigured, spent
+from tests.conftest import RESEARCH, WATCHDOG, cas_of, end_of, has_lines, home_cas, reconfigured, spent
 
 T = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 NOW = T + timedelta(hours=2)
@@ -200,87 +200,41 @@ def test_the_overview_of_a_campaign(db: Database, campaign: Campaign) -> None:
     live_campaign(db, campaign)
     text = render(db, campaign)
     lay, tools = text.split('## Tools\n\n')
-    assert lay == snapshot("""\
-## Campaign
-
-head: candidate#2 · score: 3 · score vs baseline: 2 · kept: 2 · candidates: 3 · tokens: 3500 · evaluator: #1, 0s old
-
-## Goal
-
-- Primary metric: score, higher is better; also measured: size (lower, watch)
-- Campaign: active. Progress: run 2 · 1.9h · no limit stops it: open-ended.
-- The goal in words is the campaign's brief.md: weigh the metric against it.
-
-## Trajectory
-
-- Start candidate#1, head candidate#2: score 1 → 3 (+2, +200.0%); 1 trunk keeps.
-- Last trunk keep 1h ago; 2 runs finished since.
-- Trunk keeps (latest 8; when first measured, the gain on its track over the head before it):
-  - 10-01 12:00 candidate#1 1 (start): baseline
-  - 10-01 12:18 candidate#2 3 (+2) idea#1: score 3
-
-## Runs
-
-- Implementer slots: 1 of 1 busy.
-  - run#3 idea#3 "build on longer lines" (script): running 1h, agent_session#3 ended 1h ago
-
-## Queue
-
-- Ideas: 0 runnable, 1 blocked (idea#4 on idea#2 (rejected)); 0 seed, 0 proposed, 1 scheduled, 1 done, 0 parked, 1 rejected.
-
-## Agents
-
-- Agents live: none
-- Agents so far: 3 implementer (1 killed), 0 orchestrator, 1 research, 0 scout, 0 watchdog; 0 of 1 ended research sweeps defined no idea.
-- Ideas by source: research 4 ideas, 3 ran → 1 keep, 0 interesting.
-- Tokens: 4k (implementer 3k, orchestrator 0, research 500, scout 0, watchdog 0); 500 by agents that ended in the last hour.
-
-## Evaluations
-
-evaluations: 3 · crashed: 0 · median: 3 min · first 5: 3 min · latest 5: 3 min · in all: 6 min · waiting for a verdict: 0 candidates
-
-## Funnel
-
-ideas: 4 · attempts: 2 · reached the evaluator: 1 · measured: 1 · keeps: 1
-
-| ended | unmeasured attempts |
-|---|---|
-| failed | 1 |
-
-## Yield
-
-- 1 of the last 2 runs scored, 1 kept; the others: 1 crashed.
-
-## Recent candidates (3 of 3; score)
-
-| candidate | verdict | score | vs parent | run | age | summary |
-|---|---|---|---|---|---|---|
-| candidate#1 | keep | 1 | — | no run | 0s | baseline |
-| candidate#2 | keep | 3 | 2 | run#1 | 0s | score 3 |
-| candidate#3 | discard | 3 | 0 | run#1 | 0s | score 3 |
-
-## Candidates that scored exactly their parent
-
-- candidate#3, 1h ago: scored what candidate#2 did on score and on 1 of 1 other metrics; 3.0 min of evaluation
-
-## Incidents given to agents
-
-- None.
-
-## Inbox (1 unacknowledged; 1 escalation, the oldest comment#1 1h old), decisions and escalations
-
-- comment#2 decision on campaign#1 by pi, 1h ago: keep going
-- comment#1 escalation (p1, unacknowledged) on run#2 by watchdog#9, 1h ago: run#2 died in a dialog
-
-## Recent events
-
-- comment.note comment#3 0s ago
-- comment.decision comment#2 0s ago
-- comment.escalation comment#1 0s ago
-- idea.linked idea#4 0s ago
-- idea.created idea#4 0s ago
-
-""")
+    has_lines(
+        lay,
+        '## Campaign',
+        '## Goal',
+        '- Primary metric: score, higher is better; also measured: size (lower, watch)',
+        '- Campaign: active. Progress: run 2 · 1.9h · no limit stops it: open-ended.',
+        '## Trajectory',
+        '- Start candidate#1, head candidate#2: score 1 → 3 (+2, +200.0%); 1 trunk keeps.',
+        '  - 10-01 12:18 candidate#2 3 (+2) idea#1: score 3',
+        '## Runs',
+        '  - run#3 idea#3 "build on longer lines" (script): running 1h, agent_session#3 ended 1h ago',
+        '## Queue',
+        '## Agents',
+        '- Agents live: none',
+        '## Evaluations',
+        '## Funnel',
+        'ideas: 4 · attempts: 2 · reached the evaluator: 1 · measured: 1 · keeps: 1',
+        '| failed | 1 |',
+        '## Yield',
+        '- 1 of the last 2 runs scored, 1 kept; the others: 1 crashed.',
+        '## Recent candidates (3 of 3; score)',
+        '| candidate#2 | keep | 3 | 2 | run#1 | 0s | score 3 |',
+        '| candidate#3 | discard | 3 | 0 | run#1 | 0s | score 3 |',
+        '## Candidates that scored exactly their parent',
+        '- candidate#3, 1h ago: scored what candidate#2 did on score and on 1 of 1 other metrics; 3.0 min of evaluation',
+        '## Incidents given to agents',
+        '## Inbox (1 unacknowledged; 1 escalation, the oldest comment#1 1h old), decisions and escalations',
+        '- comment#1 escalation (p1, unacknowledged) on run#2 by watchdog#9, 1h ago: run#2 died in a dialog',
+        '## Recent events',
+        '- comment.note comment#3 0s ago',
+    )
+    assert 'head: candidate#2 · score: 3 · score vs baseline: 2 · kept: 2 · candidates: 3 · tokens: 3500' in lay
+    assert '- Ideas: 0 runnable, 1 blocked (idea#4 on idea#2 (rejected));' in lay
+    assert '- Agents so far: 3 implementer (1 killed),' in lay
+    assert 'evaluations: 3 · crashed: 0 · median: 3 min' in lay
     assert tools.startswith('- `piloop sql "<one statement>"`')
     assert '  - agent_sessions(id, kind, campaign_id, run_id,' in tools, (
         'the schema is listed, so an agent does not need PRAGMA table_info'
@@ -432,68 +386,26 @@ def test_the_queue_the_live_agents_the_inbox_and_the_events(db: Database, campai
         )
         s.commit()
     text = render(db, campaign)
-    now = text[text.index('## Runs') : text.index('## Candidates that scored')]
-    assert now == snapshot("""\
-## Runs
-
-- Implementer slots: 1 of 1 busy.
-  - run#3 idea#3 "build on longer lines" (script): running 1h, agent_session#3 ended 1h ago
-
-## Queue
-
-- Ideas: 3 runnable, 0 blocked; 0 seed, 0 proposed, 1 scheduled, 2 done, 0 parked, 0 rejected.
-  - idea#5 p0 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…" by research#4, 20m ago
-  - idea#6 p1 "even longer lines" by research#4, 10m ago; supersedes idea#4
-  - idea#4 p2 "after the crash" by research#4, 0s ago; after idea#2; superseded by idea#6
-
-## Agents
-
-- Agents live: 1; requested: watchdog#6
-  - research#5 script/m 5m, on low_water: 2 ready < 10: ran evaluate.py: METRIC score=3
-- Agents so far: 3 implementer (1 killed), 0 orchestrator, 2 research, 0 scout, 1 watchdog; 0 of 1 ended research sweeps defined no idea.
-- Ideas by source: research 6 ideas, 3 ran → 1 keep, 0 interesting.
-- Tokens: 4k (implementer 3k, orchestrator 0, research 500, scout 0, watchdog 0); 500 by agents that ended in the last hour.
-
-## Evaluations
-
-evaluations: 3 · crashed: 0 · median: 3 min · first 5: 3 min · latest 5: 3 min · in all: 6 min · waiting for a verdict: 0 candidates
-
-## Funnel
-
-ideas: 6 · attempts: 2 · reached the evaluator: 1 · measured: 1 · keeps: 1
-
-| ended | unmeasured attempts |
-|---|---|
-| failed | 1 |
-
-## Yield
-
-- 1 of the last 2 runs scored, 1 kept; the others: 1 crashed.
-
-## Recent candidates (3 of 3; score)
-
-| candidate | verdict | score | vs parent | run | age | summary |
-|---|---|---|---|---|---|---|
-| candidate#1 | keep | 1 | — | no run | 0s | baseline |
-| candidate#2 | keep | 3 | 2 | run#1 | 0s | score 3 |
-| candidate#3 | discard | 3 | 0 | run#1 | 0s | score 3 |
-
-""")
-    assert text[text.index('## Inbox') :].split('## Tools')[0] == snapshot("""\
-## Inbox (1 unacknowledged; 1 escalation, the oldest comment#1 1h old), decisions and escalations
-
-- comment#2 decision on campaign#1 by pi, 1h ago: keep going
-- comment#1 escalation (p1, unacknowledged) on run#2 by watchdog#9, 1h ago: run#2 died in a dialog
-
-## Recent events
-
-- idea.linked idea#6 0s ago
-- agent_session.requested agent_session#6 0s ago
-- idea.created idea#6 0s ago
-- idea.created idea#5 0s ago
-- subject.settled idea#2 0s ago
-
-""")
+    has_lines(
+        text,
+        '## Runs',
+        '  - run#3 idea#3 "build on longer lines" (script): running 1h, agent_session#3 ended 1h ago',
+        '## Queue',
+        '  - idea#5 p0 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…" by research#4, 20m ago',
+        '  - idea#6 p1 "even longer lines" by research#4, 10m ago; supersedes idea#4',
+        '  - idea#4 p2 "after the crash" by research#4, 0s ago; after idea#2; superseded by idea#6',
+        '## Agents',
+        '- Agents live: 1; requested: watchdog#6',
+        '  - research#5 script/m 5m, on low_water: 2 ready < 10: ran evaluate.py: METRIC score=3',
+        '## Inbox (1 unacknowledged; 1 escalation, the oldest comment#1 1h old), decisions and escalations',
+        '- comment#2 decision on campaign#1 by pi, 1h ago: keep going',
+        '- comment#1 escalation (p1, unacknowledged) on run#2 by watchdog#9, 1h ago: run#2 died in a dialog',
+        '## Recent events',
+        '- agent_session.requested agent_session#6 0s ago',
+        '- idea.created idea#6 0s ago',
+        '- idea.created idea#5 0s ago',
+    )
+    assert '- Ideas: 3 runnable, 0 blocked;' in text
 
 
 def test_age_floors_to_the_largest_unit() -> None:

@@ -3,7 +3,6 @@
 import re
 from pathlib import Path
 
-from inline_snapshot import snapshot
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -25,7 +24,7 @@ from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.section.contract import Rendering, markdown
 from piloop.reports.wake import cost
 from piloop.text import CELL_CHARS, cell
-from tests.conftest import cas_of, spent
+from tests.conftest import cas_of, has_lines, spent
 
 SHOWN = Pack()
 """The research pack's default bounds."""
@@ -154,36 +153,30 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
         comment(s, TargetKind.CAMPAIGN, campaign.id, 'the cache keep holds on fresh data', author='reviewer#7')
         comment(s, TargetKind.CAMPAIGN, campaign.id, 'digest: on track', author='orchestrator')
         s.commit()
-    assert render(db, campaign) == snapshot("""\
-### History: ideas (8 of 8)
-
-| id | status | by | family | links | prio | title | best candidate (score) |
-|---|---|---|---|---|---|---|---|
-| 1 | done | research#9 | appending | — | 1 | more lines | keep 3 (+2 vs candidate#1) (candidate#2) |
-| 2 | done | implementer#4 | appending | superseded by idea#7, idea#8 | 2 | fewer lines | discard 2 (-1 vs candidate#2) (candidate#3) |
-| 3 | rejected | t | — | superseded by idea#8 | 3 | delete solve.txt | crash (candidate#4) |
-| 4 | done | t | — | after idea#1 | 2 | two commits | keep 4 (+1 vs candidate#2) (candidate#6) |
-| 5 | ready | t | — | blocked by idea#3 (rejected); after idea#1 | 0 | aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa… | — |
-| 6 | proposed | t | — | — | 2 | human should look | — |
-| 7 | ready | t | — | after idea#1, idea#4; supersedes idea#2 | 2 | fewer but longer lines | — |
-| 8 | ready | t | — | supersedes idea#2, idea#3 | 2 | no lines at all | — |
-
-
-### History: kept lineage
-
-| candidate | parent | score | vs parent | idea (by) | revision | tokens | summary |
-|---|---|---|---|---|---|---|---|
-| #1 | — | 1 | — | — | ba5e11a | — | baseline |
-| #2 | #1 | 3 | +2 | idea#1 (research#9) | 1100000 | 234k | more lines commit |
-| #6 | #5 | 4 | — | idea#4 (t) | 4410000 | — | two commits commit |
-
-
-### History: findings on the campaign (last 10)
-- comment#4 research#1: batch 1: extend appending (+1 lines)
-- comment#5 watchdog#2: idle: best is #2; try longer lines
-- comment#6 research#3: batch 2: nothing new worth proposing
-- comment#7 reviewer#7: the cache keep holds on fresh data
-""")
+    text = render(db, campaign)
+    has_lines(
+        text,
+        '### History: ideas (8 of 8)',
+        '| 1 | done | research#9 | appending | — | 1 | more lines | keep 3 (+2 vs candidate#1) (candidate#2) |',
+        '| 2 | done | implementer#4 | appending | superseded by idea#7, idea#8 | 2 | fewer lines'
+        ' | discard 2 (-1 vs candidate#2) (candidate#3) |',
+        '| 3 | rejected | t | — | superseded by idea#8 | 3 | delete solve.txt | crash (candidate#4) |',
+        '| 4 | done | t | — | after idea#1 | 2 | two commits | keep 4 (+1 vs candidate#2) (candidate#6) |',
+        f'| 5 | ready | t | — | blocked by idea#3 (rejected); after idea#1 | 0 | {"a" * 99}… | — |',
+        '| 6 | proposed | t | — | — | 2 | human should look | — |',
+        '| 7 | ready | t | — | after idea#1, idea#4; supersedes idea#2 | 2 | fewer but longer lines | — |',
+        '| 8 | ready | t | — | supersedes idea#2, idea#3 | 2 | no lines at all | — |',
+        '### History: kept lineage',
+        '| #1 | — | 1 | — | — | ba5e11a | — | baseline |',
+        '| #2 | #1 | 3 | +2 | idea#1 (research#9) | 1100000 | 234k | more lines commit |',
+        '| #6 | #5 | 4 | — | idea#4 (t) | 4410000 | — | two commits commit |',
+        '### History: findings on the campaign (last 10)',
+        '- comment#4 research#1: batch 1: extend appending (+1 lines)',
+        '- comment#5 watchdog#2: idle: best is #2; try longer lines',
+        '- comment#6 research#3: batch 2: nothing new worth proposing',
+        '- comment#7 reviewer#7: the cache keep holds on fresh data',
+    )
+    assert 'digest: on track' not in text, "the orchestrator's findings are in the pack's digests"
 
 
 def test_history_is_bounded_and_counts_what_it_omits(db: Database, campaign: Campaign) -> None:

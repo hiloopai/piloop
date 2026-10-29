@@ -45,7 +45,7 @@ from piloop.settings import Settings, WatchSettings
 from piloop.watch.app import CampaignScreen, CampaignsScreen, CandidatesTable, Follower, Lost, Shown, Started, Watch
 from piloop.watch.panels import Api, Part, read_frame, sparkline, touched
 from tests.campaign.test_inbox import news_lines
-from tests.conftest import RESEARCH, WATCHDOG, reconfigured, register, serving_api, spent, store_config
+from tests.conftest import RESEARCH, WATCHDOG, has_lines, reconfigured, register, serving_api, spent, store_config
 from tests.reports.test_history import idea
 
 
@@ -149,6 +149,17 @@ def campaign_screen(app: Watch) -> CampaignScreen:
     screen = app.screen
     assert isinstance(screen, CampaignScreen)
     return screen
+
+
+def cells(screen: str, first: str) -> list[str]:
+    """The cells of the row of ``screen`` whose first cell is ``first``: runs of two or more spaces part the cells."""
+    [row] = [line for line in screen.splitlines() if line.startswith(f' {first} ')]
+    return re.split(r' {2,}', row.strip())
+
+
+def detail(below: str) -> str:
+    """The lines of the detail panel, the rightmost one, in ``below``: the screen below the panel's title."""
+    return '\n'.join(line.split('│')[-2].rstrip() for line in below.splitlines()[1:] if line.count('│') >= 2)
 
 
 @pytest.fixture
@@ -300,70 +311,24 @@ def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, 
         shots.append(screen_text(app))
 
     drive(db, None, scenario)
-    assert shots[0].splitlines()[:5] == snapshot(
-        [
-            ' piloop: 2 campaigns',
-            '',
-            ' campaign  status                                    head     vs baseline  agents    ready    inbox    tokens    last event',
-            ' demo      active                                    4 score  +3           2 agents  1 ready  2 inbox  1.2M tok  comment.note 1m ago',
-            ' other     stopped: max_runs: 50 runs, and more wo…  —        —            0 agents  0 ready  0 inbox  —         —',
-        ]
+    assert shots[0].startswith(' piloop: 2 campaigns\n')
+    assert {'active', '4 score', '+3', '2 agents', '1 ready', '2 inbox', '1.2M tok', 'comment.note 1m ago'} <= set(
+        cells(shots[0], 'demo')
     )
+    assert cells(shots[0], 'other')[1] == 'stopped: max_runs: 50 runs, and more wo…'
     header, rest = shots[1].split('\n', 2)[:2], shots[1].split('\n', 2)[2]
     assert header[0] == ' demo · active'
     assert header[1].startswith(
         ' head: candidate#4 · score: 4 · score vs baseline: 3 · kept: 3 · candidates: 4 · tokens:'
     )
-    assert rest == snapshot("""\
-╭─ [1] Inbox 2 ────────────────────────────────────────────────────────────────────────╮╭─ [0] inbox ──────────────────────────────────────────────────────────╮
-│ p1  escalation  watchdog#3  30m  Codex cannot start: trust dialog. Environment or har││ comment#3 escalation on campaign#1 by watchdog#3, 30m ago · p1,      │
-│ p2  decision    pi          20m  Keep #2: the floor holds.                           ││ unacknowledged                                                       │
-╰──────────────────────────────────────────────────────────────────────────────────────╯│                                                                      │
-╭─ [2] Agents 2 ───────────────────────────────────────────────────────────────────────╮│ Codex cannot start: trust dialog. Environment or harness?            │
-│ #1  implementer  running   pi/m         3m   idea#2 longer lines                     ││ Second line.                                                         │
-│ #2  research     starting  claude/opus  10m  low_water: 1 ready < 10                 ││                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────────╯│                                                                      │
-╭─ [3] Ideas 1 proposed · 1 ready · 1 scheduled ───────────────────────────────────────╮│                                                                      │
-│ P2  proposed   #4  soft voting    —                                                  ││                                                                      │
-│ P1  ready      #3  shorter lines  —                                                  ││                                                                      │
-│ P2  scheduled  #2  longer lines   —                                                  ││                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────────╯│                                                                      │
-╭─ [4] Candidates ▁▆█ 1 → 4 ───────────────────────────────────────────────────────────╮│                                                                      │
-│ candidate#4  Kept             4  +2  1h  [wip] step 4                                ││                                                                      │
-│ candidate#3  Discarded        2  -1  1h  [wip] step 3                                ││                                                                      │
-│ candidate#2  Kept             3  +2  1h  [wip] step 2                                ││                                                                      │
-│ candidate#1  Baseline · Kept  1  —   3h  baseline                                    ││                                                                      │
-│                                                                                      ││                                                                      │
-│                                                                                      ││                                                                      │
-│                                                                                      ││                                                                      │
-│                                                                                      ││                                                                      │
-│                                                                                      ││                                                                      │
-│                                                                                      ││                                                                      │
-│                                                                                      ││                                                                      │
-│                                                                                      ││                                                                      │
-│                                                                                      ││                                                                      │
-│                                                                                      ││                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────────╯│                                                                      │
-╭─ [5] Status 13 ──────────────────────────────────────────────────────────────────────╮│                                                                      │
-│ Campaign                                                                             ││                                                                      │
-│ Goal                                                                                 ││                                                                      │
-│ Trajectory                                                                           ││                                                                      │
-│ Runs                                                                                 ││                                                                      │
-│ Queue                                                                                ││                                                                      │
-│ Agents                                                                               ││                                                                      │
-│ Evaluations                                                                          ││                                                                      │
-│ Funnel                                                                             ▂▂││                                                                      │
-│ Yield                                                                                ││                                                                      │
-│ Recent candidates (4 of 4; score)                                                    ││                                                                      │
-╰──────────────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯
- a ack  A ack all shown  r reply  / filter  esc campaigns  q quit  ? keys
-""")
-    assert shots[2].splitlines()[:2] == snapshot(
-        [
-            ' other · stopped: max_runs: 50 runs, and more words than the column holds',
-            ' head: no trunk keep · kept: 0 · candidates: 1 · stopped because: max_runs: 50 runs, and more words than the column holds',
-        ]
+    assert re.findall(r'╭─ \[\d\] (\w+)', rest) == ['Inbox', 'inbox', 'Agents', 'Ideas', 'Candidates', 'Status']
+    assert ' comment#3 escalation on campaign#1 by watchdog#3, 30m ago · p1,' in detail(rest), (
+        'the detail opens on the first item of the inbox'
     )
+    assert 'esc campaigns' in rest.splitlines()[-1]
+    other = shots[2].splitlines()
+    assert other[0] == ' other · stopped: max_runs: 50 runs, and more words than the column holds'
+    assert other[1].endswith(' · stopped because: max_runs: 50 runs, and more words than the column holds')
 
 
 def test_a_campaign_not_registered_yet_is_waited_for_and_shown_once_it_is(db: Database, campaign_path: Path) -> None:
@@ -502,14 +467,11 @@ def test_the_agents_panel_shows_the_selected_agents_output_and_its_state(db: Dat
         shots.append(screen_text(app).split('[0] agents')[1])
 
     drive(db, 'demo', scenario)
-    assert [line.split('│')[-2].rstrip() for line in shots[0].splitlines()[1:6]] == snapshot(
-        [
-            ' implementer-1 · pi/m · running 3m · subprocess',
-            ' on: idea#2 longer lines',
-            '',
-            ' the last 1 lines it wrote',
-            ' hello from the agent',
-        ]
+    has_lines(
+        detail(shots[0]),
+        ' implementer-1 · pi/m · running 3m · subprocess',
+        ' on: idea#2 longer lines',
+        ' hello from the agent',
     )
     assert 'proposing idea B' in shots[1], "a headless agent's saved transcript"
 
@@ -703,25 +665,19 @@ def test_the_ideas_detail(db: Database, live_campaign: Campaign) -> None:
         shots.append(screen_text(app).split('[0] ideas')[1])
 
     drive(db, 'demo', scenario)
-    assert [line.split('│')[-2].rstrip() for line in shots[0].splitlines()[1:17]] == snapshot(
-        [
-            ' idea#2 longer lines',
-            ' status scheduled · priority 2 · by t 20m ago · links: —',
-            '',
-            ' hypothesis:',
-            ' longer lines helps',
-            '',
-            ' plan:',
-            ' step one',
-            ' step two',
-            '',
-            ' runs (1):',
-            ' - run#2 running pi/m',
-            '',
-            ' comments (1):',
-            ' - comment#6 note by human: go on',
-            '',
-        ]
+    has_lines(
+        detail(shots[0]),
+        ' idea#2 longer lines',
+        ' status scheduled · priority 2 · by t 20m ago · links: —',
+        ' hypothesis:',
+        ' longer lines helps',
+        ' plan:',
+        ' step one',
+        ' step two',
+        ' runs (1):',
+        ' - run#2 running pi/m',
+        ' comments (1):',
+        ' - comment#6 note by human: go on',
     )
 
 
@@ -734,18 +690,19 @@ def test_the_status_panel_lists_the_overview_s_sections(db: Database, live_campa
         shots.append(screen_text(app))
 
     drive(db, 'demo', scenario)
-    assert [line.split('│')[1].rstrip() for line in shots[0].split('[5] ')[1].splitlines()[1:4]] == snapshot(
-        [' Campaign', ' Goal', ' Trajectory']
+    panel = shots[0].split('[5] ')[1].splitlines()[1:]
+    has_lines(
+        '\n'.join(line.split('│')[1].rstrip() for line in panel if line.startswith('│')),
+        ' Campaign',
+        ' Goal',
+        ' Trajectory',
+        ' Runs',
+        ' Queue',
+        ' Agents',
     )
-    assert [line.split('│')[-2].rstrip() for line in shots[0].split('[0] status')[1].splitlines()[1:6]] == snapshot(
-        [
-            ' Goal',
-            '',
-            '  • Primary metric: score, higher is better; also measured: size',
-            '    (lower, watch)',
-            '  • Campaign: active. Progress: run 2/50 · 2.0h/12h · 1.2M/5.0M tok ·',
-        ]
-    )
+    goal = detail(shots[0].split('[0] status')[1])
+    has_lines(goal, ' Goal', '  • Primary metric: score, higher is better; also measured: size')
+    assert '  • Campaign: active. Progress: run 2/50 · 2.0h/12h · 1.2M/5.0M tok' in goal
 
 
 def test_question_mark_shows_the_panels_keys_and_0_focuses_the_detail(db: Database, live_campaign: Campaign) -> None:

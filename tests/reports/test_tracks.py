@@ -20,7 +20,7 @@ from piloop.plugins.campaign_type.optimization.pack import pack
 from piloop.plugins.campaign_type.optimization.summary import summary
 from piloop.settings import Settings, WatchSettings
 from piloop.watch.panels import Api, CandidatesPanel, Frame, campaigns, read_frame
-from tests.conftest import reconfigured, serving_api
+from tests.conftest import has_lines, reconfigured, serving_api
 from tests.reports.test_history import SHOWN, full
 from tests.reports.test_overview import NOW, candidate, live_campaign, render
 
@@ -66,45 +66,26 @@ def test_status_names_every_track_its_head_its_floor_and_what_works_on_it(db: Da
             )
         )
         s.commit()
-    lay = render(db, campaign).split('## Runs')[0]
-    assert lay == snapshot("""\
-## Campaign
-
-head: candidate#4 · score: 3 · score vs baseline: 2 · size: 8 · size vs baseline: -4 · kept: 3 · candidates: 4 · tokens: 3500 · evaluator: #1, 0s old
-
-## Goal
-
-- Tracks, each a primary its keeps improve while holding the others: score (score, higher, margin 1, floor 0.5, share 0.75); size (size, lower, margin 2, floor 20, share 0.25)
-- Campaign: active. Progress: run 3 · 1.9h · no limit stops it: open-ended.
-- The goal in words is the campaign's brief.md: weigh the metric against it.
-
-## Tracks
-
-- score: score 3 at the head (+2 on the start); floor 0.5, 2.5 to spare; 1 trunk keeps, the latest candidate#2 1h ago; share 0.75 of 1 slots, 0 running; 0 runnable ideas, 0 proposed.
-- size: size 8 at the head (-4 on the start); floor 20, 12 to spare; 1 trunk keeps, the latest candidate#4 1h ago; share 0.25 of 1 slots, 2 running; 0 runnable ideas, 1 proposed.
-
-## Trajectory
-
-- Start candidate#1, head candidate#4: score 1 → 3 (+2, +200.0%); size 12 → 8 (-4, -33.3%); 2 trunk keeps.
-- Last trunk keep 1h ago; 0 runs finished since.
-- Trunk keeps (latest 8; when first measured, the gain on its track over the head before it):
-  - 10-01 12:00 candidate#1 1 (start): baseline
-  - 10-01 12:18 candidate#2 [score] score 3 (+2) idea#1: score 3
-  - 10-01 13:00 candidate#4 [size] size 8 (-2) idea#3: score 3
-
-""")
-    recent = render(db, campaign).split('## Recent candidates')[1].split('## Candidates that scored')[0]
-    assert recent == snapshot("""\
- (4 of 4; each on its track's primary)
-
-| candidate | verdict | track | score | vs parent | run | age | summary |
-|---|---|---|---|---|---|---|---|
-| candidate#1 | keep | score | 1 | — | no run | 0s | baseline |
-| candidate#2 | keep | score | 3 | 2 | run#1 | 0s | score 3 |
-| candidate#3 | discard | score | 3 | 0 | run#1 | 0s | score 3 |
-| candidate#4 | keep | size | 8 | -2 | run#4 | 0s | score 3 |
-
-""")
+    text = render(db, campaign)
+    has_lines(
+        text,
+        '## Goal',
+        '- Tracks, each a primary its keeps improve while holding the others:'
+        ' score (score, higher, margin 1, floor 0.5, share 0.75); size (size, lower, margin 2, floor 20, share 0.25)',
+        '## Tracks',
+        '- score: score 3 at the head (+2 on the start); floor 0.5, 2.5 to spare; 1 trunk keeps,'
+        ' the latest candidate#2 1h ago; share 0.75 of 1 slots, 0 running; 0 runnable ideas, 0 proposed.',
+        '- size: size 8 at the head (-4 on the start); floor 20, 12 to spare; 1 trunk keeps,'
+        ' the latest candidate#4 1h ago; share 0.25 of 1 slots, 2 running; 0 runnable ideas, 1 proposed.',
+        '## Trajectory',
+        '- Start candidate#1, head candidate#4: score 1 → 3 (+2, +200.0%); size 12 → 8 (-4, -33.3%); 2 trunk keeps.',
+        '  - 10-01 12:18 candidate#2 [score] score 3 (+2) idea#1: score 3',
+        '  - 10-01 13:00 candidate#4 [size] size 8 (-2) idea#3: score 3',
+        "## Recent candidates (4 of 4; each on its track's primary)",
+        '| candidate#2 | keep | score | 3 | 2 | run#1 | 0s | score 3 |',
+        '| candidate#4 | keep | size | 8 | -2 | run#4 | 0s | score 3 |',
+    )
+    assert 'head: candidate#4 · score: 3 · score vs baseline: 2 · size: 8 · size vs baseline: -4' in text
 
 
 def test_status_of_a_campaign_with_no_candidate_says_there_is_no_baseline_yet(db: Database, campaign: Campaign) -> None:

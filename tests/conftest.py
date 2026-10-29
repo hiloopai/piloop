@@ -553,6 +553,17 @@ def wait_until(predicate: Callable[[], object], what: str = 'the condition', *, 
         time.sleep(0.05)
 
 
+def has_lines(text: str, *lines: str) -> None:
+    """Fail unless each of ``lines`` is a whole line of ``text``, in this order, with any lines between them.
+
+    For a rendered screen or report: a test names the facts it is about, so a new line or section breaks no test.
+    """
+    rest = text.splitlines()
+    for line in lines:
+        assert line in rest, f'{line!r} is not a line of the text, after the lines before it:\n{text}'
+        rest = rest[rest.index(line) + 1 :]
+
+
 def wait_for_agent_session_handle(db: Database) -> dict[str, object]:
     """Poll until some implementer is ``running`` with a published handle; returns the handle.
 

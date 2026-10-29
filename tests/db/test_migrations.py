@@ -20,7 +20,6 @@ from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
 from covalence import Cid
 from git import Repo
-from inline_snapshot import snapshot
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.exc import IntegrityError
 
@@ -64,6 +63,7 @@ from piloop.plugins.memory.contract import MEMORY
 from piloop.plugins.memory.local import LocalMemory
 from piloop.store.chunks import read
 from piloop.version import Version, installed
+from scripts.release_triggers import PATH as RELEASE_TRIGGERS, ReleaseTriggers
 from tests.conftest import bare_config, disk, reconfigured, role_of
 from tests.test_deprecated import piloop_version
 
@@ -181,170 +181,30 @@ def schema(path: Path) -> list[tuple[str, ...]]:
         return con.execute('SELECT type, name, sql FROM sqlite_master ORDER BY name').fetchall()
 
 
-def test_the_sql_of_every_persistent_trigger_is_pinned() -> None:
-    """A database keeps the persistent triggers that its migrations installed, so a change to their SQL (to an event
-    model that one renders, for example) reaches no database that is already migrated."""
-    assert {t.name: t.sql() for t in PERSISTENT} == snapshot(
-        {
-            'campaigns_updated_at': """\
-CREATE TRIGGER campaigns_updated_at AFTER UPDATE ON campaigns
-WHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by
-BEGIN
-  UPDATE campaigns SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;
-END;\
-""",
-            'ideas_updated_at': """\
-CREATE TRIGGER ideas_updated_at AFTER UPDATE ON ideas
-WHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by
-BEGIN
-  UPDATE ideas SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;
-END;\
-""",
-            'runs_updated_at': """\
-CREATE TRIGGER runs_updated_at AFTER UPDATE ON runs
-WHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by
-BEGIN
-  UPDATE runs SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;
-END;\
-""",
-            'candidates_updated_at': """\
-CREATE TRIGGER candidates_updated_at AFTER UPDATE ON candidates
-WHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by
-BEGIN
-  UPDATE candidates SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;
-END;\
-""",
-            'comments_updated_at': """\
-CREATE TRIGGER comments_updated_at AFTER UPDATE ON comments
-WHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by
-BEGIN
-  UPDATE comments SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;
-END;\
-""",
-            'agent_sessions_updated_at': """\
-CREATE TRIGGER agent_sessions_updated_at AFTER UPDATE ON agent_sessions
-WHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by
-BEGIN
-  UPDATE agent_sessions SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;
-END;\
-""",
-            'documents_updated_at': """\
-CREATE TRIGGER documents_updated_at AFTER UPDATE ON documents
-WHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by
-BEGIN
-  UPDATE documents SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;
-END;\
-""",
-            'comments_escalation_event': """\
-CREATE TRIGGER comments_escalation_event AFTER INSERT ON comments
-WHEN NEW.kind = 'escalation'
-BEGIN
-  INSERT INTO events (at, actor, target_kind, target_id, payload)
-  VALUES (strftime('%Y-%m-%d %H:%M:%f', 'now'), NEW.author, 'comment', NEW.id, json_object('kind', 'comment.' || NEW.kind, 'target_kind', NEW.target_kind, 'target_id', NEW.target_id, 'in_reply_to', NEW.in_reply_to));
-END;\
-""",
-            'idea_links_campaign': """\
-CREATE TRIGGER idea_links_campaign BEFORE INSERT ON idea_links
-WHEN (SELECT campaign_id FROM ideas WHERE id = NEW.idea_id) IS NOT (SELECT campaign_id FROM ideas WHERE id = NEW.target_id)
-BEGIN
-  SELECT RAISE(ABORT, 'idea_links: idea_id and target_id must be ideas of the same campaign');
-END;\
-""",
-            'agent_sessions_kind': """\
-CREATE TRIGGER agent_sessions_kind BEFORE INSERT ON agent_sessions
-WHEN NEW.campaign_id IS NOT NULL AND (SELECT json_type(config, '$.plugins.role.' || json_quote(NEW.kind)) FROM campaigns WHERE id = NEW.campaign_id) IS NULL
-BEGIN
-  SELECT RAISE(ABORT, 'agent_sessions.kind must be a role of the campaign: a key of plugins.role in its config');
-END;\
-""",
-            'campaigns_parent_insert': """\
-CREATE TRIGGER campaigns_parent_insert AFTER INSERT ON campaigns
-WHEN NEW.parent_id IS NOT NULL AND NEW.id IN (WITH RECURSIVE up(id) AS (SELECT NEW.parent_id UNION SELECT p.parent_id FROM campaigns p JOIN up ON p.id = up.id WHERE p.parent_id IS NOT NULL) SELECT id FROM up)
-BEGIN
-  SELECT RAISE(ABORT, 'campaigns.parent_id: a campaign cannot be under itself or under one of its descendants');
-END;\
-""",
-            'campaigns_parent_update': """\
-CREATE TRIGGER campaigns_parent_update AFTER UPDATE OF parent_id ON campaigns
-WHEN NEW.parent_id IS NOT NULL AND NEW.id IN (WITH RECURSIVE up(id) AS (SELECT NEW.parent_id UNION SELECT p.parent_id FROM campaigns p JOIN up ON p.id = up.id WHERE p.parent_id IS NOT NULL) SELECT id FROM up)
-BEGIN
-  SELECT RAISE(ABORT, 'campaigns.parent_id: a campaign cannot be under itself or under one of its descendants');
-END;\
-""",
-            'journal_no_replace': """\
-CREATE TRIGGER journal_no_replace BEFORE INSERT ON journal
-WHEN EXISTS (SELECT 1 FROM journal WHERE id = NEW.id)
-BEGIN
-  SELECT RAISE(ABORT, 'journal rows are never replaced: insert a new row');
-END;\
-""",
-            'lessons_no_replace': """\
-CREATE TRIGGER lessons_no_replace BEFORE INSERT ON lessons
-WHEN EXISTS (SELECT 1 FROM lessons WHERE id = NEW.id)
-BEGIN
-  SELECT RAISE(ABORT, 'lessons rows are never replaced: insert a new row');
-END;\
-""",
-            'ideas_fts_insert': """\
-CREATE TRIGGER ideas_fts_insert AFTER INSERT ON ideas
-BEGIN
-  INSERT INTO ideas_fts (rowid, title, hypothesis, plan) VALUES (NEW.id, NEW.title, NEW.hypothesis, NEW.plan);
-END;\
-""",
-            'ideas_fts_delete': """\
-CREATE TRIGGER ideas_fts_delete AFTER DELETE ON ideas
-BEGIN
-  INSERT INTO ideas_fts (ideas_fts, rowid, title, hypothesis, plan) VALUES ('delete', OLD.id, OLD.title, OLD.hypothesis, OLD.plan);
-END;\
-""",
-            'ideas_fts_update': """\
-CREATE TRIGGER ideas_fts_update AFTER UPDATE OF id, title, hypothesis, plan ON ideas
-BEGIN
-  INSERT INTO ideas_fts (ideas_fts, rowid, title, hypothesis, plan) VALUES ('delete', OLD.id, OLD.title, OLD.hypothesis, OLD.plan);
-  INSERT INTO ideas_fts (rowid, title, hypothesis, plan) VALUES (NEW.id, NEW.title, NEW.hypothesis, NEW.plan);
-END;\
-""",
-            'comments_fts_insert': """\
-CREATE TRIGGER comments_fts_insert AFTER INSERT ON comments
-BEGIN
-  INSERT INTO comments_fts (rowid, body) VALUES (NEW.id, NEW.body);
-END;\
-""",
-            'comments_fts_delete': """\
-CREATE TRIGGER comments_fts_delete AFTER DELETE ON comments
-BEGIN
-  INSERT INTO comments_fts (comments_fts, rowid, body) VALUES ('delete', OLD.id, OLD.body);
-END;\
-""",
-            'comments_fts_update': """\
-CREATE TRIGGER comments_fts_update AFTER UPDATE OF id, body ON comments
-BEGIN
-  INSERT INTO comments_fts (comments_fts, rowid, body) VALUES ('delete', OLD.id, OLD.body);
-  INSERT INTO comments_fts (rowid, body) VALUES (NEW.id, NEW.body);
-END;\
-""",
-            'documents_fts_insert': """\
-CREATE TRIGGER documents_fts_insert AFTER INSERT ON documents
-BEGIN
-  INSERT INTO documents_fts (rowid, title, body) VALUES (NEW.id, NEW.title, NEW.body);
-END;\
-""",
-            'documents_fts_delete': """\
-CREATE TRIGGER documents_fts_delete AFTER DELETE ON documents
-BEGIN
-  INSERT INTO documents_fts (documents_fts, rowid, title, body) VALUES ('delete', OLD.id, OLD.title, OLD.body);
-END;\
-""",
-            'documents_fts_update': """\
-CREATE TRIGGER documents_fts_update AFTER UPDATE OF id, title, body ON documents
-BEGIN
-  INSERT INTO documents_fts (documents_fts, rowid, title, body) VALUES ('delete', OLD.id, OLD.title, OLD.body);
-  INSERT INTO documents_fts (rowid, title, body) VALUES (NEW.id, NEW.title, NEW.body);
-END;\
-""",
-        }
-    ), (
-        'a persistent trigger changed: add a migration that recreates it (recreate or install), then update this snapshot'
+def test_a_database_of_the_last_release_upgrades_to_every_persistent_trigger_as_the_code_renders_it(
+    tmp_path: Path,
+) -> None:
+    """A database keeps the triggers of the release that created them until a migration creates them again, so a
+    change to a trigger's SQL (to an event model that one renders, for example) needs a migration that recreates it."""
+    released = ReleaseTriggers.model_validate_json(RELEASE_TRIGGERS.read_text())
+    assert released.version == str(piloop_version()), (
+        'a release records its triggers: uv run -m scripts.release_triggers'
+    )
+    path = tmp_path / 'piloop.db'
+    for chain, head in released.heads.items():
+        command.upgrade(alembic_config(f'sqlite:///{path}', chain, disk(tmp_path)), head)
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for (name,) in con.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall():
+            con.execute(f'DROP TRIGGER {name}')
+        for sql in released.triggers.values():
+            con.execute(sql)
+    engine = create_engine(f'sqlite:///{path}')
+    migrate(engine, cas=disk(tmp_path), backups=0, daemon=None)
+    engine.dispose()
+    with closing(sqlite3.connect(path)) as con:
+        installed = dict(con.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'"))
+    assert installed == {t.name: t.sql().removesuffix(';') for t in PERSISTENT}, (
+        'a persistent trigger changed: add a migration that recreates it (recreate or install)'
     )
 
 

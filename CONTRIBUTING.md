@@ -478,6 +478,9 @@ Maintainers only.
    `git ls-tree --name-only vX.(Y-1).Z piloop/db/migrations/versions/` lists, and each plugin's is the last file of its
    `migrations/` directory. Those heads are the oldest schema that this release migrates, so a database upgrades one
    minor release at a time, through that patch release. The test of `RELEASES` fails until it is there.
+   For every release, run `uv run -m scripts.release_triggers`. It records the triggers of a new database of this
+   release, which a migration test upgrades to check that each changed trigger has a migration. That test fails until
+   you run it.
 2. Write the release notes:
 
    ```bash
