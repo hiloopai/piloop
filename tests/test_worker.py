@@ -6,7 +6,7 @@ import shutil
 import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import partial
 from http import HTTPStatus
 from pathlib import Path
@@ -76,7 +76,7 @@ from piloop.plugins.executor.kit.leases import (
 from piloop.plugins.executor.kit.relay import Relay
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.executor.workers.worker import WORKER_ANOMALY, Unsent, Worker
-from piloop.plugins.runtime.contract import QUEUE, Deadline, ExitStatus, Handle, put, take
+from piloop.plugins.runtime.contract import QUEUE, AgentSpec, Deadline, ExitStatus, Handle, put, take
 from piloop.plugins.vcs.git import commands as git
 from piloop.settings import INPUTS_DIR, Settings
 from piloop.store import tree as tree_module
@@ -90,6 +90,7 @@ from tests.conftest import (
     home_cas,
     role_timeout,
     serving,
+    still,
     timed,
     wait_until,
     workers_of,
@@ -566,6 +567,20 @@ def test_a_stale_evaluation_never_touches_the_files_of_the_lease_that_replaced_i
         assert (measurement.candidate_id, measurement.error) == (candidate, None)
 
 
+def renewed_at(db: Database, agent_session_id: AgentSessionId) -> datetime:
+    """When the agent's lease was last renewed."""
+    with db.session() as s:
+        lease = s.scalars(select(Lease).where(Lease.agent_session_id == agent_session_id)).one()
+        assert lease.renewed_at is not None
+        return lease.renewed_at
+
+
+def renewal(db: Database, agent_session_id: AgentSessionId, after: datetime) -> datetime:
+    """Wait for a heartbeat that renews the agent's lease after ``after``, and return when it did."""
+    wait_until(lambda: renewed_at(db, agent_session_id) > after, 'a heartbeat that renews it')
+    return renewed_at(db, agent_session_id)
+
+
 def renewed_while(ex: RunController, db: Database, agent_session_id: AgentSessionId, seconds: float) -> None:
     """Tick the scheduler's expiry for ``seconds``, and check that the agent's lease stays live meanwhile."""
     deadline = time.monotonic() + seconds
@@ -621,16 +636,33 @@ def test_a_slow_start_holds_back_no_heartbeat(
     monkeypatch: pytest.MonkeyPatch,
     launched: list[threading.Thread],
 ) -> None:
-    """A start can take minutes (a checkout of a large repo); meanwhile the worker's other agents are renewed."""
+    """A start can take minutes (a checkout of a large repo); meanwhile the worker's other agents are renewed.
+
+    The second agent's start is held until three heartbeats renewed the first agent's lease.
+    """
     hold = tmp_path / 'hold'
     hold.touch()
     use(db, campaign, HOLD.format(hold=hold), timeout=600)
-    ex = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=timed(FAST)))
+    ex = RunController(db, Tracer(None), tmp_path, factory(runtime), executor=timed(FAST))
+    workers_of(ex).worker.clock = still  # a heartbeat that a loaded host holds stops no agent
+    serving(ex)
     first = running_agent(db, campaign, ex, tmp_path, 'first', launched)
+    starting, release = threading.Event(), threading.Event()
     start = runtime.start
-    monkeypatch.setattr(runtime, 'start', lambda spec: time.sleep(2) or start(spec))
+
+    def held(spec: AgentSpec) -> Handle:
+        starting.set()
+        assert release.wait(60)
+        return start(spec)
+
+    monkeypatch.setattr(runtime, 'start', held)
     launching(db, campaign, ex, tmp_path, 'second', launched)
-    renewed_while(ex, db, first, 2.5)
+    assert starting.wait(30)
+    renewed = renewed_at(db, first)
+    for _ in range(3):
+        renewed = renewal(db, first, renewed)
+    assert lease_state(db, first) is LeaseState.RUNNING
+    release.set()
     hold.unlink()
 
 
@@ -1199,13 +1231,15 @@ def test_a_dismissed_worker_stops_its_job_keeps_an_unsent_report_in_its_spool_an
         local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0),
         runners=('process',),
     )
+    worker.clock = still  # so the self-stop never ends it: only the refusal can
     worker.start()
     wait_until(lambda: lease_states(db) == [LeaseState.RUNNING])
     client.refused |= set(refused)
-    began = time.monotonic()
-    worker.wait()
+    loop = worker._loop
+    assert loop is not None
+    loop.join(30)
+    assert not loop.is_alive(), 'the first refused call ended it'
     assert str(worker.dismissed) == f'{refused[0]}: the token is unknown or revoked'
-    assert time.monotonic() - began < FAST.self_stop
     assert worker.spool.leases() == spooled, 'a report that it could not send waits for a worker that is taken again'
 
 
@@ -1306,8 +1340,11 @@ def started_evaluation(db: Database, campaign: Campaign, tmp_path: Path) -> Eval
 
 
 def worker_on(leases: Leases, db: Database, tmp_path: Path, *, once: bool = False) -> Worker:
+    """A worker of ``serve`` on ``leases``, on a clock that stands still: only a drain or ``once`` ends it."""
     site = local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0)
-    return Worker(Local(leases, SERVE), Tracer(None), site, runners=('process',), once=once)
+    worker = Worker(Local(leases, SERVE), Tracer(None), site, runners=('process',), once=once)
+    worker.clock = still
+    return worker
 
 
 def test_a_drained_worker_reports_its_job_takes_no_other_and_ends(

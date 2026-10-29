@@ -114,7 +114,7 @@ from piloop.plugins.lineage.wire import LineageClient
 from piloop.plugins.memory.local.api import JournalBody, Journaled
 from piloop.plugins.memory.local.tables import Journal
 from piloop.plugins.network.contract import NetworkHost
-from piloop.plugins.network.https import ACTOR_HEADER, TOKEN_ENV, Https
+from piloop.plugins.network.https import ACTOR_HEADER, TIMEOUT, TOKEN_ENV, Https
 from piloop.plugins.network.proxy import Proxy, Rule
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
@@ -165,8 +165,8 @@ def test_on_the_network_a_caller_needs_a_token_whose_access_reads(
 ) -> None:
     reader = token(db, 'ana', Access.READ)
     with serving_api(cfg, listen='127.0.0.1:0') as [_, tcp]:
-        assert httpx.get(tcp.url + '/v1/status').status_code == 401, 'only the socket knows its owner'
-        answered_ = httpx.get(tcp.url + '/v1/status', headers={'Authorization': f'Bearer {reader}'})
+        assert httpx.get(tcp.url + '/v1/status', timeout=TIMEOUT).status_code == 401, 'only the socket knows its owner'
+        answered_ = httpx.get(tcp.url + '/v1/status', headers={'Authorization': f'Bearer {reader}'}, timeout=TIMEOUT)
         assert answered_.status_code == 200 and answered_.json()['daemon']['listen'] == tcp.url
 
 
@@ -393,15 +393,16 @@ def test_a_caller_acts_as_itself_or_the_orchestrator_and_only_an_agent_s_token_a
     with serving_api(cfg, listen='127.0.0.1:0') as [_, tcp]:
         news = tcp.url + '/v1/inbox/news'
         for named in (None, 'human', 'human:ana', 'orchestrator'):
-            assert httpx.get(news, headers={**reader, **({ACTOR_HEADER: named} if named else {})}).status_code == 200
-        agent = httpx.get(news, headers={**reader, ACTOR_HEADER: 'implementer#12'})
+            headers = {**reader, **({ACTOR_HEADER: named} if named else {})}
+            assert httpx.get(news, headers=headers, timeout=TIMEOUT).status_code == 200
+        agent = httpx.get(news, headers={**reader, ACTOR_HEADER: 'implementer#12'}, timeout=TIMEOUT)
         assert agent.json() == {
             'error': 'forbidden',
             'detail': 'ana may not act as implementer#12: only the token of implementer#12 acts as it',
         }
-        other = httpx.get(news, headers={**reader, ACTOR_HEADER: 'human:bob'})
+        other = httpx.get(news, headers={**reader, ACTOR_HEADER: 'human:bob'}, timeout=TIMEOUT)
         assert other.json() == {'error': 'forbidden', 'detail': 'ana has read access, which may not act as human:bob'}
-        assert httpx.get(news, headers={**reader, ACTOR_HEADER: 'implementer#'}).status_code == 422
+        assert httpx.get(news, headers={**reader, ACTOR_HEADER: 'implementer#'}, timeout=TIMEOUT).status_code == 422
 
 
 def test_an_agent_s_token_acts_as_its_agent_only_and_the_owner_on_the_socket_as_anyone_else(
@@ -763,7 +764,7 @@ def test_a_limit_is_set_and_unset_by_an_admin_and_refused_on_a_key_that_is_not_l
             client.unset_limit(key)
         assert unknown.value.error == Problem.UNKNOWN_LIMIT
         actor = {'Authorization': f'Bearer {token(db, "ana", Access.ACT)}'}
-        refused = httpx.get(tcp.url + '/v1/limits', headers=actor)
+        refused = httpx.get(tcp.url + '/v1/limits', headers=actor, timeout=TIMEOUT)
     assert refused.json() == {'detail': 'ana has act access, and this route needs admin'}
 
 
@@ -795,7 +796,7 @@ def test_an_admin_sets_lists_and_removes_secrets(
         with pytest.raises(Refused, match='^name: String should match pattern'):
             admin.set_secret('1X', home, body)
         actor = {'Authorization': f'Bearer {token(db, "ana", Access.ACT)}'}
-        refused = httpx.get(tcp.url + '/v1/secrets', headers=actor)
+        refused = httpx.get(tcp.url + '/v1/secrets', headers=actor, timeout=TIMEOUT)
     assert refused.json() == {'detail': 'ana has act access, and this route needs admin'}
 
 
@@ -1257,7 +1258,9 @@ def test_an_admin_makes_a_token_whose_secret_only_its_answer_carries_and_revokes
             client.revoke_token('gpu1')
         assert unknown.value.error == Problem.UNKNOWN_TOKEN
         actor = {'Authorization': f'Bearer {token(db, "ana", Access.ACT)}'}
-        refused = httpx.post(tcp.url + '/v1/tokens', headers=actor, json={'name': 'mine', 'access': 'admin'})
+        refused = httpx.post(
+            tcp.url + '/v1/tokens', headers=actor, json={'name': 'mine', 'access': 'admin'}, timeout=TIMEOUT
+        )
     assert refused.json() == {'detail': 'ana has act access, and this route needs admin'}
 
 
@@ -1407,8 +1410,8 @@ def test_a_write_needs_act_access_and_a_caller_whose_name_signs(
     reader = {'Authorization': f'Bearer {token(db, "ana", Access.READ)}'}
     spaced = {'Authorization': f'Bearer {token(db, "two words", Access.ACT)}'}
     with serving_api(cfg, listen='127.0.0.1:0') as [_, tcp]:
-        refused = httpx.post(tcp.url + '/v1/campaigns/demo/resume', headers=reader)
-        unsigned = httpx.post(tcp.url + '/v1/campaigns/demo/resume', headers=spaced)
+        refused = httpx.post(tcp.url + '/v1/campaigns/demo/resume', headers=reader, timeout=TIMEOUT)
+        unsigned = httpx.post(tcp.url + '/v1/campaigns/demo/resume', headers=spaced, timeout=TIMEOUT)
     assert refused.json() == {'detail': 'ana has read access, and this route needs act'}
     assert unsigned.json() == {
         'error': 'forbidden',

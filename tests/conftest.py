@@ -597,6 +597,15 @@ def timed(timing: Timing) -> Workers:
     return Workers(renew_seconds=timing.renew, grace_seconds=timing.grace, toleration_seconds=timing.toleration)
 
 
+def still() -> float:
+    """A worker's clock that stands still (``Worker.clock``): no silence reaches its self-stop.
+
+    For a test that is not about the self-stop: a loaded host can hold one heartbeat past ``Timing.self_stop``, and the
+    worker would then stop its jobs.
+    """
+    return 0.0
+
+
 def serving(controller: RunController) -> RunController:
     """``controller`` with its executor's worker started, as the daemon's ``reap`` leaves it: its slots count."""
     controller.executor.adopt([])

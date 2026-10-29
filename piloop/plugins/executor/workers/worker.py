@@ -192,9 +192,12 @@ class Worker:
         self._draining = False
         """It takes no more jobs, and ends once each one reported: the server drained it, or it ran ``once``."""
         self._handover = False
-        self._heard = time.monotonic()
-        """When the last heartbeat that came back was sent. The worker stops its jobs ``Timing.self_stop`` after it."""
-        self._answered = self._heard
+        self.clock: Callable[[], float] = time.monotonic
+        """The clock that its silence and its orphan exit count on. A test sets its own before ``start``."""
+        self._heard = 0.0
+        """When the last heartbeat that came back was sent, or the start. The worker stops its jobs
+        ``Timing.self_stop`` after it."""
+        self._answered = 0.0
         """When the last answer of its server came: ``orphan_exit`` counts the silence from it. A slow answer is one."""
         self._ended = threading.Event()
         """Set once the worker stops or hands over: its silence guard ends (``_guard_silence``)."""
@@ -227,6 +230,7 @@ class Worker:
             if self._started or self._stopping:
                 return
             self._started = True
+            self._heard = self._answered = self.clock()
         if self.relay is not None:
             self.relay.start()
         self._join()
@@ -273,7 +277,7 @@ class Worker:
         call until the call's own timeout, which can be longer than what the leases have left.
         """
         while True:
-            left = self._heard + self.timing.self_stop - time.monotonic()
+            left = self._heard + self.timing.self_stop - self.clock()
             if left <= 0 and not self._handover:  # silent: again on each heartbeat, so a failed kill is tried again
                 self._stop_jobs('silent')
                 left = self.timing.renew
@@ -445,7 +449,7 @@ class Worker:
                     if self._stopping and not self._threads:
                         return
                     # its server is gone: an instance must not outlive it, nor wait to send what it would refuse
-                    orphaned = self.orphan_exit is not None and time.monotonic() - self._answered >= self.orphan_exit
+                    orphaned = self.orphan_exit is not None and self.clock() - self._answered >= self.orphan_exit
                     drained = not self._threads and (orphaned or self._draining and not self.spool.leases())
                 if drained:  # a drained instance has no next process to send what is left
                     self._tracer.event('worker.drained', worker=self.id)
@@ -481,11 +485,11 @@ class Worker:
                     lease_id: running.session if (running := self._jobs.get(lease_id)) is not None else HarnessSession()
                     for lease_id in self._threads
                 }
-            sent = time.monotonic()
+            sent = self.clock()
             answers = self.client.heartbeat(sessions, host)
             # the renewal is stamped inside the call, after ``sent``: a call that waited for the write lock must not
             # move the worker's own deadline past the lease's
-            self._heard, self._answered = sent, time.monotonic()
+            self._heard, self._answered = sent, self.clock()
         except Dismissed:  # an answer, and the end of this worker: not a partition
             raise
         except Exception as e:  # a partition: the control plane does not answer; ``_guard_silence`` stops the jobs
