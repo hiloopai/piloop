@@ -16,7 +16,7 @@ from piloop.actor import Actor, Agent, Person, System
 from piloop.api.views import CommentNews
 from piloop.campaign import escalations
 from piloop.campaign.campaigns import CampaignAdded
-from piloop.campaign.inbox import ack, news
+from piloop.campaign.inbox import ack, items, news
 from piloop.campaign.ops import Refused as BacklogRefused
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.loop import Consumer, Phase, Turn
@@ -25,7 +25,7 @@ from piloop.db.feed import newest
 from piloop.db.models import Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged, Commented, CommentEdited
-from piloop.ids import HOME, CampaignId, CommentId, CommentKind, TargetKind, TargetRef
+from piloop.ids import HOME, CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -257,7 +257,7 @@ def test_each_item_goes_once_to_each_notifier_of_its_campaign_and_one_of_no_camp
     configure(db, campaign, {'use': ['team'], 'team': {**TEAM, 'link': 'https://p/{comment}'}})
     made = contribution(host_of(db, tmp_path, tracer, home.providers, home.campaign_defaults))
     consumer = consumer_named(made, 'notify')
-    assert (consumer.phase, consumer.wakes_on) == (Phase.UPKEEP, frozenset({Commented}))
+    assert (consumer.phase, consumer.wakes_on) == (Phase.UPKEEP, frozenset({Commented, CampaignStatusChanged}))
     item, homeless = write(db, campaign), of_no_campaign(db)
     now = utcnow()
     again = consumer.run(Turn(now))
@@ -365,6 +365,40 @@ def test_an_item_that_still_waits_after_remind_every_is_sent_again_unless_remind
             == ()
         )
         assert due(s, route_of(db, campaign, 'other', Outbox()), now).notices != (), 'each notifier has its own record'
+
+
+def test_a_stopped_campaign_s_items_stay_in_the_inbox_but_remind_again_only_once_it_is_reopened(
+    db: Database, campaign: Campaign, tmp_path: Path, tracer: Tracer
+) -> None:
+    host = host_of(db, tmp_path, tracer, {})
+    item = write(db, campaign)
+    outbox = Outbox(remind_every=timedelta(hours=2))
+    now = utcnow()
+    send_due(host, route_of(db, campaign, 'outbox', outbox), now)
+    set_status(db, campaign, CampaignStatus.STOPPED)
+    later = now + timedelta(hours=3)
+    with db.session() as s:
+        assert due(s, route_of(db, campaign, 'outbox', outbox), later) == consumers.Due((), 0, None), (
+            'no reminder, and no wake for one'
+        )
+        assert [c.id for c, _ in items(s)] == [item], 'the escalation still waits for an answer'
+    fresh = write(db, campaign)
+    with db.session() as s:
+        assert [(n.comment, n.kind) for n in due(s, route_of(db, campaign, 'outbox', outbox), later).notices] == [
+            (fresh, NoticeKind.NEW)
+        ], 'a new item is sent once'
+    set_status(db, campaign, CampaignStatus.ACTIVE)
+    with db.session() as s:
+        assert [(n.comment, n.kind) for n in due(s, route_of(db, campaign, 'outbox', outbox), later).notices] == [
+            (item, NoticeKind.REMINDER),
+            (fresh, NoticeKind.NEW),
+        ]
+
+
+def set_status(db: Database, campaign: Campaign, status: CampaignStatus) -> None:
+    with db.session() as s:
+        s.get_one(Campaign, campaign.id).status = status
+        s.commit()
 
 
 def test_a_failure_is_an_event_one_inbox_item_and_a_backoff_and_a_send_ends_the_run_of_failures(

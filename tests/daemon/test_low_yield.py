@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Never
 
+import pytest
 from inline_snapshot import snapshot
 from sqlalchemy import select
 
@@ -16,7 +17,8 @@ from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.runs.controller import NO_CHANGES
 from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
 from piloop.plugins.campaign_type.optimization.trigger.low_yield import LowYield
-from piloop.plugins.campaign_type.optimization.yields import Result, recent, watch
+from piloop.plugins.campaign_type.optimization.yields import Found, Low, Result, Yield, asked, recent, watch
+from piloop.plugins.escalation.structured import Structured
 from piloop.plugins.section.contract import SECTIONS, Rendering, markdown
 from piloop.plugins.trigger.contract import Fire
 from tests.campaign.test_stop import add_candidate, add_run
@@ -161,11 +163,18 @@ def test_a_low_yield_raises_one_p1_escalation_that_clears_when_the_yield_recover
         1,
         None,
     )
-    assert item.body == snapshot(
-        'Few runs reach scoring: 1 of the last 4 runs scored, 0 kept; the others: 1 no candidate, 1 skipped scoring,'
-        ' 1 crashed; fewer than 50% scored. Find out why the runs end without a scored version (piloop history, and the'
-        ' errors of the runs), then fix the brief or the evaluate command, or pause the campaign: piloop pause.'
-    )
+    assert item.form is not None, 'the escalation plugin drafted its form'
+    assert item.body == snapshot("""\
+Do you pause the campaign while you find why few runs reach a score?
+
+Only 1 of the last 4 runs reached a score. The others end with no version to score.
+
+A. Pause the campaign, and fix the cause. (recommended) → No new run starts until you resume.
+B. Let the campaign run. → New runs cost tokens, and most may give no score.
+
+Details:
+Few runs reach scoring: 1 of the last 4 runs scored, 0 kept; the others: 1 no candidate, 1 skipped scoring, 1 crashed; fewer than 50% scored. Find out why the runs end without a scored version (piloop history, and the errors of the runs), then fix the brief or the evaluate command. Pause: piloop pause. Resume: piloop resume.\
+""")
     with db.session() as s:
         assert [c.id for c, _ in items(s)] == [item.id], 'an inbox item, which the notifiers send'
     finished(db, campaign, NONE)
@@ -181,6 +190,12 @@ def test_a_low_yield_raises_one_p1_escalation_that_clears_when_the_yield_recover
     finished(db, campaign, NONE, NONE, NONE)
     watched(db, campaign, trigger)
     assert len(escalations(db)) == 2, 'a new spell, a new item'
+
+
+@pytest.mark.parametrize('low', list(Low))
+def test_the_escalation_of_each_reason_keeps_the_rules_of_plain_words(low: Low) -> None:
+    found = Found(got=Yield(counts={Result.SCORED: 15, Result.CRASHED: 5}, last=None), low=low, detail='none kept')
+    assert Structured().form(Structured().draft(asked(found)))
 
 
 def test_a_stopped_campaign_clears_its_alarm_and_a_human_ack_raises_nothing_new(

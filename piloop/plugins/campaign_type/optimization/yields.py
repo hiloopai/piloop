@@ -15,17 +15,18 @@ from sqlalchemy import ColumnElement, case, exists
 from sqlalchemy.orm import Session
 
 from piloop.actor import System
+from piloop.campaign import escalations
 from piloop.campaign.stop import _since_reopen
 from piloop.db.events import emit, latest
 from piloop.db.models import Campaign, Comment, Event, EventModel, ReadBy
-from piloop.db.triggers import DAEMON_ACTOR
-from piloop.ids import CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
+from piloop.ids import CampaignStatus, CommentId, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.controller import NO_CHANGES
 from piloop.plugins.campaign_type.kit.runs.ids import FAILED_RUNS, FINISHED_RUNS
 from piloop.plugins.campaign_type.kit.runs.stop import attempt, scored, unsettled
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.escalation.contract import Choice, EscalationView
 
 if TYPE_CHECKING:  # the trigger reads this module: only the annotation names it
     from piloop.plugins.campaign_type.optimization.trigger.low_yield import LowYield
@@ -87,14 +88,35 @@ class Low(StrEnum):
     """At least ``keepless`` of the runs scored, and none is kept."""
 
 
-ADVICE: dict[Low, str] = {
-    Low.UNSCORED: (
-        'Find out why the runs end without a scored version (piloop history, and the errors of the runs), then fix the'
-        ' brief or the evaluate command, or pause the campaign: piloop pause.'
+@dataclass(frozen=True)
+class Advice:
+    """What the escalation of a reason asks, why, and what a person checks."""
+
+    ask: str
+    why: str
+    """With ``{scored}`` and ``{runs}``: the window's scored runs, and all its runs."""
+    check: str
+
+
+ADVICE: dict[Low, Advice] = {
+    Low.UNSCORED: Advice(
+        ask='Do you pause the campaign while you find why few runs reach a score?',
+        why='Only {scored} of the last {runs} runs reached a score. The others end with no version to score.',
+        check=(
+            'Find out why the runs end without a scored version (piloop history, and the errors of the runs), then fix'
+            ' the brief or the evaluate command.'
+        ),
     ),
-    Low.KEEPLESS: (
-        'Check that the evaluate command and the bar can tell a better version, and that the ideas aim at the metric,'
-        ' or pause the campaign: piloop pause.'
+    Low.KEEPLESS: Advice(
+        ask='Do you pause the campaign while you find why no scored run is kept?',
+        why=(
+            '{scored} of the last {runs} runs reached a score, and none is kept. The evaluate command or the bar may not'
+            ' tell a better version.'
+        ),
+        check=(
+            'Check that the evaluate command and the bar can tell a better version, and that the ideas aim at the'
+            ' metric.'
+        ),
     ),
 }
 """What the escalation of each reason asks a person to do."""
@@ -175,11 +197,7 @@ def watch(s: Session, campaign: Campaign, trigger: LowYield, now: datetime) -> N
     on = TargetRef(TargetKind.CAMPAIGN, campaign.id)
     match (low, None if raised is None else raised[1]):
         case (Found() as found, None):
-            # TODO: file it through the escalation capability's helper once there is one
-            body = f'{found.low.capitalize()}: {found}. {ADVICE[found.low]}'
-            item = Comment(target=on, author=DAEMON_ACTOR, kind=CommentKind.ESCALATION, priority=PRIORITY, body=body)
-            s.add(item)
-            s.flush()
+            item = escalations.escalate(s, on, asked(found), author=System.DAEMON, priority=PRIORITY)
             emit(s, YieldAlarm(kind='low_yield.raised', comment=item.id), on, System.DAEMON)
         case (None, YieldAlarm(comment=comment)):
             emit(s, YieldAlarm(kind='low_yield.cleared', comment=comment), on, System.DAEMON)
@@ -188,3 +206,20 @@ def watch(s: Session, campaign: Campaign, trigger: LowYield, now: datetime) -> N
                 item.acked_at, item.acked_by = now, System.DAEMON.signature
         case _:  # no spell, or a spell that has its item
             pass
+
+
+def asked(found: Found) -> EscalationView:
+    """What the escalation of a spell of low yield asks: whether to pause the campaign while a person finds the cause."""
+    advice = ADVICE[found.low]
+    return EscalationView(
+        headline=advice.ask,
+        why=advice.why.format(scored=found.got.scored, runs=found.got.runs),
+        choices=(
+            Choice(
+                id='A', label='Pause the campaign, and fix the cause.', result='No new run starts until you resume.'
+            ),
+            Choice(id='B', label='Let the campaign run.', result='New runs cost tokens, and most may give no score.'),
+        ),
+        recommended='A',
+        details=f'{found.low.capitalize()}: {found}. {advice.check} Pause: piloop pause. Resume: piloop resume.',
+    )

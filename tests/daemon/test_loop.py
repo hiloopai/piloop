@@ -146,6 +146,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'campaign.status': [
                 'listeners',
                 'archiver',
+                'notify',
                 'wind_down',
                 'facts',
                 'campaigns',
@@ -404,7 +405,7 @@ def test_routing_by_kind_decides_what_a_pass_on_every_change_decides(
             ['campaigns', 'idle_slots', 'yield_alarm'],
             ['notify', 'prompts', 'wind_down', 'campaigns', 'idle_slots', 'yield_alarm'],
             ['limits', 'evaluations', 'campaigns', 'idle_slots', 'yield_alarm'],
-            ['listeners', 'home_check', 'wind_down', 'facts', 'campaigns', 'idle_slots', 'yield_alarm'],
+            ['listeners', 'home_check', 'notify', 'wind_down', 'facts', 'campaigns', 'idle_slots', 'yield_alarm'],
         ]
     ), 'the consumers that each write ran, in the order of the turn'
     assert trace(db) == snapshot(

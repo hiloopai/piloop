@@ -86,8 +86,16 @@ When fewer than 5 of the last 20 runs scored, or 15 scored and none is kept, the
 investigate. piloop also posts one escalation of priority 1, also when no role names the trigger:
 
 ```text
+Do you pause the campaign while you find why few runs reach a score?
+
+Only 1 of the last 20 runs reached a score. The others end with no version to score.
+
+A. Pause the campaign, and fix the cause. (recommended) → No new run starts until you resume.
+B. Let the campaign run. → New runs cost tokens, and most may give no score.
+
+Details:
 Few runs reach scoring: 1 of the last 20 runs scored, 0 kept; the others: 15 no candidate, 2 skipped scoring, 2
-crashed; fewer than 25% scored. Find out why the runs end without a scored version …
+crashed; fewer than 25% scored. …
 ```
 
 piloop acknowledges it when the yield recovers or the campaign stops. `piloop status` shows the yield in `## Yield`.

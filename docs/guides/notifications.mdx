@@ -35,7 +35,8 @@ Run 41's evaluation takes 3 h, over the 1 h timeout. Raise the timeout, or drop 
 - An item is sent when it is an escalation or has priority 0, nobody has acknowledged it, and a person did not write
   it.
 - Each pass of the daemon sends one message with every new item. `slack_app` posts each item on its own.
-- An item that still waits a day later is sent again as a reminder. `piloop inbox ack` ends the reminders.
+- An item that still waits a day later is sent again as a reminder, while its campaign is active.
+  `piloop inbox ack` ends the reminders.
 - piloop records each send as a `notification.sent` event on the item, so a restart sends nothing twice.
 
 ## When a send fails

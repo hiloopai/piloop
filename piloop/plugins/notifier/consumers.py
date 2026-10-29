@@ -27,7 +27,7 @@ from piloop.db.events import emit, has, in_order, latest
 from piloop.db.models import NOT_RETIRED, Campaign, Comment, Event
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged, Commented
-from piloop.ids import HOME, CampaignId, CommentId, CommentKind, TargetKind, TargetRef
+from piloop.ids import HOME, CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.backlog.ops import file_seed
@@ -67,8 +67,8 @@ from piloop.plugins.secrets.contract import (
     SecretsProvider,
 )
 
-NOTIFY: Kinds = frozenset({Commented})
-"""What wakes the notifiers: a new comment may be an item to send."""
+NOTIFY: Kinds = frozenset({Commented, CampaignStatusChanged})
+"""What wakes the notifiers: a new comment may be an item to send, and a reopened campaign's items remind again."""
 LISTEN: Kinds = frozenset({CampaignAdded, CampaignConfigChanged, CampaignStatusChanged, SecretSet, SecretDeleted})
 """What wakes the listeners: a campaign's notifiers, or a credential that one listens with, may have changed."""
 FAILING_PRIORITY = 1
@@ -445,7 +445,8 @@ def due(s: Session, route: Route, now: datetime) -> Due:
 
     An item is an escalation whose campaign's escalation provider says it reaches a human now (``reach``), or another
     comment of priority 0, of the route's campaign (of none for the home's), that nobody has acknowledged and that a
-    person did not write. It is due when no notifier of the route's name sent it, or sent it ``remind_every`` ago.
+    person did not write. It is due when no notifier of the route's name sent it, or sent it ``remind_every`` ago while
+    its campaign is active: a stopped campaign's items wait in the inbox, and remind again once it is reopened.
     Nothing is due while the backoff of the route's failures since its last send lasts.
     """
     name, notifier = route.name, route.notifier
@@ -487,6 +488,8 @@ def due(s: Session, route: Route, now: datetime) -> Due:
     for comment, campaign in wanted:
         if (at := sent.get(comment.id)) is None:
             notices.append(_notice(s, notifier, NoticeKind.NEW, comment, campaign))
+        elif campaign is not None and campaign.status is not CampaignStatus.ACTIVE:
+            continue
         elif (again := notifier.reminder(at)) is not None and again <= now:
             notices.append(_notice(s, notifier, NoticeKind.REMINDER, comment, campaign))
         else:
