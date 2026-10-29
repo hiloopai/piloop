@@ -11,7 +11,7 @@ with the core services.
 
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -79,6 +79,9 @@ class DaemonHost:
     """Runs a body in a thread of the daemon."""
     plugins: Plugins
     """The home's ``[plugins]`` (``config.toml``), validated: the instances of a capability of the home."""
+    defaults: Mapping[str, object] = field(default_factory=dict)
+    """The tables of ``config.toml`` that are defaults of every campaign, unvalidated (``host.campaign_defaults``): the
+    home's own instances of a capability that campaigns configure, for what belongs to no campaign."""
 
 
 @dataclass(frozen=True)

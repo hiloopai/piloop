@@ -1,5 +1,11 @@
-"""The notifier capability's machinery: it sends each notifier in use the inbox items that are due for it."""
+"""The notifier capability's machinery: it sends each notifier in use the inbox items that are due for it.
 
+A **route** is a notifier in use and the items that it sends: those of a campaign, by the campaign's
+``[plugins.notifier] use``, or those of no campaign, by the ``use`` of ``config.toml``. ``config.toml`` holds the
+defaults of every campaign's, so an item goes to the notifiers of exactly one ``use``, and once to each name.
+"""
+
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
@@ -7,9 +13,10 @@ from datetime import datetime
 from typing import assert_never
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
+from piloop import deprecated
 from piloop.actor import ACTORS, Person, System
 from piloop.campaign import escalations
 from piloop.campaign.campaigns import CampaignAdded
@@ -17,14 +24,15 @@ from piloop.campaign.inbox import ack, campaign_of, items, root_of
 from piloop.campaign.ops import Refused as BacklogRefused
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
 from piloop.db.events import emit, has, in_order, latest
-from piloop.db.models import Campaign, Comment, Event
+from piloop.db.models import NOT_RETIRED, Campaign, Comment, Event
 from piloop.db.session import Database
-from piloop.db.triggers.changelog import Commented
+from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged, Commented
 from piloop.ids import HOME, CampaignId, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ops import file_seed
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, Lifecycle
 from piloop.plugins.escalation.contract import At, EscalationView, Never, Now
+from piloop.plugins.host import PluginError, Plugins, Scope
 from piloop.plugins.notifier.contract import (
     NOTIFIERS,
     Accepted,
@@ -48,61 +56,188 @@ from piloop.plugins.notifier.contract import (
     Receipt,
     Reply,
 )
-from piloop.plugins.secrets.contract import SECRETS, HomeSecrets
+from piloop.plugins.secrets.contract import (
+    SECRETS,
+    CampaignSecrets,
+    HomeSecrets,
+    SecretDeleted,
+    SecretReader,
+    SecretSet,
+    SecretsProvider,
+)
 
 NOTIFY: Kinds = frozenset({Commented})
 """What wakes the notifiers: a new comment may be an item to send."""
+LISTEN: Kinds = frozenset({CampaignAdded, CampaignConfigChanged, CampaignStatusChanged, SecretSet, SecretDeleted})
+"""What wakes the listeners: a campaign's notifiers, or a credential that one listens with, may have changed."""
 FAILING_PRIORITY = 1
 """The priority of the inbox item that says a notifier fails: the human reads it today, as a failed send is no news."""
 
 
+@dataclass(frozen=True)
+class Route:
+    """A notifier in use, by its name, and whose items it sends with whose credentials."""
+
+    owner: CampaignId | None
+    """The campaign whose items it sends, or None for the items of no campaign."""
+    name: str
+    notifier: Notifier
+    secrets: SecretReader
+    """The campaign's secrets over the home's, or the home's."""
+
+
+def home_notifiers(defaults: Mapping[str, object]) -> dict[str, Notifier]:
+    """The notifiers that ``config.toml`` uses (``DaemonHost.defaults``), by name: those of the items of no campaign.
+
+    Raises:
+        PluginError: Its ``use`` names an instance that it does not define.
+    """
+    plugins: Plugins = {NOTIFIERS.name: NOTIFIERS.validated_table(defaults.get(NOTIFIERS.name, {}), Scope.CAMPAIGN)}
+    return _used(plugins, 'config.toml')
+
+
+def _used(plugins: Plugins, where: str) -> dict[str, Notifier]:
+    found = NOTIFIERS.instances(plugins)
+    if unknown := [name for name in NOTIFIERS.used(plugins) if name not in found]:
+        raise PluginError(f'{where}: [plugins.notifier] use names {", ".join(unknown)}, which no table defines')
+    return {name: found[name] for name in NOTIFIERS.used(plugins)}
+
+
+def routes(s: Session, db: Database, provider: SecretsProvider, home: Mapping[str, Notifier]) -> list[Route]:
+    """Every route: the home's for the items of no campaign, then each campaign's, by its stored config.
+
+    A campaign whose stored config no longer validates has none: the pass over the campaigns traces it.
+    """
+    found = [Route(None, name, notifier, HomeSecrets(db, provider)) for name, notifier in home.items()]
+    for campaign in s.scalars(select(Campaign).where(NOT_RETIRED).order_by(Campaign.id)):
+        try:
+            plugins = campaign.config.plugins
+        except ValidationError:
+            continue
+        secrets = CampaignSecrets(db, provider, campaign.id, campaign.name)
+        used = _used(plugins, campaign.name) if _configured(s, campaign) else _stored_before(home)
+        found += [Route(campaign.id, name, notifier, secrets) for name, notifier in used.items()]
+    return found
+
+
+def _configured(s: Session, campaign: Campaign) -> bool:
+    """Whether the campaign's stored config has ``[plugins.notifier]``: one that ``piloop init`` stored since it may."""
+    stored = select(func.json_type(Campaign.config, '$.plugins.notifier')).where(Campaign.id == campaign.id)
+    return s.scalar(stored) is not None
+
+
+def _stored_before(home: Mapping[str, Notifier]) -> Mapping[str, Notifier]:
+    deprecated.until(
+        '0.6.0',
+        'a campaign that 0.4 stored, before notifiers were per campaign, gets the notifiers of config.toml until its'
+        ' next piloop init: delete _configured and this bridge',
+    )
+    return home
+
+
 def contribution(host: DaemonHost) -> Contribution:
-    """The consumer ``notify``, beside the agents: it sends what is due, and returns when a retry or reminder is."""
-    secrets = HomeSecrets(host.db, SECRETS.selected(host.plugins))
-    notifiers = NOTIFIERS.instances(host.plugins)
-    used = {name: notifiers[name] for name in NOTIFIERS.used(host.plugins)}
+    """The consumers ``notify``, beside the agents, and ``listeners``, first in a turn.
+
+    ``notify`` sends what is due on each route, and returns when a retry or reminder is. ``listeners`` opens and
+    closes the listeners as campaigns and secrets change (``Listeners``).
+
+    Raises:
+        PluginError: ``config.toml``'s ``[plugins.notifier]`` names an instance that it does not define.
+    """
+    home = home_notifiers(host.defaults)
+    provider = SECRETS.selected(host.plugins)
 
     def notify(turn: Turn) -> datetime | None:
+        with host.db.session() as s:
+            found = routes(s, host.db, provider, home)
         later = Soonest()
-        for name, notifier in used.items():
-            later.add(send_due(host, secrets, name, notifier, turn.now))
+        for route in found:
+            later.add(send_due(host, route, turn.now))
         return later.at
 
-    listeners = tuple(
-        notifier.listen(ListenHost(secrets, _answering(host, name, notifier), _failing(host, name)))
-        for name, notifier in used.items()
-        if isinstance(notifier, Listens)
-    )
+    listeners = Listeners(host, provider, home)
     return Contribution(
-        consumers=(Consumer('notify', NOTIFY, notify, Phase.UPKEEP),),
-        lifecycle=Listeners(listeners) if listeners else None,
+        consumers=(
+            Consumer('listeners', LISTEN, listeners.run, Phase.CONFIGURE),
+            Consumer('notify', NOTIFY, notify, Phase.UPKEEP),
+        ),
+        lifecycle=listeners,
     )
 
 
-@dataclass(frozen=True)
 class Listeners:
-    """The ``Lifecycle`` of every notifier in use that listens: each starts with the daemon and stops with it."""
+    """The listeners of the routes whose notifier listens: one for each connection (``Listens.connection``).
 
-    each: tuple[Lifecycle, ...]
+    Every route of a connection shares its listener, which the first route opens: a service such as Slack splits the
+    events of one app across its open connections, so a second one would lose answers. ``run`` opens the connections
+    that a route needs, closes those that none needs, and reopens one whose first route changed. It runs when the
+    daemon starts, and when a campaign or a secret changes: no restart is needed.
+    """
+
+    def __init__(self, host: DaemonHost, provider: SecretsProvider, home: Mapping[str, Notifier]) -> None:
+        self._host, self._provider, self._home = host, provider, home
+        self._lock = threading.Lock()
+        self._open: dict[str, tuple[Route, Lifecycle]] = {}
+        """Each open connection: the route that opened it, and its listener."""
+        self._shared: dict[str, tuple[Route, ...]] = {}
+        """The routes of each connection, which its answers are for."""
 
     def start(self) -> None:
-        for listener in self.each:
-            listener.start()
+        self._reconcile()
 
     def in_flight(self) -> Mapping[str, Future[None]]:
-        return {key: f for listener in self.each for key, f in listener.in_flight().items()}
+        return {}
 
     def stop(self, leaving: Leaving, timeout: float) -> None:
-        for listener in self.each:
-            listener.stop(leaving, timeout)
+        with self._lock:
+            for _, listener in self._open.values():
+                listener.stop(leaving, timeout)
+            self._open.clear()
+
+    def run(self, _turn: Turn) -> datetime | None:
+        """The consumer ``listeners``: open, close and reopen the listeners, as the routes now need them."""
+        self._reconcile()
+        return None
+
+    def _reconcile(self) -> None:
+        with self._host.db.session() as s:
+            found = routes(s, self._host.db, self._provider, self._home)
+        wanted: dict[str, list[tuple[Route, Listens]]] = {}
+        for route in found:
+            if not isinstance(listens := route.notifier, Listens):
+                continue
+            if (key := listens.connection(route.secrets)) is None:
+                error = 'a credential that it listens with is not set: see `piloop secret list`'
+                self._host.tracer.event('notification.listen_failed', notifier=route.name, error=error)
+                continue
+            wanted.setdefault(key, []).append((route, listens))
+        with self._lock:
+            for key in [k for k, (first, _) in self._open.items() if k not in wanted or wanted[k][0][0] != first]:
+                self._open.pop(key)[1].stop(Leaving.STOP, 0)  # a listener has nothing in flight to wait for
+            self._shared = {key: tuple(route for route, _ in shared) for key, shared in wanted.items()}
+            for key, [(first, listens), *_] in wanted.items():
+                if key not in self._open:
+                    listener = listens.listen(
+                        ListenHost(first.secrets, self._answering(key), _failing(self._host, first.name))
+                    )
+                    listener.start()
+                    self._open[key] = (first, listener)
+
+    def _answering(self, key: str) -> Callable[[Inbound], Receipt]:
+        def shared() -> tuple[Route, ...]:
+            with self._lock:
+                return self._shared.get(key, ())
+
+        return _answering(self._host, shared)
 
 
-def _answering(host: DaemonHost, name: str, notifier: Notifier) -> Callable[[Inbound], Receipt]:
+def _answering(host: DaemonHost, shared: Callable[[], Sequence[Route]]) -> Callable[[Inbound], Receipt]:
     def answer(inbound: Inbound) -> Receipt:
         try:
-            return received(host.db, host.tracer, name, notifier, inbound)
+            return received(host.db, host.tracer, shared(), inbound)
         except Exception as e:  # it runs in the listener's thread, whose service library would only log what escapes
-            host.tracer.event('notification.receive_failed', notifier=name, error=f'{type(e).__name__}: {e}')
+            names = ','.join(sorted({r.name for r in shared()}))
+            host.tracer.event('notification.receive_failed', notifier=names, error=f'{type(e).__name__}: {e}')
             return Declined(f'piloop could not write this: {type(e).__name__}: {e}')
 
     return answer
@@ -115,29 +250,37 @@ def _failing(host: DaemonHost, name: str) -> Callable[[str], None]:
     return failed
 
 
-def received(db: Database, tracer: Tracer, name: str, notifier: Notifier, inbound: Inbound) -> Receipt:
-    """Write what a person did in the thread of a post of the notifier ``name``, signed as them, and say how it went.
+def received(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inbound) -> Receipt:
+    """Write what a person did in the thread of a post of a route of ``shared``, signed as them, and say how it went.
 
-    The thread maps to its item through the ``notification.sent`` event that names the post. A post that the notifier
-    did not make is ``Foreign``. A redelivered post is accepted once: its ``notification.received`` is there already.
+    The thread maps to its item through the ``notification.sent`` event that names the post, and the route of that
+    item says who the person is. A post that no route of ``shared`` made is ``Foreign``. A redelivered post is accepted
+    once: its ``notification.received`` is there already.
     """
+    names = tuple(sorted({r.name for r in shared}))
     if isinstance(inbound.act, Edit):
-        return _edit(db, tracer, name, inbound, inbound.act)
+        return _edit(db, tracer, shared, inbound, inbound.act)
     with db.session() as s:
-        if _received_already(s, name, inbound.message):
+        if _received_already(s, names, inbound.message):
             return Again()
         post = latest(
             s,
             NotificationSent,
             has(
-                NotificationSent, notifier=name, message=inbound.thread.id, notice=(NoticeKind.NEW, NoticeKind.REMINDER)
+                NotificationSent,
+                notifier=names,
+                message=inbound.thread.id,
+                notice=(NoticeKind.NEW, NoticeKind.REMINDER),
             ),
         )
         if post is None:
             return Foreign()
-        if (person := inbound.person) is None:
-            return Declined(f'you are not in [plugins.notifier.{name}] people: ask whoever runs piloop to add you')
         item = s.get_one(Comment, post[0].target_id)
+        route = _route_of(s, shared, post[1].notifier, item.id)
+        if (person := _person(route, inbound.member)) is None:
+            return Declined(
+                f'you are not in [plugins.notifier.{route.name}] people: ask whoever runs piloop to add you'
+            )
         match inbound.act:
             case Reply(text=text, priority=priority):
                 answer = Comment(
@@ -161,32 +304,52 @@ def received(db: Database, tracer: Tracer, name: str, notifier: Notifier, inboun
                 if campaign is None or not hunch:
                     return Declined('write the hunch after "idea:", in the thread of an item of a campaign')
                 try:
-                    seed = file_seed(s, campaign, hunch, actor=person, provenance=f'comment#{item.id}, via {name}')
+                    seed = file_seed(
+                        s, campaign, hunch, actor=person, provenance=f'comment#{item.id}, via {route.name}'
+                    )
                 except BacklogRefused as e:
                     return Declined(str(e))
                 target = TargetRef(TargetKind.IDEA, seed.id)
                 said = f'piloop filed this as seed idea#{seed.id}, for research'
             case _:
                 assert_never(inbound.act)
-        emit(s, NotificationReceived(notifier=name, message=inbound.message.id), target, person)
+        emit(s, NotificationReceived(notifier=route.name, message=inbound.message.id), target, person)
         s.commit()
-    tracer.event('notification.received', notifier=name, act=type(inbound.act).__name__, target=str(target))
+    tracer.event('notification.received', notifier=route.name, act=type(inbound.act).__name__, target=str(target))
     return Accepted(said)
 
 
-def _edit(db: Database, tracer: Tracer, name: str, inbound: Inbound, edit: Edit) -> Receipt:
+def _route_of(s: Session, shared: Sequence[Route], name: str, comment: CommentId) -> Route:
+    """The route of ``shared`` that sent the item ``comment`` as ``name``: the one of the item's campaign.
+
+    A campaign that changed its notifiers since keeps no route of the name: another route of it answers.
+    """
+    mine = [r for r in shared if r.name == name]
+    owner = _campaign(s, comment)
+    return next((r for r in mine if r.owner == owner), mine[0])
+
+
+def _person(route: Route, member: str) -> Person | None:
+    return route.notifier.person(member) if isinstance(route.notifier, Listens) else None
+
+
+def _edit(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inbound, edit: Edit) -> Receipt:
     """Change the text of the reply that ``inbound.message`` became, as its author, and put it back in the inbox.
 
     ``comment.body`` keeps the old text in the feed, and is news for whoever waits for the item, as a new one is. A
     post that became no reply is ``Foreign``: piloop took no answer from it.
     """
+    names = tuple(sorted({r.name for r in shared}))
     with db.session() as s:
-        found = latest(s, NotificationReceived, has(NotificationReceived, notifier=name, message=inbound.message.id))
+        found = latest(s, NotificationReceived, has(NotificationReceived, notifier=names, message=inbound.message.id))
         if found is None or found[0].target_kind is not TargetKind.COMMENT:
             return Foreign()
-        if (person := inbound.person) is None:
-            return Declined(f'you are not in [plugins.notifier.{name}] people: ask whoever runs piloop to add you')
         comment = s.get_one(Comment, found[0].target_id)
+        route = _route_of(s, shared, found[1].notifier, comment.id)
+        if (person := _person(route, inbound.member)) is None:
+            return Declined(
+                f'you are not in [plugins.notifier.{route.name}] people: ask whoever runs piloop to add you'
+            )
         if comment.author != person.signature:
             return Declined(f'comment#{comment.id} is by {comment.author}: only its author changes it')
         if comment.body == edit.text:
@@ -194,12 +357,12 @@ def _edit(db: Database, tracer: Tracer, name: str, inbound: Inbound, edit: Edit)
         comment.body = edit.text
         comment.acked_at, comment.acked_by = None, None  # changed, it waits to be read again
         s.commit()
-    tracer.event('notification.received', notifier=name, act='Edit', target=f'comment#{comment.id}')
+    tracer.event('notification.received', notifier=route.name, act='Edit', target=f'comment#{comment.id}')
     return Accepted(f'piloop updated comment#{comment.id}')
 
 
-def _received_already(s: Session, name: str, message: MessageRef) -> bool:
-    found = select(Event.id).where(has(NotificationReceived, notifier=name, message=message.id)).limit(1)
+def _received_already(s: Session, names: tuple[str, ...], message: MessageRef) -> bool:
+    found = select(Event.id).where(has(NotificationReceived, notifier=names, message=message.id)).limit(1)
     return s.scalar(found) is not None
 
 
@@ -224,23 +387,26 @@ class Due:
     later: datetime | None
 
 
-def send_due(host: DaemonHost, secrets: HomeSecrets, name: str, notifier: Notifier, now: datetime) -> datetime | None:
-    """Send what is due for the notifier ``name``, record what happened, and return when it must run again.
+def send_due(host: DaemonHost, route: Route, now: datetime) -> datetime | None:
+    """Send what is due on ``route``, record what happened, and return when it must run again.
 
     It sends outside any transaction, as a fact source reads: a write lock held for the post would lock out the rest.
     """
+    name, notifier = route.name, route.notifier
     with host.db.session() as s:
-        found = due(s, name, notifier, now)
+        found = due(s, route, now)
     if not found.notices:
         return found.later
     try:
-        posts = notifier.send(found.notices, secrets)
+        posts = notifier.send(found.notices, route.secrets)
     except NotDelivered as e:
         sent, left = found.notices[: len(e.delivered)], found.notices[len(e.delivered) :]
         ids = [n.comment for n in left]
         with host.db.session() as s:
             _record(s, name, sent, e.delivered)
-            failed = NotificationFailed(notifier=name, error=str(e), comments=ids, retry_after=e.retry_after)
+            failed = NotificationFailed(
+                notifier=name, error=str(e), comments=ids, campaign=route.owner, retry_after=e.retry_after
+            )
             row = emit(s, failed, HOME, System.DAEMON)
             if not found.failures:
                 _report(s, name, ids[0], str(e))
@@ -273,20 +439,21 @@ def _record(s: Session, name: str, notices: Sequence[Notice], posts: Sequence[Me
     return rows[0].at if rows else None
 
 
-def due(s: Session, name: str, notifier: Notifier, now: datetime) -> Due:
-    """The items that the notifier ``name`` sends now: the one rule of what is due.
+def due(s: Session, route: Route, now: datetime) -> Due:
+    """The items that ``route`` sends now: the one rule of what is due.
 
     An item is an escalation whose campaign's escalation provider says it reaches a human now (``reach``), or another
-    comment of priority 0, that nobody has acknowledged and that a person did not write. It is due when the notifier
-    never sent it, or sent it ``remind_every`` ago. Nothing is due while the backoff of the
-    failures since the notifier's last send lasts.
+    comment of priority 0, of the route's campaign (of none for the home's), that nobody has acknowledged and that a
+    person did not write. It is due when no notifier of the route's name sent it, or sent it ``remind_every`` ago.
+    Nothing is due while the backoff of the route's failures since its last send lasts.
     """
-    failures = _failures(s, name)
+    name, notifier = route.name, route.notifier
+    failures = _failures(s, route)
     if failures:
         last_at, last = failures[-1]
         if (retry := last_at + notifier.wait(len(failures), last.retry_after)) > now:
             return Due((), len(failures), retry)
-    follow_ups = _follow_ups(s, name)
+    follow_ups = [(c, thread) for c, thread in _follow_ups(s, name) if _campaign(s, c.id) == route.owner]
     notices = [
         _notice(s, notifier, NoticeKind.FOLLOW_UP, comment, _campaign_row(s, comment.id), thread)
         for comment, thread in follow_ups
@@ -295,7 +462,11 @@ def due(s: Session, name: str, notifier: Notifier, now: datetime) -> Due:
     later = Soonest()
     wanted: list[tuple[Comment, Campaign | None]] = []
     for comment, campaign in items(s):
-        if _by_a_person(comment.author) or comment.id in threaded:
+        if (
+            (campaign.id if campaign is not None else None) != route.owner
+            or _by_a_person(comment.author)
+            or comment.id in threaded
+        ):
             continue
         if comment.kind is not CommentKind.ESCALATION:
             wanted += [(comment, campaign)] if comment.priority == 0 else []
@@ -322,13 +493,20 @@ def due(s: Session, name: str, notifier: Notifier, now: datetime) -> Due:
     return Due(tuple(notices), len(failures), later.at)
 
 
-def _failures(s: Session, name: str) -> list[tuple[datetime, NotificationFailed]]:
-    """The failures of the notifier ``name`` since its last send, oldest first, with their times."""
-    last_sent = s.scalar(select(func.max(Event.id)).where(has(NotificationSent, notifier=name))) or 0
-    return [
-        (e.at, failed)
-        for e, failed in in_order(s, NotificationFailed, has(NotificationFailed, notifier=name), Event.id > last_sent)
-    ]
+def _failures(s: Session, route: Route) -> list[tuple[datetime, NotificationFailed]]:
+    """The failures of ``route`` since its last send, oldest first, with their times."""
+    sends = (
+        has(NotificationSent, notifier=route.name),
+        _is(campaign_of(Event.target_kind, Event.target_id), route.owner),
+    )
+    last_sent = s.scalar(select(func.max(Event.id)).where(*sends)) or 0
+    of = has(NotificationFailed, notifier=route.name), _is(func.json_extract(Event.payload, '$.campaign'), route.owner)
+    return [(e.at, failed) for e, failed in in_order(s, NotificationFailed, *of, Event.id > last_sent)]
+
+
+def _is(column: ColumnElement[int | None], owner: CampaignId | None) -> ColumnElement[bool]:
+    """Select where ``column`` is the campaign ``owner``, or no campaign for None."""
+    return column.is_(None) if owner is None else column == owner
 
 
 def _follow_ups(s: Session, name: str) -> list[tuple[Comment, MessageRef]]:

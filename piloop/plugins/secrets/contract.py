@@ -19,14 +19,14 @@ from abc import ABC, abstractmethod
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import ClassVar, Literal
+from typing import Literal, Protocol
 
 from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
 from piloop.actor import ACTORS, Actor
 from piloop.db.events import emit, has, latest
-from piloop.db.models import AgentSession, Event, EventModel, ReadBy
+from piloop.db.models import AgentSession, Event, EventModel
 from piloop.db.session import Database
 from piloop.ids import HOME, AgentSessionId, CampaignId, EnvName, TargetKind, TargetRef
 from piloop.plugins.host import Capability, One, Parameters, Scope
@@ -73,6 +73,18 @@ SECRETS = Capability(
 """Every secrets provider by name. ``local``, built in and the default, keeps the values in the home's database."""
 
 
+class SecretReader(Protocol):
+    """The secrets that one owner reads by name: the home's, or a campaign's over the home's."""
+
+    def get(self, name: EnvName) -> SecretStr | None:
+        """The value of the secret ``name``, or None when there is none."""
+        ...
+
+    def missing(self, name: EnvName) -> str:
+        """Why ``name`` has no value, and the command that sets it."""
+        ...
+
+
 @dataclass(frozen=True)
 class HomeSecrets:
     """The home's secrets of a database, which a network provider reads the credential that it hands out from."""
@@ -85,11 +97,38 @@ class HomeSecrets:
         with self.db.session() as s:
             return self.provider.get(s, None, {name}).get(name)
 
+    def missing(self, name: EnvName) -> str:
+        return f'the home has no secret {name}: set it with `piloop secret set {name}`'
+
+
+@dataclass(frozen=True)
+class CampaignSecrets:
+    """A campaign's secrets, over the home's of the same name, as its agents get them (``values``)."""
+
+    db: Database
+    provider: SecretsProvider
+    campaign: CampaignId
+    name: str
+    """The campaign's name, for ``missing``."""
+
+    def get(self, name: EnvName) -> SecretStr | None:
+        """The value of the campaign's secret ``name``, else of the home's, or None when neither has one."""
+        with self.db.session() as s:
+            return (self.provider.get(s, None, {name}) | self.provider.get(s, self.campaign, {name})).get(name)
+
+    def missing(self, name: EnvName) -> str:
+        return (
+            f'neither campaign {self.name} nor the home has a secret {name}: set it with'
+            f' `piloop secret set {name} --campaign {self.name}`, or without --campaign for the home'
+        )
+
 
 class SecretSet(EventModel):
-    """On the home or on a campaign, the secret's owner: a value of the secret ``name``, never the value itself."""
+    """On the home or on a campaign, the secret's owner: a value of the secret ``name``, never the value itself.
 
-    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    It wakes what reads a credential while the daemon runs, such as the listeners of the notifiers.
+    """
+
     kind: Literal['secret.set'] = 'secret.set'
     name: EnvName
 
@@ -97,7 +136,6 @@ class SecretSet(EventModel):
 class SecretDeleted(EventModel):
     """On the home or on a campaign, the secret's owner: the secret ``name`` is gone."""
 
-    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
     kind: Literal['secret.deleted'] = 'secret.deleted'
     name: EnvName
 

@@ -171,6 +171,7 @@ class Daemon:
             daemon=cfg.daemon,
             agents=cfg.agents,
             plugins=cfg.providers,
+            defaults=cfg.campaign_defaults,
         )
         self._restart = False
 

@@ -8,7 +8,7 @@ and stops their lifecycles with the daemon, and runs their threads.
 
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from datetime import datetime
 from pathlib import Path
@@ -53,12 +53,14 @@ class Scheduler:
         daemon: DaemonSettings | None = None,
         agents: AgentSettings | None = None,
         plugins: Plugins | None = None,
+        defaults: Mapping[str, object] | None = None,
     ) -> None:
         """Collect the daemon's jobs.
 
         ``archiver``: the home's archive provider, opened, which the daemon always passes. A test without one archives
         nothing. ``now``: the clock. ``daemon`` and ``agents``: the home's timings, ``[daemon]`` and ``[agents]`` in its
-        ``config.toml``, by default their defaults. ``plugins``: its ``[plugins]``, validated, by default none.
+        ``config.toml``, by default their defaults. ``plugins``: its ``[plugins]``, validated, by default none, and ``defaults``
+        the tables of it that are defaults of every campaign (``Settings.campaign_defaults``).
         """
         self._db, self._now, self._tracer, self._controller = db, now, tracer, controller
         daemon = daemon if daemon is not None else DaemonSettings()
@@ -86,6 +88,7 @@ class Scheduler:
             self._planners,
             self._thread,
             plugins if plugins is not None else {},
+            defaults if defaults is not None else {},
         )
         opened = (controller.executor,) if archiver is None else (controller.executor, archiver)
         self._home, self._home_check = home, daemon.home_check

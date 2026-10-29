@@ -21,7 +21,8 @@ SLACK_WEBHOOK_URL set for the home
 use = ["slack"]
 ```
 
-Then run `piloop restart`. The next escalation posts this to the channel:
+`config.toml` holds the defaults of every campaign's notifiers. Run `piloop restart`, then `piloop init` each
+campaign, which stores them in its config. The next escalation posts this to the channel:
 
 ```text
 :rotating_light: *enwik8* · escalation comment#1 · P1 · from implementer#12
@@ -91,5 +92,33 @@ people = { "alice@example.com" = "U0123ABC" }
 Socket Mode is a connection out from the daemon, so it needs no public URL. piloop confirms each answer to you, in a
 message that only you see: `piloop recorded this as comment#3, a reply to comment#1`. Only `people` can answer:
 piloop tells anyone else why, the same way. A reply outside a post's thread gets a hint.
+
+## A campaign's own notifiers
+
+A campaign's `piloop.toml` can set `[plugins.notifier]` over the defaults of `config.toml`. Its `use` replaces the
+home's for the items of that campaign. Each item goes once to each notifier of one `use`: an item of no campaign goes
+to those of `config.toml`. To post a campaign's items to its own channel with its own bot token:
+
+```bash
+printf %s "$TOKEN" | piloop secret set ENWIK8_BOT_TOKEN --campaign enwik8
+```
+
+```toml
+# piloop.toml
+[plugins.notifier]
+use = ["team"]
+
+[plugins.notifier.team]
+provider = "slack_app"
+channel = "C0ENWIK8"
+token = { secret = "ENWIK8_BOT_TOKEN" }
+```
+
+A notifier reads its secrets as the campaign's agents do: the campaign's secret wins over the home's of the same
+name. Then run `piloop init` on the campaign.
+
+The `slack_app` instances with the same app token share one Socket Mode connection, whichever campaigns use them:
+Slack splits an app's events across its open connections. piloop opens, closes and reopens the connections when a
+campaign or a secret changes, with no restart.
 
 To write a notifier for another service, see [Infrastructure](/plugins/infrastructure#notifiers).

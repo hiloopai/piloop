@@ -7,7 +7,7 @@ import httpx2 as httpx
 from piloop.plugins.harness.contract import SecretRef
 from piloop.plugins.notifier.contract import MessageRef, NotDelivered, Notice
 from piloop.plugins.notifier.kit.slack import SlackText, refused
-from piloop.plugins.secrets.contract import HomeSecrets
+from piloop.plugins.secrets.contract import SecretReader
 
 
 class Slack(SlackText):
@@ -16,10 +16,10 @@ class Slack(SlackText):
     webhook: SecretRef = SecretRef(secret='SLACK_WEBHOOK_URL')
     """The secret that holds the webhook's URL: ``SLACK_WEBHOOK_URL`` unless set (``piloop secret set``)."""
 
-    def send(self, notices: Sequence[Notice], secrets: HomeSecrets) -> Sequence[MessageRef | None]:
+    def send(self, notices: Sequence[Notice], secrets: SecretReader) -> Sequence[MessageRef | None]:
         name = self.webhook.secret
         if (url := secrets.get(name)) is None:
-            raise NotDelivered(f'the home has no secret {name}: set it with `piloop secret set {name}`')
+            raise NotDelivered(secrets.missing(name))
         try:
             answer = httpx.post(
                 url.get_secret_value(), json={'text': self.text(notices)}, timeout=self.timeout.total_seconds()

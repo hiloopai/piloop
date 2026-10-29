@@ -46,6 +46,15 @@ model = "gpt-6.1-sol"
 # command = ["python3", "server.py"]
 # env = ["XAI_API_KEY"]                   # the variables that a stdio server reads
 
+# [plugins.notifier]                      # who hears of escalations; if not set: the [plugins.notifier] of config.toml
+# use = ["team"]                          # names of [plugins.notifier.<name>]; replaces config.toml's for this campaign
+
+# [plugins.notifier.team]                 # see the Notifications guide (keys: link, remind_every, retry, retry_max)
+# provider = "slack_app"                  # posts each item as a Slack app and reads the replies (keys: people, timeout, max_items, body_chars, template, reply_priority, api)
+# channel = "C0123ABC"                    # the channel's id; the app's bot must be in it
+# token = { secret = "SLACK_BOT_TOKEN" }  # a secret of this campaign, else of the home
+# app_token = { secret = "SLACK_APP_TOKEN" }  # one Socket Mode connection for each app token, however many campaigns use it
+
 [plugins.role.implementer]                # an implementer tries one idea in a new worktree; its commits are scored
 runs = true                               # its agents do runs; a sweeping role has runs = false
 # takes = "priority < 3"                  # the ideas it takes: an SQL condition on the ideas table; if not set: every one

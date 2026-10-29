@@ -116,7 +116,7 @@ def test_a_post_that_cannot_connect_or_has_no_token_is_not_delivered(db: Databas
                 'thread_ts': '5.1',
                 'text': ' raise it ',
             },
-            Inbound(MessageRef('C1/5.1'), MessageRef('C1/9.1'), Person(name='alice'), Reply('raise it', 2)),
+            Inbound(MessageRef('C1/5.1'), MessageRef('C1/9.1'), 'UALICE', Reply('raise it', 2)),
         ),
         (
             {
@@ -127,7 +127,7 @@ def test_a_post_that_cannot_connect_or_has_no_token_is_not_delivered(db: Databas
                 'thread_ts': '5.1',
                 'text': 'Idea: halve it',
             },
-            Inbound(MessageRef('C1/5.1'), MessageRef('C1/9.1'), None, FileSeed('halve it')),
+            Inbound(MessageRef('C1/5.1'), MessageRef('C1/9.1'), 'UBOB', FileSeed('halve it')),
         ),
         ({'type': 'message', 'user': 'UALICE', 'channel': 'C1', 'ts': '9.1', 'text': 'hello'}, 'hint'),
         ({'type': 'message', 'subtype': 'bot_message', 'channel': 'C1', 'ts': '9.1', 'text': 'x'}, None),
@@ -151,9 +151,7 @@ def test_a_post_that_cannot_connect_or_has_no_token_is_not_delivered(db: Databas
                 'item': {'type': 'message', 'channel': 'C1', 'ts': '5.1'},
                 'event_ts': '9.9',
             },
-            Inbound(
-                MessageRef('C1/5.1'), MessageRef('C1/5.1/white_check_mark/UALICE/9.9'), Person(name='alice'), Ack()
-            ),
+            Inbound(MessageRef('C1/5.1'), MessageRef('C1/5.1/white_check_mark/UALICE/9.9'), 'UALICE', Ack()),
         ),
         (
             {
@@ -172,7 +170,7 @@ def test_a_post_that_cannot_connect_or_has_no_token_is_not_delivered(db: Databas
                 'channel': 'C1',
                 'message': {'user': 'UALICE', 'ts': '9.1', 'thread_ts': '5.1', 'text': ' raise it to 4 h '},
             },
-            Inbound(MessageRef('C1/5.1'), MessageRef('C1/9.1'), Person(name='alice'), Edit('raise it to 4 h')),
+            Inbound(MessageRef('C1/5.1'), MessageRef('C1/9.1'), 'UALICE', Edit('raise it to 4 h')),
         ),
         (
             {
@@ -197,6 +195,18 @@ def test_a_post_that_cannot_connect_or_has_no_token_is_not_delivered(db: Databas
 )
 def test_an_event_becomes_what_it_asks_of_piloop(event: dict[str, object], found: object) -> None:
     assert SlackApp(channel='C1', people={'alice': 'UALICE'}).inbound(event) == found
+
+
+def test_a_person_is_whom_people_names_and_the_connection_is_the_app_token_never_shown(
+    db: Database, secrets: HomeSecrets
+) -> None:
+    """Instances of one app token share a socket: Slack splits an app's events across its open sockets."""
+    app = SlackApp(channel='C1', people={'alice': 'UALICE'})
+    assert (app.person('UALICE'), app.person('UBOB')) == (Person(name='alice'), None)
+    key = app.connection(secrets)
+    assert key is not None and 'xapp-app' not in key
+    assert SlackApp(channel='C2', token={'secret': 'OTHER_BOT'}).connection(secrets) == key, 'the same app'
+    assert SlackApp.model_validate({'channel': 'C1', 'app_token': {'secret': 'NONE'}}).connection(secrets) is None
 
 
 class Heard:
@@ -333,7 +343,7 @@ def test_a_listener_needs_the_slack_extra_and_both_tokens(
     app.listen(missing.host).start()
     assert missing.failures == [
         'Socket Mode did not open: the home has no secret SLACK_APP_TOKEN: set it with'
-        ' `piloop secret set SLACK_APP_TOKEN`, then `piloop restart`'
+        ' `piloop secret set SLACK_APP_TOKEN`'
     ]
 
 

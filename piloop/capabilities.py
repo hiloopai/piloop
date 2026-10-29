@@ -223,6 +223,7 @@ from piloop.plugins.provisioner.kit.conformance import check_provisioning
 from piloop.plugins.provisioner.modal import Modal
 
 from piloop.plugins.secrets.contract import SECRETS, SecretsProvider, SecretKey, Owner, HomeSecrets
+from piloop.plugins.secrets.contract import SecretReader
 from piloop.plugins.secrets.local import LocalSecrets
 
 from piloop.ids import CommentKind

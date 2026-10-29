@@ -15,7 +15,7 @@
 | mcp server: `MCP_SERVERS` (`piloop.mcp_servers`) | host | `[plugins.mcp_server.<name>]` | `http`: `HttpServer`<br/>`stdio`: `StdioServer` |
 | memory: `MEMORY` (`piloop.memory`) | host | `[plugins.memory] provider` | `local`: `LocalMemory` |
 | network: `NETWORKS` (`piloop.networks`) | host | `[plugins.network] provider` in `config.toml` | `https`: `Https`<br/>`proxy`: `Proxy` |
-| notifier: `NOTIFIERS` (`piloop.notifiers`) | host | `[plugins.notifier.<name>]` in `config.toml` | `slack`: `Slack`<br/>`slack_app`: `SlackApp` |
+| notifier: `NOTIFIERS` (`piloop.notifiers`) | host | `[plugins.notifier.<name>]` | `slack`: `Slack`<br/>`slack_app`: `SlackApp` |
 | price list: `PRICE_LISTS` (`piloop.price_lists`) | pure | `[plugins.price_list] provider` | `genai_prices`: `GenaiPrices` |
 | provisioner: `PROVISIONERS` (`piloop.provisioners`) | host | its name, where the configuration uses it | `modal`: `Modal` |
 | role: `ROLES` (`piloop.roles`) | host | `[plugins.role.<name>]` | `implementer`: `ImplementerRole`<br/>`orchestrator`: `OrchestratorRole`<br/>`research`: `ResearchRole`<br/>`scout`: `ScoutRole`<br/>`watchdog`: `WatchdogRole` |

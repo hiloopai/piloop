@@ -7,6 +7,7 @@ behind NAT. A reply in a post's thread is a ``Reply``, ``idea: <hunch>`` there f
 (``uv tool install 'piloop[slack]'``), imported when the listener starts.
 """
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Future
 from typing import TYPE_CHECKING, Literal, assert_never
@@ -33,7 +34,7 @@ from piloop.plugins.notifier.contract import (
     Reply,
 )
 from piloop.plugins.notifier.kit.slack import SlackText, refused
-from piloop.plugins.secrets.contract import HomeSecrets
+from piloop.plugins.secrets.contract import SecretReader
 
 if TYPE_CHECKING:  # the extra is optional: only a listener that starts imports it
     from slack_sdk.socket_mode.builtin import SocketModeClient
@@ -63,7 +64,7 @@ class SlackApp(SlackText):
     api: str = 'https://slack.com/api/'
     """Slack's Web API: another URL only for a proxy, or a test."""
 
-    def send(self, notices: Sequence[Notice], secrets: HomeSecrets) -> Sequence[MessageRef | None]:
+    def send(self, notices: Sequence[Notice], secrets: SecretReader) -> Sequence[MessageRef | None]:
         token = self._secret(secrets, self.token)
         posted: list[MessageRef | None] = []
         for notice in notices:
@@ -88,6 +89,11 @@ class SlackApp(SlackText):
     def listen(self, host: ListenHost) -> SocketListener:
         return SocketListener(self, host)
 
+    def connection(self, secrets: SecretReader) -> str | None:
+        """A digest of the app token: Slack splits an app's events across its open sockets, so one app gets one."""
+        found = secrets.get(self.app_token.secret)
+        return None if found is None else hashlib.sha256(found.get_secret_value().encode()).hexdigest()
+
     def inbound(self, event: Mapping[str, object]) -> Inbound | Literal['hint'] | None:
         """What a Slack event asks of piloop: an answer, ``hint`` for a message outside any thread, or None."""
         match event:
@@ -102,7 +108,7 @@ class SlackApp(SlackText):
                     if said.lower().startswith(SEED)
                     else Reply(said, self.reply_priority)
                 )
-                return Inbound(MessageRef(f'{channel}/{thread}'), MessageRef(f'{channel}/{ts}'), self.person(user), act)
+                return Inbound(MessageRef(f'{channel}/{thread}'), MessageRef(f'{channel}/{ts}'), user, act)
             case {
                 'type': 'message',
                 'subtype': 'message_changed',
@@ -112,7 +118,7 @@ class SlackApp(SlackText):
                 return Inbound(
                     MessageRef(f'{channel}/{thread}'),
                     MessageRef(f'{channel}/{ts}'),
-                    self.person(user),
+                    user,
                     Edit(text.strip()),
                 )
             case {
@@ -123,7 +129,7 @@ class SlackApp(SlackText):
                 'event_ts': str(at),
             } if reaction in ACKS:
                 post = MessageRef(f'{channel}/{ts}')
-                return Inbound(post, MessageRef(f'{channel}/{ts}/{reaction}/{user}/{at}'), self.person(user), Ack())
+                return Inbound(post, MessageRef(f'{channel}/{ts}/{reaction}/{user}/{at}'), user, Ack())
             case _:
                 return None
 
@@ -168,9 +174,9 @@ class SlackApp(SlackText):
         return found
 
     @staticmethod
-    def _secret(secrets: HomeSecrets, ref: SecretRef) -> str:
+    def _secret(secrets: SecretReader, ref: SecretRef) -> str:
         if (value := secrets.get(ref.secret)) is None:
-            raise NotDelivered(f'the home has no secret {ref.secret}: set it with `piloop secret set {ref.secret}`')
+            raise NotDelivered(secrets.missing(ref.secret))
         return value.get_secret_value()
 
 
@@ -204,8 +210,8 @@ class SocketListener:
         try:
             token = SlackApp._secret(self._host.secrets, self._app.token)
             app_token = SlackApp._secret(self._host.secrets, self._app.app_token)
-        except NotDelivered as e:  # `piloop secret set` needs the daemon: it starts, and listens after a restart
-            self._host.failed(f'Socket Mode did not open: {e}, then `piloop restart`')
+        except NotDelivered as e:  # a secret removed since the daemon chose this listener: setting it again reopens it
+            self._host.failed(f'Socket Mode did not open: {e}')
             return
         client = SocketModeClient(
             app_token=app_token,

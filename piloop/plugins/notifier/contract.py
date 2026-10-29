@@ -1,10 +1,12 @@
 """The notifier capability: it tells a human, outside piloop, that an inbox item needs them.
 
-A **notifier** is a named instance, ``[plugins.notifier.<name>]`` in ``config.toml``, and ``[plugins.notifier] use``
-there names those that the daemon sends to. Each pass of its machinery (``consumers``) sends each notifier one message
-with every item that is due (``due``): an escalation when its campaign's ``[plugins.escalation]`` provider says it
-reaches a human, or another item of priority 0, that nobody has acknowledged and that a person did not write. A
-``notification.sent`` event on the item records each send, so a restart sends nothing twice.
+A **notifier** is a named instance, ``[plugins.notifier.<name>]``, and ``[plugins.notifier] use`` names those in use.
+A campaign's ``piloop.toml`` has them, over the defaults of ``config.toml``: a campaign's ``use`` replaces the home's
+for its items. An item of no campaign goes to the notifiers of ``config.toml``. Each pass of the machinery
+(``consumers``) sends each notifier one message with every item of its own that is due (``due``): an escalation when
+its campaign's ``[plugins.escalation]`` provider says it reaches a human, or another item of priority 0, that nobody
+has acknowledged and that a person did not write. A ``notification.sent`` event on the item records each send by the
+notifier's name, so a restart sends nothing twice, and an item goes once to each name.
 
 A failed send is a ``notification.failed`` event, and the items stay due: the next try comes after a backoff that the
 events give. Modelled on Alertmanager: its receivers, its notification log, and its ``repeat_interval``.
@@ -13,7 +15,9 @@ A notifier that also **listens** (``Listens``) takes answers back: a person repl
 reply lands in piloop as a reply on the item, signed as that person (``consumers.received``). Each of its posts is one
 item, and ``notification.sent`` names the post (``MessageRef``), so a thread maps back to its item, as Grafana
 OnCall maps a Slack ``ts`` to its alert. piloop's answers in that thread go back as ``FOLLOW_UP`` notices. Its
-interface is Hermes Agent's platform adapter: a send that returns the post's id, and one inbound callback.
+interface is Hermes Agent's platform adapter: a send that returns the post's id, and one inbound callback. The
+instances whose ``connection`` is the same, such as two campaigns' Slack instances of one app token, share one
+listener: a service splits its events across the connections of one app.
 """
 
 from abc import ABC, abstractmethod
@@ -27,11 +31,11 @@ from pydantic import Field, field_validator
 
 from piloop.actor import Person
 from piloop.db.models import EventModel, ReadBy
-from piloop.ids import CommentId, CommentKind
+from piloop.ids import CampaignId, CommentId, CommentKind
 from piloop.plugins.contribution import Lifecycle
 from piloop.plugins.escalation.contract import EscalationView
 from piloop.plugins.host import Capability, Many, Parameters, Pick, Scope, Use
-from piloop.plugins.secrets.contract import HomeSecrets
+from piloop.plugins.secrets.contract import SecretReader
 
 
 class NoticeKind(StrEnum):
@@ -122,10 +126,10 @@ class Notifier(Parameters, ABC):
         return link
 
     @abstractmethod
-    def send(self, notices: Sequence[Notice], secrets: HomeSecrets) -> Sequence[MessageRef | None]:
+    def send(self, notices: Sequence[Notice], secrets: SecretReader) -> Sequence[MessageRef | None]:
         """Send ``notices``, and say what each became: its post, or None when the service gives no id (a webhook).
 
-        ``secrets`` has the credentials that the notifier's keys name. A notifier that listens posts each notice on its
+        ``secrets`` has the credentials that the notifier's keys name: the campaign's of the notices, over the home's. A notifier that listens posts each notice on its
         own, so that a reply in a post's thread names one item.
 
         Raises:
@@ -147,9 +151,10 @@ class Notifier(Parameters, ABC):
 NOTIFIERS = Capability(
     'notifier',
     Notifier,
-    table=Many(Scope.HOME, use=Use(Scope.HOME, Pick.ORDERED)),
+    table=Many(Scope.CAMPAIGN, use=Use(Scope.CAMPAIGN, Pick.ORDERED)),
 )
-"""Every notifier by name. ``config.toml`` has them, and its ``[plugins.notifier] use`` names those in use."""
+"""Every notifier by name. A campaign's ``piloop.toml`` has them, over the defaults of ``config.toml``, and its
+``[plugins.notifier] use`` names those in use for its items."""
 
 
 class NotificationSent(EventModel):
@@ -215,8 +220,9 @@ class Inbound:
     """The post that the notifier made, whose thread it is in."""
     message: MessageRef
     """What the person posted: a redelivery has the same one."""
-    person: Person | None
-    """Who did it, from the notifier's map of people. None: the service's user is in no map, so it is refused."""
+    member: str
+    """Who did it, as the service names its user. The notifier that posted the thread says which person that is
+    (``Listens.person``)."""
     act: Act
 
 
@@ -251,7 +257,8 @@ type Receipt = Accepted | Again | Declined | Foreign
 class ListenHost:
     """What the notifier machinery gives a notifier that listens."""
 
-    secrets: HomeSecrets
+    secrets: SecretReader
+    """The credentials of the instance that opens the connection."""
     received: Callable[[Inbound], Receipt]
     """Write what a person did. Safe from any thread."""
     failed: Callable[[str], None]
@@ -266,6 +273,17 @@ class Listens(Protocol):
         """The listener: ``start`` connects, and calls ``host.received`` for each answer until ``stop``."""
         ...
 
+    def connection(self, secrets: SecretReader) -> str | None:
+        """What identifies the connection that ``listen`` opens with ``secrets``, never a secret's value.
+
+        The instances with the same one share a listener. None when a credential is missing: it does not listen.
+        """
+        ...
+
+    def person(self, member: str) -> Person | None:
+        """The person whom the service's user ``member`` is, or None: then piloop refuses what they did."""
+        ...
+
 
 class NotificationFailed(EventModel):
     """On the home: the notifier ``notifier`` could not send the items ``comments``."""
@@ -275,5 +293,7 @@ class NotificationFailed(EventModel):
     notifier: str
     error: str
     comments: list[CommentId]
+    campaign: CampaignId | None = None
+    """The campaign of the items: each campaign's instance of a name backs off on its own. None: items of none."""
     retry_after: timedelta | None = None
     """How long the receiver asked to wait (``NotDelivered.retry_after``)."""

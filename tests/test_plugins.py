@@ -42,22 +42,23 @@ from piloop.plugins.host import (
     Check,
     ContractBroken,
     Instances,
+    Many,
     MissingProvider,
     One,
     Parameters,
+    Pick,
     PluginError,
     PythonSource,
     Reference,
     Scope,
     Tier,
+    Use,
     compose,
     data_errors,
     is_default,
     refs,
 )
 from piloop.plugins.metric import Direction
-from piloop.plugins.notifier.contract import NOTIFIERS
-from piloop.plugins.notifier.slack import Slack
 from piloop.plugins.role.contract import ROLES
 from piloop.plugins.runtime.contract import RUNTIMES, RuntimeName
 from piloop.plugins.runtime.subprocess import Subprocess
@@ -116,7 +117,6 @@ def test_the_runtimes_of_config_toml_hold_every_runtime_with_its_settings(
     assert HOME_PLUGINS.validate_python(plugins) == plugins
     assert HOME_PLUGINS.dump_python(plugins) == {
         'runtime': {'subprocess': {}, 'nice': {'niceness': 5}},
-        'notifier': {'slack': {}},
     }
     home = Settings(home=tmp_path, plugins={'runtime': {'fast': {'provider': 'nice', 'niceness': 1}}})
     assert runtimes(home)['fast'] == Nice(niceness=1), 'a table with a new name and a provider'
@@ -364,7 +364,7 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
         ({'verdict_rule': {'provider': 'min_gain'}}, 'min_gain: Field required'),
         (
             {'planner': {'provider': 'min_gain'}},
-            'plugins.planner: no capability has that name; there is escalation, fact_source, harness, harness_choice, lineage, mcp_server, memory, price_list, role, runtime, section, stop_rule, trigger, vcs, verdict_rule',
+            'plugins.planner: no capability has that name; there is escalation, fact_source, harness, harness_choice, lineage, mcp_server, memory, notifier, price_list, role, runtime, section, stop_rule, trigger, vcs, verdict_rule',
         ),
         (
             {'verdict_rule': {'provider': 'bootstrap', 'min_gain': 2}},
@@ -535,6 +535,38 @@ EXTRAS = Capability('extra', Extra, table=One(Scope.HOME), group='piloop.example
 """A capability of the home that a plugin declares, which nothing selects by default."""
 
 
+class Bell(Parameters):
+    """The contract of a capability of the home with instances, and a ``use`` in ``config.toml`` too."""
+
+
+class Ding(Bell):
+    """A bell that needs no keys."""
+
+
+BELLS = Capability(
+    'bell', Bell, table=Many(Scope.HOME, use=Use(Scope.HOME, Pick.ORDERED)), group='piloop.example.bells'
+)
+
+
+def test_config_toml_refuses_an_instance_that_no_use_names_and_a_use_that_names_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed(
+        monkeypatch,
+        [
+            EntryPoint('bell', f'{__name__}:BELLS', plugins.CAPABILITIES),
+            EntryPoint('ding', f'{__name__}:Ding', BELLS.group),
+        ],
+    )
+    unused = Settings(home=tmp_path, plugins={'bell': {'loud': {'provider': 'ding'}}})
+    with pytest.raises(ValueError, match=r'\[plugins.bell.loud\] is configured, and nothing uses it: add it to'):
+        _ = unused.providers
+    typo = Settings(home=tmp_path, plugins={'bell': {'use': ['dong']}})
+    with pytest.raises(ValueError, match=r"bell.use\[0\] = 'dong': no \[plugins.bell.dong\]; there are ding"):
+        _ = typo.providers
+    assert BELLS.used(Settings(home=tmp_path, plugins={'bell': {'use': ['ding']}}).providers) == ('ding',)
+
+
 @pytest.mark.parametrize(
     ('value', 'error'),
     [
@@ -562,7 +594,6 @@ def test_a_capability_selects_the_table_of_its_file_else_its_default_else_nothin
     assert HOME_PLUGINS.validate_python({'executor': workers}) == {
         'executor': workers,
         'runtime': Instances(RUNTIMES, (), {'subprocess': Subprocess()}),
-        'notifier': Instances(NOTIFIERS, (), {'slack': Slack()}),
     }, 'a capability of several instances has those of its providers that need no keys, and no use in config.toml'
     with pytest.raises(ValidationError, match=r'\[plugins\] is a table of tables'):
         HOME_PLUGINS.validate_python(1)

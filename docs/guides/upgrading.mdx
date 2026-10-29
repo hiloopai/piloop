@@ -163,6 +163,21 @@ sections = ["database", "search", "context", "goal", "queue", "pack"]
 Until 0.5.0, a list without `context` shows it after the list's guides, as before. Add it to each list. Each section now
 has a `##` heading, and the brief has no `# Guides` or `# Context` heading.
 
+### Notifiers are per campaign
+
+`[plugins.notifier]` of `config.toml` holds the defaults of every campaign's notifiers, and a campaign's
+`piloop.toml` can set its own ([A campaign's own notifiers](/guides/notifications#a-campaigns-own-notifiers)). Run
+`piloop init` on each campaign to store them. Until then, a campaign that 0.4 stored sends its items to the notifiers
+of `config.toml`, until 0.6.0. An item of no campaign goes to those of `config.toml`.
+
+A notifier plugin changes:
+
+| Before 0.5.0 | Since 0.5.0 |
+|---|---|
+| `send(notices, secrets: HomeSecrets)` | `send(notices, secrets: SecretReader)`: the campaign's secrets over the home's. `secrets.missing(name)` says how to set one. |
+| `Inbound(thread, message, person, act)` | `Inbound(thread, message, member, act)`: the service's user id. `Listens.person(member)` says who it is. |
+| `Listens.listen(host)` | Also `Listens.connection(secrets)`: what identifies its connection, never a secret. The instances with the same one share one listener. |
+
 ## Upgrading to 0.4.0
 
 ### Removed keys

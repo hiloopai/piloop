@@ -317,15 +317,19 @@ env_fallback = "my_package:EnvFallback"
 
 ## Notifiers
 
-A **notifier** sends the inbox items that need a human to a service outside piloop. `[plugins.notifier.<name>]` in
-`config.toml` configures one, and `[plugins.notifier] use` names those in use. `slack`, built in, posts to an incoming
+A **notifier** sends the inbox items that need a human to a service outside piloop. `[plugins.notifier.<name>]`
+configures one, and `[plugins.notifier] use` names those in use: a campaign's `piloop.toml` over the defaults of
+`config.toml`. `slack`, built in, posts to an incoming
 webhook, and `slack_app` posts as an app and takes answers back. [Notifications](/guides/notifications) shows their
-keys. `send` says what each notice became: its post, or None when the service gives no id. Or it raises
+keys. `send` gets the notices of one campaign, and the secrets of that campaign over the home's. It says what each
+notice became: its post, or None when the service gives no id. Or it raises
 `NotDelivered`, and piloop retries. piloop records which items it sent, and reminds.
 
 A notifier that also has `listen` (`Listens`) takes answers back. `listen` returns a lifecycle that the daemon starts
-and stops. For each answer, it calls `host.received` with an `Inbound`: the post whose thread it is in, the message,
-the person, and a `Reply`, `Ack` or `FileSeed`. piloop maps the post to its item, writes what it asks as that person,
+and stops. `connection` names what it connects with, never a secret: the instances with the same one share one
+listener. For each answer, it calls `host.received` with an `Inbound`: the post whose thread it is in, the message,
+the service's user, and a `Reply`, `Ack` or `FileSeed`. piloop maps the post to its item, asks `person` of the
+notifier that posted it who the user is, writes what it asks as that person,
 and returns `Accepted` or `Declined`, each with what to tell the person, `Again` for a redelivery, or `Foreign` for
 a thread that is not piloop's.
 
@@ -334,7 +338,7 @@ from collections.abc import Sequence
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from piloop.capabilities import HomeSecrets, MessageRef, NotDelivered, Notice, Notifier
+from piloop.capabilities import MessageRef, NotDelivered, Notice, Notifier, SecretReader
 
 
 class Ntfy(Notifier):
@@ -342,7 +346,7 @@ class Ntfy(Notifier):
 
     topic: str
 
-    def send(self, notices: Sequence[Notice], secrets: HomeSecrets) -> Sequence[MessageRef | None]:
+    def send(self, notices: Sequence[Notice], secrets: SecretReader) -> Sequence[MessageRef | None]:
         text = '\n'.join(f'{n.campaign}: {n.comment_kind} comment#{n.comment}' for n in notices)
         try:
             urlopen(f'https://ntfy.sh/{self.topic}', data=text.encode(), timeout=10).close()
