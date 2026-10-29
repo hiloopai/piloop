@@ -501,6 +501,10 @@ def test_a_worker_whose_server_does_not_answer_says_so_at_the_first_failure_then
         w1.heartbeat({}, HOST)
     with pytest.raises(httpx.ConnectError):
         w1.acquire(uuid4().hex, HOST)
+    stop.naps.append(60)  # a minute on: a call that fails now would say so again
+    stop.set()
+    with pytest.raises(httpx.ConnectError):
+        w1.messages(0, 1)  # a stopping worker's call, which a closing server drops: no outage to say
     unreachable = [s.attributes or {} for s in spans.get_finished_spans() if s.name == 'worker.unreachable']
     said = [(a['call'], a['seconds']) for a in unreachable]
     assert said == [('heartbeat', 0), ('heartbeat', 61), ('heartbeat', 121), ('acquire', 182), ('acquire', 242)]

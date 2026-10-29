@@ -428,7 +428,8 @@ class Remote:
                         self._unanswered_since = None
                     return _success(response)
                 error, again = _failed(response), resend is Resend.ANSWERLESS
-            self._unanswered(path, error)
+            if not self._stop.is_set():  # a closing server drops the calls of a worker that stops: no outage
+                self._unanswered(path, error)
             if not again or monotonic() + backoff >= deadline or self._stop.wait(backoff):
                 raise error
             backoff = min(backoff * 2, MAX_BACKOFF)

@@ -1319,6 +1319,44 @@ def test_a_worker_whose_registration_failed_registers_on_a_later_turn_and_a_stop
     assert client.registers == 3
 
 
+class Cut(Local):
+    """``Local``, whose long-poll of messages fails once ``cut`` is set, as one that a closing server drops."""
+
+    def __init__(self, leases: Leases, worker: str) -> None:
+        super().__init__(leases, worker)
+        self.polling, self.cut = threading.Event(), threading.Event()
+
+    def messages(self, after: int, wait: float) -> list[Work | PromptMessage | Revoke | Extend | Drain]:
+        self.polling.set()
+        self.cut.wait()
+        raise OSError('connection reset')
+
+
+def test_a_long_poll_that_fails_once_its_worker_stopped_is_no_partition(
+    db: Database, campaign: Campaign, tmp_path: Path, tracer: Tracer, spans: InMemorySpanExporter
+) -> None:
+    """A closing server drops a stopped worker's poll, which outlives the stop by up to a heartbeat: else its thread
+    says ``worker.unheard`` into whatever runs next."""
+    leases = Leases(
+        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), FAST
+    )
+    client = Cut(leases, SERVE)
+    worker = Worker(
+        client,
+        tracer,
+        local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0),
+        runners=('process',),
+        relay=quiet_relay(tmp_path),
+    )
+    worker.start()
+    assert client.polling.wait(30)
+    worker.stop()
+    worker.join(30)
+    client.cut.set()
+    wait_until(lambda: f'messages-{SERVE}' not in {t.name for t in threading.enumerate()}, 'the poll to end')
+    assert 'worker.unheard' not in span_names(spans), 'a stopped worker is not cut off'
+
+
 def test_a_worker_dismissed_while_it_reports_a_job_it_cannot_find_again_ends(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:

@@ -431,7 +431,6 @@ def test_serve_refuses_when_a_daemon_holds_the_pid_file(
     assert cfg.pid_file.read_text() == str(lock_holder.pid)
 
 
-@pytest.mark.quarantine(issue=555)
 def test_shutdown_fails_open_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     daemon = Daemon(Settings(home=tmp_path / 'home'))
     with daemon.db.session() as s:

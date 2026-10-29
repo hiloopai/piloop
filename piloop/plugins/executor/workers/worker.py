@@ -313,6 +313,8 @@ class Worker:
                 self._dismiss(e)
                 return
             except Exception as e:  # the control plane does not answer: the heartbeat's loop decides what stops
+                if self._stopping:  # a closing server drops the poll of a worker that stops: no partition
+                    return
                 self._tracer.event('worker.unheard', worker=self.id, error=str(e))
                 self._wanted.wait(self.timing.renew)
                 continue
