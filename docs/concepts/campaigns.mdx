@@ -229,7 +229,8 @@ agents never see the units.
 
 An **evaluator** is the evaluate command, `link`, and the names and directions of the primaries and guardrails. A
 change to one of them makes a new evaluator at the next `piloop init`. piloop never compares scores of two evaluators:
-it measures the head again, and runs then compare under the new one. To measure an older keep again:
+it measures the head again, and runs then compare under the new one. A run that is being scored when the evaluator
+changes measures its bar and its next commits under the new one before it judges them. To measure an older keep again:
 
 ```bash
 piloop candidate remeasure 2

@@ -1461,7 +1461,9 @@ def test_a_restart_during_an_evaluation_scores_the_run_on_start_and_never_runs_i
     hold = tmp_path / 'hold'
     hold.touch()
     write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
-    wait_then_score = f'while [ -f {hold} ]; do sleep 0.05; done; echo METRIC score=$(wc -l < solve.txt)'
+    # the baseline, the run's bar under this new evaluator, is measured at once: the cut is in the run's own evaluation
+    held = f'[ -f {hold} ] && [ $(wc -l < solve.txt) -gt 1 ]'
+    wait_then_score = f'while {held}; do sleep 0.05; done; echo METRIC score=$(wc -l < solve.txt)'
     set_config(db, campaign, evaluate=['sh', '-c', f'{wait_then_score}; echo METRIC size=1'])
     first = make_scheduler(db, runtime, tmp_path)
     add_ideas(db, campaign, 'two commits')

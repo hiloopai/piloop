@@ -15,8 +15,8 @@ from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
-from piloop.plugins.campaign_type.kit.evaluation.measure import measured, request_remeasure
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
+from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, measured, request_remeasure
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -46,6 +46,18 @@ def held_evaluate(tmp_path: Path, then: str = SCORE) -> list[str]:
     """An evaluate command that logs its commit in ``evaluated``, waits while ``hold`` exists, then runs ``then``."""
     log, hold = tmp_path / 'evaluated', tmp_path / 'hold'
     return ['sh', '-c', f'git rev-parse HEAD >> {log}; while [ -f {hold} ]; do sleep 0.05; done; {then}']
+
+
+def held_runs(db: Database, campaign: Campaign, tmp_path: Path, then: str = SCORE) -> None:
+    """``held_evaluate`` as a new evaluator that has measured the baseline: the runs' bar, which the scheduler measures
+    before any run starts. So each evaluation that the test holds is a run's own."""
+    set_config(db, campaign, evaluate=held_evaluate(tmp_path, then))
+    with db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        evaluator = current_evaluator(s, proj, proj.config).id
+        bar = baseline(db, campaign.id).id
+        s.add(Measurement(candidate_id=bar, evaluator_id=evaluator, metrics={'score': 1.0, 'size': 5.0}))
+        s.commit()
 
 
 def rows(db: Database) -> list[tuple[int, bool, str | None]]:
@@ -87,7 +99,7 @@ def test_two_runs_that_reach_one_tree_share_one_evaluation_and_its_crash(
 ) -> None:
     """A tree that a second run reaches while it is evaluated is not evaluated again, not even after a crash."""
     (tmp_path / 'hold').touch()
-    set_config(db, campaign, evaluate=held_evaluate(tmp_path, then='exit 7'))
+    held_runs(db, campaign, tmp_path, then='exit 7')
     ex = queued_executor(db, runtime, tmp_path, slots=2)
     waits = mocker.spy(queue, 'request')
     first, second = make_run(db, campaign), make_run(db, campaign, title='the same line')
@@ -139,7 +151,7 @@ def test_a_cancelled_evaluation_is_a_crash_that_names_who_cancelled_it_at_once(
     """A cancel records the crash itself, so it holds even if no daemon sees it; a running evaluator is stopped."""
     write_script(Path(campaign.path).parent / 'harness.sh', HARNESS_OWN_LINE)
     (tmp_path / 'hold').touch()
-    set_config(db, campaign, evaluate=held_evaluate(tmp_path))
+    held_runs(db, campaign, tmp_path)
     ex = queued_executor(db, runtime, tmp_path, slots=1)
     first, second = make_run(db, campaign), make_run(db, campaign, title='another line')
     one = in_thread(lambda: execute(ex, db, first))
@@ -188,7 +200,7 @@ def test_a_stop_ends_the_waiting_evaluations_and_records_nothing(
 ) -> None:
     write_script(Path(campaign.path).parent / 'harness.sh', HARNESS_OWN_LINE)
     (tmp_path / 'hold').touch()
-    set_config(db, campaign, evaluate=held_evaluate(tmp_path))
+    held_runs(db, campaign, tmp_path)
     ex = queued_executor(db, runtime, tmp_path, slots=1)
     first, second = make_run(db, campaign), make_run(db, campaign, title='another line')
     threads = [in_thread(lambda: execute(ex, db, first))]

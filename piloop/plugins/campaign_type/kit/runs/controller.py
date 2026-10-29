@@ -817,8 +817,8 @@ class RunController:
         Return the id of the candidate of the run's last commit, unless scoring was cancelled. A tree that is already a candidate keeps that candidate, and its verdict unless another run
         proposes it again (``ledger.reproposed``).
 
-        The daemon scores each candidate with the campaign's config and evaluator at that moment, not at launch
-        (``Scope.now``). A run that outlives a config change must not move the campaign back to the old evaluator. All commits are candidates and pinned first, so a
+        The daemon judges each candidate with the campaign's config and evaluator at that moment, not at launch, against
+        a bar that the same evaluator measured (``_measure_with_bar``). A run that outlives a config change must not move the campaign back to the old evaluator. All commits are candidates and pinned first, so a
         commit that waits for the evaluations before it is a ``pending`` candidate, and after a stop, ``resume`` finds
         all of them. It judges the candidates that the stop left pending, including rebased ones
         (``_follow``).
@@ -858,28 +858,22 @@ class RunController:
                 candidate = s.get_one(Candidate, candidate_id)
                 again = candidate.origin in UNMEASURED or reproposed(candidate, s.get_one(Run, run_id))
                 judge_now = pending(candidate) or (unmeasured is None and again)
-                needs_measurement = unmeasured is None and not measured(candidate, scope.evaluator_id)
+                known = measured(candidate, scope.evaluator_id)
                 gate = bar_id if judgeable(candidate) else None
             with self._tracer.span('piloop.candidate', run=run_id, revision=revision, candidate=candidate_id) as span:
                 if unmeasured is not None:
                     span.set(status=unmeasured)
-                elif not needs_measurement:
-                    span.set(status='known')
-                    self._tracer.event('candidate.known', run=run_id, revision=revision, candidate=candidate_id)
-                elif not self._measure(
-                    run_id,
-                    campaign_id,
-                    scope.cfg,
-                    revision,
-                    candidate_id,
-                    scope.evaluator_id,
-                    log_dir / f'eval-{i}',
-                    bar=bar_id if scope.track.repeats else None,
-                    repeats=scope.track.repeats or 1,
-                    gate=gate,
-                ):
-                    span.set(status='cancelled')
-                    return None
+                else:
+                    if known:
+                        span.set(status='known')
+                        self._tracer.event('candidate.known', run=run_id, revision=revision, candidate=candidate_id)
+                    measured_in = self._measure_with_bar(
+                        run_id, repo, candidate_id, log_dir / f'eval-{i}', bar=bar_id, gate=gate
+                    )
+                    if measured_in is None:
+                        span.set(status='cancelled')
+                        return None
+                    scope = measured_in
                 judged = self._judge(
                     scope,
                     candidate_id,
@@ -916,33 +910,76 @@ class RunController:
         current: CandidateId | None = candidate_id
         while current is not None:
             with self._db.session() as s:
-                scope = Scope.now(s, s.get_one(Run, scope.run_id), scope.repo)
-                s.commit()
                 candidate = s.get_one(Candidate, current)
                 revision, parent_id = candidate.revision, candidate.parent_id
-                needs_measurement = not measured(candidate, scope.evaluator_id)
                 judge_now = pending(candidate)
-                gated = judgeable(candidate)
+                gate = parent_id if judgeable(candidate) else None
             assert parent_id is not None  # A rebased candidate's parent is the head it was merged onto.
             with self._tracer.span('piloop.candidate', run=scope.run_id, revision=revision, candidate=current) as span:
                 span.set(rebased=True)
-                if needs_measurement and not self._measure(
-                    scope.run_id,
-                    scope.campaign_id,
-                    scope.cfg,
-                    revision,
-                    current,
-                    scope.evaluator_id,
-                    log_dir / f'eval-rebased-{current}',
-                    bar=parent_id if scope.track.repeats else None,
-                    repeats=scope.track.repeats or 1,
-                    gate=parent_id if gated else None,
-                ):
+                eval_dir = log_dir / f'eval-rebased-{current}'
+                measured_in = self._measure_with_bar(
+                    scope.run_id, scope.repo, current, eval_dir, bar=parent_id, gate=gate
+                )
+                if measured_in is None:
                     span.set(status='cancelled')
                     return False
+                scope = measured_in
                 judged = self._judge(scope, current, parent_id, span, judge_now=judge_now, unmeasured=None, notes=[])
             current = judged.merged
         return True
+
+    def _measure_with_bar(
+        self,
+        run_id: RunId,
+        repo: Repository,
+        candidate_id: CandidateId,
+        eval_dir: Path,
+        *,
+        bar: CandidateId,
+        gate: CandidateId | None,
+    ) -> Scope | None:
+        """Measure a run's candidate and its ``bar``, then return the scope to judge the candidate in.
+
+        Returns None if the daemon stopped. Each is measured once under the scope's evaluator unless that evaluator
+        measured it already (``measured``), and the scope is read again after each measurement. So when ``piloop init``
+        registers an evaluator meanwhile, both are measured under the new one: a candidate is never judged under an old
+        evaluator, nor against a bar that its evaluator has not measured. The bar is measured as the scheduler measures
+        the bars of open runs (``remeasure``, ``judge.due``), and a run joins that evaluation when the scheduler queued
+        it first.
+        """
+        tried = set[tuple[CandidateId, EvaluatorId]]()  # a climb that stopped at a rung is not ``measured``
+        while True:
+            with self._db.session() as s:
+                scope = Scope.now(s, s.get_one(Run, run_id), repo)
+                s.commit()
+                both = (s.get_one(Candidate, bar), s.get_one(Candidate, candidate_id))
+                ev = scope.evaluator_id
+                todo = [c.id for c in both if (c.id, ev) not in tried and not measured(c, ev)]
+                revision = both[1].revision
+            match todo:
+                case []:
+                    return scope
+                case [first, *_] if first == bar:
+                    tried.add((bar, scope.evaluator_id))
+                    self.remeasure(bar)
+                    if self.launcher.cancelled.is_set():
+                        return None
+                case _:
+                    tried.add((candidate_id, scope.evaluator_id))
+                    if not self._measure(
+                        run_id,
+                        scope.campaign_id,
+                        scope.cfg,
+                        revision,
+                        candidate_id,
+                        scope.evaluator_id,
+                        eval_dir,
+                        bar=bar if scope.track.repeats else None,
+                        repeats=scope.track.repeats or 1,
+                        gate=gate,
+                    ):
+                        return None
 
     def _measure(
         self,

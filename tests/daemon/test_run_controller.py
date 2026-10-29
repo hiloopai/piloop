@@ -2237,12 +2237,10 @@ def test_a_changed_evaluator_measures_again_and_old_numbers_do_not_count(
         assert [m.metrics['score'] for m in tried.measurements] == [6.0], 'measured under the doubled evaluator'
         base = s.get_one(Candidate, added.id)
         assert [m.metrics['score'] for m in base.measurements] == [2.0, 4.0], (
-            'the revert resolved to the base, which the new evaluator had not seen: measured once more, under it'
+            'the base, the bar of the first commit, measured once more under the new evaluator; the revert to it is known'
         )
         assert base.verdict is Outcome.KEEP, 'a known candidate keeps its verdict; the revert says nothing new about it'
-        assert (tried.verdict, tried.verdict_by) == (Outcome.KEEP, System.DAEMON), (
-            'an unmeasured bar is beaten by any score'
-        )
+        assert (tried.verdict, tried.verdict_by) == (Outcome.KEEP, System.DAEMON), '6 against a bar of 4'
         trunk = head(s, proj)
         assert trunk is not None and trunk.id == tried.id
 
@@ -2296,16 +2294,85 @@ def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_
 
     monkeypatch.setattr(ex, '_measure', then_init(ex._measure))
     execute(ex, db, run_id)
-    first, second = candidates(db, run_id)
     with db.session() as s:
         new_evaluator = s.get_one(Campaign, campaign.id).evaluator_id
-        old, new = (s.get_one(Candidate, c.id).measurements for c in (first, second))
-        assert [(m.evaluator_id != new_evaluator, m.metrics['score']) for m in old] == [(True, 2.0)]
-        assert [(m.evaluator_id, m.metrics['score']) for m in new] == [(new_evaluator, 6.0)], (
+        first, second = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
+        assert [(m.evaluator_id == new_evaluator, m.metrics['score']) for m in first.measurements] == [
+            (False, 2.0),
+            (True, 4.0),
+        ], 'judged under the old evaluator, then measured under the new one as the bar of the second'
+        assert [(m.evaluator_id, m.metrics['score']) for m in second.measurements] == [(new_evaluator, 6.0)], (
             'measured under the evaluator of the config it is scored in'
         )
-        judged = s.get_one(Candidate, second.id)
-        assert (judged.verdict, judged.verdict_by) == (Outcome.KEEP, System.DAEMON)
+        assert (second.verdict, second.verdict_by) == (Outcome.KEEP, System.DAEMON)
+        [_, (_, judged)] = in_order(s, CandidateJudged)
+        assert judged.reason == f'against candidate#{first.id}: score 6 vs 4 (+2; aggregate: no per-unit results)', (
+            'judged against its bar under the new evaluator'
+        )
+
+
+def test_a_config_change_while_a_commit_is_measured_judges_it_and_its_bar_under_the_new_evaluator(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``piloop init`` while the run's first evaluation runs: no commit is judged on the old evaluator, nor against a
+    bar that the new one has not measured."""
+    write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
+    reload_campaign(db, campaign)
+    run_id = make_run(db, campaign)
+    ex = controller(db, runtime, tmp_path)
+    doubled = ['sh', '-c', 'echo METRIC score=$(( 2 * $(wc -l < solve.txt) )); echo METRIC size=1']
+    inits: list[None] = []
+
+    def init_during[**P](fn: Callable[P, bool]) -> Callable[P, bool]:
+        def measuring(*args: P.args, **kwargs: P.kwargs) -> bool:
+            if not inits:
+                inits.append(None)
+                write_toml(Path(campaign.path), HARNESS_TWO_COMMITS, evaluate=doubled)
+                with db.session() as s:
+                    sync(s, s.get_one(Campaign, campaign.id))
+                    s.commit()
+            return fn(*args, **kwargs)
+
+        return measuring
+
+    monkeypatch.setattr(ex, '_measure', init_during(ex._measure))
+    execute(ex, db, run_id)
+    with db.session() as s:
+        new = s.get_one(Campaign, campaign.id).evaluator_id
+        first, second = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
+
+        def under_new(c: CandidateId) -> list[float]:
+            return [m.metrics['score'] for m in s.get_one(Candidate, c).measurements if m.evaluator_id == new]
+
+        assert [under_new(c) for c in (baseline(db, campaign.id).id, first.id, second.id)] == [[2.0], [4.0], [6.0]], (
+            'the bar and both commits are measured under the evaluator that judges them'
+        )
+        judged = [(e.target_id, j.score) for e, j in in_order(s, CandidateJudged)]
+        assert judged == [(first.id, 4.0), (second.id, 6.0)], 'each judged on its score under the new evaluator'
+
+
+def test_a_stop_while_a_run_measures_its_bar_judges_nothing(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=['sh', '-c', 'echo METRIC score=7; echo METRIC size=1'])
+    with db.session() as s:
+        sync(s, s.get_one(Campaign, campaign.id))
+        s.commit()
+    run_id = make_run(db, campaign)
+    ex = controller(db, runtime, tmp_path)
+
+    def stopping(candidate_id: CandidateId) -> None:
+        ex.launcher.cancel()
+        RunController.remeasure(ex, candidate_id)
+
+    monkeypatch.setattr(ex, 'remeasure', stopping)
+    execute(ex, db, run_id)
+    with db.session() as s:
+        bar = s.get_one(Candidate, baseline(db, campaign.id).id)
+        evaluator = s.get_one(Campaign, campaign.id).evaluator_id
+        assert not any(m.evaluator_id == evaluator for m in bar.measurements), 'the stop killed the bar evaluation'
+        [added] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
+        assert (added.verdict, added.measurements) == (None, []), 'left pending for the next daemon'
 
 
 SPLIT_UNITS = [
