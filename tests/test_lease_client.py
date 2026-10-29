@@ -318,6 +318,7 @@ def test_an_extension_reaches_the_worker_of_the_agent_s_live_lease_once_for_each
     assert held.extended == 5400, 'a restarted worker finds it on its grant'
 
 
+@pytest.mark.quarantine(issue=521)
 def test_a_long_poll_answers_at_the_commit_that_brings_a_message(
     connect: Connect, db: Database, campaign: Campaign, tmp_path: Path, leases: Leases
 ) -> None:

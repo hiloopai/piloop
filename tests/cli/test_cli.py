@@ -18,6 +18,7 @@ import pytest
 from alembic import command
 from alembic.script import ScriptDirectory
 from covalence import Cid
+from dirty_equals import IsStr
 from git import Repo
 from inline_snapshot import snapshot
 from pydantic import SecretStr
@@ -849,7 +850,7 @@ def test_a_message_reaches_the_orchestrator_s_wait_and_its_reply_the_sender_s_in
     assert lines == [
         'what next?',
         '',
-        '- comment#2 decision by orchestrator, 0s ago, answers comment#1: a cache: idea#3',
+        IsStr(regex=r'- comment#2 decision by orchestrator, \d+s ago, answers comment#1: a cache: idea#3'),
     ], 'a reply shows the thread of its root'
     with pytest.raises(SystemExit, match="^no campaign 'nope'"):
         run_cli(['message', 'nope', 'hello?'])

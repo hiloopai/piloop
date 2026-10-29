@@ -107,6 +107,10 @@ Keep the suite fast:
 - To test a timeout of the code, give it a fake clock that a sleep advances, rather than a short real timeout: that
   one is slow alone and flaky under load.
 
+A test that fails without a code cause is quarantined at once: open an issue labelled `flaky` and `critical`, add it to
+`tests/quarantine.toml` with the files that only its tests cover, and mark the test `@pytest.mark.quarantine(issue=N)`.
+CI then runs it only in a job that does not block, as `make quarantine` does. Its fix removes the marks and the issue.
+
 Other targets: `make format`, `make lint`, `make typecheck`, `make test` (no coverage), `make testcov`, `make docs`,
 `make docs-check` and `make e2e` (see below). CI runs the pre-commit hooks, `make testcov` on Linux, and `install.sh`
 with the enwik8 example. In `hiloopai/piloop`, not in a fork, CI also runs `make test` on macOS.

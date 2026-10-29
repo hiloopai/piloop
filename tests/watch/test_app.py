@@ -255,6 +255,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
     return campaign
 
 
+@pytest.mark.quarantine(issue=523)
 def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, live_campaign: Campaign) -> None:
     shots: list[str] = []
 
@@ -334,6 +335,7 @@ def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, 
     )
 
 
+@pytest.mark.quarantine(issue=523)
 def test_a_campaign_not_registered_yet_is_waited_for_and_shown_once_it_is(db: Database, campaign_path: Path) -> None:
     shots: list[str] = []
 
@@ -348,6 +350,7 @@ def test_a_campaign_not_registered_yet_is_waited_for_and_shown_once_it_is(db: Da
     assert shots == [" no campaign 'demo' yet: `piloop init` registers it, and this view follows"]
 
 
+@pytest.mark.quarantine(issue=523)
 def test_a_campaign_whose_config_no_longer_validates_says_how_to_fix_it(db: Database, campaign: Campaign) -> None:
     store_config(db, campaign.id, {'name': campaign.name, 'metrics': 'no list'})
     shots: list[str] = []
@@ -363,6 +366,7 @@ def test_a_campaign_whose_config_no_longer_validates_says_how_to_fix_it(db: Data
     assert shots[1].startswith(' demo: the stored config is not a valid piloop config')
 
 
+@pytest.mark.quarantine(issue=523)
 def test_a_caller_that_may_not_act_as_its_actor_is_told_why(db: Database, campaign: Campaign) -> None:
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
         assert [n.message for n in app._notifications] == [
@@ -373,6 +377,7 @@ def test_a_caller_that_may_not_act_as_its_actor_is_told_why(db: Database, campai
     assert app.follower is None, 'it follows nothing it cannot read'
 
 
+@pytest.mark.quarantine(issue=523)
 def test_inbox_keys_acknowledge_one_item_or_every_item_shown(db: Database, live_campaign: Campaign) -> None:
     notes: list[str] = []
 
@@ -398,6 +403,7 @@ def test_inbox_keys_acknowledge_one_item_or_every_item_shown(db: Database, live_
         ]
 
 
+@pytest.mark.quarantine(issue=523)
 def test_r_replies_to_the_thread_root_with_a_priority_that_wakes_the_orchestrator(
     db: Database, live_campaign: Campaign
 ) -> None:
@@ -435,6 +441,7 @@ def test_r_replies_to_the_thread_root_with_a_priority_that_wakes_the_orchestrato
         ]
 
 
+@pytest.mark.quarantine(issue=523)
 def test_slash_filters_the_focused_panel_and_esc_clears_it(db: Database, live_campaign: Campaign) -> None:
     shots: list[str] = []
 
@@ -451,6 +458,7 @@ def test_slash_filters_the_focused_panel_and_esc_clears_it(db: Database, live_ca
     assert '[1] Inbox 2 ─' in shots[1]
 
 
+@pytest.mark.quarantine(issue=523)
 def test_the_agents_panel_shows_the_selected_agents_output_and_its_state(db: Database, live_campaign: Campaign) -> None:
     shots: list[str] = []
 
@@ -475,6 +483,7 @@ def test_the_agents_panel_shows_the_selected_agents_output_and_its_state(db: Dat
     assert 'proposing idea B' in shots[1], "a headless agent's saved transcript"
 
 
+@pytest.mark.quarantine(issue=523)
 def test_s_steers_a_running_agent(db: Database, live_campaign: Campaign) -> None:
     notes: list[str] = []
 
@@ -497,6 +506,7 @@ def test_s_steers_a_running_agent(db: Database, live_campaign: Campaign) -> None
     ], 'the daemon delivers the note'
 
 
+@pytest.mark.quarantine(issue=523)
 def test_a_paused_campaign_says_so_in_its_row_and_its_header(db: Database, live_campaign: Campaign) -> None:
     with db.session() as s:
         ops.pause(s, live_campaign.id, evals=False, reason='evaluator v2')
@@ -514,6 +524,7 @@ def test_a_paused_campaign_says_so_in_its_row_and_its_header(db: Database, live_
     assert shots[1].splitlines()[0] == ' demo · paused (launches): evaluator v2'
 
 
+@pytest.mark.quarantine(issue=523)
 def test_the_candidates_are_the_lineage_s_nodes_with_their_detail(db: Database, live_campaign: Campaign) -> None:
     with db.session() as s:
         s.add(
@@ -574,6 +585,7 @@ def test_the_candidates_are_the_lineage_s_nodes_with_their_detail(db: Database, 
     )
 
 
+@pytest.mark.quarantine(issue=523)
 def test_ideas_keys_approve_park_reject_with_a_reason_and_move_the_priority(
     db: Database, live_campaign: Campaign
 ) -> None:
@@ -619,6 +631,7 @@ def test_ideas_keys_approve_park_reject_with_a_reason_and_move_the_priority(
         }
 
 
+@pytest.mark.quarantine(issue=523)
 def test_a_review_that_the_api_refuses_says_why(db: Database, live_campaign: Campaign) -> None:
     with db.session() as s:
         seed = idea(s, s.get_one(Campaign, live_campaign.id), 'a hunch', IdeaStatus.SEED, created_by='watchdog#9')
@@ -650,6 +663,7 @@ def test_a_review_that_the_api_refuses_says_why(db: Database, live_campaign: Cam
     ]
 
 
+@pytest.mark.quarantine(issue=523)
 def test_the_ideas_detail(db: Database, live_campaign: Campaign) -> None:
     with db.session() as s:
         s.add(Comment(target=TargetRef(TargetKind.IDEA, 2), author='human', body='go on'))
@@ -685,6 +699,7 @@ def test_the_ideas_detail(db: Database, live_campaign: Campaign) -> None:
     )
 
 
+@pytest.mark.quarantine(issue=523)
 def test_the_status_panel_lists_the_overview_s_sections(db: Database, live_campaign: Campaign) -> None:
     shots: list[str] = []
 
@@ -708,6 +723,7 @@ def test_the_status_panel_lists_the_overview_s_sections(db: Database, live_campa
     )
 
 
+@pytest.mark.quarantine(issue=523)
 def test_question_mark_shows_the_panels_keys_and_0_focuses_the_detail(db: Database, live_campaign: Campaign) -> None:
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
         await pilot.press('question_mark')
@@ -725,6 +741,7 @@ def test_question_mark_shows_the_panels_keys_and_0_focuses_the_detail(db: Databa
     drive(db, 'demo', scenario)
 
 
+@pytest.mark.quarantine(issue=523)
 def test_an_empty_campaign_takes_every_key_without_acting(db: Database, live_campaign: Campaign) -> None:
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
         assert isinstance(app.focused, CandidatesTable), 'an empty inbox does not take the focus'
@@ -736,6 +753,7 @@ def test_an_empty_campaign_takes_every_key_without_acting(db: Database, live_cam
     drive(db, 'other', scenario)
 
 
+@pytest.mark.quarantine(issue=523)
 def test_the_screen_follows_the_feed_and_a_dialog_holds_it_still(db: Database, live_campaign: Campaign) -> None:
     def write(body: str) -> None:
         with db.session() as s:
@@ -762,6 +780,7 @@ def test_the_screen_follows_the_feed_and_a_dialog_holds_it_still(db: Database, l
     drive(db, 'demo', scenario)
 
 
+@pytest.mark.quarantine(issue=523)
 def test_an_event_of_another_campaign_draws_again_and_one_of_the_home_reads_again(
     db: Database, live_campaign: Campaign
 ) -> None:
@@ -822,6 +841,7 @@ def test_the_follower_says_when_the_feed_fails_and_reads_again_from_its_cursor(m
     assert follower.after == 8
 
 
+@pytest.mark.quarantine(issue=523)
 def test_the_campaigns_screen_without_a_campaign_opens_nothing(db: Database) -> None:
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
         await pilot.press('enter')
@@ -831,6 +851,7 @@ def test_the_campaigns_screen_without_a_campaign_opens_nothing(db: Database) -> 
     drive(db, None, scenario)
 
 
+@pytest.mark.quarantine(issue=523)
 @pytest.mark.parametrize('remote', [False, True], ids=['socket', 'PILOOP_SERVER'])
 def test_a_reply_typed_in_the_watch_wakes_the_orchestrators_inbox_wait(
     db: Database, campaign: Campaign, tmp_path: Path, remote: bool

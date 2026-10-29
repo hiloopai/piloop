@@ -128,6 +128,38 @@ jobs:
       - run: uv sync
       - run: make ${{ matrix.make || 'test' }} PYTEST_WORKERS=${{ matrix.workers || 'logical' }}
 
+  # Not in `check`: a quarantined test fails here without failing CI. It runs on every push, so its fix shows as a
+  # run of passes.
+  quarantine:
+    name: quarantined tests (non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-suffix: test
+      - run: uv sync
+      - name: each quarantine issue is still open
+        # The issues live in the private repository.
+        if: github.event.repository.private
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for n in $(grep -o '^\[[0-9]\+\]' tests/quarantine.toml | tr -d '[]'); do
+            state=$(gh issue view "$n" -R "$GITHUB_REPOSITORY" --json state -q .state)
+            [ "$state" = OPEN ] || { echo "::error::issue $n is $state: delete its table in tests/quarantine.toml and its marks"; exit 1; }
+          done
+      - run: make quarantine PYTEST_WORKERS=4
+
   check:
     if: always()
     needs: [lint, test]

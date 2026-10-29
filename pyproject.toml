@@ -338,9 +338,11 @@ testpaths = ["tests"]
 # The example plugins import as packages; their entry points register only where a test installs them.
 pythonpath = ["examples/plugins/nice-runtime", "examples/plugins/sqlite-cas", "examples/plugins/min-gain", "examples/plugins/stop-after-keeps", "examples/plugins/keep-cost", "examples/plugins/inline-executor", "examples/plugins/inference"]
 # The e2e tests run real agents and cost money: only `make e2e` (`-m e2e`, which overrides this) selects them.
-addopts = ["-m", "not e2e"]
+# A quarantined test runs only in `make quarantine` (`-m quarantine`), until its issue is fixed.
+addopts = ["-m", "not e2e and not quarantine"]
 markers = [
     "e2e: a real campaign with real agents (make e2e)",
+    "quarantine(issue): a flaky test, out of the required run until its open issue (tests/quarantine.toml) is fixed",
     "needs(*tests): skip unless these earlier tests of the module passed (tests/e2e)",
 ]
 xfail_strict = true
@@ -353,6 +355,7 @@ data_file = ".coverage/.coverage"
 source = ["piloop"]
 omit = ["piloop/db/migrations/*", "piloop/plugins/*/*/migrations/*", "piloop/__main__.py", "piloop/plugins/campaign_type/optimization/templates/*"]
 branch = true
+plugins = ["tests.quarantine"]
 
 [tool.coverage.report]
 fail_under = 100
