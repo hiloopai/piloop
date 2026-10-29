@@ -265,13 +265,13 @@ class Definition:
     evidence: str
     """What supports it, with ids and paths: runs, findings, candidates, loss tables, documents."""
     check: str
-    """The cheapest measurement that can disprove it, and the result that stops the run."""
+    """What the evaluator should show if the idea works, and what would show it wrong. Never a gate before a commit."""
     metric: str
     """What decides success: the primary metric, or the part of it that the idea targets."""
     effect: str
     """The expected size of the effect in the metric's units, and why that much."""
     plan: str | None = None
-    """More steps for the implementer, after the check."""
+    """More steps for the implementer."""
 
     def missing(self) -> list[str]:
         """Return the names of the required parts that are blank."""
@@ -306,7 +306,7 @@ def develop(
         raise ValueError(f'a defined idea needs {", ".join(gaps)}')
     idea.hypothesis = f'{definition.hypothesis.strip()}\n\nSeed ({idea.created_by}): {idea.hypothesis}'
     steps = [
-        f'First check, stop if it fails: {definition.check.strip()}',
+        f'The evaluator should show: {definition.check.strip()}',
         f'Success: {definition.metric.strip()}; expected effect: {definition.effect.strip()}',
         *([definition.plan.strip()] if definition.plan and definition.plan.strip() else []),
     ]

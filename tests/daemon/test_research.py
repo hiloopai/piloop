@@ -179,7 +179,7 @@ def test_a_seed_sweep_develops_one_seed_and_rejects_the_other_however_full_the_b
         assert (developed.status, developed.created_by, developed.family) == (IdeaStatus.READY, 'orchestrator', 'trees')
         assert developed.hypothesis == 'a deeper tree fits the interactions\n\nSeed (orchestrator): deeper trees'
         assert developed.plan == (
-            'First check, stop if it fails: depth 6 on the dev split; stop below +0.01\n'
+            'The evaluator should show: depth 6 on the dev split; stop below +0.01\n'
             'Success: score; expected effect: +0.02: half the interaction loss'
         )
         assert developed.provenance == 'loss table l.md; seed pointers: run#3'

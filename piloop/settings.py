@@ -122,7 +122,8 @@ class DaemonSettings(BaseModel):
 class AgentSettings(BaseModel):
     """``[agents]``: how the daemon steers and ends the agents of this home.
 
-    A campaign's ``[agents]`` in its ``piloop.toml`` can set ``wrap_up_grace`` and ``finding_grace`` for its own agents.
+    A campaign's ``[agents]`` in its ``piloop.toml`` can set ``wrap_up_grace``, ``finding_grace`` and ``brief_words``
+    for its own agents.
     """
 
     model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
@@ -138,6 +139,9 @@ class AgentSettings(BaseModel):
     steer_line_chars: int = Field(default=200, gt=1)
     """How many characters of a comment's first line a running agent gets, in the one line that the daemon sends it
     for the comment. The agent can read the rest with SQL."""
+    brief_words: int = Field(default=400, ge=1)
+    """How many words a campaign's ``brief.md`` may have before ``piloop init`` and ``piloop doctor`` warn. A brief that
+    grows rule by rule teaches agents caution instead of saving scored versions: rewrite it to this size."""
     exit_output_chars: int = Field(default=500, ge=0)
     """How many characters of its last output lines an agent that exits non-zero leaves in its error, which
     ``piloop status`` and the escalation of paused launches show, and one that exits 0 early with nothing done in the

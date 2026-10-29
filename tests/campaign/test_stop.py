@@ -895,7 +895,7 @@ def test_a_stop_syncs_the_memory_documents_before_the_closing_watchdog_whose_bri
         'result': 'documents: 1 added, 0 unchanged',
     }
     brief = (tmp_path / 'agent_sessions' / str(watchdog) / 'brief.md').read_text()
-    assert 'one row of `lessons` on the campaign for each mechanism family\n(`ideas.family`)' in brief
+    assert 'leave one row of `lessons` for each family that this campaign tried' in brief
     assert 'INSERT INTO lessons (campaign_id, family, status, effect, metric, body, created_by)' in brief, (
         'the INSERT, from the procedures'
     )

@@ -93,12 +93,14 @@ Then edit the files. Put each answer in one place only.
 
 ### brief.md
 
-- The eight headings of the template follow the interview topics. Keep the headings that fit. Remove or add
-  headings to fit the problem.
+- Fill the template's headings from the interview: the goal, how to work, the hard rules, the prior work.
 - Write the rules to the implementer: "you may edit…", "never touch…". Every role reads it, so do not tell the
   reader that it is an implementer.
-- The editable surface, the prior art and the escalation policy go only here.
-- Keep it under one page.
+- The editable surface, the prior art and the escalation policy go only here. The budget, the harnesses and the
+  guardrails go in `piloop.toml`.
+- Keep it under 400 words (`[agents] brief_words`). `piloop init` and `piloop doctor` warn past it.
+- Say that a scored version comes early and that the evaluator is the check. Write no rule that lets an implementer
+  end without a scored version, and no gate before the first one.
 
 ### piloop.toml
 
@@ -201,7 +203,8 @@ this session or in a background subagent that leaves this session free.
 1. Run the same interview, but pre-fill it from the current `brief.md` and `piloop.toml`, not from guesses. The first
    option you offer is always what the campaign says now.
 2. Ask only about what the human wants to change.
-3. Apply the change to both files and show them.
+3. Apply the change to both files and show them. Rewrite `brief.md` to its budget as a whole: never append a rule.
+   Fold the change in, and drop what no longer holds.
 4. Run `piloop init .` again. It reads the config again.
 
 A changed evaluate command or metric set makes a new evaluator. Scores from the old evaluator are never compared with

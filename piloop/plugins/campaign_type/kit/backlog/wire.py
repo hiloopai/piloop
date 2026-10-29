@@ -65,7 +65,7 @@ class DevelopBody(Params):
     evidence: str
     """What supports it, with ids and paths."""
     check: str
-    """The cheapest measurement that can prove it wrong, and the result that stops the run."""
+    """What the evaluator should show if the idea works, and what would show it wrong. Never a gate before a commit."""
     metric: str
     """The metric that decides success."""
     effect: str

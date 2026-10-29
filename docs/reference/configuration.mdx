@@ -49,8 +49,8 @@ section.
 | `ladder` | list\[[Rung](#rung)\] | `[]` | `[[ladder]]`: the rungs that a run's evaluation of its own version climbs before the full panel, cheapest first. The climb stops at the first rung whose `stop` holds. A baseline, a head, a bar, a reference and a remeasure climb every rung and never stop. |
 | `link` | list\[string\] | `[]` | Repo-relative paths, ignored by git, that piloop puts into every worktree read-only, for example data or virtual environments. Each job gets them as they are when it is made. |
 | `context` | list\[string\] | `[]` | Repo-relative files or globs (for example `docs/error-analysis-*.md`) that hold the campaign's analysis: error analyses, comparisons with a reference, evaluation reports. The research pack lists each one with its outline, newest first, so that every sweep that reads the pack reads them before it proposes work. |
-| `agents` | [AgentTimings](#agenttimings) | `{}` | `[agents]`: how long the campaign's agents get to wrap up and to leave after their finding. |
-| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "leases": {}, "models": {}, "optimization": {}, "spend": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "scout": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "comments": {}, "concepts": {}, "cost": {}, "database": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "judging": {}, "lessons": {}, "links": {}, "orchestration": {}, "pack": {}, "past_campaigns": {}, "priorities": {}, "provenance": {}, "queries": {}, "queue": {}, "reported": {}, "runs": {}, "same_as_parent": {}, "search": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "candidates", "same_as_parent", "reported", "inbox", "events"]}, "trigger": {"cron": {}, "dead_at_startup": {}, "leaking_funnel": {}, "low_water": {}, "news": {}, "run_failed": {}, "seed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
+| `agents` | [CampaignAgents](#campaignagents) | `{}` | `[agents]`: how long the campaign's agents get to wrap up and to leave after their finding. |
+| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "leases": {}, "models": {}, "optimization": {}, "spend": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "scout": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "comments": {}, "concepts": {}, "cost": {}, "database": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idea_comments": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "judging": {}, "lessons": {}, "links": {}, "long_jobs": {}, "orchestration": {}, "pack": {}, "past_campaigns": {}, "priorities": {}, "provenance": {}, "queries": {}, "queue": {}, "reported": {}, "runs": {}, "same_as_parent": {}, "search": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "candidates", "same_as_parent", "reported", "inbox", "events"], "workspace": {}}, "trigger": {"cron": {}, "dead_at_startup": {}, "leaking_funnel": {}, "low_water": {}, "news": {}, "run_failed": {}, "seed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
 
 ## Tolerance
 
@@ -124,14 +124,15 @@ climb of a run's own version stops when `stop` says so, and piloop ends the eval
 | `stop` | dict\[string, [Tolerance](#tolerance)\] | required | When the climb stops at this rung, by metric of `[[metrics]]`. Example: `{ accuracy = { margin = 0.03 }, latency_ms = { fraction = 0.1 } }`. |
 | `evaluate` | list\[string\] \| null | `null` | Optional. A command (argv) of its own, which runs before the evaluate command and reports this rung alone. The rungs that have one come first in `[[ladder]]`. |
 
-## AgentTimings
+## CampaignAgents
 
-`[agents]`: how long the campaign's agents get to finish, over the home's `[agents]` in its `config.toml`.
+`[agents]`: the timings of the campaign's agents and its brief's budget, over the home's `[agents]`.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `wrap_up_grace` | duration \| null | `null` | How long an agent that was told to wrap up, because the campaign stopped or someone cancelled it, has to save its work before the daemon ends it. Unset: the home's. Seconds, or an ISO 8601 duration such as `PT20M`. |
 | `finding_grace` | duration \| null | `null` | How long after its finding the daemon ends an implementer, and every process that it left. Unset: the home's. |
+| `brief_words` | integer \| null | `null` | How many words `brief.md` may have before `piloop init` and `piloop doctor` warn. Unset: the home's. |
 
 ## `[plugins]`
 
@@ -290,6 +291,13 @@ With `provider = "history"`:
 | `budget` | integer | `1000` | The size of the section in tokens, at about 4 characters each. The ideas that do not fit are left out, and the table's title counts them. |
 | `findings` | integer | `10` | How many of the latest findings on the campaign the section lists. |
 
+With `provider = "idea_comments"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `latest` | integer | `10` | How many of the latest comments the section shows. It counts the older ones. |
+| `chars` | integer | `600` | How many characters of each comment's body it shows. A longer one ends with how to read the rest. |
+
 With `provider = "idle_queue"`, the table has no other key.
 
 With `provider = "inbox"`, the table has no other key.
@@ -305,6 +313,8 @@ With `provider = "lessons"`:
 | `budget` | integer | `400` | The size of the section in tokens, its title and introduction included, at about 4 characters each. A line that does not fit gives way to one that counts the rest and says how to read them. |
 
 With `provider = "links"`, the table has no other key.
+
+With `provider = "long_jobs"`, the table has no other key.
 
 With `provider = "orchestration"`, the table has no other key.
 
@@ -343,6 +353,8 @@ With `provider = "tools"`, the table has no other key.
 With `provider = "tracks"`, the table has no other key.
 
 With `provider = "trajectory"`, the table has no other key.
+
+With `provider = "workspace"`, the table has no other key.
 
 ### `[plugins.stop_rule]`
 
@@ -475,7 +487,8 @@ The keys that every `[plugins.role.<name>]` table accepts. Each role's table bel
 | `mcp` | list\[string\] | `[]` | The MCP servers that the agents of this role get, by the name of their `[plugins.mcp_server.<name>]` table. Every harness in the role's rotation must be able to take them in the invocation of the role's runtime. |
 | `writes` | list\[string\] | `[]` | What the agents of this role may write, as their brief states it. Only `files` is enforced. |
 | `files` | `nothing` \| `seeds` \| `ideas` | `"seeds"` | What the agents of this role may file with `piloop idea`: `nothing`, `seeds` or `ideas`. The CLI refuses the rest. |
-| `sections` | list\[string\] \| null | `null` | What the briefs of this role show: the names of sections, in order. A guide goes before the role's context, and every other section after it. When unset, the role's own guides, then every installed section that a brief of this kind of role shows by default, in their order (`Section.SHOWN_IN`, `Section.ORDER`). Built in: `agents`, `candidates`, `comments`, `concepts`, `cost`, `database`, `evaluations`, `events`, `funnel`, `goal`, `headline`, `history`, `idle_queue`, `inbox`, `incidents`, `judging`, `lessons`, `links`, `orchestration`, `pack`, `past_campaigns`, `priorities`, `provenance`, `queries`, `queue`, `reported`, `runs`, `same_as_parent`, `search`, `tools`, `tracks`, `trajectory`. |
+| `plan_words` | integer | `150` | The most words in the plan of an idea that an agent of this role adds or develops: steps that one run can follow, not a protocol. A longer plan is refused. |
+| `sections` | list\[string\] \| null | `null` | What the briefs of this role show: the names of sections, in order. A guide goes before the role's context, and every other section after it. When unset, the role's own guides, then every installed section that a brief of this kind of role shows by default, in their order (`Section.SHOWN_IN`, `Section.ORDER`). Built in: `agents`, `candidates`, `comments`, `concepts`, `cost`, `database`, `evaluations`, `events`, `funnel`, `goal`, `headline`, `history`, `idea_comments`, `idle_queue`, `inbox`, `incidents`, `judging`, `lessons`, `links`, `long_jobs`, `orchestration`, `pack`, `past_campaigns`, `priorities`, `provenance`, `queries`, `queue`, `reported`, `runs`, `same_as_parent`, `search`, `tools`, `tracks`, `trajectory`, `workspace`. |
 
 ## ImplementerRole
 
@@ -617,7 +630,8 @@ Experimental: the scout.
 
 `[agents]`: how the daemon steers and ends the agents of this home.
 
-A campaign's `[agents]` in its `piloop.toml` can set `wrap_up_grace` and `finding_grace` for its own agents.
+A campaign's `[agents]` in its `piloop.toml` can set `wrap_up_grace`, `finding_grace` and `brief_words`
+for its own agents.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -625,6 +639,7 @@ A campaign's `[agents]` in its `piloop.toml` can set `wrap_up_grace` and `findin
 | `finding_grace` | duration | `"PT1M"` | How long after its finding the daemon ends an implementer, and every process that it left: a last commit takes seconds. |
 | `wrap_up_lead` | duration | `"PT10M"` | How long before its role timeout the daemon tells an implementer to wrap up, at most a quarter of the timeout. |
 | `steer_line_chars` | integer | `200` | How many characters of a comment's first line a running agent gets, in the one line that the daemon sends it for the comment. The agent can read the rest with SQL. |
+| `brief_words` | integer | `400` | How many words a campaign's `brief.md` may have before `piloop init` and `piloop doctor` warn. A brief that grows rule by rule teaches agents caution instead of saving scored versions: rewrite it to this size. |
 | `exit_output_chars` | integer | `500` | How many characters of its last output lines an agent that exits non-zero leaves in its error, which `piloop status` and the escalation of paused launches show, and one that exits 0 early with nothing done in the escalation. The values of its secrets read as their names. 0 leaves none. |
 
 ### `[watch]`

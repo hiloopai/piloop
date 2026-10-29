@@ -13,6 +13,7 @@ from piloop.db.session import Database
 from piloop.ids import CampaignStatus
 from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.section.idea_comments import IdeaComments
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.host import Scope
 from piloop.plugins.role.contract import ROLES, ImplementerRole
@@ -113,8 +114,8 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     overview += ['funnel', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
     assert defaults(Surface.SWEEP) == ['lessons', 'incidents', *overview, 'tools', 'pack']
-    assert defaults(Surface.RUN) == ['lessons', 'history']
-    assert ImplementerRole().shown() == ['database', 'lessons', 'history'], 'its guides first'
+    assert defaults(Surface.RUN) == ['idea_comments', 'lessons', 'history']
+    assert ImplementerRole().shown() == ['database', 'idea_comments', 'lessons', 'history'], 'its guides first'
 
 
 def test_the_funnel_shows_how_far_the_attempts_got_and_where_the_others_ended(db: Database, campaign: Campaign) -> None:
@@ -233,3 +234,9 @@ def test_a_guide_renders_with_its_campaigns_id_and_primary_metric(db: Database, 
         p = s.get_one(Campaign, campaign.id)
         text = markdown(sections('judging'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
     assert text.startswith('## Judge results') and f'c.campaign_id = {campaign.id} ' in text and "'$.score'" in text
+
+
+def test_the_comments_on_an_idea_show_only_in_the_brief_of_its_run(db: Database, campaign: Campaign) -> None:
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        assert IdeaComments().render(Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s))) is None, 'no reader'

@@ -122,6 +122,9 @@ class RoleConfig(Parameters):
     files: Files = Files.SEEDS
     """What the agents of this role may file with ``piloop idea``: ``nothing``, ``seeds`` or ``ideas``. The CLI
     refuses the rest."""
+    plan_words: int = Field(default=150, ge=1)
+    """The most words in the plan of an idea that an agent of this role adds or develops: steps that one run can
+    follow, not a protocol. A longer plan is refused."""
     sections: list[SectionName] | None = None
     """What the briefs of this role show: the names of sections, in order. A guide goes before the role's context, and
     every other section after it. When unset, the role's own guides, then every installed section that a brief of
@@ -241,10 +244,13 @@ class SweepRole(RoleConfig):
         """The lines that the role adds to its agent's context, after the daemon's own and before the sections.
 
         By default, a role that defines ideas (``files = "ideas"``) is told its ``max_ideas``, which ``low_water``
-        counts on, and any other role adds nothing.
+        counts on, and its ``plan_words``. Any other role adds nothing.
         """
         if self.files is Files.IDEAS:
-            return [f'- New ideas of your own in this sweep: at most {self.max_ideas} (`max_ideas`).']
+            return [
+                f'- New ideas of your own in this sweep: at most {self.max_ideas} (`max_ideas`), each with a plan of'
+                f' at most {self.plan_words} words (`plan_words`).'
+            ]
         return []
 
     @model_validator(mode='after')

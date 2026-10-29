@@ -185,6 +185,13 @@ def test_campaign_and_idea_lifecycle(campaign_path: Path, out) -> None:
     run_cli(['init', str(campaign_path)])
     assert out().strip() == 'campaign demo #1 already registered; config re-read from piloop.toml'
 
+    (campaign_path / 'brief.md').write_text('rule ' * 401)
+    run_cli(['init', str(campaign_path)])
+    assert out().strip().splitlines()[0] == (
+        f'warning: {campaign_path}/brief.md has 401 words, over the budget of 400 ([agents] brief_words): rewrite it'
+        ' to the budget, never append. Say what to improve, how to work, and that the evaluator is the check.'
+    )
+
 
 @pytest.mark.usefixtures('api')
 def test_every_role_but_the_implementer_files_a_seed_and_only_research_the_orchestrator_and_humans_add_ideas(
@@ -220,6 +227,9 @@ def test_every_role_but_the_implementer_files_a_seed_and_only_research_the_orche
             SystemExit, match="implementer#3 files no ideas or seeds: say the hunch in your run's finding"
         ):
             as_('implementer#3', 'idea', *verb)
+    protocol = ' '.join(['step'] * 151)
+    with pytest.raises(SystemExit, match=r'the plan has 151 words, and a plan of a research has at most 150'):
+        as_('research#7', 'idea', 'add', 'demo', 'a protocol', '--plan', protocol)
     with pytest.raises(SystemExit, match='a seed needs pointers'):
         as_('human', 'idea', 'seed', 'demo', 'a whim', '--from', ' ')
     with pytest.raises(SystemExit, match='no candidate#99 in campaign demo'):
@@ -261,8 +271,7 @@ def test_every_role_but_the_implementer_files_a_seed_and_only_research_the_orche
             ('human', None, None, None),
         ], "a developed seed keeps its filer: whether that role's hunches pay off stays measurable"
         assert s.get_one(Idea, 2).plan == (
-            'First check, stop if it fails: one file; stop at no gain\nSuccess: score; expected effect: +1\n'
-            'then all files'
+            'The evaluator should show: one file; stop at no gain\nSuccess: score; expected effect: +1\nthen all files'
         )
         assert [e.actor for e in s.scalars(select(Event).where(Event.kind == 'idea.created'))] == [
             'orchestrator',
@@ -1952,7 +1961,7 @@ def test_upgrade_reinstalls_migrates_and_restarts_the_daemon(
         cli_check(),
         f'ok    daemon: pid {pid} runs the installed {installed()}',
         f'ok    database: {common.settings.home}/piloop.db at schema {HEADS}, current',
-        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 6 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 2 notifiers, 1 price list, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 32 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
+        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 6 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 2 notifiers, 1 price list, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 35 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
         'ok    secrets: from `piloop secret set` (no secrets_command)',
         f'ok    skills (pi): current in {common.settings.agent_skills_dir}',
         'ok    harnesses: on PATH: none configured',
@@ -1980,7 +1989,7 @@ def test_upgrade_of_a_checkout_install_without_a_daemon_creates_the_schema(fake_
         cli_check(),
         'ok    daemon: not running',
         f'ok    database: {common.settings.home}/piloop.db at schema {HEADS}, current',
-        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 6 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 2 notifiers, 1 price list, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 32 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
+        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 6 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 2 notifiers, 1 price list, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 35 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
         'ok    secrets: from `piloop secret set` (no secrets_command)',
         f'ok    skills (Agent Skills): current in {common.settings.agent_skills_dir}',
         'ok    harnesses: on PATH: none configured',

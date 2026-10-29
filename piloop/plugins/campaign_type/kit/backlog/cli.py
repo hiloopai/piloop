@@ -134,13 +134,15 @@ def idea_develop(
     ],
     check: Annotated[
         str,
-        cyclopts.Parameter(help='The cheapest measurement that can prove it wrong, and the result that stops the run.'),
+        cyclopts.Parameter(
+            help='What the evaluator should show if the idea works, and what would show it wrong. Never a gate before a commit.'
+        ),
     ],
     metric: Annotated[
         str, cyclopts.Parameter(help='The metric that decides success: the primary metric, or the slice it targets.')
     ],
     effect: Annotated[str, cyclopts.Parameter(help="The expected size of the effect in the metric's units, and why.")],
-    plan: Annotated[str | None, cyclopts.Parameter(help='More steps for the implementer, after the check.')] = None,
+    plan: Annotated[str | None, cyclopts.Parameter(help='More steps for the implementer.')] = None,
     title: Annotated[str | None, cyclopts.Parameter(help="A clearer title. Default: the seed's title.")] = None,
     family: Annotated[str | None, cyclopts.Parameter(help=FAMILY_HELP)] = None,
     base: Annotated[CandidateId | None, cyclopts.Parameter(help=BASE_HELP)] = None,

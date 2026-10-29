@@ -69,13 +69,28 @@ def test_a_healthy_install_passes_every_check(
         f'ok    cli: {installed()}; not checked for a newer one: installed from file:///src/piloop: update that checkout',
         'ok    daemon: not running',
         f'ok    database: {tmp_path}/piloop.db at schema {HEADS}, current',
-        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 6 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 2 notifiers, 1 price list, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 32 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
+        'ok    plugins: 1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 6 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 2 notifiers, 1 price list, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 35 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in',
         'ok    secrets: from `piloop secret set` (no secrets_command)',
         f'ok    campaign demo: {campaign.path}/piloop.toml loads',
         f'ok    skills (pi): current in {cfg.agent_skills_dir}',
         'ok    harnesses: on PATH: script',
         git_check(),
     ]
+
+
+def test_a_campaign_brief_over_its_word_budget_is_a_warning_that_says_to_rewrite_it(
+    cfg: Settings, campaign: Campaign
+) -> None:
+    brief = Path(campaign.path) / 'brief.md'
+    brief.write_text('rule ' * 400)
+    assert 'campaign demo brief' not in by_name(cfg), 'at the budget'
+    brief.write_text('rule ' * 401)
+    assert by_name(cfg)['campaign demo brief'] == Check(
+        'campaign demo brief',
+        f'{brief} has 401 words, over the budget of 400 ([agents] brief_words)',
+        'rewrite it to the budget, never append. Say what to improve, how to work, and that the evaluator is the check.',
+        Severity.WARN,
+    )
 
 
 def test_a_git_older_than_piloop_needs_or_one_that_does_not_run_fails_with_the_fix(

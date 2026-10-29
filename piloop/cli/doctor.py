@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from piloop import deprecated
 from piloop.actor import Actor
-from piloop.campaign.campaigns import check_takes
+from piloop.campaign.campaigns import REWRITE_BRIEF, check_takes, long_brief
 from piloop.cli import skills, upgrade
 from piloop.config import CampaignConfig, ConfigError, ConfigMissing, explain, load_campaign_config
 from piloop.daemon.main import preflight, unbound_failures
@@ -87,6 +87,12 @@ def checks(cfg: Settings) -> list[Check]:
             *first,
             *map(_campaign, campaigns),
             *(_digits(c) for c in campaigns if c.name.isdigit()),
+            *(
+                Check(f'campaign {c.name} brief', str(long), REWRITE_BRIEF, Severity.WARN)
+                for c in campaigns
+                if isinstance(c.config, CampaignConfig)
+                and (long := long_brief(Path(c.path), c.config.agents.over(cfg.agents).brief_words)) is not None
+            ),
             *(
                 _mcp(c.name, c.config)
                 for c in campaigns

@@ -36,6 +36,25 @@ def files(campaign: Campaign, actor: Actor) -> Files | None:
     return filed
 
 
+def check_plan(campaign: Campaign, actor: Actor, plan: str | None) -> None:
+    """Refuse a plan longer than ``plan_words`` of the actor's role. An actor that is not a role has no limit.
+
+    Raises:
+        Refused: the plan is too long.
+    """
+    if (
+        plan is None
+        or (agent := actor.launched) is None
+        or (table := campaign.config.roles.all().get(agent.role)) is None
+    ):
+        return
+    if (words := len(plan.split())) > table.plan_words:
+        raise Refused(
+            f'the plan has {words} words, and a plan of a {agent.role} has at most {table.plan_words}'
+            ' (`plan_words`): give the steps of one run, and let the evaluator judge the result'
+        )
+
+
 def add_idea(
     s: Session,
     campaign_id: CampaignId,
@@ -70,6 +89,7 @@ def add_idea(
             ' Research develops each seed with the whole campaign in view.'
         )
     check_base(s, campaign, base)
+    check_plan(campaign, actor, plan)
     held = review_first(campaign, actor, new=True)
     idea = Idea(
         campaign_id=campaign.id,
@@ -150,6 +170,7 @@ def develop_seed(
     if files(idea.campaign, actor) is Files.SEEDS:
         raise Refused(f'{actor} files seeds; research develops them')
     check_base(s, idea.campaign, base)
+    check_plan(idea.campaign, actor, definition.plan)
     held = review_first(idea.campaign, actor, new=False)
     try:
         develop(

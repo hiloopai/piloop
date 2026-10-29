@@ -322,11 +322,11 @@ Develops a seed into a defined idea. Every one of these is required:
 |---|---|
 | `--hypothesis` | The mechanism, and why it should move the metric. |
 | `--evidence` | What supports it, with ids and paths. |
-| `--check` | The cheapest measurement that could kill it, and the result that stops the run. |
+| `--check` | What the evaluator should show if the idea works, and what would show it wrong. It is never a gate before a commit. |
 | `--metric` | What decides success: the primary metric, or the part of it that the idea targets. |
 | `--effect` | The expected size of the effect, in the metric's units, and why. |
 
-Optional: `--plan`, `--title`, `--family`, `--base`, `--priority` (default: the seed's), `--proposed`, `--after` and
+Optional: `--plan` (at most `plan_words` of the agent's role, 150 by default), `--title`, `--family`, `--base`, `--priority` (default: the seed's), `--proposed`, `--after` and
 `--supersedes`. As with `idea add`, the links are written together with the idea, so the daemon never takes the idea
 without them.
 

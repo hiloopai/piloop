@@ -26,8 +26,10 @@ from piloop.campaign.campaigns import (
     EVALUATE_CONTRACT,
     EVALUATE_STUB,
     EXAMPLE_DATA,
+    REWRITE_BRIEF,
     TEMPLATES,
     create_campaign_repo,
+    long_brief,
     stub_untouched,
     tree as campaign_tree,
 )
@@ -80,6 +82,9 @@ def init(
             f' metrics that piloop.toml names. Describe the goal in brief.md. Then run `piloop init {path}` again.'
         )
         return
+    budget = load_campaign_config(path).agents.over(common.settings.agents).brief_words
+    if (long := long_brief(path, budget)) is not None:
+        common.console.print(f'warning: {long}: {REWRITE_BRIEF}', markup=False, soft_wrap=True)
     if common.settings.server is None and not answers(common.settings.socket_file):
         daemon.detached()
     with Client.connect(daemon_http()) as client:

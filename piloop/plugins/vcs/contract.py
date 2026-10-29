@@ -134,8 +134,6 @@ class Part(StrEnum):
     """How saved versions become candidates."""
     SKIP = 'skip'
     """How a version asks not to be measured, and what happens to unsaved work."""
-    EARLIER = 'earlier'
-    """The implementer's section on how to read earlier candidates."""
     OLD_FILES = 'old_files'
     """How to read an older file without copying the tree."""
     SHOW = 'show'

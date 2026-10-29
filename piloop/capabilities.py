@@ -96,6 +96,9 @@ from piloop.plugins.section.priorities import Priorities
 from piloop.plugins.section.search import Search
 from piloop.plugins.section.past_campaigns import PastCampaigns
 from piloop.plugins.campaign_type.kit.backlog.section.links import Links
+from piloop.plugins.campaign_type.kit.runs.section.long_jobs import LongJobs
+from piloop.plugins.campaign_type.kit.runs.section.workspace import SharedWorkspace
+from piloop.plugins.campaign_type.kit.runs.section.idea_comments import IdeaComments
 from piloop.plugins.section.provenance import Provenance
 from piloop.plugins.campaign_type.optimization.section.queries import Queries
 from piloop.plugins.section.orchestration import Orchestration

@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, System
-from piloop.config import CONFIG_FILE, CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
+from piloop.config import BRIEF_FILE, CONFIG_FILE, CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
 from piloop.db.events import emit, latest
 from piloop.db.models import NOT_RETIRED, Campaign, Event, EventModel
 from piloop.db.session import Database
@@ -253,6 +253,31 @@ def stub_untouched(path: Path) -> bool:
         and stub.read_bytes() == (BLANK / EVALUATE_STUB).read_bytes()
         and load_campaign_config(path).evaluate == load_campaign_config(BLANK).evaluate
     )
+
+
+REWRITE_BRIEF = (
+    'rewrite it to the budget, never append. Say what to improve, how to work, and that the evaluator is the check.'
+)
+"""The fix of a brief over its budget."""
+
+
+@dataclass(frozen=True)
+class LongBrief:
+    """A campaign's ``brief.md`` with more words than its budget (``[agents] brief_words``)."""
+
+    path: Path
+    words: int
+    budget: int
+
+    def __str__(self) -> str:
+        return f'{self.path} has {self.words} words, over the budget of {self.budget} ([agents] brief_words)'
+
+
+def long_brief(path: Path, budget: int) -> LongBrief | None:
+    """The campaign brief at ``path`` when it has more than ``budget`` words, else None (also without a brief)."""
+    brief = path / BRIEF_FILE
+    words = len(brief.read_text().split()) if brief.is_file() else 0
+    return LongBrief(brief, words, budget) if words > budget else None
 
 
 def check_takes(path: Path, cfg: CampaignConfig) -> None:

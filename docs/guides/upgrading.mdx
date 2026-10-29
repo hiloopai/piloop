@@ -151,6 +151,21 @@ one. The [changelog](https://github.com/hiloopai/piloop/blob/main/CHANGELOG.md) 
 
 ## Upgrading to 0.4.0
 
+### Shorter briefs, and the comments on an idea are a section
+
+The built-in prompts are a third of their size. What an implementer rarely needs is a guide away:
+`piloop schema long_jobs` and `piloop schema workspace`. An implementer's brief shows the comments on its idea in the
+`idea_comments` section, the latest 10, each cut at 600 characters. A role whose `sections` you set lists it to keep
+them:
+
+```toml
+[plugins.role.implementer]
+sections = ["database", "idea_comments", "lessons", "history"]
+```
+
+`piloop idea develop --check` says what the evaluator should show, not a gate before the first commit. A plan that an
+agent files has at most `plan_words` words (150).
+
 ### Agents ignore your own harness setup
 
 Claude, Codex and pi agents no longer load your instructions, skills, plugins or hooks

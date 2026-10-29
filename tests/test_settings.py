@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from piloop import settings as settings_module
 from piloop.actor import Agent, System
-from piloop.config import AgentTimings
+from piloop.config import CampaignAgents
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.harness.contract import cleared_env, each_provider
 from piloop.settings import UNDER_TEST_ENV, Settings, StorageSettings, TracingSettings, env_names, expand_env
@@ -229,6 +229,6 @@ def test_the_daemon_s_timings_are_read_from_config_toml_the_environment_wins_and
         timedelta(seconds=60),
         timedelta(seconds=30),
     )
-    campaign = AgentTimings(wrap_up_grace=timedelta(minutes=20))
+    campaign = CampaignAgents(wrap_up_grace=timedelta(minutes=20))
     assert campaign.over(home.agents) == home.agents.model_copy(update={'wrap_up_grace': timedelta(minutes=20)})
-    assert AgentTimings().over(home.agents) == home.agents, "unset: the home's"
+    assert CampaignAgents().over(home.agents) == home.agents, "unset: the home's"

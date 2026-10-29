@@ -1197,31 +1197,21 @@ class RunController:
     def _context(
         self, s: Session, cfg: CampaignConfig, run: Run, base: Candidate, reader: Agent, timeout: float
     ) -> str:
-        """Return the implementer's context: its worktree, its time, the idea, its base, the comments on the idea and its runs, and its role's sections.
+        """Return the implementer's context: its worktree, its time, the idea and its base, then its role's sections.
 
-        A comment on a run is about the idea too. Examples are a human's decision during attempt 1, or a watchdog's
-        finding on why it failed. The next attempt is a new run, so without these comments it would start with no
-        context. All runs of the idea are included: the earlier attempts and this run, which can get comments while
-        it is queued.
+        The comments on the idea and its runs are a section of their own (``idea_comments``).
         """
         author = reader.signature
         idea = run.idea
         track = cfg.track(idea.track)
         evaluator_id = idea.campaign.evaluator_id
-        on_idea = Comment.target == TargetRef(TargetKind.IDEA, idea.id)
-        on_its_runs = (Comment.target_kind == TargetKind.RUN) & Comment.target_id.in_(
-            select(Run.id).where(Run.idea_id == idea.id)
-        )
-        comments = s.scalars(select(Comment).where(on_idea | on_its_runs).order_by(Comment.id)).all()
         at_base = ', '.join(f'{t.primary.name}={score(base, evaluator_id, t.primary)}' for t in cfg.all_tracks)
         lines = [
-            '- Your cwd is your checkout: make every edit, run every evaluation and save every version there.'
-            f' Only its versions are scored. The campaign repo, {idea.campaign.path}, is read-only for you: read'
-            ' its history and candidates, never edit, run or save in it.',
+            '- Your cwd is your checkout: edit, run and save every version there. Only its versions are scored.'
+            f' The campaign repo, {idea.campaign.path}, is read-only for you.',
             f'- Your session ends {round(timeout / 60, 1):g} minutes after it starts, at `${DEADLINE_ENV}` (Unix time).'
-            f' The daemon tells you to wrap up {round(wrap_up_lead(timeout, self._agents.wrap_up_lead) / 60, 1):g} minutes before, but a message'
-            ' reaches you only between two tool calls: start no command that can run past the deadline. Save each'
-            ' step that runs, and leave your finding before the end.',
+            f' The daemon tells you to wrap up {round(wrap_up_lead(timeout, self._agents.wrap_up_lead) / 60, 1):g}'
+            ' minutes before, between two tool calls: start no command that can run past the deadline.',
             f'- Starting from candidate#{base.id}: {at_base} — {base.summary}',
         ]
         if base.run_id is not None and s.get_one(Run, base.run_id).idea_id == idea.id:
@@ -1246,10 +1236,8 @@ class RunController:
                 f' better) with confidence and hold {guards}.'
             )
         lines += [
-            f'- Shared workspace for artifacts and notes to future implementers: `./{WORKSPACE}/` (in no version). Put what'
-            f' your idea produces there under `./{WORKSPACE}/idea{idea.id}/`: it is archived when the idea is done, and'
-            ' its local copy goes some days later. The files of a done idea come back with'
-            f' `piloop restore {idea.campaign.name} <idea id>|<workspace path>`.',
+            f"- Your idea's directory in the shared workspace: `./{WORKSPACE}/idea{idea.id}/` (in no version)."
+            f" `piloop restore {idea.campaign.name} <idea id>` writes back a done idea's files.",
             f'- Leave a finding on your idea when you are done, piped into the SQL tool: INSERT INTO comments'
             f" (target_kind, target_id, author, kind, body) VALUES ('idea', {idea.id}, '{author}', 'finding', '...').",
             '- Ask for what you cannot do or decide yourself with an escalation, never a note: INSERT INTO comments'
@@ -1262,8 +1250,6 @@ class RunController:
             lines += ['', f'Proposed by {idea.created_by}, prompted by: {idea.provenance.strip()}']
         if idea.plan:
             lines += ['', '### Plan', idea.plan.rstrip()]
-        if comments:
-            lines += ['', '## Comments on this idea and its runs', *(_comment_line(c) for c in comments)]
         workspace = workspace_dir(self._home, idea.campaign.id)
         rendering = Rendering(s, utcnow(), idea.campaign, workspace, self.cas, reader=reader.session)
         return '\n'.join([*lines, '', markdown(cfg.sections_of(RoleName(run.role)), rendering)])
@@ -1303,11 +1289,6 @@ class Judged:
 def wrap_up_lead(timeout: float, most: timedelta) -> float:
     """How many seconds before its role ``timeout`` an implementer is told to wrap up: a quarter, at most ``most``."""
     return min(most.total_seconds(), timeout / 4)
-
-
-def _comment_line(c: Comment) -> str:
-    where = f' on run#{c.target_id}' if c.target_kind is TargetKind.RUN else ''
-    return f'- {c.author} ({c.kind}{where}): {c.body}'
 
 
 def finding_of(s: Session, run: Run, agent_session: AgentSession) -> Comment | None:

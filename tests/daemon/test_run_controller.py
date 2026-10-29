@@ -1127,7 +1127,7 @@ def test_brief_carries_history_and_comments(
     assert [brief.index(s) for s in order] == sorted(brief.index(s) for s in order), 'the fixed brief order'
     assert '## Your idea (idea#2): second idea' in brief and 'candidate#2' in brief
     assert (
-        '## Comments on this idea and its runs\n- human:t (note): try harder\n- pi (decision on run#2): and faster\n'
+        '## Comments on this idea and its runs\n\n- human:t (note): try harder\n- pi (decision on run#2): and faster\n'
         in (brief)
     ), "the idea's comments and those on any of its runs, in order, each run comment saying which run"
     assert 'about another idea' not in brief
@@ -1136,15 +1136,44 @@ def test_brief_carries_history_and_comments(
     assert '"$PILOOP_BIN" sql' in brief and "'implementer#2', 'finding'" in brief
     assert (
         '- Your session ends 2 minutes after it starts, at `$PILOOP_DEADLINE` (Unix time). The daemon tells you to'
-        ' wrap up 0.5 minutes before, but a message reaches you only between two tool calls: start no command that'
-        ' can run past the deadline. Save each step that runs, and leave your finding before the end.\n' in brief
+        ' wrap up 0.5 minutes before, between two tool calls: start no command that can run past the deadline.\n'
+        in brief
     ), 'the role timeout of 120s'
     assert "VALUES ('idea', 2, 'implementer#2', 'escalation', 1, '...')" in brief, (
         'a request is an escalation, never a note'
     )
-    assert 'Never wait with `pgrep -f "<pattern>"`' in brief, 'a waiter that finds itself never ends'
+    assert '`piloop schema long_jobs`' in brief, 'how to wait for a long job is a guide away'
     assert 'the daemon kills every process that you started' in brief, 'nothing outlives the harness'
     assert '- A hunch worth a run of its own goes in your finding' in brief and 'idea seed demo' not in brief
+
+
+def test_the_comments_on_an_idea_are_capped_by_their_section(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A long thread of comments cannot crowd out the brief: the latest ones, each cut, then a query for the rest."""
+    run_id = make_run(db, campaign)
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        p.config = load_campaign_config(
+            Path(campaign.path),
+            plugins={
+                'section': {'idea_comments': {'latest': 2, 'chars': 12}},
+                'role': {'implementer': {'sections': ['idea_comments']}},
+            },
+        )
+        idea_id = s.get_one(Run, run_id).idea_id
+        for body in ('first and oldest', 'second', 'third, which runs on and on'):
+            s.add(Comment(target=TargetRef(TargetKind.IDEA, idea_id), author='human:t', body=body))
+        s.commit()
+    execute(controller(db, runtime, tmp_path), db, run_id)
+    brief = brief_of(db, run_id)
+    assert (
+        '## Comments on this idea and its runs\n\n'
+        '- 1 older comments: `SELECT body FROM comments` reads them.\n'
+        '- human:t (note): second\n'
+        '- human:t (note): third, which… (comment#3 has the rest)\n'
+    ) in brief
+    assert 'first and oldest' not in brief
 
 
 def test_an_implementer_brief_names_its_checkout_as_the_place_to_work_and_the_campaign_repo_as_read_only(
@@ -1163,9 +1192,8 @@ def test_an_implementer_brief_names_its_checkout_as_the_place_to_work_and_the_ca
     execute(controller(db, runtime, tmp_path), db, run_id)
     brief = brief_of(db, run_id)
     assert (
-        '- Your cwd is your checkout: make every edit, run every evaluation and save every version there.'
-        f' Only its versions are scored. The campaign repo, {campaign.path}, is read-only for you: read its history'
-        ' and candidates, never edit, run or save in it.'
+        '- Your cwd is your checkout: edit, run and save every version there. Only its versions are scored.'
+        f' The campaign repo, {campaign.path}, is read-only for you.'
     ) in brief
     assert git_words(brief) == []
 

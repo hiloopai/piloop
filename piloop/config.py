@@ -54,8 +54,8 @@ TRANSCRIPT = 'transcript.txt'
 """The file in an agent's log directory with the end of its screen or output, written when it ends."""
 
 
-class AgentTimings(BaseModel):
-    """``[agents]``: how long the campaign's agents get to finish, over the home's ``[agents]`` in its ``config.toml``."""
+class CampaignAgents(BaseModel):
+    """``[agents]``: the timings of the campaign's agents and its brief's budget, over the home's ``[agents]``."""
 
     model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
 
@@ -64,9 +64,11 @@ class AgentTimings(BaseModel):
     its work before the daemon ends it. Unset: the home's. Seconds, or an ISO 8601 duration such as ``PT20M``."""
     finding_grace: timedelta | None = Field(default=None, ge=timedelta(0))
     """How long after its finding the daemon ends an implementer, and every process that it left. Unset: the home's."""
+    brief_words: int | None = Field(default=None, ge=1)
+    """How many words ``brief.md`` may have before ``piloop init`` and ``piloop doctor`` warn. Unset: the home's."""
 
     def over(self, home: AgentSettings) -> AgentSettings:
-        """The home's settings, with the timings that the campaign sets."""
+        """The home's settings, with what the campaign sets."""
         return home.model_copy(update=self.model_dump(exclude_none=True))
 
 
@@ -128,7 +130,7 @@ class CampaignConfig(BaseModel):
     """Repo-relative files or globs (for example ``docs/error-analysis-*.md``) that hold the campaign's analysis:
     error analyses, comparisons with a reference, evaluation reports. The research pack lists each one with its
     outline, newest first, so that every sweep that reads the pack reads them before it proposes work."""
-    agents: AgentTimings = AgentTimings()
+    agents: CampaignAgents = CampaignAgents()
     """``[agents]``: how long the campaign's agents get to wrap up and to leave after their finding."""
     plugins: Annotated[Plugins, PluginTables(Scope.CAMPAIGN)] = Field(default={}, validate_default=True)
     """``[plugins]``: the campaign's plugins, a table for each capability (``PluginTables``)."""

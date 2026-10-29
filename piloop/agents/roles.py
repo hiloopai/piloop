@@ -67,7 +67,7 @@ IDEAS: dict[Files, str] = {
     Files.SEEDS: SEED_HINT,
     Files.IDEAS: (
         "- Develop a seed: `{piloop} idea develop <seed id> --hypothesis '…' --evidence '<ids, paths>' --check"
-        " '<cheapest measurement that kills it, and the result that stops the run>' --metric '<what decides"
+        " '<what the evaluator should show if it works>' --metric '<what decides"
         " success>' --effect '<expected size, in the units of the metric, and why>' [--plan '…'] [--family '…']"
         " [--title '…'] [--base <candidate>]`.\n"
         "- Add an idea of your own: `{piloop} idea add {campaign} '<title>' --hypothesis '…' --plan '…' --family"

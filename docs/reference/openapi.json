@@ -5584,7 +5584,7 @@
           "check": {
             "type": "string",
             "title": "Check",
-            "description": "The cheapest measurement that can prove it wrong, and the result that stops the run."
+            "description": "What the evaluator should show if the idea works, and what would show it wrong. Never a gate before a commit."
           },
           "metric": {
             "type": "string",

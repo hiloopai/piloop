@@ -232,7 +232,9 @@ def test_a_role_that_defines_ideas_is_told_how_many_its_sweep_may_add(
     sched.wait(SETTLE)
     sched.stop(timeout=5)
     brief = (tmp_path / 'agent_sessions' / '1' / 'brief.md').read_text()
-    assert '- New ideas of your own in this sweep: at most 2 (`max_ideas`).' in brief
+    assert (
+        '- New ideas of your own in this sweep: at most 2 (`max_ideas`), each with a plan of at most 150 words' in brief
+    )
     [(_, _, reason)] = agent_sessions(db, 'ideator')
     assert reason is not None and reason.startswith('1 free implementer slots without a runnable idea')
 

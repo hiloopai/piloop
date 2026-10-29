@@ -238,7 +238,7 @@ def test_a_broken_package_of_a_capability_that_nothing_binds_is_a_warning(
     found = next(c for c in doctor.checks(home) if c.name == 'plugins')
     assert found.fix is None
     assert found.found == (
-        '1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 6 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 2 notifiers, 1 price list, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 32 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in; warning: nothing selects a extra, and they do not load:'
+        '1 archive provider, 1 campaign type, 5 CAS providers, 1 executor, 6 fact sources, 3 harness providers, 1 lineage provider, 2 MCP server providers, 1 memory provider, 2 networks, 2 notifiers, 1 price list, 1 provisioner, 5 roles, 1 runtime, 1 secrets provider, 35 sections, 1 stop rule, 10 triggers, 1 vcs provider, 1 verdict rule; all built in; warning: nothing selects a extra, and they do not load:'
         ' entry point gone = tests.fixtures.no_such_module:Gone in piloop.example.extras does not load: ModuleNotFoundError:'
         " No module named 'tests.fixtures.no_such_module'"
     )
