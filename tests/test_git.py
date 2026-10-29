@@ -27,7 +27,7 @@ from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, comm
 from tests.conftest import disk, git_processes
 
 
-def test_merge_and_contains_raise_on_a_commit_the_repo_does_not_have(campaign_path: Path) -> None:
+def test_merge_contains_and_pin_all_raise_on_a_commit_the_repo_does_not_have(campaign_path: Path) -> None:
     """A conflict and "not an ancestor" are answers; an unknown commit is an error, never read as either."""
     repo = Repo(campaign_path)
     head = repo.head.commit.hexsha
@@ -36,6 +36,8 @@ def test_merge_and_contains_raise_on_a_commit_the_repo_does_not_have(campaign_pa
         git.merge(repo, head, '0' * 40, 'm', PILOOP)
     with pytest.raises(GitCommandError, match='merge-base'):
         git.contains(repo, head, '0' * 40)
+    with pytest.raises(subprocess.CalledProcessError, match='update-ref'):
+        git.pin_all(repo, {'refs/piloop/gone': 'f' * 40})
 
 
 def test_a_commit_contains_another_by_history_or_by_having_all_its_changes(campaign_path: Path) -> None:

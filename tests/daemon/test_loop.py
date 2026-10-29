@@ -12,13 +12,14 @@ from pathlib import Path
 import pytest
 from inline_snapshot import snapshot
 from sqlalchemy import select, text
+from sqlalchemy.orm import Session
 
 import piloop
 from piloop.actor import System
 from piloop.daemon.loop import Consumer, Loop, Phase, Turn, routes
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import emit
-from piloop.db.models import AgentSession, Campaign, EventModel, ReadBy, utcnow
+from piloop.db.models import AgentSession, Campaign, EventModel, ReadBy, UnknownEvent, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import IdeaCreated, LimitSet
 from piloop.ids import TargetKind, TargetRef
@@ -235,6 +236,9 @@ def test_a_turn_runs_each_consumer_that_an_event_routes_to_or_whose_due_came_onc
     assert [len(r.turns) for r in (ideas, timer, everything)] == [2, 1, 2], 'once for both ideas; a base model is all'
     loop.turn()
     assert [len(r.turns) for r in (ideas, timer, everything)] == [2, 1, 2], 'nothing new: nothing runs'
+    add(db, UnknownEvent(kind='gone.plugin', payload={}))
+    loop.turn()
+    assert [len(r.turns) for r in (ideas, timer, everything)] == [2, 1, 3], 'a kind no model knows is still an event'
     clock.advance(59)
     loop.turn()
     assert len(timer.turns) == 1
@@ -289,6 +293,7 @@ def test_the_loop_sleeps_until_another_process_writes_an_event_or_a_due_comes(
     while len(timer.turns) < 3 and time.monotonic() < deadline:
         time.sleep(0.05)
     assert len(timer.turns) >= 3, 'its due wakes it'
+    assert max(t.absent for t in timer.turns) < timedelta(seconds=5), 'on time: the loop was not away'
     assert len(ideas.turns) == 1, 'only the start: no event came'
     other = Database(str(db.engine.url), actor=System.HUMAN)
     add(other, IdeaCreated())
@@ -425,7 +430,7 @@ def recorded(consumer: Consumer, ran: list[str]) -> Callable[[Turn], datetime | 
 
 
 def test_a_served_loop_reads_a_long_feed_in_pages_and_runs_an_overdue_consumer_without_waiting(
-    db: Database, served: Callable[[Loop], None]
+    db: Database, served: Callable[[Loop], None], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     late: list[Turn] = []
 
@@ -449,10 +454,25 @@ def test_a_served_loop_reads_a_long_feed_in_pages_and_runs_an_overdue_consumer_w
         Consumer('late', frozenset(), overdue, Phase.PLAN),
         ideas.consumer(),
     ]
-    served(Loop(db, consumers, page=1))
+    waiting = threading.Event()
+    wait = db.wait_until
+
+    def waits(done: Callable[[Session], bool], give_up: Callable[[], bool], timeout: float) -> bool:
+        waiting.set()
+        return wait(done, give_up, timeout)
+
+    monkeypatch.setattr(db, 'wait_until', waits)
+    served(loop := Loop(db, consumers, page=1))
     deadline = time.monotonic() + 10
     while len(ideas.turns) < 3 and time.monotonic() < deadline:
         time.sleep(0.01)
     other.close()
     assert len(late) == 2, 'its due had passed: no wait'
+    assert late[1].absent == timedelta(0), 'the first turn after the start was away from nothing'
     assert len(ideas.turns) == 3, 'the start, then one page for each idea'
+    assert waiting.wait(10), 'nothing is due: it waits'
+    loop.wake('ideas')
+    deadline = time.monotonic() + 10
+    while len(ideas.turns) < 4 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert len(ideas.turns) == 4, 'a wake ends a wait that has no due'

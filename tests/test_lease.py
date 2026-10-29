@@ -55,6 +55,7 @@ from piloop.plugins.executor.contract import (
     Source,
     key_of,
 )
+from piloop.plugins.executor.kit import leases as leases_module
 from piloop.plugins.executor.kit.capacity import GB, HostSample, Pool
 from piloop.plugins.executor.kit.client import Local, Registration, WorkerInfo
 from piloop.plugins.executor.kit.leases import (
@@ -342,7 +343,7 @@ def test_only_the_newest_lease_of_a_job_is_live(
 
 
 def test_a_silent_worker_is_unreachable_after_the_grace_period_and_its_leases_expire_after_the_toleration(
-    db: Database, campaign: Campaign, tmp_path: Path, leases: Leases, recorder: Recorder
+    db: Database, campaign: Campaign, tmp_path: Path, leases: Leases, recorder: Recorder, mocker: MockerFixture
 ) -> None:
     job = agent_job(db, campaign, tmp_path)
     lease_id = queue(db, job)
@@ -354,7 +355,9 @@ def test_a_silent_worker_is_unreachable_after_the_grace_period_and_its_leases_ex
     assert expiry is not None and before + grace <= expiry <= now + grace, 'the next deadline: when it goes silent'
     assert events(db, LeaseUnreachable) == []
     leases.expire(now + timedelta(seconds=51))
-    leases.expire(now + timedelta(seconds=52))
+    assert leases.expire(now + timedelta(seconds=52)) == lease_row(db, lease_id).expires_at, (
+        'the next deadline of an unreachable worker: its lease expires'
+    )
     assert events(db, LeaseUnreachable) == [
         (TargetKind.AGENT_SESSION, job.agent_session, LeaseUnreachable(lease=lease_id, worker='w1'))
     ], 'once per silence'
@@ -365,9 +368,12 @@ def test_a_silent_worker_is_unreachable_after_the_grace_period_and_its_leases_ex
     leases.expire(heard + timedelta(seconds=51))  # unreachable again: a due of its own, not an absence
     assert leases.expire(heard + timedelta(seconds=301)) is None, 'expired: nothing left to wait for'
     row = lease_row(db, lease_id)
-    assert row.state is LeaseState.EXPIRED and str(row.receipt['lost']).startswith('worker lost: w1 was silent for')
+    assert (row.state, row.receipt) == (LeaseState.EXPIRED, {'lost': 'worker lost: w1 was silent for 301 s'})
     [(_, _, payload)] = events(db, LeaseExpired)
     assert payload.lease == lease_id and recorder.calls[-1][:2] == ('lost', job.agent_session)
+    locked = mocker.spy(leases_module, 'write_transaction')
+    leases.expire(heard + timedelta(seconds=302))
+    assert locked.call_count == 0, "an ended lease's past expiry is not due: no write lock"
 
 
 def test_a_restarted_daemon_gives_every_live_lease_a_full_period(
@@ -375,10 +381,15 @@ def test_a_restarted_daemon_gives_every_live_lease_a_full_period(
 ) -> None:
     lease_id = queue(db, agent_job(db, campaign, tmp_path))
     take(leases, 'w1', [])
+    join(leases, 'idle', [])
     with db.session() as s:
         s.get_one(Lease, lease_id).expires_at = utcnow() - timedelta(seconds=1)
         s.commit()
-    leases.renew_all()
+    now = utcnow()
+    leases.renew_all(now)
+    row = lease_row(db, lease_id)
+    assert (row.renewed_at, row.expires_at) == (now, now + timedelta(seconds=300))
+    assert (worker_row(db, 'w1').seen_at, worker_row(db, 'idle').seen_at != now) == (now, True), 'only a holder'
     leases.expire()
     assert lease_row(db, lease_id).state is LeaseState.ACQUIRED, "nothing expires for the daemon's own absence"
 
@@ -408,6 +419,10 @@ def test_an_evaluation_goes_to_a_worker_with_its_runner_in_the_order_in_which_it
     assert grant is not None and key_of(granted(db, grant)) == key_of(job)
     second = take(leases, 'w2', ['process', 'gpu-runner'])
     assert second is not None and key_of(granted(db, second)) == key_of(other)
+    leases.revoke(key_of(job))
+    assert [lease_row(db, g.lease).revoked_at is not None for g in (grant, second)] == [True, False], (
+        "a revoke finds its own evaluation's lease, not another's"
+    )
 
 
 def evaluation_job_for_another_candidate(
@@ -602,21 +617,45 @@ def test_an_adoption_ends_the_evaluation_leases_that_no_worker_took(
     )
 
 
-def test_an_expiry_that_a_report_overtakes_expires_nothing(
-    db: Database, campaign: Campaign, tmp_path: Path, leases: Leases, recorder: Recorder, mocker: MockerFixture
+def reported(leases: Leases, lease_id: int) -> None:
+    leases.report(lease_id, 'w1', 'r', DONE)
+
+
+def renewed(leases: Leases, lease_id: int) -> None:
+    leases.heartbeat('w1', {lease_id: HarnessSession()}, HOST)
+
+
+@pytest.mark.parametrize(
+    ('heard', 'state', 'applied'),
+    [(reported, LeaseState.REPORTED, ['finished']), (renewed, LeaseState.ACQUIRED, [])],
+    ids=['report', 'heartbeat'],
+)
+def test_an_expiry_that_a_report_or_a_heartbeat_overtakes_expires_nothing(
+    db: Database,
+    campaign: Campaign,
+    tmp_path: Path,
+    leases: Leases,
+    recorder: Recorder,
+    mocker: MockerFixture,
+    heard: Callable[[Leases, int], None],
+    state: LeaseState,
+    applied: list[str],
 ) -> None:
-    """The report comes between the expiry's look for silent leases and its write: one of them applies, the report."""
+    """It comes between the expiry's look for silent leases and its write: the lease is no longer silent then."""
     lease_id = queue(db, agent_job(db, campaign, tmp_path))
     take(leases, 'w1', [])
+    with db.session() as s:
+        s.get_one(Lease, lease_id).expires_at = utcnow() - timedelta(seconds=1)
+        s.commit()
     lose = Leases._lose
 
     def heard_first(self: Leases, lease_id: int, reason: str, fence: Callable[[Session], Lease]) -> None:
-        self.report(lease_id, 'w1', 'r', DONE)
+        heard(self, lease_id)
         lose(self, lease_id, reason, fence)
 
     mocker.patch.object(Leases, '_lose', heard_first)
-    leases.expire(utcnow() + timedelta(seconds=301))
-    assert (lease_row(db, lease_id).state, [c[0] for c in recorder.calls]) == (LeaseState.REPORTED, ['finished'])
+    leases.expire(utcnow())
+    assert (lease_row(db, lease_id).state, [c[0] for c in recorder.calls]) == (state, applied)
 
 
 def test_a_stop_leaves_an_agent_lease_that_a_worker_took_meanwhile_to_its_report(

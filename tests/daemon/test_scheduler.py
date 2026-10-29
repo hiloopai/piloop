@@ -66,6 +66,7 @@ from piloop.db.triggers.changelog import IdeaStatusChanged
 from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
+from piloop.plugins.campaign_type.contract import CAMPAIGNS
 from piloop.plugins.campaign_type.kit.backlog.ideas import waiting
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
@@ -1035,10 +1036,12 @@ def test_a_dead_thread_is_traced_and_its_row_closed(
 ) -> None:
     scheduler = make_scheduler(db, runtime, tmp_path, tracer)
     mocker.patch.object(scheduler._controller, 'execute', side_effect=RuntimeError('thread broke'))
+    wake = mocker.spy(scheduler.loop, 'wake')
     add_ideas(db, campaign, 'x')
     run_all(scheduler)
     scheduler.wait(SETTLE)
     assert active(scheduler) == []
+    wait_until(lambda: call(CAMPAIGNS) in wake.call_args_list, 'the end of its thread wakes the pass to fill its slot')
     died = span_named(spans, 'agent_session.thread_died')
     assert dict(died.attributes or {}) == {'agent_session': 1, 'error': 'thread broke'}, 'no open span: it gets its own'
     with db.session() as s:

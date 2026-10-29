@@ -16,7 +16,7 @@ from piloop.actor import Agent, System
 from piloop.campaign import ops
 from piloop.campaign.stop import CancelRequested
 from piloop.config import load_campaign_config
-from piloop.db.events import in_order
+from piloop.db.events import emit, in_order
 from piloop.db.models import Campaign, Comment, Event, EventModel, Pause
 from piloop.db.requests import RequestAnswered
 from piloop.db.session import Database
@@ -29,7 +29,7 @@ from piloop.db.triggers.changelog import (
     IdeaTrackChanged,
     VerdictChanged,
 )
-from piloop.ids import CampaignId, CampaignStatus, CommentKind, Ending, TargetKind
+from piloop.ids import CampaignId, CampaignStatus, CommentKind, Ending, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
@@ -37,17 +37,24 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, 
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, wire as evaluation_api
-from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ids import MeasurementId, TrackName
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import settle_cancelled
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
-from piloop.plugins.campaign_type.kit.verdicts.judge import RejudgeRequested, answer_rejudge, head, rejudges, unjudged
+from piloop.plugins.campaign_type.kit.verdicts.judge import (
+    RejudgeRequested,
+    answer_rejudge,
+    follow_up,
+    head,
+    rejudges,
+    unjudged,
+)
 from piloop.plugins.campaign_type.kit.verdicts.verdict import pending
 from piloop.plugins.vcs.git import PILOOP, GitRepository
-from tests.conftest import end_of, reconfigured
+from tests.conftest import bare_config, end_of, reconfigured
 
 ACTOR = System.ORCHESTRATOR
 
@@ -419,6 +426,21 @@ def test_a_measurement_by_hand_is_recorded_and_asks_the_daemon_to_judge_its_cand
         evaluation_ops.add_measurement(s, c, evaluation_api.Report(metrics={}, error='timeout'), actor=ACTOR)
         s.commit()
         assert [x.id for x in rejudges(s, s.get_one(Campaign, 1))] == [c], 'a failed one counts too'
+
+
+def test_another_campaigns_rejudge_requests_and_idea_titles_are_not_this_ones(me: Database, campaign: Campaign) -> None:
+    with me.session() as s:
+        other = Campaign(name='other', path='/other', config=bare_config('other'))
+        s.add(other)
+        s.flush()
+        theirs = Candidate(campaign_id=other.id, tree_sha='t', revision='c')
+        s.add_all([theirs, Idea(campaign_id=other.id, track='score', title='try', hypothesis='h', created_by='t')])
+        s.flush()
+        emit(s, RejudgeRequested(measurement=MeasurementId(1)), TargetRef(TargetKind.CANDIDATE, theirs.id), ACTOR)
+        mine = s.get_one(Campaign, 1)
+        assert rejudges(s, mine) == []
+        [seed] = follow_up(s, s.get_one(Candidate, 1), ['try'], 'why', ACTOR, track=TrackName('score'))
+        assert seed.title == 'try', 'the title is free in this campaign'
 
 
 def test_a_measurement_by_hand_of_a_keep_or_of_someones_verdict_leaves_the_verdict(

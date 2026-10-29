@@ -105,7 +105,8 @@ def test_a_git_older_than_piloop_needs_or_one_that_does_not_run_fails_with_the_f
     assert missing.found.startswith('`git --version` failed: ') and missing.fix == fix
     git.write_text('#!/bin/sh\nexit 3\n')
     git.chmod(0o755)
-    assert by_name(cfg)['git'].fix == fix, 'a git that fails'
+    failing = by_name(cfg)['git']
+    assert failing.found.startswith('`git --version` failed: ') and failing.fix == fix, 'a git that fails'
     git.write_text('#!/bin/sh\n[ "$1" = --version ] && echo "git version 2.39.5 (Apple Git-154)"\n')
     assert by_name(cfg)['git'] == Check('git', 'git version 2.39.5 (Apple Git-154); piloop needs 2.40 or later', fix)
     git.write_text('#!/bin/sh\n[ "$1" = --version ] && echo "git version 2.40.0"\n')

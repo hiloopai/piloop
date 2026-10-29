@@ -2954,14 +2954,24 @@ def test_the_ideas_that_wait_for_a_run_whose_merge_conflicts_wait_for_its_compos
     with db.session() as s:
         first = run_row(db, run_id).idea_id
         later = Idea(campaign_id=campaign.id, title='build on it', hypothesis='h', track='score', created_by='test')
-        later.links.append(IdeaLink(target_id=first, kind=LinkKind.AFTER))
-        s.add(later)
+        started = Idea(
+            campaign_id=campaign.id,
+            title='began',
+            hypothesis='h',
+            track='score',
+            created_by='test',
+            status=IdeaStatus.DONE,
+        )
+        for each in (later, started):
+            each.links.append(IdeaLink(target_id=first, kind=LinkKind.AFTER))
+        s.add_all([later, started])
         s.commit()
-        later_id = later.id
+        later_id, started_id = later.id, started.id
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
         [seed] = s.scalars(select(Idea).where(Idea.status == IdeaStatus.SEED)).all()
         assert [(lk.kind, lk.target_id) for lk in s.get_one(Idea, later_id).links] == [(LinkKind.AFTER, seed.id)]
+        assert [lk.target_id for lk in s.get_one(Idea, started_id).links] == [first], 'it began without the change'
         assert park_stranded(s, campaign.id) == {}, 'not stranded: the change comes with the seed'
         assert s.scalars(select(Idea.id).where(runnable())).all() == [], 'it waits until the compose is done'
         moves = in_order(s, IdeaLinked, Event.target == TargetRef(TargetKind.IDEA, later_id))

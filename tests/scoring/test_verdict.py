@@ -8,6 +8,7 @@ import ast
 import sys
 from pathlib import Path
 
+import pytest
 from inline_snapshot import snapshot
 from piloop_min_gain import MinGain
 from sqlalchemy import Enum
@@ -21,7 +22,8 @@ from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Origin, Outco
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole, Track, TrackConfig
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Units
-from piloop.plugins.campaign_type.kit.evaluation.ids import RungName, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, RungName, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.verdicts import judge
 from piloop.plugins.campaign_type.kit.verdicts.judge import criterion
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
@@ -38,7 +40,15 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict import (
 )
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule import bootstrap as verdict_module
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap, compare, lower_bound
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, Side, Stopped, VerdictRule
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
+    VERDICT_RULES,
+    Case,
+    Judgement,
+    Side,
+    Stopped,
+    Trunk,
+    VerdictRule,
+)
 from piloop.plugins.host import data_errors
 from piloop.plugins.metric import Direction
 
@@ -169,6 +179,32 @@ def test_a_climb_that_stopped_at_a_rung_is_a_discard_and_a_full_panel_outranks_i
     remeasured = Side('c', {'accuracy': 0.6}, {}, stopped=stopped)
     assert judge.decide(Bootstrap(confidence=confidence), track, remeasured, bar)[0] is Outcome.DISCARD
     assert 'stopped' not in judge.decide(Bootstrap(confidence=confidence), track, remeasured, bar)[1]
+
+
+class ShowsRungs(Bootstrap):
+    """A rule that judges on the ladder: its reason is the rungs of both sides."""
+
+    def decide(self, case: Case) -> Judgement:
+        return Judgement(Outcome.INTERESTING, f'{case.candidate.rungs} vs {case.bar.rungs}')
+
+
+def shows_rungs(cfg: CampaignConfig) -> VerdictRule:
+    return ShowsRungs()
+
+
+def climbed(screen: float) -> Candidate:
+    """A candidate that measured ``screen`` at the rung of that name, then the full panel."""
+    at = Measurement(evaluator_id=EvaluatorId(1), rung=RungName('screen'), metrics={'accuracy': screen})
+    full = Measurement(evaluator_id=EvaluatorId(1), metrics={'accuracy': 0.9})
+    return Candidate(campaign_id=1, tree_sha='t', revision='c', measurements=[at, full])
+
+
+def test_a_rule_gets_the_rungs_that_each_side_climbed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(judge, 'verdict_rule', shows_rungs)
+    cfg = config()
+    assert judge.judge(
+        climbed(0.5), climbed(0.7), EvaluatorId(1), cfg, cfg.all_tracks[0], tmp_path, head=None, side=Trunk()
+    ) == (Outcome.INTERESTING, "{'screen': {'accuracy': 0.5}} vs {'screen': {'accuracy': 0.7}}")
 
 
 COVERAGE = Metric(name='coverage', direction=Direction.HIGHER, role=MetricRole.GUARDRAIL, margin=10, floor=1000)
