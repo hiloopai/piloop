@@ -4,7 +4,3 @@
 
 [521]
 title = "the long-poll message test sometimes misses its 5 s wake on CI"
-
-[523]
-title = "the watch app tests that drive the app fail under CI load"
-unmeasured = ["piloop/watch/app.py", "piloop/watch/panels.py"]

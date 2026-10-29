@@ -165,6 +165,8 @@ class WatchSettings(BaseModel):
     """How many of a campaign's own candidates its panel lists, newest first."""
     spark: int = Field(default=40, gt=1)
     """How many of the head's last steps the sparkline of the candidates panel draws."""
+    notice: timedelta = Field(default=timedelta(seconds=6), gt=timedelta(0))
+    """How long a note stays on the screen: what a key did, or why a read failed."""
 
 
 SUN_PATH = 104 if sys.platform == 'darwin' else 108

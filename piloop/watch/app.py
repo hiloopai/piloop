@@ -82,6 +82,14 @@ ModalScreen { align: center middle; }
 """
 
 
+class Started(Message):
+    """The cursor that the ``Follower`` follows from, and the feed's tail before it."""
+
+    def __init__(self, cursor: int, tail: Batch | None) -> None:
+        super().__init__()
+        self.cursor, self.tail = cursor, tail
+
+
 class Fed(Message):
     """A batch of the event feed, which the ``Follower`` read."""
 
@@ -91,7 +99,7 @@ class Fed(Message):
 
 
 class Lost(Message):
-    """A read of the event feed that failed. The ``Follower`` reads again after ``WatchSettings.retry``."""
+    """A read of the ``Follower`` that failed. It reads again after ``WatchSettings.retry``, unless it was refused."""
 
     def __init__(self, failure: Failure) -> None:
         super().__init__()
@@ -99,29 +107,73 @@ class Lost(Message):
 
 
 class Follower(threading.Thread):
-    """Read the event feed after ``after`` until ``stop``, and post each batch to ``app``, also an empty one.
+    """Read a cursor of the event feed, then the feed after it until ``stop``, and post each batch to ``app``.
 
-    A daemon thread: the server holds each read up to ``WatchSettings.wait``, and the process may exit meanwhile.
+    The start reads a status for the cursor, and the tail of the feed before it (``WatchSettings.tail``). A read that
+    gets no answer goes again after ``WatchSettings.retry``; a refused one ends the thread. A daemon thread: the server
+    holds each read up to ``WatchSettings.wait``, and the process may exit meanwhile.
     """
 
-    def __init__(self, app: Watch, after: int) -> None:
+    def __init__(self, app: Watch) -> None:
         super().__init__(daemon=True, name='piloop-watch-feed')
-        self.app, self.after, self.stop = app, after, threading.Event()
+        self.app, self.stop = app, threading.Event()
+        self.after: int | None = None
+        """The cursor that the next read starts from. None until the start read it."""
+        self.batches = 0
+        """How many batches the app got, the start's included: a caller waits for the next with ``read_after``."""
+        self._moved = threading.Condition()
+        self._ended = False
 
     def run(self) -> None:
-        settings = self.app.settings
-        while not self.stop.is_set():
-            try:
-                batch = self.app.api.core.events(EventsQuery(after=self.after, wait=settings.wait.total_seconds()))
-            except FAILURES as e:
-                if self.stop.is_set():  # the app closed the connection on its way out
+        try:
+            while not self.stop.is_set():
+                try:
+                    message = self._read()
+                except Refused as e:
+                    self.app.post_message(Lost(e))
                     return
-                self.app.post_message(Lost(e))
-                self.stop.wait(settings.retry.total_seconds())
-                continue
-            self.after = batch.next
-            if not self.stop.is_set():
-                self.app.post_message(Fed(batch))
+                except (NoDaemon, httpx.TransportError) as e:
+                    if self.stop.is_set():  # the app closed the connection on its way out
+                        return
+                    self.app.post_message(Lost(e))
+                    self.stop.wait(self.app.settings.retry.total_seconds())
+                    continue
+                if not self.stop.is_set():
+                    self.app.post_message(message)
+                with self._moved:
+                    self.after = message.cursor if isinstance(message, Started) else message.batch.next
+                    self.batches += 1
+                    self._moved.notify_all()
+        finally:
+            with self._moved:
+                self._ended = True
+                self._moved.notify_all()
+
+    def _read(self) -> Started | Fed:
+        core, settings = self.app.api.core, self.app.settings
+        if self.after is None:
+            cursor = core.status(Selection()).cursor
+            tail = settings.tail
+            return Started(cursor, core.events(EventsQuery(after=max(0, cursor - tail), limit=tail)) if tail else None)
+        return Fed(core.events(EventsQuery(after=self.after, wait=settings.wait.total_seconds())))
+
+    def past(self, cursor: int) -> None:
+        """Block until the app has the batch that reads past ``cursor``, or the follower ended.
+
+        A caller that wrote an event, such as a test, knows then that the app has it to read.
+        """
+        with self._moved:
+            self._moved.wait_for(lambda: (self.after or 0) >= cursor or self._ended)
+
+    def read_after(self, batches: int) -> None:
+        """Block until the app has more than ``batches`` batches, or the follower ended."""
+        with self._moved:
+            self._moved.wait_for(lambda: self.batches > batches or self._ended)
+
+    @property
+    def ended(self) -> bool:
+        """Whether the thread ended: the app closed, or the server refused a read."""
+        return self._ended
 
 
 class Ask(ModalScreen[str | None]):
@@ -405,12 +457,18 @@ class CampaignsScreen(Screen[None]):
         self.reload()
 
     def reload(self) -> None:
-        """Read the status of every campaign in a worker, then draw it."""
+        """Read the status of every campaign in a worker, then draw it. The next batch of the feed reads again."""
         app = self.main_app
-        read(self, lambda: app.api.core.status(Selection()).campaigns, self.draw)
+        read(self, lambda: app.api.core.status(Selection()).campaigns, self.draw, self.failed_with)
+
+    failed: Failure | None = None
+    """Why the last read failed, until a read answers."""
+
+    def failed_with(self, failure: Failure) -> None:
+        self.failed = failure
 
     def draw(self, states: list[CampaignState | InvalidConfig]) -> None:
-        app = self.main_app
+        app, self.failed = self.main_app, None
         rows = campaigns(states, app.latest, app.now())
         table = self.query_one(DataTable)
         index = table.cursor_row
@@ -492,19 +550,29 @@ class CampaignScreen(Screen[None]):
         return list(self.query(Pane))
 
     def fed(self, batch: Batch) -> None:
-        """Read again what the batch touched (``touched``), else draw again: the ages move on."""
+        """Read again what the batch touched (``touched``) and what a failed read left, else draw again: the ages move."""
         frame = self.frame
         if frame is None:
             self.reload()
-        elif (parts := touched(batch, frame.state.id)) is not None:
-            self.reload(parts)
+        elif (parts := touched(batch, frame.state.id)) is not None or self.unread:
+            self.reload((parts or frozenset()) | self.unread)
         else:
             self.draw(replace(frame, now=self.main_app.now()))
 
     def reload(self, parts: frozenset[Part] = frozenset(Part)) -> None:
-        """Read the campaign in a worker, then fill every panel and the detail."""
+        """Read the campaign in a worker, then fill every panel and the detail.
+
+        A read that fails leaves its parts in ``unread``, which the next batch of the feed reads again.
+        """
         app, last = self.main_app, self.frame
-        read(self, lambda: read_frame(self.api, self.ref, app.now(), last, parts), self.drawn)
+
+        def failed(_: Failure) -> None:
+            self.unread |= parts
+
+        read(self, lambda: read_frame(self.api, self.ref, app.now(), last, parts), self.drawn, failed)
+
+    unread: frozenset[Part] = frozenset()
+    """The parts that the last read failed to read: the next batch of the feed reads them again."""
 
     def drawn(self, frame: Frame | InvalidConfig | None) -> None:
         match frame:
@@ -515,7 +583,7 @@ class CampaignScreen(Screen[None]):
             case InvalidConfig(name=name, problem=problem, fix=fix):
                 self.query_one('#header', Static).update(Text(f'{name}: {problem}; fix it with {fix}'))
             case Frame():
-                first = self.frame is None
+                first, self.unread = self.frame is None, frozenset()
                 self.draw(frame)
                 if first:
                     inbox = self.query_one(InboxTable)
@@ -547,11 +615,18 @@ class CampaignScreen(Screen[None]):
         self.shown = Shown(table.id, table.selected(), frame)
         self.query_one('#main', VerticalScroll).border_title = escape(f'[0] {table.id}')
         wanted = self.shown
-        read(self, lambda: table.detail(self.api, frame), lambda d: self.detailed(wanted, d), group='detail')
+
+        def failed(_: Failure) -> None:
+            self.undetailed = wanted
+
+        read(self, lambda: table.detail(self.api, frame), lambda d: self.detailed(wanted, d), failed, group='detail')
 
     shown_table: Pane
+    undetailed: Shown | None = None
+    """The row whose detail failed to read, until a detail answers: the next draw reads it again."""
 
     def detailed(self, wanted: Shown, detail: RenderableType) -> None:
+        self.undetailed = None
         if wanted == self.shown:
             self.query_one('#detail', Static).update(detail)
 
@@ -578,7 +653,7 @@ class CampaignScreen(Screen[None]):
 
     def say(self, note: str) -> None:
         self.note = note
-        self.notify(note, timeout=6)
+        self.notify(note, timeout=self.main_app.settings.notice.total_seconds())
 
     def action_panel(self, name: str) -> None:
         self.query_one(f'#{name}', Pane).focus()
@@ -625,31 +700,26 @@ class Watch(App[None]):
         self.api, self.ref, self.actor, self.settings = api, ref, actor, settings
         self.latest: dict[CampaignId, Envelope] = {}
         """The last event of each campaign that the feed brought, for the campaigns screen."""
-        self.follower: Follower | None = None
+        self.follower = Follower(self)
+        self.started = False
+        """Whether the follower's start answered, and the screens are up."""
 
     def now(self) -> datetime:
         return datetime.now(UTC)
 
     def on_mount(self) -> None:
-        read(self, self._start, self._started)
+        self.follower.start()
 
-    def _start(self) -> int:
-        """Read the feed's tail before the cursor of a status, for each campaign's last event, and return the cursor."""
-        cursor = self.api.core.status(Selection()).cursor
-        if tail := self.settings.tail:
-            self._seen(self.api.core.events(EventsQuery(after=max(0, cursor - tail), limit=tail)))
-        return cursor
-
-    def _started(self, cursor: int) -> None:
+    def on_started(self, message: Started) -> None:
+        if message.tail is not None:
+            self._seen(message.tail)
+        self.started = True
         self.push_screen(CampaignsScreen())
         if self.ref is not None:
             self.push_screen(CampaignScreen(self.ref))
-        self.follower = Follower(self, cursor)
-        self.follower.start()
 
     def on_unmount(self) -> None:
-        if self.follower is not None:
-            self.follower.stop.set()
+        self.follower.stop.set()
 
     def _seen(self, batch: Batch) -> None:
         for event in batch.events:
@@ -664,7 +734,17 @@ class Watch(App[None]):
             screen.fed(message.batch)
 
     def on_lost(self, message: Lost) -> None:
-        self.notify(f'the event feed: {message.failure}; reading again soon', severity='warning', timeout=4)
+        match message.failure:
+            case Refused() as refused:
+                self.notify(
+                    f'the event feed: {refused}', severity='error', timeout=self.settings.notice.total_seconds()
+                )
+            case failure:
+                self.notify(
+                    f'the event feed: {failure}; reading again soon',
+                    severity='warning',
+                    timeout=self.settings.notice.total_seconds(),
+                )
 
     def action_keys(self) -> None:
         """Show or hide the keys of the focused panel beside the screen (``?``)."""
@@ -675,18 +755,29 @@ class Watch(App[None]):
 
 
 def read[T](
-    node: Screen[None] | App[None], call: Callable[[], T], then: Callable[[T], None], group: str = 'read'
+    node: Screen[None],
+    call: Callable[[], T],
+    then: Callable[[T], None],
+    failed: Callable[[Failure], None],
+    group: str = 'read',
 ) -> None:
     """Make ``call`` in a worker thread of ``node``, and hand its answer to ``then`` in ``node``, or say why it failed.
 
-    A newer read of the same ``group`` replaces one that has not answered. ``node`` drops the answer once it is gone.
+    ``failed`` gets a failure, in ``node``, which says it. A newer read of the same ``group`` replaces one that has not
+    answered. ``node`` drops the answer once it is gone.
     """
+
+    def said(failure: Failure) -> None:
+        app = node.app
+        assert isinstance(app, Watch)
+        node.notify(str(failure), severity='error', timeout=app.settings.notice.total_seconds())
+        failed(failure)
 
     def work() -> None:
         try:
             answer = call()
         except FAILURES as e:
-            node.call_later(node.notify, str(e), severity='error', timeout=6)
+            node.call_later(said, e)
             return
         node.call_later(then, answer)
 

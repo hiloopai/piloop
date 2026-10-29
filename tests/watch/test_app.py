@@ -1,13 +1,14 @@
 """``piloop watch``: the Textual app driven key by key against a real API on a fixture database, and its screens as text."""
 
 import asyncio
+import contextlib
 import io
 import os
 import pty
+import re
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -19,10 +20,11 @@ from rich.console import Console
 from rich.text import Text
 from sqlalchemy import func, select
 from textual.pilot import Pilot
-from textual.widgets import HelpPanel
+from textual.widgets import DataTable, HelpPanel
+from textual.worker import Worker, WorkerCancelled, WorkerState
 
 from piloop.actor import Actor, Agent, System
-from piloop.api.client import Refused, socket_http
+from piloop.api.client import Client, Refused, socket_http
 from piloop.api.contract import Access
 from piloop.api.views import Batch, Envelope, Subject
 from piloop.campaign import ops
@@ -40,10 +42,10 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.settings import Settings, WatchSettings
-from piloop.watch.app import CampaignScreen, CampaignsScreen, CandidatesTable, Follower, Lost, Shown, Watch
+from piloop.watch.app import CampaignScreen, CampaignsScreen, CandidatesTable, Follower, Lost, Shown, Started, Watch
 from piloop.watch.panels import Api, Part, read_frame, sparkline, touched
 from tests.campaign.test_inbox import news_lines
-from tests.conftest import RESEARCH, WATCHDOG, reconfigured, register, serving_api, spent, store_config, wait_until
+from tests.conftest import RESEARCH, WATCHDOG, reconfigured, register, serving_api, spent, store_config
 from tests.reports.test_history import idea
 
 
@@ -53,8 +55,10 @@ def ago(**delta: float) -> datetime:
 
 STOP = {'max_runs': 50, 'max_hours': 12, 'max_tokens': 5_000_000, 'plateau': 10, 'target': 10}
 SIZE = (160, 44)
-DEFAULTS = WatchSettings()
-SETTLED_TURNS = 3
+DEFAULTS = WatchSettings(notice=timedelta(hours=1))
+"""The defaults, but a note stays: a test reads the notes after a slow run too."""
+OPEN = frozenset({WorkerState.PENDING, WorkerState.RUNNING})
+"""The states of a worker that has not ended."""
 
 
 def screen_text(app: Watch) -> str:
@@ -70,22 +74,48 @@ def screen_text(app: Watch) -> str:
 async def settle(pilot: Pilot[None]) -> None:
     """Wait until every read that the app started answered, and its answers are drawn.
 
-    A drawn answer can start a read of its own, such as the detail of the row that the cursor lands on: the app is
-    settled once no read runs over a few turns of its message loop.
+    A worker hands its answer to its screen before it ends, so once the workers ended a pause draws the answers. A
+    drawn answer can start a read of its own, such as the detail of the row that the cursor lands on, and a pushed
+    screen starts its read when it mounts: then wait again. A read that failed goes again with the next batch of the
+    feed: then wait for that batch.
     """
-    deadline, quiet = time.monotonic() + 30, 0
-    while quiet < SETTLED_TURNS:
-        assert time.monotonic() < deadline, 'the reads did not answer'
-        await pilot.pause(0.02)
-        quiet = 0 if any(w.is_running for w in pilot.app.workers) else quiet + 1
+    app = pilot.app
+    assert isinstance(app, Watch)
+    while True:
+        await pilot.pause()
+        if any(not screen.is_mounted for screen in app.screen_stack):
+            continue
+        if live := [w for w in app.workers if w.state in OPEN]:
+            await asyncio.wait([asyncio.ensure_future(ended(w)) for w in live])
+        elif retries(app):
+            await asyncio.to_thread(app.follower.read_after, app.follower.batches)
+        elif not any(table._require_update_dimensions for table in app.screen.query(DataTable)):
+            await pilot.pause()  # the repaint of what the last round drew and sized
+            return  # else a table sizes its columns to its new rows when it is idle: pause again
 
 
-async def until(pilot: Pilot[None], done: Callable[[], bool], what: str) -> None:
-    """Wait until ``done``: the feed brought an event, and the app read and drew what it touched."""
-    deadline = time.monotonic() + 30
-    while not done():
-        assert time.monotonic() < deadline, f'timed out waiting for {what}'
-        await pilot.pause(0.05)
+def retries(app: Watch) -> bool:
+    """Whether the app waits for the next batch of the feed to read again what failed: its start, or a screen's read."""
+    match app.screen:
+        case CampaignsScreen(failed=Exception()):
+            return True
+        case CampaignScreen() as screen if screen.unread or screen.undetailed is not None:
+            return True
+        case _:
+            return not app.started and not app.follower.ended
+
+
+async def ended(worker: Worker[object]) -> None:
+    """Wait until ``worker`` ends. One that a newer read of its group cancelled ended too."""
+    with contextlib.suppress(WorkerCancelled):
+        await worker.wait()
+
+
+async def fed(pilot: Pilot[None], app: Watch, db: Database) -> None:
+    """Wait until the app's feed read past the newest event of ``db``, and the app read and drew what it touched."""
+    with db.session() as s:
+        newest = s.scalar(select(func.max(Event.id))) or 0
+    await asyncio.to_thread(app.follower.past, newest)
     await settle(pilot)
 
 
@@ -111,9 +141,7 @@ def drive(
         # read stays blocked for good when another thread closes its socket.
         for server in servers:
             server.close()
-        if app.follower is not None:
-            app.follower.join(10)
-            assert not app.follower.is_alive()
+        app.follower.join()
     return app
 
 
@@ -259,7 +287,6 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
     return campaign
 
 
-@pytest.mark.quarantine(issue=523)
 def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, live_campaign: Campaign) -> None:
     shots: list[str] = []
 
@@ -339,7 +366,6 @@ def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, 
     )
 
 
-@pytest.mark.quarantine(issue=523)
 def test_a_campaign_not_registered_yet_is_waited_for_and_shown_once_it_is(db: Database, campaign_path: Path) -> None:
     shots: list[str] = []
 
@@ -347,14 +373,18 @@ def test_a_campaign_not_registered_yet_is_waited_for_and_shown_once_it_is(db: Da
         shots.append(screen_text(app).splitlines()[0])
         await pilot.press('slash', 'enter')
         await settle(pilot)
-        register(db, campaign_path)
-        await until(pilot, lambda: screen_text(app).startswith(' demo · active'), 'the registration on the feed')
+        registered = register(db, campaign_path)
+        with db.session() as s:  # what the daemon's registration emits; the fixture's insert emits nothing
+            target = TargetRef(TargetKind.CAMPAIGN, registered.id)
+            emit(s, UnknownEvent(kind='campaign.registered', payload={}), target, System.DAEMON)
+            s.commit()
+        await fed(pilot, app, db)
+        assert screen_text(app).startswith(' demo · active')
 
-    drive(db, 'demo', scenario, settings=WatchSettings(tail=0))
+    drive(db, 'demo', scenario, settings=DEFAULTS.model_copy(update={'tail': 0}))
     assert shots == [" no campaign 'demo' yet: `piloop init` registers it, and this view follows"]
 
 
-@pytest.mark.quarantine(issue=523)
 def test_a_campaign_whose_config_no_longer_validates_says_how_to_fix_it(db: Database, campaign: Campaign) -> None:
     store_config(db, campaign.id, {'name': campaign.name, 'metrics': 'no list'})
     shots: list[str] = []
@@ -370,18 +400,16 @@ def test_a_campaign_whose_config_no_longer_validates_says_how_to_fix_it(db: Data
     assert shots[1].startswith(' demo: the stored config is not a valid piloop config')
 
 
-@pytest.mark.quarantine(issue=523)
 def test_a_caller_that_may_not_act_as_its_actor_is_told_why(db: Database, campaign: Campaign) -> None:
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
         assert [n.message for n in app._notifications] == [
-            snapshot('owner may not act as implementer#99: only the token of implementer#99 acts as it')
+            snapshot('the event feed: owner may not act as implementer#99: only the token of implementer#99 acts as it')
         ]
 
     app = drive(db, None, scenario, actor=Agent(role='implementer', session=AgentSessionId(99)))
-    assert app.follower is None, 'it follows nothing it cannot read'
+    assert (app.started, app.follower.ended) == (False, True), 'a refusal ends the feed: reading again changes nothing'
 
 
-@pytest.mark.quarantine(issue=523)
 def test_inbox_keys_acknowledge_one_item_or_every_item_shown(db: Database, live_campaign: Campaign) -> None:
     notes: list[str] = []
 
@@ -390,10 +418,12 @@ def test_inbox_keys_acknowledge_one_item_or_every_item_shown(db: Database, live_
         await settle(pilot)
         assert 'Keep #2: the floor holds.' in screen_text(app).split('[0] inbox')[1], 'the detail follows the cursor'
         await pilot.press('a')
-        await until(pilot, lambda: '[1] Inbox 1 ' in screen_text(app), 'the ack to come back on the feed')
+        await fed(pilot, app, db)
+        assert '[1] Inbox 1 ' in screen_text(app), 'the ack came back on the feed'
         notes.append(campaign_screen(app).note)
         await pilot.press('A')
-        await until(pilot, lambda: '[1] Inbox 0 ' in screen_text(app), 'the second ack')
+        await fed(pilot, app, db)
+        assert '[1] Inbox 0 ' in screen_text(app)
         notes.append(campaign_screen(app).note)
         await pilot.press('a', 'A')
 
@@ -407,7 +437,6 @@ def test_inbox_keys_acknowledge_one_item_or_every_item_shown(db: Database, live_
         ]
 
 
-@pytest.mark.quarantine(issue=523)
 def test_r_replies_to_the_thread_root_with_a_priority_that_wakes_the_orchestrator(
     db: Database, live_campaign: Campaign
 ) -> None:
@@ -445,7 +474,6 @@ def test_r_replies_to_the_thread_root_with_a_priority_that_wakes_the_orchestrato
         ]
 
 
-@pytest.mark.quarantine(issue=523)
 def test_slash_filters_the_focused_panel_and_esc_clears_it(db: Database, live_campaign: Campaign) -> None:
     shots: list[str] = []
 
@@ -462,7 +490,6 @@ def test_slash_filters_the_focused_panel_and_esc_clears_it(db: Database, live_ca
     assert '[1] Inbox 2 ─' in shots[1]
 
 
-@pytest.mark.quarantine(issue=523)
 def test_the_agents_panel_shows_the_selected_agents_output_and_its_state(db: Database, live_campaign: Campaign) -> None:
     shots: list[str] = []
 
@@ -487,7 +514,6 @@ def test_the_agents_panel_shows_the_selected_agents_output_and_its_state(db: Dat
     assert 'proposing idea B' in shots[1], "a headless agent's saved transcript"
 
 
-@pytest.mark.quarantine(issue=523)
 def test_s_steers_a_running_agent(db: Database, live_campaign: Campaign) -> None:
     notes: list[str] = []
 
@@ -510,7 +536,6 @@ def test_s_steers_a_running_agent(db: Database, live_campaign: Campaign) -> None
     ], 'the daemon delivers the note'
 
 
-@pytest.mark.quarantine(issue=523)
 def test_a_paused_campaign_says_so_in_its_row_and_its_header(db: Database, live_campaign: Campaign) -> None:
     with db.session() as s:
         ops.pause(s, live_campaign.id, evals=False, reason='evaluator v2')
@@ -528,7 +553,6 @@ def test_a_paused_campaign_says_so_in_its_row_and_its_header(db: Database, live_
     assert shots[1].splitlines()[0] == ' demo · paused (launches): evaluator v2'
 
 
-@pytest.mark.quarantine(issue=523)
 def test_the_candidates_are_the_lineage_s_nodes_with_their_detail(db: Database, live_campaign: Campaign) -> None:
     with db.session() as s:
         s.add(
@@ -589,7 +613,6 @@ def test_the_candidates_are_the_lineage_s_nodes_with_their_detail(db: Database, 
     )
 
 
-@pytest.mark.quarantine(issue=523)
 def test_ideas_keys_approve_park_reject_with_a_reason_and_move_the_priority(
     db: Database, live_campaign: Campaign
 ) -> None:
@@ -598,7 +621,8 @@ def test_ideas_keys_approve_park_reject_with_a_reason_and_move_the_priority(
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
         async def note(*keys: str, shown: str) -> None:
             await pilot.press(*keys)
-            await until(pilot, lambda: shown in screen_text(app).split('[4] ')[0], shown)
+            await fed(pilot, app, db)
+            assert shown in screen_text(app).split('[4] ')[0]
             notes.append(campaign_screen(app).note)
 
         await note('3', 'y', *'worth a run', 'enter', shown='P2  ready      #4')
@@ -635,7 +659,6 @@ def test_ideas_keys_approve_park_reject_with_a_reason_and_move_the_priority(
         }
 
 
-@pytest.mark.quarantine(issue=523)
 def test_a_review_that_the_api_refuses_says_why(db: Database, live_campaign: Campaign) -> None:
     with db.session() as s:
         seed = idea(s, s.get_one(Campaign, live_campaign.id), 'a hunch', IdeaStatus.SEED, created_by='watchdog#9')
@@ -667,7 +690,6 @@ def test_a_review_that_the_api_refuses_says_why(db: Database, live_campaign: Cam
     ]
 
 
-@pytest.mark.quarantine(issue=523)
 def test_the_ideas_detail(db: Database, live_campaign: Campaign) -> None:
     with db.session() as s:
         s.add(Comment(target=TargetRef(TargetKind.IDEA, 2), author='human', body='go on'))
@@ -703,7 +725,6 @@ def test_the_ideas_detail(db: Database, live_campaign: Campaign) -> None:
     )
 
 
-@pytest.mark.quarantine(issue=523)
 def test_the_status_panel_lists_the_overview_s_sections(db: Database, live_campaign: Campaign) -> None:
     shots: list[str] = []
 
@@ -727,7 +748,6 @@ def test_the_status_panel_lists_the_overview_s_sections(db: Database, live_campa
     )
 
 
-@pytest.mark.quarantine(issue=523)
 def test_question_mark_shows_the_panels_keys_and_0_focuses_the_detail(db: Database, live_campaign: Campaign) -> None:
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
         await pilot.press('question_mark')
@@ -745,7 +765,6 @@ def test_question_mark_shows_the_panels_keys_and_0_focuses_the_detail(db: Databa
     drive(db, 'demo', scenario)
 
 
-@pytest.mark.quarantine(issue=523)
 def test_an_empty_campaign_takes_every_key_without_acting(db: Database, live_campaign: Campaign) -> None:
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
         assert isinstance(app.focused, CandidatesTable), 'an empty inbox does not take the focus'
@@ -757,7 +776,6 @@ def test_an_empty_campaign_takes_every_key_without_acting(db: Database, live_cam
     drive(db, 'other', scenario)
 
 
-@pytest.mark.quarantine(issue=523)
 def test_the_screen_follows_the_feed_and_a_dialog_holds_it_still(db: Database, live_campaign: Campaign) -> None:
     def write(body: str) -> None:
         with db.session() as s:
@@ -766,11 +784,12 @@ def test_the_screen_follows_the_feed_and_a_dialog_holds_it_still(db: Database, l
 
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
         write('new')
-        await until(pilot, lambda: '[1] Inbox 3 ' in screen_text(app), "another client's write")
+        await fed(pilot, app, db)
+        assert '[1] Inbox 3 ' in screen_text(app), "another client's write"
         await pilot.press('r')
         await pilot.pause()
         write('newer')
-        await pilot.pause(0.5)
+        await fed(pilot, app, db)
         await pilot.press('escape')
         await settle(pilot)
         assert '[1] Inbox 3 ' in screen_text(app), 'under a dialog the screen does not read'
@@ -778,13 +797,12 @@ def test_the_screen_follows_the_feed_and_a_dialog_holds_it_still(db: Database, l
         await settle(pilot)
         assert 'piloop: 2 campaigns' in screen_text(app)
         write('newest')
-        await until(pilot, lambda: 'comment.note 1m ago' not in screen_text(app), 'the campaigns screen follows too')
-        assert 'comment.note 0s ago' in screen_text(app)
+        await fed(pilot, app, db)
+        assert 'comment.note 0s ago' in screen_text(app), 'the campaigns screen follows too'
 
     drive(db, 'demo', scenario)
 
 
-@pytest.mark.quarantine(issue=523)
 def test_an_event_of_another_campaign_draws_again_and_one_of_the_home_reads_again(
     db: Database, live_campaign: Campaign
 ) -> None:
@@ -794,10 +812,7 @@ def test_an_event_of_another_campaign_draws_again_and_one_of_the_home_reads_agai
             with db.session() as s:
                 emit(s, UnknownEvent(kind='noise', payload={}), target, System.DAEMON)
                 s.commit()
-            follower = app.follower
-            assert follower is not None
-            seen = follower.after
-            await until(pilot, lambda seen=seen, follower=follower: follower.after > seen, 'the event')
+            await fed(pilot, app, db)
         screen.detailed(Shown('inbox', 'stale', None), Text('an answer for a row the cursor left'))
         assert 'an answer for' not in screen_text(app)
         app.post_message(Lost(httpx.ConnectError('the server went away')))
@@ -839,7 +854,8 @@ def test_the_follower_says_when_the_feed_fails_and_reads_again_from_its_cursor(m
     app = Watch(Api.over(http), None, 'human', WatchSettings(retry=timedelta(milliseconds=1)))
     posted: list[object] = []
     monkeypatch.setattr(app, 'post_message', posted.append)
-    follower = Follower(app, 7)
+    follower = Follower(app)
+    follower.after = 7
     follower.run()
     assert asked == ['7', '7'] and [type(m).__name__ for m in posted] == ['Lost'], 'a batch after the stop is dropped'
     assert follower.after == 8
@@ -854,12 +870,76 @@ def test_a_read_that_fails_once_the_app_closed_ends_the_follower_quietly(monkeyp
     app = Watch(Api.over(http), None, 'human', DEFAULTS)
     posted: list[object] = []
     monkeypatch.setattr(app, 'post_message', posted.append)
-    follower = Follower(app, 7)
+    follower = Follower(app)
+    follower.after = 7
     follower.run()
     assert posted == []
 
 
-@pytest.mark.quarantine(issue=523)
+def test_the_follower_reads_its_start_again_until_it_answers_and_a_refusal_ends_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asked: list[str] = []
+    status = {'protocol': 1, 'cursor': 3, 'daemon': {'pid': 1, 'started': '2026-10-29T00:00:00Z', 'listen': None}}
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.path)
+        match len(asked):
+            case 1:
+                raise httpx.ConnectError('the daemon restarts')
+            case 2:
+                return httpx.Response(200, json={**status, 'campaigns': []})
+            case 3:
+                return httpx.Response(200, json={'protocol': 1, 'events': [], 'next': 3, 'more': False})
+            case _:
+                return httpx.Response(409, json={'error': 'cursor_ahead', 'detail': 'cursor 3 is ahead of the feed'})
+
+    http = httpx.Client(transport=httpx.MockTransport(answer), base_url='http://piloop')
+    app = Watch(Api.over(http), None, 'human', WatchSettings(retry=timedelta(milliseconds=1), tail=10))
+    posted: list[object] = []
+    monkeypatch.setattr(app, 'post_message', posted.append)
+    app.follower.run()
+    assert asked == ['/v1/status', '/v1/status', '/v1/events', '/v1/events']
+    assert [type(m).__name__ for m in posted] == ['Lost', 'Started', 'Lost'] and app.follower.ended
+    started = posted[1]
+    assert isinstance(started, Started) and (started.cursor, app.follower.after, app.follower.batches) == (3, 3, 1)
+    app.follower.read_after(5)
+    app.follower.past(99)  # an ended follower holds no waiter
+
+
+def test_a_read_that_fails_is_read_again_with_the_next_batch_of_the_feed(
+    db: Database, live_campaign: Campaign, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A server that stalls past the client's timeout fails a read: the screen says so, then reads it again."""
+    calls: dict[str, int] = {}
+
+    def once(name: str, nth: int) -> None:
+        method = getattr(Client, name)
+
+        def flaky(self: Client, *args: object) -> object:
+            calls[name] = calls.get(name, 0) + 1
+            if calls[name] == nth:
+                raise httpx.ReadTimeout('the server stalled')
+            return method(self, *args)
+
+        monkeypatch.setattr(Client, name, flaky)
+
+    once('status', 2)  # the campaigns screen's: the follower's start reads the first
+    once('overview', 1)
+    once('thread', 1)
+
+    async def scenario(pilot: Pilot[None], app: Watch) -> None:
+        assert '[1] Inbox 2 ' in screen_text(app) and 'Codex cannot start' in screen_text(app).split('[0] inbox')[1]
+        await pilot.press('escape')
+        await settle(pilot)
+        assert 'demo      active' in screen_text(app)
+
+    drive(db, 'demo', scenario, settings=DEFAULTS.model_copy(update={'wait': timedelta(milliseconds=200)}))
+    assert {name: n > 1 for name, n in calls.items()} == {'status': True, 'overview': True, 'thread': True}, (
+        'each read that failed went again'
+    )
+
+
 def test_the_campaigns_screen_without_a_campaign_opens_nothing(db: Database) -> None:
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
         await pilot.press('enter')
@@ -869,7 +949,6 @@ def test_the_campaigns_screen_without_a_campaign_opens_nothing(db: Database) -> 
     drive(db, None, scenario)
 
 
-@pytest.mark.quarantine(issue=523)
 @pytest.mark.parametrize('remote', [False, True], ids=['socket', 'PILOOP_SERVER'])
 def test_a_reply_typed_in_the_watch_wakes_the_orchestrators_inbox_wait(
     db: Database, campaign: Campaign, tmp_path: Path, remote: bool
@@ -908,50 +987,62 @@ def _reply_wakes_the_wait(db: Database, campaign: Campaign, env: dict[str, str])
     env = {**env, 'TERM': 'xterm-256color'}
     env.pop('PILOOP_ACTOR', None)
     piloop = [sys.executable, '-m', 'piloop']
-    waiting = subprocess.Popen(
-        [*piloop, 'inbox', 'wait', 'demo', '--after', str(cursor), '--timeout', '60'],
-        env={**env, 'PILOOP_ACTOR': 'orchestrator'},
-        stdout=subprocess.PIPE,
-        text=True,
-    )
     controller, terminal = pty.openpty()
-    shown = bytearray()
-
-    def drain() -> None:
-        while chunk := _read(controller):
-            shown.extend(chunk)
-
     watching = subprocess.Popen([*piloop, 'watch', 'demo'], env=env, stdin=terminal, stdout=terminal, stderr=terminal)
     # The child has the terminal now. On macOS a close of the terminal side blocks while its output waits to be read,
-    # so the parent closes its copy at once, while the drain thread still reads the controller.
+    # so the parent closes its copy at once, while the reader thread still reads the controller.
     os.close(terminal)
-    threading.Thread(target=drain, daemon=True).start()
-
-    def replied() -> bool:
-        with db.session() as s:
-            return s.get(Comment, 2) is not None
-
+    screen = Terminal(controller)
     try:
-        wait_until(lambda: b'Inbox' in shown, timeout=30)
-        for keys in ('r', 'Use the cheaper model', '\r'):
-            time.sleep(1)
-            os.write(controller, keys.encode())
-        wait_until(replied, timeout=30)
+        screen.wait_for('Inbox')
+        os.write(controller, b'r')
+        screen.wait_for('enter sends it')  # the reply box is open, and takes the keys
+        os.write(controller, b'Use the cheaper model\r')
+        db.wait_until(lambda s: s.get(Comment, 2) is not None)
         os.write(controller, b'q')
-        assert watching.wait(timeout=30) == 0
-        out, _ = waiting.communicate(timeout=30)
+        assert watching.wait() == 0
+        waiting = subprocess.run(
+            [*piloop, 'inbox', 'wait', 'demo', '--after', str(cursor), '--timeout', '60'],
+            env={**env, 'PILOOP_ACTOR': 'orchestrator'},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
     finally:
-        for proc in (watching, waiting):
-            proc.kill()
+        watching.kill()
         os.close(controller)
-    return out
+    return waiting.stdout
 
 
-def _read(fd: int) -> bytes:
-    try:
-        return os.read(fd, 65536)
-    except OSError:  # the terminal closed under the reader: the test is over
-        return b''
+class Terminal:
+    """What a program drew on a terminal, read in a thread: ``wait_for`` blocks until a text shows."""
+
+    def __init__(self, controller: int) -> None:
+        self._shown, self._changed, self._ended = '', threading.Condition(), False
+        threading.Thread(target=self._read, args=(controller,), daemon=True).start()
+
+    def _read(self, fd: int) -> None:
+        while True:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:  # the terminal closed under the reader: the test is over
+                chunk = b''
+            with self._changed:
+                self._shown += ANSI.sub('', chunk.decode(errors='replace'))
+                self._ended = not chunk
+                self._changed.notify_all()
+            if not chunk:
+                return
+
+    def wait_for(self, text: str) -> None:
+        """Block until ``text`` shows, or the program closed the terminal without it, which fails."""
+        with self._changed:
+            self._changed.wait_for(lambda: text in self._shown or self._ended)
+            assert text in self._shown, f'the program closed the terminal without showing {text!r}'
+
+
+ANSI = re.compile(r'\x1b(\[[0-9;?]*[ -/]*[@-~]|\][^\x07]*\x07|[()][0-9A-Za-z])')
+"""An escape sequence of a terminal: what a program sends to move the cursor or style the text, not text."""
 
 
 def test_the_sparkline_draws_the_spine_s_steps() -> None:
