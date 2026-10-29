@@ -1,6 +1,3 @@
 # The open issue of each quarantined test (`pytest.mark.quarantine(issue=N)`), as a table named by its number.
 # `unmeasured`: the files that only its tests cover, left out of the required run's coverage while they are quarantined.
 # The fix of an issue deletes its table and its marks; tests/test_quarantine.py keeps the two in step.
-
-[521]
-title = "the long-poll message test sometimes misses its 5 s wake on CI"

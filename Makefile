@@ -31,8 +31,8 @@ testcov:  ## Run tests in parallel with coverage; fails under 100%
 	COLUMNS=150 uv run pytest -n $(PYTEST_WORKERS) --durations=10 --cov --cov-report=term-missing:skip-covered
 
 .PHONY: quarantine
-quarantine:  ## Run only the quarantined flaky tests (tests/quarantine.toml)
-	COLUMNS=150 uv run pytest -n $(PYTEST_WORKERS) -m quarantine -rA
+quarantine:  ## Run only the quarantined flaky tests (tests/quarantine.toml); none quarantined passes
+	COLUMNS=150 uv run pytest -n $(PYTEST_WORKERS) -m quarantine -rA || [ $$? -eq 5 ]
 
 .PHONY: e2e
 e2e:  ## Run the end-to-end scenarios with real agents (about 15 minutes and 1 USD)

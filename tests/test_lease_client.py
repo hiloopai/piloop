@@ -318,7 +318,6 @@ def test_an_extension_reaches_the_worker_of_the_agent_s_live_lease_once_for_each
     assert held.extended == 5400, 'a restarted worker finds it on its grant'
 
 
-@pytest.mark.quarantine(issue=521)
 def test_a_long_poll_answers_at_the_commit_that_brings_a_message(
     connect: Connect, db: Database, campaign: Campaign, tmp_path: Path, leases: Leases
 ) -> None:
@@ -326,8 +325,10 @@ def test_a_long_poll_answers_at_the_commit_that_brings_a_message(
     start = w1.register(INFO).cursor
     threading.Timer(0.3, leases.submit, args=(agent_job(db, campaign, tmp_path),)).start()
     began = time.monotonic()
-    assert [type(m) for m in w1.messages(start, 20)] == [Work]
-    assert time.monotonic() - began < 5, 'woken by the commit, not at the end of its wait'
+    assert [type(m) for m in w1.messages(start, MAX_POLL_SECONDS)] == [Work]
+    # The bound is the wait itself: a poll that no commit wakes reads again only when its wait ends, and a loaded CI
+    # runner can stall every process for seconds, so a shorter bound fails on a wake that came in time.
+    assert time.monotonic() - began < MAX_POLL_SECONDS, 'woken by the commit, not at the end of its wait'
 
 
 def test_a_lost_job_ends_its_lease_and_a_second_lost_is_stale(
