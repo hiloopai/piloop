@@ -101,7 +101,7 @@ def launch_in_thread(
     ex: RunController, db: Database, campaign: Campaign, tmp_path: Path
 ) -> tuple[AgentSessionId, list[Ended]]:
     with db.session() as s:
-        w = AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='contract')
+        w = AgentSession(kind=WATCHDOG, campaign_id=campaign.id, harness='script', reason='contract')
         s.add(w)
         s.commit()
         agent_session_id = w.id

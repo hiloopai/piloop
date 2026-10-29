@@ -111,7 +111,7 @@ def use(db: Database, campaign: Campaign, body: str, timeout: float = 20) -> Non
 
 def request_agent(db: Database, campaign: Campaign) -> AgentSessionId:
     with db.session() as s:
-        w = AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, reason='contract')
+        w = AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, harness='script', reason='contract')
         s.add(w)
         s.commit()
         return w.id

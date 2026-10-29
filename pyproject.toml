@@ -113,6 +113,8 @@ mcp_server = "piloop.plugins.mcp_server.contract:MCP_SERVERS"
 lineage = "piloop.plugins.lineage.contract:LINEAGE"
 notifier = "piloop.plugins.notifier.contract:NOTIFIERS"
 price_list = "piloop.plugins.price_list.contract:PRICE_LISTS"
+launch_policy = "piloop.plugins.launch_policy.contract:LAUNCH_POLICIES"
+harness_choice = "piloop.plugins.harness_choice.contract:HARNESS_CHOICES"
 
 # What runs in the daemon for a capability, or for a provider that needs the daemon, by its name
 # (piloop.plugins.contribution.CONTRIBUTORS).
@@ -226,6 +228,12 @@ spend = "piloop.plugins.fact_source.spend:SpendFacts"
 
 [project.entry-points."piloop.price_lists"]
 genai_prices = "piloop.plugins.price_list.genai_prices:GenaiPrices"
+
+[project.entry-points."piloop.launch_policies"]
+fewest_live = "piloop.plugins.launch_policy.fewest_live:FewestLive"
+
+[project.entry-points."piloop.harness_choices"]
+round_robin = "piloop.plugins.harness_choice.round_robin:RoundRobin"
 
 [project.entry-points."piloop.campaign_types"]
 optimization = "piloop.plugins.campaign_type.optimization:Optimization"

@@ -555,7 +555,8 @@ class Executor[C: ExecutorConfig](Contributes, Protocol):
         """How many more jobs of each kind it can take now: its free slots, less the jobs it has and has not started.
 
         Core submits no more than that, in its own order: it launches agents across campaigns, and evaluations in the
-        order of the evaluation queue. The order and the fairness are core's.
+        order of the evaluation queue. The order and the fairness are not the executor's: the home's launch policy picks
+        the campaign of each agent slot (``LAUNCH_POLICIES``).
         """
         ...
 

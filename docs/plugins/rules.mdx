@@ -11,6 +11,8 @@ import ContractVerdictRule from '/snippets/generated/contract-verdict-rule.mdx';
 import ContractStopRule from '/snippets/generated/contract-stop-rule.mdx';
 import ContractFactSource from '/snippets/generated/contract-fact-source.mdx';
 import ContractPriceList from '/snippets/generated/contract-price-list.mdx';
+import ContractLaunchPolicy from '/snippets/generated/contract-launch-policy.mdx';
+import ContractHarnessChoice from '/snippets/generated/contract-harness-choice.mdx';
 import StopAnswers from '/snippets/generated/stop-answers.mdx';
 import Facts from '/snippets/generated/facts.mdx';
 
@@ -217,3 +219,37 @@ bundles, with no network. Each harness names its model as its vendor's API does 
 model returns None, and the spend of its campaign is unknown.
 
 <ContractPriceList />
+
+## Launch policies
+
+A **launch policy** picks the campaign that each free agent slot goes to. It is one per home, in `config.toml`, and
+holds the limits of the startup breaker:
+
+```toml
+[plugins.launch_policy]
+provider = "fewest_live"   # the default
+startup_breaker = 3        # this many failed starts of a campaign's agents...
+startup_window = "PT10M"   # ...within this window pause its launches
+```
+
+The built-in `fewest_live` gives each slot to the waiting campaign with the fewest live agents. A policy reads its own
+keys for anything else it needs, such as a priority or a weight by campaign name. Returning `None` leaves the slots
+free, which is how a policy sets a quota.
+
+<ContractLaunchPolicy />
+
+## Harness choices
+
+A **harness choice** picks the harness of the role's rotation that the next agent runs on. Each campaign picks its own,
+in `piloop.toml`:
+
+```toml
+[plugins.harness_choice]
+provider = "round_robin"   # the default
+```
+
+The built-in `round_robin` gives the n-th agent of a role the n-th harness. A harness whose session the agent can
+resume comes first, and a full harness passes its turn. A harness pinned on an idea or by
+`piloop agent launch --harness` is never replaced.
+
+<ContractHarnessChoice />

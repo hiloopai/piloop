@@ -11,7 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from covalence import Cid
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
@@ -38,7 +38,6 @@ from piloop.otel import Span, Tracer
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
 from piloop.plugins.executor.contract import AgentJob, Executor, ExecutorConfig, Resume, Source
 from piloop.plugins.harness.contract import SESSION_ID, cleared_env, fill, of_provider, takes_session_id
-from piloop.plugins.role.contract import Continuity, RoleConfig, SweepRole
 from piloop.plugins.runtime.contract import AgentStart
 
 PROMPT = 'Your brief is in {path}. Read all of it, in parts if a read comes back cut short, then follow it.'
@@ -190,7 +189,8 @@ class Launcher:
                 emit(s, source, TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
                 span.set(unresumed=source.reason)
                 source = None
-            harness = source.harness if source is not None else w.harness or rotate(s, w, cfg.role_harnesses(w.kind))
+            harness = source.harness if source is not None else w.harness
+            assert harness is not None, 'the pass that took the row chose its harness'
             model = w.model or cfg.role_models(w.kind)[harness]
             effort = cfg.role(w.kind).effort
             definition = cfg.harness_for(harness)
@@ -276,8 +276,8 @@ class Resumable:
 def resumable(s: Session, w: AgentSession, cfg: CampaignConfig, place: Path) -> Resumable | SessionNotResumed:
     """The earlier agent of ``w``'s role whose harness session ``w`` continues, or why ``w`` starts anew.
 
-    It is the latest one with a session in the CAS, on ``w``'s harness when the request named one. The role's last
-    agent resumed a session and did not end well: that session may be what broke it, so ``w`` starts anew.
+    It is the latest one with a session in the CAS on ``w``'s harness, which the pass chose when it took ``w``. The
+    role's last agent resumed a session and did not end well: that session may be what broke it, so ``w`` starts anew.
     """
     earlier = (
         select(AgentSession)
@@ -286,15 +286,15 @@ def resumable(s: Session, w: AgentSession, cfg: CampaignConfig, place: Path) -> 
     )
     if (last := s.scalars(earlier.limit(1)).first()) is not None and (failed := _failed_resume(s, last)) is not None:
         return failed
-    saved = earlier.where(AgentSession.session_file.is_not(None), AgentSession.session_id.is_not(None))
-    if w.harness is not None:
-        saved = saved.where(AgentSession.harness == w.harness)
+    saved = earlier.where(
+        AgentSession.session_file.is_not(None), AgentSession.session_id.is_not(None), AgentSession.harness == w.harness
+    )
     match s.scalars(saved.limit(1)).first():
         case AgentSession(id=row, harness=str(harness), session_id=str(session_id), session_file=Cid() as file):
             source = Resumable(row, harness, session_id, file)
         case _:
-            on = f' on {w.harness}' if w.harness is not None else ''
-            return SessionNotResumed(reason=Unresumed.NO_SESSION, detail=f'no earlier {w.kind} left a session{on}')
+            detail = f'no earlier {w.kind} left a session on {w.harness}'
+            return SessionNotResumed(reason=Unresumed.NO_SESSION, detail=detail)
     try:
         definition = cfg.harness_for(source.harness)
     except KeyError:
@@ -319,42 +319,3 @@ def _failed_resume(s: Session, w: AgentSession) -> SessionNotResumed | None:
             return SessionNotResumed(reason=Unresumed.FAILED, detail=detail)
         case _:
             return None
-
-
-def turn(s: Session, w: AgentSession, table: RoleConfig, harnesses: list[str]) -> str:
-    """Return the harness whose turn it is for the sweep ``w`` of a role whose table is ``table``.
-
-    A role that resumes its sessions keeps the harness of its last session while ``harnesses`` has it, so that the
-    next agent can resume it. Any other takes the next one (``rotate``).
-    """
-    match table:
-        case SweepRole(continuity=Continuity.RESUME):
-            kept = s.scalar(
-                select(AgentSession.harness)
-                .where(
-                    AgentSession.campaign_id == w.campaign_id,
-                    AgentSession.kind == w.kind,
-                    AgentSession.id < w.id,
-                    AgentSession.session_file.is_not(None),
-                    AgentSession.harness.in_(harnesses),
-                )
-                .order_by(AgentSession.id.desc())
-                .limit(1)
-            )
-            return kept if kept is not None else rotate(s, w, harnesses)
-        case _:
-            return rotate(s, w, harnesses)
-
-
-def rotate(s: Session, agent_session: AgentSession, harnesses: list[str]) -> str:
-    """Return the harness for an implementer: the n-th agent of a kind in a campaign takes the n-th harness, round robin."""
-    earlier = s.scalar(
-        select(func.count())
-        .select_from(AgentSession)
-        .where(
-            AgentSession.campaign_id == agent_session.campaign_id,
-            AgentSession.kind == agent_session.kind,
-            AgentSession.id < agent_session.id,
-        )
-    )
-    return harnesses[(earlier or 0) % len(harnesses)]

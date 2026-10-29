@@ -141,12 +141,10 @@ def test_slow_write_is_one_ms_read_from_config_toml_and_the_environment_wins(
 def test_the_daemon_s_timings_are_read_from_config_toml_the_environment_wins_and_a_campaign_sets_its_graces(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (tmp_path / 'config.toml').write_text(
-        '[daemon]\nstartup_breaker = 5\n[agents]\nwrap_up_grace = 60\nfinding_grace = 5\n'
-    )
+    (tmp_path / 'config.toml').write_text('[daemon]\nfeed_page = 5\n[agents]\nwrap_up_grace = 60\nfinding_grace = 5\n')
     monkeypatch.setenv('PILOOP_AGENTS__FINDING_GRACE', 'PT30S')
     home = Settings(home=tmp_path)
-    assert (home.daemon.startup_breaker, home.agents.wrap_up_grace, home.agents.finding_grace) == (
+    assert (home.daemon.feed_page, home.agents.wrap_up_grace, home.agents.finding_grace) == (
         5,
         timedelta(seconds=60),
         timedelta(seconds=30),

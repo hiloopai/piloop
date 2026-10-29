@@ -8,6 +8,8 @@
 | executor: `EXECUTORS` (`piloop.executors`) | host | `[plugins.executor] provider` in `config.toml` | `workers`: `Workers` |
 | fact source: `FACT_SOURCES` (`piloop.fact_sources`) | host | `[plugins.fact_source.<name>]` | `campaign`: `CampaignFacts`<br/>`command`: `Command`<br/>`leases`: `LeaseFacts`<br/>`models`: `ModelFacts`<br/>`optimization`: `OptimizationFacts`<br/>`spend`: `SpendFacts` |
 | harness: `HARNESSES` (`piloop.harnesses`) | host | `[plugins.harness.<name>]` | `claude`: `Claude`<br/>`codex`: `Codex`<br/>`pi`: `Pi` |
+| harness choice: `HARNESS_CHOICES` (`piloop.harness_choices`) | pure | `[plugins.harness_choice] provider` | `round_robin`: `RoundRobin` |
+| launch policy: `LAUNCH_POLICIES` (`piloop.launch_policies`) | pure | `[plugins.launch_policy] provider` in `config.toml` | `fewest_live`: `FewestLive` |
 | lineage: `LINEAGE` (`piloop.lineages`) | host | `[plugins.lineage.<name>]` | `optimization`: `OptimizationLineage` |
 | mcp server: `MCP_SERVERS` (`piloop.mcp_servers`) | host | `[plugins.mcp_server.<name>]` | `http`: `HttpServer`<br/>`stdio`: `StdioServer` |
 | memory: `MEMORY` (`piloop.memory`) | host | `[plugins.memory] provider` | `local`: `LocalMemory` |

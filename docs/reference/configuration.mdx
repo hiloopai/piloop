@@ -184,6 +184,12 @@ With `provider = "spend"`:
 |---|---|---|---|
 | `facts` | list\[string\] | `["compute_usd", "models_usd"]` | The facts in USD that the spend sums, each from another source of `[plugins.fact_source] use`. The default is those of `leases` and `models`. |
 
+### `[plugins.harness_choice]`
+
+The harness choice. Without a table: `round_robin`.
+
+With `provider = "round_robin"`, the table has no other key.
+
 ### `[plugins.harness] use`
 
 The harness instances that the campaign uses, by name, in order. Unset: `pi`.
@@ -631,8 +637,6 @@ Experimental: the scout.
 | `feed_page` | integer | `1000` | How many events a turn of the daemon's loop reads at most. A turn with more reads again at once. |
 | `prompt_retry` | duration | `"PT2S"` | How soon a comment that the executor did not take, because its database was locked, goes to its agent again. |
 | `kill_retry` | duration | `"PT10S"` | How soon the kill of an agent that the daemon ended goes again while the agent has not ended: a kill can fail. |
-| `startup_breaker` | integer | `3` | How many of a campaign's agents can fail at startup within `startup_window` before its launches pause. A host that is too loaded to start agents makes every new agent fail, and each failure costs a start window. |
-| `startup_window` | duration | `"PT10M"` | How far back `startup_breaker` counts. Launches resume when fewer failures are that recent. |
 | `home_check` | duration | `"PT10S"` | How often the daemon checks that its home is still there. A daemon whose home is gone stops: no client can find it there to stop it. |
 | `startup_relaunches` | integer | `2` | How many times a run is queued again with a new implementer after its implementer failed to start. Then the run fails. A failure at startup is a fault of the host or the harness, not an attempt at the idea: it does not count toward `max_runs`. |
 
@@ -765,6 +769,17 @@ target). `compute` is the provider that starts and stops the workers.
 | `max_worker_hours_per_day` | number \| null | `null` | The pool starts no worker once its workers ran this many hours in the last 24. No bound when unset. |
 | `once` | boolean | `false` | Each worker takes one lease, runs it and exits (`piloop worker --once`): for a platform that bills per call or cannot keep a process. |
 | `orphan_exit_seconds` | number \| null | `600` | A worker that cannot reach its server for this long exits by itself once it holds no job (`piloop worker --orphan-exit`): so it never outlives a stopped server. While the server answers, its drain decides. None: never. |
+
+#### `[plugins.launch_policy]`
+
+The launch policy. Without a table: `fewest_live`.
+
+With `provider = "fewest_live"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `startup_breaker` | integer | `3` | How many of a campaign's agents can fail at startup within `startup_window` before its launches pause. A host that is too loaded to start agents makes every new agent fail, and each failure costs a start window. |
+| `startup_window` | duration | `"PT10M"` | How far back `startup_breaker` counts. Launches resume when fewer failures are that recent. |
 
 #### `[plugins.network]`
 

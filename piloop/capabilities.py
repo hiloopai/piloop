@@ -135,6 +135,10 @@ from piloop.plugins.campaign_type.optimization.fact_source.optimization import O
 from piloop.plugins.fact_source.command import Command
 from piloop.plugins.price_list.contract import PRICE_LISTS, PriceList
 from piloop.plugins.price_list.genai_prices import GenaiPrices
+from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchPolicy, LaunchCase, Share
+from piloop.plugins.launch_policy.fewest_live import FewestLive
+from piloop.plugins.harness_choice.contract import HARNESS_CHOICES, HarnessChoice, HarnessCase
+from piloop.plugins.harness_choice.round_robin import RoundRobin
 from piloop.usage import ModelId
 from piloop.plugins.fact_source.leases import LeaseFacts
 from piloop.plugins.fact_source.models import ModelFacts, Price

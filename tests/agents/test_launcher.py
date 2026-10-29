@@ -10,7 +10,6 @@ import pytest
 from covalence import Cid
 from dirty_equals import IsFloat
 from git import Repo
-from inline_snapshot import snapshot
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 from pydantic import SecretStr
@@ -96,6 +95,8 @@ def role_in(campaign: Campaign, kind: RoleName = WATCHDOG) -> Role:
 
 
 def request(db: Database, campaign: Campaign, kind: RoleName = WATCHDOG, **fields: object) -> AgentSessionId:
+    """A requested row, on ``script`` unless ``fields`` names a harness: the pass that takes a row chooses one."""
+    fields.setdefault('harness', 'script')
     with db.session() as s:
         agent_session = AgentSession(kind=kind, campaign_id=campaign.id, reason='test', **fields)
         s.add(agent_session)
@@ -334,30 +335,6 @@ def test_launch_runs_the_row_through_its_lifecycle(
     }
     [job] = [span for span in spans.get_finished_spans() if span.name == 'piloop.job']
     assert dict(job.attributes or {}) == {'lease': 1, 'agent_session': 1, 'status': 'exited'}, "the worker's span"
-
-
-def test_rotation_over_the_role_harnesses_unless_pinned(
-    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    write_toml(Path(campaign.path), HARNESS_PROMPT_TO_FILE)
-    cfg = load_campaign_config(
-        Path(campaign.path),
-        plugins={
-            'harness': {'use': ['script', 'pi'], 'script': {'model': 'm'}, 'pi': {'model': 'p'}},
-            'role': {'watchdog': {'harnesses': ['script', 'pi'], 'model': {'pi': 'wp'}}},
-        },
-    )
-    with db.session() as s:
-        s.get_one(Campaign, campaign.id).config = cfg
-        s.commit()
-    ids = [request(db, campaign), request(db, campaign), request(db, campaign, harness='script', model='pinned')]
-    request(db, campaign, kind=RESEARCH)  # another kind: not in this rotation
-    picks = []
-    for agent_session_id in ids:
-        launch(db, runtime, tmp_path, agent_session_id)
-        w = agent_session(db, agent_session_id)
-        picks.append((w.harness, w.model))
-    assert picks == snapshot([('script', 'watchdog-model'), ('pi', 'wp'), ('script', 'pinned')])
 
 
 def test_an_agent_writes_through_piloop_sql_as_its_own_actor(
@@ -658,7 +635,7 @@ def test_nothing_starts_after_cancel(campaign: Campaign, db: Database, runtime: 
         agent_session_id, brief=home_cas(db).put(b'x'), place='w', artifact=checkout(campaign), timeout=60
     )
     w = agent_session(db, agent_session_id)
-    assert (outcome, w.state, w.harness) == (DaemonStopped(), AgentSessionState.REQUESTED, None), 'stop() closes rows'
+    assert (outcome, w.state) == (DaemonStopped(), AgentSessionState.REQUESTED), 'stop() closes rows'
     assert not (tmp_path / 'w').exists()
 
 
@@ -1186,7 +1163,7 @@ def research_argv(
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
     start = mocker.spy(runtime, 'start')
-    launch(db, runtime, tmp_path, request(db, campaign, kind=RESEARCH))
+    launch(db, runtime, tmp_path, request(db, campaign, kind=RESEARCH, harness=harness))
     [spec] = [c.args[0] for c in start.call_args_list]
     return spec.args
 

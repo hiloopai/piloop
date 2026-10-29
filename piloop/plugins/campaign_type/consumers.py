@@ -3,8 +3,8 @@
 The pass has two phases. First, each campaign's type and the triggers of its roles
 (https://piloop.autoresearch.inc/concepts/roles) insert ``agent_sessions`` rows in state ``requested``. Then the
 requested rows launch in id order, as far as the role's ``max_concurrent`` allows, while the executor has a free agent
-slot (``Executor.capacity``). A free slot goes to the campaign with the fewest live agents, as the evaluation queue
-gives its slots. Anyone can insert a requested row by hand, for example the CLI or an agent. Such a row launches in
+slot (``Executor.capacity``). The home's launch policy picks the campaign that each free slot goes to, and a
+campaign's harness choice the harness of each agent. Anyone can insert a requested row by hand, for example the CLI or an agent. Such a row launches in
 the same second phase.
 """
 
@@ -23,7 +23,6 @@ from sqlalchemy import Select, delete, exists, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
-from piloop.agents.launcher import turn
 from piloop.agents.results import (
     AgentSessionFinished,
     AgentSessionRunning,
@@ -33,7 +32,7 @@ from piloop.agents.results import (
 from piloop.agents.roles import compose_brief, compose_resumed, role_of
 from piloop.campaign.anomaly import AnomalyReported, assigned
 from piloop.campaign.campaigns import WORKSPACE, CampaignAdded, workspace_dir
-from piloop.campaign.launches import close, free_harness, full_harnesses, remove_checkouts
+from piloop.campaign.launches import choose_harness, close, earlier, full_harnesses, remove_checkouts, resumed_on
 from piloop.campaign.stop import (
     CampaignClosed,
     CancelRequested,
@@ -109,13 +108,14 @@ from piloop.plugins.executor.consumers import LIMITS
 from piloop.plugins.executor.contract import AgentKey, LeftJob
 from piloop.plugins.fact_source.contract import FACT_SOURCES
 from piloop.plugins.fact_source.facts import Facts
+from piloop.plugins.host import ContractBroken
+from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchCase, LaunchPolicy, Share
 from piloop.plugins.memory.contract import MEMORY
 from piloop.plugins.role.contract import PUSHED_KINDS, Continuity, ImplementerRole, SweepRole
 from piloop.plugins.section.contract import Rendering, markdown
 from piloop.plugins.stop_rule.contract import GO, STOP_RULES, Go, Hold, Stop, WhileHeld
 from piloop.plugins.trigger.contract import TRIGGERS, Backlog, Fire, Quiet, Steer
 from piloop.runtime.factory import handle_for, runtime_for
-from piloop.settings import DaemonSettings
 
 AGENT_SESSIONS = 'agent_sessions'
 """The directory under the home of each sweep's place: ``agent_sessions/<id>``."""
@@ -202,7 +202,8 @@ class Campaigns:
     def __init__(self, host: DaemonHost) -> None:
         self._host = host
         self._db, self._now, self._tracer, self._home = host.db, host.now, host.tracer, host.home
-        self._daemon, self._agents = host.daemon, host.agents
+        self._agents = host.agents
+        self._launch_policy = LAUNCH_POLICIES.selected(host.plugins)
         self._controller = host.controller
         self._runs_dir = host.home / RUNS
         self._agent_sessions_dir = host.home / AGENT_SESSIONS
@@ -582,27 +583,40 @@ class Campaigns:
     ) -> list[tuple[AgentSessionId, RunId | None]]:
         """Take the requested agents of ``launching`` while the executor has a free agent slot (``_take``).
 
-        Each slot goes to the campaign with the fewest live agents, so that a campaign with many requests never holds
-        back another. A row whose campaign was retired since the pass read it is closed instead (``_unretired``).
-        Returns ``(agent_session_id, run_id)`` pairs.
+        The home's launch policy picks the campaign that each slot goes to. Without a bound on the slots, the campaign
+        it picks takes all it can. A row whose campaign was retired since the pass read it is closed instead
+        (``_unretired``). Returns ``(agent_session_id, run_id)`` pairs.
+
+        Raises:
+            ContractBroken: The policy picked a campaign that waits for no slot.
         """
         # before the executor's count: a job submitted in between then counts twice, for one pass, never in neither
         unsubmitted = len(self._controller.launcher.unsubmitted)
         free = self._controller.executor.capacity().agents
         if free is not None:
             free -= unsubmitted
-        live = Counter(s.scalars(select(AgentSession.campaign_id).where(AgentSession.state.in_(LIVE))).all())
-        left = list(launching)
+        rows = s.execute(
+            select(Campaign.id, Campaign.name).join(AgentSession).where(AgentSession.state.in_(LIVE))
+        ).all()
+        live = Counter(campaign_id for campaign_id, _ in rows)
+        names = {campaign_id: name for campaign_id, name in rows} | {e.campaign.id: e.campaign.name for e in launching}
+        left = {entry.campaign.id: entry for entry in launching}
         taken: list[tuple[AgentSessionId, RunId | None]] = []
         while left and (free is None or free > 0):
-            nxt = min(left, key=lambda entry: (live[entry.campaign.id], entry.campaign.id))
-            campaign = nxt.campaign
-            got = self._take(s, campaign, nxt.cfg, now, most=None if free is None else 1, roles=nxt.roles)
+            shares = tuple(Share(c, names[c], live[c], c in left) for c in sorted(live.keys() | left.keys()))
+            if (picked := self._launch_policy.pick(LaunchCase(free, shares))) is None:
+                break
+            if (nxt := left.get(picked)) is None:
+                raise ContractBroken(
+                    f'launch policy {type(self._launch_policy).__name__} picked campaign {picked}, which waits for no'
+                    ' slot'
+                )
+            got = self._take(s, nxt.campaign, nxt.cfg, now, most=None if free is None else 1, roles=nxt.roles)
             if free is None or not got:
-                left.remove(nxt)
+                del left[picked]
             else:
                 free -= len(got)
-            live[campaign.id] += len(got)
+            live[picked] += len(got)
             taken += got
         return self._unretired(s, taken)
 
@@ -645,8 +659,8 @@ class Campaigns:
 
         A run role's row without a run is refused.
 
-        A sweep's harness is chosen here. A harness at its cap (``_full``) is skipped for the next one in the rotation.
-        A sweep pinned to that harness stays requested. A run's harness was chosen when it was queued (``_reroute``).
+        A sweep's harness is chosen here, by the campaign's harness choice (``choose_harness``), never a harness at its
+        cap (``full_harnesses``). A sweep pinned to such a harness stays requested. A run's harness was chosen when it was queued (``_reroute``).
         A request for a role that ``piloop.toml`` no longer has is refused, and its queued run fails
         (``RunEnd.ROLE_REMOVED``), so that its idea goes back to the queue.
 
@@ -695,8 +709,8 @@ class Campaigns:
                         case _:
                             assert_never(taking)
                 else:
-                    harness = agent_session.harness or free_harness(
-                        rotation, turn(s, agent_session, rc, rotation), full
+                    harness = agent_session.harness or choose_harness(
+                        cfg, kind, full, earlier(s, agent_session), resumed_on(s, agent_session, rc, rotation)
                     )
                     if harness is None or harness in full:
                         continue
@@ -720,7 +734,7 @@ class Campaigns:
             StartupAnomaly,
             Event.target_kind == TargetKind.AGENT_SESSION,
             Event.target_id.in_(agent_sessions),
-            Event.at >= now - self._daemon.startup_window,
+            Event.at >= now - self._launch_policy.startup_window,
         )
         on_campaign = TargetRef(TargetKind.CAMPAIGN, campaign.id)
         latest = s.scalars(
@@ -730,7 +744,7 @@ class Campaigns:
             .limit(1)
         ).first()
         pause = latest.payload if latest is not None and isinstance(latest.payload, LaunchPaused) else None
-        if len(deaths) < self._daemon.startup_breaker:
+        if len(deaths) < self._launch_policy.startup_breaker:
             if pause is not None:
                 emit(s, LaunchResumed(comment=pause.comment), on_campaign, System.DAEMON)
             return None
@@ -738,17 +752,18 @@ class Campaigns:
         if pause is None or escalation is None:
             self._escalate_pause(s, campaign, deaths)
         else:
-            escalation.body = pause_body(deaths, pause.load, self._daemon)
-        return deaths[-self._daemon.startup_breaker][0].at + self._daemon.startup_window
+            escalation.body = pause_body(deaths, pause.load, self._launch_policy)
+        return deaths[-self._launch_policy.startup_breaker][0].at + self._launch_policy.startup_window
 
     def _escalate_pause(self, s: Session, campaign: Campaign, deaths: Sequence[tuple[Event, StartupAnomaly]]) -> None:
+        # TODO: file it through the escalation capability's helper once that lands, at the same priority
         load = ' / '.join(f'{x:.1f}' for x in os.getloadavg())
         comment = Comment(
             target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
             author=DAEMON_ACTOR,
             kind=CommentKind.ESCALATION,
             priority=1,
-            body=pause_body(deaths, load, self._daemon),
+            body=pause_body(deaths, load, self._launch_policy),
         )
         s.add(comment)
         s.flush()
@@ -911,17 +926,17 @@ def sweep_place(agent_session_id: AgentSessionId) -> str:
     return f'{AGENT_SESSIONS}/{agent_session_id}'
 
 
-def pause_body(deaths: Sequence[tuple[Event, StartupAnomaly]], load: str, daemon: DaemonSettings) -> str:
+def pause_body(deaths: Sequence[tuple[Event, StartupAnomaly]], load: str, policy: LaunchPolicy) -> str:
     """Format the pause escalation: the number of failures, the load average and the latest failures' errors."""
-    minutes = daemon.startup_window.total_seconds() / 60
+    minutes = policy.startup_window.total_seconds() / 60
     lines = [
         f'Launches paused: {len(deaths)} agents died at startup in the last {minutes:g} minutes. Load average'
         f' {load} on {os.cpu_count()} CPUs when launches paused. Launches resume automatically when fewer than'
-        f' {daemon.startup_breaker} deaths are that recent. If the host is overloaded, stop what overloads it. The latest'
+        f' {policy.startup_breaker} deaths are that recent. If the host is overloaded, stop what overloads it. The latest'
         ' deaths:',
         *(
             f'- {e.target} ({death.role} on {death.harness}): {death.error}'
-            for e, death in deaths[-daemon.startup_breaker :]
+            for e, death in deaths[-policy.startup_breaker :]
         ),
     ]
     return '\n'.join(lines)

@@ -1,0 +1,13 @@
+{/* WARNING: This file is auto-generated (uv run -m scripts.generate_all). Update the docstrings in `piloop/plugins/launch_policy/contract.py` if you want to change anything here. */}
+
+| Member | What it is |
+|---|---|
+| `LaunchPolicy.startup_breaker: int` | How many of a campaign's agents can fail at startup within `startup_window` before its launches pause. A host that is too loaded to start agents makes every new agent fail, and each failure costs a start window. |
+| `LaunchPolicy.startup_window: timedelta` | How far back `startup_breaker` counts. Launches resume when fewer failures are that recent. |
+| `LaunchPolicy.pick(case: LaunchCase) -> CampaignId \| None` | Return the waiting campaign that the next free slot goes to, or None: no campaign launches more now. |
+| `LaunchCase.free: int \| None` | The free agent slots left in this pass, this one included. None: the executor sets no bound. |
+| `LaunchCase.campaigns: tuple[Share, ...]` | Every campaign that has live agents or waits, by id. |
+| `Share.campaign: CampaignId` | Its id: what `pick` returns. |
+| `Share.name: str` | Its name, as `piloop.toml` sets it: what a policy's own keys name it by. |
+| `Share.live: int` | Its live agents, with those that this pass launched so far. |
+| `Share.waits: bool` | Whether it has requested agents that can take a slot in this pass. Only such a campaign can be picked. |

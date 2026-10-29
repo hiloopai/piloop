@@ -1,25 +1,82 @@
 """Launching the agents that campaigns request: the kernel's share of the campaigns' pass."""
 
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Collection
 from contextlib import closing
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from piloop.agents.refill import usage_of
 from piloop.campaign.campaigns import vcs_of
 from piloop.config import CampaignConfig
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, utcnow
+from piloop.ids import RoleName
 from piloop.otel import Tracer
+from piloop.plugins.harness_choice.contract import HARNESS_CHOICES, HarnessCase, chosen
+from piloop.plugins.role.contract import Continuity, RoleConfig, SweepRole
 from piloop.plugins.vcs.contract import NotARepository
 from piloop.usage import Usage
 
 
-def free_harness(rotation: Sequence[str], turn: str, full: Collection[str]) -> str | None:
-    """Return ``turn``, the rotation's pick, unless it is ``full``. Then return the first harness that is not full."""
-    return turn if turn not in full else next((h for h in rotation if h not in full), None)
+def choose_harness(
+    cfg: CampaignConfig, role: RoleName, full: Collection[str], turn: int, resumes: str | None = None
+) -> str | None:
+    """The harness that the campaign's harness choice gives the next agent of ``role``, or None: every one is ``full``.
+
+    ``turn`` is how many agents of the role came before, and ``resumes`` the harness that resumes its last session.
+    """
+    rotation = cfg.role_harnesses(role)
+    models = cfg.role_models(role)
+    case = HarnessCase(
+        role=role,
+        rotation=tuple(rotation),
+        full=frozenset(full),
+        turn=turn,
+        resumes=resumes,
+        models={h: models[h] for h in rotation if h in models},
+    )
+    return chosen(HARNESS_CHOICES.selected(cfg.plugins), case)
+
+
+def earlier(s: Session, agent_session: AgentSession) -> int:
+    """How many agents of the role of ``agent_session`` its campaign requested before it."""
+    return (
+        s.scalar(
+            select(func.count())
+            .select_from(AgentSession)
+            .where(
+                AgentSession.campaign_id == agent_session.campaign_id,
+                AgentSession.kind == agent_session.kind,
+                AgentSession.id < agent_session.id,
+            )
+        )
+        or 0
+    )
+
+
+def resumed_on(s: Session, w: AgentSession, table: RoleConfig, harnesses: Collection[str]) -> str | None:
+    """The harness on which the sweep ``w`` can resume its role's last saved session, or None.
+
+    Only a role that resumes its sessions has one, and only while ``harnesses`` still has it.
+    """
+    match table:
+        case SweepRole(continuity=Continuity.RESUME):
+            return s.scalar(
+                select(AgentSession.harness)
+                .where(
+                    AgentSession.campaign_id == w.campaign_id,
+                    AgentSession.kind == w.kind,
+                    AgentSession.id < w.id,
+                    AgentSession.session_file.is_not(None),
+                    AgentSession.harness.in_(harnesses),
+                )
+                .order_by(AgentSession.id.desc())
+                .limit(1)
+            )
+        case _:
+            return None
 
 
 def remove_checkouts(agent_dir: Path, campaign: Campaign, tracer: Tracer) -> None:

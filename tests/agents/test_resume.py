@@ -145,7 +145,7 @@ def test_each_agent_resumes_the_last_session_with_only_the_new_brief_and_counts_
     resuming(db, campaign)
     first = wake(db, runtime, tmp_path, campaign)
     assert not_resumed(db, first) == [
-        SessionNotResumed(reason=Unresumed.NO_SESSION, detail='no earlier watchdog left a session')
+        SessionNotResumed(reason=Unresumed.NO_SESSION, detail='no earlier watchdog left a session on script')
     ]
     assert '- the whole brief' in (tmp_path / 'brief--session-id.md').read_text()
     one = agent_session(db, first)

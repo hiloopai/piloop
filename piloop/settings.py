@@ -105,11 +105,6 @@ class DaemonSettings(BaseModel):
     """How soon a comment that the executor did not take, because its database was locked, goes to its agent again."""
     kill_retry: timedelta = Field(default=timedelta(seconds=10), gt=timedelta(0))
     """How soon the kill of an agent that the daemon ended goes again while the agent has not ended: a kill can fail."""
-    startup_breaker: int = Field(default=3, gt=0)
-    """How many of a campaign's agents can fail at startup within ``startup_window`` before its launches pause. A host
-    that is too loaded to start agents makes every new agent fail, and each failure costs a start window."""
-    startup_window: timedelta = Field(default=timedelta(minutes=10), gt=timedelta(0))
-    """How far back ``startup_breaker`` counts. Launches resume when fewer failures are that recent."""
     home_check: timedelta = Field(default=timedelta(seconds=10), gt=timedelta(0))
     """How often the daemon checks that its home is still there. A daemon whose home is gone stops: no client can find
     it there to stop it."""

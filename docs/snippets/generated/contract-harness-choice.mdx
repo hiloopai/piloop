@@ -1,0 +1,11 @@
+{/* WARNING: This file is auto-generated (uv run -m scripts.generate_all). Update the docstrings in `piloop/plugins/harness_choice/contract.py` if you want to change anything here. */}
+
+| Member | What it is |
+|---|---|
+| `HarnessChoice.choose(case: HarnessCase) -> str \| None` | Return a harness of the rotation that is not full, or None: every one is, and the agent waits. |
+| `HarnessCase.role: RoleName` | The role of the agent. |
+| `HarnessCase.rotation: tuple[str, ...]` | The role's harnesses, in the order of `piloop.toml`. |
+| `HarnessCase.full: frozenset[str]` | The harnesses at their `max_concurrent`: none of them can be chosen now. |
+| `HarnessCase.turn: int` | How many agents of the role came before this one. |
+| `HarnessCase.resumes: str \| None` | The harness of the role's last saved session, for a role that resumes its sessions: the agent can resume it on that harness only. None: there is none, or the role starts afresh. |
+| `HarnessCase.models: dict[str, str]` | The model that each harness of the rotation runs for the role. |

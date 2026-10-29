@@ -90,6 +90,8 @@ from piloop.plugins.executor.contract import AgentKey, Capacity, Prompt
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.leases import SERVE
 from piloop.plugins.executor.workers import Workers
+from piloop.plugins.host import Plugins
+from piloop.plugins.launch_policy.fewest_live import FewestLive
 from piloop.plugins.runtime.contract import Handle
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
 from piloop.plugins.trigger.sql import SqlTrigger
@@ -130,10 +132,12 @@ from tests.test_actor import ACTORS
 from tests.usage.test_usage import PI_ID, store
 
 
-def make_scheduler(db: Database, runtime: ScriptRuntime, tmp_path: Path, tracer: Tracer | None = None) -> Scheduler:
+def make_scheduler(
+    db: Database, runtime: ScriptRuntime, tmp_path: Path, tracer: Tracer | None = None, plugins: Plugins | None = None
+) -> Scheduler:
     tracer = tracer or Tracer(None)
     controller = serving(RunController(db, tracer, tmp_path, factory(runtime), executor=Workers()))
-    return Scheduler(db, controller, tracer, tmp_path, factory(runtime))
+    return Scheduler(db, controller, tracer, tmp_path, factory(runtime), plugins=plugins)
 
 
 def request_watchdog(db: Database, campaign: Campaign) -> AgentSessionId:
@@ -2536,12 +2540,12 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
 
     with db.session() as s:
         for event in s.scalars(select(Event).where(has(StartupAnomaly))):
-            event.at -= DaemonSettings().startup_window
+            event.at -= FewestLive().startup_window
         s.commit()
     assert run_all(scheduler) != [], 'the deaths aged out of the window: launches resume'
     scheduler.wait(SETTLE)
 
-    for _ in range(DaemonSettings().startup_breaker):
+    for _ in range(FewestLive().startup_breaker):
         died_at_startup(db, campaign, WATCHDOG)
     request_watchdog(db, campaign)
     assert run_all(scheduler) == [] and len(pause_escalations(db)) == 2, 'a new pause: a new escalation'

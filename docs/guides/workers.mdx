@@ -25,8 +25,8 @@ min_memory_gb = 4
 ```
 
 Each heartbeat carries a sample of the worker's host. A worker over `max_load` or under `min_memory_gb` takes no job,
-and its slots count zero. The daemon launches an agent only into a free slot, and gives it to the campaign with the
-fewest live agents. To change a pool's key while the daemon runs, set a **limit**. It wins over `config.toml` from
+and its slots count zero. The daemon launches an agent only into a free slot, and gives it to the campaign that the
+[launch policy](/plugins/rules#launch-policies) picks: by default, the one with the fewest live agents. To change a pool's key while the daemon runs, set a **limit**. It wins over `config.toml` from
 the daemon's next pass, and `piloop status` shows it with its reason:
 
 ```bash

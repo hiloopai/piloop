@@ -33,6 +33,8 @@ from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.harness.contract import Harness
+from piloop.plugins.harness_choice.contract import HarnessCase, HarnessChoice
+from piloop.plugins.launch_policy.contract import LaunchCase, LaunchPolicy, Share
 from piloop.plugins.lineage.contract import Graph, LineageNode, LineageProvider, NodeStatus, SeriesPoint, SessionLink
 from piloop.plugins.memory.contract import MemoryProvider
 from piloop.plugins.network.contract import Network, NetworkConfig
@@ -69,6 +71,8 @@ CONTRACTS: dict[str, Contract] = {
     'stop-rule': Contract((StopRule, StopCase), '`piloop/plugins/stop_rule/contract.py`'),
     'fact-source': Contract((FactSource, Readings), '`piloop/plugins/fact_source/`'),
     'price-list': Contract((PriceList,), '`piloop/plugins/price_list/contract.py`'),
+    'launch-policy': Contract((LaunchPolicy, LaunchCase, Share), '`piloop/plugins/launch_policy/contract.py`'),
+    'harness-choice': Contract((HarnessChoice, HarnessCase), '`piloop/plugins/harness_choice/contract.py`'),
     'contribution': Contract(
         (Contributes, Contribution, Consumer), '`piloop/plugins/contribution.py` and `piloop/daemon/loop.py`'
     ),

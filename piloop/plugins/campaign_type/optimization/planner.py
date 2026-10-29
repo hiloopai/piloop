@@ -16,8 +16,7 @@ from sqlalchemy import Boolean, ColumnElement, Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import System
-from piloop.agents.launcher import rotate
-from piloop.campaign.launches import free_harness, full_harnesses, remove_checkouts
+from piloop.campaign.launches import choose_harness, earlier, full_harnesses, remove_checkouts
 from piloop.config import CampaignConfig
 from piloop.db.events import emit
 from piloop.db.models import LIVE, AgentSession, Campaign, Comment, EventModel, ReadBy, count
@@ -422,8 +421,7 @@ class OptimizationPlanner:
         Returns False, and queues nothing, if the idea pins no harness and every harness of the rotation is ``full``.
         """
         total_runs = count(s, campaign_runs(campaign.id).where(done_by(role)))
-        harnesses = cfg.role_harnesses(role)
-        harness = idea.harness or free_harness(harnesses, harnesses[total_runs % len(harnesses)], full)
+        harness = idea.harness or choose_harness(cfg, role, full, total_runs)
         if harness is None:
             return False
         computed = head(s, campaign)
@@ -483,7 +481,7 @@ class OptimizationPlanner:
         run = s.get_one(Run, agent_session.run_id)
         if run.idea.harness is not None or run.harness in rotation:
             return True
-        harness = free_harness(rotation, rotate(s, agent_session, rotation), full)
+        harness = choose_harness(cfg, agent_session.kind, full, earlier(s, agent_session))
         if harness is None:
             return False
         emit(s, RunRerouted(from_=run.harness, to=harness), TargetRef(TargetKind.RUN, run.id), System.DAEMON)
