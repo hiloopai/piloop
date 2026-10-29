@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from piloop.plugins.harness.contract import fill
+from piloop import deprecated
 from piloop.plugins.runtime.contract import (
     MESSAGES_ENV,
     QUEUE,
@@ -21,9 +21,9 @@ from piloop.plugins.runtime.contract import (
     NotSteerable,
     RuntimeConfig,
     put,
-    take,
 )
 from piloop.plugins.runtime.kit.tags import kill_tagged
+from piloop.plugins.runtime.kit.turns import SUPERVISOR_ARGV, Turns
 from piloop.proc import Leader, Started, child_env, kill_group, running, started
 
 STDOUT = 'agent_session.stdout'
@@ -32,13 +32,11 @@ POLL_SECONDS = 0.1
 SESSION_ID_SECONDS = 30
 """How long a live process has to print the line that ``session_id_pattern`` matches. After that, the session id is
 unknown."""
-RESUMER = 'agent_session.resumer'
-"""Under the agent's log directory: present while the instance that started the agent waits on it and can resume it.
-``wait`` in any other instance (a re-attach after an in-place restart) removes it, so ``prompt`` refuses from then
-on instead of queueing messages that no turn would take."""
+TURNS = 'turns'
+"""The handle's key of an agent that a supervisor runs (``kit.turns``), with the version of its protocol: 1."""
 CURRENT = 'agent_session.current'
-"""Under the agent's log directory: the pid and start time of the process of the agent's latest turn, once a resumed
-turn replaced the first process. Every instance reads it, so ``kill`` and ``status`` reach the agent's live process."""
+"""Under the log directory of an agent that piloop 0.4 started: the pid and start time of its latest turn, once a
+resumed turn replaced its first process."""
 
 
 class Subprocess(RuntimeConfig):
@@ -51,15 +49,15 @@ class Subprocess(RuntimeConfig):
 
 
 class SubprocessRuntime:
-    """Each agent as a background process without a terminal, one process per turn of the agent.
+    """Each agent as a background process without a terminal, the leader of its own process group.
 
     The first prompt is in ``spec.args``.
 
     A message (``prompt``) waits in a queue. A hook of the harness can take it during the turn (``MESSAGES_ENV``).
-    Otherwise, when the process exits, ``wait`` starts the harness again with ``spec.resume_args``, which continue the
-    same session with the queued messages as the prompt. Only the instance that started the agent can resume it, because the
-    environment, secrets included, is never written down: after an in-place restart, a re-attached agent takes no
-    more messages (``prompt`` refuses them) and its queue is left as it is.
+    Otherwise the next turn takes it: an agent whose harness has ``spec.resume_args`` runs under a supervisor
+    (``kit.turns``), which starts the harness again when a turn ends with messages queued, to continue the same session
+    with them as the prompt. The supervisor is the agent's process and holds its environment, which is never written
+    down, so any instance can queue a message for it: also one that re-attached to it after ``piloop restart``.
 
     This instance keeps the processes it started, so it knows their exit codes. A handle loaded from the database in
     another process can still be observed and killed by its pid and start time, but has no exit code.
@@ -69,21 +67,36 @@ class SubprocessRuntime:
         """``name``: the runtime's, which its handles carry."""
         self.name = name
         self._procs: dict[int, subprocess.Popen[bytes]] = {}
-        """The process of each agent's latest turn, by the pid of its first process (the handle's)."""
-        self._specs: dict[int, AgentSpec] = {}
-        """The spec of each agent this instance started with resume arguments, by the handle's pid."""
+        """The process of each agent this instance started, by its pid (the handle's)."""
 
     def start(self, spec: AgentSpec) -> Handle:
-        """Start the process in its own session, with stdout and stderr written under ``spec.log_dir``.
+        """Start the agent in its own session, with stdout and stderr written under ``spec.log_dir``.
 
-        Its environment has ``TAG_ENV``, which every process it starts inherits, so ``kill`` finds them all.
+        Its environment has ``TAG_ENV``, which every process it starts inherits, so ``kill`` finds them all. An agent
+        whose harness has resume arguments starts as its supervisor, which gets its ``Turns`` on stdin.
         """
         spec.log_dir.mkdir(parents=True, exist_ok=True)
         token = uuid4().hex
-        proc = _spawn(spec, self._command(spec, spec.args, token), 'w')
+        command = self._command(spec, token)
+        turns = None
+        if spec.resume_args:
+            turns = Turns(
+                prefix=command.argv,
+                args=spec.args,
+                resume_args=spec.resume_args,
+                session_id_pattern=spec.session_id_pattern,
+                stdout=spec.log_dir / STDOUT,
+                queue=spec.log_dir / QUEUE,
+            )
+            command = Command(list(SUPERVISOR_ARGV), command.env)
+        else:
+            command = Command([*command.argv, *spec.args], command.env)
+        proc = _spawn(spec, command, turns is not None)
         try:
-            if spec.resume_args:
-                (spec.log_dir / RESUMER).touch()
+            if turns is not None:
+                assert proc.stdin is not None  # a pipe
+                with proc.stdin:
+                    proc.stdin.write(turns.model_dump_json().encode())
             handle = Handle(
                 self.name,
                 {
@@ -96,6 +109,7 @@ class SubprocessRuntime:
                     'log_dir': str(spec.log_dir),
                     'session_id_pattern': spec.session_id_pattern,
                     'token': token,
+                    **({TURNS: 1} if turns is not None else {}),
                 },
             )
         except BaseException:
@@ -104,29 +118,21 @@ class SubprocessRuntime:
             proc.wait()
             raise
         self._procs[proc.pid] = proc
-        if spec.resume_args:
-            self._specs[proc.pid] = spec
         return handle
 
     def wait(self, handle: Handle, deadline: Deadline) -> AgentExit:
-        """Poll until the agent is gone, resuming it while messages wait for it. At the deadline, kill its process group.
+        """Poll until the agent is gone: its last turn ended, and no message waits for another.
 
-        A turn that ends with messages in the queue, exit status 0 and a known session starts the next turn
-        (``_resume``). All turns share the deadline.
+        At the deadline, kill its process group: all its turns share the deadline.
         """
         started = time.monotonic()
-        if _pid(handle) not in self._specs:  # a re-attach: nothing here can resume the agent
-            (_log_dir(handle) / RESUMER).unlink(missing_ok=True)
-        while True:
-            while self._alive(handle):
-                if deadline.passed():
-                    self.kill(handle)
-                    seconds = time.monotonic() - started
-                    error = f'agent timeout after {deadline.seconds():g}s'
-                    return AgentExit(ExitStatus.TIMED_OUT, seconds, None, error)
-                time.sleep(POLL_SECONDS)
-            if not self._resume(handle):
-                break
+        while self._alive(handle):
+            if deadline.passed():
+                self.kill(handle)
+                seconds = time.monotonic() - started
+                error = f'agent timeout after {deadline.seconds():g}s'
+                return AgentExit(ExitStatus.TIMED_OUT, seconds, None, error)
+            time.sleep(POLL_SECONDS)
         rc = self._exit_code(handle)
         return AgentExit(
             ExitStatus.EXITED, time.monotonic() - started, rc, None if rc in (0, None) else f'agent exit {rc}'
@@ -155,56 +161,32 @@ class SubprocessRuntime:
     def prompt(self, handle: Handle, text: str) -> None:
         """Keeps the message in a queue, which a hook of the harness can take in the turn, or else the next turn takes.
 
-        When the turn ends with messages queued, piloop runs the harness again with ``[plugins.harness.<name>] resume``, with the queued messages as the prompt. A
-        harness without ``resume`` takes no message. Neither does an agent that the daemon re-attached to after
-        ``piloop restart``.
+        When the turn ends with messages queued, piloop runs the harness again with
+        ``[plugins.harness.<name>] resume``, with the queued messages as the prompt. A harness without ``resume`` takes
+        no message.
 
         Note:
             The queue is ``QUEUE``: the process of this turn has no input channel. Raise ``NotSteerable`` when nothing
-            would take the message: the harness cannot continue its session, the daemon that could resume it was
-            restarted (``RESUMER``), or the agent has ended. The append holds the queue's lock, so a turn that starts
+            would take the message: no supervisor runs the agent (its harness cannot continue its session, or an older
+            piloop started it), or the agent has ended. The append holds the queue's lock, so a turn that starts
             meanwhile takes the message or leaves it for the next one.
         """
-        log_dir = handle.data.get('log_dir')  # a handle that names none has no queue either
-        if log_dir is None or not (Path(str(log_dir)) / RESUMER).is_file():
+        if TURNS not in handle.data:
             raise NotSteerable(
                 f'subprocess agent pid {_pid(handle)} cannot take a message: its harness has no resume arguments, or'
-                ' the daemon that started it was restarted'
+                ' an older piloop started it'
             )
         if not self._alive(handle):
             raise NotSteerable(f'subprocess agent pid {_pid(handle)} has ended')
         put(_log_dir(handle), text)
 
-    def _resume(self, handle: Handle) -> bool:
-        """Start the agent's next turn with the queued messages. False when there is none to start.
+    def _command(self, spec: AgentSpec, token: str) -> Command:
+        """The command of each turn before the harness's arguments, and its environment.
 
-        There is none when the queue is empty, the turn failed (its exit status is not 0), this instance did not
-        start the agent, or its session is unknown. The messages then stay queued. The new process appends to the
-        agent's stdout and stderr, and ``CURRENT`` names it.
+        The command is the harness's executable, and the environment has the agent's tag and queue.
         """
-        log_dir = _log_dir(handle)
-        spec = self._specs.get(_pid(handle))
-        if spec is None or self._exit_code(handle) != 0:
-            return False
-        session = self.session_id(handle) or ''
-        if not session and any('{session_id}' in a for a in spec.resume_args):
-            return False
-        if not (messages := take(log_dir / QUEUE)):
-            return False
-        prompt = '\n'.join(messages)
-        args = [fill(a, prompt=prompt, session_id=session) for a in spec.resume_args]
-        proc = _spawn(spec, self._command(spec, args, str(handle.data['token'])), 'a')
-        self._procs[_pid(handle)] = proc
-        # replaced in one step: another instance may read it at any moment (status, kill, prompt)
-        current = log_dir / f'{CURRENT}.tmp'
-        current.write_text(json.dumps({'pid': proc.pid, 'start_time': started(proc.pid)}))
-        current.replace(log_dir / CURRENT)
-        return True
-
-    def _command(self, spec: AgentSpec, args: list[str], token: str) -> Command:
-        """The argv and the environment of one turn: the harness itself, with the agent's tag and queue."""
         env = child_env() | spec.env | {TAG_ENV: token, MESSAGES_ENV: str(spec.log_dir / QUEUE)}
-        return Command([spec.executable, *args], env)
+        return Command([spec.executable], env)
 
     def read(self, handle: Handle, lines: int = 80) -> str:
         """Return the last ``lines`` lines of the captured stdout."""
@@ -228,7 +210,7 @@ class SubprocessRuntime:
         return running(self._leader(handle))
 
     def _leader(self, handle: Handle) -> Leader:
-        """The agent's latest process: its ``Popen`` when this instance started it."""
+        """The agent's process: its ``Popen`` when this instance started it."""
         proc = self._procs.get(_pid(handle))
         return proc if proc is not None else Started(*_current(handle))
 
@@ -242,9 +224,14 @@ def _pid(handle: Handle) -> int:
 
 
 def _current(handle: Handle) -> tuple[int, float]:
-    """The pid and start time of the agent's latest process: ``CURRENT`` once a turn was resumed, else the handle's."""
+    """The pid and start time of the agent's process: the handle's, or ``CURRENT`` of a resumed agent of piloop 0.4."""
     path = _log_dir(handle) / CURRENT
-    data = json.loads(path.read_text()) if path.is_file() else handle.data
+    data = handle.data
+    if path.is_file():
+        deprecated.until(
+            '0.6.0', 'an agent of piloop 0.4 names its resumed turn in CURRENT: delete CURRENT and this branch'
+        )
+        data = json.loads(path.read_text())
     return int(str(data['pid'])), float(str(data['start_time']))
 
 
@@ -256,15 +243,15 @@ class Command:
     env: dict[str, str]
 
 
-def _spawn(spec: AgentSpec, command: Command, mode: str) -> subprocess.Popen[bytes]:
-    """Start one turn of the agent in a session of its own, writing (``w``) or appending (``a``) its output files."""
-    with (spec.log_dir / STDOUT).open(mode) as out, (spec.log_dir / STDERR).open(mode) as err:
+def _spawn(spec: AgentSpec, command: Command, supervised: bool) -> subprocess.Popen[bytes]:
+    """Start the agent in a session of its own, writing its output files. A supervisor gets a pipe on stdin."""
+    with (spec.log_dir / STDOUT).open('w') as out, (spec.log_dir / STDERR).open('w') as err:
         return subprocess.Popen(
             command.argv,
             cwd=spec.cwd,
             stdout=out,
             stderr=err,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE if supervised else subprocess.DEVNULL,
             env=command.env,
             start_new_session=True,
         )

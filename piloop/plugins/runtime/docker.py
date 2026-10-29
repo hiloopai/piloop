@@ -111,8 +111,11 @@ class DockerRuntime(SubprocessRuntime):
         super().__init__(name)
         self.config = config
 
-    def _command(self, spec: AgentSpec, args: list[str], token: str) -> Command:
-        """``docker run`` of the harness, with the agent's variables by name: their values stay off the argv."""
+    def _command(self, spec: AgentSpec, token: str) -> Command:
+        """``docker run`` of the harness, with the agent's variables by name: their values stay off the argv.
+
+        Every turn runs it, with the harness's arguments after it, in a container of the same name.
+        """
         proxy = egress(self.config)
         proxy.allow(spec.reaches)
         own = own_files(token)
@@ -148,7 +151,6 @@ class DockerRuntime(SubprocessRuntime):
             *itertools.chain.from_iterable(('--env', k) for k in inside),
             self.config.image,
             spec.executable,
-            *args,
         ]
         return Command(argv, child_env() | inside)
 

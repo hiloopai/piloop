@@ -60,7 +60,7 @@ from piloop.plugins.executor.kit.capacity import HostSample
 from piloop.plugins.executor.kit.leases import SERVE, Answer, LeaseQueued, Leases, LeaseWorkerJoined, read_job
 from piloop.plugins.executor.kit.sessions import SessionFile
 from piloop.plugins.executor.workers import Workers
-from piloop.plugins.harness.contract import MCP, Usage, each_provider
+from piloop.plugins.harness.contract import MCP, PROMPT, SESSION_ID, Usage, UserConfig, each_provider
 from piloop.plugins.harness.kit.jsonl import dash_separators_wrapped
 from piloop.plugins.role.contract import FIRST_MESSAGE
 from piloop.plugins.runtime.contract import AgentExit, AgentSpec, ExitStatus
@@ -1036,6 +1036,19 @@ def test_codex_trusts_the_agents_worktree_and_gives_its_tool_shells_the_agents_e
             'shell_environment_policy.ignore_default_excludes': True,
             'shell_environment_policy.include_only': [],
         }, 'PILOOP_PROCESS_TAG and PILOOP_AGENT_TOKEN reach every command; the MCP renderer excludes the keys'
+
+
+@pytest.mark.parametrize('user_config', list(UserConfig))
+def test_each_harness_resumes_with_the_model_effort_and_config_of_its_first_turn(user_config: UserConfig) -> None:
+    """A resumed turn that changed the model, the effort or a config flag would miss the prompt cache of the session:
+    the two argvs differ only in how they name the session and in the prompt."""
+    for name, default in each_provider().items():
+        harness = type(default).model_validate({'user_config': user_config})
+        session = {'resume', '--resume', '--session-id', SESSION_ID, PROMPT}
+        first, resumed = (
+            [a for a in harness.expanded(argv) if a not in session] for argv in (harness.headless, harness.resume)
+        )
+        assert first == resumed, name
 
 
 def test_a_brief_past_the_limit_of_one_argument_reaches_the_agent_as_a_file(
