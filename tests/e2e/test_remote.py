@@ -435,7 +435,9 @@ def test_implementers_run_on_the_servers_workers(server: Server) -> None:
         queued = server.seen(lambda e, i=idea: e.kind == 'run.queued' and payload(e)['idea'] == i, f'run of {key}', 300)
         run = queued.subject.id
         identified = server.seen(
-            lambda e, r=run: e.kind == 'agent_session.identified' and payload(e)['run'] == r, f'run#{run} agent', 600
+            lambda e, r=run: e.kind == 'agent_session.identified' and payload(e)['subject'] == f'run#{r}',
+            f'run#{run} agent',
+            600,
         )
         agent = identified.subject.id
         running = server.seen(kind_on('agent_session.running', 'agent_session', agent), f'agent#{agent} running', 900)
