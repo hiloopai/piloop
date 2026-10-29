@@ -19,11 +19,9 @@ from pydantic import (
     PlainSerializer,
     SecretStr,
     Tag,
-    model_validator,
 )
 from pydantic_core import PydanticCustomError
 
-from piloop import deprecated
 from piloop.actor import CALLER_NAME
 from piloop.ids import (
     LISTED,
@@ -340,16 +338,6 @@ type Credential = Annotated[
 """What the host of a repository asks for: exactly one of ``{"secret": "<home secret>"}`` and ``{"token": "..."}``."""
 
 
-@deprecated.until('0.4.0', 'the secret of a clone is its credential: delete secret_is_credential and its validator')
-def secret_is_credential(data: object) -> object:
-    """Return ``data``, a body, with its ``secret`` as its ``credential``. A body that has both keeps both: it is refused."""
-    match data:
-        case {'secret': secret, **rest} if 'credential' not in rest:
-            return {**rest, 'credential': {'secret': secret}}
-        case _:
-            return data
-
-
 class Remote(Params):
     """A repository to clone, and the credential that its host asks for."""
 
@@ -358,11 +346,6 @@ class Remote(Params):
     url: str
     credential: Credential | None = None
     """What the host of ``url`` asks for: a home secret, or a token for this clone alone. None: nothing."""
-
-    @model_validator(mode='before')
-    @classmethod
-    def _secret(cls, data: object) -> object:
-        return secret_is_credential(data)
 
 
 class SyncBody(Params):

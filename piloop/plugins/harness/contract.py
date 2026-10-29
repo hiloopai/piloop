@@ -310,13 +310,6 @@ class Harness(Parameters):
             return f'its headless argv has no {MCP} element'
         return renderer.refuses(self.headless)
 
-    @model_validator(mode='before')
-    @classmethod
-    def _removed(cls, data: object) -> object:
-        if isinstance(data, Mapping) and (removed := deprecated.removed_harness_keys(data)) is not None:
-            raise ValueError(removed)
-        return data
-
     @model_validator(mode='after')
     def _check(self) -> Self:
         if self.resume and not all(any(p in a for a in self.resume) for p in (SESSION_ID, PROMPT)):

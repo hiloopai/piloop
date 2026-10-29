@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Generator, Iterator
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 
@@ -24,14 +24,14 @@ import pytest
 from git import Repo
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pytest_mock import MockerFixture
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 
 from piloop.daemon.scheduler import Scheduler
 from piloop.daemon.serve import SERVE_ARGV
 from piloop.db.events import has, in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event, Lease, LeaseState, utcnow
 from piloop.db.session import Database
-from piloop.ids import Revision, TargetKind
+from piloop.ids import TargetKind
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -42,7 +42,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import attempts
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.contract import CAS
-from piloop.plugins.executor.contract import AgentFinished, AgentReport, EvaluationReport, Source
+from piloop.plugins.executor.contract import AgentFinished, AgentReport, EvaluationReport
 from piloop.plugins.executor.kit.leases import NOT_TAKEN, SERVE, Leases, StaleReport, Timing
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.runtime.kit import tags
@@ -57,7 +57,6 @@ from tests.conftest import (
     baseline,
     factory,
     register,
-    run_all,
     serving,
     timed,
     wait_until,
@@ -66,7 +65,7 @@ from tests.conftest import (
 )
 from tests.daemon.test_evaluation_queue import held_evaluate
 from tests.daemon.test_run_controller import execute, make_run, reload_campaign, run_row, set_config
-from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_watchdog
+from tests.daemon.test_scheduler import make_scheduler
 from tests.daemon.test_serve import env_for
 
 FAST = Timing(renew=0.1, grace=0.5, toleration=2.0)
@@ -448,58 +447,6 @@ def test_a_real_daemon_killed_during_a_run_is_followed_by_one_that_finishes_it_o
         db.close()
 
 
-@pytest.mark.parametrize('agent', ['run', 'sweep'])
-def test_an_agent_that_a_daemon_before_leases_started_is_adopted_and_its_work_scored(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, agent: str, mocker: MockerFixture
-) -> None:
-    """An upgrade hands over to a daemon with leases: each running agent without one gets one, keeps running, and its
-    run is scored. A run's implementer and a sweep."""
-    hold = tmp_path / 'hold'
-    hold.touch()
-    write_toml(Path(campaign.path), COMMIT_THEN_HOLD.format(hold=hold).replace('../agent.pid', f'{tmp_path}/agent.pid'))
-    reload_campaign(db, campaign)
-    first = make_scheduler(db, runtime, tmp_path)
-    if agent == 'run':
-        add_ideas(db, campaign, 'one line')
-    else:
-        request_watchdog(db, campaign)
-    assert run_all(first) == [1]
-    wait_until((tmp_path / 'agent.pid').exists)
-    first.hand_over(timeout=5)
-    with db.session() as s:  # what a daemon before leases leaves
-        s.execute(delete(Lease))
-        s.commit()
-    second = next_daemon(db, tmp_path)
-    sources = second._controller.sources
-    snapshot = sources.source
-    blocked: list[str] = []
-
-    def source(campaign: Campaign, revision: Revision) -> Source:
-        """Store the links, as the adoption does, while a command writes: a write lock held here would block it."""
-        with closing(sqlite3.connect(db.engine.url.database or '', timeout=0)) as con:
-            try:
-                con.execute("UPDATE campaigns SET updated_by = 'human'")
-                con.commit()
-            except sqlite3.OperationalError as e:
-                blocked.append(str(e))
-        return snapshot(campaign, revision)
-
-    mocker.patch.object(sources, 'source', source)
-    second.reap()
-    assert blocked == [], 'the reap stores the linked inputs of an adopted agent without holding the write lock'
-    with db.session() as s:
-        [adopted] = s.scalars(select(Lease)).all()
-        assert (adopted.agent_session_id, adopted.state, adopted.worker) == (1, LeaseState.RUNNING, SERVE)
-    hold.unlink()
-    second.wait(SETTLE)
-    with db.session() as s:
-        assert s.get_one(AgentSession, 1).state is AgentSessionState.EXITED
-        assert s.get_one(Lease, adopted.id).state is LeaseState.REPORTED
-        if agent == 'run':
-            [candidate] = s.scalars(select(Candidate).where(Candidate.run_id == 1)).all()
-            assert candidate.summary == 'a line', 'its work is scored'
-
-
 def test_a_stop_ends_an_agent_lease_that_no_worker_took_yet(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -513,7 +460,7 @@ def test_a_stop_ends_an_agent_lease_that_no_worker_took_yet(
     assert run_row(db, run_id).status is RunStatus.RUNNING, 'the stop writes the run, not its thread'
 
 
-def test_a_running_agent_without_a_lease_or_a_worktree_is_not_adopted_and_fails_as_stale(
+def test_a_running_agent_without_a_lease_is_not_adopted_and_fails_as_stale(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     run_id = make_run(db, campaign)
@@ -525,7 +472,7 @@ def test_a_running_agent_without_a_lease_or_a_worktree_is_not_adopted_and_fails_
         s.commit()
     make_scheduler(db, runtime, tmp_path).reap()
     with db.session() as s:
-        assert s.scalars(select(Lease)).all() == [], 'its worktree is gone: nothing to adopt'
+        assert s.scalars(select(Lease)).all() == [], 'no lease: nothing to adopt'
         assert (s.get_one(AgentSession, 1).state, s.get_one(Run, run_id).end) == (
             AgentSessionState.KILLED,
             RunEnd.STALE,

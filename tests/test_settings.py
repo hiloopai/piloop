@@ -88,36 +88,6 @@ def test_an_env_placeholder_is_the_variable_or_its_default_in_the_home(monkeypat
     assert env_names(glob + ' {env:A_DIR:other}') == ['A_DIR', 'UNSET', 'EMPTY']
 
 
-def test_the_storage_backend_of_config_toml_is_the_remote_of_a_cached_cas(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """0.2.0 wrote the remote as ``[storage.backend]``."""
-    monkeypatch.setenv('PILOOP_HOME', str(tmp_path))
-    (tmp_path / 'config.toml').write_text(
-        '[storage]\nevict_after_days = 3\nmin_free_gb = 9\n\n[storage.backend]\nkind = "s3"\nurl = "s3://b/p"\n'
-    )
-    with pytest.warns(PiloopDeprecationWarning) as w:
-        given = Settings()
-    assert str(w[-1].message).startswith('[storage.backend] is deprecated; write [plugins.cas] provider = "cached"')
-    assert given.storage == StorageSettings(min_free_gb=9)
-    assert given.plugins['cas'] == {
-        'provider': 'cached',
-        'remote': {'provider': 's3', 'url': 's3://b/p'},
-        'evict_after_days': 3,
-    }
-    (tmp_path / 'config.toml').write_text(
-        '[storage]\nlocal_max_gb = 1\n[storage.backend]\nkind = "s3"\nurl = "s3://b/p"\n'
-        '[plugins.cas]\nprovider = "disk"\n'
-    )
-    with pytest.warns(PiloopDeprecationWarning) as w:
-        given = Settings()
-    assert given.plugins['cas'] == {'provider': 'disk'}, 'a [plugins.cas] of the file wins'
-    assert w[0].lineno == 3, 'at the table header'
-    (tmp_path / 'config.toml').write_text('plugins = 3\n[storage.backend]\nkind = "s3"\n')
-    with pytest.warns(PiloopDeprecationWarning), pytest.raises(ValidationError, match='plugins'):
-        Settings()
-
-
 def test_a_runtime_value_that_is_no_table_of_tables_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('PILOOP_HOME', str(tmp_path))
     (tmp_path / 'config.toml').write_text('[plugins]\nruntime = 3\n')
@@ -140,13 +110,6 @@ def test_the_actor_is_read_from_its_signature(tmp_path: Path, monkeypatch: pytes
     assert Settings(home=tmp_path).actor == System.HUMAN
 
 
-def test_tick_seconds_of_config_toml_is_dropped_with_a_warning(tmp_path: Path) -> None:
-    """The daemon wakes on events now: a ``tick_seconds`` of 0.2 does nothing, and a home that sets it still loads."""
-    (tmp_path / 'config.toml').write_text('tick_seconds = 2\n')
-    with pytest.warns(PiloopDeprecationWarning, match=r'tick_seconds is deprecated and does nothing; delete it'):
-        Settings(home=tmp_path)
-
-
 def test_name_claim_of_the_proxy_network_is_a_list_of_one_name_claims(tmp_path: Path) -> None:
     """0.3 named a proxy's caller by one claim, ``name_claim``."""
     network = '[plugins.network]\nprovider = "proxy"\nname_claim = "principal"\n'
@@ -160,47 +123,6 @@ def test_name_claim_of_the_proxy_network_is_a_list_of_one_name_claims(tmp_path: 
         assert Settings(home=tmp_path).plugins['network']['name_claims'] == ['user'], 'name_claims wins'
     (tmp_path / 'config.toml').write_text(network.replace('proxy', 'https'))
     assert Settings(home=tmp_path).plugins['network']['name_claim'] == 'principal', 'only the proxy network'
-
-
-def test_max_evaluations_of_config_toml_or_the_environment_is_the_evaluations_of_the_executor(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """0.2.0 had ``max_evaluations`` (``PILOOP_MAX_EVALUATIONS``), the slots that ``workers`` now takes."""
-    monkeypatch.delenv('PILOOP_MAX_EVALUATIONS', raising=False)
-    (tmp_path / 'config.toml').write_text('max_evaluations = 3\n')
-    with pytest.warns(
-        PiloopDeprecationWarning,
-        match=r'max_evaluations is deprecated; write evaluations in \[plugins.executor.pools.serve\];'
-        r' removed in piloop 0\.4\.0',
-    ):
-        settings = Settings(home=tmp_path)
-    assert settings.plugins['executor'] == {'provider': 'workers', 'pools': {'serve': {'evaluations': 3}}}
-    (tmp_path / 'config.toml').write_text('max_evaluations = 3\n\n[plugins.executor.pools.serve]\nevaluations = 4\n')
-    with pytest.warns(PiloopDeprecationWarning):
-        settings = Settings(home=tmp_path)
-    assert settings.plugins['executor']['pools'] == {'serve': {'evaluations': 4}}
-    (tmp_path / 'config.toml').unlink()
-    monkeypatch.setenv('PILOOP_MAX_EVALUATIONS', '5')
-    with pytest.warns(
-        PiloopDeprecationWarning, match=r'PILOOP_MAX_EVALUATIONS is deprecated.*removed in piloop 0\.4\.0'
-    ):
-        settings = Settings(home=tmp_path)
-    assert settings.plugins['executor']['pools'] == {'serve': {'evaluations': '5'}}
-
-
-def test_max_evaluations_changes_nothing_for_an_executor_without_slots(tmp_path: Path) -> None:
-    (tmp_path / 'config.toml').write_text('max_evaluations = 3\n\n[plugins.executor]\nprovider = "inline"\n')
-    with pytest.warns(PiloopDeprecationWarning, match='max_evaluations is deprecated'):
-        settings = Settings(home=tmp_path)
-    assert settings.plugins['executor'] == {'provider': 'inline'}
-    (tmp_path / 'config.toml').write_text('max_evaluations = 3\nplugins = 1\n')
-    with pytest.raises(ValueError), pytest.warns(PiloopDeprecationWarning):
-        Settings(home=tmp_path)  # not a table: the validation refuses it
-    (tmp_path / 'config.toml').write_text(
-        'max_evaluations = 3\n\n[plugins.executor]\nprovider = "workers"\npools = 1\n'
-    )
-    with pytest.warns(PiloopDeprecationWarning):
-        assert Settings(home=tmp_path).plugins['executor']['pools'] == 1, 'the executor refuses it when it starts'
 
 
 def test_slow_write_is_one_ms_read_from_config_toml_and_the_environment_wins(

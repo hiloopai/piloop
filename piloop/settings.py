@@ -313,8 +313,7 @@ class Settings(BaseSettings):
         """Arguments, then the environment, then ``config.toml`` under the home the arguments or environment name."""
         given = init_settings.init_kwargs.get('home') if isinstance(init_settings, InitSettingsSource) else None
         home = Path(given) if given else home_of_env()
-        file = deprecated.max_evaluations_env(os.environ, config_file(home))
-        return init_settings, env_settings, InitSettingsSource(settings_cls, file)
+        return init_settings, env_settings, InitSettingsSource(settings_cls, config_file(home))
 
     @model_validator(mode='after')
     def _not_a_real_home_under_test(self) -> Self:

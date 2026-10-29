@@ -1,7 +1,7 @@
 """``archives.manifest`` holds a CID: a 52-character base32 BLAKE3 digest becomes the text of its raw CID.
 
-The digest is the same, so the store finds the same bytes. The manifest it names is still JSON: ``piloop migrate``
-rewrites each as a DASL value once the schema is at head (``piloop.campaign.archive.migrate_manifests``).
+The digest is the same, so the store finds the same bytes. The manifest it names is still JSON: piloop 0.3 rewrote
+each as a DASL value once the schema was at head, and a later piloop refuses a home where one is left.
 
 The downgrade turns each raw CID back into its digest. It refuses a DRISL CID, a manifest already rewritten: restore
 the database backup that the upgrade wrote, whose JSON manifests stay in the store.

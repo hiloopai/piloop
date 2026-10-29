@@ -63,26 +63,6 @@ def test_load_precedence(campaign_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert load_campaign_config(campaign_path, evaluate_timeout=None).evaluate_timeout == 9
 
 
-def test_a_piloop_toml_on_the_removed_herdr_runtime_says_where_to_read_why(campaign_path: Path) -> None:
-    gone = re.escape(
-        'the herdr runtime is removed in piloop 0.3.0: write runtime = "subprocess", or delete the key'
-        ' (https://piloop.autoresearch.inc/guides/upgrading#the-herdr-runtime)'
-    )
-    with pytest.raises(ConfigError, match=f"  plugins.runtime.use = 'herdr': {gone}"):
-        load_campaign_config(campaign_path, plugins={'runtime': {'use': 'herdr'}})
-    with pytest.raises(ConfigError, match=f"  plugins.role.research.runtime = 'herdr': {gone}"):
-        load_campaign_config(campaign_path, plugins={'role': {'research': {'runtime': 'herdr'}}})
-
-
-def test_a_piloop_toml_with_the_removed_entire_agent_says_where_to_read_why(campaign_path: Path) -> None:
-    gone = re.escape(
-        'entire_agent: removed in piloop 0.3.0; delete the key (https://piloop.autoresearch.inc/guides/upgrading#entire)'
-    )
-    harness = {'executable': 'x', 'headless': ['{prompt}'], 'entire_agent': 'pi'}
-    with pytest.raises(ConfigError, match=f'  plugins.harness.x: .*{gone}'):
-        load_campaign_config(campaign_path, plugins={'harness': {'x': harness}})
-
-
 def test_a_table_of_a_built_in_harness_changes_only_its_keys_and_env_takes_values_and_secrets(
     campaign_path: Path,
 ) -> None:
@@ -103,45 +83,6 @@ def test_a_table_of_a_built_in_harness_changes_only_its_keys_and_env_takes_value
         load_campaign_config(
             campaign_path, plugins={'harness': {'claude': {'env': {'ANTHROPIC_API_KEY': {'value': 'sk-1'}}}}}
         )
-
-
-def test_a_harness_key_that_only_herdr_read_says_where_to_read_why(campaign_path: Path) -> None:
-    with pytest.raises(
-        ConfigError,
-        match=re.escape(
-            '  plugins.harness.script: interactive, queue_key: removed in piloop 0.3.0; delete the key'
-            ' (https://piloop.autoresearch.inc/guides/upgrading#the-herdr-runtime); entire_agent: removed in piloop'
-            ' 0.3.0; delete the key (https://piloop.autoresearch.inc/guides/upgrading#entire)'
-        ),
-    ):
-        load_campaign_config(
-            campaign_path,
-            plugins={
-                'harness': {
-                    'script': {
-                        'executable': 'x',
-                        'headless': ['{prompt}'],
-                        'entire_agent': 'pi',
-                        'interactive': ['x'],
-                        'queue_key': 'Tab',
-                    }
-                }
-            },
-        )
-
-
-def test_a_piloop_project_variable_fails_with_its_new_name(
-    campaign_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv('PILOOP_PROJECT_EVALUATE_TIMEOUT', '9')
-    with pytest.raises(
-        ConfigError,
-        match=re.escape(
-            'is not loaded: PILOOP_PROJECT_EVALUATE_TIMEOUT is PILOOP_CAMPAIGN_EVALUATE_TIMEOUT: PILOOP_PROJECT_<KEY> is'
-            ' removed in piloop 0.3.0; rename or unset it (https://piloop.autoresearch.inc/guides/upgrading#removed-keys)'
-        ),
-    ):
-        load_campaign_config(campaign_path)
 
 
 def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
@@ -610,13 +551,6 @@ def test_a_table_with_a_new_name_defines_a_role_that_needs_a_prompt_file_and_tri
     )
     assert cfg.roles.sweeping()[RoleName('reviewer')].max_ideas == 1, 'any sweeping role can fill the backlog'
     assert filler.triggers_of('reviewer') == [LowWaterTrigger(buffer=1)]
-    assert fails({'worker': {'max_concurrent': 2}}, {}) == snapshot(
-        '  plugins.role.worker: [roles.worker] is removed in piloop 0.3.0: rename the table [roles.implementer] (https://piloop.autoresearch.inc/guides/upgrading#removed-keys). Fix: https://piloop.autoresearch.inc/reference/configuration describes the key'
-    ), 'not a new sweeping role named worker'
-    for workdir in ('repo', 'head'):
-        assert fails(reviewer(workdir=workdir)) == snapshot(
-            '  plugins.role.reviewer: workdir is removed in piloop 0.3.0: every agent works in a worktree of its own, never in the campaign checkout. Delete the key (https://piloop.autoresearch.inc/guides/upgrading#workdir). Fix: https://piloop.autoresearch.inc/reference/configuration describes the key'
-        )
     for query, error in {
         'DELETE FROM ideas': 'not authorized',
         'SELECT nope FROM ideas': 'no such column: nope',

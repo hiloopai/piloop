@@ -92,6 +92,7 @@ class Release:
 RELEASES = (
     Release(Version(0, 1, 0), {CORE: MigrationRevision('0001')}),
     Release(Version(0, 2, 0), {CORE: MigrationRevision('0018')}),
+    Release(Version(0, 3, 0), {CORE: MigrationRevision('0053')}),
 )
 """Every minor release, oldest first. The newest is the floor: this piloop migrates each chain of a database from its
 head there or from a newer revision, never from an older one, so a database upgrades one minor release at a time.
@@ -374,23 +375,20 @@ def unmigratable(database: Path) -> SchemaMismatch | None:
     """Return why ``migrate`` would refuse ``database``, read read-only, else None.
 
     Another piloop build migrated an installed chain (``foreign``), or core's is older than the floor,
-    the newest of ``RELEASES`` (``SchemaTooOld``). A database that does not exist, or that was never migrated, can be.
+    the newest of ``RELEASES`` (``SchemaTooOld``), or a schema refuses it (``Schema.refuses``). A database that does not exist, or that was never migrated, can be.
     """
-    found, chain = stamps(database), revisions()
-    if (stamp := found.get(CORE)) is None:
+    found = stamps(database)
+    if CORE not in found:
         return None
     for name in schemas():
         if name in found and (refused := foreign(database, name, found[name])) is not None:
             return refused
-    at = MigrationRevision(stamp)
-    position, floor = chain.index, RELEASES[-1]
-    if position(at) < position(HERDR_REMOVED) and (refused := on_herdr(database)) is not None:
-        return refused
+    floor = RELEASES[-1]
     order = {name: [r.revision for r in reversed(list(script.walk_revisions()))] for name, script in scripts().items()}
     known = {name: revision for name, revision in found.items() if name in order}
     reached = [r for r in RELEASES if all(order[n].index(known[n]) >= order[n].index(h) for n, h in _shared(r, known))]
     if floor in reached:
-        return None
+        return _refused(database, found)
     before = [r.version.line for r in reached]
     stops = [r.version.line for r in RELEASES if r not in reached]
     origin = f'piloop {before[-1]}' if before else f'a piloop before {stops[0]}'
@@ -405,50 +403,26 @@ def unmigratable(database: Path) -> SchemaMismatch | None:
     )
 
 
+def _refused(database: Path, found: Stamps) -> SchemaMismatch | None:
+    """Why a schema whose chain is behind its head does not migrate ``database`` yet (``Schema.refuses``), or None."""
+    newest = heads()
+    asked = [
+        refuses
+        for name, schema in schemas().items()
+        if (refuses := schema.refuses) is not None and found.get(name) != newest.get(name)
+    ]
+    if not asked:
+        return None
+    with closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as con:
+        for refuses in asked:
+            if (why := refuses(con)) is not None:
+                return SchemaMismatch(f'{database}: {why.found}', why.fix)
+    return None
+
+
 def _shared(release: Release, found: Stamps) -> list[tuple[str, str]]:
     """Each chain of ``release`` that ``found`` has, with its head at ``release``."""
     return [(name, head) for name, head in release.heads.items() if name in found]
-
-
-HERDR_REMOVED = MigrationRevision('0034')
-"""The revision that moves the stopped campaigns off the herdr runtime."""
-
-
-@deprecated.until('0.4.0', 'a 0.2 database with work on the herdr runtime: delete on_herdr, HERDR_REMOVED and its call')
-def on_herdr(database: Path) -> SchemaMismatch | None:
-    """Return why ``database`` cannot be migrated yet: an active campaign or a live agent is on the herdr runtime.
-
-    ``HERDR_REMOVED`` moves only the stopped campaigns, which run nothing. The others move with the piloop that runs
-    them, before the upgrade. A database from before ``agent_sessions`` (0.1) is not checked.
-    """
-    with closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as con:
-        try:
-            campaigns = con.execute(
-                "SELECT DISTINCT 'campaign ' || name FROM campaigns"
-                " LEFT JOIN json_each(campaigns.config, '$.roles') AS role ON 1 WHERE status = 'active'"
-                " AND :herdr IN (json_extract(config, '$.runtime'), json_extract(role.value, '$.runtime'))",
-                {'herdr': deprecated.HERDR},
-            ).fetchall()
-            agents = con.execute(
-                "SELECT 'agent_session#' || id FROM agent_sessions"
-                " WHERE runtime = :herdr AND state IN ('starting', 'running', 'ending')",
-                {'herdr': deprecated.HERDR},
-            ).fetchall()
-        except sqlite3.OperationalError:  # a 0.1 schema, with projects and workers
-            return None
-    if not (found := [row[0] for row in (*campaigns, *agents)]):
-        return None
-    return SchemaMismatch(
-        f'{database} has work on the herdr runtime, which piloop 0.3.0 removes: {", ".join(found)}',
-        'with piloop 0.2 (`uv tool install \'piloop==0.2.*\'`), set runtime = "subprocess" in the piloop.toml of each'
-        ' such campaign and run `piloop init <repo>`, let its herdr agents end or `piloop agent cancel` them, then'
-        f' install this piloop again and run `piloop upgrade` ({deprecated.HERDR_UPGRADE})',
-    )
-
-
-def revisions() -> list[MigrationRevision]:
-    """Every revision of core's chain that this piloop knows, oldest first."""
-    return [MigrationRevision(r.revision) for r in reversed(list(ScriptDirectory(str(MIGRATIONS)).walk_revisions()))]
 
 
 def schema_mismatch(database: Path, daemon: int | None, actor: Actor) -> SchemaMismatch | None:

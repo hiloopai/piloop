@@ -2,6 +2,7 @@ import errno
 import os
 import shutil
 import threading
+import time
 from pathlib import Path
 from typing import BinaryIO
 
@@ -289,7 +290,7 @@ def test_a_manifest_is_a_dasl_value_that_links_its_blobs(tmp_path: Path) -> None
     with pytest.raises(ValidationError, match='colour'):
         Manifest.get(cas, junk)
     with pytest.raises(Missing, match='is not in the CAS'):
-        Manifest.get(cas, Cid.of(b'never'))
+        Manifest.get(cas, Cid.from_parts('drisl', 'blake3', Cid.of(b'never').digest))
     with pytest.raises(ValueError, match='names no manifest'):
         Manifest.get(cas, cas.put(b'{"version": 2}'))
 
@@ -369,6 +370,20 @@ def test_materialised_files_keep_their_modification_times(
     for source in (arrays, other):
         copy = tmp_path / 'tree' / source.relative_to(workspace)
         assert copy.stat().st_mtime_ns == source.stat().st_mtime_ns
+
+
+def test_an_entry_stored_before_its_time_was_kept_is_materialised_with_the_time_of_its_copy(
+    tmp_path: Path, workspace: Path
+) -> None:
+    cas = disk(tmp_path)
+    stored = put_tree(cas, workspace, ['idea7'])
+    timeless = Manifest(entries=tuple(e.model_copy(update={'mtime_ns': None}) for e in stored.manifest.entries))
+    before = time.time_ns()
+    materialise(cas, timeless, tmp_path / 'tree')
+    for entry in (e for e in timeless.entries if e.blob is not None):
+        copy = tmp_path / 'tree' / entry.path
+        assert copy.read_bytes() == (workspace / entry.path).read_bytes()
+        assert copy.stat().st_mtime_ns >= before, 'no time to give it: the copy keeps its own'
 
 
 @pytest.mark.usefixtures('no_reflink')

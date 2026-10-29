@@ -1,13 +1,11 @@
 import os
 import re
-import shutil
 import signal
 import subprocess
 import threading
 from pathlib import Path
 
 import pytest
-from covalence import Cid
 from inline_snapshot import snapshot
 from pytest_mock import MockerFixture
 from sqlalchemy import create_engine, func, select
@@ -21,7 +19,6 @@ from piloop.daemon.serve import RESTART_SIGNAL, SERVE_ARGV
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database, migrate
 from piloop.ids import CommentKind, TargetKind, TargetRef
-from piloop.plugins.archive.local.tables import Archive
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
@@ -48,7 +45,6 @@ from tests.conftest import (
     workers_of,
     write_toml,
 )
-from tests.store.test_0_2_0_store import FIXTURE, MANIFEST
 
 
 def test_daemon_end_to_end(
@@ -149,29 +145,6 @@ def test_serve_runs_until_interrupted(tmp_path: Path, mocker: MockerFixture) -> 
     daemon.serve()
     assert loop.called
     assert not (tmp_path / 'home' / 'serve.pid').exists()
-
-
-def test_a_start_stores_the_manifests_of_0_2_again_and_goes_on_when_one_cannot_be_read(
-    tmp_path: Path, mocker: MockerFixture, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The archive whose JSON manifest the store holds gets a DASL one; the next keeps its row, and the start says why."""
-    home = tmp_path / 'home'
-    shutil.copytree(FIXTURE / 'local', home / 'store')
-    daemon = Daemon(Settings(home=home))
-    with daemon.db.session() as s:
-        s.add(Campaign(name='c', path='/c', config=bare_config('c')))
-        s.flush()
-        s.add_all([Archive(campaign_id=1, manifest=MANIFEST), Archive(campaign_id=1, manifest=Cid.of(b'gone'))])
-        s.commit()
-    mocker.patch.object(daemon.scheduler, 'serve', side_effect=KeyboardInterrupt)
-    daemon.serve()
-    db = Database(Settings(home=home).database_url, actor=ACTOR)
-    with db.session() as s:
-        first, second = (row.manifest for row in s.scalars(select(Archive).order_by(Archive.id)))
-    db.close()
-    assert first is not None and first.codec.name == 'dag-cbor' and second == Cid.of(b'gone')
-    [start] = [line for line in console_lines(capsys.readouterr().err) if line.startswith('piloop.start')]
-    assert 'error=ManifestNotMigrated: archive 2' in start
 
 
 def test_serve_reaps_the_children_an_in_place_restart_handed_over_as_each_exits(tmp_path: Path) -> None:

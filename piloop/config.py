@@ -10,7 +10,6 @@
 import hashlib
 import json
 import math
-import os
 import tomllib
 from dataclasses import dataclass
 from datetime import timedelta
@@ -538,8 +537,6 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
         raw = tomllib.loads(toml.read_text())
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f'{toml} is not valid TOML: {e}') from e
-    if (removed := deprecated.removed_env(os.environ)) is not None:
-        raise ConfigError(f'{toml} is not loaded: {removed}')
     old = deprecated.old_instances(raw)
     deprecated.apply(toml, raw)
     defaults = settings.campaign_defaults

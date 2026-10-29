@@ -1182,21 +1182,6 @@ def test_a_validation_refusal_says_where_and_why_and_never_echoes_what_was_sent(
     assert 'input' not in error and sent not in answer.text
 
 
-def test_the_secret_of_a_clone_until_0_4_0_is_its_credential(
-    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path, mocker: MockerFixture
-) -> None:
-    url = bare(campaign_path, tmp_path / 'demo.git')
-    cloned = mocker.spy(Git, 'clone')
-    assert Remote.model_validate({'url': url, 'secret': 'TOKEN'}).credential == SecretCredential(secret='TOKEN')
-    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-        client.set_secret('TOKEN', Located(), SecretBody(value=SecretStr('tok')))
-        transport = httpx.HTTPTransport(uds=str(cfg.socket_file))
-        with httpx.Client(transport=transport, base_url='http://piloop') as raw:
-            assert raw.post('/v1/campaigns', json={'clone': {'url': url, 'secret': 'TOKEN'}}).status_code == 200
-    [(_, _, _, credential)] = [c.args for c in cloned.call_args_list]
-    assert credential.get_secret_value() == 'tok'
-
-
 def test_a_sync_of_a_cloned_campaign_takes_its_repository_s_new_versions_and_reads_its_piloop_toml_again(
     db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path
 ) -> None:

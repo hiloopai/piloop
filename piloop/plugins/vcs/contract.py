@@ -22,7 +22,6 @@ from typing import Protocol
 from covalence import Cid
 from pydantic import BaseModel, ConfigDict, SecretStr
 
-from piloop import deprecated
 from piloop.actor import Agent
 from piloop.ids import Revision
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
@@ -234,11 +233,6 @@ class Repository(Protocol):
 
     def keep(self, revision: Revision, why: Keep) -> None:
         """Keep ``revision`` for ``why``, also after whatever named it is gone."""
-        ...
-
-    @deprecated.until('0.4.0', 'a run that a daemon before 0.3.0 received has no RunReceived: delete Repository.kept')
-    def kept(self, campaign: str, run: RunId) -> list[Version]:
-        """The versions of ``run`` that ``keep`` kept (``RunVersion``), in their order, for a run before 0.3.0."""
         ...
 
     def checkout(self, revision: Revision, path: Path) -> None:

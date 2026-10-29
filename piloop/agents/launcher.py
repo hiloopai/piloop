@@ -14,7 +14,6 @@ from covalence import Cid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from piloop import deprecated
 from piloop.actor import Agent, System
 from piloop.agents.results import (
     AgentSessionStarted,
@@ -30,7 +29,6 @@ from piloop.agents.results import (
     learn,
     session_finished,
 )
-from piloop.agents.roles import harness_of
 from piloop.config import BRIEF_FILE, CampaignConfig
 from piloop.db.events import emit, latest
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, utcnow
@@ -38,7 +36,7 @@ from piloop.db.session import Database, write_transaction
 from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.otel import Span, Tracer
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
-from piloop.plugins.executor.contract import AgentJob, AgentKey, Executor, ExecutorConfig, LeftJob, Resume, Source
+from piloop.plugins.executor.contract import AgentJob, Executor, ExecutorConfig, Resume, Source
 from piloop.plugins.harness.contract import SESSION_ID, cleared_env, fill, of_provider, takes_session_id
 from piloop.plugins.role.contract import Continuity, RoleConfig, SweepRole
 from piloop.plugins.runtime.contract import AgentStart
@@ -263,33 +261,6 @@ class Launcher:
             learn(s, w, resumes.session_id if resumes is not None else session_id)
             s.commit()
             return job
-
-    @deprecated.until(
-        '0.4.0',
-        'an agent that a 0.2 daemon started (before leases): delete Launcher.left, Scheduler._left, LeftJob.job and'
-        ' LeftJob.handle, and a None AgentJob.spec',
-    )
-    def left(self, s: Session, w: AgentSession, artifact: Source, place: str, capture: RunId | None) -> LeftJob:
-        """The ``LeftJob`` of a running agent, with its job as its row has it: no spec, so it is re-attached, never started.
-
-        Only an agent that a daemon before leases started needs it: an executor finds its own jobs again.
-        """
-        cfg = s.get_one(Campaign, w.campaign_id).config
-        definition = harness_of(s, w)
-        assert w.runtime is not None and w.log_dir is not None  # a running row was launched
-        job = AgentJob(
-            agent_session=w.id,
-            runtime=w.runtime,
-            artifact=artifact,
-            place=place,
-            timeout=cfg.role(w.kind).timeout,
-            brief_cid=None,
-            spec=None,
-            harness=None if definition is None else of_provider(definition),
-            session_id=w.session_id,
-            capture=capture,
-        )
-        return LeftJob(AgentKey(w.id), job, dict(w.handle) or None, w.started_at)
 
 
 @dataclass(frozen=True)

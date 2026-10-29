@@ -99,7 +99,7 @@ from tests.conftest import (
 from tests.daemon.test_evaluation_queue import held_evaluate
 from tests.daemon.test_run_controller import execute, make_run, reload_campaign, set_config
 from tests.test_executors import Steerable
-from tests.test_lease import PROBE, Recorder, agent_job, evaluation_job
+from tests.test_lease import BRIEF, PROBE, START, Recorder, agent_job, evaluation_job
 
 HOLD = '#!/bin/sh\nwhile [ -f {hold} ]; do sleep 0.05; done\n'
 
@@ -772,8 +772,8 @@ def test_a_worker_killed_between_the_start_and_its_record_leaves_no_worktree(
         artifact=source,
         place='logs',
         timeout=60,
-        brief_cid=None,
-        spec=None,
+        brief_cid=BRIEF,
+        spec=START,
     )
     git.add_worktree(git.open_repo(repo), cwd, source.revision, {})
     with db.session() as s:

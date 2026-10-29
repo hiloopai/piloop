@@ -22,7 +22,6 @@
 | `Repository.merge(onto: Revision, other: Revision, message: str) -> Version \| Conflicts` | Save the merge of `other` onto `onto` as a version, without a checkout, or return what conflicts. |
 | `Repository.contains(revision: Revision, ancestor: Revision) -> bool` | Whether `revision` has all of `ancestor`: it descends from it, or merging it in changes nothing. |
 | `Repository.keep(revision: Revision, why: Keep) -> None` | Keep `revision` for `why`, also after whatever named it is gone. |
-| `Repository.kept(campaign: str, run: RunId) -> list[Version]` | The versions of `run` that `keep` kept (`RunVersion`), in their order, for a run before 0.3.0. |
 | `Repository.checkout(revision: Revision, path: Path) -> None` | Put the files of `revision` at `path`, where an agent or an evaluator works on them. |
 | `Repository.discard(path: Path) -> None` | Remove what `checkout` put at `path`. Nothing fails if it is gone, or a directory of something else. |
 | `Repository.checkouts(root: Path) -> list[Path]` | The paths under `root` that `checkout` made and `discard` did not remove yet. |

@@ -2,9 +2,8 @@
 
 ``tests/fixtures/configs/<revision>-<n>.json`` is a ``campaigns.config`` as a real home stored it at that revision,
 structure only: its keys, tables and value types, with every path, name, command and text replaced. Together, the
-files of a revision hold every key and value type that those homes stored at it. A campaign on the herdr runtime was
-moved off it first, as the upgrade guide asks before 0.3. ``0018-4`` has a ``[harness.codex]`` table of piloop 0.2,
-with ``mcp`` null.
+files of a revision hold every key and value type that those homes stored at it. Only a revision that this piloop
+migrates from has files: the head of the previous minor release, or a newer one.
 """
 
 import sqlite3

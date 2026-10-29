@@ -59,6 +59,7 @@ from piloop.proc import Channel
 from piloop.store.tree import put_tree
 from tests.agents.test_launcher import MINTED_HARNESS, agent_session, launch, request, use_harness
 from tests.conftest import HARNESS_PROMPT_TO_FILE, RESEARCH, WATCHDOG, ScriptRuntime, baseline, disk
+from tests.test_lease import BRIEF, START
 
 RESEARCH_SESSION = '0c5b9f9e-3a43-4c39-9a51-6f0cfa1a3b0e'
 
@@ -172,8 +173,8 @@ def test_the_finished_event_of_an_agent_says_the_state_of_its_closed_row(
         artifact=Source(vcs=Git(), repo=RepoId(campaign.id), revision=baseline(db, campaign.id).revision),
         place='agent',
         timeout=60,
-        brief_cid=None,
-        spec=None,
+        brief_cid=BRIEF,
+        spec=START,
     )
     results.finished(job, AgentFinished(process=AgentExit(ExitStatus.EXITED, 200, 0)))
     with db.session() as s:
@@ -241,8 +242,8 @@ def test_a_report_read_after_a_restart_closes_the_agent_as_the_stop_on_its_row_s
         artifact=Source(vcs=Git(), repo=RepoId(campaign.id), revision=baseline(db, campaign.id).revision),
         place='agent',
         timeout=60,
-        brief_cid=None,
-        spec=None,
+        brief_cid=BRIEF,
+        spec=START,
     )
     results.finished(job, report)
     with db.session() as s:
@@ -271,8 +272,8 @@ def test_two_results_for_one_job_in_plain_sessions_close_its_row_once_and_measur
         artifact=Source(vcs=Git(), repo=RepoId(campaign.id), revision=baseline(db, campaign.id).revision),
         place='agent',
         timeout=60,
-        brief_cid=None,
-        spec=None,
+        brief_cid=BRIEF,
+        spec=START,
     )
     measure = EvaluationJob(
         evaluation=evaluation_id,
@@ -343,8 +344,8 @@ def agent_job(campaign: Campaign, agent_session_id: AgentSessionId, tmp_path: Pa
         artifact=Source(vcs=Git(), repo=RepoId(campaign.id), revision=Repo(campaign.path).head.commit.hexsha),
         place='agent',
         timeout=60,
-        brief_cid=None,
-        spec=None,
+        brief_cid=BRIEF,
+        spec=START,
     )
 
 
@@ -537,8 +538,8 @@ def test_two_agents_that_change_one_workspace_file_keep_the_first_ones_and_the_s
             artifact=Source(vcs=Git(), repo=RepoId(campaign.id), revision=base.revision, workspace=workspace),
             place=f'agent_sessions/{agent}',
             timeout=60,
-            brief_cid=None,
-            spec=None,
+            brief_cid=BRIEF,
+            spec=START,
         )
         results.finished(job, AgentFinished(process=AgentExit(ExitStatus.EXITED, 200, 0), workspace=changed))
 

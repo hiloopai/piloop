@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from covalence import Cid
 
 from piloop import deprecated
 from piloop.config import ConfigError, load_campaign_config
@@ -28,8 +29,6 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.evaluation.tables import evaluator_of
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
 from piloop.plugins.campaign_type.optimization.fact_source.optimization import OptimizationFacts
 from piloop.plugins.executor.contract import AgentJob
 from piloop.plugins.fact_source.campaign import CampaignFacts
@@ -46,7 +45,6 @@ from piloop.plugins.memory.local import LocalMemory
 from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.stop_rule.contract import STOP_RULES, WhileHeld
 from piloop.plugins.stop_rule.limits import Limits
-from piloop.plugins.trigger.contract import TRIGGERS
 from piloop.settings import config_file
 from piloop.version import Version
 from tests.conftest import AGENT_TIMEOUT, HARNESS_APPEND, role_of, write_toml
@@ -136,24 +134,6 @@ NOTE = re.compile(
 DEPRECATED = re.compile(r'(?<![\w.])deprecated(?![\w.])', re.IGNORECASE)
 """A comment that calls code deprecated (but not one that names ``piloop.deprecated``). A docstring may: it describes a
 deprecated key to the reader."""
-
-
-def test_kind_in_a_trigger_entry_is_provider_and_warns_at_the_line_of_its_role(campaign_path: Path) -> None:
-    write_toml(campaign_path, HARNESS_APPEND)
-    toml = campaign_path / 'piloop.toml'
-    text = toml.read_text().replace(
-        '[plugins.role.research]\n',
-        '[plugins.role.research]\ntriggers = [{ kind = "low_water", buffer = 1 }, { kind = "seed" }]\n',
-    )
-    toml.write_text(
-        text.replace('[plugins.role.watchdog]\n', '[plugins.role.watchdog]\ntriggers = [{ provider = "cron" }]\n')
-    )
-    with pytest.warns(PiloopDeprecationWarning) as record:
-        cfg = load_campaign_config(campaign_path)
-    assert [TRIGGERS.name_of(t) for t in cfg.triggers_of('research')] == ['low_water', 'seed']
-    lines = toml.read_text().splitlines()
-    kinds = [w.lineno for w in record if 'kind in a trigger' in str(w.message)]
-    assert kinds == [lines.index('[plugins.role.research]') + 2], 'research, not the watchdog'
 
 
 def test_wake_budget_is_the_budget_of_the_lessons_section_of_each_role(campaign_path: Path) -> None:
@@ -821,31 +801,6 @@ def test_until_leaves_what_it_marks_as_it_is() -> None:
     assert deprecated.until('0.3.0', 'r')(f) is f
 
 
-def test_stop_the_spend_limit_and_confidence_are_keys_of_the_rules(campaign_path: Path) -> None:
-    toml = deprecated_config(
-        campaign_path,
-        '[stop]\nmax_runs = 7\nplateau = 4\n\n[spend]\ncommand = ["true"]\nlimit = 300\n\n[plugins.stop_rule]\nplateau = 9\n',
-    )
-    toml.write_text('confidence = 0.9\n' + toml.read_text())
-    with pytest.warns(PiloopDeprecationWarning) as record:
-        cfg = load_campaign_config(campaign_path)
-    assert STOP_RULES.selected(cfg.plugins) == Limits(max_runs=7, plateau=9, hold_at={'spend': 300}), (
-        'the table keeps its own'
-    )
-    assert VERDICT_RULES.selected(cfg.plugins) == Bootstrap(confidence=0.9)
-    lines = toml.read_text().splitlines()
-    assert sorted((w.lineno, str(w.message).partition(';')[0]) for w in record) == [
-        (1, 'confidence is deprecated'),
-        (lines.index('[stop]') + 1, '[stop] is deprecated'),
-        (lines.index('[spend]') + 1, '[spend] is deprecated'),
-        (lines.index('limit = 300') + 1, '[spend] limit is deprecated'),
-    ]
-    toml = deprecated_config(campaign_path, '[stop]\nmax_runs = 7\n')
-    toml.write_text('plugins = 3\n' + without_plugin_tables(toml.read_text()))
-    with pytest.warns(PiloopDeprecationWarning), pytest.raises(ConfigError, match='plugins'):
-        load_campaign_config(campaign_path)
-
-
 def test_spend_is_a_command_source_whose_fact_is_all_of_the_spend_and_closing_review_is_while_held(
     campaign_path: Path, tmp_path: Path
 ) -> None:
@@ -902,7 +857,7 @@ def test_spend_joins_the_sources_that_the_file_lists(campaign_path: Path, source
 def test_spend_leaves_a_plugins_table_or_a_use_that_is_no_list_to_the_validation(
     campaign_path: Path, plugins: str
 ) -> None:
-    toml = deprecated_config(campaign_path, '[spend]\ncommand = ["true"]\n')
+    toml = deprecated_config(campaign_path, '[spend]\ncommand = ["true"]\nclosing_review = "skip"\n')
     toml.write_text(
         plugins + without_plugin_tables(toml.read_text())
         if plugins.startswith('plugins')
@@ -923,28 +878,6 @@ def test_max_spend_is_hold_at_of_the_spend(campaign_path: Path) -> None:
     assert STOP_RULES.selected(cfg.plugins) == Limits(hold_at={'spend': 300})
 
 
-def test_the_variables_of_stop_and_confidence_set_the_rules_and_win_over_the_file(
-    campaign_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    deprecated_config(campaign_path, '[plugins.stop_rule]\nmax_runs = 7\n')
-    monkeypatch.setenv('PILOOP_CAMPAIGN_STOP__MAX_RUNS', '3')
-    monkeypatch.setenv('PILOOP_CAMPAIGN_CONFIDENCE', '0.8')
-    with pytest.warns(PiloopDeprecationWarning) as record:
-        cfg = load_campaign_config(campaign_path)
-    assert STOP_RULES.selected(cfg.plugins) == Limits(max_runs=3)
-    assert VERDICT_RULES.selected(cfg.plugins) == Bootstrap(confidence=0.8)
-    assert sorted(str(w.message) for w in record) == [
-        'PILOOP_CAMPAIGN_CONFIDENCE is deprecated; set PILOOP_CAMPAIGN_PLUGINS__VERDICT_RULE__CONFIDENCE; removed in'
-        ' piloop 0.4.0',
-        'PILOOP_CAMPAIGN_STOP__MAX_RUNS is deprecated; set PILOOP_CAMPAIGN_PLUGINS__STOP_RULE__MAX_RUNS; removed in'
-        ' piloop 0.4.0',
-    ]
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text('plugins = 3\n' + without_plugin_tables(toml.read_text()))
-    with pytest.warns(PiloopDeprecationWarning), pytest.raises(ConfigError, match='plugins'):
-        load_campaign_config(campaign_path)
-
-
 def test_a_job_that_a_0_3_daemon_queued_names_its_harness_by_its_renderer_or_tally() -> None:
     old = {
         'agent_session': 1,
@@ -952,8 +885,8 @@ def test_a_job_that_a_0_3_daemon_queued_names_its_harness_by_its_renderer_or_tal
         'artifact': {'repo': 1, 'revision': 'c1', 'vcs': {'provider': 'git'}},
         'place': 'w',
         'timeout': 60,
-        'brief_cid': None,
-        'spec': None,
+        'brief_cid': str(Cid.of(b'brief')),
+        'spec': {'executable': 'true', 'args': []},
     }
     usage = {'reader': 'jsonl', 'file': 'x', 'tally': 'codex'}
     assert isinstance(AgentJob.model_validate(old | {'mcp': 'claude', 'usage': usage}).harness, Codex)

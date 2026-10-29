@@ -157,9 +157,6 @@ class GitRepository(Repository):
     def keep(self, revision: Revision, why: Keep) -> None:
         git.pin(self.repo, ref(why), revision)
 
-    def kept(self, campaign: str, run: RunId) -> list[Version]:
-        return [self._version(sha) for sha in git.pinned(self.repo, runs(campaign, run))]
-
     def checkout(self, revision: Revision, path: Path) -> None:
         """A detached worktree."""
         git.add_worktree(self.repo, path, revision, {})

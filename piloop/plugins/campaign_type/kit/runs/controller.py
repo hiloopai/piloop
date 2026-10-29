@@ -703,15 +703,13 @@ class RunController:
                 run = s.get_one(Run, run_id)
                 campaign = run.idea.campaign
                 end, idea_id, campaign_id = run.end, run.idea_id, campaign.id
-                name, vcs, campaign_path = campaign.name, vcs_of(campaign), Path(campaign.path)
+                vcs, campaign_path = vcs_of(campaign), Path(campaign.path)
                 received = latest(s, RunReceived, Event.target == TargetRef(TargetKind.RUN, run_id))
             last = None
             try:
                 with closing(vcs.open(campaign_path)) as repo:
-                    if received is not None:
-                        versions = [repo.version(revision) for revision in received[1].revisions]
-                    else:
-                        versions = repo.kept(name, run_id)
+                    revisions = received[1].revisions if received is not None else []
+                    versions = [repo.version(revision) for revision in revisions]
                     span.set(versions=len(versions))
                     last = self._score(run_id, campaign_id, repo, versions, self._runs_dir / str(run_id))
             except Exception as e:

@@ -81,7 +81,7 @@ from piloop.plugins.executor.kit.leases import (
     revoke,
 )
 from piloop.plugins.executor.workers import Workers
-from piloop.plugins.runtime.contract import AgentExit, ExitStatus
+from piloop.plugins.runtime.contract import AgentExit, AgentStart, ExitStatus
 from piloop.plugins.vcs.git import Git
 from tests.conftest import WATCHDOG, baseline, home_cas
 
@@ -172,6 +172,12 @@ def leases(db: Database, recorder: Recorder) -> Leases:
     return Leases(db, recorder, home_cas(db), TIMING, POOLS)
 
 
+BRIEF = Cid.of(b'# brief')
+"""The brief of a job that the test never starts, or starts with a spec of its own."""
+START = AgentStart(executable='true', args=[])
+"""The start of a job that the test never starts, or starts with a spec of its own."""
+
+
 def agent_job(db: Database, campaign: Campaign, tmp_path: Path) -> AgentJob:
     with db.session() as s:
         w = AgentSession(kind=WATCHDOG, campaign_id=campaign.id)
@@ -184,8 +190,8 @@ def agent_job(db: Database, campaign: Campaign, tmp_path: Path) -> AgentJob:
         artifact=Source(vcs=Git(), repo=RepoId(campaign.id), revision=baseline(db, campaign.id).revision),
         place='logs',
         timeout=60,
-        brief_cid=None,
-        spec=None,
+        brief_cid=BRIEF,
+        spec=START,
     )
 
 

@@ -19,7 +19,6 @@ from piloop.db.schema import CORE
 from piloop.db.session import Database, Stamps, backups, described, stamps
 from piloop.net import tokens
 from piloop.net.acting import OWNER, MayNotAct, acts_as
-from piloop.plugins.archive.local.store import ManifestNotMigrated, migrate_manifests
 from piloop.plugins.section.contract import SECTIONS, Guide, guides
 from piloop.plugins.vcs.contract import VCS
 
@@ -110,9 +109,7 @@ def _cell(value: object) -> str:
 def migrate_cmd() -> None:
     """Migrate the database to the schema of this piloop, and print what changed and where its backup is.
 
-    Before it migrates, it copies the database next to it (`migration_backups` in config.toml). Then it stores the
-    archived manifests of piloop 0.2 again in the new format. It exits non-zero when it cannot read one, and the next
-    run tries again. Only this command, `piloop serve` when it starts and `piloop upgrade` migrate. Every other command
+    Before it migrates, it copies the database next to it (`migration_backups` in config.toml). Only this command, `piloop serve` when it starts and `piloop upgrade` migrate. Every other command
     refuses a database at another schema revision, and says what to run. It refuses to migrate under the running
     daemon of an older piloop, and refuses an agent that the daemon launched.
     """
@@ -122,14 +119,8 @@ def migrate_cmd() -> None:
     try:
         backup = local.migrate(db)
         _print_schema(old, stamps(common.settings.home / 'piloop.db'), backup)
-        try:
-            manifests = migrate_manifests(db, local.cas())
-        except ManifestNotMigrated as e:
-            raise SystemExit(str(e)) from e
     finally:
         db.close()
-    if manifests:
-        common.console.print(f'manifests: {manifests} stored again in the new format')
 
 
 def _print_schema(old: Stamps, new: Stamps, backup: Path | None) -> None:

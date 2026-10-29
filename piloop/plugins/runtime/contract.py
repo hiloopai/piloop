@@ -17,9 +17,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, ClassVar, Protocol
 
-from pydantic import BeforeValidator
-
-from piloop import deprecated
 from piloop.plugins.harness.contract import fill
 from piloop.plugins.host import Capability, Many, Parameters, Pick, Scope, Use
 
@@ -231,21 +228,15 @@ class RuntimeConfig(Parameters, ABC):
         """Make the runtime of the instance ``name``. Raise when it cannot run on this machine."""
 
 
-def _not_removed(name: object) -> object:
-    if isinstance(name, str) and (removed := deprecated.removed_runtime(name)) is not None:
-        raise ValueError(removed)
-    return name
-
-
 RUNTIMES = Capability(
     'runtime',
     RuntimeConfig,
-    table=Many(Scope.HOME, use=Use(Scope.CAMPAIGN, Pick.ONE, refuses=deprecated.removed_runtime)),
+    table=Many(Scope.HOME, use=Use(Scope.CAMPAIGN, Pick.ONE)),
 )
 """Every runtime by name. ``config.toml`` has their settings, and ``[plugins.runtime] use`` of ``piloop.toml`` picks
 the campaign's."""
 
 
-RuntimeName = Annotated[str, RUNTIMES.ref, BeforeValidator(_not_removed)]
+RuntimeName = Annotated[str, RUNTIMES.ref]
 """The name of a runtime of ``config.toml`` (``[plugins.runtime.<name>]``): ``subprocess``, or one that a package
 adds."""

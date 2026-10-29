@@ -8,21 +8,31 @@ JSON manifest (``put_manifest``); ``staging`` staged one blob to the directory r
 import json
 import os
 import shutil
+import sqlite3
+from contextlib import closing
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config as AlembicConfig
+from covalence import Cid
+from sqlalchemy import create_engine
 
-from piloop.campaign.campaigns import workspace_dir
-from piloop.db.models import Campaign
-from piloop.db.session import Database
-from piloop.plugins.archive.local.store import ManifestNotMigrated, migrate_manifests, restore
-from piloop.plugins.archive.local.tables import Archive
+from piloop.db.session import (
+    CAS_ATTRIBUTE,
+    MIGRATIONS,
+    SchemaMismatch,
+    heads,
+    migrate,
+    stamps,
+    unmigratable,
+)
 from piloop.plugins.cas.cached import REMOTE, CachedCas
 from piloop.plugins.cas.contract import Integrity, integrity
-from piloop.plugins.cas.disk import BOUND, BoundElsewhere, Disk, DiskCas
-from piloop.plugins.cas.kit.objects import ObjectsCas, key, named
-from piloop.store.tree import Manifest, Missing, cid_of, materialise
+from piloop.plugins.cas.disk import BoundElsewhere, Disk, DiskCas
+from piloop.plugins.cas.kit.objects import key, named
+from piloop.store.tree import Manifest, cid_of
 
 FIXTURE = Path(__file__).parents[1] / 'fixtures' / 'store_0_2_0'
 WRITTEN = json.loads((FIXTURE / 'written.json').read_text())
@@ -54,22 +64,18 @@ def staging(root: Path, remote: Path, url: str = URL) -> CachedCas:
     return CachedCas(DiskCas(root), root, DiskCas(remote), url, timedelta(0))
 
 
-def test_a_local_store_of_0_2_0_is_read_in_place_and_its_json_manifest_restores_the_tree(tmp_path: Path) -> None:
+def test_a_local_store_of_0_2_0_is_read_in_place(tmp_path: Path) -> None:
     root = copy('local', tmp_path)
     cas = Disk(path=root).open(tmp_path)
     before = {p: p.stat().st_mtime_ns for p in root.rglob('*')}
-    manifest = Manifest.get(cas, MANIFEST)
-    assert all(integrity(cas, cid) is Integrity.OK for cid in manifest.blobs | {MANIFEST})
+    files = [p for p in sorted((FIXTURE / 'tree').rglob('*')) if p.is_file() and not p.is_symlink()]
+    blobs = {cid_of(path) for path in files}
     assert len(list((root / 'blake3').iterdir())) == 5
-    done = materialise(cas, manifest, tmp_path / 'out')
-    assert tree(tmp_path / 'out') == tree(FIXTURE / 'tree')
-    assert (done.written, done.kept) == (6, [])
-    modes = {e.path: e.mode for e in manifest.entries if e.link is None}
-    assert modes['notes.txt'] == 0o600 and modes['idea1/run.sh'] == 0o755
-    assert all((tmp_path / 'out' / path).stat().st_mode & 0o7777 == mode for path, mode in modes.items())
-    for path in ('notes.txt', 'idea1/sub/data.bin'):
-        cid = cas.put_file(FIXTURE / 'tree' / path)
-        assert cid in manifest.blobs and cid_of(FIXTURE / 'tree' / path) == cid, 'the same content, the same address'
+    assert all(integrity(cas, cid) is Integrity.OK for cid in blobs | {MANIFEST})
+    for path in files:
+        assert cas.get(cid_of(path)) == path.read_bytes() and cas.put_file(path) == cid_of(path), (
+            'the same content, the same address'
+        )
     assert {p: p.stat().st_mtime_ns for p in root.rglob('*') if p.name != 'tmp'} == before, 'nothing rewritten'
 
 
@@ -85,50 +91,43 @@ def test_a_staging_store_of_0_2_0_reads_through_its_remote_and_stays_bound_to_it
         Disk(path=root).open(tmp_path)
 
 
-@pytest.fixture
-def archived(db: Database, campaign: Campaign) -> int:
-    """An archive row as revision 0027 leaves one of 0.2.0: the raw CID of its JSON manifest."""
-    with db.session() as s:
-        row = Archive(campaign_id=campaign.id, manifest=MANIFEST, files=6, bytes=1)
-        s.add(row)
-        s.commit()
-        return row.id
+def at_0_3(tmp_path: Path, manifest: Cid) -> Path:
+    """A database as piloop 0.3 leaves it, at core 0053, with an archive whose manifest is ``manifest``."""
+    path = tmp_path / 'home' / 'piloop.db'
+    path.parent.mkdir()
+    cfg = AlembicConfig()
+    cfg.set_main_option('script_location', str(MIGRATIONS))
+    cfg.set_main_option('sqlalchemy.url', f'sqlite:///{path}')
+    cfg.attributes[CAS_ATTRIBUTE] = Disk(path=tmp_path / 'cas').open(tmp_path)
+    command.upgrade(cfg, '0053')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('c', '/c', '{}')")
+        con.execute('INSERT INTO archives (campaign_id, manifest) VALUES (1, ?)', (str(manifest),))
+    return path
 
 
-@pytest.mark.parametrize('staged', [False, True], ids=['local', 'staging'])
-def test_migrating_a_0_2_0_archive_stores_a_dasl_manifest_that_restores_every_byte(
-    db: Database, campaign: Campaign, archived: int, tmp_path: Path, staged: bool
+def test_a_home_whose_archive_still_names_a_json_manifest_of_0_2_0_is_refused_and_left_as_it_was(
+    tmp_path: Path,
 ) -> None:
-    """A staging home holds no manifest locally: the migration reads it through the remote, as a restore does."""
-    cas: ObjectsCas | CachedCas
-    if staged:
-        root, objects = tmp_path / 'store', copy('local', tmp_path)
-        for d in (objects / 'blake3').iterdir():
-            (root / 'blake3' / d.name).mkdir(parents=True)
-            (root / 'blake3' / d.name / REMOTE).touch()
-        (root / BOUND).write_text(URL)
-        cas = staging(root, objects)
-    else:
-        cas = DiskCas(copy('local', tmp_path))
-    assert migrate_manifests(db, cas) == 1
-    with db.session() as s:
-        dasl = s.get_one(Archive, archived).manifest
-        assert dasl is not None and dasl.codec.name == 'dag-cbor'
-        assert Manifest.get(cas, dasl) == Manifest.get(cas, MANIFEST), 'the same tree'
-        assert cas.has(MANIFEST), 'the JSON manifest stays for a restored database'
-        assert migrate_manifests(db, cas) == 0, 'done once'
-        restored = restore(s, cas, tmp_path / 'home', s.get_one(Campaign, campaign.id), None)
-    assert restored.archives == 1
-    assert tree(workspace_dir(tmp_path / 'home', campaign.id)) == tree(FIXTURE / 'tree')
-
-
-def test_a_manifest_that_the_store_cannot_give_stops_the_migration_and_keeps_its_row(
-    db: Database, archived: int, tmp_path: Path
-) -> None:
+    """piloop 0.3 stores each manifest again at its start; one that it could not read is refused here."""
+    path = at_0_3(tmp_path, MANIFEST)
+    before = path.read_bytes()
+    engine = create_engine(f'sqlite:///{path}')
     with pytest.raises(
-        ManifestNotMigrated, match=f'archive {archived}: its manifest {MANIFEST} could not be read'
-    ) as e:
-        migrate_manifests(db, Disk(path=tmp_path / 'empty').open(tmp_path))
-    assert isinstance(e.value.__cause__, Missing)
-    with db.session() as s:
-        assert s.get_one(Archive, archived).manifest == MANIFEST
+        SchemaMismatch,
+        match=r'archive 1 still names a manifest of piloop 0\.2: install piloop 0\.3 \(`uv tool install'
+        r" 'piloop==0\.3\.\*'`\) and run `piloop migrate`",
+    ):
+        migrate(engine, cas=Disk(path=tmp_path / 'cas').open(tmp_path), backups=3, daemon=None)
+    engine.dispose()
+    assert path.read_bytes() == before, 'not migrated'
+    assert unmigratable(path) is not None, 'every command says so'
+
+
+def test_a_home_whose_archives_name_dasl_manifests_migrates(tmp_path: Path) -> None:
+    path = at_0_3(tmp_path, Manifest(entries=()).value().cid())
+    assert unmigratable(path) is None
+    engine = create_engine(f'sqlite:///{path}')
+    migrate(engine, cas=Disk(path=tmp_path / 'cas').open(tmp_path), backups=0, daemon=None)
+    engine.dispose()
+    assert stamps(path) == heads()

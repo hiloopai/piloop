@@ -201,8 +201,6 @@ class Use:
 
     scope: Scope
     pick: Pick
-    refuses: Callable[[str], str | None] | None = None
-    """Why a name is refused before it is looked up, such as a provider that a release removed. None: none is."""
     defaults: Callable[[], list[str]] | None = None
     """The instances in use when ``use`` is unset, when a flag of a provider cannot say it, such as the sections of
     ``piloop status`` in their order. None: the providers that are ``DEFAULT``."""
@@ -498,9 +496,6 @@ class Capability[P: Parameters]:
         except ValidationError as e:
             errors = [_at((USE, *err['loc']), err) for err in e.errors()]
             raise ValidationError.from_exception_data(self.name, errors) from e
-        except ValueError as e:
-            error = InitErrorDetails(type='value_error', loc=(USE,), input=value.get(USE), ctx={'error': e})
-            raise ValidationError.from_exception_data(self.name, [error]) from e
         if many.scope is not scope:
             return Instances(self, use, {})
         configured = tuple(name for name, table in tables.items() if table)
@@ -527,10 +522,7 @@ class Capability[P: Parameters]:
                     )
                 return tuple(defaults)
             case Pick.ONE:
-                name = _ONE.validate_python(value)
-                if many.use.refuses is not None and (why := many.use.refuses(name)) is not None:
-                    raise ValueError(why)
-                return (name,)
+                return (_ONE.validate_python(value),)
             case Pick.ORDERED if value is None:
                 return tuple(defaults)
             case _:  # ORDERED, set

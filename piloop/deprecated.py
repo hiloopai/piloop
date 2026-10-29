@@ -19,9 +19,8 @@ role), one that would silently change nothing (a ``PILOOP_PROJECT_<KEY>`` variab
 """
 
 import os
-import re
 import warnings
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import count
 from pathlib import Path
@@ -478,91 +477,6 @@ def _roles(raw: dict[str, object]) -> dict[str, object] | None:
     return roles if isinstance(roles, dict) else None
 
 
-@bridge('0.4.0', 'kind in a trigger entry is provider: delete the trigger_kind bridge')
-def trigger_kind(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``kind`` in an entry of ``[plugins.role.<name>] triggers`` is ``provider``: ``{ provider = "cron" }``."""
-    for name in _table(raw, 'plugins', 'role') or {}:
-        role = _table(raw, 'plugins', 'role', name)
-        triggers = role.get('triggers') if role is not None else None
-        if (
-            role is None
-            or not isinstance(triggers, list)
-            or not any(isinstance(t, dict) and 'kind' in t for t in triggers)
-        ):
-            continue
-        role['triggers'] = [
-            {('provider' if k == 'kind' else k): v for k, v in t.items()} if isinstance(t, dict) else t
-            for t in triggers
-        ]
-        warn(
-            toml,
-            f'plugins.role.{name}.triggers',
-            'kind in a trigger is deprecated; name the trigger, and set its keys in [plugins.trigger.<name>]',
-            removed_in=removed_in,
-            nth=_nth(toml, f'plugins.role.{name}', 'triggers'),
-        )
-
-
-@bridge('0.4.0', '[stop] is the limits of [plugins.stop_rule]: delete the stop_table bridge')
-def stop_table(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``[stop] <key>`` is ``[plugins.stop_rule] <key>``, a limit of the stop rule. A rule without that key refuses it.
-
-    A key that ``[plugins.stop_rule]`` sets too keeps its value there.
-    """
-    if not isinstance(old := raw.get('stop'), dict):
-        return
-    del raw['stop']
-    _into(raw, 'stop_rule', old)
-    warn(toml, 'stop', '[stop] is deprecated; write its keys in [plugins.stop_rule]', removed_in=removed_in)
-
-
-@bridge('0.4.0', '[spend] limit is [plugins.stop_rule] hold_at of the spend: delete the spend_limit bridge')
-def spend_limit(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``[spend] limit`` is ``[plugins.stop_rule] hold_at = { spend = <value> }``. A value that it sets too wins."""
-    spend = _table(raw, 'spend')
-    if spend is None or 'limit' not in spend:
-        return
-    _held(raw, spend.pop('limit'))
-    warn(
-        toml,
-        'spend.limit',
-        '[spend] limit is deprecated; write hold_at = { spend = ... } in [plugins.stop_rule]',
-        removed_in=removed_in,
-        nth=_nth(toml, 'spend', 'limit'),
-    )
-
-
-@bridge('0.4.0', 'confidence is [plugins.verdict_rule] confidence: delete the confidence bridge')
-def confidence(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """The top-level ``confidence`` is ``[plugins.verdict_rule] confidence``. A value that the table sets too wins."""
-    if 'confidence' not in raw:
-        return
-    _into(raw, 'verdict_rule', {'confidence': raw.pop('confidence')})
-    warn(toml, 'confidence', 'confidence is deprecated; write it in [plugins.verdict_rule]', removed_in=removed_in)
-
-
-OLD_RULE_ENV = re.compile(r'PILOOP_CAMPAIGN_(?:STOP__(?P<stop>\w+)|(?P<confidence>CONFIDENCE))', re.IGNORECASE)
-"""The variable of a key of ``[stop]``, or of ``confidence``: those keys are in a rule's table now. ``[spend]`` has
-none: its variables fail as unknown keys."""
-
-
-@bridge('0.4.0', "the variables of [stop] and confidence are the rules': delete rule_env and OLD_RULE_ENV")
-def rule_env(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``PILOOP_CAMPAIGN_STOP__<KEY>`` and ``PILOOP_CAMPAIGN_CONFIDENCE`` set keys of the rules' tables.
-
-    They are ``PILOOP_CAMPAIGN_PLUGINS__STOP_RULE__<KEY>`` and ``PILOOP_CAMPAIGN_PLUGINS__VERDICT_RULE__CONFIDENCE``. The
-    old variable still wins over the file.
-    """
-    for name, value in sorted(os.environ.items()):
-        if (old := OLD_RULE_ENV.fullmatch(name)) is None:
-            continue
-        rule, key = ('stop_rule', old['stop'].lower()) if old['stop'] else ('verdict_rule', 'confidence')
-        if (table := _rule(raw, rule)) is not None:
-            table[key] = value
-        new = f'PILOOP_CAMPAIGN_PLUGINS__{rule.upper()}__{key.upper()}'
-        warn(toml, name, f'{name} is deprecated; set {new}', removed_in=removed_in)
-
-
 def _into(raw: dict[str, object], rule: str, keys: Mapping[str, object]) -> None:
     """Add ``keys`` to ``[plugins.<rule>]`` of the parsed file, under the keys that the table sets."""
     if (table := _rule(raw, rule)) is not None:
@@ -818,58 +732,6 @@ def spend_table(toml: Path, raw: dict[str, object], removed_in: Version) -> None
     )
 
 
-@bridge(
-    '0.4.0',
-    '[storage.backend] and its eviction keys are [plugins.cas] cached: delete the storage_backend bridge',
-    CONFIG_BRIDGES,
-)
-def storage_backend(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """In ``config.toml``, ``[storage.backend]`` is the ``remote`` of ``[plugins.cas] provider = "cached"``.
-
-    Its ``kind`` is the remote's ``provider``. ``evict_after_days`` and ``local_max_gb`` of ``[storage]`` move with
-    it. A ``[plugins.cas]`` table of the file wins: the old keys then go, with the warning, and change nothing.
-    """
-    storage = _table(raw, 'storage')
-    if storage is None or (backend := storage.pop('backend', None)) is None:
-        return
-    remote = dict(backend) if isinstance(backend, dict) else {}
-    cached: dict[str, object] = {'provider': 'cached', 'remote': {'provider': remote.pop('kind', None), **remote}}
-    for key in ('evict_after_days', 'local_max_gb'):
-        if key in storage:
-            cached[key] = storage.pop(key)
-    plugins = raw.setdefault('plugins', {})
-    if isinstance(plugins, dict):
-        plugins.setdefault('cas', cached)
-    warn(
-        toml,
-        'storage.backend',
-        '[storage.backend] is deprecated; write [plugins.cas] provider = "cached" and remote = { provider = <its kind>,'
-        ' <its keys> }, with evict_after_days and local_max_gb there too',
-        removed_in=removed_in,
-    )
-
-
-@bridge(
-    '0.4.0',
-    'max_evaluations in config.toml is [plugins.executor.pools.serve] evaluations: delete the max_evaluations bridge',
-    CONFIG_BRIDGES,
-)
-def max_evaluations(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """In ``config.toml``, ``max_evaluations`` is ``evaluations`` in ``[plugins.executor.pools.serve]``.
-
-    A value that ``[plugins.executor.pools.serve]`` sets too wins.
-    """
-    if (old := raw.pop('max_evaluations', None)) is None:
-        return
-    _slots(raw, old)
-    warn(
-        toml,
-        'max_evaluations',
-        'max_evaluations is deprecated; write evaluations in [plugins.executor.pools.serve]',
-        removed_in=removed_in,
-    )
-
-
 RUNTIME_TABLES = (Move('runtimes.*', 'plugins.runtime.*'),)
 """The settings of each runtime, as ``[plugins.runtime.<name>]``."""
 
@@ -883,14 +745,6 @@ def runtime_tables(toml: Path, raw: dict[str, object], removed_in: Version) -> N
     ``PILOOP_RUNTIMES__<NAME>__<KEY>`` is ``PILOOP_PLUGINS__RUNTIME__<NAME>__<KEY>``.
     """
     moved(toml, raw, RUNTIME_TABLES, 'PILOOP_', removed_in)
-
-
-@bridge('0.4.0', 'tick_seconds in config.toml does nothing: delete the tick_seconds bridge', CONFIG_BRIDGES)
-def tick_seconds(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """In ``config.toml``, ``tick_seconds`` does nothing: the daemon wakes on events, not on a timer."""
-    if raw.pop('tick_seconds', None) is None:
-        return
-    warn(toml, 'tick_seconds', 'tick_seconds is deprecated and does nothing; delete it', removed_in=removed_in)
 
 
 @bridge('0.5.0', 'name_claim of the proxy network is name_claims: delete the name_claim bridge', CONFIG_BRIDGES)
@@ -911,115 +765,6 @@ def name_claim(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     )
 
 
-OLD_MAX_EVALUATIONS_ENV = 'PILOOP_MAX_EVALUATIONS'
-
-
-@until(
-    '0.4.0',
-    'PILOOP_MAX_EVALUATIONS is PILOOP_PLUGINS__EXECUTOR__POOLS__SERVE__EVALUATIONS: delete max_evaluations_env',
-)
-def max_evaluations_env(environ: Mapping[str, str], raw: dict[str, object]) -> dict[str, object]:
-    """Return ``raw``, the parsed ``config.toml``, with ``PILOOP_MAX_EVALUATIONS`` in it, with a warning.
-
-    It becomes ``[plugins.executor.pools.serve] evaluations``, unless the file sets that.
-    """
-    if (old := environ.get(OLD_MAX_EVALUATIONS_ENV)) is None:
-        return raw
-    _slots(raw, old)
-    warnings.warn(
-        f'{OLD_MAX_EVALUATIONS_ENV} is deprecated; set PILOOP_PLUGINS__EXECUTOR__POOLS__SERVE__EVALUATIONS;'
-        ' removed in piloop 0.4.0',
-        PiloopDeprecationWarning,
-        stacklevel=2,
-    )
-    return raw
-
-
-WORKERS = 'workers'
-"""The executor whose slots ``max_evaluations`` was in 0.2.0, the only one there was."""
-
-
-def _slots(raw: dict[str, object], old: object) -> None:
-    """Put ``old`` in ``raw`` as ``[plugins.executor.pools.serve] evaluations``, if it selects ``workers`` or nothing.
-
-    Another executor has no such key: the old one goes, with its warning, and changes nothing.
-    """
-    plugins = raw.setdefault('plugins', {})
-    executor = plugins.setdefault('executor', {'provider': WORKERS}) if isinstance(plugins, dict) else None
-    if isinstance(executor, dict) and executor.setdefault('provider', WORKERS) == WORKERS:
-        pools = executor.setdefault('pools', {})
-        serve = pools.setdefault('serve', {}) if isinstance(pools, dict) else None
-        if isinstance(serve, dict):
-            serve.setdefault('evaluations', old)
-
-
-HERDR = 'herdr'
-"""The name of the runtime that 0.3.0 removed."""
-HERDR_UPGRADE = 'https://piloop.autoresearch.inc/guides/upgrading#the-herdr-runtime'
-"""What to do about the removed herdr runtime."""
-
-
-@until(
-    '0.4.0',
-    'runtime = "herdr" of a 0.2 piloop.toml: delete removed_runtime, HERDR, HERDR_UPGRADE, the runtime\'s _not_removed'
-    ' and the refuses of its use',
-)
-def removed_runtime(name: str) -> str | None:
-    """Why ``runtime = <name>`` does not load when piloop removed that runtime, else None."""
-    if name != HERDR:
-        return None
-    return f'the herdr runtime is removed in piloop 0.3.0: write runtime = "subprocess", or delete the key ({HERDR_UPGRADE})'
-
-
-WORKDIR_UPGRADE = 'https://piloop.autoresearch.inc/guides/upgrading#workdir'
-"""What to do about the removed ``[roles.<name>] workdir``."""
-
-
-@until('0.4.0', 'workdir of a 0.2 piloop.toml: delete removed_workdir and WORKDIR_UPGRADE')
-def removed_workdir() -> str:
-    """Why a role table with ``workdir`` does not load: every agent works in a worktree of its own now."""
-    return (
-        'workdir is removed in piloop 0.3.0: every agent works in a worktree of its own, never in the campaign'
-        f' checkout. Delete the key ({WORKDIR_UPGRADE})'
-    )
-
-
-ENTIRE_UPGRADE = 'https://piloop.autoresearch.inc/guides/upgrading#entire'
-"""What to do about ``entire_agent``, which 0.3.0 removed with Entire."""
-REMOVED_HARNESS_KEYS = {
-    **dict.fromkeys(
-        ('interactive', 'startup_dialogs', 'busy_screens', 'failed_turn_screens', 'queue_key', 'composer'),
-        HERDR_UPGRADE,
-    ),
-    'entire_agent': ENTIRE_UPGRADE,
-}
-"""The keys of a ``[harness.<name>]`` table that 0.3.0 removed, with what to do about each: the keys that only the
-herdr runtime read, and ``entire_agent``."""
-
-
-@until('0.4.0', 'the keys of a 0.2 harness table: delete removed_harness_keys, REMOVED_HARNESS_KEYS, ENTIRE_UPGRADE')
-def removed_harness_keys(harness: Collection[str]) -> str | None:
-    """Why a ``[harness.<name>]`` table with a key that 0.3.0 removed does not load, else None."""
-    by_link: dict[str, list[str]] = {}
-    for key in (k for k in REMOVED_HARNESS_KEYS if k in harness):
-        by_link.setdefault(REMOVED_HARNESS_KEYS[key], []).append(key)
-    if not by_link:
-        return None
-    return '; '.join(
-        f'{", ".join(keys)}: removed in piloop 0.3.0; delete the key ({link})' for link, keys in by_link.items()
-    )
-
-
-REMOVED_KEYS = 'https://piloop.autoresearch.inc/guides/upgrading#removed-keys'
-"""The keys that 0.2.0 deprecated and 0.3.0 removed."""
-
-
-@until('0.4.0', '[roles.worker] of a 0.2 piloop.toml: delete removed_worker and its call in new_role')
-def removed_worker() -> str:
-    """Why ``[roles.worker]`` does not load: it would define a new role, not set the implementer's keys."""
-    return f'[roles.worker] is removed in piloop 0.3.0: rename the table [roles.implementer] ({REMOVED_KEYS})'
-
-
 type MessageFormat = Literal['lines', 'claude-hook']
 """The ``--format`` of ``piloop agent messages`` in 0.3, which the hook of a running agent still passes."""
 
@@ -1034,22 +779,6 @@ def message_format(form: MessageFormat) -> str | None:
             return 'claude'
         case _:
             assert_never(form)
-
-
-OLD_ENV_PREFIX = 'PILOOP_PROJECT_'
-"""The prefix of the variables that override ``piloop.toml`` before 0.2.0. ``PILOOP_CAMPAIGN_`` since."""
-
-
-@until('0.4.0', 'PILOOP_PROJECT_<KEY> of a 0.2 environment: delete removed_env, OLD_ENV_PREFIX and its call')
-def removed_env(environ: Mapping[str, str]) -> str | None:
-    """Why ``piloop.toml`` does not load while a ``PILOOP_PROJECT_<KEY>`` variable is set, else None.
-
-    Without this, the variable would change nothing, silently.
-    """
-    if not (found := sorted(n for n in environ if n.upper().startswith(OLD_ENV_PREFIX))):
-        return None
-    renamed = ', '.join(f'{n} is {"PILOOP_CAMPAIGN_" + n[len(OLD_ENV_PREFIX) :]}' for n in found)
-    return f'{renamed}: PILOOP_PROJECT_<KEY> is removed in piloop 0.3.0; rename or unset it ({REMOVED_KEYS})'
 
 
 OLD_INSTANCES = {'harness': 'harness', 'model': 'harness', 'max_concurrent': 'harness', 'mcp': 'mcp_server'}

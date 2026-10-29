@@ -19,7 +19,6 @@ protect it, is the executor's choice.
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, NewType, Protocol, Self, get_args
 
@@ -162,12 +161,11 @@ class AgentJob(BaseModel):
     timeout: float
     """The seconds the agent may run, counted from its start, also across a restart of its worker. Its extensions add
     to it (``Executor.extend``)."""
-    brief_cid: BlobAddress | None
+    brief_cid: BlobAddress
     """The agent's brief, a text blob in the CAS, which the worker writes to its log directory before the start: its
     first prompt names the file."""
-    spec: AgentStart | None
-    """What the runtime starts, once the worker fills in its places. None for an agent that a previous daemon process
-    left (``LeftJob``): it is re-attached, never started."""
+    spec: AgentStart
+    """What the runtime starts, once the worker fills in its places."""
     harness: Annotated[Harness, HARNESSES.entry] | None = None
     """The agent's harness, which renders its MCP servers (``{mcp}``) and reads its session file on the worker. None
     for a harness of no provider (``Custom``), which does neither."""
@@ -432,18 +430,9 @@ def key_of(job: AgentJob | EvaluationJob) -> JobKey:
 
 @dataclass(frozen=True)
 class LeftJob:
-    """A job that a previous daemon process left in flight, for ``Executor.adopt``.
-
-    An agent's comes with its description as its row has it (no spec: re-attach it, never start it) when its row is
-    ``running``, and without one while it was still starting. An evaluation's is its key only.
-    """
+    """A job that a previous daemon process left in flight, for ``Executor.adopt``: its key. Its executor finds it."""
 
     key: JobKey
-    job: AgentJob | None = None
-    handle: dict[str, object] | None = None
-    """The agent's handle in its runtime, when its start was recorded."""
-    started_at: datetime | None = None
-    """When the agent started, which its timeout counts from."""
 
 
 @dataclass(frozen=True)

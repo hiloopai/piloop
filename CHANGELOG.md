@@ -5,6 +5,110 @@ All notable changes to piloop are in this file. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, a minor release may contain breaking changes.
 A deprecated configuration key shows a warning for at least one minor release before it is removed.
 
+## [0.4.0](https://github.com/hiloopai/piloop/compare/v0.3.1...v0.4.0) - 2026-10-28
+
+This release has breaking changes, marked **Breaking** below. Read
+[Upgrading](https://piloop.autoresearch.inc/guides/upgrading) before you upgrade.
+
+The upgrade migrates the database from 0.3.0 or newer only. A 0.2 database upgrades through 0.3 first. Upgrade
+`piloop worker` on every machine with the server: the worker protocol is 16, and the server refuses another.
+
+### Added
+
+- piloop launches a campaign's orchestrator, which resumes its session on each wake and gets the news that arrives
+  while it works as notes. `piloop message` writes to it.
+- Retire a stopped campaign, whose files then leave the disk for the CAS, reopen it, and fork a campaign from a
+  version of another. Register one URL as several campaigns. A sync updates a cloned campaign.
+- A clone or a sync takes a credential: a home secret, or a token for that one call (`--token-stdin`).
+- An evaluation ladder, one tolerance for guardrails and its stops, as a fraction of the bar, and ratio metrics.
+- Fact sources: a `command` source reads any fact, such as an outside cost. The `spend` source sums the facts that it
+  names, by default the compute of the leases and the models' tokens, priced in USD:
+  `GET /v1/campaigns/{campaign}/spend`.
+- The lineage capability: a campaign as a typed graph, at `GET /v1/campaigns/{campaign}/lineage`.
+- A notifier capability posts escalations and P0 items to Slack, once, with reminders, and takes answers from the
+  thread.
+- `piloop run extend` gives a running implementer more time, also on a worker elsewhere.
+- `piloop candidate show` and `GET /v1/candidates/{candidate}` give each rung's values and time.
+- `piloop watch` is a client of the API, so it works with `PILOOP_SERVER`. The API has the reads that a UI needs.
+- `[daemon]` and `[agents]` in `config.toml` hold the daemon's timings, and a campaign's `[agents]` sets its graces.
+- A reply records what it answers, and a comment shows its whole thread.
+- Free implementer slots behind proposed ideas raise one escalation.
+- The funnel and cost sections, and the `leaking_funnel` trigger.
+- `act` sets a campaign's secrets, and codex takes a config table.
+- A low yield wakes the watchdog and raises one P1 escalation: the `low_yield` trigger fires when few of the last
+  runs scored, or none of the scored ones was kept. `piloop status` has a `## Yield` section.
+
+### Changed
+
+- **Breaking:** The evaluate command writes one JSON result line to `$PILOOP_RESULT_FILE`, with its per-unit results.
+- **Breaking:** A capability of several instances is `[plugins.<capability>.<name>]`: harnesses, roles, runtimes,
+  triggers, sections, fact sources and MCP servers, and lists name them. The upgrade rewrites the stored configs.
+- **Breaking:** `[spend]` is a `command` fact source, `max_spend` is `hold_at = { spend = ... }`, and `closing_review`
+  is `while_held`. A stop rule answers what is left of each fact.
+- **Breaking:** Agents ignore your own harness setup (instructions, skills, plugins, hooks) unless the harness sets
+  `user_config = "load"`.
+- **Breaking:** Each agent signs with its own token, minted at its launch, and agents cannot write secrets.
+- **Breaking:** Agent sessions are in the CAS, and `usage.source` is gone.
+- **Breaking:** An agent's commits are by the agent. piloop's own commits are by `piloop <piloop@localhost>`.
+- **Breaking:** The `anomaly` trigger is `run_failed` and `dead_at_startup`.
+- **Breaking:** The journal is per campaign: `piloop journal --campaign` names one when several could match.
+- **Breaking:** A campaign with `plateau` gets a stall mark of two rounds of its run slots: set `every` on the
+  `stalled` trigger to keep the old one.
+- **Breaking:** `piloop init` starts the daemon, and every write command asks it.
+- **Breaking:** A person signs as `human:<name>`, and a network plugin implements `actor(headers)`.
+- **Breaking:** A ladder's rungs are measurements: SQL that averages `measurements.metrics` adds `rung IS NULL`.
+- **Breaking:** Archives are of subjects: `archives.subject_kind` and `subject_id` replace `idea_id`.
+- **Breaking:** The plugin API: an executor implements `contribution()`, `Vcs.clone` is `Vcs.replica`, `piloop.schemas`
+  replaces `piloop.tables`, `Runtime.wait` takes a deadline, and optimization's code moved. Import from
+  `piloop.capabilities`.
+- **Breaking:** The comments on an idea are the `idea_comments` section: a role whose `sections` you set lists it to
+  keep them.
+- **Breaking:** `plateau` counts every finished run without a keep, scored or not.
+- Ship-first briefs: the role prompts are a third of their size, each role's brief has only the guides that it uses,
+  an idea's `--check` says what the evaluator should show instead of a gate, and plans and an idea's comments are
+  capped. `piloop init` and `piloop doctor` warn when `brief.md` passes `[agents] brief_words` (400 by default). A
+  research sweep defines up to 3 ideas by default.
+
+### Deprecated
+
+These still load, with a warning, until 0.5.0:
+
+- `METRIC` lines and `PILOOP_UNITS_FILE`: write the result line.
+- `[harness.<name>]`, `[roles.<name>]`, `harnesses`, `runtime`, `[model]`, `[max_concurrent]`, `[mcp.<name>]`,
+  `[runtimes.<name>]` of `config.toml`, the lists of inline triggers, sections and `[[facts]]`, and `[status] sections`:
+  write the `[plugins]` tables.
+- `[spend]` and `max_spend`, `[memory] documents`, the `mcp` and `usage` of a harness table, the `anomaly` trigger,
+  and `name_claim` of the proxy network.
+- A Claude login in `~/.claude/settings.json` still reaches the agents: move it to the harness's `env`.
+
+### Removed
+
+- The keys that 0.3.0 deprecated: `[stop]`, `[spend] limit`, `confidence` and their variables, a trigger's `kind`,
+  `[storage.backend]`, `max_evaluations`, `PILOOP_MAX_EVALUATIONS` and `tick_seconds`. Each fails as an unknown key.
+- A clone's `secret` beside its `credential`.
+- The compat code for 0.2: its agents and runs, its JSON archive manifests, and the messages of the keys that 0.3.0
+  removed.
+
+### Fixed
+
+- An upgrade keeps the backups that it did not write, and `status` lists a campaign whose stored config no longer
+  validates.
+- Candidates are scored under the evaluator of the moment, an override cancels stale runs, and every track judges.
+- An agent whose launch the stop rule stops never starts, and a prompt right after an agent starts is queued.
+- A retire refuses while an agent of its campaign is open.
+- `piloop init` refuses a config that strands ideas on a dropped track.
+- A hung first transfer fails at a deadline, and a slow server orphans no worker.
+- Pi agents resume their session from the CAS, on any worker.
+- The API refuses with a typed answer instead of a 500.
+- The orchestrator is reminded of unacked escalations.
+- Every git repo that piloop opens is closed.
+- The save of a run's unsaved work never stages an excluded path, so a workspace file written meanwhile no longer
+  loses the run's work.
+- A daemon stop is recorded on each agent, so a report read after a restart still closes the run as stopped.
+- A resumed agent counts only its own tokens, and a Codex resume continues the rollout that Codex writes.
+- `piloop watch` retries its start until the server answers, and reads again what a stalled server made fail.
+  `[watch] notice` in `config.toml` sets how long a note stays.
+
 ## [0.3.1](https://github.com/hiloopai/piloop/compare/v0.3.0...v0.3.1) - 2026-10-25
 
 0.3.0 was tagged but never published: its release checks failed on macOS. 0.3.1 is 0.3.0 plus this fix.

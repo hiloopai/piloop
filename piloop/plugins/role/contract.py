@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, Self
 
 from pydantic import Field, model_validator
 
-from piloop import deprecated
 from piloop.ids import ROLE_NAME, CommentKind
 from piloop.plugins.harness.contract import HarnessKey, HarnessName
 from piloop.plugins.host import Capability, Many, Parameters, Reach, Scope
@@ -76,13 +75,6 @@ class Continuity(StrEnum):
 
 class RoleConfig(Parameters):
     """The keys that every ``[plugins.role.<name>]`` table accepts. Each role's table below adds keys and sets defaults."""
-
-    @model_validator(mode='before')
-    @classmethod
-    def _no_workdir(cls, data: object) -> object:
-        if isinstance(data, dict) and 'workdir' in data:
-            raise ValueError(deprecated.removed_workdir())
-        return data
 
     PROMPT: ClassVar[Traversable | None] = None
     """The prompt that starts the brief of the role's agents: a resource of the role's package, such as
@@ -270,8 +262,6 @@ def new_role(name: str, table: Mapping[str, object]) -> type[ImplementerRole] | 
     Raises:
         ValueError: ``name`` is no role name, or one that signs writes already.
     """
-    if name == 'worker':
-        raise ValueError(deprecated.removed_worker())
     if not re.fullmatch(ROLE_NAME, name) or name in RESERVED_NAMES:
         raise ValueError(
             f'{name!r} is not a role name: use lowercase letters, digits, _ and - ({ROLE_NAME}), and none of'

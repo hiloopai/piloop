@@ -249,8 +249,6 @@ def run_agent(job: AgentJob, runtime: Runtime, control: Control, site: Site, spa
 
     None when there is nothing to report: the job is no longer the executor's, or the daemon hands it over.
     """
-    # only an agent that a previous daemon left has neither, and it is re-attached (``watch_agent``)
-    assert job.spec is not None and job.brief_cid is not None
     started_at = time.monotonic()
     log_dir, cwd = site.log_dir(job), site.cwd(job)
     try:

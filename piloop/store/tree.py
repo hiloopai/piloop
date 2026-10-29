@@ -5,11 +5,9 @@ directories and special files (sockets, fifos) are not, and the latter stay wher
 that links each blob, stored as its DRISL encoding under its DRISL CID.
 """
 
-import base64
 import contextlib
 import errno
 import fcntl
-import json
 import os
 import shutil
 import stat
@@ -23,7 +21,6 @@ from pathlib import Path
 from covalence import Cid, Codec, Value
 from pydantic import BaseModel, ConfigDict
 
-from piloop import deprecated
 from piloop.plugins.cas.contract import UNBOUNDED, BlobAddress, Cas
 
 DRISL = Codec('drisl')
@@ -76,40 +73,18 @@ class Manifest(BaseModel):
 
     @classmethod
     def get(cls, cas: Cas, cid: Cid) -> Manifest:
-        """The manifest stored under ``cid``, checked: a DASL value, or the JSON of piloop 0.2 under a raw CID.
+        """The manifest stored under ``cid``, checked: a DASL value.
 
         Raises:
             Missing: The CAS does not hold it.
             ValueError: What ``cid`` names is not a manifest.
         """
+        if cid.codec != DRISL:
+            raise ValueError(f'{cid} names no manifest: its codec is {cid.codec.name}, not DRISL')
         data = cas.get(cid)
         if data is None:
             raise Missing(f'the manifest {cid} is not in the CAS')
-        if cid.codec == RAW:
-            return _json_manifest(cid, data)
         return cls.model_validate(Value.decode(data).to_native())
-
-
-@deprecated.until('0.4.0', 'JSON manifests of piloop 0.2: delete _json_manifest, its call and migrate_manifests')
-def _json_manifest(cid: Cid, data: bytes) -> Manifest:
-    """A manifest that piloop 0.2 stored: JSON, each file's blob a base32 digest."""
-    doc = json.loads(data)
-    if doc.get('version') != 1:
-        raise ValueError(f'{cid} names no manifest')
-    return Manifest(
-        entries=tuple(
-            Entry(
-                path=row['path'],
-                mode=row['mode'],
-                size=row.get('size', 0),
-                blob=Cid.from_parts(RAW, 'blake3', base64.b32decode(row['hash'].upper() + '===='))
-                if 'hash' in row
-                else None,
-                link=row.get('link'),
-            )
-            for row in doc['entries']
-        )
-    )
 
 
 def cid_of(path: Path) -> Cid:

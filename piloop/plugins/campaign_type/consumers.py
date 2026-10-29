@@ -22,7 +22,6 @@ from pydantic import ValidationError
 from sqlalchemy import Select, delete, exists, select
 from sqlalchemy.orm import Session
 
-from piloop import deprecated
 from piloop.actor import Agent, System
 from piloop.agents.launcher import turn
 from piloop.agents.results import (
@@ -96,11 +95,9 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from piloop.plugins.campaign_type.kit.runs.controller import (
     RUNS,
     RunFinished,
-    run_place,
 )
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.stop import runs_without_keep, settled
-from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     CandidateJudged,
     Rebased,
@@ -258,7 +255,7 @@ class Campaigns:
             with self._db.session() as s:
                 live = s.scalars(select(AgentSession).where(AgentSession.state.in_(LIVE))).all()
                 runs = {w.id: w.run_id for w in live}
-                left = [self._left(s, w) for w in live]
+                left = [LeftJob(AgentKey(w.id)) for w in live]
             with self._db.session() as s:
                 s.execute(delete(Evaluation))
                 s.commit()
@@ -278,37 +275,6 @@ class Campaigns:
                 self._futures[agent_session_id] = self._host.thread(body)
             for planner in self._types.values():
                 planner.resume_unscored()
-
-    def _left(self, s: Session, w: AgentSession) -> LeftJob:
-        """The ``LeftJob`` of an agent that a previous daemon left in flight: its key, and the job of a running one."""
-        if w.state is AgentSessionState.RUNNING and (job := self._running(s, w)) is not None:
-            return job
-        return LeftJob(AgentKey(w.id))
-
-    @deprecated.until(
-        '0.4.0',
-        'an agent that a 0.2 daemon started (before leases): delete _running with Launcher.left and LeftJob.job',
-    )
-    def _running(self, s: Session, w: AgentSession) -> LeftJob | None:
-        """The ``LeftJob`` of a running agent with its job, if its worktree exists, for an executor to adopt it.
-
-        Only an agent that a daemon before leases started needs it: so an upgrade does not lose its work, it keeps
-        running, and its run is scored when it ends.
-        """
-        campaign = s.get(Campaign, w.campaign_id) if w.campaign_id is not None else None
-        if campaign is None:
-            return None
-        sources = self._controller.sources
-        if w.run_id is not None:
-            run = s.get_one(Run, w.run_id)
-            if run.status is not RunStatus.RUNNING or not (self._runs_dir / str(w.run_id) / 'worktree').is_dir():
-                return None
-            artifact = sources.source(campaign, run.base.revision)
-            return self._controller.launcher.left(s, w, artifact, run_place(w.run_id), w.run_id)
-        if not (self._agent_sessions_dir / str(w.id) / 'worktree').is_dir():
-            return None
-        artifact = sources.source(campaign, checkout_candidate(s, campaign).revision)
-        return self._controller.launcher.left(s, w, artifact, sweep_place(w.id), None)
 
     def _fail_open(self, end: RunEnd, *, reaped: bool, sparing: Collection[AgentSessionId] = ()) -> None:
         """End each run in flight as ``end`` and queue its idea again. Close each live agent except ``sparing``.
@@ -334,14 +300,10 @@ class Campaigns:
                 close(s, agent_session, end, self._tracer)
             s.commit()
 
-    @deprecated.until(
-        '0.4.0', 'a kill of an agent that a 0.2 daemon started (before leases): delete _kill_stale with _running'
-    )
     def _kill_stale(self, s: Session, agent_session: AgentSession) -> None:
         """Ask the runtime to kill an agent that no executor adopted, which outlives its daemon. Best effort.
 
-        Such an agent was started before leases, or its job ended with no report. Once every agent is an executor's,
-        its executor stops it.
+        Its job ended with no report, so no executor stops it.
         """
         try:
             runtime_for(agent_session, self._runtime_factory).kill(handle_for(agent_session))

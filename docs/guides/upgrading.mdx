@@ -151,6 +151,22 @@ one. The [changelog](https://github.com/hiloopai/piloop/blob/main/CHANGELOG.md) 
 
 ## Upgrading to 0.4.0
 
+### Removed keys
+
+The keys that 0.3.0 deprecated are removed, and a file that still sets one fails as an unknown key:
+
+| Removed | Write instead |
+|---|---|
+| `[stop]`, `confidence` and their `PILOOP_CAMPAIGN_STOP__<KEY>` and `PILOOP_CAMPAIGN_CONFIDENCE` | [Limits and confidence are parameters of the rules](#limits-and-confidence-are-parameters-of-the-rules) |
+| `[spend] limit` | `hold_at = { spend = ... }` in `[plugins.stop_rule]` ([Spend is a fact](#spend-is-a-fact)) |
+| `kind` in a trigger | [Triggers name their provider](#triggers-name-their-provider) |
+| `[storage.backend]` in `config.toml` | [The CAS](#the-cas) |
+| `max_evaluations` and `PILOOP_MAX_EVALUATIONS` | `evaluations` in `[plugins.executor.pools.serve]` of `config.toml` |
+| `tick_seconds` in `config.toml` | Nothing: delete it |
+
+The keys that 0.2.0 deprecated, the herdr runtime and `workdir` no longer get a message of their own: they fail as
+unknown keys too.
+
 ### Shorter briefs, and the comments on an idea are a section
 
 The built-in prompts are a third of their size. What an implementer rarely needs is a guide away:
@@ -415,6 +431,10 @@ An archiving is of a subject: `archives.subject_kind` and `archives.subject_id` 
 `anomaly.disk` events name it in `subject` (`"idea#12"`) in place of `idea`. The migration rewrites both. A query of
 `archives.idea_id` reads `subject_id WHERE subject_kind = 'idea'`. `piloop store status` counts settled subjects in
 place of done ideas.
+
+piloop no longer reads an archive manifest of piloop 0.2. piloop 0.3 stored each one again at its start. When one
+was left, because the store could not give it back, the upgrade refuses the home and names the archive: run
+`piloop migrate` with piloop 0.3 first.
 
 ### Incidents are triggers
 

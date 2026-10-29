@@ -27,7 +27,6 @@ from piloop.net.tokens import Tokens
 from piloop.otel import Span, tracer
 from piloop.plugins import host as plugins
 from piloop.plugins.archive.contract import ARCHIVES, CONSUMER, ArchiveHost
-from piloop.plugins.archive.local.store import ManifestNotMigrated, migrate_manifests
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.cas import contract as cas
 from piloop.plugins.contribution import CONTRIBUTORS
@@ -199,7 +198,6 @@ class Daemon:
                 backup=None if self._backup is None else str(self._backup),
             ) as span:
                 self._listen(span)
-                self._migrate_manifests(span)
                 self.scheduler.reap()
                 self._inherited.watch()
             self.scheduler.serve()
@@ -239,17 +237,6 @@ class Daemon:
             raise SystemExit(f'{SECRETS_COMMAND_ENV} ({self._cfg.secrets_command}) failed: {e}') from e
         os.environ.update(values)
         return ','.join(sorted(values))
-
-    def _migrate_manifests(self, span: Span) -> None:
-        """Store the archives' manifests of piloop 0.2 again in the new format, or record why not on the start span.
-
-        A failure does not stop the start: an in-place restart must not leave its agents without a daemon, and the
-        store still reads the old manifests. The next start, or ``piloop migrate``, tries again.
-        """
-        try:
-            span.set(manifests_migrated=migrate_manifests(self.db, self._cas))
-        except ManifestNotMigrated as e:
-            span.error(e)
 
     def _listen(self, span: Span) -> None:
         """Serve the API on the home's Unix socket, and on the network's listener when it has one.

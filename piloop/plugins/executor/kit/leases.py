@@ -47,7 +47,6 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from sqlalchemy import ColumnElement, exists, func, select, update
 from sqlalchemy.orm import Session, aliased
 
-from piloop import deprecated
 from piloop.actor import System
 from piloop.agents.results import PromptOutcome
 from piloop.db import feed
@@ -991,8 +990,7 @@ class Leases:
     def adopt(self, left: Sequence[LeftJob], worker: str) -> list[JobKey]:
         """Give every live lease a full period, and return the jobs of ``left`` that have no open lease.
 
-        A job on an open lease goes on: its worker finds it again (``register``). A running agent that a daemon before
-        leases started goes on a live lease of ``worker`` (``_adopt_running``).
+        A job on an open lease goes on: its worker finds it again (``register``).
         """
         self.renew_all()
         refused: list[JobKey] = []
@@ -1004,8 +1002,6 @@ class Leases:
                 cancel(s, lease, NOT_TAKEN)
             for job in left:
                 lease = lease_of(s, job.key)
-                if lease is None and _adopt_running(s, self._cas, job, worker, self.timing):
-                    continue
                 if lease is None or lease.state not in OPEN_LEASES:
                     refused.append(job.key)
             s.commit()
@@ -1071,23 +1067,6 @@ def _unanswered() -> ColumnElement[bool]:
         func.json_extract(outcome.payload, '$.comment') == func.json_extract(Event.payload, '$.comment'),
     )
     return Event.kind.not_in(LeasePrompted.kinds()) | ~answered
-
-
-@deprecated.until('0.4.0', 'an agent that a 0.2 daemon started (before leases): delete _adopt_running')
-def _adopt_running(s: Session, cas: Cas, left: LeftJob, worker: str, timing: Timing) -> bool:
-    """Put a running agent that a daemon before leases started on a live lease of ``worker``, and return True.
-
-    It keeps running, and its work is scored. False for every other job without a lease.
-    """
-    if left.job is None or left.handle is None:
-        return False
-    lease = enqueue(s, cas, left.job)
-    now = utcnow()
-    handle = AgentHandle(runtime=left.job.runtime, data=left.handle)
-    lease.state, lease.worker, lease.handle = LeaseState.RUNNING, worker, handle.model_dump(mode='json')
-    lease.acquired_at = lease.started_at = left.started_at or now
-    lease.renewed_at, lease.expires_at = now, now + timedelta(seconds=timing.toleration)
-    return True
 
 
 def _held_back(s: Session, kind: LeaseKind, runners: Sequence[str]) -> bool:
