@@ -156,3 +156,16 @@ def test_a_spell_that_ends_before_its_alert_raises_nothing_and_the_next_one_wait
     set_status(db, proposed, IdeaStatus.PROPOSED)
     assert watched(db, campaign, start + 2 * ALERT) == start + 2 * ALERT + ALERT
     assert spells(db) == ['slots_idle.seen', 'slots_idle.ended', 'slots_idle.seen'] and escalations(db) == []
+
+
+@pytest.mark.parametrize('skew', [timedelta(days=-1), timedelta(days=1)], ids=['behind', 'ahead'])
+def test_a_spell_counts_its_alert_on_the_clock_of_the_pass_that_saw_it_not_on_the_write_s(
+    db: Database, campaign: Campaign, skew: timedelta
+) -> None:
+    """The passes' clock is a day off the database's: the spell raises at the due that its first pass returned."""
+    add_ideas(db, campaign, 'a', status=IdeaStatus.PROPOSED)
+    start = utcnow() + skew
+    assert watched(db, campaign, start) == start + ALERT
+    assert watched(db, campaign, start + ALERT - timedelta(seconds=1)) == start + ALERT and escalations(db) == []
+    assert watched(db, campaign, start + ALERT) is None
+    assert spells(db) == ['slots_idle.seen', 'slots_idle.raised']

@@ -89,7 +89,8 @@ def _spell(
     spell = last if last is not None and last[1].kind != 'slots_idle.ended' else None
     match spell:
         case None if ideas:
-            emit(s, SlotsIdle(kind='slots_idle.seen', role=name), on, System.DAEMON)
+            # stamped with the pass's clock, which its due is counted on, not with the write's
+            emit(s, SlotsIdle(kind='slots_idle.seen', role=name), on, System.DAEMON).at = now
             return now + role.idle_alert
         case None:
             return None
