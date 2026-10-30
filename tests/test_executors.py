@@ -30,6 +30,7 @@ from piloop.otel import Tracer
 from piloop.plugins import host as plugins
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, KIND, EvaluationJob
 from piloop.plugins.campaign_type.kit.evaluation.measure import request_remeasure
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
@@ -50,6 +51,7 @@ from piloop.plugins.executor.contract import (
     key_of,
 )
 from piloop.plugins.executor.kit.leases import StaleReport, read_job
+from piloop.plugins.metric import Direction
 from piloop.plugins.runtime.contract import Handle
 from piloop.plugins.vcs.contract import Pin
 from piloop.plugins.vcs.git import Git
@@ -376,6 +378,7 @@ def test_a_place_is_a_relative_path_that_stays_inside_a_home(place: str) -> None
             place=place,
             command=['true'],
             timeout=1,
+            score=Score(name='score', direction=Direction.HIGHER),
             required=[],
             known=[],
             max_evidence_bytes=0,
@@ -405,7 +408,7 @@ def test_a_job_and_a_report_validate_as_the_model_of_their_kind_and_an_unknown_k
     artifact = Source(vcs=Git(), repo=RepoId(CampaignId(1)), revision=Revision('abc'))
     job = EvaluationJob(
         evaluation=3, candidate=CandidateId(1), runner='process', artifact=artifact, place='eval', command=['true'],
-        timeout=1, required=[], known=[], max_evidence_bytes=0,
+        timeout=1, score=Score(name='score', direction=Direction.HIGHER), required=[], known=[], max_evidence_bytes=0,
     )  # fmt: skip
     assert JOB.validate_json(JOB.dump_json(job)) == job
     assert StaleReport.model_json_schema()['properties']['report'] == {'title': 'Report', 'type': 'object'}

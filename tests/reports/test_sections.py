@@ -114,10 +114,31 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     overview += ['funnel', 'yields', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
     assert defaults(Surface.SWEEP) == ['context', 'lessons', 'incidents', *overview, 'tools', 'pack']
-    assert defaults(Surface.RUN) == ['context', 'idea_comments', 'lessons', 'queue', 'history'], 'the board too'
-    assert ImplementerRole().shown() == ['database', 'context', 'idea_comments', 'lessons', 'queue', 'history'], (
-        'its guides first'
-    )
+    assert defaults(Surface.RUN) == ['context', 'dev', 'idea_comments', 'lessons', 'queue', 'history'], 'the board too'
+    assert ImplementerRole().shown() == [
+        'database',
+        'context',
+        'dev',
+        'idea_comments',
+        'lessons',
+        'queue',
+        'history',
+    ], 'its guides first'
+
+
+def test_an_implementer_is_told_the_dev_command_which_piloop_never_runs(db: Database, campaign: Campaign) -> None:
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        assert markdown(sections('dev'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s))) == '', 'none set'
+    set_config(db, campaign, evaluator={'dev': ['uv', 'run', 'evaluate.py', '--n', '50 rows']})
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        text = markdown(sections('dev'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
+    assert text == snapshot("""\
+## Check a change
+
+Run `uv run evaluate.py --n '50 rows'` in your checkout to check a change, as often as you like. It is fast, and piloop never runs it or records what it prints: only the evaluate command scores a version.\
+""")
 
 
 def test_the_funnel_shows_how_far_the_attempts_got_and_where_the_others_ended(db: Database, campaign: Campaign) -> None:

@@ -3,6 +3,7 @@
 | Section | Shows | Shown by default in | Order | Parameters |
 |---|---|---|---|---|
 | `context` | `[plugins.section.context]`: who the agent is, where its campaign is, why it started, and how it runs piloop. | sweep, run | 1 | `lines` |
+| `dev` | The campaign's dev command (`[evaluator] dev`), which an implementer runs itself to check a change. | run | 3 | none |
 | `idea_comments` | `[plugins.section.idea_comments]`: the comments on the reader's idea and on its runs, the latest last. | run | 5 | `latest`, `chars` |
 | `database` | How to run `piloop sql`, and how to quote an agent's own text. Every built-in role shows it. | none | 10 | none |
 | `lessons` | The current lessons of the campaign's repo, most relevant first, in a reading budget. | sweep, run | 10 | `budget` |

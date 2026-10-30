@@ -155,10 +155,14 @@ https://piloop.autoresearch.inc/concepts/roles documents the `[plugins.role.*]` 
 Wire the existing measurement, or write `evaluate.py`. The contract:
 
 - It runs from the repo root of a clean worktree.
-- It appends one JSON line to `$PILOOP_RESULT_FILE` with every primary and guardrail of `piloop.toml`:
-  `{"metrics": {"<name>": <number>}}`, plus `units` when the metric is a sum over units. A name that `piloop.toml`
-  lacks is a crash. When the variable is unset (a human or an implementer runs it), it prints the line instead.
-- It exits 0. A non-zero exit is recorded as a crash.
+- It appends one JSON line to `$PILOOP_RESULT_FILE`: `{"status": "ok", "score": <primary>, "direction": "<higher|lower>",
+  "metrics": {"<guardrail or watch>": <number>}, "feedback": "<one line>"}`, plus `units` when a metric is a sum over
+  units. A name that `piloop.toml` lacks is a crash. When the variable is unset (a human or an implementer runs it), it
+  prints the line instead.
+- The evaluator, not the brief, checks the ceremony (manifests, size caps, inputs) and says what failed in `feedback`.
+- `status` is `crash` or `timeout` when the candidate failed, and `infra_error` for a fault that is not the candidate's
+  (a rate limit, a missing input): piloop runs it again later and never judges on it. After `ok` it exits 0.
+- A fast `[evaluator] dev` command lets implementers check a change themselves.
 - It is deterministic: fixed seeds and splits.
 - When an evaluation costs money, it reports `eval_cost_usd` as a watch metric, also when it fails.
 - When the full panel is expensive, a `[[ladder]]` rung that it reports first can stop a bad commit early:

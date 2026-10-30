@@ -75,6 +75,7 @@ from piloop.plugins.campaign_type.kit.verdicts.section.trajectory import Traject
 from piloop.plugins.campaign_type.kit.runs.section.runs import Runs
 from piloop.plugins.campaign_type.kit.backlog.section.queue import Queue
 from piloop.plugins.section.agents import Agents
+from piloop.plugins.campaign_type.kit.evaluation.section.dev import Dev
 from piloop.plugins.campaign_type.kit.evaluation.section.evaluations import Evaluations
 from piloop.plugins.campaign_type.kit.evaluation.section.funnel import RunFunnel
 from piloop.plugins.campaign_type.optimization.section.yields import Yields

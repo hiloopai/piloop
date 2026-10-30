@@ -68,9 +68,10 @@ def eval_cancel(
 ) -> None:
     """Cancel the evaluation of a candidate: a waiting one never starts, and the daemon stops a running one.
 
-    It also cancels a requested remeasure. The candidate gets a crashed measurement that names you, at once, so a run's
-    candidate is judged a `crash`, and a daemon restart does not run it again. It is evaluated again only when someone
-    asks (`piloop candidate remeasure`). A baseline that never measured pauses its campaign, as a failed one does.
+    It also cancels a requested remeasure. A cancel is not a verdict: it records no measurement. A run's candidate that
+    waits for its verdict is `skipped` at once, and a daemon restart does not run it again. It is evaluated again only
+    when someone asks (`piloop candidate remeasure`). A baseline that never measured pauses its campaign's measurements
+    until you resume it.
     """
     with EvaluationClient.connect(daemon_http()) as client:
         client.cancel_evaluation(candidate_id)

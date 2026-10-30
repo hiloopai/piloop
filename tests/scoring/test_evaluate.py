@@ -15,9 +15,15 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
     EvalResult,
     Exited,
     Failed,
+    Gone,
+    Infra,
     Killed,
     Measured,
     MissingMetrics,
+    NotRun,
+    Said,
+    Score,
+    Status,
     Step,
     StoppedAt,
     TimedOut,
@@ -34,6 +40,8 @@ from piloop.plugins.metric import Direction
 HIGHER, LOWER = Direction.HIGHER, Direction.LOWER
 
 KNOWN = frozenset({'a', 'b', 'cost'})
+SCORE = Score(name='a', direction=HIGHER)
+"""The primary that a result's ``score`` reports."""
 
 
 def evaluate(
@@ -54,6 +62,7 @@ def evaluate(
         required=set(required),
         known=set(KNOWN),
         max_evidence_bytes=cap,
+        score=SCORE,
         track=track,
     )
     return result
@@ -89,6 +98,57 @@ def test_a_result_is_measured(tmp_path: Path) -> None:
 def test_a_watch_metric_may_be_left_out(tmp_path: Path) -> None:
     r = evaluate(tmp_path, write({'metrics': {'a': 1}}))
     assert isinstance(r, Measured) and r.metrics == {'a': 1.0}
+
+
+def test_a_result_reports_its_score_as_the_primary(tmp_path: Path) -> None:
+    """``score`` is the primary's value; ``metrics`` has the others, and ``feedback`` stays with the measurement."""
+    result = {'status': 'ok', 'score': 0.8, 'direction': 'higher', 'metrics': {'b': 2}, 'feedback': '3 warnings'}
+    r = evaluate(tmp_path, write(result))
+    assert r == Measured({'b': 2.0, 'a': 0.8}, r.seconds, feedback='3 warnings')
+
+
+def test_the_score_may_have_units(tmp_path: Path) -> None:
+    r = evaluate(tmp_path, write({'status': 'ok', 'score': 2, 'direction': 'higher', 'units': {'a': {'x': 1, 'y': 1}}}))
+    assert isinstance(r, Measured) and r.units == {'a': {'x': 1.0, 'y': 1.0}}
+
+
+@pytest.mark.parametrize(
+    ('status', 'feedback', 'error'),
+    [
+        ('crash', 'the manifest is missing', 'evaluate reported crash: the manifest is missing'),
+        ('timeout', None, 'evaluate reported timeout'),
+        ('infra_error', 'HTTP 429 from the judge', 'evaluate reported infra_error: HTTP 429 from the judge'),
+    ],
+)
+def test_a_reported_failure_wins_over_the_exit(tmp_path: Path, status: str, feedback: str | None, error: str) -> None:
+    """An evaluator that says why it failed is believed, whatever its exit code: what it said is the error."""
+    r = evaluate(tmp_path, f'{write({"status": status, "feedback": feedback, "metrics": {"cost": 0.2}})}; exit 1')
+    assert isinstance(r, Failed) and isinstance(r.why, Said) and (r.why.status, r.why.feedback) == (status, feedback)
+    assert (r.error, r.printed) == (error, {'cost': 0.2}), 'a failure has a cost too'
+
+
+def test_a_failure_that_is_not_the_candidates_says_why_and_a_gone_version_is_the_candidates() -> None:
+    """An infra error, a worktree that piloop could not make and an evaluate that another process killed measured nothing
+    of the candidate. A version that the repo lacks never runs: it is the candidate's crash."""
+    assert [
+        Failed(why, 0).infra
+        for why in (Said(Status.INFRA_ERROR, None), NotRun('no worktree'), Killed(signal.SIGKILL, ''))
+    ] == [Infra.REPORTED, Infra.NOT_RUN, Infra.KILLED]
+    candidates = [
+        Gone("'abc' names no commit"),
+        Said(Status.CRASH, None),
+        Said(Status.TIMEOUT, None),
+        Killed(signal.SIGSEGV, ''),
+        Exited(1, ''),
+        TimedOut(5),
+    ]
+    assert [Failed(why, 0).infra for why in candidates] == [None] * 6
+    assert Failed(Gone("'abc' names no commit"), 0).error == "'abc' names no commit"
+
+
+def test_an_ok_result_that_exits_non_zero_is_a_crash(tmp_path: Path) -> None:
+    r = evaluate(tmp_path, f'{write({"status": "ok", "score": 1, "direction": "higher"})}; exit 2')
+    assert isinstance(r, Failed) and r.why == Exited(2, '') and r.printed == {'a': 1.0}
 
 
 def test_a_result_written_in_parts_and_without_a_final_newline_is_read(tmp_path: Path) -> None:
@@ -193,7 +253,7 @@ def assert_dead(pid: int) -> None:
         ),
         (
             write({'metric': {'a': 1}}),
-            'expected one JSON object of the result schema: metric: Extra inputs are not permitted; metrics: Field required',
+            'expected one JSON object of the result schema: metric: Extra inputs are not permitted',
         ),
         (
             write({'metrics': {'a': 1}, 'notes': 'x'}),
@@ -204,6 +264,22 @@ def assert_dead(pid: int) -> None:
         (write({'metrics': {'a': 1}, 'units': {'b': {'x': 1}}}), "units for 'b', which has no value"),
         (write({'metrics': {'a': 1}, 'units': {'a': {}}}), "no units for 'a'"),
         (write({'metrics': {'a': 3}, 'units': {'a': {'x': 1, 'y': 1}}}), "units of 'a' sum to 2, its value is 3"),
+        (
+            write({'status': 'ok', 'direction': 'higher'}),
+            'status ok needs a score and a direction',
+        ),
+        (
+            write({'status': 'ok', 'score': 1, 'direction': 'lower'}),
+            'it reports the direction lower; [[metrics]] says a is higher',
+        ),
+        (
+            write({'status': 'ok', 'score': 1, 'direction': 'higher', 'metrics': {'a': 1}}),
+            'a is the score: report it as score, not in metrics',
+        ),
+        (
+            write({'status': 'fine', 'score': 1}),
+            "expected one JSON object of the result schema: status: Input should be 'ok', 'crash', 'timeout' or 'infra_error'",
+        ),
         (
             write({'metrics': {'a': 1}, 'evidence': {'../up': 'x'}}),
             "expected one JSON object of the result schema: evidence.../up.[key]: String should match pattern '^[A-Za-z0-9][A-Za-z0-9_.-]*$'",
@@ -263,6 +339,7 @@ def test_bad_evidence_is_a_crash(tmp_path: Path, script: str, error: str) -> Non
         required={'a'},
         known=set(KNOWN),
         max_evidence_bytes=1000,
+        score=SCORE,
     )
     assert isinstance(r, Failed) and r.why == BadResult(error)
     assert r.printed == {}, 'a refused line counts nothing'
@@ -286,6 +363,7 @@ def climb(
         required={'a'},
         known=set(KNOWN),
         max_evidence_bytes=1000,
+        score=SCORE,
         step=step,
         gate=gate,
         stop_grace=grace,
@@ -353,6 +431,11 @@ def test_a_rungs_own_command_reports_one_line_without_its_name(tmp_path: Path) -
         (write({'metrics': {'a': 1}}), "it reported rung None where 'screen' comes", 'screen'),
         (rung('screen', {'cost': 1}), None, 'screen'),
         (rung('screen', {'a': 0.7}), 'it stopped after rung screen, before its last line', None),
+        (
+            write({'rung': 'screen', 'status': 'ok', 'score': 0.7, 'direction': 'higher'}),
+            'a rung reports its metrics, not a status',
+            'screen',
+        ),
         ('echo METRIC a=1', 'it wrote no result to PILOOP_RESULT_FILE', 'screen'),
     ],
 )
@@ -372,7 +455,8 @@ def test_a_bad_line_ends_the_command_and_is_why_it_failed(tmp_path: Path) -> Non
 
 def test_a_line_that_ends_the_run_before_its_process_is_known_stops_the_process_once_it_is(tmp_path: Path) -> None:
     """The pipe's reader can take a line before the run's process is tracked: ``track`` then sends the SIGTERM."""
-    lines = _Lines(Step(rungs=(SCREEN,)), Checks({'a'}, set(KNOWN), tmp_path, tmp_path / 'evidence', 1000), GATE, 5)
+    checks = Checks({'a'}, set(KNOWN), tmp_path, tmp_path / 'evidence', 1000, SCORE)
+    lines = _Lines(Step(rungs=(SCREEN,)), checks, GATE, 5)
     lines.take(json.dumps({'rung': 'wide', 'metrics': {'b': 1}}))
     proc = subprocess.Popen(['sleep', '30'], start_new_session=True)
     lines.track(proc)

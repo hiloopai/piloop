@@ -417,7 +417,7 @@ def test_a_revoked_token_and_the_servers_own_name_are_dismissed(remote: Callable
 
 def test_a_worker_of_another_protocol_is_dismissed_with_the_servers_version(remote: Callable[..., Remote]) -> None:
     with pytest.raises(
-        Dismissed, match=r'\(426\): the server runs piloop .+, with protocol 17, and the worker protocol 1'
+        Dismissed, match=r'\(426\): the server runs piloop .+, with protocol 18, and the worker protocol 1'
     ):
         remote().register(INFO.model_copy(update={'protocol': 1}))
 
@@ -434,7 +434,7 @@ def test_a_worker_that_registered_before_the_server_upgraded_is_refused_at_its_h
     ):
         refused = http.post(f'/v1/executor/{path}', content=body.model_dump_json())
         assert (refused.status_code, refused.json()['error']) == (426, 'protocol'), path
-        assert 'with protocol 17, and the worker protocol 1' in refused.json()['detail']
+        assert 'with protocol 18, and the worker protocol 1' in refused.json()['detail']
     http.close()
 
 

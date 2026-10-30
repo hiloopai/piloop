@@ -64,9 +64,10 @@ def evaluations(s: Reading) -> EvaluationQueue:
     dependencies=[Depends(actor_access)],
 )
 def cancel_evaluation(s: Writing, me: Acting, candidate: AddressedCandidate) -> CandidateAnswer:
-    """Cancel a candidate's evaluation, waiting or running, or its requested remeasure: it measures a crash at once.
+    """Cancel a candidate's evaluation, waiting or running, or its requested remeasure. A cancel is not a verdict.
 
-    A baseline that never measured pauses its campaign, as when it fails (``ops.hold_on_failed_baseline``).
+    A run's candidate that waits for its verdict is ``skipped``. A baseline that never measured pauses every
+    measurement of its campaign (``ops.hold_on_cancelled_baseline``).
     """
     if not queue.cancel(s, candidate.id, me):
         raise Refusal(
@@ -74,7 +75,7 @@ def cancel_evaluation(s: Writing, me: Acting, candidate: AddressedCandidate) -> 
             Problem.REFUSED,
             f'candidate#{candidate.id} has no evaluation that waits or runs: see `piloop eval queue`',
         )
-    evaluation_ops.hold_on_failed_baseline(s, candidate, None)
+    evaluation_ops.hold_on_cancelled_baseline(s, candidate, me)
     s.commit()
     with db_feed.snapshot(s) as cursor:
         return CandidateAnswer(cursor=cursor, candidate=candidate_view(candidate))

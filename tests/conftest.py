@@ -51,7 +51,7 @@ from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidatesClient
-from piloop.plugins.campaign_type.kit.evaluation.evaluate import Measured, run_evaluate
+from piloop.plugins.campaign_type.kit.evaluation.evaluate import Measured, Score, run_evaluate
 from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import EvaluationClient
@@ -414,6 +414,7 @@ def register(db: Database, campaign_path: Path) -> Campaign:
         required={m.name for m in cfg.metrics},
         known={m.name for m in cfg.metrics},
         max_evidence_bytes=0,
+        score=Score.of(cfg.all_tracks[0].primary),
     )
     assert isinstance(result, Measured), result
     with db.session() as s:

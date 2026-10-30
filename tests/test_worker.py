@@ -32,7 +32,7 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.jobs import EvaluationJob
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EvaluationJob, InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunStatus
@@ -838,7 +838,10 @@ def test_a_worker_whose_heartbeat_hangs_stops_its_job_when_its_self_stop_passes(
     finally:
         healed.set()
         (tmp_path / 'hold').unlink()
+        wait_until(lambda: infra_errors(db) == 1, 'its evaluator killed by the stop')
+        ex.stop(5)  # it waits to run again, a fault of the machine: the stop ends the wait
         measuring.join(30)
+    assert not measuring.is_alive()
 
 
 def test_a_worker_that_cannot_register_at_its_start_registers_on_its_next_turn(
@@ -863,8 +866,10 @@ def test_an_evaluator_whose_start_is_refused_by_the_fence_is_killed_at_once(
     mocker.patch.object(workers_of(ex).leases, 'started', side_effect=StaleLease('stale_lease: lease#1 was replaced'))
     measuring = threading.Thread(target=ex.remeasure, args=(baseline(db, campaign.id).id,))
     measuring.start()
+    wait_until(lambda: infra_errors(db) == 1, 'its evaluator killed, though the hold is still there')
+    ex.stop(5)  # it waits to run again, a fault of the machine: the stop ends the wait
     measuring.join(30)
-    assert not measuring.is_alive(), 'its evaluator was killed, though the hold is still there'
+    assert not measuring.is_alive()
 
 
 @pytest.mark.usefixtures('daemon_api')
@@ -1543,3 +1548,9 @@ def test_a_worker_whose_cas_lacks_the_job_loses_its_lease_with_why(
     assert lost.startswith('worker lost: MissingJob: the CAS lacks the job of lease#1, bafkr'), lost
     worker.stop()
     worker.join(5)
+
+
+def infra_errors(db: Database) -> int:
+    """How many evaluations failed for a cause that is not their candidate's (``InfraFailed``)."""
+    with db.session() as s:
+        return len(in_order(s, InfraFailed))

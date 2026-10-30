@@ -10,6 +10,7 @@ from collections.abc import Callable
 from contextlib import ExitStack, closing
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
+from enum import StrEnum
 from functools import partial
 from pathlib import Path
 from typing import ClassVar, Final, Literal, assert_never
@@ -65,8 +66,9 @@ from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.config import Track
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, Bar, EvaluationJob, Sample, record
+from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, Bar, EvaluationJob, InfraFailed, Sample, record
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     current_evaluator,
     gate_of,
@@ -178,6 +180,21 @@ class RunFinished(EventModel):
     kind: Literal['run.finished'] = 'run.finished'
     end: RunEnd
     error: str | None
+
+
+class Measuring(StrEnum):
+    """How a request for a measurement ended (``RunController._measure``)."""
+
+    MEASURED = 'measured'
+    """A measurement of it is recorded: a score, or a crash."""
+    CANCELLED = 'cancelled'
+    """Someone cancelled it (``queue.cancel``): no measurement, and no verdict."""
+    STOPPED = 'daemon_stopped'
+    """The daemon stopped: the next one asks again."""
+
+
+type Halted = Literal[Measuring.CANCELLED, Measuring.STOPPED]
+"""Why a run's candidate has no measurement to judge it on."""
 
 
 class RunController:
@@ -721,10 +738,11 @@ class RunController:
         with ExitStack() as opened:
             try:
                 repo = opened.enter_context(closing(vcs.open(campaign_path)))
-                if not self._measure(
+                ended = self._measure(
                     None, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir, bar=bar, repeats=repeats
-                ):
-                    return  # a stop killed the evaluator: there is nothing new to judge
+                )
+                if ended is not Measuring.MEASURED:
+                    return  # a stop killed the evaluator, or someone cancelled it: there is nothing new to judge
             except Exception as e:
                 with self._db.session() as s:
                     error = Sample(metrics={}, seconds=0.0, error=f'{type(e).__name__}: {e}')
@@ -831,6 +849,11 @@ class RunController:
                 scope = Scope.now(s, s.get_one(Run, run_id), repo)
                 s.commit()
                 candidate = s.get_one(Candidate, candidate_id)
+                match candidate.origin:
+                    case Origin.RECOVERED | Origin.SKIPPED as never if candidate.revision == revision:
+                        unmeasured = never  # this very version: its mark, or a cancel of its evaluation, holds
+                    case _:
+                        pass
                 again = candidate.origin in UNMEASURED or reproposed(candidate, s.get_one(Run, run_id))
                 judge_now = pending(candidate) or (unmeasured is None and again)
                 known = measured(candidate, scope.evaluator_id)
@@ -842,13 +865,19 @@ class RunController:
                     if known:
                         span.set(status='known')
                         self._tracer.event('candidate.known', run=run_id, revision=revision, candidate=candidate_id)
-                    measured_in = self._measure_with_bar(
+                    match self._measure_with_bar(
                         run_id, repo, candidate_id, log_dir / f'eval-{i}', bar=bar_id, gate=gate
-                    )
-                    if measured_in is None:
-                        span.set(status='cancelled')
-                        return None
-                    scope = measured_in
+                    ):
+                        case Measuring.STOPPED:
+                            span.set(status='cancelled')
+                            return None
+                        case Measuring.CANCELLED:  # no verdict: ``queue.cancel`` made it ``skipped``
+                            span.set(status='skipped')
+                            continue
+                        case Scope() as measured_in:
+                            scope = measured_in
+                        case never:
+                            assert_never(never)
                 judged = self._judge(
                     scope,
                     candidate_id,
@@ -895,13 +924,17 @@ class RunController:
             with self._tracer.span('piloop.candidate', run=scope.run_id, revision=revision, candidate=current) as span:
                 span.set(rebased=True)
                 eval_dir = log_dir / f'eval-rebased-{current}'
-                measured_in = self._measure_with_bar(
-                    scope.run_id, scope.repo, current, eval_dir, bar=parent_id, gate=gate
-                )
-                if measured_in is None:
-                    span.set(status='cancelled')
-                    return False
-                scope = measured_in
+                match self._measure_with_bar(scope.run_id, scope.repo, current, eval_dir, bar=parent_id, gate=gate):
+                    case Measuring.STOPPED:
+                        span.set(status='cancelled')
+                        return False
+                    case Measuring.CANCELLED:  # no verdict: ``queue.cancel`` made it ``skipped``
+                        span.set(status='skipped')
+                        return True
+                    case Scope() as measured_in:
+                        scope = measured_in
+                    case never:
+                        assert_never(never)
                 judged = self._judge(scope, current, parent_id, span, judge_now=judge_now, unmeasured=None, notes=[])
             current = judged.merged
         return True
@@ -915,10 +948,11 @@ class RunController:
         *,
         bar: CandidateId,
         gate: CandidateId | None,
-    ) -> Scope | None:
+    ) -> Scope | Halted:
         """Measure a run's candidate and its ``bar``, then return the scope to judge the candidate in.
 
-        Returns None if the daemon stopped. Each is measured once under the scope's evaluator unless that evaluator
+        Returns how it halted instead when the daemon stopped, or someone cancelled the candidate's evaluation. Each is
+        measured once under the scope's evaluator unless that evaluator
         measured it already (``measured``), and the scope is read again after each measurement. So when ``piloop init``
         registers an evaluator meanwhile, both are measured under the new one: a candidate is never judged under an old
         evaluator, nor against a bar that its evaluator has not measured. The bar is measured as the scheduler measures
@@ -941,10 +975,10 @@ class RunController:
                     tried.add((bar, scope.evaluator_id))
                     self.remeasure(bar)
                     if self.launcher.cancelled.is_set():
-                        return None
+                        return Measuring.STOPPED
                 case _:
                     tried.add((candidate_id, scope.evaluator_id))
-                    if not self._measure(
+                    ended = self._measure(
                         run_id,
                         scope.campaign_id,
                         scope.cfg,
@@ -955,8 +989,9 @@ class RunController:
                         bar=bar if scope.track.repeats else None,
                         repeats=scope.track.repeats or 1,
                         gate=gate,
-                    ):
-                        return None
+                    )
+                    if ended is not Measuring.MEASURED:
+                        return ended
 
     def _measure(
         self,
@@ -971,26 +1006,81 @@ class RunController:
         bar: CandidateId | None = None,
         repeats: int = 1,
         gate: CandidateId | None = None,
-    ) -> bool:
-        """Measure ``revision`` on the executor, and wait until its measurement is recorded. False if the daemon stopped.
+    ) -> Measuring:
+        """Measure ``revision`` on the executor, and wait until its measurement is recorded. Return how it ended.
 
         With ``bar``, it is a paired evaluation: ``repeats`` samples of ``revision``, each next to one of the bar's
         (``EvaluationJob.bar``). Without, ``repeats`` samples of ``revision`` alone. With ``gate``, the candidate whose
         rungs the ladder's stops compare with, the first sample may stop at a rung (``EvaluationJob.gate``): only a run's
         own version that the daemon may judge. Without, every sample climbs every rung, as what may become a bar must.
 
+        An evaluation that failed for a cause that is not its candidate's records nothing (``InfraFailed``): it waits in
+        the queue, where ``piloop eval queue`` lists it and ``piloop eval cancel`` cancels it, and runs again after
+        ``[evaluation] infra_retry``, twice as long after each failure up to ``infra_retry_max``. Each failure is an
+        event. It ends once it measures, someone cancels it, or the daemon stops.
+        """
+        failures = 0
+        while True:
+            match ended := self._request(
+                run_id, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir, bar, repeats, gate
+            ):
+                case InfraFailed(error=error):
+                    retry = min(self._evaluation.infra_retry * 2**failures, self._evaluation.infra_retry_max)
+                    failures += 1
+                    self._tracer.event(
+                        ended.kind, candidate=candidate_id, error=error, failures=failures, retry=retry.total_seconds()
+                    )
+                    # waits in the queue meanwhile, so a cancel finds it; the lock as in ``_request``: the runs that
+                    # shared the evaluation all put it back
+                    with self.launcher.lock, self._db.session() as s:
+                        waiting, _ = queue.request(s, candidate_id, evaluator_id)
+                        s.commit()
+                        row, before = waiting.id, _last_measurement(s, candidate_id, evaluator_id)
+                    gone = self._db.wait_until(
+                        lambda s, row=row: s.get(Evaluation, row) is None,
+                        give_up=self.launcher.cancelled.is_set,
+                        timeout=retry.total_seconds(),
+                    )
+                    if self.launcher.cancelled.is_set():
+                        return Measuring.STOPPED
+                    if gone:  # another request ran it meanwhile, or someone cancelled it
+                        with self._db.session() as s:
+                            after = _last_measurement(s, candidate_id, evaluator_id)
+                        return Measuring.MEASURED if after != before else Measuring.CANCELLED
+                case Measuring():
+                    return ended
+                case never:
+                    assert_never(never)
+
+    def _request(
+        self,
+        run_id: RunId | None,
+        campaign_id: CampaignId,
+        cfg: CampaignConfig,
+        revision: Revision,
+        candidate_id: CandidateId,
+        evaluator_id: EvaluatorId,
+        eval_dir: Path,
+        bar: CandidateId | None,
+        repeats: int,
+        gate: CandidateId | None,
+    ) -> Measuring | InfraFailed:
+        """Ask for one evaluation (``_measure``), and wait until it leaves the queue. Return how it ended.
+
         A request for a candidate that already waits or runs under the evaluator waits for that evaluation and submits
         nothing of its own (``queue.request``). It is submitted when the queue gives it a slot (``dispatch``), and its
-        result records the measurement (``CampaignResults``). An evaluation that cannot start, because the commit cannot
-        be checked out say, is a crash like one that fails, so every request ends with a measurement. A cancelled
-        evaluation records nothing: ``queue.cancel`` recorded its crash.
+        result records the measurement (``CampaignResults``). An evaluation that fails is a crash, a measurement too.
+        A cancelled one records nothing (``queue.cancel``), nor does an infra error, which says so (``InfraFailed``).
         """
         artifact = self.sources.source(self._campaign(campaign_id), revision)
         with self.launcher.lock:
             if self.launcher.cancelled.is_set():
-                return False
+                return Measuring.STOPPED
             with self._db.session() as s:  # two requests for one tree must not both insert it
-                evaluation, mine = queue.request(s, candidate_id, evaluator_id)
+                before = _last_measurement(s, candidate_id, evaluator_id)
+                evaluation, created = queue.request(s, candidate_id, evaluator_id)
+                # a row that waits with no job of this daemon is one that an infra error put back (``_measure``)
+                mine = created or (evaluation.started_at is None and evaluation.id not in self._jobs)
                 job = None
                 if mine:
                     paired = None
@@ -1006,6 +1096,7 @@ class RunController:
                         place=eval_dir.relative_to(self._home).as_posix(),
                         command=cfg.evaluate,
                         timeout=cfg.evaluate_timeout,
+                        score=Score.of(cfg.all_tracks[0].primary),
                         required=cfg.required,
                         known=cfg.reported,
                         max_evidence_bytes=self._evaluation.max_evidence_bytes,
@@ -1029,20 +1120,28 @@ class RunController:
             self.dispatch()  # its slot is free
             if not measured or self.launcher.cancelled.is_set():  # a stop's evaluation records nothing
                 span.set(status='cancelled')
-                return False
+                return Measuring.STOPPED
             with self._db.session() as s:
                 measurement = s.scalars(
                     select(Measurement)
-                    .where(Measurement.candidate_id == candidate_id, Measurement.evaluator_id == evaluator_id)
+                    .where(
+                        Measurement.candidate_id == candidate_id,
+                        Measurement.evaluator_id == evaluator_id,
+                        Measurement.id > (before or 0),
+                    )
                     .order_by(Measurement.id.desc())
                     .limit(1)
-                ).one()  # what it measured, or the crash that a cancel recorded
+                ).first()
+                if measurement is None:
+                    infra = latest(s, InfraFailed, has(InfraFailed, evaluation=evaluation_id))
+                    span.set(status='infra_error' if infra is not None else 'cancelled')
+                    return Measuring.CANCELLED if infra is None else infra[1]
                 span.set(
                     measurement=measurement.id,
                     error=measurement.error,
                     **{f'metric.{k}': v for k, v in measurement.metrics.items()},
                 )
-        return True
+        return Measuring.MEASURED
 
     def _judge(
         self,
@@ -1288,6 +1387,14 @@ class Judged:
     """It kept against the run's bar, on the trunk or for a rebase. The run's next commit is judged against it."""
     merged: CandidateId | None
     """The candidate of its merge onto the head, if it was rebased and the merge is a new tree."""
+
+
+def _last_measurement(s: Session, candidate_id: CandidateId, evaluator_id: EvaluatorId) -> MeasurementId | None:
+    """The newest measurement of the candidate under the evaluator, by id, or None."""
+    found = select(func.max(Measurement.id)).where(
+        Measurement.candidate_id == candidate_id, Measurement.evaluator_id == evaluator_id
+    )
+    return s.scalar(found)
 
 
 def wrap_up_lead(timeout: float, most: timedelta) -> float:

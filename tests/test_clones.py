@@ -16,7 +16,7 @@ from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import RepoId, Source, Workspace
 from piloop.plugins.executor.kit.clones import WORKSPACE, Clones, Fetch, of_record, own_replica
 from piloop.plugins.executor.kit.jobs import remote_site
-from piloop.plugins.vcs.contract import MAX_HAVE, Captured
+from piloop.plugins.vcs.contract import MAX_HAVE, Captured, UnknownRevision
 from piloop.plugins.vcs.git import FETCHED, Git
 from piloop.plugins.vcs.git.bundles import bundle, unbundle
 from piloop.plugins.vcs.git.commands import commits
@@ -186,7 +186,7 @@ def test_a_commit_that_the_server_cannot_bundle_fails_the_checkout(tmp_path: Pat
         return []
 
     clones = Clones(store, {REPO: origin}.__getitem__, of_record, nothing, tmp_path)
-    with pytest.raises(GitCommandError):
+    with pytest.raises(UnknownRevision, match='names no commit'):
         clones.checkout(Source(vcs=Git(), repo=REPO, revision=Revision('f' * 40)), tmp_path / 'wt')
 
 

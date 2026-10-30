@@ -24,6 +24,7 @@ from piloop.db.session import Database, write_transaction
 from piloop.ids import CommentId, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, EvaluationJob, EvaluationReport, Sample
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.executor.contract import (
@@ -73,6 +74,7 @@ from piloop.plugins.executor.kit.leases import (
 )
 from piloop.plugins.executor.kit.tables import LeaseWorker, NoLease
 from piloop.plugins.executor.workers import Workers
+from piloop.plugins.metric import Direction
 from piloop.plugins.runtime.contract import AgentExit, AgentStart, ExitStatus
 from piloop.plugins.vcs.git import Git
 from tests.conftest import WATCHDOG, baseline, home_cas
@@ -207,6 +209,7 @@ def evaluation_job(db: Database, campaign: Campaign, tmp_path: Path, runner: str
         place='eval',
         command=['true'],
         timeout=60,
+        score=Score(name='score', direction=Direction.HIGHER),
         required=['score'],
         known=['score'],
         max_evidence_bytes=0,
@@ -435,6 +438,7 @@ def evaluation_job_for_another_candidate(
         place='eval2',
         command=['true'],
         timeout=60,
+        score=Score(name='score', direction=Direction.HIGHER),
         required=['score'],
         known=['score'],
         max_evidence_bytes=0,

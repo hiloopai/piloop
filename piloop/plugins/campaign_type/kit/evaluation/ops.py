@@ -35,11 +35,24 @@ def hold_on_failed_baseline(s: Session, candidate: Candidate, logs: Path | None)
     """
     errors = [m.error for m in candidate.measurements]
     campaign = s.get_one(Campaign, candidate.campaign_id)
-    if candidate.origin is not Origin.BASELINE or campaign.paused is not None or None in errors:
+    if candidate.origin is not Origin.BASELINE or campaign.paused is not None or None in errors or not errors:
         return
     where = '' if logs is None else f'; its logs are in {logs}'
     fix = f'fix it, then `piloop candidate remeasure {candidate.id}` and `piloop resume {campaign.name}`'
     pause(s, campaign.id, evals=False, reason=f'the baseline failed to evaluate: {errors[-1]}{where}; {fix}')
+
+
+def hold_on_cancelled_baseline(s: Session, candidate: Candidate, actor: Actor) -> None:
+    """Pause every measurement of a campaign whose baseline never measured, when ``actor`` cancelled its evaluation.
+
+    A cancel records nothing, and the daemon measures a head that has no score at once: the pause holds that until
+    someone resumes the campaign. The caller commits.
+    """
+    campaign = s.get_one(Campaign, candidate.campaign_id)
+    if candidate.origin is not Origin.BASELINE or campaign.paused is Pause.ALL or candidate.measurements:
+        return
+    why = f'{actor} cancelled the evaluation of the baseline; `piloop resume {campaign.name}` measures it again'
+    pause(s, campaign.id, evals=True, reason=why)
 
 
 @dataclass(frozen=True)

@@ -221,6 +221,24 @@ daemon ends it `end_grace` later. A run that ends without it fails.
 - `escalation` and `decision` are kinds of the escalation plugin. They work as before. A plugin that names them
   imports `ESCALATION` and `DECISION` from `piloop.plugins.escalation.kit.kinds`, not from `CommentKind`.
 
+### The evaluate command reports a status and a score
+
+The result line names its `status`, and the primary is its `score`:
+
+| 0.5 | 0.6 |
+|---|---|
+| `{"metrics": {"bytes": 3688775, "seconds": 0.82}}` | `{"status": "ok", "score": 3688775, "direction": "lower", "metrics": {"seconds": 0.82}}` |
+| exit 1 | `{"status": "crash", "feedback": "<why>"}`, or exit 1 |
+| exit 1 on a rate limit | `{"status": "infra_error", "feedback": "<why>"}`: no verdict, run again later |
+
+A line without `status` still reads as `ok`, with the primary among `metrics`, until 0.7.0. A rung's line keeps its
+form.
+
+### A cancelled evaluation is no verdict
+
+`piloop eval cancel` records no measurement. A run's candidate is `skipped`, not a `crash`. A baseline that never
+measured pauses its campaign's measurements until you resume it.
+
 ## Upgrading to 0.5.0
 
 ### Upgrade from 0.4

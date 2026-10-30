@@ -61,7 +61,15 @@ def main() -> int:
         return _fail(f'missing predictions for {len(missing)} rows')
     correct = sum(preds[k] == v for k, v in labels.items())
     shares = {k: (preds[k] == v) / len(labels) for k, v in labels.items()}
-    report({'metrics': {'accuracy': correct / len(labels), 'cost_seconds': min(cpu)}, 'units': {'accuracy': shares}})
+    report(
+        {
+            'status': 'ok',
+            'score': correct / len(labels),
+            'direction': 'higher',
+            'metrics': {'cost_seconds': min(cpu)},
+            'units': {'accuracy': shares},
+        }
+    )
     return 0
 
 

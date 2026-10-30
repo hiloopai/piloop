@@ -195,6 +195,7 @@ idea_comments = "piloop.plugins.campaign_type.kit.runs.section.idea_comments:Ide
 queue = "piloop.plugins.campaign_type.kit.backlog.section.queue:Queue"
 agents = "piloop.plugins.section.agents:Agents"
 evaluations = "piloop.plugins.campaign_type.kit.evaluation.section.evaluations:Evaluations"
+dev = "piloop.plugins.campaign_type.kit.evaluation.section.dev:Dev"
 funnel = "piloop.plugins.campaign_type.kit.evaluation.section.funnel:RunFunnel"
 yields = "piloop.plugins.campaign_type.optimization.section.yields:Yields"
 cost = "piloop.plugins.section.cost:Cost"

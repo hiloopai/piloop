@@ -51,7 +51,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference, resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import jobs as evaluation_jobs
+from piloop.plugins.campaign_type.kit.evaluation import jobs as evaluation_jobs, queue
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import CHANGED_INPUTS
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.jobs import INPUTS_CHANGED
@@ -73,6 +73,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
     RECOVERED_REASON,
     SKIPPED_REASON,
     UNSAVED,
+    Measuring,
     RunController,
     RunFacts,
     RunRelaunched,
@@ -456,7 +457,7 @@ def test_every_commit_of_a_run_is_a_candidate_before_the_first_is_measured(
         bar: CandidateId | None,
         repeats: int,
         gate: CandidateId | None,
-    ) -> bool:
+    ) -> Measuring:
         with db.session() as s:
             rows = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
             seen.append([(c.summary, label(c), c.parent_id) for c in rows])
@@ -2031,8 +2032,8 @@ def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_
     ex = controller(db, runtime, tmp_path)
     doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
 
-    def then_init[**P](fn: Callable[P, bool]) -> Callable[P, bool]:
-        def measured(*args: P.args, **kwargs: P.kwargs) -> bool:
+    def then_init[**P](fn: Callable[P, Measuring]) -> Callable[P, Measuring]:
+        def measured(*args: P.args, **kwargs: P.kwargs) -> Measuring:
             done = fn(*args, **kwargs)
             write_toml(Path(campaign.path), HARNESS_TWO_COMMITS, evaluate=doubled)
             with db.session() as s:
@@ -2073,8 +2074,8 @@ def test_a_config_change_while_a_commit_is_measured_judges_it_and_its_bar_under_
     doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
     inits: list[None] = []
 
-    def init_during[**P](fn: Callable[P, bool]) -> Callable[P, bool]:
-        def measuring(*args: P.args, **kwargs: P.kwargs) -> bool:
+    def init_during[**P](fn: Callable[P, Measuring]) -> Callable[P, Measuring]:
+        def measuring(*args: P.args, **kwargs: P.kwargs) -> Measuring:
             if not inits:
                 inits.append(None)
                 write_toml(Path(campaign.path), HARNESS_TWO_COMMITS, evaluate=doubled)
@@ -2940,9 +2941,9 @@ def test_a_merge_a_stop_left_unjudged_is_measured_and_judged_when_the_run_resume
         bar: CandidateId | None,
         repeats: int,
         gate: CandidateId | None,
-    ) -> bool:
+    ) -> Measuring:
         if candidate_id == merged_id:
-            return False  # what a stop does to an evaluation in flight
+            return Measuring.STOPPED  # what a stop does to an evaluation in flight
         return measure(
             run, campaign_id, cfg, sha, candidate_id, evaluator_id, eval_dir, bar=bar, repeats=repeats, gate=gate
         )
@@ -2960,6 +2961,52 @@ def test_a_merge_a_stop_left_unjudged_is_measured_and_judged_when_the_run_resume
     with db.session() as s:
         merged = s.get_one(Candidate, merged_id)
         assert (merged.verdict, len(merged.measurements)) == (Outcome.KEEP, 1)
+
+
+def cancelling(db: Database, measure: Callable[..., Measuring], cancelled: CandidateId) -> Callable[..., Measuring]:
+    """``measure``, but what someone does with ``piloop eval cancel`` to the evaluation of ``cancelled``."""
+
+    def measured(*args: object, **kwargs: object) -> Measuring:
+        if args[4] != cancelled:
+            return measure(*args, **kwargs)
+        with db.session() as s:
+            candidate = s.get_one(Candidate, cancelled)
+            evaluator = s.get_one(Campaign, candidate.campaign_id).evaluator_id
+            assert evaluator is not None
+            queue.request(s, cancelled, evaluator)
+            assert queue.cancel(s, cancelled, System.HUMAN) == 1
+            s.commit()
+        return Measuring.CANCELLED
+
+    return measured
+
+
+def test_a_cancelled_evaluation_leaves_its_candidate_skipped_also_when_the_run_resumes(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = make_run(db, campaign)
+    ex = controller(db, runtime, tmp_path)
+    measure = ex._measure
+    monkeypatch.setattr(ex, '_measure', cancelling(db, measure, CandidateId(2)))
+    execute(ex, db, run_id)
+    monkeypatch.setattr(ex, '_measure', measure)
+    ex.resume(run_id)
+    with db.session() as s:
+        skipped = s.get_one(Candidate, CandidateId(2))
+        assert (skipped.origin, skipped.verdict, skipped.measurements) == (Origin.SKIPPED, None, [])
+
+
+def test_a_merge_whose_evaluation_is_cancelled_is_skipped(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = make_run(db, campaign)
+    keep_elsewhere(db, campaign, 'notes', {'notes.txt': 'n\n'}, {'score': 1.0, 'size': 5.0})
+    ex = controller(db, runtime, tmp_path)
+    monkeypatch.setattr(ex, '_measure', cancelling(db, ex._measure, CandidateId(4)))
+    execute(ex, db, run_id)
+    with db.session() as s:
+        merged = s.get_one(Candidate, CandidateId(4))
+        assert (merged.origin, merged.verdict, merged.parent_id) == (Origin.SKIPPED, None, 2)
 
 
 def test_a_tree_two_runs_reach_is_never_judged_against_itself(
@@ -3266,8 +3313,8 @@ def test_a_resumed_run_scores_the_versions_that_it_received(
     ex = controller(db, runtime, tmp_path)
     measure = ex._measure
 
-    def stopped(*args: object, **kwargs: object) -> bool:
-        return False  # what a stop does to the evaluation in flight
+    def stopped(*args: object, **kwargs: object) -> Measuring:
+        return Measuring.STOPPED  # what a stop does to the evaluation in flight
 
     monkeypatch.setattr(ex, '_measure', stopped)
     execute(ex, db, run_id)

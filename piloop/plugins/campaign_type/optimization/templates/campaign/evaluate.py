@@ -1,10 +1,12 @@
-"""The evaluate command: score the checkout it runs in, and report one JSON line of metrics.
+"""The evaluate command: score the checkout it runs in, and report one JSON line.
 
-piloop runs this command (``evaluate`` in ``piloop.toml``) in a clean checkout of every version that an implementer saves.
-Report a value for every metric under ``[[metrics]]`` and exit 0: piloop reads the line from the pipe that
-``PILOOP_RESULT_FILE`` names. If the candidate cannot be scored, exit non-zero with the reason on stderr, and piloop
-records a crash. Be deterministic: use fixed seeds and fixed splits. Make sure the candidate can change the score only
-through what it is supposed to change.
+piloop runs this command (``evaluate`` in ``piloop.toml``) in a clean checkout of every version that it scores. Report
+``status``, the primary metric as ``score`` with its ``direction``, a value for every other metric under ``[[metrics]]``
+in ``metrics``, and optionally one line of ``feedback``. piloop reads the line from the pipe that ``PILOOP_RESULT_FILE``
+names. ``status`` is ``ok``, or why nothing counts: ``crash`` or ``timeout`` when the candidate failed, and
+``infra_error`` when something else failed (a rate limit, a missing input), which piloop runs again later and never
+judges. Be deterministic: use fixed seeds and fixed splits. Make sure the candidate can change the score only through
+what it is supposed to change.
 
 Per-unit results (optional): add ``units``, each metric's contribution per unit (one record, example or test case), as
 ``{"<metric>": {"<unit id>": <number>, ...}}``. The contributions of a metric must add up to its value. For a mean,
@@ -30,8 +32,8 @@ def report(result: dict[str, object]) -> None:
 
 
 def main() -> None:
-    """Run the candidate, measure it and report the metrics."""
-    report({'metrics': {'score': 0.0}})
+    """Run the candidate, measure it and report its score."""
+    report({'status': 'ok', 'score': 0.0, 'direction': 'higher'})
 
 
 if __name__ == '__main__':

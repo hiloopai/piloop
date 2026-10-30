@@ -22,6 +22,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.measure import request_remeasure, requested
+from piloop.plugins.campaign_type.kit.runs.controller import Measuring
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.campaign_type.kit.verdicts.judge import due
 from piloop.plugins.campaign_type.kit.verdicts.verdict import write
@@ -140,7 +141,7 @@ def test_a_keep_that_lands_during_the_climb_stays_and_is_measured_in_full_as_a_h
         bar: CandidateId | None,
         repeats: int,
         gate: CandidateId | None,
-    ) -> bool:
+    ) -> Measuring:
         args = (run, campaign_id, cfg, sha, candidate_id, evaluator_id, eval_dir)
         done = measure(*args, bar=bar, repeats=repeats, gate=gate)
         with db.session() as s:

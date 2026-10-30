@@ -866,7 +866,7 @@ def test_candidate_import_registers_a_reference_shown_apart_and_refuses_a_bad_re
         run_cli(['candidate', 'import', 'demo', 'refs/piloop/demo/reference/2'])
     with pytest.raises(SystemExit, match=r"the tree of 'main' already is candidate#1 \(keep\)"):
         run_cli(['candidate', 'import', 'demo', 'main'])
-    with pytest.raises(SystemExit, match=r"'nope' names no commit in .*: Ref 'nope' did not resolve"):
+    with pytest.raises(SystemExit, match=r"^'nope' names no commit in "):
         run_cli(['candidate', 'import', 'demo', 'nope'])
 
 
@@ -1022,7 +1022,8 @@ def test_eval_queue_lists_the_running_then_the_waiting_evaluations_and_eval_canc
     ]
     assert summary == '2 running, 1 waiting; `piloop eval cancel <candidate>`'
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
-        assert [m.error for m in s.get_one(Candidate, 2).measurements] == ['evaluation cancelled by human']
+        cancelled = s.get_one(Candidate, 2)
+        assert (cancelled.measurements, cancelled.origin, cancelled.verdict) == ([], Origin.SKIPPED, None)
     run_cli(['candidate', 'remeasure', '1'])
     out()
     run_cli(['eval', 'queue'])

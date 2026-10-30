@@ -61,7 +61,10 @@ def main() -> int:
                 'p50_ms': round(percentile(latencies, 0.50) * 1000, 2),
                 'p95_ms': round(percentile(latencies, 0.95) * 1000, 2),
             }
-            report({'rung': rung, 'metrics': metrics} if rung else {'metrics': metrics})
+            if rung:
+                report({'rung': rung, 'metrics': metrics})
+            else:
+                report({'status': 'ok', 'score': served / busy, 'direction': 'higher', 'metrics': metrics})
     except ServerError as e:
         print(e, file=sys.stderr)
         return 1

@@ -1,7 +1,7 @@
 """Run the evaluate command in a worktree, and read its result. A timeout kills the whole process group.
 
-The command writes its result to ``RESULT_ENV`` as one JSON object (``Result``), which is checked against the
-campaign's metrics.
+The command writes its result to ``RESULT_ENV`` as one JSON object (``Result``): its status, its score and the score's
+direction, its other metrics and one line of feedback. piloop checks it against the campaign's metrics.
 """
 
 import contextlib
@@ -13,15 +13,18 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, assert_never
+from typing import Annotated, Literal, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
-from piloop.plugins.campaign_type.kit.evaluation.config import Rung
+from piloop import deprecated
+from piloop.plugins.campaign_type.kit.evaluation.config import Metric, Rung
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
+from piloop.plugins.metric import Direction
 from piloop.proc import RESULT_ENV, STDERR_IN_ERROR, ResultPipe, child_env, kill_group
 
 SENT = frozenset({signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGKILL})
@@ -47,23 +50,65 @@ UNITS = TypeAdapter(dict[str, dict[str, Number]])
 """Validates a units file, because the evaluate command is on the other side of a trust boundary."""
 type Label = Annotated[str, StringConstraints(pattern=r'^[A-Za-z0-9][A-Za-z0-9_.-]*$', max_length=64)]
 """The name of an evidence file: letters, digits, ``_``, ``.`` and ``-``."""
+type Feedback = Annotated[str, StringConstraints(max_length=STDERR_IN_ERROR)]
+"""One line that says what the evaluate command saw: a missing manifest, a size cap that the candidate broke."""
+
+
+class Status(StrEnum):
+    """What one run of the evaluate command came to, as it reports it.
+
+    ``ok``: it measured the candidate. ``crash`` and ``timeout``: the candidate failed, which is a measurement of it.
+    ``infra_error``: something that is not the candidate failed (a rate limit, a missing input, a lost GPU), so it
+    measured nothing: piloop runs it again later, and never judges the candidate on it.
+    """
+
+    OK = 'ok'
+    CRASH = 'crash'
+    TIMEOUT = 'timeout'
+    INFRA_ERROR = 'infra_error'
+
+
+class Score(BaseModel):
+    """What a result's ``score`` is: the value of the primary metric ``name``, which is better in ``direction``."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    direction: Direction
+
+    @classmethod
+    def of(cls, primary: Metric) -> Score:
+        """The score that reports ``primary``: the primary of the campaign's first track."""
+        return cls(name=primary.name, direction=primary.direction)
 
 
 class Result(BaseModel):
     """One line that the evaluate command writes to ``RESULT_ENV``: its full result, or a rung of the ladder.
 
-    Example: ``{"metrics": {"accuracy": 0.83}, "units": {"accuracy": {"q-1": 0.002}}, "evidence": {"errors": "out/errors.md"}}``.
+    Example: ``{"status": "ok", "score": 0.83, "direction": "higher", "metrics": {"seconds": 41},
+    "feedback": "3 of 500 answers were empty"}``. A rung's line has only ``rung``, ``metrics``, ``units`` and
+    ``evidence``.
     """
 
     model_config = ConfigDict(extra='forbid', frozen=True)
 
     rung: RungName | None = None
     """The rung of ``[[ladder]]`` that the line reports, before the last line. None on the last line."""
-    metrics: dict[str, Number]
-    """The value of each metric, by its name in ``[[metrics]]``."""
+    status: Status | None = None
+    """How the run came out. Required on the last line."""
+    score: Number | None = None
+    """The value of the primary metric: the first of ``[[metrics]]`` with ``role = "primary"``. Required with ``ok``."""
+    direction: Direction | None = None
+    """Whether a higher or a lower score is better: the primary's ``direction``. Required with ``ok``."""
+    metrics: dict[str, Number] = {}
+    """The value of each other metric, by its name in ``[[metrics]]``. A rung's line reports its metrics here, the
+    primary among them."""
+    feedback: Feedback | None = None
+    """Optional. One line on what the run saw, which piloop keeps with the measurement. A worker never gets it."""
     units: dict[str, dict[str, Number]] = {}
-    """Optional. Each metric's contribution per unit (one record, example or test case), by unit id. The contributions
-    of a metric sum to its value. piloop then tests a gain with a paired bootstrap over the units."""
+    """Optional. Each metric's contribution per unit (one record, example or test case), by unit id, the score's by
+    the primary's name. The contributions of a metric sum to its value. The ``bootstrap`` verdict rule then tests a
+    gain with a paired bootstrap over the units."""
     evidence: dict[Label, str] = {}
     """Optional. Files of the worktree that explain the result, by a label: piloop keeps them with the evaluation's
     logs, as ``evidence/<label><suffix>``."""
@@ -121,6 +166,8 @@ class Measured:
     """The per-unit results that it reported. Empty when it reported none."""
     rung: RungName | None = None
     """The rung that it measured. None for the full panel."""
+    feedback: str | None = None
+    """What the result said of the run (``Result.feedback``)."""
 
 
 @dataclass(frozen=True)
@@ -190,7 +237,37 @@ class NotRun:
     error: str
 
 
-type Why = TimedOut | Exited | Killed | MissingMetrics | BadResult | InputsChanged | NotRun
+@dataclass(frozen=True)
+class Gone:
+    """The version to evaluate is not in the repo: no evaluation of it can ever run."""
+
+    error: str
+
+
+class Infra(StrEnum):
+    """Why a failed evaluation measured nothing of its candidate (``Failed.infra``)."""
+
+    REPORTED = 'reported'
+    """The evaluate command reported an ``infra_error``."""
+    NOT_RUN = 'not_run'
+    """piloop could not make its worktree or its inputs."""
+    KILLED = 'killed'
+    """Another process killed it, on its retry too (``jobs._evaluate``)."""
+
+
+type Unmeasured = Literal[Status.CRASH, Status.TIMEOUT, Status.INFRA_ERROR]
+"""A status that a result reports when it measured nothing that counts."""
+
+
+@dataclass(frozen=True)
+class Said:
+    """The evaluate command reported that its run failed: the status that it reported, and its feedback."""
+
+    status: Unmeasured
+    feedback: str | None
+
+
+type Why = TimedOut | Exited | Killed | MissingMetrics | BadResult | InputsChanged | NotRun | Gone | Said
 
 
 @dataclass(frozen=True)
@@ -204,6 +281,24 @@ class Failed:
     measurement keeps it, next to the error, and a measurement with an error never scores. Empty when it was refused."""
     rung: RungName | None = None
     """The rung that failed. None for the full panel."""
+
+    @property
+    def infra(self) -> Infra | None:
+        """Why the failure is not the candidate's, so the evaluation measured nothing of it, or None when it is.
+
+        A version that the repo lacks is the candidate's (``Gone``): it would run again forever. An evaluate that the
+        kernel's OOM killer ends is ``KILLED`` too, so a candidate that takes too much memory runs again, until someone
+        cancels it.
+        """
+        match self.why:
+            case Said(status=Status.INFRA_ERROR):
+                return Infra.REPORTED
+            case NotRun():
+                return Infra.NOT_RUN
+            case Killed() as killed if killed.sent:
+                return Infra.KILLED
+            case _:
+                return None
 
     @property
     def error(self) -> str:
@@ -221,8 +316,10 @@ class Failed:
                 return f'evaluate wrote a bad result: {why}'
             case InputsChanged(paths=paths):
                 return f'{CHANGED_INPUTS}: {", ".join(paths)}'
-            case NotRun(error=error):
+            case NotRun(error=error) | Gone(error=error):
                 return error
+            case Said(status=status, feedback=feedback):
+                return f'evaluate reported {status}' + ('' if feedback is None else f': {feedback}')
             case _:
                 assert_never(self.why)
 
@@ -263,6 +360,9 @@ class Reported:
     metrics: dict[str, float]
     units: Units
     seconds: float
+    feedback: str | None = None
+    said: Said | None = None
+    """The failure that it reported, which counts whatever the exit. None: it reported what it measured."""
 
 
 type Read = Measured | StoppedAt | Reported | BadResult | MissingMetrics
@@ -348,23 +448,23 @@ class _Lines:
             return BadResult(f'expected one JSON object of the result schema: {_errors(e)}')
         if unknown := sorted((result.metrics.keys() | result.units.keys()) - checks.known):
             return BadResult(f'unknown metrics {", ".join(unknown)}; [[metrics]] has {", ".join(sorted(checks.known))}')
-        try:
-            _check_units(result.units, result.metrics)
-        except ValueError as e:
-            return BadResult(str(e))
         streamed = step.rungs[done] if done < len(step.rungs) else None
         if result.rung != (None if streamed is None else streamed.name):
             return BadResult(f'it reported rung {result.rung!r} where {step.label(done)!r} comes')
+        match last := _last(result, checks.score, rung=streamed is not None or step.last is not None):
+            case BadResult():
+                return last
+            case _:
+                pass
         if streamed is not None and (missing := set(streamed.stop) - result.metrics.keys()):
             return MissingMetrics(tuple(sorted(missing)))
         label = step.label(done)
         into = checks.evidence if label is None else checks.evidence / label
         if (bad := keep_evidence(result.evidence, checks.cwd, into, checks.max_evidence_bytes)) is not None:
             return bad
-        metrics, units = dict(result.metrics), {m: dict(u) for m, u in result.units.items()}
         if streamed is None:
-            return Reported(metrics, units, seconds)
-        return self._judged(streamed, metrics, units, seconds)
+            return replace(last, seconds=seconds)
+        return self._judged(streamed, last.metrics, last.units, seconds)
 
     def _judged(self, rung: Rung, metrics: dict[str, float], units: Units, seconds: float) -> Measured | StoppedAt:
         """``rung``'s line as measured, or as where the climb stops when the gate says so."""
@@ -388,6 +488,42 @@ class Checks:
     """Where the evidence goes: ``<log dir>/evidence``, and ``<log dir>/evidence/<rung>`` for a rung's."""
     max_evidence_bytes: int
     """The evidence of one line, all together."""
+    score: Score
+    """The primary that the last line's ``score`` reports."""
+
+
+def _last(result: Result, score: Score, *, rung: bool) -> Reported | BadResult:
+    """What a line reported, with its score as the primary's value, or why piloop refuses it.
+
+    A ``rung``'s line reports its metrics alone.
+    """
+    metrics, units = dict(result.metrics), {m: dict(u) for m, u in result.units.items()}
+    match result.status:
+        case None if rung:
+            pass
+        case _ if rung:
+            return BadResult('a rung reports its metrics, not a status')
+        case None:
+            deprecated.until('0.7.0', "a last line without status is 0.5's: delete this case, require status")
+        case Status.OK:
+            if result.score is None or result.direction is None:
+                return BadResult('status ok needs a score and a direction')
+            if result.direction is not score.direction:
+                return BadResult(
+                    f'it reports the direction {result.direction}; [[metrics]] says {score.name} is {score.direction}'
+                )
+            if score.name in metrics:
+                return BadResult(f'{score.name} is the score: report it as score, not in metrics')
+            metrics = {score.name: result.score, **metrics}  # the primary first, as a person reads it
+        case Status.CRASH | Status.TIMEOUT | Status.INFRA_ERROR as status:
+            return Reported(metrics, units, 0.0, result.feedback, Said(status, result.feedback))
+        case never:
+            assert_never(never)
+    try:
+        _check_units(units, metrics)
+    except ValueError as e:
+        return BadResult(str(e))
+    return Reported(metrics, units, 0.0, result.feedback)
 
 
 FULL = Step()
@@ -403,6 +539,7 @@ def run_evaluate(
     required: set[str],
     known: set[str],
     max_evidence_bytes: int,
+    score: Score,
     track: Track = no_track,
     step: Step = FULL,
     gate: Gate | None = None,
@@ -412,10 +549,11 @@ def run_evaluate(
     """Run the evaluate command, and read the lines that it writes to ``RESULT_ENV`` while it runs (``_Lines``).
 
     Return a result for each rung that it reported, then how it ended: the full panel (or ``step.last``) measured, or
-    failed. A climb that stopped ends at its ``StoppedAt`` rung. ``prefix`` names its logs in ``log_dir``. The pipe and
-    the units file are in ``log_dir`` while it runs, and removed after, so neither outlives the call.
+    failed. A failure that the last line reports (``Said``) counts whatever the exit; else a non-zero exit is a crash.
+    A climb that stopped ends at its ``StoppedAt`` rung. ``prefix`` names its logs in ``log_dir``. The pipe and the
+    units file are in ``log_dir`` while it runs, and removed after, so neither outlives the call.
     """
-    checks = Checks(required, known, cwd, log_dir / EVIDENCE_DIR, max_evidence_bytes)
+    checks = Checks(required, known, cwd, log_dir / EVIDENCE_DIR, max_evidence_bytes, score)
     lines = _Lines(step, checks, gate, stop_grace)
 
     def both(proc: subprocess.Popen[bytes] | None) -> None:
@@ -434,6 +572,8 @@ def run_evaluate(
     if last is None:
         last = _unreported(lines)
     kept = last.metrics if isinstance(last, Reported) else {}
+    if isinstance(last, Reported) and last.said is not None:
+        return [*rungs, Failed(last.said, seconds, kept, label)]
     match done.returncode:
         case None:
             return [*rungs, Failed(TimedOut(timeout), seconds, kept, label)]
@@ -448,12 +588,12 @@ def run_evaluate(
     match last:
         case BadResult() | MissingMetrics():
             return [*rungs, Failed(last, seconds, rung=label)]
-        case Reported(metrics=metrics, units=units):
+        case Reported(metrics=metrics, units=units, feedback=feedback):
             if missing := (required if step.last is None else set(step.last.stop)) - metrics.keys():
                 return [*rungs, Failed(MissingMetrics(tuple(sorted(missing))), seconds, metrics, label)]
             if step.last is not None and gate is not None and (why := gate.stop_reason(step.last, metrics)):
                 return [*rungs, StoppedAt(step.last.name, why, metrics, seconds, units)]
-            return [*rungs, Measured(metrics, seconds, units, label)]
+            return [*rungs, Measured(metrics, seconds, units, label, feedback)]
         case _:
             assert_never(last)
 

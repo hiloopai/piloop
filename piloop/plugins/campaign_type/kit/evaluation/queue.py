@@ -18,9 +18,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
-from piloop.db.models import NOT_RETIRED, Campaign
-from piloop.ids import CampaignId
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.db import requests
+from piloop.db.models import NOT_RETIRED, Campaign, Event
+from piloop.ids import CampaignId, TargetRef
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import measure as ledger
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
@@ -34,9 +35,10 @@ from piloop.plugins.campaign_type.kit.evaluation.wire import (
     WaitingSince,
 )
 from piloop.plugins.campaign_type.kit.verdicts.judge import head
+from piloop.plugins.campaign_type.kit.verdicts.verdict import pending
 
-CANCELLED = 'evaluation cancelled by {actor}'
-"""The error of the crashed measurement that ``cancel`` records."""
+CANCELLED = 'not judged: its evaluation was cancelled by {actor}'
+"""The reason of a run's candidate whose evaluation ``cancel`` cancelled: it is ``skipped``, with no verdict."""
 
 
 def request(s: Session, candidate_id: CandidateId, evaluator_id: EvaluatorId) -> tuple[Evaluation, bool]:
@@ -132,24 +134,26 @@ def cancel(s: Session, candidate_id: CandidateId, actor: Actor) -> int:
 
     Signed by ``actor``. Return how many it cancelled. The caller commits.
 
-    Each records its crashed measurement now (``CANCELLED``), so the candidate is not evaluated again unless someone
-    asks, even if the daemon restarts first. That measurement also answers a remeasure request (``ledger.record``). A
-    waiting evaluation leaves the queue. A running one gets ``cancelled_by``, and the daemon stops its evaluator and
-    records nothing more.
+    A cancel is not a verdict: it records no measurement. A run's candidate that waits for its verdict becomes
+    ``skipped``, with the reason ``CANCELLED``, so no daemon measures it again unless someone asks
+    (``piloop candidate remeasure``), even after a restart. A head or a bar is asked for again when a
+    run needs it. A pending remeasure request is answered. A waiting evaluation leaves the queue. A running one gets
+    ``cancelled_by``, and the daemon stops its evaluator and records nothing.
     """
     found = s.scalars(
         select(Evaluation).where(Evaluation.candidate_id == candidate_id, Evaluation.cancelled_by.is_(None))
     ).all()
-    evaluators = [e.evaluator_id for e in found]
-    if not found and (asked := [c for c, _ in requested(s) if c.id == candidate_id]):
-        evaluator_id = s.get_one(Campaign, asked[0].campaign_id).evaluator_id
-        evaluators += [evaluator_id] if evaluator_id is not None else []
-    for evaluator_id in evaluators:
-        error = CANCELLED.format(actor=actor)
-        ledger.record(s, s.get_one(Candidate, candidate_id), evaluator_id, actor, metrics={}, error=error, seconds=None)
+    asked = requests.pending(s, ledger.RemeasureRequested, Event.target == TargetRef(CANDIDATE, candidate_id))
+    if not found and not asked:
+        return 0
+    candidate = s.get_one(Candidate, candidate_id)
+    for ask, _ in asked:
+        requests.answer(s, ask)
+    if pending(candidate) and candidate.origin is Origin.RUN:
+        candidate.origin, candidate.verdict_reason = Origin.SKIPPED, CANCELLED.format(actor=actor)
     for evaluation in found:
         if evaluation.started_at is None:  # its executor finds it gone when a slot comes (``Results.started``)
             s.delete(evaluation)
         else:
             evaluation.cancelled_by = actor.signature
-    return len(evaluators)
+    return max(len(found), 1)

@@ -23,6 +23,7 @@ from piloop.net.tokens import Caller, Tokens
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, EvaluationJob
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.escalation.contract import ESCALATION
@@ -41,6 +42,7 @@ from piloop.plugins.executor.kit.tables import (
     WorkerInstanceState,
 )
 from piloop.plugins.executor.workers import _worker_argv
+from piloop.plugins.metric import Direction
 from piloop.plugins.network.contract import NetworkHost
 from piloop.plugins.network.https import TOKEN_ENV, Https
 from piloop.plugins.provisioner.contract import InstanceState, Launch
@@ -136,6 +138,7 @@ def waiting(db: Database, campaign: Campaign, tmp_path: Path, n: int = 1, runner
                     place='eval',
                     command=['true'],
                     timeout=60,
+                    score=Score(name='score', direction=Direction.HIGHER),
                     required=['score'],
                     known=['score'],
                     max_evidence_bytes=0,

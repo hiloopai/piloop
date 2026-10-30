@@ -98,7 +98,7 @@ their ideas are open again, for a run from the new head. A branch run of an olde
 | `piloop candidate verdict 42 interesting --reason "lucky seed"` | Override the verdict. The daemon never overwrites a verdict that it did not set. |
 | `piloop candidate note 42 "<why>" --follow-up "<idea>"` | Keep a regressed result in view: it becomes `interesting`, with the cause `note`, and each follow-up is an open idea about it. Who set the verdict stays, unless the note turns a `discard` into a lead. The daemon never judges a noted candidate again. |
 | `piloop measurement add 42 --report report.json` | Record an evaluation that you ran, such as `{"metrics": {"accuracy": 0.853}, "seconds": 600}`. |
-| `piloop eval queue`, `piloop eval cancel 42` | List the evaluations, or cancel one. A cancelled evaluation is a `crash`. |
+| `piloop eval queue`, `piloop eval cancel 42` | List the evaluations, or cancel one. A cancel is no verdict: a run's candidate is `skipped`. |
 
 ```bash
 piloop candidate remeasure 1

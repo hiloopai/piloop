@@ -14,7 +14,7 @@ from pathlib import Path
 
 from covalence import Cid
 from git import Repo
-from git.exc import BadName, GitCommandError, GitError, InvalidGitRepositoryError, NoSuchPathError
+from git.exc import GitCommandError, GitError, InvalidGitRepositoryError, NoSuchPathError
 from pydantic import SecretStr
 
 from piloop.actor import Agent
@@ -83,10 +83,10 @@ class GitRepository(Repository):
         return Path(self.repo.common_dir).resolve()
 
     def version(self, native: str) -> Version:
-        try:
-            sha = self.repo.commit(native).hexsha
-        except (BadName, ValueError) as e:
-            raise UnknownRevision(f'{native!r} names no commit in {self.repo.working_dir}: {e}') from e
+        try:  # a full sha that the repo lacks is no BadName for GitPython: git itself checks that it names a commit
+            sha = self.repo.git.rev_parse('--verify', '--quiet', '--end-of-options', f'{native}^{{commit}}')
+        except GitCommandError as e:
+            raise UnknownRevision(f'{native!r} names no commit in {self.repo.working_dir}') from e
         return self._version(sha)
 
     def _version(self, sha: str) -> Version:

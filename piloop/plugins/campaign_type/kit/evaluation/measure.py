@@ -254,12 +254,14 @@ def record(
     pair: MeasurementId | None = None,
     rung: RungName | None = None,
     stopped: str | None = None,
+    feedback: str | None = None,
 ) -> Measurement:
     """Store a measurement of ``candidate``, with ``MeasurementRecorded``. The caller commits.
 
     The one writer of measurements. ``run`` is the run that the daemon measured it for, ``pair`` the bar's
     measurement that ran next to it in a paired evaluation, ``rung`` the rung of the ladder that it measured, and
-    ``stopped`` why the climb stopped there. A measurement of the full panel under the campaign's current evaluator
+    ``stopped`` why the climb stopped there, and ``feedback`` the line that the result said of the run, which only its
+    event keeps. A measurement of the full panel under the campaign's current evaluator
     answers the pending request to measure the candidate again (``request_remeasure``). A rung does not: the request
     waits for the full panel.
     """
@@ -276,7 +278,14 @@ def record(
     s.add(measurement)
     s.flush()
     recorded = MeasurementRecorded(
-        candidate=candidate.id, metrics=metrics, error=error, run=run, pair=pair, rung=rung, stopped=stopped
+        candidate=candidate.id,
+        metrics=metrics,
+        error=error,
+        run=run,
+        pair=pair,
+        rung=rung,
+        stopped=stopped,
+        feedback=feedback,
     )
     emit(s, recorded, TargetRef(MEASUREMENT, measurement.id), actor)
     if rung is None and evaluator_id == s.get_one(Campaign, candidate.campaign_id).evaluator_id:
@@ -300,6 +309,8 @@ class MeasurementRecorded(EventModel):
     """The rung of the ladder that it measured. None for the full panel."""
     stopped: str | None = None
     """Why the climb stopped at ``rung``. None when it went on."""
+    feedback: str | None = None
+    """The line that the evaluate command's result said of the run (``Result.feedback``)."""
 
 
 def units_file(units_dir: Path, measurement_id: MeasurementId) -> Path:

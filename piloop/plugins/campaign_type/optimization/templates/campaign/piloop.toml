@@ -5,7 +5,7 @@
 # PILOOP_CAMPAIGN_<KEY> overrides a key when `piloop init` reads the file. Join nested keys with __.
 
 name = "my-campaign"                       # required; short identifier; piloop names git refs after it
-evaluate = ["uv", "run", "python", "evaluate.py"]  # required; run in a clean checkout of each version; writes {"metrics": …} to $PILOOP_RESULT_FILE
+evaluate = ["uv", "run", "python", "evaluate.py"]  # required; run in a clean checkout of each version; writes {"status": …, "score": …} to $PILOOP_RESULT_FILE
 evaluate_timeout = 600                    # seconds; a slower evaluation is stopped and recorded as a crash
 link = []                                 # gitignored paths put into every worktree read-only, for example "data" or ".venv"
 context = []                              # analysis files that every sweep reads first, for example ["docs/error-analysis.md"]
@@ -149,6 +149,9 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # runs = true                             # it takes every key and default of [plugins.role.implementer], its prompt included
 # timeout = 300
 # max_concurrent = 2
+
+# [evaluator]                             # the commands beside evaluate
+# dev = ["uv", "run", "python", "evaluate.py", "--quick"]  # a fast check that implementers run themselves; piloop never runs it
 
 # [agents]                                # the agents' wrap-up and the brief's budget; if not set: the home's [agents]
 # wrap_up_grace = 600                     # seconds to save their work after a stop or a cancel with --wrap-up

@@ -32,7 +32,14 @@ from pydantic_settings import (
 
 from piloop import deprecated
 from piloop.ids import EnvName, RoleName
-from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole, Rung, Track, TrackConfig
+from piloop.plugins.campaign_type.kit.evaluation.config import (
+    EvaluatorConfig,
+    Metric,
+    MetricRole,
+    Rung,
+    Track,
+    TrackConfig,
+)
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource
@@ -114,6 +121,8 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     ``{"metrics": {"<name>": <value>}}``, to ``$PILOOP_RESULT_FILE``."""
     evaluate_timeout: float = 600
     """The number of seconds before the evaluate command is stopped. The evaluation is then a crash."""
+    evaluator: EvaluatorConfig = EvaluatorConfig()
+    """``[evaluator]``: the commands beside ``evaluate``, such as the fast one that implementers run themselves."""
     ladder: list[Rung] = []
     """``[[ladder]]``: the rungs that a run's evaluation of its own version climbs before the full panel, cheapest
     first. The climb stops at the first rung whose ``stop`` holds. A baseline, a head, a bar, a reference and a

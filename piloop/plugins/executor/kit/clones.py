@@ -92,6 +92,7 @@ class Clones:
             with making:  # a clone that is still being made is not a repository yet: open it under the lock
                 repo = opened.enter_context(closing(self.repository(source)))
                 repo.fetch(self._cas, [source.revision, *source.history], partial(self._fetch, source.repo))
+            repo.version(source.revision)  # raises UnknownRevision for one that not even the repo of record has
             repo.checkout(source.revision, cwd)
         links = Materialised()
         for blob in source.links.values():

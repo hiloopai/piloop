@@ -30,7 +30,7 @@ from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind
 from piloop.net import tokens
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
-from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
@@ -331,10 +331,15 @@ def test_a_worker_killed_with_a_report_in_its_spool_sends_it_when_it_starts_agai
     _kill(worker)
     net.proxy.toxic = None
     net.start_worker()
+    wait_until(lambda: state(db, 1) is LeaseState.REPORTED and not (net.spool / '1.json').exists())
+    core.stop(5)  # an infra error waits to run again: the stop ends the wait
     measuring.join(30)
     assert not measuring.is_alive()
-    assert state(db, 1) is LeaseState.REPORTED and state(db, 2) is None and measured(db, held) == 2
-    wait_until(lambda: not (net.spool / '1.json').exists())
+    with db.session() as s:
+        infra = len(in_order(s, InfraFailed))
+    # the blackhole can come after the server recorded the evaluator's start but before its answer reached the worker:
+    # then the start times out, and the report says so, a fault of the machine. Else it carries the measurement.
+    assert state(db, 2) is None and (measured(db, held), infra) in {(2, 0), (1, 1)}, 'the spooled report, once'
 
 
 def test_a_worker_whose_token_is_revoked_stops_its_evaluation_and_exits_non_zero_keeping_its_report(
@@ -355,8 +360,12 @@ def test_a_worker_whose_token_is_revoked_stops_its_evaluation_and_exits_non_zero
         net.token = tokens.create(s, WORKER, Access.WORKER)
         s.commit()
     net.start_worker()
+    wait_until(lambda: state(db, 1) is LeaseState.REPORTED, 'a new token sends the kept report')
+    with db.session() as s:
+        assert [p.evaluation for _, p in in_order(s, InfraFailed)] == [1], 'its killed evaluator measured nothing'
+    core.stop(5)  # the evaluation waits to run again: the stop ends the wait
     measuring.join(30)
-    assert not measuring.is_alive() and state(db, 1) is LeaseState.REPORTED, 'a new token sends the kept report'
+    assert not measuring.is_alive()
 
 
 RELAYED_NOTE = (

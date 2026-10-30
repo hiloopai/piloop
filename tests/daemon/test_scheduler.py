@@ -1762,7 +1762,7 @@ def test_a_keep_that_cannot_be_checked_out_is_measured_as_a_crash_once(
     run_all(sched)
     sched.wait(SETTLE)
     [(_, score, error)] = measured_by(db, CandidateId(2))
-    assert score is None and error is not None and error.startswith('GitCommandError'), error
+    assert score is None and error is not None and error.endswith('names no commit in ' + campaign.path), error
     run_all(sched)
     sched.wait(SETTLE)
     assert len(measured_by(db, CandidateId(2))) == 1, 'a crash is an answer: not measured again'

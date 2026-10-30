@@ -100,7 +100,7 @@ def test_a_candidate_reads_with_its_metrics_beside_its_parents_and_each_rung_of_
         assert unknown.value.error == Problem.UNKNOWN_CANDIDATE
 
 
-def test_a_cancelled_evaluation_of_a_baseline_that_never_measured_pauses_its_campaign(
+def test_a_cancelled_evaluation_of_a_baseline_that_never_measured_pauses_its_measurements(
     db: Database, campaign_path: Path, cfg: Settings
 ) -> None:
     with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
@@ -110,7 +110,7 @@ def test_a_cancelled_evaluation_of_a_baseline_that_never_measured_pauses_its_cam
     with db.session() as s:
         held = s.get_one(Campaign, added.campaign.id)
         assert (held.paused, held.paused_reason) == (
-            Pause.LAUNCHES,
-            'the baseline failed to evaluate: evaluation cancelled by human; fix it, then'
-            f' `piloop candidate remeasure {added.baseline}` and `piloop resume demo`',
-        )
+            Pause.ALL,
+            'human cancelled the evaluation of the baseline; `piloop resume demo` measures it again',
+        ), 'a cancel records nothing: the pause holds the measurement that a head without a score asks for'
+        assert s.get_one(Candidate, added.baseline).measurements == []

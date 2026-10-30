@@ -32,7 +32,7 @@ dst.write_bytes(getattr(compressor, sys.argv[2])(src.read_bytes()))
 
 
 def main() -> int:
-    """Run the round trip and print the metrics."""
+    """Run the round trip and report its size as the score."""
     with zipfile.ZipFile(ARCHIVE) as z, z.open('enwik8') as f:
         original = f.read(SIZE)
     with tempfile.TemporaryDirectory() as tmp:
@@ -57,10 +57,10 @@ def main() -> int:
     usage = resource.getrusage(resource.RUSAGE_CHILDREN)
     report(
         {
-            'metrics': {
-                'bytes': compressed + COMPRESSOR.stat().st_size,
-                'seconds': round(usage.ru_utime + usage.ru_stime, 2),
-            }
+            'status': 'ok',
+            'score': compressed + COMPRESSOR.stat().st_size,
+            'direction': 'lower',
+            'metrics': {'seconds': round(usage.ru_utime + usage.ru_stime, 2)},
         }
     )
     return 0

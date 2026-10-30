@@ -56,7 +56,8 @@ def report(result):
     else:
         print(line)
 
-report({"metrics": {"bytes": compressed + compressor_size, "seconds": round(cpu_seconds, 2)}})
+report({"status": "ok", "score": compressed + compressor_size, "direction": "lower",
+        "metrics": {"seconds": round(cpu_seconds, 2)}})
 ```
 
 piloop sets the variable only when it runs the command. Run by hand, the command prints the line:
@@ -66,18 +67,36 @@ uv run python evaluate.py
 ```
 
 ```text
-{"metrics": {"bytes": 3688775, "seconds": 0.82}}
+{"status": "ok", "score": 3688775, "direction": "lower", "metrics": {"seconds": 0.82}}
 ```
 
 | Key | Holds |
 |---|---|
-| `metrics` | A number for each metric, by its name in `[[metrics]]`. Each primary and guardrail is required, a watch metric is optional. |
+| `status` | `ok`, or why nothing counts: `crash` or `timeout` when the candidate failed, `infra_error` when something else failed. |
+| `score` | With `ok`: the value of the primary, the first metric of `[[metrics]]` with `role = "primary"`. |
+| `direction` | With `ok`: `higher` or `lower`, as the primary's `direction` says. |
+| `metrics` | A number for each other metric, by its name in `[[metrics]]`. Each guardrail is required, a watch metric is optional. |
+| `feedback` | Optional: one line on what the run saw. piloop keeps it with the measurement, and never sends it to an implementer. |
 | `units` | Optional: the [per-unit results](#per-unit-results). |
 | `evidence` | Optional: files of the worktree that explain the result, by a label, such as `{"errors": "out/errors.md"}`. piloop keeps them with the evaluation's logs, up to `[evaluation] max_evidence_mb` in `config.toml`. |
 
-A non-zero exit, a missing or unknown metric, a value that is not a number, a second line, or a run longer than
-`evaluate_timeout` seconds makes the commit a `crash`. Print the reason on stderr. Fix the seeds and the data splits,
-so that the same code gets the same score.
+`crash`, `timeout`, a non-zero exit after `ok`, a missing or unknown metric, a value that is not a number, a second
+line, or a run longer than `evaluate_timeout` seconds makes the commit a `crash`. Print the reason on stderr, or give
+it as `feedback`. Fix the seeds and the data splits, so that the same code gets the same score.
+
+An `infra_error` is never a verdict. Report it for a fault that is not the candidate's: a rate limit, a missing input,
+a lost GPU. piloop treats two more faults the same way: a worktree or inputs that it cannot make, and an evaluate that
+another process kills twice. piloop records no measurement and an `evaluation.infra_error` event. The evaluation waits
+in `piloop eval queue` for `[evaluation] infra_retry` in `config.toml`, twice as long after each failure up to
+`infra_retry_max`, then runs again, until it measures or you cancel it. A version that the repo lacks is a `crash`.
+
+`[evaluator] dev` names a fast command that checks a change. Each implementer's brief names it. The implementers run
+it in their own checkouts as often as they like, and piloop never runs it:
+
+```toml
+[evaluator]
+dev = ["uv", "run", "python", "evaluate.py", "--quick"]
+```
 
 <Warning>
   piloop runs the evaluate command from the commit that it measures. An implementer that edits the command changes its
@@ -175,7 +194,7 @@ The evaluate command reports the rung, then extends it into the full panel, so n
 done = score(PANEL[:50])
 report({"rung": "screen", "metrics": {"accuracy": sum(done) / len(done), "cost": 0.05}})
 done += score(PANEL[50:])
-report({"metrics": {"accuracy": sum(done) / len(done), "cost": 0.45}})
+report({"status": "ok", "score": sum(done) / len(done), "direction": "higher", "metrics": {"cost": 0.45}})
 ```
 
 A run's commit scored 0.2 at the screen, where the baseline scored 1. piloop ended the command there:
@@ -218,11 +237,11 @@ A metric that is a sum over units, such as test examples, can report each unit. 
 gain from a gain on a few lucky units. Add each unit's part of each metric to the result:
 
 ```json
-{"metrics": {"accuracy": 0.0112}, "units": {"accuracy": {"test-0001": 0.0056, "test-0002": 0.0, "test-0003": 0.0056}}}
+{"status": "ok", "score": 0.0112, "direction": "higher", "units": {"accuracy": {"test-0001": 0.0056, "test-0002": 0.0, "test-0003": 0.0056}}}
 ```
 
-The parts of a metric must sum to its value, within 0.1%. Leave out metrics that are not sums, such as a latency. The
-agents never see the units.
+The parts of a metric must sum to its value, within 0.1%. The score's units go under the primary's name. Leave out
+metrics that are not sums, such as a latency. The agents never see the units.
 
 ## Evaluators
 

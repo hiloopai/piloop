@@ -1,7 +1,9 @@
 """The evaluation queue: one evaluation per tree, a cap on the evaluations that run, a fair order, and cancels."""
 
+import json
 import threading
 from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -10,12 +12,14 @@ from pytest_mock import MockerFixture
 from sqlalchemy import delete, select
 
 from piloop.actor import System
+from piloop.db.events import in_order
 from piloop.db.models import Campaign, utcnow
 from piloop.db.session import Database
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
+from piloop.plugins.campaign_type.kit.evaluation.jobs import InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, measured, request_remeasure
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
@@ -23,6 +27,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import commands as git
+from piloop.settings import EvaluationSettings
 from tests.conftest import (
     SETTLE,
     ScriptRuntime,
@@ -85,9 +90,16 @@ def run_candidates(db: Database, run_id: RunId) -> list[Candidate]:
         return list(s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)))
 
 
-def queued_executor(db: Database, runtime: ScriptRuntime, tmp_path: Path, slots: int) -> RunController:
+RETRY = EvaluationSettings(infra_retry=timedelta(milliseconds=50))
+"""An infra error asks again at once: the tests wait for no real minute."""
+
+
+def queued_executor(
+    db: Database, runtime: ScriptRuntime, tmp_path: Path, slots: int, evaluation: EvaluationSettings = RETRY
+) -> RunController:
     executor = Workers.model_validate({'pools': {'serve': {'slots': {'evaluation': slots}}}})
-    return serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=executor))
+    controller = RunController(db, Tracer(None), tmp_path, factory(runtime), executor=executor, evaluation=evaluation)
+    return serving(controller)
 
 
 def errors(db: Database, candidate_id: CandidateId) -> tuple[list[str | None], Outcome | None]:
@@ -120,18 +132,20 @@ def test_two_runs_that_reach_one_tree_share_one_evaluation_and_its_crash(
 
 
 @pytest.mark.usefixtures('submitting')
-def test_a_shared_evaluation_that_cannot_start_is_a_crash_for_every_request(
+def test_a_shared_evaluation_that_cannot_start_is_no_measurement_and_runs_again_for_every_request(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    """The request that waits for another's evaluation gets that evaluation's crash, never an empty result."""
+    """A worktree that piloop cannot make is not the candidate's fault: both requests share what it measures later."""
     ex = queued_executor(db, runtime, tmp_path, slots=2)
     waits = mocker.spy(queue, 'request')
     add_worktree = git.add_worktree
+    failed: list[Path] = []
 
     def cannot_check_out(repo: Repo, path: Path, sha: str, links: dict[str, Path]) -> None:
-        if 'eval-' not in str(path):  # the implementer's worktree
+        if 'eval-' not in str(path) or failed:  # the implementer's worktree, or the evaluation that runs again
             return add_worktree(repo, path, sha, links)
         wait_until(lambda: waits.call_count == 2, 'the second request')
+        failed.append(path)
         raise RuntimeError('cannot check out the commit')
 
     mocker.patch('piloop.plugins.vcs.git.commands.add_worktree', side_effect=cannot_check_out)
@@ -142,16 +156,18 @@ def test_a_shared_evaluation_that_cannot_start_is_a_crash_for_every_request(
     one.join(30)
     two.join(30)
     [candidate] = run_candidates(db, first)
-    assert errors(db, candidate.id) == (['RuntimeError: cannot check out the commit'], Outcome.CRASH)
+    assert errors(db, candidate.id) == ([None], Outcome.KEEP), 'measured once, after the infra error'
     with db.session() as s:
         assert [s.get_one(Run, r).status for r in (first, second)] == [RunStatus.SUCCEEDED] * 2
+        [infra] = [p for _, p in in_order(s, InfraFailed)]
+        assert infra.error == 'RuntimeError: cannot check out the commit'
     assert rows(db) == []
 
 
-def test_a_cancelled_evaluation_is_a_crash_that_names_who_cancelled_it_at_once(
+def test_a_cancelled_evaluation_is_no_verdict_and_its_candidate_is_skipped_at_once(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """A cancel records the crash itself, so it holds even if no daemon sees it; a running evaluator is stopped."""
+    """A cancel skips the candidate itself, so it holds even if no daemon sees it; a running evaluator is stopped."""
     write_script(Path(campaign.path).parent / 'harness.sh', HARNESS_OWN_LINE)
     (tmp_path / 'hold').touch()
     held_runs(db, campaign, tmp_path)
@@ -171,10 +187,18 @@ def test_a_cancelled_evaluation_is_a_crash_that_names_who_cancelled_it_at_once(
     two.join(30)
     ex.stop_cancelled()
     one.join(30)
-    assert errors(db, running.id) == (['evaluation cancelled by human'], Outcome.CRASH)
-    assert errors(db, waiting.id) == (['evaluation cancelled by orchestrator'], Outcome.CRASH)
+    assert skipped(db, running.id) == ([], 'not judged: its evaluation was cancelled by human')
+    assert skipped(db, waiting.id) == ([], 'not judged: its evaluation was cancelled by orchestrator')
     assert len(evaluated(tmp_path)) == 1, 'the waiting evaluation never started'
     assert rows(db) == []
+
+
+def skipped(db: Database, candidate_id: CandidateId) -> tuple[list[Measurement], str | None]:
+    """The measurements of a ``skipped`` candidate, and why it is skipped."""
+    with db.session() as s:
+        c = s.get_one(Candidate, candidate_id)
+        assert (c.origin, c.verdict) == (Origin.SKIPPED, None)
+        return list(c.measurements), c.verdict_reason
 
 
 def test_a_cancel_holds_when_the_daemon_restarts_before_it_sees_it(db: Database, campaign: Campaign) -> None:
@@ -193,9 +217,8 @@ def test_a_cancel_holds_when_the_daemon_restarts_before_it_sees_it(db: Database,
         s.commit()
         s.execute(delete(Evaluation))  # what the next daemon's reap does
         s.commit()
-        for candidate in (s.get_one(Candidate, base), s.get_one(Candidate, other.id)):
-            assert measured(candidate, evaluator), 'its crash is recorded: resumed scoring does not evaluate it again'
-            assert candidate.measurements[-1].error == 'evaluation cancelled by human'
+        assert not measured(s.get_one(Candidate, other.id), evaluator)
+    assert skipped(db, other.id)[1] == 'not judged: its evaluation was cancelled by human', 'no daemon measures it'
 
 
 def test_a_stop_ends_the_waiting_evaluations_and_records_nothing(
@@ -371,14 +394,76 @@ def test_an_evaluation_that_another_process_kills_is_run_once_more(
     assert rows(db) == []
 
 
-def test_an_evaluation_killed_twice_is_a_crash_that_names_the_signal(
+def infra_first(tmp_path: Path, times: int) -> list[str]:
+    """An evaluate command that logs each try in ``tries`` and reports an infra error on its first ``times`` tries."""
+    tries, infra = tmp_path / 'tries', json.dumps({'status': 'infra_error', 'feedback': 'HTTP 429'})
+    said = f"printf '%s\\n' '{infra}' >> \"$PILOOP_RESULT_FILE\"; exit 1"
+    return ['sh', '-c', f'echo x >> {tries}; if [ $(wc -l < {tries}) -le {times} ]; then {said}; fi; {SCORE}']
+
+
+def test_an_infra_error_is_no_measurement_and_runs_again_until_it_measures(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    set_config(db, campaign, evaluate=infra_first(tmp_path, times=2))
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        before = len(s.get_one(Candidate, base).measurements)
+    queued_executor(db, runtime, tmp_path, slots=1).remeasure(base)
+    assert tries(tmp_path) == 3
+    with db.session() as s:
+        [after] = s.get_one(Candidate, base).measurements[before:]
+        assert (after.error, after.metrics) == (None, {'score': 1.0, 'size': 5.0}), 'only the measurement counts'
+        assert [p.error for _, p in in_order(s, InfraFailed)] == ['evaluate reported infra_error: HTTP 429'] * 2
+    assert rows(db) == []
+
+
+def test_a_daemon_that_stops_while_an_infra_error_waits_asks_no_more(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    set_config(db, campaign, evaluate=infra_first(tmp_path, times=5))
+    ex = queued_executor(db, runtime, tmp_path, 1, EvaluationSettings(infra_retry=timedelta(minutes=10)))
+    remeasured = in_thread(lambda: ex.remeasure(baseline(db, campaign.id).id))
+    base = baseline(db, campaign.id).id
+    wait_until(lambda: (tmp_path / 'tries').exists() and rows(db) == [(base, False, None)], 'the wait in the queue')
+    ex.stop(30)
+    remeasured.join(30)
+    assert not remeasured.is_alive(), 'the stop ends the wait'
+    assert tries(tmp_path) == 1
+
+
+def test_an_evaluation_killed_twice_waits_and_runs_again_as_an_infra_error(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     set_config(db, campaign, evaluate=killed_first(tmp_path, times=2))
     base = baseline(db, campaign.id).id
+    with db.session() as s:
+        before = len(s.get_one(Candidate, base).measurements)
     queued_executor(db, runtime, tmp_path, slots=1).remeasure(base)
-    assert tries(tmp_path) == 2, 'one more try, not a loop'
-    assert errors(db, base)[0][-1] == 'evaluate killed by SIGTERM (exit -15), not by its own exit: '
+    assert tries(tmp_path) == 3, 'killed twice in one evaluation, then measured in the next'
+    with db.session() as s:
+        [after] = s.get_one(Candidate, base).measurements[before:]
+        assert after.error is None
+        [infra] = [p for _, p in in_order(s, InfraFailed)]
+        assert infra.error == 'evaluate killed by SIGTERM (exit -15), not by its own exit: '
+
+
+def test_an_evaluation_that_waits_after_an_infra_error_is_listed_and_a_cancel_ends_it(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The wait doubles after each failure, and the evaluation waits in the queue, where a cancel finds it."""
+    set_config(db, campaign, evaluate=infra_first(tmp_path, times=99))
+    wait = EvaluationSettings(infra_retry=timedelta(milliseconds=50), infra_retry_max=timedelta(minutes=10))
+    ex = queued_executor(db, runtime, tmp_path, 1, wait)
+    base = baseline(db, campaign.id).id
+    remeasured = in_thread(lambda: ex.remeasure(base))
+    wait_until(lambda: tries(tmp_path) >= 3 if (tmp_path / 'tries').exists() else False, 'two retries')
+    wait_until(lambda: rows(db) == [(base, False, None)], 'the wait in the queue')
+    with db.session() as s:
+        assert queue.cancel(s, base, System.HUMAN) == 1
+        s.commit()
+    remeasured.join(30)
+    assert not remeasured.is_alive(), 'the cancel ends the wait'
+    assert rows(db) == []
 
 
 def test_an_evaluate_that_crashes_on_a_signal_of_its_own_is_not_run_again(
@@ -416,7 +501,7 @@ def test_a_requested_remeasure_is_listed_as_waiting_before_the_daemon_queues_it(
         assert queue.cancel(s, base.id, System.ORCHESTRATOR) == 1, 'a request that is not queued yet can be cancelled'
         s.commit()
         assert queue.requested(s) == []
-        assert base.measurements[-1].error == 'evaluation cancelled by orchestrator'
+        assert queue.cancel(s, base.id, System.ORCHESTRATOR) == 0, 'nothing left to cancel'
 
 
 def test_a_waiting_evaluation_that_this_daemon_did_not_ask_for_is_never_submitted(

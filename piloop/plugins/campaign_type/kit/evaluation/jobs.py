@@ -16,6 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import System
+from piloop.db.events import emit
+from piloop.db.models import EventModel, ReadBy
 from piloop.ids import TargetRef
 from piloop.otel import Span
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
@@ -25,10 +27,13 @@ from piloop.plugins.campaign_type.kit.evaluation.config import Rung
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
     EvalResult,
     Failed,
+    Gone,
     InputsChanged,
     Killed,
     Measured,
     NotRun,
+    Said,
+    Score,
     Step,
     StoppedAt,
     printed,
@@ -41,6 +46,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evalu
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.executor.contract import Applying, Control, Job, JobKind, Report, Settled, Site, Source
 from piloop.plugins.executor.kit.jobs import SHOWN, rebuilt
+from piloop.plugins.vcs.contract import UnknownRevision
 from piloop.proc import kill_group
 from piloop.settings import UNITS_DIR
 
@@ -48,6 +54,19 @@ EVALUATION = 'evaluation'
 """The name of the kind (``piloop.job_kinds``)."""
 INPUTS_CHANGED = 'inputs.changed'
 """An event: an evaluation changed a linked input that it read, so what it measured is a crash, not a measurement."""
+
+
+class InfraFailed(EventModel):
+    """An evaluation failed for a cause that is not its candidate's (``Failed.infra``): it recorded no measurement.
+
+    The request that waits for it asks for it again (``RunController``), so it never becomes a verdict.
+    """
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['evaluation.infra_error'] = 'evaluation.infra_error'
+    evaluation: int
+    """The evaluation, by its row in the queue (``evaluations``)."""
+    error: str
 
 
 class Bar(BaseModel):
@@ -78,6 +97,8 @@ class EvaluationJob(Job):
     """The evaluator runner (``evaluators.runner``). A worker takes only jobs of the runners that it has."""
     command: list[str]
     timeout: float
+    score: Score
+    """The primary that a result's ``score`` reports."""
     required: list[str]
     """The metrics that the evaluate command must report: the primaries and the guardrails."""
     known: list[str]
@@ -109,6 +130,8 @@ class Sample(BaseModel):
     """The rung of the ladder that it measured. None for the full panel."""
     stopped: str | None = None
     """Why the climb stopped at ``rung``. None when it went on."""
+    feedback: str | None = None
+    """What the result said of the run (``Result.feedback``)."""
 
 
 class EvaluationReport(Report):
@@ -122,6 +145,9 @@ class EvaluationReport(Report):
     """The candidate's samples. The first one ran first."""
     bar_samples: list[Sample] = Field(default_factory=list)
     """The bar's samples of a paired evaluation: the i-th ran next to the i-th of ``samples``."""
+    infra_error: str | None = None
+    """Set when its last run failed for a cause that is not the candidate's (``Failed.infra``): then no sample of it
+    counts, and it records no measurement."""
 
 
 class Evaluations(JobKind):
@@ -185,14 +211,19 @@ def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: A
     A sample of the full panel of the candidate names the bar's that ran next to it (``Measurement.pair``): the i-th
     of one side with the i-th of the other. A rung's sample has no pair.
 
-    A cancelled evaluation records nothing: ``queue.cancel`` recorded its crash. Nor does one that ends while the
-    daemon stops: its evaluator was killed, and the next daemon measures it again.
+    A cancelled evaluation records nothing (``queue.cancel``). Nor does one that ends while the daemon stops: its
+    evaluator was killed, and the next daemon measures it again. Nor does an infra error: it emits ``InfraFailed``, and
+    its request asks again.
     """
     evaluation = s.get(Evaluation, job.evaluation)
     if evaluation is None or evaluation.started_at is None:
         raise Settled(f'evaluation#{job.evaluation} is not running')
     s.delete(evaluation)
     if daemon.stopping or evaluation.cancelled_by is not None:
+        return
+    if report.infra_error is not None:
+        failed = InfraFailed(evaluation=evaluation.id, error=report.infra_error)
+        emit(s, failed, TargetRef(CANDIDATE, job.candidate), System.DAEMON)
         return
     evaluator_id = evaluation.evaluator_id
     bar = job.bar
@@ -235,6 +266,7 @@ def record(
         pair=pair,
         rung=sample.rung,
         stopped=sample.stopped,
+        feedback=sample.feedback,
     )
     save_units(units_dir, measurement.id, sample.units)
     return measurement.id
@@ -247,8 +279,9 @@ def run_evaluation(job: EvaluationJob, control: Control, site: Site, span: Span)
     candidate that crashes once crashes again, and a pair needs both sides. The candidate runs first, so each job
     measures it. Each run climbs the job's ladder (``_climb``): one sample for each rung, then one for the full panel.
     Only the first run, on the candidate, runs the rungs that have a command of their own, and only it may stop at a
-    rung (``EvaluationJob.gate``), which ends the job too. Each run has its own worktree and logs, under
-    ``<side>-<n>`` in the job's place, and the report names the files of all of them.
+    rung (``EvaluationJob.gate``), which ends the job too. A run that fails for a cause that is not the candidate's
+    (``Failed.infra``) ends the job, and the report says so: none of its samples count. Each run has its own worktree
+    and logs, under ``<side>-<n>`` in the job's place, and the report names the files of all of them.
     """
     samples: dict[Tree, list[Sample]] = {Tree.CANDIDATE: [], Tree.BAR: []}
     runs: dict[Tree, int] = {Tree.CANDIDATE: 0, Tree.BAR: 0}
@@ -258,10 +291,13 @@ def run_evaluation(job: EvaluationJob, control: Control, site: Site, span: Span)
         runs[side] += 1
         first = i == 0
         own = tuple(r for r in job.ladder if r.evaluate is not None) if first else ()
-        climb = [sample(r) for r in _evaluate(one, control, site, span, own=own, gate=job.gate if first else None)]
+        results = _evaluate(one, control, site, span, own=own, gate=job.gate if first else None)
+        climb = [sample(r) for r in results]
         last = climb[-1]
         span.set(error=last.error, stopped=last.stopped)
         samples[side].extend(climb)
+        if isinstance(failed := results[-1], Failed) and failed.infra is not None:
+            return EvaluationReport(samples=climb, infra_error=failed.error, files=site.files(job))
         if last.error is not None or last.stopped is not None or control.asked() or control.stopping():
             break
     return EvaluationReport(samples=samples[Tree.CANDIDATE], bar_samples=samples[Tree.BAR], files=site.files(job))
@@ -307,12 +343,13 @@ def _evaluate(
 def sample(result: EvalResult) -> Sample:
     """What the report says of one line of the evaluate command: what it measured, where it stopped, or why it failed."""
     match result:
-        case Measured(metrics=metrics, seconds=seconds, units=units, rung=rung):
-            return Sample(metrics=metrics, seconds=seconds, units=units, rung=rung)
+        case Measured(metrics=metrics, seconds=seconds, units=units, rung=rung, feedback=feedback):
+            return Sample(metrics=metrics, seconds=seconds, units=units, rung=rung, feedback=feedback)
         case StoppedAt(rung=rung, reason=reason, metrics=metrics, seconds=seconds, units=units):
             return Sample(metrics=metrics, seconds=seconds, units=units, rung=rung, stopped=reason)
         case Failed(seconds=seconds, rung=rung) as failed:
-            return Sample(metrics=failed.printed, seconds=seconds, error=failed.error, rung=rung)
+            feedback = failed.why.feedback if isinstance(failed.why, Said) else None
+            return Sample(metrics=failed.printed, seconds=seconds, error=failed.error, rung=rung, feedback=feedback)
         case _:
             assert_never(result)
 
@@ -341,6 +378,7 @@ def _climb(
                 required=set(job.required),
                 known=set(job.known),
                 max_evidence_bytes=job.max_evidence_bytes,
+                score=job.score,
                 track=lambda proc: _track(control, proc),
                 step=step,
                 gate=gate,
@@ -360,7 +398,10 @@ def _climb(
             last = climb[-1]
             return [*climb[:-1], Failed(InputsChanged(tuple(changed[:SHOWN])), last.seconds, printed(last))]
         return climb
-    except Exception as e:
+    except UnknownRevision as e:  # it never runs: the candidate's own crash
+        span.error(e)
+        return [Failed(Gone(str(e)), 0.0)]
+    except Exception as e:  # anything else that makes no worktree is the machine's: ``Failed.infra`` retries it
         span.error(e)
         return [Failed(NotRun(f'{type(e).__name__}: {e}'), 0.0)]
     finally:

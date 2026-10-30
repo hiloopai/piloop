@@ -16,6 +16,7 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
     UNITS_SUM_TOLERANCE,
     Failed,
     Measured,
+    Score,
     _check_units,
     run_evaluate,
 )
@@ -41,6 +42,19 @@ def test_the_bootstrap_pairs_units_by_sorted_name_and_measures_gain_in_the_metri
     c = compare(errors, 15.0, 18.0, mine, theirs, 0.95)
     assert (c.gain, c.worst, c.count, c.over) == (3.0, lower_bound([1.0, -1.0, 1.0, 2.0], 0.95), 4, Over.UNITS)
     assert c.worst == -1.0
+
+
+def test_a_result_is_one_json_line_of_a_status_a_score_its_direction_metrics_and_feedback() -> None:
+    line = '{"status": "ok", "score": 3, "direction": "lower", "metrics": {"seconds": 0.5}, "feedback": "1 skipped"}'
+    result = RESULT.validate_json(line)
+    assert (result.status, result.score, result.direction, result.metrics, result.feedback) == (
+        'ok',
+        3.0,
+        Direction.LOWER,
+        {'seconds': 0.5},
+        '1 skipped',
+    )
+    assert RESULT.validate_json('{"status": "infra_error"}').metrics == {}, 'all but the status are optional'
 
 
 def test_a_result_is_one_json_line_of_finite_metrics_units_and_evidence() -> None:
@@ -71,14 +85,23 @@ def test_a_failed_or_incomplete_evaluation_gives_an_error(tmp_path: Path) -> Non
             required={'errors', 'seconds'},
             known={'errors', 'seconds'},
             max_evidence_bytes=0,
+            score=Score(name='errors', direction=Direction.LOWER),
         )
         assert isinstance(r, Measured | Failed), 'no ladder: no rung to stop at'
         return (r.metrics, None) if isinstance(r, Measured) else (r.printed, r.error)
 
-    def write(metrics: dict[str, float]) -> str:
-        return f"printf '%s\\n' '{json.dumps({'metrics': metrics})}' >> \"$PILOOP_RESULT_FILE\""
+    def write(metrics: dict[str, float], **result: object) -> str:
+        return f"printf '%s\\n' '{json.dumps({'metrics': metrics, **result})}' >> \"$PILOOP_RESULT_FILE\""
 
-    assert evaluate(write({'errors': 3, 'seconds': 2})) == ({'errors': 3.0, 'seconds': 2.0}, None)
+    assert evaluate(write({'seconds': 2}, status='ok', score=3, direction='lower')) == (
+        {'errors': 3.0, 'seconds': 2.0},
+        None,
+    ), 'the score is the primary'
+    assert evaluate(f'{write({"seconds": 2}, status="infra_error", feedback="429")}; exit 1') == (
+        {'seconds': 2.0},
+        'evaluate reported infra_error: 429',
+    ), 'a status that the result reports wins over the exit'
+    assert evaluate(write({'errors': 3, 'seconds': 2})) == ({'errors': 3.0, 'seconds': 2.0}, None), "0.5's form"
     assert evaluate(f'{write({"errors": 3})}; echo boom >&2; exit 1') == ({'errors': 3.0}, 'evaluate exit 1: boom'), (
         'a non-zero exit keeps what it reported next to the error: a failed evaluation has a cost too'
     )

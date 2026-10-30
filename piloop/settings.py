@@ -79,6 +79,15 @@ class EvaluationSettings(BaseModel):
     """When a rung of the evaluation ladder stops a climb, piloop sends the evaluate command SIGTERM, then SIGKILL this
     many seconds later if it still runs. Put the command's cleanup in a SIGTERM handler."""
 
+    infra_retry: timedelta = Field(default=timedelta(minutes=1), gt=timedelta(0))
+    """How long an evaluation that failed for a cause that is not its candidate's waits before it runs again: an
+    ``infra_error`` that the evaluate command reported, a worktree or inputs that piloop could not make, or an evaluate
+    that another process killed twice. The wait doubles after each failure, up to ``infra_retry_max``. It runs again
+    until it measures, or someone cancels it (``piloop eval cancel``). Seconds, or an ISO 8601 duration."""
+    infra_retry_max: timedelta = Field(default=timedelta(minutes=30), gt=timedelta(0))
+    """The longest wait between two runs of an evaluation that keeps failing for a cause that is not its candidate's
+    (``infra_retry``)."""
+
     @property
     def max_evidence_bytes(self) -> int:
         """``max_evidence_mb`` in bytes."""

@@ -1,4 +1,4 @@
-"""The ``evaluation`` component's keys of ``piloop.toml``: its metrics, its tracks and its evaluation ladder."""
+"""The ``evaluation`` component's keys of ``piloop.toml``: its evaluator, its metrics, its tracks and its ladder."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -13,6 +13,17 @@ from pydantic import (
 
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName, TrackName
 from piloop.plugins.metric import Direction
+
+
+class EvaluatorConfig(BaseModel):
+    """``[evaluator]``: the campaign's commands beside ``evaluate``, the one that scores a version."""
+
+    model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
+
+    dev: list[str] | None = Field(default=None, min_length=1)
+    """Optional. A fast command (argv) that checks a change, which an implementer runs in its own checkout as often as
+    it likes. Each implementer's brief names it. piloop never runs it and records nothing of it. Example:
+    ``["uv", "run", "python", "evaluate.py", "--quick"]``."""
 
 
 class MetricRole(StrEnum):
