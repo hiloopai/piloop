@@ -65,7 +65,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRequested
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.kit.capacity import GB, HostSample
@@ -186,6 +186,43 @@ def test_campaign_and_idea_lifecycle(campaign_path: Path, out) -> None:
 
 
 @pytest.mark.usefixtures('api')
+def test_a_worker_claims_an_idea_or_proposes_one_through_the_api_and_signs_the_claim(
+    campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``piloop idea claim`` and ``piloop idea propose`` act for the caller's run; the claim's event is the worker's."""
+    run_cli(['init', str(campaign_path)])
+    run_cli(['idea', 'add', 'demo', 'try a cache'])
+    db = Database(common.settings.database_url, actor=System.DAEMON)
+    with db.session() as s:
+        for _ in range(2):
+            run = Run(campaign_id=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING)
+            s.add(run)
+            s.flush()
+            s.add(AgentSession(kind=IMPLEMENTER, campaign_id=1, subject=TargetRef(RUN, run.id), reason='a free slot'))
+        s.commit()
+    out()
+
+    def as_(actor: str, *argv: str) -> None:
+        settings = Settings(home=tmp_path, uv_tool_dir=tmp_path / 'uv-tools', actor=actor)
+        monkeypatch.setattr(common, 'settings', settings.model_copy(update=launched(tmp_path, actor)))
+        run_cli(list(argv))
+
+    as_('implementer#1', 'idea', 'claim', '1')
+    as_('implementer#2', 'idea', 'propose', 'halve the window', '--hypothesis', 'fewer misses')
+    assert out().splitlines() == ['idea#1 claimed: try a cache', 'idea#2 claimed: halve the window']
+    with pytest.raises(SystemExit, match='run#1 claimed idea#1 already: a run tries one idea'):
+        as_('implementer#1', 'idea', 'claim', '2')
+    with db.session() as s:
+        assert [(r.id, r.idea_id, r.attempt) for r in s.scalars(select(Run).order_by(Run.id))] == [(1, 1, 1), (2, 2, 1)]
+        claims = s.scalars(select(Event).where(Event.kind == 'idea.status').order_by(Event.id)).all()
+        assert [(e.target_id, e.actor) for e in claims] == [(1, 'implementer#1'), (2, 'implementer#2')], (
+            'each claim is signed by its worker'
+        )
+        assert s.get_one(Idea, 2).created_by == 'implementer#2'
+    db.close()
+
+
+@pytest.mark.usefixtures('api')
 def test_research_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file_none(
     campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -200,7 +237,7 @@ def test_research_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file
         run_cli(list(argv))
 
     out()
-    as_('research#7', 'idea', 'add', 'demo', 'longer lines', '--base', '1', '--from', 'l.md')
+    as_('research#7', 'idea', 'add', 'demo', 'longer lines', '--from', 'l.md')
     as_('orchestrator', 'idea', 'add', 'demo', 'from the digest')
     as_('human', 'idea', 'add', 'demo', 'just try it')
     assert out().splitlines() == [
@@ -209,7 +246,7 @@ def test_research_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file
         'idea#3 open p2: just try it',
     ], 'every idea is open on the board'
     for actor in ('watchdog#5', 'implementer#3'):
-        with pytest.raises(SystemExit, match=f"{actor} files no ideas: say the hunch in a note on your run's idea"):
+        with pytest.raises(SystemExit, match=f'{actor} files no ideas for others: a worker tries one of its own'):
             as_(actor, 'idea', 'add', 'demo', 'just do it')
     protocol = ' '.join(['step'] * 151)
     with pytest.raises(SystemExit, match=r'the plan has 151 words, and a plan of a research has at most 150'):
@@ -217,8 +254,8 @@ def test_research_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file
 
     db = Database(common.settings.database_url, actor=System.HUMAN)
     with db.session() as s:
-        rows = [(i.created_by, i.provenance, i.base_candidate_id) for i in s.scalars(select(Idea))]
-        assert rows == [('research#7', 'l.md', 1), ('orchestrator', None, None), ('human', None, None)]
+        rows = [(i.created_by, i.provenance) for i in s.scalars(select(Idea))]
+        assert rows == [('research#7', 'l.md'), ('orchestrator', None), ('human', None)]
         assert [e.actor for e in s.scalars(select(Event).where(Event.kind == 'idea.created'))] == [
             'research#7',
             'orchestrator',
@@ -226,8 +263,6 @@ def test_research_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file
         ]
         assert added_by(s, CampaignId(1)) == {'research#7', 'orchestrator', 'human'}
     db.close()
-    with pytest.raises(SystemExit, match='no candidate#99 in campaign demo'):
-        as_('human', 'idea', 'add', 'demo', 'from nowhere', '--base', '99')
 
 
 def research_files(campaign_path: Path, most: int) -> None:
@@ -809,7 +844,7 @@ def test_candidate_import_registers_a_reference_shown_apart_and_refuses_a_bad_re
     assert '## Recent candidates (1 of 1; score)' in text, 'a starting point is no candidate of the campaign'
     run_cli(['history'])
     text = out()
-    assert 'History: starting points (pin one with' in text
+    assert 'History: starting points (take the change of one onto the head)' in text
     assert re.search(rf'#2 +{sha[:7]} +— +from another campaign', text), 'unmeasured yet'
 
     with pytest.raises(
@@ -1062,15 +1097,14 @@ def test_candidate_note_keeps_a_regressed_result_in_view_with_follow_ups_pinned_
     run_cli(['candidate', 'note', '2', 'halves the eval time', '--follow-up', 'try again', '--follow-up', 'cache it'])
     assert out().splitlines() == [
         'candidate#2 interesting (note): halves the eval time; against candidate#1: score 0 vs 1',
-        'idea#2 open, pinned to candidate#2: try again (from candidate#2)',
-        'idea#3 open, pinned to candidate#2: cache it',
+        'idea#2 open, about candidate#2: try again (from candidate#2)',
+        'idea#3 open, about candidate#2: cache it',
     ]
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
         assert s.get_one(Candidate, 2).verdict_by == 'human'
         idea = s.get_one(Idea, 3)
-        assert (idea.status, idea.base_candidate_id, idea.created_by, idea.hypothesis) == (
+        assert (idea.status, idea.created_by, idea.hypothesis) == (
             IdeaStatus.OPEN,
-            2,
             'human',
             'Follow-up of candidate#2 (worse): halves the eval time',
         )
@@ -1218,7 +1252,15 @@ def test_prompt_is_a_note_on_the_agent_and_says_whether_it_arrived(
         s.add(idea)
         s.flush()
         s.add(
-            Run(idea_id=idea.id, attempt=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING)
+            Run(
+                campaign_id=idea.campaign_id,
+                idea_id=idea.id,
+                attempt=1,
+                base_candidate_id=1,
+                harness='script',
+                model='m',
+                status=RunStatus.RUNNING,
+            )
         )
         s.flush()  # the run first: the unit of work orders unrelated mappers by name
         s.add(
@@ -1280,7 +1322,15 @@ def test_campaign_stop_and_cancels_are_requests_that_the_daemon_acts_on(campaign
         s.add(idea)
         s.flush()
         s.add(
-            Run(idea_id=idea.id, attempt=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING)
+            Run(
+                campaign_id=idea.campaign_id,
+                idea_id=idea.id,
+                attempt=1,
+                base_candidate_id=1,
+                harness='script',
+                model='m',
+                status=RunStatus.RUNNING,
+            )
         )
         s.flush()
         s.add_all(
@@ -1349,7 +1399,15 @@ def test_run_extend_gives_the_running_implementer_more_time_and_says_how_much_in
         s.add(idea)
         s.flush()
         s.add(
-            Run(idea_id=idea.id, attempt=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING)
+            Run(
+                campaign_id=idea.campaign_id,
+                idea_id=idea.id,
+                attempt=1,
+                base_candidate_id=1,
+                harness='script',
+                model='m',
+                status=RunStatus.RUNNING,
+            )
         )
         s.flush()
         s.add(
@@ -1624,6 +1682,7 @@ def test_status_without_results(campaign_path: Path, out, mocker: MockerFixture)
         s.flush()
         s.add(
             Run(
+                campaign_id=idea.campaign_id,
                 idea_id=idea.id,
                 attempt=1,
                 base_candidate_id=1,
@@ -2000,13 +2059,16 @@ def test_schema_prints_every_guide_and_the_tables_or_only_the_guides_named(out) 
 
 
 @pytest.mark.usefixtures('api')
-def test_with_several_tracks_every_idea_names_its_track(campaign_path: Path, out) -> None:
+def test_with_several_tracks_every_idea_names_its_track_and_a_claim_says_what_its_track_asks(
+    campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
+) -> None:
     toml = campaign_path / 'piloop.toml'
     text = toml.read_text().replace('role = "primary"', 'role = "primary"\nmargin = 1')
     text = text.replace(
         'name = "size"\ndirection = "lower"', 'name = "size"\ndirection = "lower"\nrole = "primary"\nmargin = 2'
     )
-    toml.write_text(text + '\n[tracks.score]\nshare = 0.5\n\n[tracks.size]\nshare = 0.5\n')
+    (campaign_path / 'size.md').write_text('# Size track\nCut bytes, keep every line.\n')
+    toml.write_text(text + '\n[tracks.size]\naddendum = "size.md"\n')
     run_cli(['init', str(campaign_path)])
     out()
     with pytest.raises(SystemExit, match='demo has tracks score, size: name one with --track'):
@@ -2026,6 +2088,38 @@ def test_with_several_tracks_every_idea_names_its_track(campaign_path: Path, out
     assert rows == [('shorter lines', 'size'), ('more lines', 'score'), ('trim it', 'size'), ('pad it', 'score')], (
         'a follow-up of a candidate no run made is on the first track unless it says otherwise'
     )
+    with closing(Database(common.settings.database_url, actor=System.DAEMON)) as db, db.session() as s:
+        run = Run(campaign_id=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING)
+        s.add(run)
+        s.flush()
+        s.add(AgentSession(kind=IMPLEMENTER, campaign_id=1, subject=TargetRef(RUN, run.id), reason='a free slot'))
+        s.commit()
+    out()
+    settings = Settings(home=tmp_path, uv_tool_dir=tmp_path / 'uv-tools', actor='implementer#1')
+    monkeypatch.setattr(common, 'settings', settings.model_copy(update=launched(tmp_path, 'implementer#1')))
+    run_cli(['idea', 'claim', '1'])
+    assert out().splitlines() == [
+        'idea#1 claimed: shorter lines',
+        'Your run is on track size: a keep must improve size (lower is better) with confidence and hold score'
+        ' (margin 1).',
+        '',
+        '# Size track',
+        'Cut bytes, keep every line.',
+    ], 'the brief was written before the claim: the claim gives the track its brief would have had'
+    with closing(Database(common.settings.database_url, actor=System.DAEMON)) as db, db.session() as s:
+        run = Run(campaign_id=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING)
+        s.add(run)
+        s.flush()
+        s.add(AgentSession(kind=IMPLEMENTER, campaign_id=1, subject=TargetRef(RUN, run.id), reason='a free slot'))
+        s.commit()
+    settings = Settings(home=tmp_path, uv_tool_dir=tmp_path / 'uv-tools', actor='implementer#2')
+    monkeypatch.setattr(common, 'settings', settings.model_copy(update=launched(tmp_path, 'implementer#2')))
+    run_cli(['idea', 'propose', 'drop a blank line', '--track', 'score'])
+    assert out().splitlines()[:2] == [
+        'idea#5 claimed: drop a blank line',
+        'Your run is on track score: a keep must improve score (higher is better) with confidence and hold size'
+        ' (margin 2).',
+    ], 'a proposal says it too, and a track without an addendum ends with its rule'
 
 
 def test_restart_and_upgrade_keep_the_daemon_running_when_the_code_would_not_start_again(

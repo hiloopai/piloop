@@ -60,7 +60,7 @@ def on(s: Session, w: AgentSession) -> str:
     """Describe what the agent works on: the idea of its run, or else the reason for its request."""
     if run_of(w) is not None:
         idea = s.get_one(Run, run_of(w)).idea
-        return f'idea#{idea.id} {cell(idea.title)}'
+        return 'no idea claimed yet' if idea is None else f'idea#{idea.id} {cell(idea.title)}'
     return cell(w.reason or NONE)
 
 

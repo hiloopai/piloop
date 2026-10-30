@@ -89,8 +89,8 @@ class Planner(Protocol):
         """An agent that never started closed, for ``end``: end what it was requested for."""
         ...
 
-    def take(self, s: Session, agent_session: AgentSession, rotation: list[str], full: set[str]) -> Take | CannotLaunch:
-        """Whether a requested agent of a role that does its work launches now."""
+    def take(self, s: Session, agent_session: AgentSession, full: set[str]) -> Take | CannotLaunch:
+        """Whether a requested agent of a role that does its work launches now. ``full``: the harnesses at their caps."""
         ...
 
     def fail_open(self, s: Session, end: RunEnd, *, reaped: bool, sparing: Collection[AgentSessionId]) -> None:

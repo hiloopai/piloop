@@ -100,8 +100,9 @@ class OpenRun(View):
     """A run that is queued or running."""
 
     id: RunId
-    idea: IdeaId
-    title: str
+    idea: IdeaId | None
+    """The idea that its worker claimed. Null until it claims one."""
+    title: str | None
     harness: str
     model: str
     status: str

@@ -78,7 +78,14 @@ def add_run(
     """
     with db.session() as s:
         owner = s.get_one(Idea, idea_id)
-        run = Run(idea_id=idea_id, attempt=len(owner.runs) + 1, base_candidate_id=1, harness='script', model='m')
+        run = Run(
+            campaign_id=owner.campaign_id,
+            idea_id=idea_id,
+            attempt=len(owner.runs) + 1,
+            base_candidate_id=1,
+            harness='script',
+            model='m',
+        )
         s.add(run)
         s.flush()
         finished = utcnow() if status not in (RunStatus.QUEUED, RunStatus.RUNNING) else None

@@ -26,11 +26,12 @@ from git import Repo
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import TypeAdapter
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from piloop.actor import SignedAgent, System
+from piloop.actor import Agent, SignedAgent, System
 from piloop.campaign.campaigns import CampaignAdded
+from piloop.campaign.stop import left
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.api import Handlers, daemon_state, with_api
 from piloop.daemon.main import ACTOR
@@ -44,6 +45,8 @@ from piloop.net.tokens import Tokens, mint_agent
 from piloop.otel import Tracer
 from piloop.plugins.archive.local import store as archive_module
 from piloop.plugins.campaign_type.consumers import Campaigns
+from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -53,9 +56,11 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluato
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import EvaluationClient
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session
 from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
 from piloop.plugins.campaign_type.kit.verdicts.wire import VerdictsClient
+from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
 from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
 from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.contribution import collect, contributions_of, installed
@@ -837,6 +842,41 @@ wait returns as soon as nothing is in flight."""
 def campaigns_of(scheduler: Scheduler) -> Campaigns:
     """The campaigns' pass of ``scheduler``: the campaign type capability's machinery."""
     return next(each for each in scheduler.contributions.lifecycles if isinstance(each, Campaigns))
+
+
+def claim(db: Database, run_id: RunId, idea_id: IdeaId) -> None:
+    """Claim ``idea_id`` for the open run ``run_id``, as its latest worker does with ``piloop idea claim``."""
+    with db.session() as s:
+        worker = latest_agent_session(s, run_id)
+        assert worker is not None, f'run#{run_id} has a worker'
+        backlog_ops.claim(s, idea_id, actor=Agent(role=worker.kind, session=worker.id))
+        s.commit()
+
+
+def queued(db: Database, scheduler: Scheduler, campaign_id: CampaignId, *ideas: IdeaId) -> list[RunId]:
+    """Queue a fresh run on each free slot of the campaign (``Planner.queue``), and claim ``ideas`` for them in order.
+
+    Its worker would claim once it runs; claimed before the launch, the run cannot end before its claim.
+    """
+    with db.session() as s:
+        campaign = s.get_one(Campaign, campaign_id)
+        before = s.scalar(select(func.max(Run.id))) or 0
+        campaigns_of(scheduler)._planner(campaign).queue(s, campaign, left(s, campaign, campaign.config))
+        s.commit()
+        runs = list(s.scalars(select(Run.id).where(Run.id > before).order_by(Run.id)))
+    for run_id, idea_id in zip(runs, ideas, strict=False):
+        claim(db, run_id, idea_id)
+    return runs
+
+
+@pytest.fixture
+def no_fresh_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start no run on a free slot, for a test of sweeps that adds each run it needs by hand.
+
+    The scheduler fills every free slot of a role that does runs with a fresh run (``OptimizationPlanner.queue``), and
+    each of those would run, fail and wake the triggers under test.
+    """
+    monkeypatch.setattr(OptimizationPlanner, 'queue', lambda _planner, _s, _campaign, _left: None)
 
 
 def run_all(scheduler: Scheduler, now: datetime | None = None) -> list[AgentSessionId]:

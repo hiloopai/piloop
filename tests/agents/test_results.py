@@ -330,7 +330,14 @@ def implementer_of(
         idea = Idea(campaign_id=campaign.id, track='score', title='stack', hypothesis='h', created_by=created_by)
         s.add(idea)
         s.flush()
-        run = Run(idea_id=idea.id, attempt=1, base_candidate_id=1, harness='script', model='test-model')
+        run = Run(
+            campaign_id=idea.campaign_id,
+            idea_id=idea.id,
+            attempt=1,
+            base_candidate_id=1,
+            harness='script',
+            model='test-model',
+        )
         s.add(run)
         s.commit()
         run_id, idea_id = run.id, idea.id

@@ -28,7 +28,7 @@ from piloop.ids import (
     TargetKind,
 )
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.cas.contract import BlobAddress
@@ -75,10 +75,7 @@ class IdeaTrackChanged(Changed[TrackName]):
     kind: Literal['idea.track'] = 'idea.track'
 
 
-class IdeaBaseChanged(Changed[CandidateId]):
-    """An idea's pinned base changed."""
-
-    kind: Literal['idea.base_candidate_id'] = 'idea.base_candidate_id'
+EventModel.retire('idea.base_candidate_id')  # 0.5 pinned an idea's base; a run starts from the head now
 
 
 class VerdictChanged(Changed[Outcome]):
@@ -537,7 +534,6 @@ CHANGES = (
     changed(IdeaStatusChanged, IDEA_SETTLED),
     changed(IdeaPriorityChanged),
     changed(IdeaTrackChanged),
-    changed(IdeaBaseChanged),
     link_event('NEW'),
     link_event('OLD'),
     changed(VerdictChanged),

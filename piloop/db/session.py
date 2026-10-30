@@ -659,6 +659,19 @@ CLOSE_WAIT_SECONDS = 5.0
 other session in flight."""
 
 
+def write_lock(s: Session) -> None:
+    """Hold the write lock of ``s`` from now to its commit, unless an earlier write of ``s`` holds it already.
+
+    It begins the write transaction (``write_transaction``). A write transaction is current once it holds the lock: no other writer commits until it ends. The objects that
+    ``s`` read before may be stale, so they are expired.
+    """
+    connection = s.connection().connection.dbapi_connection
+    assert connection is not None  # a session's live connection has its driver's
+    if not connection.in_transaction:
+        write_transaction(s)
+    s.expire_all()
+
+
 def write_transaction(s: Session) -> None:
     """Begin the write transaction of ``s`` now (``BEGIN IMMEDIATE``): it holds the write lock until the commit.
 

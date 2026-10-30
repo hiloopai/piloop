@@ -34,6 +34,8 @@ from tests.conftest import SETTLE, ScriptRuntime, run_all, wait_until, write_tom
 from tests.daemon.test_roles import configure, recording, scheduler
 from tests.daemon.test_triggers import agent_sessions
 
+pytestmark = pytest.mark.usefixtures('no_fresh_runs')
+
 ORCHESTRATOR = 'orchestrator'
 ANA = Person(name='ana')
 

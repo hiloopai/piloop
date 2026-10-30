@@ -43,7 +43,7 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
         s.flush()
         mine = idea(s, campaign, 'mine', IdeaStatus.OPEN)
         theirs = idea(s, other, 'theirs', IdeaStatus.OPEN)
-        run = Run(idea=mine, attempt=1, base_candidate_id=1, harness='h', model='m')
+        run = Run(campaign_id=mine.campaign_id, idea=mine, attempt=1, base_candidate_id=1, harness='h', model='m')
         s.add(run)
         s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, state=AgentSessionState.EXITED))
         s.flush()

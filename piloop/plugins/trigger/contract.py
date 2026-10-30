@@ -26,28 +26,13 @@ if TYPE_CHECKING:  # piloop.db.models types campaigns.config with the triggers: 
 
 
 @dataclass(frozen=True)
-class TrackBacklog:
-    """One track's part of the backlog: its claimable and held ideas, and its share of the target."""
-
-    name: str
-    runnable: int
-    waiting: int
-    """Open ideas that an ``after`` link holds (``piloop.plugins.campaign_type.kit.backlog.ideas.held``)."""
-    target: int
-    """The track's share of ``Backlog.target``, rounded up. It is 0 for a track with share 0."""
-
-    @property
-    def gap(self) -> int:
-        """The ideas that the track needs to reach its share. Negative if it has more."""
-        return self.target - self.runnable - self.waiting
-
-
-@dataclass(frozen=True)
 class Backlog:
-    """The input to ``low_water``: the runnable ideas, the target, and what the sweeps in flight will add."""
+    """The input to ``low_water``: the board's open ideas, the target, and what the sweeps in flight will add."""
 
-    tracks: tuple[TrackBacklog, ...]
-    """One entry per track, in config order. A track below its share is short, whatever the other tracks have."""
+    runnable: int
+    """The ideas that a worker can claim now: ``open`` and not held."""
+    waiting: int
+    """The open ideas that an ``after`` link holds: the board has them, so a sweep need not add more."""
     target: int
     """One idea per run slot plus the ``buffer`` of ``low_water``, but never more than the runs that the stop rule
     leaves (``Go.left``)."""
@@ -67,25 +52,12 @@ class Backlog:
         return self.sweeps * self.per_sweep
 
     @property
-    def runnable(self) -> int:
-        """The ideas that the queue can take now: ``open``, not held, and on a track with a share."""
-        return sum(t.runnable for t in self.tracks)
-
-    @property
-    def waiting(self) -> int:
-        """The open ideas that an ``after`` link holds: the board has them, so a sweep need not add more."""
-        return sum(t.waiting for t in self.tracks)
-
-    @property
     def short(self) -> int:
-        """The ideas missing from the target after the sweeps in flight insert theirs.
+        """The ideas missing from the target after the sweeps in flight insert theirs, negative for a surplus.
 
-        This is the sum of the tracks' shortfalls. A surplus on one track does not cover a shortfall on another. If no
-        track is short, it is the negative surplus. A held idea is not missing.
+        A held idea is not missing.
         """
-        gaps = [t.gap for t in self.tracks]
-        wanted = sum(g for g in gaps if g > 0) if any(g > 0 for g in gaps) else sum(gaps)
-        return wanted - self.pending
+        return self.target - self.runnable - self.waiting - self.pending
 
     @property
     def idle(self) -> int:
@@ -102,10 +74,7 @@ class Backlog:
 
     def __str__(self) -> str:
         coming = f', {self.pending} more from {self.sweeps} sweeps in flight' if self.sweeps else ''
-        per_track = ''
-        if len(self.tracks) > 1:
-            per_track = ' (' + ', '.join(f'{t.name} {t.runnable} of {t.target}' for t in self.tracks) + ')'
-        backlog = f'{self.held()}{per_track}{coming}'
+        backlog = f'{self.held()}{coming}'
         return f'{self.idle} free implementer slots without a runnable idea; {backlog}' if self.idle > 0 else backlog
 
 

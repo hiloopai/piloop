@@ -14,7 +14,6 @@ from piloop.campaign.stop import request_cancel
 from piloop.db.events import emit
 from piloop.db.models import Campaign
 from piloop.ids import Ending, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
@@ -128,16 +127,8 @@ def cancel_replaced(s: Session, campaign: Campaign, was: Candidate | None, actor
     now = head(s, campaign)
     if was is None or (now is not None and now.id == was.id):
         return ()
-    stale = (
-        select(Run)
-        .join(Idea)
-        .where(
-            Idea.campaign_id == campaign.id,
-            Idea.base_candidate_id.is_(None),
-            Run.base_candidate_id == was.id,
-            Run.status.in_(OPEN_RUNS),
-            ~Run.branch,
-        )
+    stale = select(Run).where(
+        Run.campaign_id == campaign.id, Run.base_candidate_id == was.id, Run.status.in_(OPEN_RUNS), ~Run.branch
     )
     runs = s.scalars(stale.order_by(Run.id)).all()
     for run in runs:

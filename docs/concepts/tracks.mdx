@@ -25,11 +25,9 @@ floor = 2.0            # and never past this
 repeats = 3
 
 [tracks.accuracy]
-share = 0.75           # of the implementer slots
 addendum = "briefs/accuracy.md"
 
 [tracks.cost]
-share = 0.25
 addendum = "briefs/cost.md"
 ```
 
@@ -38,8 +36,8 @@ addendum = "briefs/cost.md"
 ```text
 ## Tracks
 
-- accuracy: accuracy 0.7416 at the head (+0 on the start); floor 0.74, 0.0016 to spare; 0 trunk keeps; share 0.75 of 4 slots, 0 running; 0 runnable ideas.
-- cost: cost_seconds 1.66 at the head (+0 on the start); floor 2, 0.34 to spare; 0 trunk keeps; share 0.25 of 4 slots, 0 running; 0 runnable ideas.
+- accuracy: accuracy 0.7416 at the head (+0 on the start); floor 0.74, 0.0016 to spare; 0 trunk keeps; 0 running; 0 open ideas.
+- cost: cost_seconds 1.66 at the head (+0 on the start); floor 2, 0.34 to spare; 0 trunk keeps; 0 running; 0 open ideas.
 ```
 
 ## The rules
@@ -50,7 +48,8 @@ addendum = "briefs/cost.md"
 - The candidate gets the best of these verdicts, and `candidates.track` names its track. A tie goes to its idea's
   track. Each track's verdict is a `candidate.judged` event.
 - All tracks share one head. A keep on any track moves it.
-- A free slot goes to the track that is furthest below its `share`. The shares sum to 1. A share of 0 stops a track.
-- `addendum` is a file that piloop adds to the brief of the track's runs.
+- Workers claim any open idea, whatever its track.
+- A worker learns its track when it claims an idea: `piloop idea claim` prints the track's keep rule, then its
+  `addendum` file.
 
-A campaign with one primary has one track, and needs no `[tracks]` table.
+A `[tracks.<name>]` table is needed only for an `addendum`.

@@ -151,6 +151,7 @@ def add_run(
         s.flush()
         in_flight = status in (RunStatus.QUEUED, RunStatus.RUNNING)
         run = Run(
+            campaign_id=idea.campaign_id,
             idea_id=idea.id,
             attempt=1,
             base_candidate_id=1,
@@ -302,6 +303,7 @@ def test_max_runs_waits_for_a_finished_run_whose_commits_are_scored(db: Database
     def scoring(on: bool, idea: IdeaStatus) -> tuple[str | None, int]:
         with db.session() as s:
             run = s.get_one(Run, run_id)
+            assert run.idea is not None
             run.scoring, run.idea.status = on, idea
             s.commit()
             return reason(db, campaign), runs(s, s.get_one(Campaign, campaign.id))
@@ -572,7 +574,7 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
     (idea,) = add_ideas(db, campaign, 'queued before the stop')
     with db.session() as s:
         s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
-        run = Run(idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
+        run = Run(campaign_id=campaign.id, idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
         s.add(
@@ -616,7 +618,7 @@ def test_a_requested_stop_ends_the_campaign_as_a_stop_condition_does(
     (idea,) = add_ideas(db, campaign, 'queued before the stop')
     with db.session() as s:
         s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
-        run = Run(idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
+        run = Run(campaign_id=campaign.id, idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
         s.add(
@@ -672,7 +674,7 @@ def stop_while_held(db: Database, campaign: Campaign, hold: str, review: str | N
     (idea,) = add_ideas(db, campaign, 'queued before the stop')
     with db.session() as s:
         s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
-        s.add(Run(idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m'))
+        s.add(Run(campaign_id=campaign.id, idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m'))
         if hold == 'pause':
             pause(s, campaign.id, evals=False, reason='too expensive')
         request_stop(s, s.get_one(Campaign, campaign.id), System.HUMAN, reason='over budget', ending=Ending.WRAP_UP)

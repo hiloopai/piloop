@@ -54,7 +54,7 @@ from piloop.plugins.cas.gcs import Gcs
 from piloop.plugins.cas.http import Http
 
 from piloop.plugins.trigger.contract import TRIGGERS, Trigger, TriggerName, Pass, Fire, Steer, Quiet
-from piloop.plugins.trigger.contract import Backlog, TrackBacklog
+from piloop.plugins.trigger.contract import Backlog
 from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
 from piloop.plugins.campaign_type.optimization.trigger.low_yield import LowYield

@@ -97,7 +97,6 @@ def test_every_trigger_is_one_statement_named_table_what_and_references_real_col
             'ideas_status_event',
             'ideas_priority_event',
             'ideas_track_event',
-            'ideas_base_candidate_id_event',
             'idea_links_linked_event',
             'idea_links_unlinked_event',
             'candidates_verdict_event',
@@ -138,7 +137,6 @@ def test_the_change_log_is_the_event_kinds_the_feed_documents() -> None:
             "'subject.settled'",
             "'idea.priority'",
             "'idea.track'",
-            "'idea.base_candidate_id'",
             "'idea.linked'",
             "'idea.unlinked'",
             "'candidate.verdict'",
@@ -238,7 +236,10 @@ def test_an_idea_settles_when_it_is_newly_done_with_no_run_open_whoever_writes_i
         )
         s.add_all([quiet, rerun, done])
         s.flush()
-        runs = [Run(idea_id=rerun.id, attempt=n, base_candidate_id=1, harness='h', model='m') for n in (1, 2)]
+        runs = [
+            Run(campaign_id=rerun.campaign_id, idea_id=rerun.id, attempt=n, base_candidate_id=1, harness='h', model='m')
+            for n in (1, 2)
+        ]
         s.add_all(runs)
         s.commit()
         ids, first, second = (quiet.id, rerun.id, done.id), runs[0].id, runs[1].id

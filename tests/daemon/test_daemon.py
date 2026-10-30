@@ -18,15 +18,16 @@ from piloop.daemon.serve import RESTART_SIGNAL, SERVE_ARGV
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database, migrate
 from piloop.ids import TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import FINDING, IMPLEMENTER, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.proc import Inherited, alive, started
 from piloop.settings import Settings
 from tests.conftest import (
+    HARNESS_APPEND,
     HARNESS_NOOP,
     RESEARCH,
     SETTLE,
@@ -34,9 +35,11 @@ from tests.conftest import (
     WRITE_PID,
     ScriptRuntime,
     bare_config,
+    claim,
     console_lines,
     disk,
     factory,
+    queued,
     register,
     run_all,
     trace,
@@ -60,44 +63,27 @@ def test_daemon_end_to_end(
         s.commit()
 
     daemon.scheduler.reap()
+    assert queued(daemon.db, daemon.scheduler, campaign.id, IdeaId(1)) == [1]
     assert run_all(daemon.scheduler) == [1]
     daemon.scheduler.wait(SETTLE)
     with daemon.db.session() as s:
         run = s.get_one(Run, 1)
         assert (run.status, run.updated_by) == (RunStatus.SUCCEEDED, ACTOR.signature)
-    assert run_all(daemon.scheduler) == [], 'a successful run does not wake the watchdog'
+        assert s.get_one(Idea, 1).status is IdeaStatus.DONE
 
     write_toml(campaign_path, HARNESS_NOOP)
     with daemon.db.session() as s:
         s.get_one(Campaign, campaign.id).config = load_campaign_config(campaign_path)
-        s.add(Idea(track='score', campaign_id=campaign.id, title='bad', hypothesis='bad', created_by='t', max_runs=1))
         s.commit()
-    assert run_all(daemon.scheduler) == [2]
+    assert run_all(daemon.scheduler) == [2], 'a fresh run fills the free slot; the successful run woke no watchdog'
     daemon.scheduler.wait(SETTLE)
-    assert run_all(daemon.scheduler) == [3], 'the failure requests a watchdog sweep, launched on the same tick'
-    daemon.scheduler.wait(SETTLE)
-    with daemon.db.session() as s:
-        watchdog = s.get_one(AgentSession, 3)
-        assert (watchdog.kind, watchdog.reason, watchdog.state, watchdog.harness) == (
-            WATCHDOG,
-            'run_failed: run#2 failed',
-            AgentSessionState.EXITED,
-            'script',
-        )
-        assert watchdog.log_dir == str(home / 'agent_sessions' / '3')
-    brief = (home / 'agent_sessions' / '3' / 'brief.md').read_text()
-    assert (
-        'Why this agent started (context, not a scope): run_failed: run#2 failed' in brief
-        and '## This sweep: an incident' in brief
-    )
-    assert run_all(daemon.scheduler) == [], 'one sweep per failure'
     assert trace(daemon.db) == snapshot(
         [
             'idea.created idea',
             'lease_worker.joined home',
-            'idea.status idea',
             'agent_session.requested agent_session',
             'run.queued run',
+            'idea.status idea',
             'run.started run',
             'agent_session.started agent_session',
             'lease.queued agent_session',
@@ -112,8 +98,6 @@ def test_daemon_end_to_end(
             'candidate.verdict candidate',
             'idea.status idea',
             'subject.settled idea',
-            'idea.created idea',
-            'idea.status idea',
             'agent_session.requested agent_session',
             'run.queued run',
             'run.started run',
@@ -124,17 +108,31 @@ def test_daemon_end_to_end(
             'agent_session.job_ended agent_session',
             'run.received run',
             'run.finished run',
-            'idea.status idea',
-            'subject.settled idea',
-            'agent_session.requested agent_session',
-            'anomaly.reported agent_session',
-            'agent_session.started agent_session',
-            'lease.queued agent_session',
-            'agent_session.running agent_session',
-            'agent_session.finished agent_session',
-            'agent_session.job_ended agent_session',
         ]
+    ), 'what the first two runs wrote: a claimed run settles its idea; a fresh run that claims nothing settles none'
+    write_toml(campaign_path, HARNESS_APPEND)
+    with daemon.db.session() as s:
+        s.get_one(Campaign, campaign.id).config = load_campaign_config(campaign_path)
+        s.commit()
+    assert run_all(daemon.scheduler) == [3, 4], 'a fresh run, and the watchdog sweep that the failure requests'
+    daemon.scheduler.wait(SETTLE)
+    with daemon.db.session() as s:
+        watchdog = s.get_one(AgentSession, 4)
+        assert (watchdog.kind, watchdog.reason, watchdog.state, watchdog.harness) == (
+            WATCHDOG,
+            'run_failed: run#2 failed',
+            AgentSessionState.EXITED,
+            'script',
+        )
+        assert watchdog.log_dir == str(home / 'agent_sessions' / '4')
+    brief = (home / 'agent_sessions' / '4' / 'brief.md').read_text()
+    assert (
+        'Why this agent started (context, not a scope): run_failed: run#2 failed' in brief
+        and '## This sweep: an incident' in brief
     )
+    launched = run_all(daemon.scheduler)
+    with daemon.db.session() as s:
+        assert [s.get_one(AgentSession, i).kind for i in launched] == [IMPLEMENTER], 'one sweep per failure'
     daemon.shutdown(timeout=5)
 
 
@@ -274,15 +272,14 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
     first = Daemon(cfg)
     campaign = register(first.db, campaign_path)
     with first.db.session() as s:
-        s.add(
-            Idea(track='score', campaign_id=campaign.id, title='two steps', hypothesis='x', created_by='t', max_runs=1)
-        )
+        s.add(Idea(track='score', campaign_id=campaign.id, title='two steps', hypothesis='x', created_by='t'))
         s.commit()
     execv = mocker.patch('piloop.daemon.main.os.execv')
     under_way = cfg.home / 'runs' / '1' / 'agent.pid'
 
     def restart_once_under_way() -> None:
         wait_until(under_way.exists)
+        claim(first.db, RunId(1), IdeaId(1))
         os.kill(os.getpid(), RESTART_SIGNAL)
 
     threading.Thread(target=restart_once_under_way, daemon=True).start()
@@ -356,6 +353,7 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
     first.scheduler.reap()
     assert run_all(first.scheduler) == [1]
     wait_until((cfg.home / 'runs' / '1' / 'agent.pid').exists)
+    claim(first.db, RunId(1), IdeaId(1))
     if finding:
         with first.db.session() as s:
             s.add(Comment(target=TargetRef(IDEA, 1), author='implementer#1', kind=FINDING, body='done'))
@@ -391,7 +389,7 @@ def test_a_report_that_comes_after_the_stop_ended_keeps_its_work_for_the_next_da
     """A stop whose agent's report came after its wait used to refuse the report and fail the run from its old base.
 
     The stop leaves such an agent to the next daemon, as a crash does: the next daemon applies the spooled report, keeps
-    its commit as recovered, and requeues the idea from it.
+    its commit as recovered, and the run's claim ends: its idea is open again.
     """
     hold = tmp_path / 'hold'
     hold.touch()
@@ -405,6 +403,7 @@ def test_a_report_that_comes_after_the_stop_ended_keeps_its_work_for_the_next_da
     first.scheduler.reap()
     assert run_all(first.scheduler) == [1]
     wait_until((cfg.home / 'runs' / '1' / 'agent.pid').exists)
+    claim(first.db, RunId(1), IdeaId(1))
     locked = mocker.patch.object(CampaignResults, 'finished', side_effect=OperationalError('', {}, Exception('locked')))
     first.shutdown(timeout=1)
     assert locked.called, 'the killed agent reported, and its report waits in the spool'
@@ -418,7 +417,7 @@ def test_a_report_that_comes_after_the_stop_ended_keeps_its_work_for_the_next_da
         assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.DAEMON_STOPPED)
         [kept] = s.scalars(select(Candidate).where(Candidate.run_id == 1)).all()
         idea = s.get_one(Idea, 1)
-        assert (kept.summary, idea.status, idea.base_candidate_id) == ('first', IdeaStatus.OPEN, kept.id)
+        assert (kept.summary, idea.status) == ('first', IdeaStatus.OPEN)
     second.shutdown(timeout=5)
 
 
@@ -444,7 +443,17 @@ def test_shutdown_fails_open_runs(tmp_path: Path, capsys: pytest.CaptureFixture[
     with daemon.db.session() as s:
         s.add(Campaign(name='p', path='/p', config=bare_config('p')))
         s.add(Idea(track='score', campaign_id=1, title='x', hypothesis='x', created_by='t'))
-        s.add(Run(idea_id=1, attempt=1, base_candidate_id=1, harness='h', model='m', status=RunStatus.RUNNING))
+        s.add(
+            Run(
+                campaign_id=1,
+                idea_id=1,
+                attempt=1,
+                base_candidate_id=1,
+                harness='h',
+                model='m',
+                status=RunStatus.RUNNING,
+            )
+        )
         s.flush()  # the run first: the unit of work orders unrelated mappers by name
         s.add(AgentSession(kind=RESEARCH, campaign_id=1, reason='by hand'))
         s.commit()

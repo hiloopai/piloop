@@ -38,7 +38,7 @@ class ResearchRole(SweepRole):
     is 1: sweeps that run at the same time read the same evidence and often duplicate each other."""
 
     def context(self, sweep: Sweep) -> list[str]:
-        """This sweep's share of the backlog, the tracks short of their share, and the stall.
+        """This sweep's share of the backlog, the tracks, and the stall.
 
         The backlog's target has the ``buffer`` of the role's first ``low_water`` trigger, or none without one. The
         stall mark is that of its first ``stalled`` trigger: without one, the role has no stall.
@@ -54,13 +54,7 @@ class ResearchRole(SweepRole):
         own = max(min(backlog.short + most, most), pivot)  # This sweep's share of the shortfall.
         campaign = sweep.campaign
         pivots = ': stalled, so one of your own ideas pivots (section 3)' if pivot else ''
-        short = ', '.join(
-            f'{t.name} {t.gap} ({t.runnable} of {t.target} runnable)' for t in backlog.tracks if t.gap > 0
-        )
-        tracks = [
-            f'- Tracks short of their share of the backlog: {short or "none"}. Give every idea the track it serves'
-            ' (`--track`); fill the short ones first.'
-        ]
+        tracks = ['- Give every idea the track it serves (`--track`).']
         return [
             f'- Ideas to add: {own} (the board holds {backlog.held()}). Fewer only when what is left duplicates'
             ' open work; name that work in your finding.',

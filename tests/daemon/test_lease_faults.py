@@ -39,7 +39,6 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.stop import attempts
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.contract import AgentFinished, Report
@@ -196,7 +195,7 @@ def test_a_worker_killed_during_a_run_loses_its_lease_and_the_run_is_no_attempt(
     assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.WORKER_LOST)
     with db.session() as s:
         idea = s.get_one(Idea, run.idea_id)
-        assert (idea.status, attempts(idea)) == (IdeaStatus.OPEN, 0), 'a fault of the host, not an attempt'
+        assert idea.status is IdeaStatus.OPEN, 'its claim ended with the run: another worker may take it'
         w = s.scalars(select(AgentSession)).one()
         assert w.state is AgentSessionState.KILLED and str(w.error).startswith('worker lost: w2 was silent for')
         assert s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all() == [], 'nothing came back'
@@ -436,9 +435,9 @@ def test_a_real_daemon_killed_during_a_run_is_followed_by_one_that_finishes_it_o
             timeout=60,
         )
         with db.session() as s:
-            agents = select(Lease).where(Lease.agent_session_id.is_not(None))
-            assert [(lease.id, lease.state) for lease in s.scalars(agents)] == [(1, LeaseState.REPORTED)]
-            assert s.scalars(select(AgentSession.state)).all() == [AgentSessionState.EXITED]
+            first = s.scalars(select(Lease).where(Lease.agent_session_id == 1)).one()
+            assert (first.id, first.state) == (1, LeaseState.REPORTED), 'the same lease, renewed'
+            assert s.get_one(AgentSession, 1).state is AgentSessionState.EXITED
     finally:
         for daemon in daemons:
             daemon.kill()

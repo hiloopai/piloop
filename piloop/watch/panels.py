@@ -270,7 +270,9 @@ def _model(agent: LiveAgent) -> str:
 def on(state: CampaignState, agent: LiveAgent) -> str:
     """Return what the agent works on: the idea of its run, from the campaign's open runs, else why it was launched."""
     run = next((r for r in state.runs if r.id == agent.run), None)
-    return cell(agent.reason or NONE) if run is None else f'idea#{run.idea} {cell(run.title)}'
+    if run is None:
+        return cell(agent.reason or NONE)
+    return 'no idea claimed yet' if run.idea is None or run.title is None else f'idea#{run.idea} {cell(run.title)}'
 
 
 class IdeasPanel:

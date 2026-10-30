@@ -407,3 +407,23 @@ def apply(toml: Path, raw: dict[str, object], found: Sequence[Bridge]) -> None:
     """
     for b in found:
         b(toml, raw)
+
+
+@bridge('0.7.0', '[tracks] share is removed: delete track_shares')
+def track_shares(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """``share`` of a ``[tracks.<name>]`` is removed: workers claim any open idea, so no track has a share of the slots.
+
+    piloop drops it, and drops a table that it leaves empty.
+    """
+    tracks = table_at(raw, 'tracks') or {}
+    for name, table in [(n, t) for n, t in tracks.items() if isinstance(t, dict) and 'share' in t]:
+        del table['share']
+        if not table:
+            del tracks[name]
+        warn(
+            toml,
+            f'tracks.{name}.share',
+            'workers claim any open idea now, so [tracks] share is removed; delete it',
+            removed_in=removed_in,
+            nth=nth(toml, f'tracks.{name}', 'share'),
+        )

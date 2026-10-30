@@ -159,10 +159,11 @@ def _runs(con: sqlite3.Connection, v: Volume, rng: random.Random) -> None:
         attempt = (r - 1) // v.ideas + 1
         st, end = rng.choice(ends)
         finished = None if end is None else f'2026-01-{1 + r % 28:02d} 12:00:00'
-        rows.append((r, idea, attempt, _campaign_of(idea, v), 'pi', 'm', st, end, finished))
+        campaign = _campaign_of(idea, v)
+        rows.append((r, campaign, idea, attempt, campaign, 'pi', 'm', st, end, finished))
     con.executemany(
-        'INSERT INTO runs (id, idea_id, attempt, base_candidate_id, harness, model, status, "end", finished_at)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO runs (id, campaign_id, idea_id, attempt, base_candidate_id, harness, model, status, "end",'
+        ' finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         rows,
     )
 

@@ -1,6 +1,7 @@
 """The control operations: each validates, changes the state and leaves its event, in the caller's transaction."""
 
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import closing
 from pathlib import Path
@@ -17,13 +18,12 @@ from piloop.campaign import ops
 from piloop.campaign.stop import CancelRequested
 from piloop.config import load_campaign_config
 from piloop.db.events import emit, in_order
-from piloop.db.models import Campaign, Comment, Event, EventModel, Pause
+from piloop.db.models import AgentSession, Campaign, Comment, Event, EventModel, Pause
 from piloop.db.requests import RequestAnswered
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import (
     CampaignParentChanged,
     CampaignPausedChanged,
-    IdeaBaseChanged,
     IdeaCreated,
     IdeaLinked,
     IdeaTrackChanged,
@@ -31,6 +31,7 @@ from piloop.db.triggers.changelog import (
 )
 from piloop.ids import CampaignId, CampaignStatus, CommentKind, Ending, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
+from piloop.plugins.campaign_type.kit.backlog.ideas import claimable
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Cause, Origin, Outcome
@@ -95,6 +96,7 @@ def run_idea(db: Database, status: IdeaStatus, run: RunStatus, *, scoring: bool 
     with db.session() as s:
         s.add(
             Run(
+                campaign_id=CampaignId(1),
                 idea_id=idea_id,
                 attempt=1,
                 base_candidate_id=1,
@@ -125,7 +127,15 @@ def run_candidate(
     """
     idea_id = add_idea(db, campaign.id, f'tried {verdict} {parent} {branch} {by}')
     with db.session() as s:
-        run = Run(idea_id=idea_id, attempt=1, base_candidate_id=parent, harness='script', model='m', branch=branch)
+        run = Run(
+            campaign_id=campaign.id,
+            idea_id=idea_id,
+            attempt=1,
+            base_candidate_id=parent,
+            harness='script',
+            model='m',
+            branch=branch,
+        )
         s.add(run)
         s.flush()
         c = Candidate(
@@ -288,15 +298,19 @@ def test_a_hand_keep_off_the_head_is_merged_onto_the_head_for_the_daemon_to_judg
         assert now is not None and now.id == after_it, 'the newest trunk keep'
 
 
-def run_from(
-    db: Database, campaign: Campaign, status: RunStatus, *, base: CandidateId, pin: bool = False, branch: bool = False
-) -> RunId:
-    """An open run of a new idea from ``base``: the idea pins it with ``pin``, and ``branch`` makes it a branch run."""
-    idea_id = add_idea(db, campaign.id, f'{status} on {base} {pin} {branch}', IdeaStatus.CLAIMED)
+def run_from(db: Database, campaign: Campaign, status: RunStatus, *, base: CandidateId, branch: bool = False) -> RunId:
+    """An open run of a new idea from ``base``: ``branch`` makes it a branch run."""
+    idea_id = add_idea(db, campaign.id, f'{status} on {base} {branch}', IdeaStatus.CLAIMED)
     with db.session() as s:
-        s.get_one(Idea, idea_id).base_candidate_id = base if pin else None
         run = Run(
-            idea_id=idea_id, attempt=1, base_candidate_id=base, harness='h', model='m', status=status, branch=branch
+            campaign_id=campaign.id,
+            idea_id=idea_id,
+            attempt=1,
+            base_candidate_id=base,
+            harness='h',
+            model='m',
+            status=status,
+            branch=branch,
         )
         s.add(run)
         s.commit()
@@ -308,8 +322,8 @@ def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_i
 ) -> None:
     """A run from the replaced head builds on a tree that is not the head, and its brief says so: it is cancelled.
 
-    Its idea is ready again once the run ends, to start from the new head. A run that pins its base, a branch run and
-    a run whose commits are being scored keep going: what they commit is judged against the head when it has the head.
+    Its idea is open again once the run ends, to start from the new head. A branch run and a run whose commits are
+    being scored keep going: what they commit is judged against the head when it has the head.
     """
     kept = run_candidate(me, campaign, Outcome.DISCARD)
     with me.session() as s:
@@ -318,7 +332,6 @@ def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_i
         s.commit()
     queued = run_from(me, campaign, RunStatus.QUEUED, base=CandidateId(1))
     running = run_from(me, campaign, RunStatus.RUNNING, base=CandidateId(1))
-    pinned = run_from(me, campaign, RunStatus.RUNNING, base=CandidateId(1), pin=True)
     branch = run_from(me, campaign, RunStatus.RUNNING, base=CandidateId(1), branch=True)
     with me.session() as s:
         done = verdicts_ops.set_verdict(s, kept, Outcome.KEEP, reason='the score misses it', actor=ACTOR)
@@ -328,11 +341,11 @@ def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_i
             assert [k for k, _, _ in kinds(me, RUN, run_id)] == ['run.cancel_requested', 'run.head_replaced']
             [(event, cancel)] = in_order(s, CancelRequested, Event.target_id == run_id)
             assert (event.actor, cancel.ending) == (ACTOR.signature, Ending.WRAP_UP)
-        for run_id in (pinned, branch):
-            assert kinds(me, RUN, run_id) == []
+        assert kinds(me, RUN, branch) == []
         run = s.get_one(Run, running)
         run.status, run.end = RunStatus.FAILED, RunEnd.CANCELLED
-        settle_cancelled(s, run)
+        assert run.idea is not None
+        settle_cancelled(s, run, run.idea)
         s.commit()
         assert run.idea.status is IdeaStatus.OPEN
         [note] = s.scalars(select(Comment).where(Comment.target_id == run.idea_id)).all()
@@ -518,6 +531,130 @@ def test_a_measurement_by_hand_says_when_the_daemon_judges_again_and_waits_for_a
         ), 'the stop rule holds an active campaign only'
 
 
+def worker(db: Database, status: RunStatus = RunStatus.RUNNING) -> tuple[RunId, Agent]:
+    """A fresh run of campaign#1 in ``status``, with no idea, and the implementer that works on it."""
+    with db.session() as s:
+        run = Run(
+            campaign_id=CampaignId(1),
+            base_candidate_id=CandidateId(1),
+            harness='h',
+            model='m',
+            status=status,
+            end=end_of(status),
+        )
+        s.add(run)
+        s.flush()
+        session = AgentSession(kind='implementer', campaign_id=1, subject=TargetRef(RUN, run.id))
+        s.add(session)
+        s.commit()
+        return run.id, Agent(role='implementer', session=session.id)
+
+
+def test_a_worker_claims_one_open_idea_for_its_run_and_every_other_claim_is_refused(
+    me: Database, campaign: Campaign
+) -> None:
+    held, free, first, dropped = (add_idea(me, CampaignId(1), t) for t in ('held', 'free', 'first', 'dropped'))
+    claimed, done = (
+        add_idea(me, CampaignId(1), t, status) for t, status in (('c', IdeaStatus.CLAIMED), ('d', IdeaStatus.DONE))
+    )
+    with me.session() as s:
+        backlog_ops.link(s, held, LinkKind.AFTER, first, reason='after it', actor=ACTOR)
+        s.get_one(Idea, dropped).status = IdeaStatus.DROPPED
+        elsewhere = Campaign(name='elsewhere', path='/elsewhere', config=s.get_one(Campaign, 1).config)
+        s.add(elsewhere)
+        s.flush()
+        strays = [
+            Idea(campaign_id=campaign_id, title=title, hypothesis='h', track=track, created_by='human')
+            for title, campaign_id, track in (('elsewhere', elsewhere.id, 'score'), ('gone track', 1, 'gone'))
+        ]
+        s.add_all(strays)
+        s.commit()
+        other, gone = (i.id for i in strays)
+    run_id, implementer = worker(me)
+    _, ended = worker(me, RunStatus.FAILED)
+    for idea, actor, error in [
+        (free, ACTOR, 'orchestrator has no run: only a worker claims an idea'),
+        (free, ended, r'run#\d+ is failed: a run claims while it is open'),
+        (held, implementer, f'idea#{held} is held by idea#{first} \\(open\\)'),
+        (dropped, implementer, f'idea#{dropped} is dropped: claim an open idea'),
+        (claimed, implementer, f'idea#{claimed} is claimed: claim an open idea'),
+        (done, implementer, f'idea#{done} is done: claim an open idea'),
+        (IdeaId(99), implementer, 'no idea#99'),
+        (other, implementer, 'is in another campaign than run#'),
+        (gone, implementer, "is on track 'gone', which piloop.toml does not have: score"),
+    ]:
+        with me.session() as s, pytest.raises(ops.Refused, match=error):
+            backlog_ops.claim(s, idea, actor=actor)
+    with me.session() as s:
+        taken = backlog_ops.claim(s, free, actor=implementer)
+        s.commit()
+        run = s.get_one(Run, run_id)
+        assert (taken.status, run.idea_id, run.attempt) == (IdeaStatus.CLAIMED, free, 1)
+    with me.session() as s, pytest.raises(ops.Refused, match=f'run#{run_id} claimed idea#{free} already'):
+        backlog_ops.claim(s, first, actor=implementer)
+
+
+def test_a_dropped_prerequisite_frees_a_claim_as_the_board_lists_it(me: Database, campaign: Campaign) -> None:
+    gate, after = add_idea(me, CampaignId(1), 'gate'), add_idea(me, CampaignId(1), 'after the gate')
+    with me.session() as s:
+        backlog_ops.link(s, after, LinkKind.AFTER, gate, reason='after it', actor=ACTOR)
+        s.get_one(Idea, gate).status = IdeaStatus.DROPPED
+        s.commit()
+        assert set(s.scalars(select(Idea.id).where(claimable()))) == {after}, 'the board lists it'
+    _, implementer = worker(me)
+    with me.session() as s:
+        assert backlog_ops.claim(s, after, actor=implementer).status is IdeaStatus.CLAIMED, 'and the claim takes it'
+
+
+def test_two_workers_that_claim_one_idea_at_once_get_it_once(me: Database, campaign: Campaign) -> None:
+    """The claim holds the write lock from its first read, so the second claim reads the first one's write."""
+    idea = add_idea(me, CampaignId(1), 'wanted')
+    (first, a), (second, b) = worker(me), worker(me)
+    refused: list[str] = []
+    with me.session() as s:
+        backlog_ops.claim(s, idea, actor=a)
+
+        def other() -> None:
+            with me.session() as t:
+                try:
+                    backlog_ops.claim(t, idea, actor=b)
+                    t.commit()
+                except ops.Refused as e:
+                    refused.append(str(e))
+
+        racing = threading.Thread(target=other)
+        racing.start()
+        racing.join(0.5)
+        assert racing.is_alive(), 'the second claim waits for the write lock of the first'
+        s.commit()
+    racing.join(10)
+    assert refused == [f'idea#{idea} is claimed: claim an open idea']
+    with me.session() as s:
+        assert [(r.id, r.idea_id) for r in s.scalars(select(Run).where(Run.id.in_((first, second))))] == [
+            (first, idea),
+            (second, None),
+        ]
+
+
+def test_a_worker_proposes_its_own_idea_and_claims_it_but_files_none_for_others(
+    me: Database, campaign: Campaign
+) -> None:
+    run_id, implementer = worker(me)
+    with me.session() as s, pytest.raises(ops.Refused, match='files no ideas for others'):
+        backlog_ops.add_idea(s, CampaignId(1), 'for others', actor=implementer)
+    with me.session() as s, pytest.raises(ops.Refused, match='orchestrator has no run'):
+        backlog_ops.propose(s, 'mine', actor=ACTOR)
+    with me.session() as s:
+        idea = backlog_ops.propose(s, 'mine', actor=implementer, hypothesis='halve the window')
+        s.commit()
+        assert (idea.status, idea.created_by, idea.hypothesis) == (
+            IdeaStatus.CLAIMED,
+            implementer.signature,
+            'halve the window',
+        )
+        assert s.get_one(Run, run_id).idea_id == idea.id
+
+
 def test_an_idea_status_takes_a_reason_in_a_note_and_refuses_what_is_not_set_by_hand(
     me: Database, campaign: Campaign
 ) -> None:
@@ -608,48 +745,17 @@ def test_links_are_validated_kept_acyclic_and_leave_events(me: Database, campaig
     )
 
 
-def test_a_raw_sql_link_or_base_change_is_logged_like_the_commands(me: Database, campaign: Campaign) -> None:
+def test_a_raw_sql_link_is_logged_like_the_commands(me: Database, campaign: Campaign) -> None:
     a, b = add_idea(me, CampaignId(1), 'a'), add_idea(me, CampaignId(1), 'b')
     with me.session() as s:
         s.execute(text(f"INSERT INTO idea_links (idea_id, target_id, kind) VALUES ({a}, {b}, 'after')"))
         s.execute(text(f'DELETE FROM idea_links WHERE idea_id = {a}'))
-        s.execute(text(f'UPDATE ideas SET base_candidate_id = 1 WHERE id = {a}'))
         s.commit()
     assert kinds(me, IDEA, a) == [
         CREATED,
         ('idea.linked', ACTOR.signature, IdeaLinked(kind='idea.linked', target=b, link_kind=LinkKind.AFTER)),
         ('idea.unlinked', ACTOR.signature, IdeaLinked(kind='idea.unlinked', target=b, link_kind=LinkKind.AFTER)),
-        ('idea.base_candidate_id', ACTOR.signature, IdeaBaseChanged(old=None, new=CandidateId(1))),
     ]
-
-
-def test_a_base_pins_a_candidate_of_the_campaign_or_clears_the_pin(me: Database, campaign: Campaign) -> None:
-    idea = add_idea(me, CampaignId(1), 'pinned')
-    with me.session() as s:
-        assert backlog_ops.set_base(s, idea, CandidateId(1), reason='from the baseline', actor=ACTOR) is None
-        s.commit()
-        assert backlog_ops.set_base(s, idea, None, reason='follow the head', actor=ACTOR) == 1
-        s.commit()
-        assert s.get_one(Idea, idea).base_candidate_id is None
-        with pytest.raises(ops.Refused, match=f'idea#{idea} starts from the head already'):
-            backlog_ops.set_base(s, idea, None, reason='again', actor=ACTOR)
-        backlog_ops.set_base(s, idea, CandidateId(1), reason='pin', actor=ACTOR)
-        with pytest.raises(ops.Refused, match=f'idea#{idea} starts from candidate#1 already'):
-            backlog_ops.set_base(s, idea, CandidateId(1), reason='again', actor=ACTOR)
-        with pytest.raises(ops.Refused, match='no candidate#99 in campaign demo'):
-            backlog_ops.set_base(s, idea, CandidateId(99), reason='why', actor=ACTOR)
-        with pytest.raises(ops.Refused, match='a reason is required'):
-            backlog_ops.set_base(s, idea, None, reason='', actor=ACTOR)
-    assert kinds(me, IDEA, idea) == [
-        CREATED,
-        ('idea.base_candidate_id', ACTOR.signature, IdeaBaseChanged(old=None, new=CandidateId(1))),
-        ('idea.base_candidate_id', ACTOR.signature, IdeaBaseChanged(old=CandidateId(1), new=None)),
-    ]
-    with me.session() as s:
-        assert [c.body for c in s.scalars(select(Comment).order_by(Comment.id))][:2] == [
-            'base the head → candidate#1: from the baseline',
-            'base candidate#1 → the head: follow the head',
-        ]
 
 
 def test_a_track_must_be_in_the_config_and_its_move_says_why(me: Database, campaign: Campaign) -> None:
@@ -660,7 +766,6 @@ def test_a_track_must_be_in_the_config_and_its_move_says_why(me: Database, campa
                 {'name': 'score', 'direction': 'higher', 'role': 'primary', 'margin': 1},
                 {'name': 'size', 'direction': 'lower', 'role': 'primary', 'margin': 1},
             ],
-            tracks={'score': {'share': 0.5}, 'size': {'share': 0.5}},
         )
         s.get_one(Campaign, 1).config = two
         s.commit()

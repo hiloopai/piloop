@@ -20,7 +20,7 @@ from piloop.db.models import Campaign
 from piloop.db.session import Database
 from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole, Track, TrackConfig
+from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole, Track
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Units
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, RungName, TrackName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
@@ -418,7 +418,6 @@ def test_every_other_track_primary_is_a_guardrail_with_its_margin_and_floor() ->
             Metric(name='cost', direction=Direction.LOWER, role=MetricRole.PRIMARY, track='serving', margin=1),
             ERRORS,
         ],
-        tracks={TrackName('accuracy'): TrackConfig(share=0.75), TrackName('serving'): TrackConfig(share=0.25)},
         evaluate=['true'],
         plugins={'harness': {'pi': {'model': 'm'}}},
     )

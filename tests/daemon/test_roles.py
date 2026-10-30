@@ -29,7 +29,7 @@ from piloop.ids import AgentSessionId, CampaignStatus, CommentKind, Ending, Role
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins_module
 from piloop.plugins.campaign_type.consumers import awake_roles, quiet_phase
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
@@ -57,6 +57,7 @@ from tests.conftest import (
     example,
     package,
     piloop_entry_points,
+    queued,
     reconfigured,
     run_all,
     serving,
@@ -121,6 +122,7 @@ def decide(db: Database, campaign: Campaign, body: str) -> None:
     time.sleep(0.01)
 
 
+@pytest.mark.usefixtures('no_fresh_runs')
 def test_a_role_that_piloop_toml_defines_runs_on_its_sql_trigger_with_its_prompt_and_runtime(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, typed: None
 ) -> None:
@@ -177,6 +179,7 @@ def test_a_role_that_piloop_toml_defines_runs_on_its_sql_trigger_with_its_prompt
     assert 'typed' in kinds
 
 
+@pytest.mark.usefixtures('no_fresh_runs')
 def test_a_role_adds_its_incident_prompt_to_an_incident_sweep_and_its_routine_prompt_to_any_other(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -208,6 +211,7 @@ def test_a_role_adds_its_incident_prompt_to_an_incident_sweep_and_its_routine_pr
         load_campaign_config(repo, plugins={'role': {'triage': triage | {'routine_prompt': 'gone.md'}}})
 
 
+@pytest.mark.usefixtures('no_fresh_runs')
 def test_a_role_that_defines_ideas_is_told_how_many_its_sweep_may_add(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -245,14 +249,12 @@ HARNESS_SIGNS = '#!/bin/sh\necho "$PILOOP_ACTOR" >> solve.txt\ngit commit -qam "
 QUICK: dict[str, object] = {
     'runs': True,
     'prompt': 'quick.md',
-    'takes': "priority >= 3 AND title NOT LIKE 'skip:%'",
     'timeout': 60,
     'max_concurrent': 1,
-    'explore_every': 0,
 }
 
 
-def runs_by_role(db: Database) -> list[tuple[int, str, int, str]]:
+def runs_by_role(db: Database) -> list[tuple[int, str, int | None, str]]:
     """Return each run as ``(id, role, idea, kind of its agent)``."""
     with db.session() as s:
         return [
@@ -274,19 +276,19 @@ def queue(db: Database, sched: Scheduler, campaign: Campaign) -> None:
         s.commit()
 
 
-def test_a_role_that_does_runs_takes_its_ideas_with_its_own_prompt_and_its_commits_are_scored(
+def test_a_role_that_does_runs_works_with_its_own_prompt_and_its_commits_are_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """``[plugins.role.quick]`` with ``runs = true`` takes the idea that ``takes`` selects, and the implementer takes the other one.
+    """``[plugins.role.quick]`` with ``runs = true`` gets a fresh run of its own, as the implementer does.
 
-    The quick agent works with its own prompt in a new worktree at the run's base, and its commit is measured and
-    judged.
+    The quick agent works with its own prompt in a new worktree at the head, and its commit is measured and judged.
     """
     (Path(campaign.path) / 'quick.md').write_text('# Quick\nTry the idea in a few minutes.\n')
     configure(db, campaign, HARNESS_SIGNS, quick=QUICK)
     (deep,) = add_ideas(db, campaign, 'deep', priority=1)
     (cheap,) = add_ideas(db, campaign, 'cheap', priority=3)
     sched = scheduler(db, recording(runtime, []), tmp_path)
+    assert queued(db, sched, campaign.id, IdeaId(cheap), IdeaId(deep)) == [1, 2]
     assert sorted(run_all(sched)) == [1, 2]
     sched.wait(SETTLE)
     sched.stop(timeout=5)
@@ -300,32 +302,30 @@ def test_a_role_that_does_runs_takes_its_ideas_with_its_own_prompt_and_its_commi
         assert s.scalars(select(Measurement).where(Measurement.candidate_id == candidate.id)).all() != []
 
 
-def test_each_role_that_does_runs_fills_its_own_slots_and_the_implementer_takes_what_waits(
+def test_each_role_that_does_runs_fills_its_own_slots_with_fresh_runs_that_claim_no_idea(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """Quick has one slot, so its second idea goes to the implementer. The implementer takes what the roles before it leave."""
+    """Quick has one slot and the implementer one: each gets a fresh run, in the order of the roles, and no idea."""
     configure(db, campaign, HARNESS_APPEND, quick={**QUICK, 'prompt': None})
-    cheap, cheaper, later = (
-        add_ideas(db, campaign, t, priority=p)[0] for t, p in (('cheap', 3), ('cheaper', 4), ('later', 4))
-    )
+    ideas = [add_ideas(db, campaign, t, priority=p)[0] for t, p in (('cheap', 3), ('cheaper', 4))]
     sched = scheduler(db, recording(runtime, []), tmp_path)
     queue(db, sched, campaign)
-    assert runs_by_role(db) == [(1, 'quick', cheap, 'quick'), (2, 'implementer', cheaper, 'implementer')]
+    assert runs_by_role(db) == [(1, 'quick', None, 'quick'), (2, 'implementer', None, 'implementer')]
     with db.session() as s:
-        assert s.get_one(Idea, later).status is IdeaStatus.OPEN, 'both slots are busy'
+        assert [s.get_one(Idea, i).status for i in ideas] == [IdeaStatus.OPEN] * 2, 'a worker claims its own'
     sched.stop(timeout=5)
 
 
-def test_a_queued_run_of_a_role_that_piloop_toml_no_longer_has_fails_and_its_idea_goes_back_to_the_queue(
+def test_a_queued_run_of_a_role_that_piloop_toml_no_longer_has_fails_and_its_claim_ends(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     (Path(campaign.path) / 'quick.md').write_text('# Quick\n')
     configure(db, campaign, HARNESS_APPEND, quick=QUICK)
     (cheap,) = add_ideas(db, campaign, 'cheap', priority=3)
     sched = scheduler(db, recording(runtime, []), tmp_path)
-    queue(db, sched, campaign)
+    assert queued(db, sched, campaign.id, IdeaId(cheap)) == [1, 2], "quick's run claims the idea"
     configure(db, campaign, HARNESS_APPEND)
-    assert run_all(sched) == []
+    assert run_all(sched) == [2], "the implementer's run launches"
     with db.session() as s:
         run, agent_session, idea = s.get_one(Run, 1), s.get_one(AgentSession, 1), s.get_one(Idea, cheap)
         assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.ROLE_REMOVED)
@@ -334,12 +334,11 @@ def test_a_queued_run_of_a_role_that_piloop_toml_no_longer_has_fails_and_its_ide
             'no [plugins.role.quick] in piloop.toml',
         )
         assert idea.status is IdeaStatus.OPEN, 'the removed role was not an attempt at the idea'
-    assert run_all(sched) == [2]
     sched.wait(SETTLE)
     sched.stop(timeout=5)
-    assert runs_by_role(db)[1:] == [(2, 'implementer', cheap, 'implementer')]
 
 
+@pytest.mark.usefixtures('no_fresh_runs')
 def test_a_built_in_role_takes_other_triggers(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -367,6 +366,7 @@ def test_a_built_in_role_takes_other_triggers(
     assert reported_events(db) == [], 'the watchdog got no anomaly'
 
 
+@pytest.mark.usefixtures('no_fresh_runs')
 def test_a_request_for_a_role_that_piloop_toml_no_longer_has_is_refused(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -384,6 +384,7 @@ def test_a_request_for_a_role_that_piloop_toml_no_longer_has_is_refused(
     assert (row.state, row.error) == (AgentSessionState.KILLED, 'no [plugins.role.reviewer] in piloop.toml')
 
 
+@pytest.mark.usefixtures('no_fresh_runs')
 def test_a_note_on_a_sweep_that_has_not_started_is_in_its_brief_and_is_not_sent_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -404,6 +405,7 @@ def test_a_note_on_a_sweep_that_has_not_started_is_in_its_brief_and_is_not_sent_
         assert [(o.kind, o.comment) for _, o in got] == [('comment.delivered', 1)]
 
 
+@pytest.mark.usefixtures('no_fresh_runs')
 def test_a_hand_over_leaves_a_sweep_running_and_the_next_scheduler_re_attaches_to_it(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -471,6 +473,7 @@ def plugins(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     forget_loaded()
 
 
+@pytest.mark.usefixtures('no_fresh_runs')
 def test_a_package_adds_a_role_and_triggers_through_entry_points(
     db: Database,
     campaign: Campaign,
@@ -621,13 +624,14 @@ def test_a_package_adds_a_role_that_does_runs(campaign_path: Path, plugins: None
     cfg = load_campaign_config(campaign_path)
     assert list(cfg.roles.doing_runs()) == ['quick', 'implementer']
     quick = cfg.roles.doing_runs()[RoleName('quick')]
-    assert (quick.takes, quick.timeout, quick.max_concurrent) == ('priority >= 3', 60, 1)
+    assert (quick.timeout, quick.max_concurrent) == (60, 1)
 
 
 HARNESS_NICENESS = '#!/bin/sh\nps -o nice= -p $$ | tr -d " " > "$PILOOP_HOME/niceness.txt"\n'
 """A harness that writes its own niceness, so a test sees which runtime started it."""
 
 
+@pytest.mark.usefixtures('no_fresh_runs')
 def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_configuration(
     db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

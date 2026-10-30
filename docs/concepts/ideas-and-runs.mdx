@@ -1,6 +1,6 @@
 ---
 title: Ideas and runs
-description: An idea is one thing to try, on the campaign's board. A run is one attempt at an idea.
+description: An idea is one thing to try, on the campaign's board. A run is one implementer's attempt at the idea that it claimed.
 ---
 
 An **idea** is one thing to try:
@@ -14,8 +14,8 @@ piloop idea add enwik8 "Model the text with an order-2 context mixer" \
 idea#2 open p2: Model the text with an order-2 context mixer
 ```
 
-The ideas of a campaign are its **board**. The daemon runs the `open` ideas, most urgent first: priority 0 is urgent,
-4 is someday, and 2 is the default. To change a status, give the reason:
+The ideas of a campaign are its **board**. The board lists the `open` ideas, most urgent first: priority 0 is urgent,
+4 is someday, and 2 is the default. Each implementer **claims** one of them. To change a status, give the reason:
 
 ```bash
 piloop idea status 2 dropped --reason "idea#1 tests the same mechanism"
@@ -27,10 +27,10 @@ idea#2 open → dropped: idea#1 tests the same mechanism
 
 | Status | Meaning |
 |---|---|
-| `open` | On the board. It waits for a free implementer, unless an `after` link holds it. |
-| `claimed` | A run of it is queued or running, or its commits wait for their verdicts. |
-| `done` | Its run ended and its commits are judged. |
-| `dropped` | Off the board: by hand, or when its last attempt failed to start or ended on an open escalation. `open` puts it back. |
+| `open` | On the board. An implementer can claim it, unless an `after` link holds it. |
+| `claimed` | A run claimed it. The run is open, or its commits wait for their verdicts. |
+| `done` | Its run finished and its commits are judged. |
+| `dropped` | Off the board: by hand, after a cancel, or when its run ended on an open escalation. `open` puts it back. |
 
 ## Who adds ideas
 
@@ -39,37 +39,43 @@ idea#2 open → dropped: idea#1 tests the same mechanism
 | You, the orchestrator | Ideas. You change the priority and status of any idea. |
 | Research | Ideas, when the board runs short. |
 | Watchdog | Nothing. Its findings say what it would try. |
-| Implementer | Nothing. Its hunches go in its `finding`, which research reads. |
-| Daemon | Retries an idea whose run failed. Adds an idea when a merge conflicts. |
+| Implementer | One idea of its own, which it claims at once (`piloop idea propose`). It files none for others. |
+| Daemon | Adds an idea when a merge conflicts. |
 
-## Where a run starts
+`piloop idea add enwik8 "<title>" --after 1` holds the idea until idea 1 is `done` or `dropped`. Then a worker can
+claim it, and its run starts from the head, which holds what idea 1 kept.
 
-| Option of `piloop idea add` | Effect |
-|---|---|
-| `--after 1` | Held until idea 1 is `done` or `dropped`, then starts from the head, which holds what idea 1 kept. |
-| `--base 7` | Starts from candidate 7, not the head. Its keeps move the head only when candidate 7 has the head's changes. |
-| `--harness codex` | Runs on that harness, not the next one of `harnesses`. |
-
-`piloop candidate import enwik8 <commit>` makes any commit a **reference**, a starting point from outside the
-campaign, such as a branch.
+`piloop candidate import enwik8 <commit>` makes any commit a **reference**, such as a branch. To take its change, add
+an idea that names it.
 
 ## Runs
 
-A **run** is one attempt at an idea by one implementer. The daemon makes a worktree at the starting point, writes the
-brief (your `brief.md`, the idea and every comment on it), and starts the implementer. The implementer commits, also
-when the idea did not work.
+A **run** is one implementer's session. For each free implementer slot, the daemon makes a worktree of the head,
+writes the brief (your `brief.md`, the board and the state of the campaign), and starts the implementer, on the next
+harness of `harnesses`. The implementer first takes one idea:
+
+```bash
+piloop idea claim 2
+piloop idea propose "Model the text with an order-3 context mixer" --hypothesis "order 2 leaves context unused"
+```
+
+The run tries that idea only. The implementer commits, also when the idea did not work.
 
 The run ends when the implementer exits, at its `timeout`, or a minute after it writes its `finding`. To give it more
 time, use [`piloop run extend`](/reference/cli#piloop-run-extend). Then the daemon scores each new commit. What the implementer left uncommitted becomes a `recovered` commit, which is never measured.
 If git refuses that commit, the run fails, and an `agent_session.work_unsaved` event holds the changes as a patch.
 Restore them in a checkout of the implementer's last commit with `piloop cas get <blob> | git apply`.
 
+The claim ends with the run:
+
 | How the run ended | What happens to the idea |
 |---|---|
 | It finished | `done` once its commits are judged. |
-| It failed or timed out, and attempts are left | Back to `open`. The next attempt starts from its last commit. |
-| Its agent never started to work | Not an attempt: the run is queued again, up to two times, then the idea is `dropped`. |
+| It failed, timed out or was stopped | Back to `open`, for another implementer. |
+| It was cancelled | `dropped`. |
 | It stopped on an open escalation | `dropped`. Answer with a `decision` comment, then set the idea `open`. |
+
+An implementer that never started to work claimed nothing: its run is queued again, up to two times.
 
 ## Talk to a running implementer
 

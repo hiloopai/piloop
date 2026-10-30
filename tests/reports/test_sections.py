@@ -114,8 +114,8 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     overview += ['funnel', 'yields', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
     assert defaults(Surface.SWEEP) == ['context', 'lessons', 'incidents', *overview, 'tools', 'pack']
-    assert defaults(Surface.RUN) == ['context', 'idea_comments', 'lessons', 'history']
-    assert ImplementerRole().shown() == ['database', 'context', 'idea_comments', 'lessons', 'history'], (
+    assert defaults(Surface.RUN) == ['context', 'idea_comments', 'lessons', 'queue', 'history'], 'the board too'
+    assert ImplementerRole().shown() == ['database', 'context', 'idea_comments', 'lessons', 'queue', 'history'], (
         'its guides first'
     )
 

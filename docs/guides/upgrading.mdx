@@ -72,8 +72,8 @@ catches up with an upgrade that you already made.
   daemon has is a warning.
 - Every harness on your `PATH` has the skills of this CLI.
 - What each provider in use checks itself, for example: the harnesses and the commands of the stdio MCP servers that
-  your campaigns use are on your `PATH`, git is 2.40 or later, a role's `takes` runs on the schema, and the extra and
-  the login of a Modal provisioner are there. No check starts anything.
+  your campaigns use are on your `PATH`, git is 2.40 or later, and the extra and the login of a Modal provisioner are
+  there. No check starts anything.
 
 Each failure says how to fix it, often with the command to run.
 
@@ -163,6 +163,7 @@ warning, until 0.7.0, and do nothing. What they wrote stays in the database.
 | Ideas and seeds that implementers file. An implementer's hunch goes in its finding, which research reads. | `files` and `plan_words` of a role that does runs |
 | Seeds. An idea is open on the board from the start, and research adds ideas, not seeds. | `"seed"` in a role's `triggers`, `[plugins.trigger.seed]`, `files = "seeds"` (now `"nothing"`), `[plugins.section.pack] seeds` |
 | Ideas that wait for a review, and the escalation of the slots that wait for them. | `idle_alert` of a role that does runs |
+| The rules that gave ideas to runs: an implementer claims its idea now. | `takes`, `explore_every` and `recovery_requeues` of a role that does runs |
 
 ### The board
 
@@ -185,6 +186,24 @@ The ideas of a campaign are a board with four statuses. The migration renames th
 - The inbox lists no seeds, and `piloop inbox wait` returns for none. The research pack has no families and no seeds.
 - `idea: <title>` in a notifier's thread adds an open idea. A notifier plugin answers it with `AddIdea`, not
   `FileSeed`.
+
+### Claims
+
+The daemon gives no idea to a run. For each free slot it starts a run from the head, and the implementer claims one
+open idea (`piloop idea claim`), or proposes one of its own and claims it (`piloop idea propose`). The claim ends with
+the run: the idea is `done` after a finished run with a verdict, and `open` again otherwise, with a note that says why.
+
+- A run has a `campaign_id`. Its `idea_id` and `attempt` are null until its implementer claims an idea.
+- `piloop idea base` is removed, and `--harness` and `--base` of `piloop idea add`. The migration deletes
+  `ideas.base_candidate_id`, `ideas.harness` and `ideas.max_runs`. Every run starts from the head: to take the change
+  of a reference or a lead, add an idea that names it.
+- `piloop candidate note --follow-up` adds an open idea about the candidate, not pinned to it.
+- A failed run's idea is not queued again from its last commit, and a queued run keeps its harness.
+- The `idea.base_candidate_id`, `run.rerouted` and `idea.recovery_requeued` events are retired: the old rows read as
+  unknown events. `run.queued` has only the `harness`.
+- A run that claimed no idea is judged on the first track.
+- `[tracks.<name>] share` is removed: workers claim any open idea. It loads with a warning until 0.7.0, and a table
+  that it leaves empty goes.
 
 ## Upgrading to 0.5.0
 

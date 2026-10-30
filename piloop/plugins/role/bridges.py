@@ -81,3 +81,26 @@ def seed_files(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
             removed_in=removed_in,
             nth=deprecated.nth(toml, f'plugins.role.{name}', 'files'),
         )
+
+
+ASSIGNMENT_KEYS = ('takes', 'explore_every', 'recovery_requeues')
+"""The keys of a role that does runs that steered which idea the scheduler gave its runs, and from where."""
+
+
+@deprecated.bridge('0.7.0', 'workers claim their ideas: delete run_role_assignment and ASSIGNMENT_KEYS')
+def run_role_assignment(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """``takes``, ``explore_every`` and ``recovery_requeues`` are removed: the scheduler assigns no idea.
+
+    Each run starts from the head, and its worker claims an idea. piloop drops the keys.
+    """
+    roles = deprecated.table_at(raw, 'plugins', 'role') or {}
+    for name, table in [(n, t) for n, t in roles.items() if isinstance(t, dict)]:
+        for key in [k for k in ASSIGNMENT_KEYS if k in table]:
+            del table[key]
+            deprecated.warn(
+                toml,
+                f'plugins.role.{name}.{key}',
+                f'workers claim their ideas now, so {key} is removed; delete it',
+                removed_in=removed_in,
+                nth=deprecated.nth(toml, f'plugins.role.{name}', key),
+            )

@@ -107,7 +107,7 @@ def _branches(s: Session, campaign: Campaign, cfg: CampaignConfig) -> list[str]:
         .limit(STEPS_SHOWN)
     ).all()
     if noted:
-        lines.append('- Notes (regressed, kept in view as leads; pin one with base_candidate_id):')
+        lines.append('- Notes (regressed, kept in view as leads; a worker takes the change of one):')
         lines += [
             f'  - candidate#{c.id} {num(score(c, evaluator_id, track_of(cfg, c).primary))} by {noted_by(s, c)}:'
             f' {cell(c.verdict_reason or "", 100)}'

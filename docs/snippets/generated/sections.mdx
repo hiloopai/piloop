@@ -25,7 +25,7 @@
 | `tracks` | One line per track. Nothing with one track. | status, sweep | 120 | none |
 | `trajectory` | The trunk: the start, the head, the gain of each track between them, and the latest trunk keeps. | status, sweep | 130 | none |
 | `runs` | The busy implementer slots, and each open run. | status, sweep | 140 | none |
-| `queue` | The ideas by status, what holds the held ones, and the claimable ideas in queue order. | status, sweep | 150 | `held`, `ideas` |
+| `queue` | The board: the ideas by status, what holds the held ones, and the claimable ideas by priority. | status, sweep, run | 150 | `held`, `ideas` |
 | `idle_queue` | Free implementer slots with no runnable idea, in an active campaign that is not paused: a cost. | status, sweep | 155 | none |
 | `agents` | The agents: the live ones with their last line, the count of each role, the yield of each source, the tokens. | status, sweep | 160 | none |
 | `evaluations` | The evaluations under the current evaluator: how many crashed, their minutes, and the candidates without a verdict. | status, sweep | 170 | none |

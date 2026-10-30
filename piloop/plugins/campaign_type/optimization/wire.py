@@ -13,7 +13,7 @@ class NoteBody(Params):
 
     reason: str
     follow_ups: tuple[str, ...] = ()
-    """An open idea pinned to the candidate for each."""
+    """An open idea about the candidate for each."""
     track: TrackName | None = None
     """The track of the follow-ups. Default: the track of the candidate's run, else the first track."""
 
@@ -22,7 +22,7 @@ class Noted(CandidateAnswer):
     """A regressed candidate kept in view as a lead."""
 
     ideas: list[IdeaView]
-    """The follow-ups: open ideas pinned to the candidate."""
+    """The follow-ups: open ideas about the candidate."""
 
 
 class OptimizationClient(Client):

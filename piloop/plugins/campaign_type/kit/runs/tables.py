@@ -19,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from piloop.db.models import NOW, AgentSession, Base, CidText, Tracked, by_value, utcnow
+from piloop.db.models import NOW, AgentSession, Base, Campaign, CidText, Tracked, by_value, utcnow
 from piloop.ids import (
     CampaignId,
     RoleName,
@@ -61,7 +61,11 @@ def _end_status() -> str:
 
 
 class Run(Tracked, Base):
-    """One attempt at an idea, by one agent of a role that does runs, with one harness and model."""
+    """One fresh worker session of a role that does runs, with one harness and model, from the head.
+
+    The scheduler starts a run with no idea. Its worker claims one open idea (``piloop idea claim``), or proposes one
+    and claims it (``piloop idea propose``). The claim ends with the run.
+    """
 
     __tablename__ = 'runs'
     __table_args__ = (
@@ -80,18 +84,23 @@ class Run(Tracked, Base):
     )
 
     id: Mapped[RunId] = mapped_column(primary_key=True)
-    idea_id: Mapped[IdeaId] = mapped_column(ForeignKey('ideas.id', ondelete='CASCADE'))
+    campaign_id: Mapped[CampaignId] = mapped_column(
+        ForeignKey('campaigns.id', ondelete='CASCADE', name='fk_runs_campaign_id_campaigns'), index=True
+    )
+    idea_id: Mapped[IdeaId | None] = mapped_column(ForeignKey('ideas.id', ondelete='CASCADE'))
+    """The idea that the run's worker claimed. NULL until it claims one."""
     role: Mapped[RoleName] = mapped_column(default=IMPLEMENTER, server_default=IMPLEMENTER)
     """The role that does the run: ``implementer``, or a role of the campaign with ``runs = true``. Its agents have this
     ``agent_sessions.kind``."""
-    attempt: Mapped[int]
+    attempt: Mapped[int | None]
+    """The claimed idea's run count, this one included. NULL until the claim."""
     base_candidate_id: Mapped[CandidateId]
     """The ``candidates.id`` that the worktree started from. The run's candidates descend from it. A plain integer,
     not a foreign key: candidates reference runs, and SQLite cannot add a foreign key for a cycle afterwards."""
     branch: Mapped[bool] = mapped_column(default=False, server_default=text('0'))
-    """Whether the run started from an alternative starting point: its idea pinned a base other than the head when it
-    was queued (a reference, an older keep or a note). The run is judged against its own base only, so what it keeps
-    is a branch keep, which never moves the head. The scheduler sets it (``explore_every`` of the run's role)."""
+    """Whether the run started from an alternative starting point, not the head: it is judged against its own base
+    only, so what it keeps is a branch keep, which never moves the head. The scheduler starts every run from the head;
+    a run of 0.5 that an idea pinned elsewhere is one."""
     harness: Mapped[str]
     model: Mapped[str]
     status: Mapped[RunStatus] = mapped_column(default=RunStatus.QUEUED, server_default=RunStatus.QUEUED.value)
@@ -110,7 +119,8 @@ class Run(Tracked, Base):
     log_dir: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
-    idea: Mapped[Idea] = relationship(back_populates='runs')
+    campaign: Mapped[Campaign] = relationship()
+    idea: Mapped[Idea | None] = relationship(back_populates='runs')
     base: Mapped[Candidate] = relationship(primaryjoin='foreign(Run.base_candidate_id) == Candidate.id', viewonly=True)
     candidates: Mapped[list[Candidate]] = relationship(
         back_populates='run', foreign_keys='Candidate.run_id', order_by='Candidate.id'
@@ -118,8 +128,8 @@ class Run(Tracked, Base):
 
 
 def campaign_runs(campaign_id: CampaignId) -> Select[Run]:
-    """Every run of the campaign. A run has no ``campaign_id``, but its idea has one."""
-    return select(Run).join(Idea).where(Idea.campaign_id == campaign_id)
+    """Every run of the campaign."""
+    return select(Run).where(Run.campaign_id == campaign_id)
 
 
 def latest_agent_session(s: Session, run_id: RunId) -> AgentSession | None:

@@ -53,6 +53,9 @@ from tests.conftest import (
 BLOCKING = '#!/bin/sh\nwhile [ ! -f {release} ]; do sleep 0.05; done\n'
 
 
+pytestmark = pytest.mark.usefixtures('no_fresh_runs')
+
+
 def scheduler(db: Database, runtime: ScriptRuntime, tmp_path: Path) -> Scheduler:
     controller = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
     return Scheduler(db, controller, Tracer(None), tmp_path, factory(runtime))
@@ -102,6 +105,7 @@ def fail_a_run(db: Database, campaign: Campaign, title: str, status: RunStatus =
         s.add(idea)
         s.flush()
         run = Run(
+            campaign_id=idea.campaign_id,
             idea_id=idea.id,
             attempt=1,
             base_candidate_id=1,
@@ -325,7 +329,15 @@ def occupy(db: Database, campaign: Campaign, title: str = 'busy') -> RunId:
         )
         s.add(idea)
         s.flush()
-        run = Run(idea_id=idea.id, attempt=1, base_candidate_id=1, harness='h', model='m', status=RunStatus.RUNNING)
+        run = Run(
+            campaign_id=idea.campaign_id,
+            idea_id=idea.id,
+            attempt=1,
+            base_candidate_id=1,
+            harness='h',
+            model='m',
+            status=RunStatus.RUNNING,
+        )
         s.add(run)
         s.commit()
         return run.id
@@ -607,6 +619,7 @@ def test_low_water_counts_held_ideas_as_backlog_until_their_prerequisite_settles
     sched = scheduler(db, runtime, tmp_path)
     with db.session() as s:
         prerequisite = s.get_one(Run, occupy(db, campaign)).idea
+        assert prerequisite is not None
         prerequisite.status = IdeaStatus.CLAIMED
         s.commit()
         prerequisite_id = prerequisite.id
@@ -656,8 +669,6 @@ def test_low_water_requests_nothing_while_every_research_slot_is_busy(
 def test_low_water_wants_no_more_ideas_than_max_runs_leaves_to_run(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    release = tmp_path / 'release'
-    write_toml(Path(campaign.path), BLOCKING.format(release=release))
     cfg = load_campaign_config(
         Path(campaign.path), plugins={'role': {'research': {'max_ideas': 1}}, 'stop_rule': {'max_runs': 3}}
     )
@@ -667,10 +678,8 @@ def test_low_water_wants_no_more_ideas_than_max_runs_leaves_to_run(
     finish_a_run(db, campaign, 'one')
     add_ideas(db, campaign, 2)
     sched = scheduler(db, runtime, tmp_path)
-    assert run_all(sched) == [1], 'a run of the first idea; one run left, one idea for it: no research'
+    assert run_all(sched) == [], 'two runs left, two ideas for them: no research, though a slot and the buffer want 3'
     assert agent_sessions(db, RESEARCH) == []
-    release.touch()
-    sched.wait(SETTLE)
     sched.stop(timeout=5)
 
 

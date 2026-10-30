@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, System
-from piloop.config import BRIEF_FILE, CONFIG_FILE, CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
+from piloop.config import BRIEF_FILE, CONFIG_FILE, CampaignConfig, ConfigMissing, load_campaign_config
 from piloop.db.events import emit, latest
 from piloop.db.models import NOT_RETIRED, Campaign, Event, EventModel
 from piloop.db.session import Database
@@ -278,26 +278,6 @@ def long_brief(path: Path, budget: int) -> LongBrief | None:
     return LongBrief(brief, words, budget) if words > budget else None
 
 
-def check_takes(path: Path, cfg: CampaignConfig) -> None:
-    """Refuse the ``takes`` condition of a role that does not run on the ``ideas`` table (``refused_takes``).
-
-    The check reads the schema, whose models type ``campaigns.config`` with the config models, so it runs here and
-    not in the role's validation.
-
-    Raises:
-        ConfigError: one line for each bad condition, as ``load_campaign_config`` gives one for each bad key.
-    """
-    bad = [
-        f'  plugins.role.{name}.takes = {role.takes!r}: the condition does not run on the ideas table: {error}'
-        for name, role in cfg.roles.doing_runs().items()
-        if (error := role.refused_takes()) is not None
-    ]
-    if bad:
-        raise ConfigError(
-            '\n'.join([f'{path / CONFIG_FILE} is not a valid piloop config ({len(bad)} problem(s)):', *bad])
-        )
-
-
 @dataclass(frozen=True)
 class ForkOf:
     """What a fork takes of its source campaign: its stored config, its repo, and the version to start from."""
@@ -326,7 +306,6 @@ def register(
             is unknown.
     """
     cfg = load_campaign_config(path) if fork is None else fork.source.config
-    check_takes(path, cfg)
     if name is None:
         try:
             name = checked_campaign_name(cfg.name)
@@ -471,7 +450,6 @@ def sync(s: Session, campaign: Campaign) -> CampaignConfig:
     remote may have been added since.
     """
     cfg = load_campaign_config(Path(campaign.path))
-    check_takes(Path(campaign.path), cfg)
     campaign.repo = VCS.selected(cfg.plugins).identity(Path(campaign.path))
     try:
         changed = cfg.plugins.get(STOP_RULES.name) != campaign.config.plugins.get(STOP_RULES.name)

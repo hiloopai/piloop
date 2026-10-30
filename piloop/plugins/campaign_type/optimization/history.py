@@ -6,7 +6,7 @@ The history has four parts:
   implementers' findings on them are a query away (``ideas_fts``, ``comments``), so the table leaves them out.
 - The kept lineage: the gain of each keep over its parent, its idea, its commit, and the tokens that the session
   that made it used. An agent can run ``git show`` on the commit.
-- The starting points: imported references that a pinned idea can start from.
+- The starting points: imported references whose changes a worker can take.
 - The latest findings on the campaign, of every role, by id and first line.
 
 The caller bounds the size: it picks the ideas and the number of findings. An idea row is about 250 characters, a
@@ -152,7 +152,7 @@ def renderables(
             *([track.name] if cfg.multitrack else []),
             *(_value(c, t.primary, evaluator_id) for t in tracks),
             _delta(c, track.primary, evaluator_id),
-            f'idea#{c.run.idea.id} ({c.run.idea.created_by})' if c.run is not None else NONE,
+            f'idea#{c.run.idea.id} ({c.run.idea.created_by})' if c.run is not None and c.run.idea is not None else NONE,
             c.revision[:SHORT_REVISION],
             human(tokens) if tokens is not None else NONE,
             cell(c.summary or NONE),
@@ -166,13 +166,13 @@ def renderables(
 def _starting_points(
     s: Session, campaign: Campaign, cfg: CampaignConfig, table_box: box.Box, heading: str
 ) -> list[RenderableType]:
-    """List the imported references that a pinned idea can start from, with their deciding metrics."""
+    """List the imported references whose changes a worker can take, with their deciding metrics."""
     found = references(s, campaign)
     if not found:
         return []
     deciding = [*(t.primary for t in cfg.all_tracks), *cfg.guardrails]
     table = titled_table(
-        f'{heading}History: starting points (pin one with base_candidate_id)',
+        f'{heading}History: starting points (take the change of one onto the head)',
         ['candidate', 'revision', *(m.name for m in deciding), 'summary'],
         table_box,
     )

@@ -112,7 +112,7 @@ def test_a_hand_keep_off_the_head_says_which_candidate_the_daemon_judges_on_the_
         shas.append(repo.head.commit.hexsha)
     repo.git.checkout('-q', branch)
     with database() as db, db.session() as s:
-        run = Run(idea_id=1, attempt=1, base_candidate_id=1, harness='script', model='m')
+        run = Run(campaign_id=1, idea_id=1, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
         for sha, verdict in zip(shas, (Outcome.DISCARD, Outcome.KEEP), strict=True):
@@ -134,6 +134,7 @@ def test_a_keep_that_replaces_the_head_says_which_runs_from_the_old_head_it_canc
     run_cli(['idea', 'add', 'demo', 'started from the head'])
     with database() as db, db.session() as s:
         made = Run(
+            campaign_id=1,
             idea_id=1,
             attempt=1,
             base_candidate_id=1,
@@ -143,7 +144,17 @@ def test_a_keep_that_replaces_the_head_says_which_runs_from_the_old_head_it_canc
             end=RunEnd.FINISHED,
         )
         s.add(made)
-        s.add(Run(idea_id=2, attempt=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING))
+        s.add(
+            Run(
+                campaign_id=1,
+                idea_id=2,
+                attempt=1,
+                base_candidate_id=1,
+                harness='script',
+                model='m',
+                status=RunStatus.RUNNING,
+            )
+        )
         s.get_one(Idea, 2).status = IdeaStatus.CLAIMED
         s.flush()
         s.add(
@@ -183,7 +194,7 @@ def crashed(campaign_path: Path) -> int:
     run_cli(['init', str(campaign_path)])
     run_cli(['idea', 'add', 'demo', 'tried'])
     with database() as db, db.session() as s:
-        run = Run(idea_id=1, attempt=1, base_candidate_id=1, harness='script', model='m')
+        run = Run(campaign_id=1, idea_id=1, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
         c = Candidate(
@@ -231,7 +242,7 @@ def test_measurement_add_records_a_report_and_asks_for_a_judgement_again_unless_
         run_cli(['measurement', 'add', str(c), '--report', str(report)])
 
 
-def test_idea_status_link_unlink_base_and_track_change_an_idea_and_say_what_they_did(campaign_path: Path, out) -> None:
+def test_idea_status_link_unlink_and_track_change_an_idea_and_say_what_they_did(campaign_path: Path, out) -> None:
     run_cli(['init', str(campaign_path)])
     run_cli(['idea', 'add', 'demo', 'first'])
     run_cli(['idea', 'add', 'demo', 'second'])
@@ -239,26 +250,19 @@ def test_idea_status_link_unlink_base_and_track_change_an_idea_and_say_what_they
     run_cli(['idea', 'link', '2', 'after', '1', '--reason', 'first lands the parser'])
     run_cli(['idea', 'status', '1', 'dropped', '--reason', 'wait for evaluator v2'])
     run_cli(['idea', 'unlink', '2', 'after', '1', '--reason', 'idea#1 dropped'])
-    run_cli(['idea', 'base', '2', '1', '--reason', 'from the baseline'])
-    run_cli(['idea', 'base', '2', 'head', '--reason', 'follow the head'])
     assert out().splitlines() == [
         'idea#2 after idea#1',
         'idea#1 open → dropped: wait for evaluator v2',
         'idea#2 no longer after idea#1',
-        'idea#2 starts from candidate#1',
-        'idea#2 starts from the head',
     ]
     with database() as db, db.session() as s:
         assert s.get_one(Idea, 1).status is IdeaStatus.DROPPED
         assert s.scalars(select(IdeaLink)).all() == []
-        assert s.get_one(Idea, 2).base_candidate_id is None
         kinds = [e.kind for e in s.scalars(select(Event).where(Event.target_id == 2).order_by(Event.id))]
         assert [k for k in kinds if k.startswith('idea.')] == [
             'idea.created',
             'idea.linked',
             'idea.unlinked',
-            'idea.base_candidate_id',
-            'idea.base_candidate_id',
         ]
     with pytest.raises(SystemExit, match='idea#2 is on track score already'):
         run_cli(['idea', 'track', '2', 'score', '--reason', 'no-op'])
@@ -269,8 +273,6 @@ def test_idea_status_link_unlink_base_and_track_change_an_idea_and_say_what_they
         run_cli(['idea', 'link', '1', 'after', '2', '--reason', 'the other way round'])
     with pytest.raises(SystemExit, match="there is no track 'speed'"):
         run_cli(['idea', 'add', 'demo', 'faster', '--track', 'speed'])
-    with pytest.raises(SystemExit, match='no candidate#9 in campaign demo'):
-        run_cli(['idea', 'add', 'demo', 'a hunch', '--from', 'run#1', '--base', '9'])
     with pytest.raises(SystemExit, match='claimed is not set by hand'):
         run_cli(['idea', 'status', '2', 'claimed', '--reason', 'why'])
 
@@ -279,7 +281,7 @@ def test_idea_track_moves_an_idea_to_another_track(campaign_path: Path, out) -> 
     toml = campaign_path / 'piloop.toml'
     text = toml.read_text().replace('role = "primary"\n', 'role = "primary"\nmargin = 1\n')
     text = text.replace('direction = "lower"\n', 'direction = "lower"\nrole = "primary"\nmargin = 1\n')
-    toml.write_text(text + '\n[tracks.score]\nshare = 0.5\n\n[tracks.size]\nshare = 0.5\n')
+    toml.write_text(text)
     run_cli(['init', str(campaign_path)])
     run_cli(['idea', 'add', 'demo', 'smaller', '--track', 'score'])
     out()

@@ -48,7 +48,7 @@ EOF
 | outside the campaign | global config, a merge, a push to a default branch, deleting data | 0 irreversible, 1 reversible |
 | spend | above the brief's budget / within it | 1 / 3 |
 | scope | finalize, extend or pause a campaign; drop an idea a human added | 2 |
-| process | requeue, reprioritize, a brief or prompt fix, a workaround for a piloop bug | 3 |
+| process | reopen an idea, reprioritize, a brief or prompt fix, a workaround for a piloop bug | 3 |
 | routine | a duplicate escalation, a false alarm you verified | 4 |
 
 Never move a goalpost after you see the result that the move would let in. Never raise `hold_at` of the stop rule: an

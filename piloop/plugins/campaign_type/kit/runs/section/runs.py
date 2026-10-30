@@ -25,5 +25,6 @@ class Runs(Section):
                 state += f' {age(run.started_at, r.now)}'
             if agent_session is not None and agent_session.ended_at is not None:
                 state += f', agent_session#{agent_session.id} ended {age(agent_session.ended_at, r.now)} ago'
-            lines.append(f'  - run#{run.id} idea#{run.idea_id} "{cell(run.idea.title, 60)}" ({run.harness}): {state}')
+            on = f'idea#{run.idea.id} "{cell(run.idea.title, 60)}"' if run.idea is not None else 'no idea claimed yet'
+            lines.append(f'  - run#{run.id} {on} ({run.harness}): {state}')
         return Rendered(title='Runs', blocks=(Lines(lines=tuple(lines)),))

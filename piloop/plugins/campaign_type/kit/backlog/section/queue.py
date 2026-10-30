@@ -2,17 +2,17 @@ from pydantic import Field
 from sqlalchemy import func, select
 
 from piloop.api.views import Lines, Rendered
-from piloop.plugins.campaign_type.kit.backlog.ideas import links, open_ideas
-from piloop.plugins.campaign_type.kit.backlog.ids import SETTLED, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ideas import holders, links, open_ideas
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.text import NONE, age, cell
 
 
 class Queue(Section):
-    """The ideas by status, what holds the held ones, and the claimable ideas in queue order."""
+    """The board: the ideas by status, what holds the held ones, and the claimable ideas by priority."""
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP, Surface.RUN})
     ORDER = 150
 
     held: int = Field(default=5, ge=0)
@@ -27,8 +27,7 @@ class Queue(Section):
         opened, free = open_ideas(s, campaign)
         held = [i for i in opened if i not in free]
         waits = [
-            f'idea#{i.id} on ' + ', '.join(f'idea#{t.id} ({t.status})' for t in i.after if t.status not in SETTLED)
-            for i in held[: self.held]
+            f'idea#{i.id} on ' + ', '.join(f'idea#{t.id} ({t.status})' for t in holders(i)) for i in held[: self.held]
         ]
         more = f', {len(held) - self.held} more' if len(held) > self.held else ''
         shown = f' ({"; ".join(waits)}{more})' if waits else ''

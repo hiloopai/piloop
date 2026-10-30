@@ -163,9 +163,6 @@ erDiagram
         varchar plan
         IdeaStatus status
         integer priority
-        varchar harness
-        integer base_candidate_id
-        integer max_runs
         varchar created_by
         varchar provenance
         datetime created_at
@@ -233,6 +230,7 @@ erDiagram
     }
     runs {
         integer id PK
+        integer campaign_id FK
         integer idea_id FK
         varchar role
         integer attempt
@@ -310,7 +308,8 @@ erDiagram
     ideas ||--o{ idea_links : "idea_id"
     ideas ||--o{ idea_links : "target_id"
     agent_sessions |o--o{ leases : "agent_session_id"
-    ideas ||--o{ runs : "idea_id"
+    campaigns ||--o{ runs : "campaign_id"
+    ideas |o--o{ runs : "idea_id"
     campaigns ||--o{ candidates : "campaign_id"
     runs |o--o{ candidates : "run_id"
     candidates |o--o{ candidates : "parent_id"

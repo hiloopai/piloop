@@ -41,7 +41,7 @@ Base.registry.update_type_annotation_map(
 class Idea(Tracked, Base):
     """Something worth trying: a card on the board (``IdeaStatus``). A worker claims an open idea and tries it.
 
-    Anyone can insert an idea: a human, the lead, or a worker that claims it at once (``piloop idea add --claim``).
+    Anyone can insert an idea: a human, the lead, or a worker that claims it at once (``piloop idea propose``).
     ``after`` links (``IdeaLink``) hold an idea until every prerequisite is ``done`` or ``dropped``: a held idea cannot
     be claimed. A prerequisite done without a keep frees it too, and nothing changes its status. Cycles are
     refused (``ops.link``).
@@ -52,7 +52,7 @@ class Idea(Tracked, Base):
         UniqueConstraint('campaign_id', 'title'),
         # the queue: the pass and the widget read the ``ready`` ideas of one campaign in priority order
         Index('ix_ideas_campaign_status_priority', 'campaign_id', 'status', 'priority'),
-        *text_checks('ideas', 'title', 'hypothesis', 'created_by', 'track', nullable=('plan', 'harness', 'provenance')),
+        *text_checks('ideas', 'title', 'hypothesis', 'created_by', 'track', nullable=('plan', 'provenance')),
     )
 
     id: Mapped[IdeaId] = mapped_column(primary_key=True)
@@ -64,22 +64,12 @@ class Idea(Tracked, Base):
     track: Mapped[TrackName]
     """The track (objective) the idea works on, by its name in ``piloop.toml``: a primary's ``track``, or else the
     primary's name. Its runs are judged on that track's primary, with the primary of every other track as a guardrail,
-    and their brief has the track's addendum. The scheduler parks an idea whose track is not in ``piloop.toml``, with
-    a note that says why."""
+    and their brief has the track's addendum. A claim refuses an idea whose track is not in ``piloop.toml``."""
     plan: Mapped[str | None]
     """Concrete steps for the implementer. They are appended to the brief."""
     status: Mapped[IdeaStatus] = mapped_column(default=IdeaStatus.OPEN, server_default=IdeaStatus.OPEN.value)
     priority: Mapped[int] = mapped_column(default=2, server_default=text('2'))
-    """0 (urgent) to 4 (someday). The scheduler takes the lowest number first."""
-    harness: Mapped[str | None]
-    """The harness for this idea. None lets the scheduler use the campaign's harnesses (``[plugins.harness] use``) in turn."""
-    base_candidate_id: Mapped[CandidateId | None]
-    """A deliberate branch: the ``candidates.id`` to start from, instead of the head at the time the run starts. NULL
-    unless the idea gives a reason for that starting point. Never pin the current head by default: when the idea
-    runs, that tree is out of date. The ``run.queued`` event of a pinned run records both bases. A plain integer, as
-    on runs."""
-    max_runs: Mapped[int] = mapped_column(default=2, server_default=text('2'))
-    """The number of attempts allowed. A crashed run is tried again until this number is reached."""
+    """0 (urgent) to 4 (someday). The board lists the lowest number first."""
     created_by: Mapped[str]
     """Who proposed it: ``human``, ``orchestrator``, or the agent's signature (``research#12``, ``implementer#40``,
     ``watchdog#7``). The part before ``#`` is the idea's source in the count of keeps by source."""

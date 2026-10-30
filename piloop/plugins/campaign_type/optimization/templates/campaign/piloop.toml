@@ -14,7 +14,7 @@ context = []                              # analysis files that every sweep read
 use = "subprocess"                        # a [plugins.runtime.<name>] of config.toml; subprocess: a background process per agent
 
 [plugins.harness]
-use = ["pi", "claude", "codex"]           # not the default, which is ["pi"]; runs use these in turn, unless an idea names one
+use = ["pi", "claude", "codex"]           # not the default, which is ["pi"]; fresh runs use these in turn
 
 [plugins.harness.pi]                      # a harness: a built-in one (pi, claude, codex) over its defaults, or a new name
 model = "anthropic/claude-opus-5-5"       # required for a harness in a rotation, in that harness's own naming
@@ -55,9 +55,8 @@ model = "gpt-6.1-sol"
 # token = { secret = "SLACK_BOT_TOKEN" }  # a secret of this campaign, else of the home
 # app_token = { secret = "SLACK_APP_TOKEN" }  # one Socket Mode connection for each app token, however many campaigns use it
 
-[plugins.role.implementer]                # an implementer tries one idea in a new worktree; its commits are scored
+[plugins.role.implementer]                # an implementer claims one idea and tries it in a new worktree of the head; its commits are scored
 runs = true                               # its agents do runs; a sweeping role has runs = false
-# takes = "priority < 3"                  # the ideas it takes: an SQL condition on the ideas table; if not set: every one
 # harnesses = ["pi", "claude", "codex"]   # if not set: [plugins.harness] use
 # model = { pi = "..." }                  # over the model of each [plugins.harness.<name>]
 # effort = "high"                         # how hard its agents think, as the harness names it
@@ -70,8 +69,6 @@ runs = true                               # its agents do runs; a sweeping role 
 # first_message = "Your brief is in {brief}. …"  # the first message of each agent; {brief} is its path
 timeout = 1800                            # seconds one implementer may run
 max_concurrent = 4                        # the most runs at the same time, on all workers together
-explore_every = 4                         # at least 1 run in 4 starts from a pinned idea, when one is open; 0 = off
-recovery_requeues = 2                     # times an idea is requeued from the last commit of a failed implementer
 # wrap_up_lead = 600                      # seconds before its timeout that an implementer is told to wrap up
 # finding_grace = 60                      # seconds after its finding before an implementer is ended
 # startup_relaunches = 2                  # new implementers for a run whose implementer failed to start
@@ -150,7 +147,6 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 
 # [plugins.role.quick]                    # a role of your own that does runs: any new name with runs = true
 # runs = true                             # it takes every key and default of [plugins.role.implementer], its prompt included
-# takes = "priority >= 3"                 # the ideas it takes; its slots fill before the implementer's
 # timeout = 300
 # max_concurrent = 2
 
@@ -238,6 +234,5 @@ role = "primary"                          # primary: must beat the head · guard
 # stop = { score = { margin = 0.05 } }    # when the climb stops here, with a guardrail's keys: floor, margin, fraction
 # evaluate = ["uv", "run", "python", "smoke.py"]  # optional: a command of its own that reports this rung; such rungs come first
 
-# [tracks.<name>]                         # experimental: one table for each track when several metrics are primary
-# share = 1                               # the fraction of each role's run slots for this track; shares sum to 1
-# addendum = "briefs/speed.md"            # a file appended to the brief of this track's runs
+# [tracks.<name>]                         # experimental: a table for a track that has a brief of its own
+# addendum = "briefs/speed.md"            # a file that a worker gets when it claims an idea of this track

@@ -160,22 +160,17 @@ class TrackConfig(BaseModel):
 
     A track has the name of its primary's ``track``, or else the name of the primary. All tracks build on one trunk. A
     run starts from the head, which is the latest keep on the trunk. A keep on any track must also hold the primary of
-    every other track within that primary's ``margin`` and ``floor``. A campaign with one primary has one track and
-    needs no table. A campaign with several primaries needs one table for each track, and the shares must sum to 1.
+    every other track within that primary's ``margin`` and ``floor``. A table is needed only for an addendum.
 
     Experimental: campaigns with more than one track.
     """
 
     model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
 
-    share: float = Field(default=1, ge=0, le=1)
-    """The fraction of the ``max_concurrent`` of each role that does runs that the ideas of this track get. A free slot
-    of a role goes to the track that is furthest below its share and has an idea that can run, and then to the most
-    urgent idea of that track. A track with no idea that can run gives its slot to another track. A share of 0 stops the track: its ideas
-    wait."""
     addendum: str | None = None
-    """A repo-relative file that is appended to the brief of this track's runs, after ``[plugins.role.implementer] addendum``. Use
-    it to say how work on this objective is done, for example "profile first" or "keep the output identical"."""
+    """A repo-relative file that a worker gets when it claims an idea of this track (``piloop idea claim``), after the
+    track's keep rule. Use it to say how work on this objective is done, for example "profile first" or "keep the
+    output identical"."""
 
 
 @dataclass(frozen=True)
@@ -184,7 +179,6 @@ class Track:
 
     name: TrackName
     primary: Metric
-    share: float
     addendum: str | None
     guardrails: tuple[Metric, ...]
     """What a candidate of this track must hold: the campaign's guardrails, then the primary of every other track, each

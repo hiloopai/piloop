@@ -52,7 +52,7 @@ Topics to cover:
   - Several objectives for one artifact are *tracks* of one campaign, not several campaigns. An example is the
     accuracy and the serving cost of one model.
   - Each track has its own primary metric, a `margin` and an optional `floor` that bind the candidates of the other
-    tracks, and a share of the implementers.
+    tracks.
   - A yardstick (a validation dataset, the speed of the evaluator) is never a track. It changes only through a new
     evaluator version that a human approves.
 - **Measurement.** The evaluate command. How long one measurement takes. Is it deterministic (fixed seeds and
@@ -119,8 +119,8 @@ Map each answer to its keys:
   - Each primary metric names its `track`.
   - Each primary has a `margin`: what a keep on another track may give up per step.
   - Each primary may have a `floor`: a value it never goes past. Only an edit to `piloop.toml` moves it.
-  - Each track has a `[tracks.<name>]` table with its `share` (the shares sum to 1) and an optional `addendum` (a brief
-    file for the runs of that track).
+  - A track may have a `[tracks.<name>]` table with an `addendum`: a brief file that a worker gets when it claims an
+    idea of the track.
   - piloop refuses a `target` in `[plugins.stop_rule]` when there are several tracks.
 - **Measurement → `evaluate`, `evaluate_timeout`.**
 - **Budget → `[plugins.role.implementer]` `timeout` and `max_concurrent`, and `[plugins.role.research]`.**

@@ -28,7 +28,8 @@ class IdeaComments(Section):
     def render(self, r: Rendering) -> Rendered | None:
         if r.reader is None or (agent := r.s.get(AgentSession, r.reader)) is None or (run := run_of(agent)) is None:
             return None
-        idea_id = r.s.get_one(Run, run).idea_id
+        if (idea_id := r.s.get_one(Run, run).idea_id) is None:
+            return None
         on_idea = Comment.target == TargetRef(IDEA, idea_id)
         on_its_runs = (Comment.target_kind == RUN) & Comment.target_id.in_(select(Run.id).where(Run.idea_id == idea_id))
         about = on_idea | on_its_runs

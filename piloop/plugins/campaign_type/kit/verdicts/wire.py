@@ -47,7 +47,8 @@ class CancelledRun(View):
     """An open run from the head that a verdict set by hand replaced: cancelled, and its idea ready again once it ends."""
 
     run: RunId
-    idea: IdeaId
+    idea: IdeaId | None
+    """The idea that it claimed, if any."""
     base: CandidateId
     """The head that it started from."""
 

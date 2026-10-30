@@ -199,7 +199,14 @@ def test_a_campaign_filter_follows_each_subject_to_its_campaign(
         s.add_all([mine, theirs])
         s.flush()
         candidate = s.scalars(select(Candidate).where(Candidate.campaign_id == campaign.id)).one()
-        run = Run(idea_id=mine.id, attempt=1, base_candidate_id=candidate.id, harness='script', model='m')
+        run = Run(
+            campaign_id=mine.campaign_id,
+            idea_id=mine.id,
+            attempt=1,
+            base_candidate_id=candidate.id,
+            harness='script',
+            model='m',
+        )
         s.add(run)
         s.flush()
         agent_session = AgentSession(kind='implementer', campaign_id=campaign.id, subject=TargetRef(RUN, run.id))
@@ -298,7 +305,14 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
         s.add_all([idea, dropped])
         s.flush()
         candidate = s.scalars(select(Candidate).where(Candidate.campaign_id == campaign.id)).one()
-        run = Run(idea_id=idea.id, attempt=1, base_candidate_id=candidate.id, harness='script', model='m')
+        run = Run(
+            campaign_id=idea.campaign_id,
+            idea_id=idea.id,
+            attempt=1,
+            base_candidate_id=candidate.id,
+            harness='script',
+            model='m',
+        )
         s.add(run)
         s.flush()
         agent_session = AgentSession(

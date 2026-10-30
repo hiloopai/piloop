@@ -229,7 +229,9 @@ def grow(db: Database, campaign: Campaign, verdicts: Sequence[Outcome | None]) -
             idea = Idea(campaign_id=row.id, track='score', title=f'idea {n}', hypothesis='h', created_by='human')
             s.add(idea)
             s.flush()
-            run = Run(idea_id=idea.id, attempt=1, base_candidate_id=bar, harness='pi', model='m')
+            run = Run(
+                campaign_id=idea.campaign_id, idea_id=idea.id, attempt=1, base_candidate_id=bar, harness='pi', model='m'
+            )
             s.add(run)
             s.flush()
             s.add(

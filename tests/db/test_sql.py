@@ -123,8 +123,8 @@ def test_documented_procedures_work_verbatim(con: sqlite3.Connection) -> None:
         "INSERT INTO ideas (track, campaign_id, title, hypothesis, plan, priority, created_by, status) VALUES ('score', 1, 't', 'h', NULL, 1, 'me', 'open')",
     )
     assert idea.last_insert_rowid == 1
-    row = sql.run(con, 'SELECT status, max_runs, created_at IS NOT NULL FROM ideas').rows[0]
-    assert row == ('open', 2, 1)
+    row = sql.run(con, 'SELECT status, priority, created_at IS NOT NULL FROM ideas').rows[0]
+    assert row == ('open', 1, 1)
     insert = "INSERT INTO comments (target_kind, target_id, author, kind, body{}) VALUES ('idea', 1, 'me', 'escalation', 'help'{})"
     with pytest.raises(sqlite3.IntegrityError, match='CHECK constraint failed: escalation_needs_priority'):
         sql.run(con, insert.format('', ''))
@@ -346,7 +346,10 @@ def test_verdict_brief_and_campaign_status_changes_carry_what_the_feed_needs(
         con, "INSERT INTO ideas (track, campaign_id, title, hypothesis, created_by) VALUES ('score', 1, 't', 'h', 'me')"
     )
     sql.run(con, "INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 'tree', 'sha')")
-    sql.run(con, "INSERT INTO runs (idea_id, attempt, base_candidate_id, harness, model) VALUES (1, 1, 1, 'pi', 'm')")
+    sql.run(
+        con,
+        "INSERT INTO runs (campaign_id, idea_id, attempt, base_candidate_id, harness, model) VALUES (1, 1, 1, 1, 'pi', 'm')",
+    )
     sql.run(
         con,
         "UPDATE candidates SET verdict = 'interesting', verdict_by = 'human', verdict_reason = 'not a win, a lead' WHERE id = 1",

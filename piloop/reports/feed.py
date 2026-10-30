@@ -181,7 +181,7 @@ def _state(s: Session, campaign: Campaign, cfg: CampaignConfig, me: Actor) -> Ca
             OpenRun(
                 id=r.id,
                 idea=r.idea_id,
-                title=r.idea.title,
+                title=r.idea.title if r.idea is not None else None,
                 harness=r.harness,
                 model=r.model,
                 status=str(r.status),

@@ -9,7 +9,6 @@
 
 import hashlib
 import json
-import math
 import tomllib
 from dataclasses import dataclass
 from datetime import timedelta
@@ -109,7 +108,7 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     """Every metric that the evaluate command reports, each with its ``role``. Each track has one ``primary``, so a campaign
     with one track has exactly one."""
     tracks: dict[TrackName, TrackConfig] = {}
-    """``[tracks.<name>]``: the share and addendum of each track. Needed only with several primaries."""
+    """``[tracks.<name>]``: the addendum of each track, where one has one."""
     evaluate: list[str] = Field(min_length=1)
     """The command (argv) that scores a commit. It runs in a clean worktree of the commit and writes one JSON line,
     ``{"metrics": {"<name>": <value>}}``, to ``$PILOOP_RESULT_FILE``."""
@@ -255,7 +254,7 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     def _check_tracks(self) -> None:
         """Check that each track has one primary.
 
-        With several tracks, each primary also needs a margin, each track needs a table, and the shares must sum to 1.
+        With several tracks, each primary also needs a margin.
         """
         primaries = [m for m in self.metrics if m.role is MetricRole.PRIMARY]
         if not primaries:
@@ -272,13 +271,8 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
                 raise ValueError(
                     f'primaries {unguarded} need a margin or a fraction: with several tracks each guards the others'
                 )
-            if untabled := [n for n in names if n not in self.tracks]:
-                raise ValueError(f'tracks {untabled} need a [tracks.<name>] table with their share')
         if unknown := sorted(set(self.tracks) - set(names)):
             raise ValueError(f'[tracks] {unknown} name no track a primary declares; tracks are {names}')
-        total = sum(self.tracks[n].share if n in self.tracks else 1 for n in names)
-        if not math.isclose(total, 1):
-            raise ValueError(f'track shares sum to {total:g}, not 1')
 
     def _check_refs(self, scope: Scope, plugins: Plugins) -> None:
         """Check that each name of an instance (``Ref``) of a capability of ``scope`` names an instance in ``plugins``.
@@ -400,8 +394,7 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
             Track(
                 name=m.track_name,
                 primary=m,
-                share=(table := self.tracks.get(m.track_name, TrackConfig())).share,
-                addendum=table.addendum,
+                addendum=self.tracks.get(m.track_name, TrackConfig()).addendum,
                 guardrails=(*self.guardrails, *(p for p in primaries if p is not m)),
             )
             for m in primaries

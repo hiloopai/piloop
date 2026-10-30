@@ -45,12 +45,12 @@ key of a role.
 
 | Role | What it does | When it starts |
 |---|---|---|
-| **implementer** | Implements one idea, commits, and writes a `finding`. Its commits are scored. | An open idea and a free slot. |
+| **implementer** | Claims one idea, implements it, commits, and writes a `finding`. Its commits are scored. | A free slot. |
 | **research** | Adds ideas where the head loses the most. | A short backlog, or a stall. |
 | **watchdog** | Investigates failures and reviews progress. Writes comments, never code. | A failed run, an agent dead at its start, every `interval` seconds when something is new, and once at the stop, for the closing report. |
 | **orchestrator** | Answers messages and escalations, steers the work, and records its decisions. Each one resumes the session of the one before. | News for it, with the `news` trigger. Off until you set it: by default, you run your own [orchestrator](/concepts/orchestrator). |
 
-The implementer **does runs**: it takes ideas from the queue. The others are **sweeps**: their triggers start them,
+The implementer **does runs**: each run claims one idea from the board. The others are **sweeps**: their triggers start them,
 and nothing that they commit is scored.
 
 ## Triggers
@@ -119,17 +119,16 @@ when = "SELECT id FROM candidates WHERE campaign_id = :campaign AND verdict = 'k
 
 `:campaign` is the campaign's id, and `:since` is when the role's last agent started.
 
-With `runs = true`, a new role does runs. It has the implementer's defaults. This one takes the cheap ideas:
+With `runs = true`, a new role does runs. It has the implementer's defaults. This one runs short sessions on `pi`:
 
 ```toml
 [plugins.role.quick]
 runs = true
-takes = "priority >= 3"    # an SQL condition on the ideas table
 harnesses = ["pi"]
 timeout = 300
 ```
 
-Your roles take their ideas first, and the implementer takes the rest. A keep of any role moves the head.
+Each role fills its own slots, and its agents claim from the same board. A keep of any role moves the head.
 
 ## Sections
 

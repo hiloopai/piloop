@@ -25,8 +25,8 @@ PILOOP_ACTOR=orchestrator piloop idea add <name> '<title>' --hypothesis '…' --
   --from '<what prompted it: comment#…, a digest, a loss table>' --priority 1
 ```
 
-- `--base <candidate>` sets the start. `--after` links it to other ideas, in the same write as the idea. Never add an
-  `open` idea and then insert its `after` link: the daemon can start it in between.
+- `--after` links it to other ideas, in the same write as the idea. Never add an `open` idea and then insert its
+  `after` link: a worker can claim it in between.
 - Priority is 0 (urgent) to 4 (someday).
 - Your ideas carry context that research does not have: the digests, the loss analysis, the human's direction.
   Write them down as ideas as soon as you see them. Use `--from` to say where they came from.
@@ -55,11 +55,10 @@ Use these commands, not SQL. Each one validates, takes `--reason '<why, with ids
 
 - Drop it, or open it again: `piloop idea status <id> dropped|open --reason '…'`. The
   reason becomes a `note` on the idea. A claimed idea, whose run is open (queued, running or being scored), can only
-  be dropped: its run finishes. Open it again after the run, never during it: that would queue a second run.
+  be dropped: its run finishes. Open it again after the run, never during it: a second run could claim it.
 - Link an idea that exists: `piloop idea link <id> after <target> --reason '…'`. It refuses a link that closes a
-  cycle, and a link from an idea that the daemon took already. An idea is held until each prerequisite is `done` or
-  `dropped`. To free it sooner, `piloop idea unlink` it.
-- Start it from another candidate: `piloop idea base <id> <candidate> --reason '…'`, or `head` to unpin it.
+  cycle, and a link from a claimed idea. An idea is held until each prerequisite is `done` or `dropped`. To free it
+  sooner, `piloop idea unlink` it.
 - Move it to another track: `piloop idea track <id> <track> --reason '…'`.
 - Reprioritize: `UPDATE ideas SET priority = 0 WHERE id = …`, with a `note` that says why.
 
@@ -95,24 +94,15 @@ Use this for a candidate of another campaign, or a branch.
 - Run `piloop candidate import <name> <commit-or-ref> --summary '…'`. It registers a `reference` candidate.
   Never `INSERT INTO candidates`.
 - The daemon measures it.
-- Start an idea from it with `piloop idea add <name> '<title>' --base <c>`.
+- To take its change, add an idea whose hypothesis names the candidate and its `revision`. Every run starts from the
+  head, and its worker merges the change in.
 - A candidate of another campaign is its `revision`. If it is in another repo, fetch it into this repo first.
-- The daemon never judges a reference. It is the bar only of a run that is pinned to it.
+- The daemon never judges a reference.
 - A composition that you made by hand on the head: import it, wait for its measurement or add yours
   (`piloop measurement add`), then `piloop candidate verdict <c> keep --reason '…'`. It is the head then.
 
-Branch runs:
-
-- A run pinned to a reference, or to an older keep, is a branch run. It is judged against its own base.
-- Its keeps form a branch and never move the head. The overview lists the latest keep of each lineage.
-- To bring a branch keep onto the trunk, file an unpinned idea that merges it into the head.
-- A noted candidate (`piloop candidate note`) or any other non-keep is not a bar. A run pinned to one starts from its
-  tree and is judged against the nearest keep. When that keep is the head, it is a trunk run.
-- A run pinned to a candidate that has the head's changes (a merge onto the head, or a compose that cherry-picked it)
-  is a trunk run too: its keep can move the head.
-- So pin a follow-up to a lead. Do not tell its implementer to reset onto the lead.
-- One run in `[plugins.role.implementer] explore_every` (default 4) takes the most urgent open idea pinned to a base other than
-  the head, whatever its priority.
+Every run starts from the head, so its keeps move the head. A branch keep of an older campaign stays on its branch:
+to bring it onto the trunk, add an idea that merges it into the head.
 
 ### Keep a failed result as a lead
 
@@ -122,7 +112,7 @@ piloop candidate note <c> '<why>' --follow-up '<hunch>'
 
 - `--follow-up` is repeatable.
 - It changes a measured `discard` or `interesting` candidate to `interesting` with the cause `note` and your reason.
-- It adds each follow-up as an open idea pinned to the candidate.
+- It adds each follow-up as an open idea about the candidate. Its worker takes the candidate's change onto the head.
 - It is not a keep and not a bar.
 - Implementers note a lead with a `Piloop-Note:` commit trailer, without follow-ups.
 

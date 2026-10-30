@@ -39,7 +39,6 @@ class OrchestratorRole(SweepRole):
             ('idea', 'status'),
             ('idea', 'link'),
             ('idea', 'unlink'),
-            ('idea', 'base'),
             ('idea', 'track'),
             ('candidate', 'verdict'),
             ('candidate', 'remeasure'),

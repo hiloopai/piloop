@@ -347,7 +347,6 @@ STILL_IMPORT_THE_TYPE_KIT = frozenset(
     {
         'agents/launcher.py',
         'agents/results.py',
-        'agents/roles.py',
         'api/views.py',
         'campaign/campaigns.py',
         'campaign/inbox.py',

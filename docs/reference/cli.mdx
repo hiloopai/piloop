@@ -284,7 +284,7 @@ Prints every campaign under its parent, with its type and its status.
 piloop idea add REF TITLE [options]
 ```
 
-Adds an idea to the board. An `open` idea runs when an implementer slot is free, in order of priority.
+Adds an `open` idea to the board, where an implementer can claim it. The board lists ideas in order of priority.
 
 | Option | Meaning |
 |---|---|
@@ -292,10 +292,25 @@ Adds an idea to the board. An `open` idea runs when an implementer slot is free,
 | `--plan` | Concrete steps for the implementer. |
 | `--from` | What prompted the idea, with ids or a URL. |
 | `--priority` | 0 (urgent) to 4 (someday). Default 2. |
-| `--harness` | Pin a harness instead of the rotation. |
-| `--base` | The candidate id to start from, instead of the head. |
 | `--track` | The track. Required when the campaign has several. |
 | `--after` | An idea to wait for. Repeat it for several. |
+
+### piloop idea claim
+
+```text
+piloop idea claim IDEA_ID
+```
+
+Claims an `open` idea for the caller's run, which tries it until the run ends. Only an implementer claims, once per
+run. An idea that an `after` link holds waits until its prerequisites are `done`.
+
+### piloop idea propose
+
+```text
+piloop idea propose TITLE [--hypothesis TEXT] [--plan TEXT] [--from TEXT] [--track TRACK]
+```
+
+Adds an idea of the implementer's own and claims it for its run, in one step, instead of `claim`.
 
 ### piloop idea status
 
@@ -313,20 +328,11 @@ a second run. A dropped idea's open run finishes and is scored.
 piloop idea link IDEA_ID after TARGET_ID --reason TEXT
 ```
 
-Links an idea that exists to another idea of the same campaign: it is held until the target is `done` or `dropped`. The link is
-written in one transaction, so the daemon never takes the idea without it. An idea whose run is open takes no link,
+Links an idea that exists to another idea of the same campaign: it is held until the target is `done` or `dropped`.
+The link is written in one transaction, so no implementer claims the idea without it. A claimed idea takes no link,
 and a link that closes a cycle is refused. The `--after` of `idea add` is checked the same way.
 `piloop idea unlink IDEA_ID after TARGET_ID --reason TEXT` deletes a link, for example to a prerequisite that is
 still open, to run the idea now.
-
-### piloop idea base
-
-```text
-piloop idea base IDEA_ID CANDIDATE_ID|head --reason TEXT
-```
-
-Pins the candidate that the idea's runs start from, or clears the pin with `head`: an unpinned run starts from the
-head at the time it starts. A run that is open keeps its base, and the next attempt takes the new one.
 
 ### piloop idea track
 
@@ -338,8 +344,7 @@ Moves an idea to another track of `piloop.toml`, with a note on the idea that sa
 keeps its track, because the run's commits are judged on it.
 
 Each of these commands writes its reason in a note on the idea. The change log records the change, signed with
-`PILOOP_ACTOR`, whether a command or raw SQL made it: `idea.status`, `idea.track` and `idea.base_candidate_id` with
-the old and new value, and `idea.linked` and `idea.unlinked` with the target and the kind.
+`PILOOP_ACTOR`, whether a command or raw SQL made it: `idea.status` and `idea.track` with the old and new value, and `idea.linked` and `idea.unlinked` with the target and the kind.
 
 ### piloop candidate show
 
@@ -384,8 +389,8 @@ measurement that names you.
 piloop candidate import REF COMMIT [--summary TEXT]
 ```
 
-Registers the tree of a commit, branch or tag of the repo as a `reference` candidate: a starting point that an idea
-can pin with `--base`. The daemon measures it, but never judges it. Once measured, a reference that builds on the head
+Registers the tree of a commit, branch or tag of the repo as a `reference` candidate, whose change an idea can name.
+The daemon measures it, but never judges it. Once measured, a reference that builds on the head
 can be kept by hand with `piloop candidate verdict`, and is the head then. To import a candidate
 of another campaign, fetch its commit into this repo first: `git fetch <its repo> <sha>`.
 
@@ -396,7 +401,7 @@ piloop candidate note CANDIDATE_ID REASON [--follow-up HUNCH]... [--track TRACK]
 ```
 
 Keeps a measured `discard` or `interesting` candidate in view as a starting point. Each `--follow-up` adds an open
-idea pinned to the candidate. The `candidate.noted` event records the note and its author; `verdict_by` changes only with
+idea about the candidate. The `candidate.noted` event records the note and its author; `verdict_by` changes only with
 the verdict. See [Notes](/concepts/verdict#act-on-a-candidate).
 
 ### piloop candidate verdict

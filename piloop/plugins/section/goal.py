@@ -19,7 +19,7 @@ class Goal(Section):
         also = f'; also measured: {others}' if others else ''
         state = campaign.status + (', paused' if campaign.paused is not None else '')  # the headline has the reasons
         if cfg.multitrack:
-            tracks = '; '.join(f'{t.name} ({_metric(t.primary)}, share {t.share:g})' for t in cfg.all_tracks)
+            tracks = '; '.join(f'{t.name} ({_metric(t.primary)})' for t in cfg.all_tracks)
             objective = f'- Tracks, each a primary its keeps improve while holding the others: {tracks}{also}'
         else:
             primary = cfg.all_tracks[0].primary

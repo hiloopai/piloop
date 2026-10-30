@@ -29,7 +29,6 @@ from piloop.db.session import Database, write_transaction
 from piloop.ids import AgentSessionId, CommentId, CommentKind, EnvName, Ref, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.cas.contract import BlobAddress, Cas
@@ -708,7 +707,7 @@ def learn(s: Session, w: AgentSession, session_id: str | None) -> None:
     w.session_id = session_id
     assert w.harness is not None  # the launcher picks the harness before it launches the agent
     run = None if (run_id := run_of(w)) is None else s.get(Run, run_id)
-    idea = None if run is None else s.get_one(Idea, run.idea_id)
+    idea = None if run is None else run.idea
     definition = harness_of(s, w)
     identified = Identified(
         session_id=session_id,

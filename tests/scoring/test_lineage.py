@@ -118,7 +118,15 @@ def test_the_trunk_and_its_head_are_the_keeps_that_raise_the_trunks_bar(
         idea = Idea(track='score', campaign_id=campaign.id, title='t', hypothesis='h', created_by='t')
         s.add(idea)
         s.flush()
-        run = Run(idea_id=idea.id, attempt=1, base_candidate_id=root.id, branch=True, harness='h', model='m')
+        run = Run(
+            campaign_id=idea.campaign_id,
+            idea_id=idea.id,
+            attempt=1,
+            base_candidate_id=root.id,
+            branch=True,
+            harness='h',
+            model='m',
+        )
         kept = child(s, root, 'branch keep', Outcome.KEEP, run)
         lead = child(s, root, 'branch lead', Outcome.INTERESTING, run)
         s.commit()

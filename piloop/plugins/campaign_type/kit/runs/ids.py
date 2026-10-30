@@ -64,11 +64,6 @@ class RunEnd(StrEnum):
     WORKER_LOST = 'worker_lost'
 
     @property
-    def attempt(self) -> bool:
-        """Whether a run that ended so was an attempt at its idea: it counts toward ``max_runs`` and ``plateau``."""
-        return self in ATTEMPTS
-
-    @property
     def status(self) -> RunStatus:
         """The ``runs.status`` of a run that ended so."""
         return END_STATUS.get(self, RunStatus.FAILED)

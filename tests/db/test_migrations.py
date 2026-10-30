@@ -1045,3 +1045,82 @@ def test_0075_drops_the_keys_of_seeds_and_reviews_from_each_stored_config(tmp_pa
             {'name': 'q'},
         ]
     command.downgrade(cfg, '0074')
+
+
+def test_optimization_0006_gives_each_run_its_campaign_lets_a_run_wait_for_its_claim_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0005')
+    queued = {'kind': 'run.queued', 'idea': 1, 'attempt': 1, 'harness': 'claude', 'track': 'main', 'pinned_base': 2}
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('c', '/c', '{}')")
+        con.execute(
+            'INSERT INTO ideas (campaign_id, title, hypothesis, track, created_by, harness, base_candidate_id)'
+            " VALUES (1, 'i', 'h', 'main', 'human', 'codex', 2)"
+        )
+        con.execute(
+            "INSERT INTO runs (idea_id, attempt, base_candidate_id, harness, model) VALUES (1, 1, 1, 'claude', 'm')"
+        )
+        con.execute(
+            "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('daemon', 'run', 1, ?)",
+            (dumps(queued),),
+        )
+    command.upgrade(chain, '0006')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT campaign_id, idea_id, attempt FROM runs').fetchall() == [(1, 1, 1)]
+        assert {'harness', 'base_candidate_id', 'max_runs'}.isdisjoint(
+            c for _, c, *_ in con.execute('PRAGMA table_info(ideas)')
+        )
+        assert loads(con.execute('SELECT payload FROM events').fetchone()[0]) == {
+            'kind': 'run.queued',
+            'harness': 'claude',
+        }
+        con.execute("INSERT INTO runs (campaign_id, base_candidate_id, harness, model) VALUES (1, 1, 'codex', 'm')")
+        with pytest.raises(sqlite3.IntegrityError, match='NOT NULL constraint failed: runs.campaign_id'):
+            con.execute("INSERT INTO runs (base_candidate_id, harness, model) VALUES (1, 'codex', 'm')")
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("INSERT INTO candidates (campaign_id, run_id, tree_sha, revision) VALUES (1, 2, 't', 'r')")
+    with pytest.raises(RuntimeError, match='cannot downgrade: run#2 claimed no idea and made candidates'):
+        command.downgrade(chain, '0005')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute('DELETE FROM candidates WHERE run_id = 2')
+    command.downgrade(chain, '0005')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT id, idea_id FROM runs').fetchall() == [(1, 1)], 'the run that claimed nothing goes'
+        assert con.execute('SELECT harness, base_candidate_id, max_runs FROM ideas').fetchall() == [(None, None, 2)]
+        assert loads(con.execute('SELECT payload FROM events').fetchone()[0]) == {
+            'kind': 'run.queued',
+            'harness': 'claude',
+            'idea': 1,
+            'attempt': 1,
+            'track': 'main',
+        }
+
+
+def test_0076_drops_the_keys_that_assigned_ideas_from_each_stored_config(tmp_path: Path) -> None:
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0075')
+    roles = {
+        'implementer': {'takes': 'priority < 3', 'explore_every': 4, 'recovery_requeues': 2, 'timeout': 60.0},
+        'research': {'max_ideas': 2},
+    }
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        tracks = {'score': {'share': 0.5}, 'size': {'share': 0.5, 'addendum': 'size.md'}}
+        for name, stored in (('p', {'plugins': {'role': roles}, 'tracks': tracks}), ('q', {'name': 'q'})):
+            con.execute(
+                'INSERT INTO campaigns (name, path, config) VALUES (?, ?, ?)', (name, f'/{name}', dumps(stored))
+            )
+    command.upgrade(cfg, '0076')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute('SELECT config FROM campaigns ORDER BY id')] == [
+            {
+                'plugins': {'role': {'implementer': {'timeout': 60.0}, 'research': {'max_ideas': 2}}},
+                'tracks': {'size': {'addendum': 'size.md'}},
+            },
+            {'name': 'q'},
+        ]
+    command.downgrade(cfg, '0075')

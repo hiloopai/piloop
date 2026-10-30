@@ -22,6 +22,7 @@ IMPLEMENTER = 1200
 """Words of an implementer's whole brief: a third of it is the run's own context."""
 
 
+@pytest.mark.usefixtures('no_fresh_runs')
 @pytest.mark.parametrize(('role', 'budget'), BUDGETS.items())
 def test_a_sweeps_default_brief_stays_within_its_budget(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, role: str, budget: int

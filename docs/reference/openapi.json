@@ -3112,6 +3112,145 @@
         }
       }
     },
+    "/v1/ideas/{idea}/claim": {
+      "post": {
+        "summary": "Claim",
+        "description": "Claim an open idea for the caller's run, which works on it until the run ends, and say what its track asks.",
+        "operationId": "claim",
+        "parameters": [
+          {
+            "name": "idea",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Idea"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Claimed"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/proposals": {
+      "post": {
+        "summary": "Propose",
+        "description": "Add a worker's own idea to the board of its run's campaign, and claim it for the run.",
+        "operationId": "propose",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Claimed"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/ideas/{idea}/status": {
       "post": {
         "summary": "Set Status",
@@ -3326,86 +3465,6 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/Reasoned"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IdeaAnswer"
-                }
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
-                }
-              }
-            },
-            "description": "Not Found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
-                }
-              }
-            },
-            "description": "Conflict"
-          },
-          "503": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
-                }
-              }
-            },
-            "description": "Service Unavailable"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/ideas/{idea}/base": {
-      "post": {
-        "summary": "Set Base",
-        "description": "Set the candidate that an idea's runs start from, or clear the pin.",
-        "operationId": "set_base",
-        "parameters": [
-          {
-            "name": "idea",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Idea"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BaseBody"
               }
             }
           }
@@ -4700,32 +4759,6 @@
         "title": "AnomalyNews",
         "description": "An anomaly that the daemon gave to a watchdog."
       },
-      "BaseBody": {
-        "properties": {
-          "reason": {
-            "type": "string",
-            "title": "Reason"
-          },
-          "base": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Base"
-          }
-        },
-        "type": "object",
-        "required": [
-          "reason",
-          "base"
-        ],
-        "title": "BaseBody",
-        "description": "The candidate that an idea's runs start from. Null: no pin, the head when the run starts."
-      },
       "Batch": {
         "properties": {
           "events": {
@@ -5124,8 +5157,16 @@
             "title": "Run"
           },
           "idea": {
-            "type": "integer",
-            "title": "Idea"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idea",
+            "description": "The idea that it claimed, if any."
           },
           "base": {
             "type": "integer",
@@ -5368,6 +5409,37 @@
         ],
         "title": "ChooseBody",
         "description": "The answer to an escalation: one of the choices that it offers, by its id."
+      },
+      "Claimed": {
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor"
+          },
+          "idea": {
+            "$ref": "#/components/schemas/IdeaView"
+          },
+          "track": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track",
+            "description": "What the idea's track asks of the run: its keep rule and its addendum. Null when the campaign has one track."
+          }
+        },
+        "type": "object",
+        "required": [
+          "cursor",
+          "idea",
+          "track"
+        ],
+        "title": "Claimed",
+        "description": "An idea that the caller's run claimed."
       },
       "Clone": {
         "properties": {
@@ -6143,30 +6215,6 @@
           "priority": {
             "$ref": "#/components/schemas/Priority",
             "default": 2
-          },
-          "harness": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Harness",
-            "description": "The harness to use instead of the rotation."
-          },
-          "base": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Base",
-            "description": "The candidate to start from instead of the head. This makes a branch."
           },
           "track": {
             "anyOf": [
@@ -7435,7 +7483,7 @@
             },
             "type": "array",
             "title": "Follow Ups",
-            "description": "An open idea pinned to the candidate for each.",
+            "description": "An open idea about the candidate for each.",
             "default": []
           },
           "track": {
@@ -7473,7 +7521,7 @@
             },
             "type": "array",
             "title": "Ideas",
-            "description": "The follow-ups: open ideas pinned to the candidate."
+            "description": "The follow-ups: open ideas about the candidate."
           }
         },
         "type": "object",
@@ -7492,11 +7540,26 @@
             "title": "Id"
           },
           "idea": {
-            "type": "integer",
-            "title": "Idea"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idea",
+            "description": "The idea that its worker claimed. Null until it claims one."
           },
           "title": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Title"
           },
           "harness": {
@@ -7726,6 +7789,61 @@
         ],
         "title": "Prompted",
         "description": "A note on an agent, which the daemon delivers, and what came of it, read at ``cursor``."
+      },
+      "ProposeBody": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "hypothesis": {
+            "type": "string",
+            "title": "Hypothesis",
+            "description": "Why this should help, and by how much. Default: the title.",
+            "default": ""
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance",
+            "description": "What prompted the idea, with ids or a URL."
+          },
+          "track": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track",
+            "description": "The track it works on. Required when the campaign has more than one track."
+          }
+        },
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "ProposeBody",
+        "description": "A worker's own idea, which its run claims at once."
       },
       "Queued": {
         "properties": {

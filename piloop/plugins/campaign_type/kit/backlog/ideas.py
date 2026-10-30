@@ -39,6 +39,11 @@ def held() -> ColumnElement[bool]:
     )
 
 
+def holders(idea: Idea) -> list[Idea]:
+    """The prerequisites that hold ``idea`` now: those not settled (``SETTLED``). ``held`` selects by the same rule."""
+    return [t for t in idea.after if t.status not in SETTLED]
+
+
 def claimable() -> ColumnElement[bool]:
     """Select the ideas that are ``open`` and not held."""
     return (Idea.status == IdeaStatus.OPEN) & ~held()
@@ -78,8 +83,8 @@ def links(idea: Idea) -> str:
     dropped), joined with ``; ``.
     """
     parts: list[str] = []
-    holding = [t for t in idea.after if t.status not in SETTLED]
-    done = [t for t in idea.after if t.status in SETTLED]
+    holding = holders(idea)
+    done = [t for t in idea.after if t not in holding]
     if holding:
         parts.append('held by ' + ', '.join(f'idea#{t.id} ({t.status})' for t in holding))
     if done:

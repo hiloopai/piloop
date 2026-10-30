@@ -13,7 +13,6 @@ from piloop.api.views import (
 )
 from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 
@@ -29,10 +28,6 @@ class IdeaBody(Params):
     provenance: str | None = None
     """What prompted the idea, with ids or a URL."""
     priority: Priority = 2
-    harness: str | None = None
-    """The harness to use instead of the rotation."""
-    base: CandidateId | None = None
-    """The candidate to start from instead of the head. This makes a branch."""
     track: TrackName | None = None
     """The track it works on. Required when the campaign has more than one track."""
     after: tuple[IdeaId, ...] = ()
@@ -45,10 +40,17 @@ class StatusBody(Reasoned):
     status: IdeaStatus
 
 
-class BaseBody(Reasoned):
-    """The candidate that an idea's runs start from. Null: no pin, the head when the run starts."""
+class ProposeBody(Params):
+    """A worker's own idea, which its run claims at once."""
 
-    base: CandidateId | None
+    title: str
+    hypothesis: str = ''
+    """Why this should help, and by how much. Default: the title."""
+    plan: str | None = None
+    provenance: str | None = None
+    """What prompted the idea, with ids or a URL."""
+    track: TrackName | None = None
+    """The track it works on. Required when the campaign has more than one track."""
 
 
 class TrackBody(Reasoned):
@@ -127,6 +129,13 @@ class IdeaAnswer(View):
     idea: IdeaView
 
 
+class Claimed(IdeaAnswer):
+    """An idea that the caller's run claimed."""
+
+    track: str | None
+    """What the idea's track asks of the run: its keep rule and its addendum. Null when the campaign has one track."""
+
+
 class StatusChanged(IdeaAnswer):
     """An idea whose status changed."""
 
@@ -146,7 +155,7 @@ class TrackChanged(IdeaAnswer):
 
 
 class BacklogClient(Client):
-    """The calls of the backlog's routes: ideas, their links, bases, tracks and statuses."""
+    """The calls of the backlog's routes: ideas, claims, their links, tracks and statuses."""
 
     def ideas(self, campaign: str, query: IdeasQuery) -> Ideas:
         return self._get(f'/v1/campaigns/{segment(campaign)}/ideas', query, Ideas)
@@ -169,8 +178,11 @@ class BacklogClient(Client):
     def unlink(self, idea: IdeaId, kind: LinkKind, target: IdeaId, body: Reasoned) -> IdeaAnswer:
         return self._send('DELETE', f'/v1/ideas/{idea}/links/{kind}/{target}', body, IdeaAnswer)
 
-    def set_base(self, idea: IdeaId, body: BaseBody) -> IdeaAnswer:
-        return self.post(f'/v1/ideas/{idea}/base', body, IdeaAnswer)
+    def claim(self, idea: IdeaId) -> Claimed:
+        return self.post(f'/v1/ideas/{idea}/claim', Params(), Claimed)
+
+    def propose(self, body: ProposeBody) -> Claimed:
+        return self.post('/v1/proposals', body, Claimed)
 
     def set_track(self, idea: IdeaId, body: TrackBody) -> TrackChanged:
         return self.post(f'/v1/ideas/{idea}/track', body, TrackChanged)

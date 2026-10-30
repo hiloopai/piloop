@@ -16,7 +16,7 @@ from typing import ClassVar, Final, Literal, assert_never
 
 from covalence import Cid
 from pydantic import ValidationError
-from sqlalchemy import func, select, update
+from sqlalchemy import ColumnElement, func, select, update
 from sqlalchemy.orm import Session, undefer
 
 from piloop.actor import Actor, Agent, System
@@ -64,7 +64,7 @@ from piloop.ids import AgentSessionId, CampaignId, CommentId, CommentKind, Revis
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, Tracer
 from piloop.plugins import limits
-from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
@@ -83,7 +83,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RUN, RunEnd, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.stop import attempts, settle_cancelled
+from piloop.plugins.campaign_type.kit.runs.stop import release
 from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session, working_on
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     MOVED,
@@ -92,8 +92,8 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import (
     RejudgeFailed,
     answer_rejudge,
     bar_of,
-    branches,
     criterion,
+    fallback_track,
     head,
     judge_tracks,
     node,
@@ -147,17 +147,7 @@ RUNS = 'runs'
 """The directory under the home of each run's place: ``runs/<id>``, its implementer's log directory and worktree."""
 
 
-class RecoveryRequeued(EventModel):
-    """``_settle`` requeued an idea from the last commit of a run that did not succeed.
-
-    Counting these events caps the requeues (the ``recovery_requeues`` of the run's role): candidates cannot, because
-    two runs that leave the same tree share one candidate.
-    """
-
-    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
-    kind: Literal['idea.recovery_requeued'] = 'idea.recovery_requeued'
-    run: RunId
-    candidate: CandidateId
+EventModel.retire('idea.recovery_requeued')  # 0.5 requeued an idea from a cut run's commits; a claim ends instead
 
 
 class RunStarted(EventModel):
@@ -388,7 +378,6 @@ class RunController:
                 span.error(e)
                 error = f'{type(e).__name__}: {e}'
                 with self._db.session() as s:
-                    idea_id = s.get_one(Run, run_id).idea_id
                     unstarted = (AgentSession.id == agent_session_id) & (
                         AgentSession.state == AgentSessionState.STARTING
                     )
@@ -401,7 +390,7 @@ class RunController:
                     s.commit()
                 end = RunEnd.FAILED if closed is None else RunEnd.NOT_STARTED
                 self._close(span, run_id, end, error)
-                self._settle(span, run_id, idea_id, end, startup_failed=end is RunEnd.NOT_STARTED, last=None)
+                self._settle(run_id, end, None)
 
     def _execute(self, run_id: RunId, agent_session_id: AgentSessionId, span: Span) -> None:
         with self.launcher.lock:
@@ -410,8 +399,7 @@ class RunController:
                 return
             with self._db.session() as s:
                 run = s.get_one(Run, run_id)
-                idea = run.idea
-                campaign = idea.campaign
+                campaign = run.campaign
                 cfg = campaign.config
                 timeout = agent_timeout(s, campaign, cfg, cfg.role(run.role).timeout, utcnow())
                 if isinstance(timeout, Stop):  # the run stays queued, its agent requested again: the stop closes both
@@ -424,14 +412,12 @@ class RunController:
                 base = s.get_one(Candidate, run.base_candidate_id)
                 if run.brief_cid is None:
                     agent = Agent(role=run.role, session=agent_session_id)
-                    track = cfg.track(idea.track)
                     brief = briefing(
                         role(cfg, run.role, Path(campaign.path)),
                         campaign,
                         agent,
-                        reason=f'idea#{idea.id} is ready',
+                        reason='a free slot',
                         lines=self._context(s, cfg, run, base, agent, timeout),
-                        track=track,
                     )
                     workspace = workspace_dir(self._home, campaign.id)
                     rendering = Rendering(s, utcnow(), campaign, workspace, self.cas, brief=brief)
@@ -439,7 +425,6 @@ class RunController:
                         role(cfg, run.role, Path(campaign.path)),
                         campaign,
                         markdown(cfg.sections_of(RoleName(run.role)), rendering),
-                        track=track,
                     )
                     run.brief_cid = self.cas.put(composed.encode())
                 brief = run.brief_cid
@@ -464,15 +449,15 @@ class RunController:
         """
         with self._db.session() as s:
             run = s.get_one(Run, run_id)
-            campaign = run.idea.campaign
+            campaign = run.campaign
             cfg = campaign.config
             base_revision = s.get_one(Candidate, run.base_candidate_id).revision
             timeout = seconds(agent_timeout(s, campaign, cfg, cfg.role(run.role).timeout, utcnow()))
-            harness, model, idea_id, campaign_id = run.harness, run.model, run.idea_id, campaign.id
+            harness, model, campaign_id = run.harness, run.model, campaign.id
             name, vcs, campaign_path = campaign.name, vcs_of(campaign), Path(campaign.path)
         log_dir = self._runs_dir / str(run_id)
         with closing(vcs.open(campaign_path)) as repo:
-            span.set(idea=idea_id, agent_session=agent_session_id, harness=harness, model=model)
+            span.set(agent_session=agent_session_id, harness=harness, model=model)
             if brief is None:
                 ended = self.launcher.reattach(agent_session_id)
             else:
@@ -490,24 +475,24 @@ class RunController:
                 case HandedOver():  # the next daemon waits for the agent again
                     span.set(status='handed_over')
                 case DaemonStopped(work=work) | Ran(work=work) if stopping:
-                    self._cut(span, run_id, idea_id, agent_session_id, name, repo, base_revision, work)
+                    self._cut(span, run_id, agent_session_id, name, repo, base_revision, work)
                 case NotStarted() | Lost() if stopping:
-                    self._cut(span, run_id, idea_id, agent_session_id, name, repo, base_revision, None)
+                    self._cut(span, run_id, agent_session_id, name, repo, base_revision, None)
                 case DaemonStopped(work=work):  # the stop of an earlier daemon process, which ended before the rows
                     self._cut_by_earlier_stop(
-                        span, run_id, idea_id, campaign_id, agent_session_id, name, repo, base_revision, work, log_dir
+                        span, run_id, campaign_id, agent_session_id, name, repo, base_revision, work, log_dir
                     )
                 case Lost(reason=reason):
                     self._close(span, run_id, RunEnd.WORKER_LOST, reason)
-                    self._settle(span, run_id, idea_id, RunEnd.WORKER_LOST, startup_failed=False, last=None)
+                    self._settle(run_id, RunEnd.WORKER_LOST, None)
                 case NotStarted():
                     if not self._relaunch(span, run_id, agent_session_id, log_dir):
                         with self._db.session() as s:
                             end = RunEnd.CANCELLED if run_cancel(s, run_id) is not None else RunEnd.NOT_STARTED
                         self._close(span, run_id, end, None)
-                        self._settle(span, run_id, idea_id, end, startup_failed=True, last=None)
+                        self._settle(run_id, end, None)
                 case Ran():
-                    self._ran(span, run_id, idea_id, campaign_id, agent_session_id, repo, base_revision, ended, log_dir)
+                    self._ran(span, run_id, campaign_id, agent_session_id, repo, base_revision, ended, log_dir)
                 case _:
                     assert_never(ended)
 
@@ -515,7 +500,6 @@ class RunController:
         self,
         span: Span,
         run_id: RunId,
-        idea_id: IdeaId,
         agent_session_id: AgentSessionId,
         name: str,
         repo: Repository,
@@ -523,7 +507,7 @@ class RunController:
         work: Transfer | None,
     ) -> None:
         """Keep the work of a run that a daemon stop cut (``_keep_cut_work``). The stop writes the rows."""
-        cut = not self._left_finding(run_id, idea_id, agent_session_id)  # else the stop closed it as handed off
+        cut = not self._left_finding(run_id, agent_session_id)  # else the stop closed it as handed off
         self._keep_cut_work(run_id, name, repo, self._received(run_id, repo, base_revision, work), cut=cut)
         self._stopped(span, run_id)
 
@@ -531,7 +515,6 @@ class RunController:
         self,
         span: Span,
         run_id: RunId,
-        idea_id: IdeaId,
         campaign_id: CampaignId,
         agent_session_id: AgentSessionId,
         name: str,
@@ -546,14 +529,14 @@ class RunController:
         ended it: ``RunEnd.DAEMON_STOPPED``, not an attempt, or handed off when the implementer left its finding, whose
         commits are scored now.
         """
-        finding = self._left_finding(run_id, idea_id, agent_session_id)
+        finding = self._left_finding(run_id, agent_session_id)
         versions = self._received(run_id, repo, base_revision, work)
         self._keep_cut_work(run_id, name, repo, versions, cut=not finding)
         with self._db.session() as s:
             end, error = handed_off(s, s.get_one(Run, run_id)) if finding else (RunEnd.DAEMON_STOPPED, None)
         self._close(span, run_id, end, error)
         last = self._score(run_id, campaign_id, repo, versions, log_dir) if finding and versions else None
-        self._settle(span, run_id, idea_id, end, startup_failed=False, last=last)
+        self._settle(run_id, end, last)
 
     def _stopped(self, span: Span, run_id: RunId) -> None:
         """Trace the end that a daemon stop writes on the run (``Scheduler._fail_run``), which owns the row."""
@@ -569,7 +552,6 @@ class RunController:
         self,
         span: Span,
         run_id: RunId,
-        idea_id: IdeaId,
         campaign_id: CampaignId,
         agent_session_id: AgentSessionId,
         repo: Repository,
@@ -580,7 +562,7 @@ class RunController:
         """Close the run of an agent that worked (``run_outcome``), score its versions and settle its idea."""
         outcome = ended.process
         versions = self._received(run_id, repo, base_revision, ended.work)
-        finding = self._left_finding(run_id, idea_id, agent_session_id)
+        finding = self._left_finding(run_id, agent_session_id)
         with self._db.session() as s:
             asked = open_escalation(s, s.get_one(Run, run_id))
             stop_ended = s.scalar(
@@ -605,7 +587,7 @@ class RunController:
         self._close(span, run_id, end, error)
         # Score all commits, even if the implementer then timed out or crashed.
         last = self._score(run_id, campaign_id, repo, versions, log_dir) if versions else None
-        self._settle(span, run_id, idea_id, end, startup_failed=False, last=last)
+        self._settle(run_id, end, last)
 
     def _relaunch(self, span: Span, run_id: RunId, agent_session_id: AgentSessionId, log_dir: Path) -> bool:
         """Queue the run again with a new implementer, up to its role's ``startup_relaunches``, after it failed to start.
@@ -619,14 +601,14 @@ class RunController:
         with self.launcher.lock:
             with self._db.session() as s:
                 run = s.get_one(Run, run_id)
-                role = run.idea.campaign.config.roles.doing_runs().get(run.role)
+                role = run.campaign.config.roles.doing_runs().get(run.role)
                 launches = s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) or 0
                 if role is None or launches > role.startup_relaunches or run_cancel(s, run_id) is not None:
                     return False
                 run.status = RunStatus.QUEUED
                 agent_session = AgentSession(
                     kind=run.role,
-                    campaign_id=run.idea.campaign_id,
+                    campaign_id=run.campaign_id,
                     subject=TargetRef(RUN, run_id),
                     harness=run.harness,
                     model=run.model,
@@ -653,10 +635,10 @@ class RunController:
 
         What the agent left unsaved was saved on its own (``AgentJob.capture``).
 
-        The stop owns the run's row. A run that the stop ``cut`` is not an attempt (``RunEnd.attempt``), so its
-        commits are not measured: each new one is ``recovered`` (``CUT_REASON``), and its idea is requeued
-        from the last one (``_requeue``), as after a timed-out run. A run whose implementer had left its finding was
-        handed off: the stop closed it as finished, and the next daemon scores the pinned commits (``resume``).
+        The stop owns the run's row. A run that the stop ``cut`` is not an attempt (``ATTEMPTS``), so its
+        commits are not measured: each new one is ``recovered`` (``CUT_REASON``). A run whose implementer had left its
+        finding was handed off: the stop closed it as finished, and the next daemon scores the pinned commits
+        (``resume``).
         """
         if not versions:
             return
@@ -669,12 +651,10 @@ class RunController:
             candidate = run.base
             for version in versions:
                 candidate, created = resolve(
-                    s, run.idea.campaign_id, version, parent=candidate, run_id=run_id, origin=Origin.RECOVERED
+                    s, run.campaign_id, version, parent=candidate, run_id=run_id, origin=Origin.RECOVERED
                 )
                 if created:
                     candidate.verdict_reason = CUT_REASON.format(run=run_id)
-            if _requeuable(s, run):
-                _requeue(s, run, candidate, RunEnd.DAEMON_STOPPED)
             s.commit()
 
     def _received(
@@ -697,7 +677,7 @@ class RunController:
         with self._db.session() as s:
             return s.get_one(Campaign, campaign_id, options=[undefer(Campaign.config)])
 
-    def _left_finding(self, run_id: RunId, idea_id: IdeaId, agent_session_id: AgentSessionId) -> bool:
+    def _left_finding(self, run_id: RunId, agent_session_id: AgentSessionId) -> bool:
         """Return True if the agent signed a ``finding`` on its idea or its run (``finding_of``)."""
         with self._db.session() as s:
             return finding_of(s, s.get_one(Run, run_id), s.get_one(AgentSession, agent_session_id)) is not None
@@ -706,13 +686,13 @@ class RunController:
         """Score the commits of a closed run and settle its idea, after a daemon stopped while it scored them.
 
         The versions are the ones that the run received (``RunReceived``). Never raises. If scoring cannot resume, for example because
-        the repo is gone, the run settles as failed. The idea then goes back to the queue if it has attempts left.
+        the repo is gone, the run settles as failed: its idea is open again.
         """
         with self._tracer.span('piloop.resume', run=run_id) as span:
             with self._db.session() as s:
                 run = s.get_one(Run, run_id)
-                campaign = run.idea.campaign
-                end, idea_id, campaign_id = run.end, run.idea_id, campaign.id
+                campaign = run.campaign
+                end, campaign_id = run.end, campaign.id
                 vcs, campaign_path = vcs_of(campaign), Path(campaign.path)
                 received = latest(s, RunReceived, Event.target == TargetRef(RUN, run_id))
             last = None
@@ -726,7 +706,7 @@ class RunController:
                 span.error(e)
                 end = RunEnd.FAILED
             assert end is not None  # a run whose commits are scored is closed
-            self._settle(span, run_id, idea_id, end, startup_failed=False, last=last)
+            self._settle(run_id, end, last)
 
     def remeasure(self, candidate_id: CandidateId) -> None:
         """Measure a candidate with the campaign's current evaluator, then judge it again if it is ``rejudgeable``.
@@ -748,7 +728,11 @@ class RunController:
             asked = remeasure_asked(s, candidate)
             parent = candidate.parent
             # a merge that no run judges is measured as its run would: paired with its head when the track repeats
-            paired = cfg.track(candidate.run.idea.track).repeats if unjudged(candidate) and candidate.run else None
+            paired = (
+                fallback_track(cfg, candidate.run.idea.track if candidate.run.idea else None).repeats
+                if unjudged(candidate) and candidate.run
+                else None
+            )
             bar = bar_of(s, parent).id if (asked is not None or paired) and parent is not None else None
             repeats = asked.repeats if asked is not None else paired or 1
             campaign_id, revision = campaign.id, candidate.revision
@@ -824,7 +808,8 @@ class RunController:
     ) -> CandidateId | None:
         """Turn each new version into a candidate, or find its existing candidate, then measure and judge it.
 
-        Return the id of the candidate of the run's last commit, unless scoring was cancelled. A tree that is already a candidate keeps that candidate, and its verdict unless another run
+        Return the id of the newest candidate of the run's versions that got a verdict, or None: none did, or scoring
+        was cancelled. A tree that is already a candidate keeps that candidate, and its verdict unless another run
         proposes it again (``ledger.reproposed``).
 
         The daemon judges each candidate with the campaign's config and evaluator at that moment, not at launch, against
@@ -849,7 +834,7 @@ class RunController:
         """
         with self._db.session() as s:
             run = s.get_one(Run, run_id)
-            name = run.idea.campaign.name
+            name = run.campaign.name
             scope = Scope.now(s, run, repo)
             bar_id = bar_of(s, run.base).id
             candidate = run.base
@@ -909,7 +894,9 @@ class RunController:
         for candidate_id in left:  # Rebased candidates that a daemon stop left unjudged.
             if not self._follow(scope, candidate_id, log_dir):
                 return None
-        return ids[-1]
+        with self._db.session() as s:
+            judged = s.scalars(select(Candidate.id).where(Candidate.id.in_(ids), Candidate.verdict.is_not(None)))
+            return max(judged, default=None)
 
     def _follow(self, scope: Scope, candidate_id: CandidateId, log_dir: Path) -> bool:
         """Measure a rebased candidate and judge it against its parent, the head it was merged onto.
@@ -1206,131 +1193,99 @@ class RunController:
                 s.commit()
         span.set(status=end.status, end=end, error=error)
 
-    def _settle(
-        self,
-        span: Span,
-        run_id: RunId,
-        idea_id: IdeaId,
-        end: RunEnd,
-        *,
-        startup_failed: bool,
-        last: CandidateId | None,
-    ) -> None:
-        """After the run's commits are judged, set the idea to ``open`` if it has attempts left, else to ``done``.
+    def _settle(self, run_id: RunId, end: RunEnd, last: CandidateId | None) -> None:
+        """After the run's commits are judged, end its ``scoring`` and its claim (``release``).
 
-        The run's ``scoring`` ends here, whatever the idea's status. If no agent of the run started to work
-        (``startup_failed``), the idea is ``dropped`` instead, attempts left or not. It was never tried, a new run would
-        fail the same way, and ``done`` would let the ideas that wait for it start without its result.
-
-        A run that did not succeed and made commits requeues its idea from them, attempts left or not, up to
-        ``recovery_requeues`` times of the run's role (``RecoveryRequeued`` events): the idea's base becomes the
-        candidate of the ``last`` commit, so a new implementer starts from it and finishes the work (``_requeue``).
-
-        A run whose implementer's escalation still waits for an answer (``open_escalation``) drops its idea first, whatever
-        its status. A new run would stop on the same question, and ``done`` would start the ideas that wait for it.
+        ``last`` is the newest candidate of the run's versions that got a verdict: it decides whether the idea is done. A run whose implementer's escalation still waits for an answer (``open_escalation``) drops its idea instead. A
+        new run would stop on the same question, and ``done`` would free the ideas that wait for it.
         """
         with self.launcher.lock:
-            if self.launcher.cancelled.is_set():  # stop() returns the idea to the queue; the run's end stands
+            if self.launcher.cancelled.is_set():  # stop() ends the claim; the run's end stands
                 return
             with self._db.session() as s:
-                run, idea = s.get_one(Run, run_id), s.get_one(Idea, idea_id)
+                run = s.get_one(Run, run_id)
                 run.scoring = False
-                if idea.status is IdeaStatus.CLAIMED:  # A human may have dropped it meanwhile.
-                    if run.end is RunEnd.CANCELLED:
-                        settle_cancelled(s, run)
-                    elif (asked := open_escalation(s, run)) is not None:
-                        idea.status = IdeaStatus.DROPPED
-                        s.add(
-                            Comment(
-                                target=TargetRef(IDEA, idea.id),
-                                author=DAEMON_ACTOR,
-                                kind=CommentKind.NOTE,
-                                body=f'dropped: run#{run_id} ended while its escalation comment#{asked} waits for an'
-                                ' answer. Answer it with a decision on this idea, which the next run reads in its'
-                                ' brief, then open the idea',
-                            )
+                idea = run.idea
+                if idea is not None and idea.status is IdeaStatus.CLAIMED and (asked := open_escalation(s, run)):
+                    idea.status = IdeaStatus.DROPPED
+                    s.add(
+                        Comment(
+                            target=TargetRef(IDEA, idea.id),
+                            author=DAEMON_ACTOR,
+                            kind=CommentKind.NOTE,
+                            body=f'dropped: run#{run_id} ended while its escalation comment#{asked} waits for an'
+                            ' answer. Answer it with a decision on this idea, then open the idea',
                         )
-                    elif last is not None and end is not RunEnd.FINISHED and _requeuable(s, run):
-                        _requeue(s, run, s.get_one(Candidate, last), end)
-                    elif startup_failed:
-                        idea.status = IdeaStatus.DROPPED
-                        s.add(
-                            Comment(
-                                target=TargetRef(IDEA, idea.id),
-                                author=DAEMON_ACTOR,
-                                kind=CommentKind.NOTE,
-                                body=f'dropped: no agent of run#{run_id} started to work; fix what stopped them (the'
-                                ' errors of its implementers, their anomaly.startup events), then open it',
-                            )
-                        )
-                    elif end is not RunEnd.FINISHED and attempts(idea) < idea.max_runs:
-                        idea.status = IdeaStatus.OPEN
-                    else:
-                        idea.status = IdeaStatus.DONE
+                    )
+                else:
+                    release(s, run, end, s.get(Candidate, last) if last is not None else None)
                 s.commit()
 
     def _context(
         self, s: Session, cfg: CampaignConfig, run: Run, base: Candidate, reader: Agent, timeout: float
     ) -> list[str]:
-        """Return the implementer's lines of context: its worktree, its time, the idea and its base.
+        """Return the worker's lines of context: its worktree, its time, its base, and how it takes an idea.
 
-        The comments on the idea and its runs are a section of their own (``idea_comments``).
+        The board is a section of its own (``queue``).
         """
         author = reader.signature
         lead = wrap_up_lead(timeout, cfg.roles.doing_runs()[run.role].wrap_up_lead)
-        idea = run.idea
-        track = cfg.track(idea.track)
-        evaluator_id = idea.campaign.evaluator_id
+        campaign = run.campaign
+        evaluator_id = campaign.evaluator_id
         at_base = ', '.join(f'{t.primary.name}={score(base, evaluator_id, t.primary)}' for t in cfg.all_tracks)
         lines = [
             '- Your cwd is your checkout: edit, run and save every version there. Only its versions are scored.'
-            f' The campaign repo, {idea.campaign.path}, is read-only for you.',
+            f' The campaign repo, {campaign.path}, is read-only for you.',
             f'- Your session ends {round(timeout / 60, 1):g} minutes after it starts, at `${DEADLINE_ENV}` (Unix time).'
             f' The daemon tells you to wrap up {round(lead / 60, 1):g} minutes before, between two tool calls: start'
             ' no command that can run past the deadline.',
-            f'- Starting from candidate#{base.id}: {at_base} — {base.summary}',
+            f'- Starting from candidate#{base.id}, the head: {at_base} — {base.summary}',
         ]
-        if base.run_id is not None and s.get_one(Run, base.run_id).idea_id == idea.id:
-            unmeasured = ' It was never measured.' if base.origin is Origin.RECOVERED else ''
-            lines.append(
-                f'- candidate#{base.id} is where run#{base.run_id}, an earlier run of this idea, stopped.{unmeasured}'
-                ' Read its diff against its parent, finish the work, and save what you would ship.'
-            )
         if (bar := bar_of(s, base)) is not base:
             at_bar = ', '.join(f'{t.primary.name}={score(bar, evaluator_id, t.primary)}' for t in cfg.all_tracks)
             lines.append(
                 f'- candidate#{base.id} is not your bar: your versions are judged against candidate#{bar.id}'
                 f' ({at_bar}).'
             )
-        if cfg.multitrack:
-            guards = ', '.join(
-                f'{m.name} ({criterion(m).limit()}' + (f', floor {m.floor:g})' if m.floor is not None else ')')
-                for m in track.guardrails
-            )
-            lines.append(
-                f'- Your track is {track.name}: a keep must improve {track.primary.name} ({track.primary.direction} is'
-                f' better) with confidence and hold {guards}.'
-            )
         lines += [
-            f"- Your idea's directory in the shared workspace: `./{WORKSPACE}/idea{idea.id}/` (in no version)."
-            f" `piloop restore {idea.campaign.name} <idea id>` writes back a done idea's files.",
-            f'- Leave a finding on your idea when you are done, piped into the SQL tool: INSERT INTO comments'
-            f" (target_kind, target_id, author, kind, body) VALUES ('idea', {idea.id}, '{author}', 'finding', '...').",
+            f"- Your idea's directory in the shared workspace: `./{WORKSPACE}/idea<your idea>/` (in no version)."
+            f" `piloop restore {campaign.name} <idea id>` writes back a done idea's files.",
+            '- Leave a finding on your idea when you are done, piped into the SQL tool: INSERT INTO comments'
+            f" (target_kind, target_id, author, kind, body) VALUES ('idea', <your idea>, '{author}', 'finding', '...').",
             '- Ask for what you cannot do or decide yourself with an escalation, never a note:'
-            f' `piloop escalate idea#{idea.id} --priority 1`, its form as JSON on stdin (`--guide` shows it).',
+            ' `piloop escalate idea#<your idea> --priority 1`, its form as JSON on stdin (`--guide` shows it).',
             '- The history below is what was tried in this campaign: do not repeat it; combine or go elsewhere.',
         ]
-        lines += ['', f'## Your idea (idea#{idea.id}): {idea.title}', idea.hypothesis.rstrip()]
-        if idea.provenance:
-            lines += ['', f'Proposed by {idea.created_by}, prompted by: {idea.provenance.strip()}']
-        if idea.plan:
-            lines += ['', '### Plan', idea.plan.rstrip()]
         return lines
+
+
+def track_brief(idea: Idea) -> str | None:
+    """What the track of a claimed ``idea`` asks of its run, for its worker: the keep rule, then the track's addendum.
+
+    The brief is written before the claim, so the claim answers this. None with one track: the brief says it all.
+    """
+    cfg = idea.campaign.config
+    if not cfg.multitrack:
+        return None
+    track = cfg.track(idea.track)
+    guards = ', '.join(
+        f'{m.name} ({criterion(m).limit()}' + (f', floor {m.floor:g})' if m.floor is not None else ')')
+        for m in track.guardrails
+    )
+    rule = (
+        f'Your run is on track {track.name}: a keep must improve {track.primary.name} ({track.primary.direction} is'
+        f' better) with confidence and hold {guards}.'
+    )
+    addendum = (Path(idea.campaign.path) / track.addendum).read_text().rstrip() if track.addendum else ''
+    return '\n\n'.join(p for p in (rule, addendum) if p)
 
 
 @dataclass(frozen=True)
 class Scope:
-    """The scope for scoring one candidate of a run: the run, the campaign's config and evaluator now, and the track."""
+    """The scope for scoring one candidate of a run: the run, the campaign's config and evaluator now, and the track.
+
+    The track is the claimed idea's, else the first: a run that claimed nothing is judged as on one track.
+    """
 
     run_id: RunId
     campaign_id: CampaignId
@@ -1343,10 +1298,18 @@ class Scope:
     @classmethod
     def now(cls, s: Session, run: Run, repo: Repository) -> Scope:
         """The scope of ``run``'s next candidate, so a candidate scored after ``piloop init`` uses its evaluator."""
-        campaign = run.idea.campaign
+        campaign = run.campaign
         cfg = campaign.config
         evaluator = current_evaluator(s, campaign, cfg)
-        return cls(run.id, campaign.id, cfg, cfg.track(run.idea.track), repo, evaluator.id, side(run))
+        return cls(
+            run.id,
+            campaign.id,
+            cfg,
+            fallback_track(cfg, run.idea.track if run.idea is not None else None),
+            repo,
+            evaluator.id,
+            side(run),
+        )
 
 
 @dataclass(frozen=True)
@@ -1364,18 +1327,22 @@ def wrap_up_lead(timeout: float, most: timedelta) -> float:
     return min(most.total_seconds(), timeout / 4)
 
 
+def about(run: Run) -> ColumnElement[bool]:
+    """Select the comments on ``run``, and on its idea once it claimed one."""
+    on_run = Comment.target == TargetRef(RUN, run.id)
+    return on_run if run.idea_id is None else on_run | (Comment.target == TargetRef(IDEA, run.idea_id))
+
+
 def finding_of(s: Session, run: Run, agent_session: AgentSession) -> Comment | None:
     """Return the first ``finding`` that ``agent_session`` signed on its run's idea or on the run, as ``<role>#<id>`` or ``run#<id>``.
 
     A finding is the implementer's report that it is done. Only the implementer's own finding counts: a relaunched run's dead
     implementer did not finish it.
     """
-    on_idea = Comment.target == TargetRef(IDEA, run.idea_id)
-    on_run = Comment.target == TargetRef(RUN, run.id)
     signed = (Agent(role=agent_session.kind, session=agent_session.id).signature, f'run#{run.id}')
     return s.scalars(
         select(Comment)
-        .where(on_idea | on_run, Comment.kind == FINDING, Comment.author.in_(signed))
+        .where(about(run), Comment.kind == FINDING, Comment.author.in_(signed))
         .order_by(Comment.id)
         .limit(1)
     ).first()
@@ -1468,12 +1435,10 @@ def open_escalation(s: Session, run: Run) -> CommentId | None:
     """
     sessions = s.scalars(select(AgentSession).where(working_on(run.id))).all()
     signed = [Agent(role=w.kind, session=w.id).signature for w in sessions]
-    on_idea = Comment.target == TargetRef(IDEA, run.idea_id)
-    on_run = Comment.target == TargetRef(RUN, run.id)
     asked = s.scalars(
         select(Comment)
         .where(
-            on_idea | on_run,
+            about(run),
             Comment.kind == CommentKind.ESCALATION,
             Comment.author.in_([*signed, f'run#{run.id}']),
         )
@@ -1483,44 +1448,6 @@ def open_escalation(s: Session, run: Run) -> CommentId | None:
     read = [p.comment for _, p in in_order(s, PromptOutcome, *on_agents) if p.kind == 'comment.delivered']
     replies = s.scalars(select(Comment.id).where(Comment.id.in_(read), Comment.author != DAEMON_ACTOR)).all()
     return next((e.id for e in asked if e.acked_at is None or not any(r > e.id for r in replies)), None)
-
-
-def _requeues(s: Session, idea: Idea) -> int:
-    """How many times ``_settle`` requeued the idea from a run's commits (its ``RecoveryRequeued`` events)."""
-    query = select(func.count()).where(Event.target == TargetRef(IDEA, idea.id), has(RecoveryRequeued))
-    return s.scalar(query) or 0
-
-
-def _requeuable(s: Session, run: Run) -> bool:
-    """Return whether the idea of ``run`` may be requeued from its commits.
-
-    The idea is still ``claimed`` (a human may have dropped it meanwhile), and the run's role allows one more requeue.
-    A role that ``piloop init`` removed while the run ran requeues nothing.
-    """
-    role = run.idea.campaign.config.roles.doing_runs().get(run.role)
-    claimed = run.idea.status is IdeaStatus.CLAIMED
-    return claimed and role is not None and _requeues(s, run.idea) < role.recovery_requeues
-
-
-def _requeue(s: Session, run: Run, last: Candidate, end: RunEnd) -> None:
-    """Requeue the idea of a run that ended ``end``, not finished, from its ``last`` version, with a note. The caller commits.
-
-    When the head moved past that version, a run from it would be a branch run, whose keeps never move the head. The
-    idea then starts on the head, and the note names the change to take.
-    """
-    idea = run.idea
-    trunk = head(s, idea.campaign)
-    moved = not run.branch and trunk is not None and branches(s, idea.campaign, last, trunk)
-    idea.status, idea.base_candidate_id = IdeaStatus.OPEN, None if moved else last.id
-    emit(s, RecoveryRequeued(run=run.id, candidate=last.id), TargetRef(IDEA, idea.id), System.DAEMON)
-    body = (
-        f'requeued on the head: run#{run.id} ended {end} after its versions, and the head moved past them. To start'
-        f' from them, take the change from {bar_of(s, run.base).revision} to {last.revision} onto the head'
-        if moved
-        else f'requeued from candidate#{last.id}: run#{run.id} ended {end} after its versions; the next run starts'
-        ' from its last one to finish the work'
-    )
-    s.add(Comment(target=TargetRef(IDEA, idea.id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
 
 
 def unmeasured_of(version: Version) -> Unmeasured | None:

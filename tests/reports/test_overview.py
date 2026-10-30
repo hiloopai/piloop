@@ -54,6 +54,7 @@ def idea(
 
 def run(s: Session, i: Idea, status: RunStatus, base: int, start: float, end: float | None, **kw: object) -> Run:
     row = Run(
+        campaign_id=i.campaign_id,
         idea_id=i.id,
         attempt=1,
         base_candidate_id=base,
@@ -148,7 +149,7 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
                 at=at(30) + timedelta(seconds=5),
             )
         )
-        pinned = idea(s, p, 'build on longer lines', IdeaStatus.CLAIMED, after=(good.id,), base_candidate_id=1)
+        pinned = idea(s, p, 'build on longer lines', IdeaStatus.CLAIMED, after=(good.id,))
         stuck = run(s, pinned, RunStatus.RUNNING, 1, 50, None)
         agent(s, p, IMPLEMENTER, 50, 300, run_id=stuck.id, usage=spent(2000))
         idea(s, p, 'after the crash', IdeaStatus.OPEN, after=(bad.id,))
@@ -339,7 +340,7 @@ def test_branches_and_notes_say_where_else_a_run_may_start(db: Database, campaig
     live_campaign(db, campaign)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        explore = idea(s, p, 'from the baseline', IdeaStatus.DONE, base_candidate_id=1)
+        explore = idea(s, p, 'from the baseline', IdeaStatus.DONE)
         branch = run(s, explore, RunStatus.SUCCEEDED, 1, 60, 70, branch=True)
         candidate(s, p, 1, Outcome.KEEP, 2, 65, run_id=branch.id)
         noted = candidate(s, p, 1, Outcome.INTERESTING, 0.5, 66, run_id=branch.id, verdict_by=f'run#{branch.id}')
@@ -356,7 +357,7 @@ def test_branches_and_notes_say_where_else_a_run_may_start(db: Database, campaig
 - Lineages (latest keep of each; a branch keep never moves the head):
   - trunk from candidate#1 (keep): latest candidate#2 3, 2 kept
   - branch from candidate#1 (keep): latest candidate#6 —, 2 kept
-- Notes (regressed, kept in view as leads; pin one with base_candidate_id):
+- Notes (regressed, kept in view as leads; a worker takes the change of one):
   - candidate#5 0.5 by run#4: halves the eval time; against candidate#1: score 0.5 vs 1
 
 """)

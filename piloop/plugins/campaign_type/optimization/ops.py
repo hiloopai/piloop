@@ -25,7 +25,7 @@ def note_candidate(
     follow_ups: Sequence[str] = (),
     track: TrackName | None = None,
 ) -> tuple[Candidate, list[Idea]]:
-    """Keep a regressed result in view as a lead (``set_verdict``, ``Cause.NOTE``), with an idea pinned to it per follow-up.
+    """Keep a regressed result in view as a lead (``set_verdict``, ``Cause.NOTE``), with an open idea about it per follow-up.
 
     The follow-ups are on ``track``, else on the track of the candidate's run. Returns the candidate and the new ideas.
 

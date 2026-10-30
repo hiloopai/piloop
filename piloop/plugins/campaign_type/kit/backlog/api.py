@@ -1,4 +1,4 @@
-"""The backlog's routes: ideas, their links, bases, tracks and statuses."""
+"""The backlog's routes: ideas, claims, their links, tracks and statuses."""
 
 from http import HTTPStatus
 from typing import Annotated
@@ -19,7 +19,7 @@ from piloop.plugins.campaign_type.kit.backlog.ideas import idea_row, idea_view
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.backlog.wire import (
-    BaseBody,
+    Claimed,
     IdeaAnswer,
     IdeaBody,
     IdeaDetail,
@@ -28,11 +28,13 @@ from piloop.plugins.campaign_type.kit.backlog.wire import (
     IdeasQuery,
     PriorityBody,
     PriorityChanged,
+    ProposeBody,
     StatusBody,
     StatusChanged,
     TrackBody,
     TrackChanged,
 )
+from piloop.plugins.campaign_type.kit.runs.controller import track_brief
 
 router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUSALS_DOCUMENTED)
 """The backlog's routes, beside the API's."""
@@ -113,12 +115,31 @@ def add_idea(s: Writing, me: Acting, campaign: Addressed, body: IdeaBody) -> Ide
         plan=body.plan,
         provenance=body.provenance,
         priority=body.priority,
-        harness=body.harness,
-        base=body.base,
         track=body.track,
         after=body.after,
     )
     return _idea_answer(s, idea)
+
+
+@router.post('/ideas/{idea}/claim', operation_id='claim', dependencies=[Depends(actor_access)])
+def claim(s: Writing, me: Acting, idea: AddressedIdea) -> Claimed:
+    """Claim an open idea for the caller's run, which works on it until the run ends, and say what its track asks."""
+    return _claimed(s, backlog_ops.claim(s, idea.id, actor=me))
+
+
+@router.post('/proposals', operation_id='propose', dependencies=[Depends(actor_access)])
+def propose(s: Writing, me: Acting, body: ProposeBody) -> Claimed:
+    """Add a worker's own idea to the board of its run's campaign, and claim it for the run."""
+    idea = backlog_ops.propose(
+        s,
+        body.title,
+        actor=me,
+        hypothesis=body.hypothesis,
+        plan=body.plan,
+        provenance=body.provenance,
+        track=body.track,
+    )
+    return _claimed(s, idea)
 
 
 @router.post('/ideas/{idea}/status', operation_id='set_status', dependencies=[Depends(actor_access)])
@@ -144,13 +165,6 @@ def unlink(s: Writing, me: Acting, idea: AddressedIdea, kind: LinkKind, target: 
     return _idea_answer(s, idea)
 
 
-@router.post('/ideas/{idea}/base', operation_id='set_base', dependencies=[Depends(actor_access)])
-def set_base(s: Writing, me: Acting, idea: AddressedIdea, body: BaseBody) -> IdeaAnswer:
-    """Set the candidate that an idea's runs start from, or clear the pin."""
-    backlog_ops.set_base(s, idea.id, body.base, reason=body.reason, actor=me)
-    return _idea_answer(s, idea)
-
-
 @router.post('/ideas/{idea}/track', operation_id='set_track', dependencies=[Depends(actor_access)])
 def set_track(s: Writing, me: Acting, idea: AddressedIdea, body: TrackBody) -> TrackChanged:
     """Move an idea to another track of its campaign, with a note on the idea that says why."""
@@ -158,6 +172,12 @@ def set_track(s: Writing, me: Acting, idea: AddressedIdea, body: TrackBody) -> T
     s.commit()
     with db_feed.snapshot(s) as cursor:
         return TrackChanged(cursor=cursor, idea=idea_view(idea), was=was)
+
+
+def _claimed(s: Session, idea: Idea) -> Claimed:
+    s.commit()
+    with db_feed.snapshot(s) as cursor:
+        return Claimed(cursor=cursor, idea=idea_view(idea), track=track_brief(idea))
 
 
 def _idea_answer(s: Session, idea: Idea) -> IdeaAnswer:

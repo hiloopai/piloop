@@ -126,9 +126,8 @@ class Auditor(SweepRole):
 
 
 class Quick(ImplementerRole):
-    """``quick``: an implementer of the ideas of priority 3 and more."""
+    """``quick``: an implementer with a short timeout and one slot."""
 
-    takes: str | None = 'priority >= 3'
     timeout: float = 60
     max_concurrent: int = 1
 
@@ -136,7 +135,6 @@ class Quick(ImplementerRole):
 class Fast(ImplementerRole):
     """A role whose default runtime is ``nice``, a runtime only once a test installs it: defaults are not validated."""
 
-    takes: str | None = 'priority >= 9'
     runtime: RuntimeName | None = 'nice'
 
 

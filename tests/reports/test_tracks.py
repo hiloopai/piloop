@@ -29,7 +29,6 @@ TRACKS = {
         {'name': 'score', 'direction': 'higher', 'role': 'primary', 'margin': 1, 'floor': 0.5},
         {'name': 'size', 'direction': 'lower', 'role': 'primary', 'margin': 2, 'floor': 20},
     ],
-    'tracks': {'score': {'share': 0.75}, 'size': {'share': 0.25}},
 }
 """Two tracks named after the metrics of the test campaign, so the ideas of ``campaign`` (on ``score``) still fit."""
 
@@ -41,13 +40,13 @@ def two_tracks(db: Database, campaign: Campaign) -> CampaignConfig:
         p = s.get_one(Campaign, campaign.id)
         cfg = reconfigured(p.config, **TRACKS)
         p.config = cfg
-        lighter = Run(idea_id=3, attempt=2, base_candidate_id=2, harness='script', model='m')
+        lighter = Run(campaign_id=campaign.id, idea_id=3, attempt=2, base_candidate_id=2, harness='script', model='m')
         s.add(lighter)
         s.flush()
         s.get_one(Candidate, 1).measurements[0].metrics = {'score': 1.0, 'size': 12.0}
         kept = candidate(s, p, 2, Outcome.KEEP, 3, 60, run_id=lighter.id)
         kept.measurements[0].metrics = {'score': 3.0, 'size': 8.0}
-        lighter.idea.track = TrackName('size')
+        s.get_one(Idea, 3).track = TrackName('size')
         s.commit()
     return cfg
 
@@ -71,12 +70,12 @@ def test_status_names_every_track_its_head_its_floor_and_what_works_on_it(db: Da
         text,
         '## Goal',
         '- Tracks, each a primary its keeps improve while holding the others:'
-        ' score (score, higher, margin 1, floor 0.5, share 0.75); size (size, lower, margin 2, floor 20, share 0.25)',
+        ' score (score, higher, margin 1, floor 0.5); size (size, lower, margin 2, floor 20)',
         '## Tracks',
         '- score: score 3 at the head (+2 on the start); floor 0.5, 2.5 to spare; 1 trunk keeps,'
-        ' the latest candidate#2 1h ago; share 0.75 of 1 slots, 0 running; 1 open ideas.',
+        ' the latest candidate#2 1h ago; 0 running; 1 open ideas.',
         '- size: size 8 at the head (-4 on the start); floor 20, 12 to spare; 1 trunk keeps,'
-        ' the latest candidate#4 1h ago; share 0.25 of 1 slots, 2 running; 1 open ideas.',
+        ' the latest candidate#4 1h ago; 2 running; 1 open ideas.',
         '## Trajectory',
         '- Start candidate#1, head candidate#4: score 1 → 3 (+2, +200.0%); size 12 → 8 (-4, -33.3%); 2 trunk keeps.',
         '  - 10-01 12:18 candidate#2 [score] score 3 (+2) idea#1: score 3',
@@ -96,8 +95,8 @@ def test_status_of_a_campaign_with_no_candidate_says_there_is_no_baseline_yet(db
         s.commit()
     shown = render(db, bare).split('## Tracks\n\n')[1].split('## Runs')[0]
     assert shown == snapshot("""\
-- score: no baseline yet; floor 0.5; 0 trunk keeps; share 0.75 of 1 slots, 0 running; 0 open ideas.
-- size: no baseline yet; floor 20; 0 trunk keeps; share 0.25 of 1 slots, 0 running; 0 open ideas.
+- score: no baseline yet; floor 0.5; 0 trunk keeps; 0 running; 0 open ideas.
+- size: no baseline yet; floor 20; 0 trunk keeps; 0 running; 0 open ideas.
 
 ## Trajectory
 
@@ -154,7 +153,9 @@ def test_watch_shows_the_head_per_track(db: Database, campaign: Campaign) -> Non
 def test_lineages_show_every_track_primary_of_their_latest_keep(db: Database, campaign: Campaign) -> None:
     two_tracks(db, campaign)
     with db.session() as s:
-        branch = Run(idea_id=1, attempt=2, base_candidate_id=1, harness='script', model='m', branch=True)
+        branch = Run(
+            campaign_id=campaign.id, idea_id=1, attempt=2, base_candidate_id=1, harness='script', model='m', branch=True
+        )
         s.add(branch)
         s.flush()
         candidate(s, s.get_one(Campaign, campaign.id), 1, Outcome.KEEP, 2, 70, run_id=branch.id)
@@ -178,4 +179,4 @@ def test_a_keep_counts_on_the_track_of_its_verdict_not_of_its_run(db: Database, 
         s.commit()
     tracks = render(db, campaign).split('## Tracks')[1].split('## Trajectory')[0]
     assert '- score: score 3 at the head (+2 on the start); floor 0.5, 2.5 to spare; 0 trunk keeps;' in tracks
-    assert '1h ago; share 0.75' not in tracks and '2 trunk keeps, the latest candidate#4 1h ago' in tracks
+    assert 'candidate#2 1h ago' not in tracks and '2 trunk keeps, the latest candidate#4 1h ago' in tracks

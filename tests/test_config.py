@@ -11,13 +11,12 @@ from inline_snapshot import snapshot
 
 from piloop import config as config_module
 from piloop.agents.roles import filed
-from piloop.campaign.campaigns import check_takes
 from piloop.config import CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.ids import RoleName
 from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
 from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
-from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole
+from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole, TrackConfig
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
@@ -29,7 +28,6 @@ from piloop.plugins.executor.workers import Workers
 from piloop.plugins.fact_source.contract import FACT_SOURCES
 from piloop.plugins.fact_source.models import ModelFacts
 from piloop.plugins.harness.contract import Harness, each_provider
-from piloop.plugins.host import Check
 from piloop.plugins.metric import Direction
 from piloop.plugins.role.contract import Files, ImplementerRole
 from piloop.plugins.role.orchestrator import OrchestratorRole
@@ -310,7 +308,7 @@ def test_metric_roles_are_validated(campaign_path: Path) -> None:
     guard = {'name': 'size', 'direction': 'lower', 'role': 'guardrail', 'margin': 3, 'floor': 10}
     cfg = load_campaign_config(campaign_path, metrics=[primary, guard])
     [track] = cfg.all_tracks
-    assert (track.name, track.primary.name, track.share, track.addendum) == ('score', 'score', 1, None), (
+    assert (track.name, track.primary.name, track.addendum) == ('score', 'score', None), (
         'one primary is one track named after it, with nothing to configure'
     )
     assert ([m.name for m in cfg.guardrails], [m.name for m in track.guardrails]) == (['size'], ['size'])
@@ -344,38 +342,35 @@ def test_metric_roles_are_validated(campaign_path: Path) -> None:
 
 ACCURACY = {'name': 'score', 'direction': 'higher', 'role': 'primary', 'track': 'accuracy', 'margin': 1, 'floor': 2}
 COST = {'name': 'size', 'direction': 'lower', 'role': 'primary', 'track': 'serving', 'margin': 5}
-SHARES = {'accuracy': {'share': 0.75, 'addendum': 'briefs/accuracy.md'}, 'serving': {'share': 0.25}}
+ADDENDA = {'accuracy': {'addendum': 'briefs/accuracy.md'}}
 
 
-def test_tracks_are_primaries_each_with_a_margin_a_table_and_a_share(campaign_path: Path) -> None:
-    cfg = load_campaign_config(campaign_path, metrics=[ACCURACY, COST], tracks=SHARES)
+def test_tracks_are_primaries_each_with_a_margin_and_a_table_only_for_an_addendum(campaign_path: Path) -> None:
+    cfg = load_campaign_config(campaign_path, metrics=[ACCURACY, COST], tracks=ADDENDA)
     assert cfg.multitrack
-    assert [(t.name, t.primary.name, t.share, t.addendum, [m.name for m in t.guardrails]) for t in cfg.all_tracks] == [
-        ('accuracy', 'score', 0.75, 'briefs/accuracy.md', ['size']),
-        ('serving', 'size', 0.25, None, ['score']),
-    ]
+    assert [(t.name, t.primary.name, t.addendum, [m.name for m in t.guardrails]) for t in cfg.all_tracks] == [
+        ('accuracy', 'score', 'briefs/accuracy.md', ['size']),
+        ('serving', 'size', None, ['score']),
+    ], 'serving needs no table'
     assert CampaignConfig.model_validate(cfg.model_dump(mode='json')) == cfg, 'round-trips through the campaign row'
-    tracks = {'metrics': [ACCURACY, COST], 'tracks': SHARES}
+    tracks = {'metrics': [ACCURACY, COST], 'tracks': ADDENDA}
     refusals = {
         r"tracks \['accuracy'\] have more than one primary": {'metrics': [ACCURACY, {**COST, 'track': 'accuracy'}]},
         r"primaries \['size'\] need a margin or a fraction": {
             **tracks,
             'metrics': [ACCURACY, {**COST, 'margin': None}],
         },
-        r"tracks \['serving'\] need a \[tracks.<name>\] table": {**tracks, 'tracks': {'accuracy': {'share': 1}}},
         r"\[tracks\] \['speed'\] name no track a primary declares": {
             **tracks,
-            'tracks': {**SHARES, 'speed': {'share': 0}},
+            'tracks': {**ADDENDA, 'speed': {}},
         },
-        'track shares sum to 0.9, not 1': {**tracks, 'tracks': {**SHARES, 'serving': {'share': 0.15}}},
-        r'track shares sum to 0.5, not 1': {'tracks': {'score': {'share': 0.5}}},
         "the stop rule 'limits' limits the head, which needs a campaign of one track": {
             **tracks,
             'plugins': {'stop_rule': {'target': 3}},
         },
         "'briefs/../x' must be a relative path inside the repo": {
             **tracks,
-            'tracks': {**SHARES, 'serving': {'share': 0.25, 'addendum': 'briefs/../x'}},
+            'tracks': {**ADDENDA, 'serving': {'addendum': 'briefs/../x'}},
         },
     }
     for message, overrides in refusals.items():
@@ -387,7 +382,7 @@ def test_tracks_are_primaries_each_with_a_margin_a_table_and_a_share(campaign_pa
         {'name': 'score', 'direction': 'higher', 'role': 'primary'},
         {**COST, 'role': 'guardrail', 'track': None},
     ]
-    assert load_campaign_config(campaign_path, metrics=[ACCURACY, COST], tracks=SHARES).evaluator_key == (
+    assert load_campaign_config(campaign_path, metrics=[ACCURACY, COST], tracks=ADDENDA).evaluator_key == (
         load_campaign_config(campaign_path, metrics=guarded).evaluator_key
     ), 'tracks, margins and floors are verdict policy: they re-measure nothing'
 
@@ -410,7 +405,6 @@ def test_the_evaluator_is_what_scores_the_judging_metrics_not_how_the_verdict_re
         'a primary that is a guardrail now': key(
             {**primary, 'track': 'a', 'margin': 1},
             {**size, 'role': 'primary', 'track': 'b'},
-            tracks={'a': {'share': 0.5}, 'b': {'share': 0.5}},
         ),
         'another order of the metrics': key(size, primary),
         'a verdict rule': key(primary, size, plugins={'verdict_rule': {'confidence': 0.9}}),
@@ -452,7 +446,7 @@ def test_repeats_marks_a_noisy_metric_and_a_track_pairs_with_the_largest_repeats
             campaign_path, metrics=[primary, {**timing, 'repeats': None}, {**cpu, 'repeats': None}]
         ).evaluator_key
     ), 'repeats is verdict policy: it re-measures nothing'
-    serving = load_campaign_config(campaign_path, metrics=[ACCURACY, {**COST, 'repeats': 3}], tracks=SHARES)
+    serving = load_campaign_config(campaign_path, metrics=[ACCURACY, {**COST, 'repeats': 3}], tracks=ADDENDA)
     assert [t.repeats for t in serving.all_tracks] == [3, 3], 'the primary of another track is a guardrail'
     with pytest.raises(ValueError, match="'size': repeats applies to primaries and guardrails only"):
         load_campaign_config(campaign_path, metrics=[primary, {'name': 'size', 'direction': 'lower', 'repeats': 3}])
@@ -568,18 +562,13 @@ def test_a_table_with_a_new_name_defines_a_role_that_needs_a_prompt_file_and_tri
 
 
 def test_a_table_with_runs_defines_a_role_that_does_runs_with_the_implementer_defaults(campaign_path: Path) -> None:
-    quick = {'runs': True, 'takes': "priority >= 3 OR track = 'speed'", 'timeout': 60, 'max_concurrent': 1}
+    quick = {'runs': True, 'timeout': 60, 'max_concurrent': 1}
     cfg = load_campaign_config(campaign_path, plugins={'role': {'quick': quick}})
     assert list(cfg.roles.all()) == ['implementer', 'orchestrator', 'research', 'watchdog', 'quick']
     assert list(cfg.roles.doing_runs()) == ['quick', 'implementer'], 'the roles of the file fill their slots first'
     assert list(cfg.roles.sweeping()) == ['orchestrator', 'research', 'watchdog']
     role = cfg.roles.doing_runs()[RoleName('quick')]
-    assert (role.prompt, role.PROMPT, filed(role), role.explore_every) == (
-        None,
-        ImplementerRole.PROMPT,
-        Files.NOTHING,
-        4,
-    )
+    assert (role.prompt, role.PROMPT, filed(role), role.timeout) == (None, ImplementerRole.PROMPT, Files.NOTHING, 60)
     assert cfg.run_slots == 1 + cfg.roles.doing_runs()[IMPLEMENTER].max_concurrent
     assert CampaignConfig.model_validate(cfg.model_dump(mode='json')) == cfg, 'round-trips through the campaign row'
 
@@ -588,35 +577,8 @@ def test_a_table_with_runs_defines_a_role_that_does_runs_with_the_implementer_de
             load_campaign_config(campaign_path, plugins={'role': roles})
         return str(e.value).split('\n', 1)[1]
 
-    def refused(takes: str) -> str:
-        cfg = load_campaign_config(campaign_path, plugins={'role': {'quick': {'runs': True, 'takes': takes}}})
-        with pytest.raises(ConfigError) as e:
-            check_takes(campaign_path, cfg)
-        return str(e.value).split('\n', 1)[1]
-
-    assert "plugins.role.quick.takes = 'priority >>= 3': the condition does not run on the ideas table" in refused(
-        'priority >>= 3'
-    )
-    assert 'no such column: nope' in refused('nope = 1')
-    role = load_campaign_config(campaign_path, plugins={'role': {'quick': {'runs': True, 'takes': 'nope = 1'}}})
-    assert role.roles.doing_runs()[RoleName('quick')].checks() == [
-        Check(
-            "takes 'nope = 1'",
-            'does not run on the ideas table: no such column: nope',
-            'fix it in piloop.toml, then `piloop init`',
-        )
-    ], 'piloop doctor runs it on the stored config, which an upgrade can leave behind the schema'
-    assert role.roles.doing_runs()[IMPLEMENTER].checks() == [], 'it takes every idea'
-    taking = load_campaign_config(campaign_path, plugins={'role': {'quick': {'runs': True, 'takes': 'priority > 1'}}})
-    assert taking.roles.doing_runs()[RoleName('quick')].checks() == [
-        Check("takes 'priority > 1'", 'runs on the ideas table')
-    ]
-    assert 'You did not supply a value for binding parameter :campaign' in refused('campaign_id = :campaign')
     assert 'plugins.role.quick.triggers: Extra inputs are not permitted' in fails(
         {'quick': {'runs': True, 'triggers': []}}
-    )
-    assert "plugins.role.quick.takes = 'priority > 1': Extra inputs are not permitted" in fails(
-        {'quick': {'takes': 'priority > 1', 'triggers': []}}
     )
     assert 'plugins.role.watchdog.runs = True: Input should be False' in fails({'watchdog': {'runs': True}})
     assert 'plugins.role.implementer.runs = False: Input should be True' in fails({'implementer': {'runs': False}})
@@ -809,6 +771,35 @@ def test_the_leaking_funnel_of_0_5_loads_without_the_trigger_and_warns(campaign_
     ], 'the line of each'
     assert [type(t).__name__ for t in cfg.triggers_of(WATCHDOG)] == ['RunFailed']
     assert [type(t).__name__ for t in cfg.triggers_of(RESEARCH)] == ['StalledTrigger'], 'its list is left as it is'
+
+
+def test_the_keys_that_assigned_ideas_of_0_5_load_without_them_and_warn(campaign_path: Path) -> None:
+    toml = campaign_path / 'piloop.toml'
+    keys = 'takes = "priority < 3"\nexplore_every = 4\nrecovery_requeues = 1\n'
+    toml.write_text(toml.read_text().replace('[plugins.role.implementer]\n', f'[plugins.role.implementer]\n{keys}'))
+    lines = toml.read_text().splitlines()
+    with pytest.warns(PiloopDeprecationWarning, match='workers claim their ideas now') as warned:
+        cfg = load_campaign_config(campaign_path)
+    assert sorted(w.lineno for w in warned) == sorted(
+        lines.index(line) + 1 for line in ('takes = "priority < 3"', 'explore_every = 4', 'recovery_requeues = 1')
+    ), 'the line of each'
+    assert IMPLEMENTER in cfg.roles.doing_runs()
+
+
+def test_a_track_share_of_0_5_loads_without_it_and_warns(campaign_path: Path) -> None:
+    """``share`` is removed: workers claim any open idea. A table that it leaves empty goes too."""
+    toml = campaign_path / 'piloop.toml'
+    text = toml.read_text()
+    toml.write_text(f'{text}\n[tracks.score]\nshare = 1.0\n')
+    lines = toml.read_text().splitlines()
+    with pytest.warns(PiloopDeprecationWarning, match=r'\[tracks\] share is removed') as warned:
+        cfg = load_campaign_config(campaign_path)
+    assert [w.lineno for w in warned] == [lines.index('share = 1.0') + 1], 'at its line'
+    assert cfg.tracks == {}, 'the table that it leaves empty goes'
+    toml.write_text(f'{text}\n[tracks.score]\nshare = 1.0\naddendum = "brief.md"\n')
+    with pytest.warns(PiloopDeprecationWarning, match=r'\[tracks\] share is removed'):
+        cfg = load_campaign_config(campaign_path)
+    assert cfg.tracks == {TrackName('score'): TrackConfig(addendum='brief.md')}, 'a table with more keeps the rest'
 
 
 def test_the_seed_trigger_of_0_5_loads_without_the_trigger_and_warns(campaign_path: Path) -> None:

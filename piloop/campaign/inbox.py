@@ -326,7 +326,7 @@ def _owner_branches(
         (target_kind == IDEA, select(Idea.campaign_id).where(Idea.id == target_id).scalar_subquery()),
         (
             target_kind == RUN,
-            select(Idea.campaign_id).join(Run.idea).where(Run.id == target_id).scalar_subquery(),
+            select(Run.campaign_id).where(Run.id == target_id).scalar_subquery(),
         ),
         (
             target_kind == CANDIDATE,

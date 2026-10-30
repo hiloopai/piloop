@@ -7,7 +7,7 @@ from piloop.plugins.campaign_type.kit.backlog.ideas import claimable
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.evaluation.measure import known, score
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
-from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import baseline, head, track_of, trunk_keeps
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.reports.overview import num
@@ -17,8 +17,8 @@ from piloop.text import age, metric
 class Tracks(Section):
     """One line per track. Nothing with one track.
 
-    A line shows the track's primary at the head against the start and its floor, its trunk keeps, its share of the
-    implementer slots against its open runs, and its runnable and proposed ideas.
+    A line shows the track's primary at the head against the start and its floor, its trunk keeps, its open runs, and
+    its open ideas.
     """
 
     SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
@@ -33,7 +33,11 @@ class Tracks(Section):
         trunk = head(s, campaign)
         first = baseline(s, campaign)
         steps = [c for c in trunk_keeps(s, campaign) if c.run_id is not None]
-        open_runs = campaign_runs(campaign.id).where(Run.status.in_(OPEN_RUNS)).with_only_columns(Idea.track)
+        open_runs = (
+            select(Idea.track)
+            .join(Run, Run.idea_id == Idea.id)
+            .where(Run.campaign_id == campaign.id, Run.status.in_(OPEN_RUNS))
+        )
         running = Counter(s.scalars(open_runs))
         tracks = select(Idea.track).where(Idea.campaign_id == campaign.id)
         ready = Counter(s.scalars(tracks.where(claimable())))
@@ -53,7 +57,7 @@ class Tracks(Section):
             at = f'{m.name} {num(value)} at the head{gain}' if first is not None else 'no baseline yet'
             lines.append(
                 f'- {track.name}: {at}{floor}; {len(mine)} trunk keeps{latest};'
-                f' share {track.share:g} of {cfg.run_slots} slots, {running[track.name]} running;'
+                f' {running[track.name]} running;'
                 f' {ready[track.name]} open ideas.'
             )
         return Rendered(title='Tracks', blocks=(Lines(lines=tuple(lines)),))

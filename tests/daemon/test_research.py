@@ -5,6 +5,7 @@ import shlex
 import sys
 from pathlib import Path
 
+import pytest
 from git import Repo
 from sqlalchemy import select
 
@@ -26,6 +27,8 @@ from piloop.settings import Settings
 from tests.conftest import RESEARCH, SETTLE, ScriptRuntime, factory, run_all, serving, serving_api
 from tests.daemon.test_triggers import LOW_WATER, add_ideas, configure, finish_a_run, last_reason, low_water, occupy
 
+pytestmark = pytest.mark.usefixtures('no_fresh_runs')
+
 PYTHON = shlex.quote(sys.executable)
 FAKE_RESEARCHER = f"""#!/bin/sh
 # a research harness stand-in: proposes through `idea add` (signed by its PILOOP_ACTOR), reports through SQL
@@ -37,7 +40,7 @@ git rev-parse HEAD > workspace/head.txt
 echo note >> solve.txt
 git commit -qam "a sweep may try things"
 {PYTHON} -m piloop idea add "$name" 'target encoding' --hypothesis 'categoricals carry signal' --plan 'encode, refit' \\
-  --priority 1 --base 1 --from 'loss table workspace/research/losses.md'
+  --priority 1 --from 'loss table workspace/research/losses.md'
 {PYTHON} -m piloop sql "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('campaign', $campaign, '$sig', 'finding', 'proposed target encoding; rejected bigger trees (tried in evaluation#1)')"
 """
 
@@ -62,10 +65,9 @@ def test_research_sweep_inserts_ideas_signed_with_its_implementer_id(
             None,
         )
         [idea] = s.scalars(select(Idea)).all()
-        assert (idea.created_by, idea.status, idea.priority, idea.base_candidate_id, idea.title) == (
+        assert (idea.created_by, idea.status, idea.priority, idea.title) == (
             'research#1',
             IdeaStatus.OPEN,
-            1,
             1,
             'target encoding',
         )
@@ -158,7 +160,7 @@ def test_a_stalled_sweep_adds_its_pivot_however_full_the_backlog(
         assert added_by(s, campaign.id) >= {'research#1'}, 'the sweep added an idea: no back-off'
 
 
-def test_with_several_tracks_research_reads_them_and_which_are_short_of_their_share(
+def test_with_several_tracks_research_reads_them_and_names_the_track_of_each_idea(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     configure(db, campaign, '#!/bin/sh\ncat ../brief.md > workspace/brief-seen.txt\n', research={'max_ideas': 1})
@@ -168,7 +170,6 @@ def test_with_several_tracks_research_reads_them_and_which_are_short_of_their_sh
                 {'name': 'score', 'direction': 'higher', 'role': 'primary', 'track': 'accuracy', 'margin': 1},
                 {'name': 'size', 'direction': 'lower', 'role': 'primary', 'track': 'cost', 'margin': 5},
             ],
-            'tracks': {'accuracy': {'share': 0.5}, 'cost': {'share': 0.5}},
             'plugins': {'role': {'research': {'max_ideas': 1, 'timeout': 20}, 'implementer': {'max_concurrent': 2}}},
         }
         s.get_one(Campaign, campaign.id).config = load_campaign_config(Path(campaign.path), **tracks)
@@ -180,9 +181,6 @@ def test_with_several_tracks_research_reads_them_and_which_are_short_of_their_sh
     scheduler.stop(timeout=5)
     brief = (tmp_path / 'projects' / str(campaign.id) / 'workspace' / 'brief-seen.txt').read_text()
     assert '- Your cwd is a detached checkout of candidate#1, the head (score=1.0, size=5.0)' in brief
-    assert (
-        '- Tracks short of their share of the backlog: accuracy 2 (0 of 2 runnable), cost 2 (0 of 2 runnable).'
-        ' Give every idea the track it serves (`--track`); fill the short ones first.'
-    ) in brief
-    assert '- Tracks: accuracy (primary score, higher is better; share 0.5); cost (primary size, lower' in brief
+    assert '- Give every idea the track it serves (`--track`).' in brief
+    assert '- Tracks: accuracy (primary score, higher is better); cost (primary size, lower' in brief
     assert '## Tracks\n\n- accuracy: score 1 at the head (+0 on the start); 0 trunk keeps;' in brief

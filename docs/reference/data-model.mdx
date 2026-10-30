@@ -21,15 +21,16 @@ The `optimization` campaign type's tables hold the research:
 
 - An **idea** is something to try. `idea_links` relates two ideas of one campaign: one runs `after` the other.
   `ideas.track` is the name of a track in `piloop.toml`.
-- A **run** is one attempt at an idea. Its agent session has its `run_id`.
+- A **run** is one implementer session of a campaign, from the head. Its `idea_id` is the idea that it claimed, null
+  until it claims one. Its agent session has the run as its subject.
 - A **candidate** is a distinct state of the code. Its git tree identifies it, and `parent_id` is its lineage.
 - An **evaluator** is one version of the evaluate command and the metrics. `piloop init` adds one when they change.
   A **measurement** is one run of an evaluator on a candidate.
 - A **technique** is an outside technique that a scout sweep of piloop 0.5 or earlier found. Nothing writes them now.
 
 The memory's tables (`lessons`, `documents`, `journal`) and the archive's (`archives`) are their providers'.
-Three columns hold a candidate id or an evaluator id without a foreign key: `campaigns.evaluator_id`,
-`ideas.base_candidate_id` and `runs.base_candidate_id`. The foreign keys would make a cycle.
+Two columns hold a candidate id or an evaluator id without a foreign key: `campaigns.evaluator_id` and
+`runs.base_candidate_id`. The foreign keys would make a cycle.
 
 Each line of the diagram is a foreign key, labeled with its column. The [database schema](/reference/schema) has the
 full DDL with the indexes, by the plugin that owns each table.

@@ -16,11 +16,12 @@ from piloop.plugins.archive.contract import CONSUMER, ArchiveHost
 from piloop.plugins.archive.local import LocalArchive, archiver as archiver_module
 from piloop.plugins.archive.local.store import Pruned
 from piloop.plugins.archive.local.tables import Archive
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.workers import Workers
 from tests.archive.test_store import files
-from tests.conftest import SETTLE, ScriptRuntime, factory, run_all, serving, wait_until, write_toml
+from tests.conftest import SETTLE, ScriptRuntime, factory, queued, run_all, serving, wait_until, write_toml
 from tests.daemon.test_scheduler import add_ideas
 
 HARNESS_LEAVES_AN_ARRAY = (
@@ -52,6 +53,7 @@ def test_the_tick_archives_an_idea_once_its_run_is_judged_and_leaves_its_files_f
     (idea,) = add_ideas(db, campaign, 'leaves an array')
     assert idea == 1
     workspace = workspace_dir(tmp_path, campaign.id)
+    assert queued(db, scheduler, campaign.id, IdeaId(idea)) == [1]
     assert run_all(scheduler) == [1]
     scheduler.wait(SETTLE)
     assert files(workspace) == {'idea1/x.npy': b'array\n'}

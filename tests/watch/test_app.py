@@ -198,6 +198,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
         s.get_one(Candidate, 1).created_at = ago(hours=3)
         done = idea(s, p, 'more lines', IdeaStatus.DONE, created_at=ago(hours=3))
         run = Run(
+            campaign_id=done.campaign_id,
             idea=done,
             attempt=1,
             base_candidate_id=1,
@@ -229,7 +230,15 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
             s.flush()
             s.add(Measurement(candidate_id=n, evaluator_id=1, metrics={'score': value, 'size': 1}, seconds=2))
         live = idea(s, p, 'longer lines', IdeaStatus.CLAIMED, created_at=ago(minutes=20))
-        live_run = Run(idea=live, attempt=1, base_candidate_id=4, harness='pi', model='m', status=RunStatus.RUNNING)
+        live_run = Run(
+            campaign_id=live.campaign_id,
+            idea=live,
+            attempt=1,
+            base_candidate_id=4,
+            harness='pi',
+            model='m',
+            status=RunStatus.RUNNING,
+        )
         s.add(live_run)
         s.flush()
         idea(s, p, 'shorter lines', IdeaStatus.OPEN, priority=1, created_at=ago(minutes=5))

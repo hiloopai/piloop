@@ -1,4 +1,4 @@
-"""The operations on the backlog that the API and the CLI run: ideas, links, bases, tracks and statuses."""
+"""The operations on the backlog that the API and the CLI run: ideas, claims, links, tracks and statuses."""
 
 from collections.abc import Sequence
 
@@ -8,15 +8,15 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor
 from piloop.agents.roles import files_of
 from piloop.campaign.ops import Refused, existing, required_reason
-from piloop.db.models import Campaign, Comment
+from piloop.db.models import AgentSession, Campaign, Comment
+from piloop.db.session import write_lock
 from piloop.ids import CampaignId, CommentKind, TargetRef
+from piloop.plugins.campaign_type.kit.backlog.ideas import holders
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.role.contract import Files
 
 
@@ -27,7 +27,9 @@ def files(campaign: Campaign, actor: Actor) -> None:
         Refused: the actor's role files nothing.
     """
     if files_of(campaign.config, actor) is Files.NOTHING:
-        raise Refused(f"{actor} files no ideas: say the hunch in a note on your run's idea, with pointers.")
+        raise Refused(
+            f"{actor} files no ideas for others: a worker tries one of its own with `piloop idea propose '<title>'`"
+        )
 
 
 def check_plan(campaign: Campaign, actor: Actor, plan: str | None) -> None:
@@ -59,8 +61,6 @@ def add_idea(
     plan: str | None = None,
     provenance: str | None = None,
     priority: int = 2,
-    harness: str | None = None,
-    base: CandidateId | None = None,
     track: TrackName | None = None,
     after: Sequence[IdeaId] = (),
 ) -> Idea:
@@ -70,12 +70,26 @@ def add_idea(
     Emits ``idea.created``.
 
     Raises:
-        Refused: the actor files nothing, the base or the track is not the campaign's, or a link is refused (``link``).
+        Refused: the actor files nothing, the track is not the campaign's, or a link is refused (``link``).
     """
     campaign = existing(s, Campaign, campaign_id, 'campaign')
     files(campaign, actor)
-    check_base(s, campaign, base)
     check_plan(campaign, actor, plan)
+    return _added(s, campaign, title, actor, hypothesis, plan, provenance, priority, track, after)
+
+
+def _added(
+    s: Session,
+    campaign: Campaign,
+    title: str,
+    actor: Actor,
+    hypothesis: str,
+    plan: str | None,
+    provenance: str | None,
+    priority: int,
+    track: TrackName | None,
+    after: Sequence[IdeaId],
+) -> Idea:
     idea = Idea(
         campaign_id=campaign.id,
         track=track_for(campaign, track),
@@ -84,8 +98,6 @@ def add_idea(
         plan=plan,
         provenance=provenance,
         priority=priority,
-        harness=harness,
-        base_candidate_id=base,
         status=IdeaStatus.OPEN,
         created_by=actor.signature,
     )
@@ -94,6 +106,86 @@ def add_idea(
     for target in after:
         _link(s, idea, LinkKind.AFTER, target)
     return idea
+
+
+def run_of_actor(s: Session, actor: Actor) -> Run:
+    """The open run that ``actor``, a worker, works on: queued or running.
+
+    Raises:
+        Refused: the actor is no agent of a run, or its run ended.
+    """
+    agent = actor.launched
+    session = s.get(AgentSession, agent.session) if agent is not None else None
+    run_id = run_of(session) if session is not None else None
+    if run_id is None:
+        raise Refused(f'{actor} has no run: only a worker claims an idea')
+    run = s.get_one(Run, run_id)
+    if run.status not in OPEN_RUNS:
+        raise Refused(f'run#{run.id} is {run.status}: a run claims while it is open')
+    return run
+
+
+def claim(s: Session, idea_id: IdeaId, *, actor: Actor) -> Idea:
+    """Claim the open idea for the actor's run: the run works on it, and the idea is ``claimed``. The caller commits.
+
+    A run claims one idea, and the claim ends with the run (``release``). The checks and the write are one write
+    transaction, so two runs never claim one idea, and no claim lands after its run ended. The ``idea.status`` event,
+    the trigger's, is signed by the worker.
+
+    Raises:
+        Refused: ``run_of_actor`` refuses, or ``_claim`` does.
+    """
+    write_lock(s)
+    return _claim(s, run_of_actor(s, actor), idea_id)
+
+
+def _claim(s: Session, run: Run, idea_id: IdeaId) -> Idea:
+    """Claim ``idea_id`` for ``run``, under the write lock that the caller took.
+
+    Raises:
+        Refused: the run claimed an idea already, or the idea is missing, in another campaign or not open, its track
+            is not in ``piloop.toml``, or an ``after`` link holds it (``holders``).
+    """
+    idea = existing(s, Idea, idea_id, 'idea')
+    if run.idea_id is not None:
+        raise Refused(f'run#{run.id} claimed idea#{run.idea_id} already: a run tries one idea')
+    if idea.campaign_id != run.campaign_id:
+        raise Refused(f'idea#{idea.id} is in another campaign than run#{run.id}')
+    if idea.status is not IdeaStatus.OPEN:
+        raise Refused(f'idea#{idea.id} is {idea.status}: claim an open idea')
+    if holding := holders(idea):
+        raise Refused(f'idea#{idea.id} is held by {", ".join(f"idea#{t.id} ({t.status})" for t in holding)}')
+    if idea.track not in (tracks := [t.name for t in idea.campaign.config.all_tracks]):
+        raise Refused(
+            f'idea#{idea.id} is on track {idea.track!r}, which piloop.toml does not have: {", ".join(tracks)}'
+        )
+    attempt = len(idea.runs) + 1
+    run.idea, run.attempt, idea.status = idea, attempt, IdeaStatus.CLAIMED
+    s.flush()
+    return idea
+
+
+def propose(
+    s: Session,
+    title: str,
+    *,
+    actor: Actor,
+    hypothesis: str = '',
+    plan: str | None = None,
+    provenance: str | None = None,
+    track: TrackName | None = None,
+) -> Idea:
+    """Add an open idea to the board of the actor's run and claim it for the run, in one write transaction.
+
+    A worker's own idea: it files no idea for others (``files``), but it may try one of its own.
+
+    Raises:
+        Refused: ``run_of_actor`` or ``_claim`` refuses, or the track is not the campaign's.
+    """
+    write_lock(s)
+    run = run_of_actor(s, actor)
+    idea = _added(s, run.campaign, title, actor, hypothesis, plan, provenance, 2, track, ())
+    return _claim(s, run, idea.id)
 
 
 SETTABLE = (IdeaStatus.OPEN, IdeaStatus.DROPPED)
@@ -214,44 +306,6 @@ def unlink(s: Session, idea_id: IdeaId, kind: LinkKind, target_id: IdeaId, *, re
         raise Refused(f'idea#{idea.id} has no {kind} link to idea#{target_id}')
     idea.links.remove(found)
     _note(s, idea, f'no longer {kind} idea#{target_id}: {why}', actor)
-
-
-def set_base(
-    s: Session, idea_id: IdeaId, candidate_id: CandidateId | None, *, reason: str, actor: Actor
-) -> CandidateId | None:
-    """Pin the idea to start from ``candidate_id``, or clear the pin with None, and return the old base.
-
-    A cleared pin runs from the head at the time the run starts. A run already open keeps its base, and the next
-    attempt takes the new one. A ``note`` says why; the ``idea.base_candidate_id`` event is the trigger's.
-
-    Raises:
-        Refused: the reason is blank, the idea is missing, the candidate is not one of its campaign, or it is the base.
-    """
-    idea = existing(s, Idea, idea_id, 'idea')
-    why = required_reason(reason)
-    check_base(s, idea.campaign, candidate_id)
-    old = idea.base_candidate_id
-    if old == candidate_id:
-        raise Refused(f'idea#{idea.id} starts from {_base(candidate_id)} already')
-    _note(s, idea, f'base {_base(old)} → {_base(candidate_id)}: {why}', actor)
-    idea.base_candidate_id = candidate_id
-    return old
-
-
-def _base(candidate_id: CandidateId | None) -> str:
-    return 'the head' if candidate_id is None else f'candidate#{candidate_id}'
-
-
-def check_base(s: Session, campaign: Campaign, candidate_id: CandidateId | None) -> None:
-    """Refuse a base that is not unset or a candidate of ``campaign``.
-
-    Raises:
-        Refused: no such candidate in the campaign.
-    """
-    if candidate_id is None:
-        return
-    if s.scalar(select(Candidate.campaign_id).where(Candidate.id == candidate_id)) != campaign.id:
-        raise Refused(f'no candidate#{candidate_id} in campaign {campaign.name}')
 
 
 def set_track(s: Session, idea_id: IdeaId, track: TrackName, *, reason: str, actor: Actor) -> TrackName:

@@ -55,7 +55,9 @@ def queued_run(db: Database, campaign: Campaign, state: AgentSessionState) -> tu
         idea.status = IdeaStatus.CLAIMED
         s.add(idea)
         s.flush()
-        run = Run(idea_id=idea.id, attempt=1, base_candidate_id=1, harness='script', model='m')
+        run = Run(
+            campaign_id=idea.campaign_id, idea_id=idea.id, attempt=1, base_candidate_id=1, harness='script', model='m'
+        )
         s.add(run)
         s.flush()
         agent = AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), state=state)

@@ -3,69 +3,46 @@
 Its run queue, its runs' ends and its measurements.
 """
 
-import math
-from collections import Counter
 from collections.abc import Collection
 from concurrent.futures import Future
 from datetime import datetime
 from functools import partial
 from typing import ClassVar, Literal
 
-from pydantic import Field
-from sqlalchemy import Boolean, ColumnElement, Select, func, or_, select
+from sqlalchemy import Boolean, ColumnElement, func, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import System
-from piloop.campaign.launches import choose_harness, earlier, full_harnesses, remove_checkouts
-from piloop.config import CampaignConfig
+from piloop.campaign.launches import choose_harness, full_harnesses, remove_checkouts
 from piloop.db.events import emit
-from piloop.db.models import LIVE, AgentSession, Campaign, Comment, EventModel, ReadBy, count
-from piloop.db.triggers import DAEMON_ACTOR
-from piloop.ids import AgentSessionId, CommentKind, RoleName, TargetKind, TargetRef
+from piloop.db.models import LIVE, AgentSession, Campaign, EventModel, ReadBy, count
+from piloop.ids import AgentSessionId, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, TypeHost
 from piloop.plugins.campaign_type.kit.backlog.ideas import claimable, held
-from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, finding_of, handed_off
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN, RunEnd, RunStatus
-from piloop.plugins.campaign_type.kit.runs.stop import attempts, settle_cancelled
+from piloop.plugins.campaign_type.kit.runs.stop import release
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of, working_on
-from piloop.plugins.campaign_type.kit.verdicts.judge import branches, due, head, head_unmeasured, rejudges
+from piloop.plugins.campaign_type.kit.verdicts.judge import due, head, head_unmeasured, rejudges
 from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.facts import Facts
-from piloop.plugins.role.contract import ImplementerRole, ideas_taken
-from piloop.plugins.trigger.contract import Backlog, TrackBacklog
+from piloop.plugins.role.contract import ImplementerRole
+from piloop.plugins.trigger.contract import Backlog
 
-NO_RUN_ERROR = 'an implementer needs a run; the scheduler requests them from open ideas'
+NO_RUN_ERROR = 'an implementer needs a run; the scheduler requests them for free slots'
 
 
 class RunQueued(EventModel):
-    """The daemon queued a run of an idea."""
+    """The daemon queued a fresh run, on the next harness of the rotation. Its worker claims its idea."""
 
     READ_BY: ClassVar[ReadBy] = ReadBy.READERS
     kind: Literal['run.queued'] = 'run.queued'
-    idea: IdeaId
-    attempt: int
     harness: str
-    track: TrackName
-    priority_pick: IdeaId | None = None
-    """The idea that the priority alone would have picked, when it is another one."""
-    pinned_base: CandidateId | None = None
-    """The idea's pinned base, when it has one."""
-    computed_base: CandidateId | None = None
-    """The base that the daemon would have picked, when the idea is pinned."""
 
 
-class RunRerouted(EventModel):
-    """The daemon moved a queued run to another harness of the rotation, because its own was at its cap."""
-
-    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
-    kind: Literal['run.rerouted'] = 'run.rerouted'
-    from_: str = Field(alias='from')
-    to: str
+EventModel.retire('run.rerouted')  # 0.5 moved a queued run to another harness; a run keeps the one it was queued on
 
 
 def done_by(role: RoleName) -> ColumnElement[bool]:
@@ -88,26 +65,6 @@ def free_slots(s: Session, campaign: Campaign, roles: dict[RoleName, Implementer
     return max(free if runs_left is None else min(free, runs_left), 0)
 
 
-def offered(s: Session, campaign: Campaign, cfg: CampaignConfig, role: ImplementerRole) -> Select[Idea]:
-    """Select the runnable ideas that ``role`` takes now.
-
-    They are on a track with a share. While the head waits for a score from the current evaluator, only pinned ideas.
-    """
-    live = [t.name for t in cfg.all_tracks if t.share > 0]
-    query = select(Idea).where(Idea.campaign_id == campaign.id, claimable(), Idea.track.in_(live))
-    if head_unmeasured(s, campaign):
-        query = query.where(Idea.base_candidate_id.is_not(None))
-    return taken_by(s, role, query)
-
-
-def taken_by(s: Session, role: ImplementerRole, query: Select[Idea]) -> Select[Idea]:
-    """Narrow ``query`` to the ideas that ``role`` takes (``ImplementerRole.takes``)."""
-    if role.takes is None:
-        return query
-    taken = s.connection().exec_driver_sql(ideas_taken(role.takes)).scalars().all()
-    return query.where(Idea.id.in_(taken))
-
-
 class OptimizationPlanner:
     """The ``optimization`` type at work in one daemon process: the hooks of the campaigns' pass (``TypeHost``)."""
 
@@ -120,8 +77,8 @@ class OptimizationPlanner:
 
     def drain(self, s: Session, campaign: Campaign) -> None:
         """Fail the campaign's queued runs at its stop: their requested implementers are closed by the pass."""
-        mine = Idea.campaign_id == campaign.id
-        for run in s.scalars(select(Run).join(Idea).where(mine, Run.status == RunStatus.QUEUED)):
+        queued = (Run.campaign_id == campaign.id, Run.status == RunStatus.QUEUED)
+        for run in s.scalars(select(Run).where(*queued)):
             self._fail_run(s, run, RunEnd.CAMPAIGN_STOPPED)
 
     def ended(self, s: Session, agent_session: AgentSession, end: RunEnd) -> None:
@@ -129,18 +86,14 @@ class OptimizationPlanner:
         if run_of(agent_session) is not None:
             self._fail_run(s, s.get_one(Run, run_of(agent_session)), end)
 
-    def take(self, s: Session, agent_session: AgentSession, rotation: list[str], full: set[str]) -> Take | CannotLaunch:
-        """Whether a requested implementer launches now.
-
-        One without a run is refused, and one whose harness is at its cap waits (``_reroute``).
-        """
+    def take(self, s: Session, agent_session: AgentSession, full: set[str]) -> Take | CannotLaunch:
+        """Whether a requested implementer launches now: one without a run is refused, and one at its harness's cap waits."""
         if run_of(agent_session) is None:
             return CannotLaunch(NO_RUN_ERROR)
-        cfg = s.get_one(Campaign, agent_session.campaign_id).config
-        return Take.LAUNCH if self._reroute(s, cfg, agent_session, rotation, full) else Take.WAIT
+        return Take.WAIT if agent_session.harness in full else Take.LAUNCH
 
     def fail_open(self, s: Session, end: RunEnd, *, reaped: bool, sparing: Collection[AgentSessionId]) -> None:
-        """End each run in flight as ``end`` and queue its idea again, but those of the agents of ``sparing``.
+        """End each run in flight as ``end``, and its claim, but those of the agents of ``sparing``.
 
         Queued runs are not changed: they are requests. With ``reaped``, their worktrees are removed: a previous daemon
         left them. Otherwise a live run thread removes its own worktrees in its ``finally`` block: removing a worktree
@@ -155,14 +108,14 @@ class OptimizationPlanner:
         for run in s.scalars(select(Run).where(in_flight | Run.id.in_(launched))).all():
             self._fail_run(s, run, end)
             if reaped:
-                remove_checkouts(self._host.home / RUNS / str(run.id), run.idea.campaign, self._tracer)
+                remove_checkouts(self._host.home / RUNS / str(run.id), run.campaign, self._tracer)
 
     def steered_by(self, s: Session, agent_session: AgentSession) -> Steering | None:
-        """An implementer's run and idea, since the run started: it signs as ``run#<id>`` too."""
+        """An implementer's run, and its idea once it claimed one, since the run started: it signs as ``run#<id>`` too."""
         run = s.get(Run, run_of(agent_session)) if run_of(agent_session) is not None else None
         if run is None:
             return None
-        targets = (TargetRef(RUN, run.id), TargetRef(IDEA, run.idea_id))
+        targets = (TargetRef(RUN, run.id), *(() if run.idea_id is None else (TargetRef(IDEA, run.idea_id),)))
         since = run.started_at or agent_session.started_at
         assert since is not None, 'a running implementer started'
         return Steering(targets, since, (f'run#{run.id}',))
@@ -187,10 +140,9 @@ class OptimizationPlanner:
         return {f'{kind}#{i}': fut for (kind, i), fut in self._scoring.items()}
 
     def _fail_run(self, s: Session, run: Run, end: RunEnd) -> None:
-        """End ``run`` as ``end`` and put its idea back on the board, unless someone dropped it meanwhile.
+        """End ``run`` as ``end``, and its claim (``release``).
 
-        A run that the daemon stopped (``RunEnd.attempt``) is not an attempt, so its idea always goes back to
-        ``open``. A running run whose implementer left its finding is not failed: it is handed off (``_hand_off``).
+        A running run whose implementer left its finding is not failed: it is handed off (``_hand_off``).
         """
         agent_session = s.scalars(
             select(AgentSession).where(working_on(run.id)).order_by(AgentSession.id.desc()).limit(1)
@@ -202,12 +154,7 @@ class OptimizationPlanner:
         ):
             self._hand_off(s, run)
             return
-        close_run(s, run, end, None)
-        idea = run.idea
-        if idea.status is IdeaStatus.CLAIMED and end is RunEnd.CANCELLED:
-            settle_cancelled(s, run)
-        elif idea.status is IdeaStatus.CLAIMED:
-            idea.status = IdeaStatus.OPEN if attempts(idea) < idea.max_runs else IdeaStatus.DONE
+        release(s, close_run(s, run, end, None), end, None)
         self._tracer.event('run.aborted', run=run.id, end=end)
 
     def _hand_off(self, s: Session, run: Run) -> None:
@@ -259,21 +206,10 @@ class OptimizationPlanner:
                 AgentSession.state.in_(LIVE),
             ),
         )
-        ready, blocked = (
-            Counter(s.scalars(select(Idea.track).where(Idea.campaign_id == campaign.id, which)))
-            for which in (claimable(), (Idea.status == IdeaStatus.OPEN) & held())
-        )
-        tracks = tuple(
-            TrackBacklog(
-                t.name,
-                runnable=ready[t.name] if t.share else 0,
-                waiting=blocked[t.name] if t.share else 0,
-                target=math.ceil(t.share * target) if target > 0 else 0,
-            )
-            for t in cfg.all_tracks
-        )
+        mine = select(Idea).where(Idea.campaign_id == campaign.id)
         return Backlog(
-            tracks=tracks,
+            runnable=count(s, mine.where(claimable())),
+            waiting=count(s, mine.where((Idea.status == IdeaStatus.OPEN) & held())),
             target=target,
             free=free_slots(s, campaign, cfg.roles.doing_runs(), left.get(facts.RUNS)),
             sweeps=sweeps,
@@ -282,201 +218,37 @@ class OptimizationPlanner:
         )
 
     def queue(self, s: Session, campaign: Campaign, left: Facts) -> None:
-        """Queue a run, and request its agent, for each free slot with a runnable idea, within the runs ``left``.
+        """Start a fresh run, and request its worker, for each free slot within the runs ``left``.
 
-        Each role that does runs fills its own slots with the ideas that it takes (``takes``), in the order of
-        ``Roles.doing_runs``. Its open runs count against its own ``max_concurrent``. Its ``explore_every`` and the
-        track shares apply to its own runs. The runs that the stop rule leaves and the attempts of an idea count the
-        runs of every role.
-
-        An ``open`` idea with an ``after`` link to an idea that is not ``done`` or ``dropped`` is held: it is skipped
-        and not changed, and taken once every prerequisite settles. A claimable idea whose track is not in ``piloop.toml`` is dropped
-        with a note that says why (``_drop_strays``). An idea on a track with a share of 0
-        waits. While a new evaluator has not measured the head (``_remeasure`` measures it first), only a pinned idea
-        has a base: an unpinned run starts from the head and is judged against it.
-        When an exploration run is due (``_explore``), the slot goes first to an idea pinned to an alternative base.
-        Otherwise it goes to the most urgent idea of the track furthest below its share (``_pick``). An idea pinned to
-        a harness at its cap (``_full``) waits. When every harness of a role's rotation is at its cap, the role queues
-        nothing more in this pass.
+        A run starts from the head, with no idea: its worker claims one from the board, or proposes one and claims it.
+        Each role that does runs fills its own slots (``max_concurrent``), in the order of ``Roles.doing_runs``, on the
+        next harness of its rotation that is not at its cap. Nothing starts while the campaign has no head, or while a
+        new evaluator has not measured the head (``remeasure`` measures it first).
         """
+        trunk = head(s, campaign)
+        if trunk is None or head_unmeasured(s, campaign):
+            return
         cfg = campaign.config
-        self._drop_strays(s, campaign, cfg)
         runs_left = left.get(facts.RUNS)
         for name, role in cfg.roles.doing_runs().items():
-            takes = offered(s, campaign, cfg, role)
             for _ in range(free_slots(s, campaign, {name: role}, runs_left)):
-                full = full_harnesses(s, campaign, cfg)
-                fits = takes.where(or_(Idea.harness.is_(None), Idea.harness.not_in(full)))
-                explored = self._explore(s, campaign, name, role, fits)
-                if explored is not None:
-                    idea, by_priority = explored, explored
-                else:
-                    idea, by_priority = self._pick(s, campaign, cfg, name, role, fits)
-                if idea is None or not self._enqueue(s, campaign, cfg, name, idea, full, by_priority=by_priority):
+                total_runs = count(s, campaign_runs(campaign.id).where(done_by(name)))
+                harness = choose_harness(cfg, name, full_harnesses(s, campaign, cfg), total_runs)
+                if harness is None:
                     break
-                runs_left = None if runs_left is None else runs_left - 1
-
-    def _drop_strays(self, s: Session, campaign: Campaign, cfg: CampaignConfig) -> None:
-        """Drop each claimable idea whose track is not in ``piloop.toml``, with a note that says how to fix it.
-
-        Track names are in the config, not in the schema. A track can be renamed or removed, or raw SQL can have a typo.
-        """
-        names = [t.name for t in cfg.all_tracks]
-        strays = s.scalars(select(Idea).where(Idea.campaign_id == campaign.id, claimable(), Idea.track.not_in(names)))
-        for idea in strays:
-            idea.status = IdeaStatus.DROPPED
-            s.add(
-                Comment(
-                    target=TargetRef(IDEA, idea.id),
-                    author=DAEMON_ACTOR,
-                    kind=CommentKind.NOTE,
-                    body=f'dropped: its track {idea.track!r} is not in piloop.toml (tracks: {", ".join(names)}); set'
-                    ' ideas.track to one of them, then open it',
+                model = cfg.role_models(name)[harness]
+                run = Run(campaign=campaign, role=name, base_candidate_id=trunk.id, harness=harness, model=model)
+                s.add(run)
+                s.flush()
+                emit(s, RunQueued(harness=harness), TargetRef(RUN, run.id), System.DAEMON)
+                s.add(
+                    AgentSession(
+                        kind=name,
+                        campaign_id=campaign.id,
+                        subject=TargetRef(RUN, run.id),
+                        harness=harness,
+                        model=model,
+                        reason='a free slot',
+                    )
                 )
-            )
-            self._tracer.event(
-                'idea.dropped', campaign=campaign.name, idea=idea.id, reason=f'unknown track {idea.track}'
-            )
-
-    def _pick(
-        self,
-        s: Session,
-        campaign: Campaign,
-        cfg: CampaignConfig,
-        name: RoleName,
-        role: ImplementerRole,
-        query: Select[Idea],
-    ) -> tuple[Idea | None, Idea | None]:
-        """Return the most urgent idea of the track furthest below its share, and the pick by priority alone.
-
-        A track's distance below its share is ``share × max_concurrent`` of the role minus the role's open runs on the
-        track. Only tracks with an idea in ``query`` take part, so a track with nothing runnable gives its slot to
-        another track. Ties go to the track listed first. With one track, the two picks are the same.
-        """
-        first = s.scalars(query.order_by(Idea.priority, Idea.id).limit(1)).first()
-        if first is None or not cfg.multitrack:
-            return first, first
-        open_runs = campaign_runs(campaign.id).where(Run.status.in_(OPEN_RUNS), done_by(name))
-        running = Counter(s.scalars(open_runs.with_only_columns(Idea.track)))
-        ready = set(s.scalars(query.with_only_columns(Idea.track)))
-        slots = role.max_concurrent
-        track = max((t for t in cfg.all_tracks if t.name in ready), key=lambda t: t.share * slots - running[t.name])
-        idea = s.scalars(query.where(Idea.track == track.name).order_by(Idea.priority, Idea.id).limit(1)).first()
-        return idea, first
-
-    def _explore(
-        self, s: Session, campaign: Campaign, name: RoleName, role: ImplementerRole, query: Select[Idea]
-    ) -> Idea | None:
-        """Return the most urgent runnable idea pinned to an alternative base if an exploration run is due, else None.
-
-        An exploration run is due if none of the role's last ``explore_every - 1`` runs was a branch run. If no such
-        idea is claimable, the queue uses its usual order. Instructions to research alone do not make enough branch runs,
-        so the daemon enforces this. It counts branch runs, not runs since the last exploration, so branch runs that
-        research or the orchestrator pinned on their own also count.
-        """
-        every = role.explore_every
-        if every == 0:
-            return None
-        latest = (
-            campaign_runs(campaign.id)
-            .where(done_by(name))
-            .with_only_columns(Run.branch)
-            .order_by(Run.id.desc())
-            .limit(every - 1)
-        )
-        recent = s.scalars(latest).all()
-        if len(recent) < every - 1 or any(recent):
-            return None
-        pinned = s.scalars(query.where(Idea.base_candidate_id.is_not(None)).order_by(Idea.priority, Idea.id))
-        trunk = head(s, campaign)
-        return next((i for i in pinned if branches(s, campaign, s.get(Candidate, i.base_candidate_id), trunk)), None)
-
-    def _enqueue(
-        self,
-        s: Session,
-        campaign: Campaign,
-        cfg: CampaignConfig,
-        role: RoleName,
-        idea: Idea,
-        full: Collection[str],
-        *,
-        by_priority: Idea | None,
-    ) -> bool:
-        """Queue one run of ``idea`` by ``role`` on its pinned candidate if it has one, else on the current head.
-
-        A pin is a deliberate branch. ``run.queued`` then records ``pinned_base`` and ``computed_base``, so a wrong pin
-        is easy to find. If the pin's bar (``ledger.bar_of``) is not the head, the run is a branch run (``runs.branch``)
-        and is judged against that bar. ``run.queued`` also records ``track``, and ``priority_pick`` if the share rule
-        took a different idea than priority order alone (``by_priority``). This shows how often the share rule changes
-        the pick.
-
-        Returns False, and queues nothing, if the idea pins no harness and every harness of the rotation is ``full``.
-        """
-        total_runs = count(s, campaign_runs(campaign.id).where(done_by(role)))
-        harness = idea.harness or choose_harness(cfg, role, full, total_runs)
-        if harness is None:
-            return False
-        computed = head(s, campaign)
-        pin = idea.base_candidate_id
-        pinned = s.get(Candidate, pin) if pin is not None else None
-        base = pinned if pin is not None else computed
-        if base is None:
-            reason = f'pinned candidate#{pin} does not exist' if pin is not None else 'no kept candidate'
-            self._tracer.event('idea.dropped', campaign=campaign.name, idea=idea.id, reason=reason)
-            idea.status = IdeaStatus.DROPPED
-            return True
-        attempt = len(idea.runs) + 1
-        model = cfg.role_models(role)[harness]
-        run = Run(
-            idea=idea,
-            role=role,
-            attempt=attempt,
-            base_candidate_id=base.id,
-            branch=branches(s, campaign, pinned, computed),
-            harness=harness,
-            model=model,
-        )
-        s.add(run)
-        idea.status = IdeaStatus.CLAIMED
-        s.flush()
-        queued = RunQueued(
-            idea=idea.id,
-            attempt=attempt,
-            harness=harness,
-            track=idea.track,
-            priority_pick=by_priority.id if by_priority is not None and by_priority is not idea else None,
-            pinned_base=base.id if pin is not None else None,
-            computed_base=computed.id if pin is not None and computed is not None else None,
-        )
-        emit(s, queued, TargetRef(RUN, run.id), System.DAEMON)
-        s.add(
-            AgentSession(
-                kind=role,
-                campaign_id=campaign.id,
-                subject=TargetRef(RUN, run.id),
-                harness=harness,
-                model=model,
-                reason=f'idea#{idea.id} is open',
-            )
-        )
-        return True
-
-    def _reroute(
-        self, s: Session, cfg: CampaignConfig, agent_session: AgentSession, rotation: list[str], full: set[str]
-    ) -> bool:
-        """Return True if a run's implementer can launch. Move it to the next free harness if its harness left the rotation.
-
-        The harness was in the rotation when the run was queued (``_enqueue``), but ``piloop init`` can change the
-        rotation later. A harness that the idea pins does not change. Returns False, and the implementer stays requested,
-        while every harness of the rotation is at its cap.
-        """
-        run = s.get_one(Run, run_of(agent_session))
-        if run.idea.harness is not None or run.harness in rotation:
-            return True
-        harness = choose_harness(cfg, agent_session.kind, full, earlier(s, agent_session))
-        if harness is None:
-            return False
-        emit(s, RunRerouted(from_=run.harness, to=harness), TargetRef(RUN, run.id), System.DAEMON)
-        run.harness = agent_session.harness = harness
-        run.model = agent_session.model = cfg.role_models(agent_session.kind)[harness]
-        return True
+                runs_left = None if runs_left is None else runs_left - 1

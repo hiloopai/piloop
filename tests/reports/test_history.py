@@ -63,7 +63,9 @@ def scored(
     tokens: int | None = None,
 ) -> Candidate:
     """Add one run of ``row`` from candidate ``base`` with one measured candidate per outcome. Return the last."""
-    run = Run(idea=row, attempt=len(row.runs) + 1, base_candidate_id=base, harness='h', model='m')
+    run = Run(
+        campaign_id=row.campaign_id, idea=row, attempt=len(row.runs) + 1, base_candidate_id=base, harness='h', model='m'
+    )
     run.status, run.end = RunStatus.SUCCEEDED, RunEnd.FINISHED
     s.add(run)
     s.flush()

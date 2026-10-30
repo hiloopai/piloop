@@ -43,7 +43,7 @@ section.
 |---|---|---|---|
 | `name` | string | required | A short name for the campaign: letters, digits, `.`, `_` and `-`, not all digits. A campaign gets it when it is registered, unless the registration names another, and piloop names its git refs after it. |
 | `metrics` | list\[[Metric](#metric)\] | required | Every metric that the evaluate command reports, each with its `role`. Each track has one `primary`, so a campaign with one track has exactly one. |
-| `tracks` | dict\[string, [TrackConfig](#trackconfig)\] | `{}` | `[tracks.<name>]`: the share and addendum of each track. Needed only with several primaries. |
+| `tracks` | dict\[string, [TrackConfig](#trackconfig)\] | `{}` | `[tracks.<name>]`: the addendum of each track, where one has one. |
 | `evaluate` | list\[string\] | required | The command (argv) that scores a commit. It runs in a clean worktree of the commit and writes one JSON line, `{"metrics": {"<name>": <value>}}`, to `$PILOOP_RESULT_FILE`. |
 | `evaluate_timeout` | number | `600` | The number of seconds before the evaluate command is stopped. The evaluation is then a crash. |
 | `ladder` | list\[[Rung](#rung)\] | `[]` | `[[ladder]]`: the rungs that a run's evaluation of its own version climbs before the full panel, cheapest first. The climb stops at the first rung whose `stop` holds. A baseline, a head, a bar, a reference and a remeasure climb every rung and never stop. |
@@ -100,15 +100,13 @@ pairs, and takes the ratio of their sums in each resample, so the verdict tests 
 
 A track has the name of its primary's `track`, or else the name of the primary. All tracks build on one trunk. A
 run starts from the head, which is the latest keep on the trunk. A keep on any track must also hold the primary of
-every other track within that primary's `margin` and `floor`. A campaign with one primary has one track and
-needs no table. A campaign with several primaries needs one table for each track, and the shares must sum to 1.
+every other track within that primary's `margin` and `floor`. A table is needed only for an addendum.
 
 Experimental: campaigns with more than one track.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `share` | number | `1` | The fraction of the `max_concurrent` of each role that does runs that the ideas of this track get. A free slot of a role goes to the track that is furthest below its share and has an idea that can run, and then to the most urgent idea of that track. A track with no idea that can run gives its slot to another track. A share of 0 stops the track: its ideas wait. |
-| `addendum` | string \| null | `null` | A repo-relative file that is appended to the brief of this track's runs, after `[plugins.role.implementer] addendum`. Use it to say how work on this objective is done, for example "profile first" or "keep the output identical". |
+| `addendum` | string \| null | `null` | A repo-relative file that a worker gets when it claims an idea of this track (`piloop idea claim`), after the track's keep rule. Use it to say how work on this objective is done, for example "profile first" or "keep the output identical". |
 
 ## Rung
 
@@ -537,7 +535,7 @@ The keys that every `[plugins.role.<name>]` table accepts. Each role's table bel
 
 `[plugins.role.implementer]`, and every `[plugins.role.<name>]` table with `runs = true`: a role that does runs.
 
-The run queue starts its agents. Each agent does one idea in a new checkout at its run's base, and its versions are
+The run queue starts its agents. Each agent claims one idea, in a new checkout of the head, and its versions are
 scored and judged when it ends. A new role of this kind takes the implementer's defaults, its prompt included.
 
 | Key | Type | Default | Description |
@@ -546,12 +544,9 @@ scored and judged when it ends. A new role of this kind takes the implementer's 
 | `max_concurrent` | integer | `4` | The maximum number of implementers that run at the same time, on all workers together. A run that is being scored after its implementer ended does not count. |
 | `writes` | list\[string\] | `["versions", "comments(finding) on your idea", "comments(note) on your run"]` | What an implementer may write, as its brief states it. It files no ideas: its hunches go in its finding, which research reads. |
 | `runs` | boolean | `true` | The agents of this role do runs. A table without `runs = true` is a sweeping role. |
-| `takes` | string \| null | `null` | The ideas that this role takes: an SQL condition on the `ideas` table, without parameters, for example `priority >= 3` or `track = 'speed'`. When unset, the role takes every runnable idea. A free slot of a role that you define is filled before a slot of the implementer, so the implementer takes what the other roles leave. |
 | `wrap_up_lead` | duration | `"PT10M"` | How long before its `timeout` the daemon tells an implementer to wrap up, at most a quarter of the timeout. |
 | `finding_grace` | duration | `"PT1M"` | How long after its finding the daemon ends an implementer, and every process that it left: a last commit takes seconds. |
-| `startup_relaunches` | integer | `2` | How many times a run is queued again with a new implementer after its implementer failed to start. Then the run fails. A failure at startup is a fault of the host or the harness, not an attempt at the idea: it does not count toward `max_runs`. |
-| `recovery_requeues` | integer | `2` | How many times one idea goes back to the queue from the last version of a run that did not succeed: a new implementer then starts from that version to finish the work, also when the idea has no attempts left. When the head moved past the version, it starts on the head, and a note names the change to take. After that, the idea settles as after any failed run, so an idea whose implementers keep dying is not run forever. 0 never requeues. |
-| `explore_every` | integer | `4` | At least one run of this role in this many starts from an alternative starting point. When none of the role's last `explore_every - 1` runs did, the next slot goes to the most urgent ready idea that is pinned to a base other than the head (a reference, an older keep or a note), whatever its priority. Nothing changes while no such idea is ready. 0 turns this off. |
+| `startup_relaunches` | integer | `2` | How many times a run is queued again with a new implementer after its implementer failed to start. Then the run fails. A failure at startup is a fault of the host or the harness, not an attempt at an idea. |
 
 ## SweepRole
 
@@ -869,8 +864,10 @@ These keys still work. Each one shows a `PiloopDeprecationWarning` that names th
 - `idle_alert` of a role that does runs is removed: an idea is never `proposed`, so no slot waits for a review. piloop drops it.
 - The `leaking_funnel` trigger is removed: `low_yield` does its work. piloop drops it from each role's `triggers`, and drops each `[plugins.trigger.<name>]` of it.
 - `[plugins.section.pack] seeds` is removed: there are no seeds, so the research pack lists none.
+- `takes`, `explore_every` and `recovery_requeues` are removed: the scheduler assigns no idea. Each run starts from the head, and its worker claims an idea. piloop drops the keys.
 - `files` and `plan_words` of a role that does runs are removed: its agents file no ideas and no seeds. piloop drops them. An implementer's hunch goes in its finding, which research reads.
 - `[plugins.role.scout]` is removed with the scout role: piloop drops the table, and no scout starts.
 - `files = "seeds"` is `files = "nothing"`: there are no seeds. An idea is open on the board from the start.
 - The `seed` trigger is removed: an idea is open on the board from the start, so there is no seed to develop. piloop drops it from each role's `triggers`, and drops each `[plugins.trigger.<name>]` of it.
+- `share` of a `[tracks.<name>]` is removed: workers claim any open idea, so no track has a share of the slots. piloop drops it, and drops a table that it leaves empty.
 - In `config.toml`, `[daemon] startup_relaunches`, `[agents] finding_grace` and `wrap_up_lead` are the role's. They are keys of `[plugins.role.implementer]`, the defaults of every campaign's implementer, and their variables move the same way (`moved_env`). A role of your own that does runs gets the role's defaults, not these.

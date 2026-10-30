@@ -42,9 +42,7 @@ floor = 2.0            # an accuracy keep may not make the CPU cost higher than 
 repeats = 3            # a time: measure each candidate 3 times next to its bar
 
 [tracks.accuracy]
-share = 0.75
 addendum = "briefs/accuracy.md"
 
 [tracks.cost]
-share = 0.25
 addendum = "briefs/cost.md"

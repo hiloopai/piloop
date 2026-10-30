@@ -42,7 +42,15 @@ def test_the_reads_of_a_ui_answer_agents_their_output_ideas_and_comments(
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         old = idea(s, p, 'more lines', IdeaStatus.DONE)
-        run = Run(idea=old, attempt=1, base_candidate_id=1, harness='pi', model='m', error='no commit')
+        run = Run(
+            campaign_id=old.campaign_id,
+            idea=old,
+            attempt=1,
+            base_candidate_id=1,
+            harness='pi',
+            model='m',
+            error='no commit',
+        )
         s.add(run)
         s.flush()
         s.add(Candidate(id=2, campaign_id=p.id, run_id=run.id, parent_id=1, tree_sha='t2', revision='r2'))

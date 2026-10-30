@@ -340,9 +340,6 @@ CREATE TABLE ideas (
 	"plan" VARCHAR,
 	status VARCHAR(16) DEFAULT 'open' NOT NULL,
 	priority INTEGER DEFAULT 2 NOT NULL,
-	harness VARCHAR,
-	base_candidate_id INTEGER,
-	max_runs INTEGER DEFAULT 2 NOT NULL,
 	created_by VARCHAR NOT NULL,
 	provenance VARCHAR,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -355,7 +352,6 @@ CREATE TABLE ideas (
 	CONSTRAINT "ideas.created_by must be a text value" CHECK (typeof(created_by) IN ('text')),
 	CONSTRAINT "ideas.track must be a text value" CHECK (typeof(track) IN ('text')),
 	CONSTRAINT "ideas.plan must be a text value" CHECK (typeof(plan) IN ('text', 'null')),
-	CONSTRAINT "ideas.harness must be a text value" CHECK (typeof(harness) IN ('text', 'null')),
 	CONSTRAINT "ideas.provenance must be a text value" CHECK (typeof(provenance) IN ('text', 'null')),
 	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
 	CONSTRAINT ideastatus CHECK (status IN ('open', 'claimed', 'done', 'dropped'))
@@ -390,9 +386,10 @@ CREATE TABLE idea_links (
 CREATE INDEX ix_idea_links_target ON idea_links (target_id, kind);
 CREATE TABLE runs (
 	id INTEGER NOT NULL,
-	idea_id INTEGER NOT NULL,
+	campaign_id INTEGER NOT NULL,
+	idea_id INTEGER,
 	role VARCHAR DEFAULT 'implementer' NOT NULL,
-	attempt INTEGER NOT NULL,
+	attempt INTEGER,
 	base_candidate_id INTEGER NOT NULL,
 	branch BOOLEAN DEFAULT 0 NOT NULL,
 	harness VARCHAR NOT NULL,
@@ -413,10 +410,12 @@ CREATE TABLE runs (
 	CONSTRAINT "runs.scoring needs a finished status" CHECK (scoring = 0 OR status IN ('succeeded', 'failed', 'timed_out')),
 	CONSTRAINT "runs.end is set once a run is finished" CHECK (("end" IS NULL) = (status IN ('queued', 'running'))),
 	CONSTRAINT "runs.status follows from runs.end" CHECK ("end" IS NULL OR status = CASE "end" WHEN 'finished' THEN 'succeeded' WHEN 'timed_out' THEN 'timed_out' ELSE 'failed' END),
+	CONSTRAINT fk_runs_campaign_id_campaigns FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
 	FOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE CASCADE,
 	CONSTRAINT runstatus CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'timed_out')),
 	CONSTRAINT runend CHECK ("end" IN ('finished', 'failed', 'timed_out', 'awaiting_answer', 'cancelled', 'campaign_stopped', 'daemon_stopped', 'stale', 'role_removed', 'not_started', 'worker_lost'))
 );
+CREATE INDEX ix_runs_campaign_id ON runs (campaign_id);
 CREATE INDEX ix_runs_status ON runs (status);
 CREATE TABLE candidates (
 	id INTEGER NOT NULL,

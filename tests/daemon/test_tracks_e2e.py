@@ -1,4 +1,4 @@
-"""A campaign with two tracks, run through the real daemon: share picks, rebase on keep, and a floor on another track.
+"""A campaign with two tracks, run through the real daemon: claims by title, rebase on keep, and a floor on another track.
 
 The harness is a script that edits files by idea title, so the whole loop runs in CI without a real agent.
 """
@@ -9,6 +9,7 @@ from pathlib import Path
 from git import Repo
 from sqlalchemy import select
 
+from piloop.agents.roles import PILOOP_HINT
 from piloop.daemon.main import Daemon
 from piloop.db.events import in_order
 from piloop.db.models import Campaign
@@ -16,9 +17,8 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.verdicts.judge import Rebased, head
-from piloop.plugins.campaign_type.optimization.planner import RunQueued
 from piloop.settings import Settings
-from tests.conftest import SETTLE, ScriptRuntime, factory, register, run_all, workers_of, write_script
+from tests.conftest import SETTLE, ScriptRuntime, factory, queued, register, run_all, workers_of, write_script
 
 TOML = """
 name = "tracks"
@@ -54,12 +54,6 @@ track = "cost"
 margin = 1
 floor = 5
 
-[tracks.accuracy]
-share = 0.5
-
-[tracks.cost]
-share = 0.5
-
 [plugins.harness.script]
 model = "test-model"
 executable = "{script}"
@@ -67,15 +61,18 @@ headless = ["{{prompt}}"]
 """
 
 HARNESS = """#!/bin/sh
-case "$(cat ../brief.md)" in
-  *"): trim cost"*) tail -n +2 cost.txt > cost.tmp && mv cost.tmp cost.txt; git commit -qam "trim cost" ;;
-  *"): slow accuracy"*)
+title=$({piloop} sql "SELECT 'idea: ' || i.title FROM ideas i JOIN runs r ON r.idea_id = i.id \\
+  JOIN agent_sessions a ON a.subject_kind = 'run' AND a.subject_id = r.id WHERE a.id = ${{PILOOP_ACTOR#*#}}")
+case "$title" in
+  *"idea: trim cost"*) tail -n +2 cost.txt > cost.tmp && mv cost.tmp cost.txt; git commit -qam "trim cost" ;;
+  *"idea: slow accuracy"*)
     while [ ! -e {go} ]; do sleep 0.05; done
     echo a >> acc.txt; git commit -qam "slow accuracy" ;;
-  *"): heavy accuracy"*) echo a >> acc.txt; printf 'c\\nc\\nc\\nc\\n' >> cost.txt; git commit -qam "heavy accuracy" ;;
+  *"idea: heavy accuracy"*) echo a >> acc.txt; printf 'c\\nc\\nc\\nc\\n' >> cost.txt; git commit -qam "heavy accuracy" ;;
 esac
 """
-"""Edits by the title in the brief's ``## Your idea (idea#<id>): <title>`` line: ``slow accuracy`` waits for the test's go file, so the cost keep lands first."""
+"""Edits by the title of the idea that its run claimed: ``slow accuracy`` waits for the test's go file, so the cost
+keep lands first. A run that claimed nothing saves nothing."""
 
 
 def test_two_tracks_rebase_a_keep_that_lost_the_race_and_refuse_one_past_the_other_tracks_floor(
@@ -86,7 +83,9 @@ def test_two_tracks_rebase_a_keep_that_lost_the_race_and_refuse_one_past_the_oth
     (path / 'acc.txt').write_text('a\n')
     (path / 'cost.txt').write_text('c\nc\nc\n')
     (path / 'brief.md').write_text('# Tracks\n')
-    (path / 'piloop.toml').write_text(TOML.format(script=write_script(tmp_path / 'harness.sh', HARNESS.format(go=go))))
+    (path / 'piloop.toml').write_text(
+        TOML.format(script=write_script(tmp_path / 'harness.sh', HARNESS.format(go=go, piloop=PILOOP_HINT)))
+    )
     repo = Repo.init(path, initial_branch='main')
     repo.git.add('-A')
     repo.git.commit('-qm', 'baseline')
@@ -95,12 +94,17 @@ def test_two_tracks_rebase_a_keep_that_lost_the_race_and_refuse_one_past_the_oth
     workers_of(daemon.controller).worker.runtime_factory = factory(runtime)
     campaign = register(daemon.db, path)
     with daemon.db.session() as s:
-        for title, track in (('slow accuracy', 'accuracy'), ('trim cost', 'cost')):
-            s.add(Idea(campaign_id=campaign.id, track=track, title=title, hypothesis=title, created_by='t'))
+        ideas = [
+            Idea(campaign_id=campaign.id, track=track, title=title, hypothesis=title, created_by='t')
+            for title, track in (('slow accuracy', 'accuracy'), ('trim cost', 'cost'))
+        ]
+        s.add_all(ideas)
         s.commit()
+        slow, trim = (i.id for i in ideas)
 
     daemon.scheduler.reap()
-    assert len(run_all(daemon.scheduler)) == 2, 'one slot per track'
+    assert queued(daemon.db, daemon.scheduler, campaign.id, slow, trim) == [1, 2], 'two slots, one idea each'
+    assert len(run_all(daemon.scheduler)) == 2
     deadline = time.monotonic() + 120  # four evaluations and a rebase; a macOS runner is slow
     while _verdicts(daemon) != [Outcome.KEEP, Outcome.KEEP]:
         assert time.monotonic() < deadline, 'the cost keep never landed'
@@ -129,13 +133,18 @@ def test_two_tracks_rebase_a_keep_that_lost_the_race_and_refuse_one_past_the_oth
         assert [p.hexsha for p in repo.commit(merged.revision).parents] == [trimmed.revision, raced.revision]
         [(rebased, payload)] = in_order(s, Rebased)
         assert (rebased.target_id, payload) == (raced.id, Rebased(head=trimmed.id, rebased=merged.id))
-        assert sorted(p.track for _, p in in_order(s, RunQueued)) == ['accuracy', 'cost']
+        assert sorted(s.get_one(Idea, i).track for i in (slow, trim)) == ['accuracy', 'cost']
         trunk = head(s, s.get_one(Campaign, campaign.id))
         assert trunk is not None and trunk.id == merged.id
-        s.add(Idea(campaign_id=campaign.id, track='accuracy', title='heavy accuracy', hypothesis='h', created_by='t'))
+        heavy_idea = Idea(
+            campaign_id=campaign.id, track='accuracy', title='heavy accuracy', hypothesis='h', created_by='t'
+        )
+        s.add(heavy_idea)
         s.commit()
+        heavy_id = heavy_idea.id
 
-    assert len(run_all(daemon.scheduler)) == 1
+    assert len(queued(daemon.db, daemon.scheduler, campaign.id, heavy_id)) == 2, 'two free slots, one idea'
+    assert len(run_all(daemon.scheduler)) == 2
     daemon.scheduler.wait(SETTLE)
     with daemon.db.session() as s:
         heavy = s.scalars(select(Candidate).order_by(Candidate.id.desc()).limit(1)).one()

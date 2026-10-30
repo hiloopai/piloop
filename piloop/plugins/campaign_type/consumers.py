@@ -75,7 +75,6 @@ from piloop.db.triggers.changelog import (
     CampaignPausedChanged,
     CampaignStatusChanged,
     CandidateDeleted,
-    IdeaBaseChanged,
     IdeaCreated,
     IdeaDeleted,
     IdeaLinked,
@@ -162,7 +161,6 @@ CAMPAIGN_STATE: Kinds = frozenset(
         IdeaStatusChanged,
         IdeaPriorityChanged,
         IdeaTrackChanged,
-        IdeaBaseChanged,
         IdeaLinked,
         IdeaDeleted,
         CandidateJudged,
@@ -663,7 +661,7 @@ class Campaigns:
         A run role's row without a run is refused.
 
         A sweep's harness is chosen here, by the campaign's harness choice (``choose_harness``), never a harness at its
-        cap (``full_harnesses``). A sweep pinned to such a harness stays requested. A run's harness was chosen when it was queued (``_reroute``).
+        cap (``full_harnesses``). A sweep pinned to such a harness stays requested. A run's harness was chosen when it was queued.
         A request for a role that ``piloop.toml`` no longer has is refused, and its queued run fails
         (``RunEnd.ROLE_REMOVED``), so that its idea goes back to the queue.
 
@@ -700,7 +698,7 @@ class Campaigns:
                 if most is not None and len(taken) >= most:
                     return taken
                 if isinstance(rc, ImplementerRole):
-                    taking = self._planner(campaign).take(s, agent_session, rotation, full)
+                    taking = self._planner(campaign).take(s, agent_session, full)
                     match taking:
                         case CannotLaunch(reason=reason):
                             close(s, agent_session, reason, self._tracer)

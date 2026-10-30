@@ -18,7 +18,7 @@ from pydantic import Field, field_validator, model_validator
 
 from piloop.ids import ROLE_NAME, CommentKind
 from piloop.plugins.harness.contract import HarnessKey, HarnessName
-from piloop.plugins.host import Capability, Check, Many, Parameters, Reach, Scope
+from piloop.plugins.host import Capability, Many, Parameters, Reach, Scope
 from piloop.plugins.mcp_server.contract import McpServerName
 from piloop.plugins.runtime.contract import RuntimeName
 from piloop.plugins.section.contract import SectionName, Surface, defaults
@@ -50,6 +50,8 @@ RELAYED: frozenset[Verb] = frozenset(
         ('sql',),
         ('escalate',),
         ('idea', 'add'),
+        ('idea', 'claim'),
+        ('idea', 'propose'),
         ('idea', 'status'),
         ('candidate', 'import'),
         ('restore',),
@@ -173,7 +175,7 @@ class RoleConfig(Parameters):
 class ImplementerRole(RoleConfig):
     """``[plugins.role.implementer]``, and every ``[plugins.role.<name>]`` table with ``runs = true``: a role that does runs.
 
-    The run queue starts its agents. Each agent does one idea in a new checkout at its run's base, and its versions are
+    The run queue starts its agents. Each agent claims one idea, in a new checkout of the head, and its versions are
     scored and judged when it ends. A new role of this kind takes the implementer's defaults, its prompt included.
     """
 
@@ -181,11 +183,6 @@ class ImplementerRole(RoleConfig):
 
     runs: Literal[True] = True
     """The agents of this role do runs. A table without ``runs = true`` is a sweeping role."""
-    takes: str | None = None
-    """The ideas that this role takes: an SQL condition on the ``ideas`` table, without parameters, for example
-    ``priority >= 3`` or ``track = 'speed'``. When unset, the role takes every runnable idea. A free slot of a role
-    that you define is filled before a slot of the implementer, so the implementer takes what the other roles leave."""
-
     timeout: float = 1800
     """The number of seconds one implementer may run before it is stopped. Its brief states it. A quarter of it before,
     at most ``wrap_up_lead``, the daemon tells the implementer to wrap up."""
@@ -196,8 +193,7 @@ class ImplementerRole(RoleConfig):
     seconds."""
     startup_relaunches: int = Field(default=2, ge=0)
     """How many times a run is queued again with a new implementer after its implementer failed to start. Then the run
-    fails. A failure at startup is a fault of the host or the harness, not an attempt at the idea: it does not count
-    toward ``max_runs``."""
+    fails. A failure at startup is a fault of the host or the harness, not an attempt at an idea."""
     max_concurrent: int = Field(default=4, ge=1)
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
     scored after its implementer ended does not count."""
@@ -205,39 +201,6 @@ class ImplementerRole(RoleConfig):
     """What an implementer may write, as its brief states it. It files no ideas: its hunches go in its
     finding, which research reads."""
     SURFACE: ClassVar[Surface] = Surface.RUN
-    recovery_requeues: int = Field(default=2, ge=0)
-    """How many times one idea goes back to the queue from the last version of a run that did not succeed: a new
-    implementer then starts from that version to finish the work, also when the idea has no attempts left. When the
-    head moved past the version, it starts on the head, and a note names the change to take. After that,
-    the idea settles as after any failed run, so an idea whose implementers keep dying is not run forever. 0 never
-    requeues."""
-    explore_every: int = Field(default=4, ge=0)
-    """At least one run of this role in this many starts from an alternative starting point. When none of the role's
-    last ``explore_every - 1`` runs did, the next slot goes to the most urgent ready idea that is pinned to a base
-    other than the head (a reference, an older keep or a note), whatever its priority. Nothing changes while no such
-    idea is ready. 0 turns this off."""
-
-    def refused_takes(self) -> str | None:
-        """Why ``takes`` does not run on the ideas table of this piloop's schema, or None when it runs or is unset."""
-        from piloop.db.sql import sql_error  # here: the schema's models type the config with the roles
-
-        return None if self.takes is None else sql_error(ideas_taken(self.takes))
-
-    def checks(self) -> list[Check]:
-        """``takes`` runs on the ideas table: an upgrade can drop a column that it names."""
-        if self.takes is None:
-            return []
-        name = f'takes {self.takes!r}'
-        if (error := self.refused_takes()) is not None:
-            return [
-                Check(name, f'does not run on the ideas table: {error}', 'fix it in piloop.toml, then `piloop init`')
-            ]
-        return [Check(name, 'runs on the ideas table')]
-
-
-def ideas_taken(takes: str) -> str:
-    """Return the query that selects the ids of the ideas that ``[plugins.role.<name>] takes`` selects."""
-    return f'SELECT id FROM ideas WHERE {takes}'
 
 
 class Sweep(Pass, Protocol):

@@ -2,7 +2,6 @@
 
 import re
 from collections.abc import Sequence
-from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -12,9 +11,6 @@ from sqlalchemy import Select, func, literal, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, System
-from piloop.campaign.campaigns import (
-    repository,
-)
 from piloop.config import CampaignConfig
 from piloop.db import requests
 from piloop.db.events import emit
@@ -198,7 +194,7 @@ def track_of(cfg: CampaignConfig, candidate: Candidate) -> Track:
 
     A candidate without either, such as the baseline or a reference, gets the first track (``fallback_track``).
     """
-    run = candidate.run.idea.track if candidate.run is not None else None
+    run = candidate.run.idea.track if candidate.run is not None and candidate.run.idea is not None else None
     return fallback_track(cfg, candidate.track or run)
 
 
@@ -210,21 +206,18 @@ def fallback_track(cfg: CampaignConfig, name: TrackName | None) -> Track:
 def due(s: Session, campaign: Campaign) -> list[Candidate]:
     """Return what the daemon measures with the current evaluator, most urgent first, each once.
 
-    1. The head: an unpinned run starts from it and is judged against it, so the queue waits only for it
-       (``head_unmeasured``).
+    1. The head: a run starts from it and is judged against it, so the queue waits for it (``head_unmeasured``).
     2. The bar of each open run (``bar_of`` its base), oldest run first: the run is judged against it.
     3. Each candidate that someone asked to measure again (``requested``), oldest request first, and each that waits
        for a verdict that no run gives (``unjudged``).
-    4. The bar of each ``ready`` idea pinned to a base.
-    5. Each reference that no evaluator measured: a new import.
+    4. Each reference that no evaluator measured: a new import.
 
     The head and the bars come only while the current evaluator has not measured them. Nothing else is measured again
     unasked: after an evaluator change, an older keep or a reference that no run needs keeps the scores of the old
     evaluator until someone asks (``request_remeasure``). A measurement never changes a keep's verdict. A stopped
     campaign gets only 3: what someone asked for, to review the campaign. The rest is for runs, and none starts.
     """
-    open_runs = select(Run).join(Idea).where(Idea.campaign_id == campaign.id, Run.status.in_(OPEN_RUNS))
-    pins = select(Candidate).join(Idea, Idea.base_candidate_id == Candidate.id)
+    open_runs = select(Run).where(Run.campaign_id == campaign.id, Run.status.in_(OPEN_RUNS))
     new_references = select(Candidate).where(
         Candidate.campaign_id == campaign.id, Candidate.origin == Origin.REFERENCE, ~Candidate.measurements.any()
     )
@@ -236,15 +229,13 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     )
     found += asked + [c for c in s.scalars(waiting.order_by(Candidate.id)) if unjudged(c)]
     if active:
-        ready = (Idea.campaign_id == campaign.id, Idea.status == IdeaStatus.OPEN)
-        found += [bar_of(s, c) for c in s.scalars(pins.where(*ready).order_by(Idea.id))]
         found += s.scalars(new_references.order_by(Candidate.id))
     evaluator_id = campaign.evaluator_id
     return [c for c in dict.fromkeys(found) if c is not None and (c in asked or not measured(c, evaluator_id))]
 
 
 def head_unmeasured(s: Session, campaign: Campaign) -> bool:
-    """Whether the head has no measurement from the current evaluator: the queue then holds the unpinned ideas."""
+    """Whether the head has no measurement from the current evaluator: the queue then starts no run."""
     trunk = head(s, campaign)
     return trunk is not None and not measured(trunk, campaign.evaluator_id)
 
@@ -507,9 +498,8 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
     reason ends with the result of the merge. The merge is a version made without a checkout (``Repository.merge``),
     and kept (``rebase/<candidate>``). A new tree becomes a pending
     candidate of the same run, with ``onto`` as its parent. A merge that conflicts adds an open idea on the track of its
-    verdict to compose the two by hand when ``conflicts`` is ``Seed``, unless the campaign stopped. The idea is not
-    pinned, so it starts from the head (``follow_up``). A merged tree that is already a candidate (the head had the
-    change) gives no new candidate. Emits ``Rebased``.
+    verdict to compose the two by hand when ``conflicts`` is ``Seed``, unless the campaign stopped (``follow_up``). A
+    merged tree that is already a candidate (the head had the change) gives no new candidate. Emits ``Rebased``.
     """
     campaign = s.get_one(Campaign, candidate.campaign_id)
     subject = REBASED_SUFFIX.sub('', candidate.summary or '')
@@ -527,7 +517,7 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
             case Seed() if not stopped:
                 title = f'Compose candidate#{candidate.id} onto the head'
                 on = track_of(campaign.config, candidate).name  # the track that kept it
-                seeds = follow_up(s, candidate, [title], why, System.DAEMON, track=on, pin=False)
+                seeds = follow_up(s, candidate, [title], why, System.DAEMON, track=on)
             case Seed() | Leave():
                 seeds = []
             case _:
@@ -565,21 +555,14 @@ def reproposed(candidate: Candidate, run: Run) -> bool:
 
 
 def follow_up(
-    s: Session,
-    candidate: Candidate,
-    titles: Sequence[str],
-    why: str,
-    actor: Actor,
-    *,
-    track: TrackName,
-    pin: bool = True,
+    s: Session, candidate: Candidate, titles: Sequence[str], why: str, actor: Actor, *, track: TrackName
 ) -> list[Idea]:
-    """Add one open idea per title on ``track``, pinned to ``candidate`` unless ``pin`` is False. Return the new ideas.
+    """Add one open idea per title on ``track``, about ``candidate``. Return the new ideas.
 
     A title that the campaign already has gets `` (from candidate#<id>)``. A follow-up already filed from this candidate
     with that title, under either name and in any status, is not filed again: a dropped compose idea stays dropped
-    when the candidate is judged again. A pinned one runs as a branch run when its candidate is not the computed base
-    (``[plugins.role.implementer] explore_every``). An unpinned one runs from the head, as a trunk run.
+    when the candidate is judged again. Its run starts from the head, like every run: the hypothesis names the
+    candidate to take the change from.
     """
     ideas: list[Idea] = []
     hypothesis = f'Follow-up of candidate#{candidate.id} ({candidate.summary or "no summary"})'
@@ -596,7 +579,6 @@ def follow_up(
             hypothesis=f'{hypothesis}: {why}',
             status=IdeaStatus.OPEN,
             track=track,
-            base_candidate_id=candidate.id if pin else None,
             provenance=provenance,
             created_by=actor.signature,
         )
@@ -640,21 +622,6 @@ def lineages(s: Session, campaign: Campaign) -> list[Line]:
         known = found.get(at)
         found[at] = Line(at, c, (known.keeps if known else 0) + 1)
     return sorted(found.values(), key=lambda line: (isinstance(line.lineage, Branch), -line.latest.id))
-
-
-def branches(s: Session, campaign: Campaign, pinned: Candidate | None, computed: Candidate | None) -> bool:
-    """Return True if a run on ``pinned`` is a branch run: the pinned base's bar is not the current head.
-
-    A pin whose bar is the head, such as a non-keep on top of it, is not a branch. Its run is judged against the head
-    (``ledger.bar_of``). Nor is a pin whose version has the head's (``Repository.contains``), such as a compose that
-    cherry-picked it: a keep of it builds on the head.
-    """
-    if pinned is None or computed is None:
-        return pinned is not None
-    if bar_of(s, pinned).id == computed.id:
-        return False
-    with closing(repository(campaign)) as repo:
-        return not repo.contains(pinned.revision, computed.revision)
 
 
 def head_scores(

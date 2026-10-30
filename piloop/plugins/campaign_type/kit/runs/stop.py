@@ -23,7 +23,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import ATTEMPTS, FINISHED_RUNS, OPEN_RUNS, RUN
+from piloop.plugins.campaign_type.kit.runs.ids import ATTEMPTS, FINISHED_RUNS, OPEN_RUNS, RUN, RunEnd
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import keeps, last_keep_at
 from piloop.plugins.campaign_type.kit.verdicts.verdict import pending_clause
@@ -58,14 +58,9 @@ def counted() -> ColumnElement[bool]:
     return attempt() & scored()
 
 
-def attempts(idea: Idea) -> int:
-    """Count the runs of ``idea`` that were an attempt at it. ``ideas.max_runs`` caps this number."""
-    return sum(run.end is None or run.end.attempt for run in idea.runs)
-
-
 def settled(s: Session, campaign: Campaign) -> bool:
     """Whether no run of ``campaign`` is open, and the commits of each one that ended are judged."""
-    busy = select(Run.id).join(Idea).where(Idea.campaign_id == campaign.id, Run.status.in_(OPEN_RUNS) | Run.scoring)
+    busy = select(Run.id).where(Run.campaign_id == campaign.id, Run.status.in_(OPEN_RUNS) | Run.scoring)
     return s.scalar(busy.limit(1)) is None
 
 
@@ -81,7 +76,7 @@ class HeadReplaced(EventModel):
     """The head that replaced it. Null: no keep is left."""
 
 
-def settle_cancelled(s: Session, run: Run) -> None:
+def settle_cancelled(s: Session, run: Run, idea: Idea) -> None:
     """Open a cancelled run's idea again, with a note on the idea that says why.
 
     A cancel stops a run, not its idea: another worker may claim it. To take the idea off the board, drop it. A run
@@ -90,7 +85,7 @@ def settle_cancelled(s: Session, run: Run) -> None:
     cancel = run_cancel(s, run.id)
     by = f' by {cancel[0].actor}' if cancel is not None else ''
     replaced = latest(s, HeadReplaced, Event.target == TargetRef(RUN, run.id))
-    run.idea.status = IdeaStatus.OPEN
+    idea.status = IdeaStatus.OPEN
     if replaced is None:
         body = f'open: run#{run.id} was cancelled{by}; drop the idea to take it off the board'
     else:
@@ -99,7 +94,34 @@ def settle_cancelled(s: Session, run: Run) -> None:
             f'open: run#{run.id} was cancelled{by}: it started from candidate#{run.base_candidate_id}, which a'
             f' verdict override replaced as the head with {now}; the next run starts from the head'
         )
-    s.add(Comment(target=TargetRef(IDEA, run.idea_id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
+    s.add(Comment(target=TargetRef(IDEA, idea.id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
+
+
+def release(s: Session, run: Run, end: RunEnd, last: Candidate | None) -> None:
+    """End the claim of a run that ended ``end``, once its commits are judged, with a note on the idea when it reopens.
+
+    The idea is ``done`` after a finished run with a real verdict: ``last``, the newest of its versions' candidates that
+    got one, a known tree included. A finished run without one, or any other end, opens it again for another worker, and the
+    note says why. A cancel settles as ``settle_cancelled`` says. An idea that someone set to another status meanwhile,
+    or a run that claimed nothing, has no claim to end.
+    """
+    idea = run.idea
+    if idea is None or idea.status is not IdeaStatus.CLAIMED:
+        return
+    match end:
+        case RunEnd.CANCELLED:
+            settle_cancelled(s, run, idea)
+            return
+        case RunEnd.FINISHED if last is not None and last.verdict is not None:
+            idea.status = IdeaStatus.DONE
+            return
+        case RunEnd.FINISHED:
+            why = 'it finished, but nothing that it saved got a verdict'
+        case _:
+            why = f'it ended {end}' + (f': {run.error}' if run.error else '')
+    idea.status = IdeaStatus.OPEN
+    body = f'open: run#{run.id} gave the idea back; {why}'
+    s.add(Comment(target=TargetRef(IDEA, idea.id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))
 
 
 def kept(s: Session, campaign: Campaign) -> int:

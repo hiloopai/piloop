@@ -177,12 +177,10 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'comment.undelivered': [],
             'evaluation.cancelled': ['evaluations'],
             'fact.read': ['campaigns', 'yield_alarm'],
-            'idea.base_candidate_id': ['campaigns', 'yield_alarm'],
             'idea.created': ['campaigns', 'yield_alarm'],
             'idea.deleted': ['campaigns', 'yield_alarm'],
             'idea.linked': ['campaigns', 'yield_alarm'],
             'idea.priority': ['campaigns', 'yield_alarm'],
-            'idea.recovery_requeued': [],
             'idea.status': ['campaigns', 'yield_alarm'],
             'idea.track': ['campaigns', 'yield_alarm'],
             'idea.unlinked': ['campaigns', 'yield_alarm'],
@@ -216,7 +214,6 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'run.queued': [],
             'run.received': [],
             'run.relaunched': [],
-            'run.rerouted': [],
             'run.started': [],
             'secret.deleted': ['listeners'],
             'secret.set': ['listeners'],
@@ -405,10 +402,9 @@ def test_routing_by_kind_decides_what_a_pass_on_every_change_decides(
     ), 'the consumers that each write ran, in the order of the turn'
     assert trace(db) == snapshot(
         [
-            'idea.created idea',
-            'idea.status idea',
             'agent_session.requested agent_session',
             'run.queued run',
+            'idea.created idea',
             'idea.created idea',
             'idea.priority idea',
             'agent_session.requested agent_session',
