@@ -61,7 +61,8 @@ def run_end(
     """End your own run. Only this ends a run before its deadline.
 
     The daemon ends you a moment later, with every process that you started. `submitted` settles your idea as done
-    once your work is judged. `gave_up` puts your idea back on the board, with your reason.
+    once your work is judged: in a campaign that scores what you submit, only after a `piloop submit`. `gave_up` puts
+    your idea back on the board, with your reason.
     """
     with RunsClient.connect(daemon_http()) as client:
         run = client.end_run(EndBody(how=how, reason=reason)).run

@@ -385,9 +385,9 @@ def test_free_slots_start_fresh_runs_from_the_head_on_the_rotation_within_the_li
     ideas = add_ideas(db, campaign, 'a', 'b', 'c')
     scheduler = make_scheduler(db, runtime, tmp_path, claims=False)
     runs = queued_runs(db, scheduler, campaign)
-    assert [(r.idea_id, r.attempt, r.base_candidate_id, r.branch, r.harness, r.model) for r in runs] == [
-        (None, None, 1, False, 'script', 'm'),
-        (None, None, 1, False, 'pi', 'p'),
+    assert [(r.idea_id, r.attempt, r.base_candidate_id, r.harness, r.model) for r in runs] == [
+        (None, None, 1, 'script', 'm'),
+        (None, None, 1, 'pi', 'p'),
     ], 'three free slots, but [stop] max_runs leaves two runs'
     with db.session() as s:
         queued = s.scalars(select(Event).where(has(RunQueued)).order_by(Event.id)).all()

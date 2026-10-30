@@ -5,6 +5,12 @@ from piloop.api.views import Rendered, Text
 from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
 from piloop.plugins.section.contract import Rendering, Section, Surface
 
+SUBMIT = (
+    '- `piloop submit` scores the version that your checkout is at, on the full evaluation, and waits for its verdict'
+    ' and score: `keep` makes it the head, `discard` does not beat the head, `crash` did not run.'
+)
+"""The line that names ``piloop submit``: on a worker elsewhere, the relay lets an agent run it."""
+
 
 class Measure(Section):
     """How an implementer measures its change: the dev command (``[evaluator] dev``), and which commits are scored."""
@@ -23,9 +29,7 @@ class Measure(Section):
         match cfg.scoring:
             case Scoring.SUBMIT:
                 lines += [
-                    '- `piloop submit` scores the version that your checkout is at, on the full evaluation, and waits'
-                    ' for its verdict and score: `keep` makes it the head, `discard` does not beat the head, `crash`'
-                    ' did not run.',
+                    SUBMIT,
                     f'- Your run has {cfg.submissions} submissions. A version that you do not submit is never scored.',
                 ]
             case Scoring.RUN_END:

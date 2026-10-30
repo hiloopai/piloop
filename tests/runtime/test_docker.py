@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 
 from piloop.ids import AgentSessionId
+from piloop.plugins.executor.contract import AgentJob
 from piloop.plugins.executor.kit.door import Call, Relayed
 from piloop.plugins.executor.kit.relay import Relay
 from piloop.plugins.runtime import docker
@@ -22,6 +23,7 @@ from piloop.plugins.runtime.contract import AgentSpec, Deadline, ExitStatus, Han
 from piloop.plugins.runtime.docker import Docker, DockerRuntime, Mount, links, mounts_of
 from piloop.plugins.runtime.kit.egress import Allowed, EgressProxy
 from piloop.settings import INPUTS_DIR, settings
+from tests.conftest import no_ship
 
 IMAGE = 'buildpack-deps:noble-scm'
 """A glibc image with bash and git: piloop's own CLI runs in it from the worker's install."""
@@ -194,9 +196,9 @@ def relay() -> Generator[list[Call]]:
         calls.append(call)
         return Relayed(stdout=f'relayed on lease {lease}: {" ".join(call.argv)}\n', exit_code=0)
 
-    served = Relay(settings.relay_file, send)
+    served = Relay(settings.relay_file, send, no_ship)
     served.start()
-    served.open({AgentSessionId(1): 7})
+    served.open(7, AgentJob.model_construct(agent_session=AgentSessionId(1)))
     yield calls
     served.stop()
 

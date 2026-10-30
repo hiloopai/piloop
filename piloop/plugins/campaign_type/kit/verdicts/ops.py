@@ -1,7 +1,7 @@
 """The operations on verdicts that the API and the CLI run: a verdict set by hand."""
 
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Literal, assert_never
 
 from sqlalchemy import select
@@ -20,7 +20,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN
 from piloop.plugins.campaign_type.kit.runs.stop import HeadReplaced
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.verdicts.judge import MOVED, Rebased, head, node, on_moved, verdict_rule
+from piloop.plugins.campaign_type.kit.verdicts.judge import MOVED, Rebased, head, on_moved
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     Refusal,
     label,
@@ -29,7 +29,6 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     refusal,
     write,
 )
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Trunk
 from piloop.plugins.vcs.contract import VcsError
 
 
@@ -59,8 +58,8 @@ def set_verdict(
     keep against a bar that is no longer the head: the head is the newest trunk keep, and a keep that lacks the
     head's changes would drop them from the trunk. So the candidate is ``interesting`` (``Cause.MOVED``), and the
     verdict rule says what follows (``ledger.on_moved``). By default its merge onto the head is a pending candidate that
-    the daemon measures and judges against the head (``ledger.unjudged``), and a merge that conflicts adds an idea to
-    compose it. A keep of a branch run never moves the head. A reference that builds on the head is kept like this
+    the daemon measures and judges against the head (``ledger.unjudged``); a merge that conflicts is recorded on its
+    reason. A reference that builds on the head is kept like this
     once the current evaluator scores it, and is the head then. With ``Cause.NOTE``, it keeps a regressed result in
     view as a lead (``verdict.note``), and the verdict stays whoever's it was unless the note changes it.
 
@@ -119,8 +118,7 @@ def set_verdict(
 def cancel_replaced(s: Session, campaign: Campaign, was: Candidate | None, actor: Actor) -> tuple[Run, ...]:
     """Cancel the open trunk runs that started from ``was``, if a verdict set by hand replaced it as the head.
 
-    Such a run builds on a tree that is not the head, and its brief named that head. A run that pins its base and a
-    branch run keep going. Each cancel is ``actor``'s, as ``piloop run cancel --wrap-up`` would ask it: the implementer
+    Such a run builds on a tree that is not the head, and its brief named that head. Each cancel is ``actor``'s, as ``piloop run cancel --wrap-up`` would ask it: the implementer
     may save its work, which is judged against the head when it has the head. Once the run ends, its idea is ready
     again (``HeadReplaced``). Return the runs, oldest first.
     """
@@ -128,7 +126,7 @@ def cancel_replaced(s: Session, campaign: Campaign, was: Candidate | None, actor
     if was is None or (now is not None and now.id == was.id):
         return ()
     stale = select(Run).where(
-        Run.campaign_id == campaign.id, Run.base_candidate_id == was.id, Run.status.in_(OPEN_RUNS), ~Run.branch
+        Run.campaign_id == campaign.id, Run.base_candidate_id == was.id, Run.status.in_(OPEN_RUNS)
     )
     runs = s.scalars(stale.order_by(Run.id)).all()
     for run in runs:
@@ -143,16 +141,11 @@ def missing_head(s: Session, candidate: Candidate) -> Candidate | None:
 
     A candidate builds on the head when the head is among its ancestors (``parent_id``): a commit of a run that
     started from it. Else the vcs decides (``Repository.contains``): a merge onto the head, or a compose that took it.
-    A keep that would not raise the trunk's bar (``VerdictRule.raises_bar``), such as a branch run's, never moves the
-    head.
 
     Raises:
         Refused: the vcs cannot tell, for example because the campaign repo is gone.
     """
     campaign = s.get_one(Campaign, candidate.campaign_id)
-    kept = replace(node(s, candidate), verdict=Outcome.KEEP)
-    if not verdict_rule(campaign.config).raises_bar(kept, Trunk()):
-        return None
     trunk = head(s, campaign)
     ancestor: Candidate | None = candidate
     while trunk is not None and ancestor is not None and ancestor.id != trunk.id:

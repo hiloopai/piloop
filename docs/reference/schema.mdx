@@ -389,7 +389,6 @@ CREATE TABLE runs (
 	role VARCHAR DEFAULT 'implementer' NOT NULL,
 	attempt INTEGER,
 	base_candidate_id INTEGER NOT NULL,
-	branch BOOLEAN DEFAULT 0 NOT NULL,
 	harness VARCHAR NOT NULL,
 	model VARCHAR NOT NULL,
 	status VARCHAR(16) DEFAULT 'queued' NOT NULL,

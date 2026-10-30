@@ -4197,7 +4197,7 @@
     "/v1/submissions": {
       "post": {
         "summary": "Submit",
-        "description": "Submit a version of the caller's run, an implementer's: the daemon scores and judges it now.",
+        "description": "Submit a version of the caller's run, an implementer's: the daemon scores and judges it now.\n\nA version that the run submitted already answers as it is, also after the run ended: a retry. Any other is refused\nbefore its ``blob``, from a worker elsewhere, is taken into the repo of record.",
         "operationId": "submit",
         "requestBody": {
           "content": {
@@ -9147,6 +9147,18 @@
             "type": "string",
             "title": "Revision",
             "description": "The version, as the campaign's vcs names one: a commit of the caller's checkout."
+          },
+          "blob": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blob",
+            "description": "The address in the CAS of the versions that the repo of record lacks (``Repository.send``), from a checkout on a\nworker elsewhere. None: the repo of record has the version. Text, so a client loads no CAS."
           }
         },
         "type": "object",

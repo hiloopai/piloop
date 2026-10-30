@@ -46,7 +46,6 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
     Judgement,
     Side,
     Stopped,
-    Trunk,
     VerdictRule,
 )
 from piloop.plugins.host import data_errors
@@ -209,9 +208,7 @@ def test_a_rule_gets_the_rungs_that_each_side_climbed(monkeypatch: pytest.Monkey
         cfg,
         cfg.all_tracks[0],
         tmp_path,
-        head=None,
-        side=Trunk(),
-        evidence=judge.Evidence(),
+        judge.Evidence(),
     ) == (Outcome.INTERESTING, "{'screen': {'accuracy': 0.5}} vs {'screen': {'accuracy': 0.7}}")
 
 

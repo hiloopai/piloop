@@ -6,6 +6,7 @@ import socket
 import subprocess
 import threading
 from collections.abc import Generator, Iterator
+from contextlib import closing
 from datetime import timedelta
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -22,7 +23,7 @@ from piloop.actor import Agent
 from piloop.api.client import CLONE_WAIT
 from piloop.ids import AgentSessionId, Revision, TargetRef
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN
-from piloop.plugins.vcs.contract import CloneFailed, Version
+from piloop.plugins.vcs.contract import CloneFailed, Transfer, UnknownRevision, VcsError, Version
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, commands as git
 from tests.conftest import disk, git_processes
 
@@ -477,3 +478,13 @@ def test_a_clone_from_a_remote_that_stalls_is_stopped_at_its_bound_and_leaves_no
 
 def test_a_registration_that_clones_waits_longer_than_a_clone_may_take() -> None:
     assert CLONE_WAIT > git.CLONE_TIMEOUT
+
+
+def test_a_blob_that_is_no_bundle_is_a_vcs_error_and_names_its_version_unknown(campaign_path: Path) -> None:
+    cas = disk(campaign_path.parent)
+    with closing(Git().open(campaign_path)) as repo:
+        base = repo.head().revision
+        with pytest.raises(VcsError, match='does not apply'):
+            repo.receive(cas, Transfer(blob=cas.put(b'not a bundle'), head=Revision('f' * 40)), base)
+        with pytest.raises(UnknownRevision, match='names no commit'):
+            repo.version('f' * 40)

@@ -39,7 +39,7 @@ from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database, migrate
-from piloop.ids import AgentSessionId, CampaignId, RoleName
+from piloop.ids import AgentSessionId, CampaignId, Revision, RoleName
 from piloop.net.server import Server, app, local_listener, url
 from piloop.net.tokens import Tokens, mint_agent
 from piloop.otel import Tracer
@@ -65,7 +65,9 @@ from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanne
 from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
 from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.contribution import collect, contributions_of, installed
+from piloop.plugins.executor.contract import AgentJob
 from piloop.plugins.executor.kit.leases import Timing
+from piloop.plugins.executor.kit.relay import Shipped
 from piloop.plugins.executor.workers import Workers, WorkersExecutor
 from piloop.plugins.executor.workers.worker import Worker
 from piloop.plugins.harness.contract import Usage, each_provider
@@ -927,3 +929,8 @@ class EveryClient(
     BacklogClient, CandidatesClient, VerdictsClient, OptimizationClient, EvaluationClient, RunsClient, LineageClient
 ):
     """A client of every route: core's, those of optimization and its components, and the lineage's."""
+
+
+def no_ship(job: AgentJob, revision: Revision | None) -> Shipped:
+    """A relay's ``Ship`` for a test whose agents submit nothing."""
+    raise AssertionError(f'no agent of this test submits a version: {revision}')

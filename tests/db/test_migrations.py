@@ -1199,3 +1199,50 @@ def test_0077_and_optimization_0007_give_comment_kinds_no_behaviour_end_no_run_a
             'finding_grace': 'PT90S'
         }
         assert con.execute("SELECT after_end FROM comment_kinds WHERE id = 'finding'").fetchone() == ('refused',)
+
+
+def test_optimization_0008_makes_each_branch_keep_interesting_so_the_head_stays_and_downgrades(tmp_path: Path) -> None:
+    """A 0.5 branch keep never moved the head: without ``runs.branch`` it would be a trunk keep, newer than the head."""
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0007')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('c', '/c', '{}')")
+        for branch in (0, 1):
+            con.execute(
+                'INSERT INTO runs (campaign_id, base_candidate_id, harness, model, branch) VALUES (1, 1, ?, ?, ?)',
+                ('h', 'm', branch),
+            )
+        rows = (
+            ('base', None, 'keep', None),
+            ('trunk', 1, 'keep', 'against candidate#1: +1'),
+            ('branch', 2, 'keep', 'against candidate#1: +2'),
+            ('lead', 2, 'discard', 'against candidate#3: -1'),
+        )
+        for tree, run, verdict, reason in rows:
+            con.execute(
+                'INSERT INTO candidates (campaign_id, run_id, tree_sha, revision, origin, verdict, verdict_reason)'
+                " VALUES (1, ?, ?, ?, 'run', ?, ?)",
+                (run, tree, tree, verdict, reason),
+            )
+    command.upgrade(chain, '0008')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT tree_sha, verdict, verdict_reason FROM candidates ORDER BY id').fetchall() == [
+            ('base', 'keep', None),
+            ('trunk', 'keep', 'against candidate#1: +1'),
+            (
+                'branch',
+                'interesting',
+                'against candidate#1: +2; a branch keep of 0.5, which never moved the head: interesting since 0.6',
+            ),
+            ('lead', 'discard', 'against candidate#3: -1'),
+        ], "the latest keep is the trunk run's still: the head stays"
+        assert 'branch' not in [c for _, c, *_ in con.execute('PRAGMA table_info(runs)')]
+    command.downgrade(chain, '0007')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT id, branch FROM runs ORDER BY id').fetchall() == [(1, 0), (2, 1)]
+        assert con.execute("SELECT verdict, verdict_reason FROM candidates WHERE tree_sha = 'branch'").fetchone() == (
+            'keep',
+            'against candidate#1: +2',
+        )

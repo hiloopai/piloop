@@ -112,7 +112,10 @@ class GitRepository(Repository):
         A line that the agent merged in is not its own: a merge's parent is the commit that it merged onto, and the
         merged line is not scored again.
         """
-        bundles.unbundle(cas, self.repo, transfer.blob, [transfer.head])
+        try:
+            bundles.unbundle(cas, self.repo, transfer.blob, [transfer.head])
+        except GitCommandError as e:
+            raise VcsError(f'the bundle {transfer.blob} does not apply to {self.repo.working_dir}: {e.stderr}') from e
         line = self.repo.iter_commits(f'{base}..{transfer.head}', first_parent=True)
         return [self._version(c.hexsha) for c in line][::-1]
 

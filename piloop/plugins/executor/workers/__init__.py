@@ -11,6 +11,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Self
 
@@ -108,12 +109,17 @@ class WorkersExecutor:
         self._cli = Runner(host.db, host.home, host.repos)
         """What the ``cli`` route does: an agent's relayed call, run here."""
         local = Local(self.leases, SERVE)
+        site = jobs.local_site(host.home, host.cas, host.repos, host.records, host.reserve)
         self.worker = Worker(
             local,
             host.tracer,
-            jobs.local_site(host.home, host.cas, host.repos, host.records, host.reserve),
+            site,
             runtime_factory=host.runtimes,
-            relay=Relay(socket_at(host.home / RELAY_SOCKET), lambda lease, call: self._cli(local.relayed(lease), call)),
+            relay=Relay(
+                socket_at(host.home / RELAY_SOCKET),
+                lambda lease, call: self._cli(local.relayed(lease), call),
+                partial(jobs.ship, site),
+            ),
         )
         """The worker inside ``piloop serve``, in the pool ``serve``. Its agents call piloop directly, except those of a
         runtime that sees none of this home, such as ``docker``: they relay their calls, as on a worker elsewhere."""
@@ -227,7 +233,8 @@ def remote_worker(
     """
     client = Remote(http, stop, tracer)
     site = jobs.remote_site(home, cas, client.send, reserve)
-    return Worker(client, tracer, site, pool=pool, relay=Relay(relay, client.cli), once=once, orphan_exit=orphan_exit)
+    relaying = Relay(relay, client.cli, partial(jobs.ship, site))
+    return Worker(client, tracer, site, pool=pool, relay=relaying, once=once, orphan_exit=orphan_exit)
 
 
 @dataclass(frozen=True)

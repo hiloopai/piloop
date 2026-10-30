@@ -19,6 +19,9 @@ import psutil
 
 STDERR_IN_ERROR = 500
 """The number of characters of a failed command's stderr that piloop keeps in the error it stores on a row."""
+TEMPFAIL = 75
+"""The exit of a command that is not done yet and asks to be called again (``EX_TEMPFAIL``), such as a
+``piloop submit --wait`` whose verdict is not in: the relay of a worker elsewhere calls it again."""
 RESULT_ENV = 'PILOOP_RESULT_FILE'
 """The pipe that a command which piloop reads writes its results to, one JSON object per line (``ResultPipe``)."""
 ACTOR_ENV = 'PILOOP_ACTOR'

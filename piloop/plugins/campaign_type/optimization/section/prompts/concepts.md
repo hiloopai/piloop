@@ -10,8 +10,7 @@
   `reference`, `recovered` or `skipped`, and only the first two are judged. {vcs:skip}
 - The **head** is the latest *trunk keep*. A run that pins no base starts from it. A keep against a bar that the head
   has passed is `interesting`, and the daemon merges it onto the head and judges the merge there (*rebase-on-keep*).
-- A run whose idea pins another base (`runs.branch`) is judged against that base, and its *branch keep* never moves the
-  head. A `reference` (`piloop candidate import`) is measured, never judged.
+- A `reference` (`piloop candidate import`) is measured, never judged.
 - A campaign can have several **tracks**, each with its own primary metric (`ideas.track`, `candidates.track`). On a
   track, every other track's primary is one more guardrail.
 - **Comments** attach to any row. **Events** are the append-only log of what happened.

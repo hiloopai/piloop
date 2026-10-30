@@ -7,16 +7,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from piloop.actor import Agent
 from piloop.api.contract import (
     Problem,
 )
 from piloop.campaign.campaigns import repository
 from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Api, Reading, Writing, actor_access, reader
 from piloop.db import feed as db_feed
-from piloop.db.models import AgentSession, Campaign
+from piloop.db.models import Campaign
 from piloop.db.session import Database
 from piloop.net import Refusal
 from piloop.net.server import changed
@@ -24,9 +24,8 @@ from piloop.plugins.campaign_type.kit.candidates.api import AddressedCandidate, 
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer
-from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, queue
+from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, queue, submissions
 from piloop.plugins.campaign_type.kit.evaluation.measure import metrics, rung_results
-from piloop.plugins.campaign_type.kit.evaluation.submissions import SubmitRefused, submit as submit_version
 from piloop.plugins.campaign_type.kit.evaluation.wire import (
     CandidateDetail,
     EvaluationQueue,
@@ -36,9 +35,11 @@ from piloop.plugins.campaign_type.kit.evaluation.wire import (
     SubmissionQuery,
     SubmitBody,
 )
-from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, candidate_view, label
-from piloop.plugins.vcs.contract import UnknownRevision
+from piloop.plugins.cas.contract import Cas
+from piloop.plugins.vcs.contract import Repository, Transfer, UnknownRevision, VcsError, Version
+from piloop.store.tree import Missing
 
 router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUSALS_DOCUMENTED)
 """The evaluation's routes, beside the API's."""
@@ -104,25 +105,51 @@ def cancel_evaluation(s: Writing, me: Acting, candidate: AddressedCandidate) -> 
 
 
 @router.post('/submissions', operation_id='submit', dependencies=[Depends(actor_access)])
-def submit(s: Writing, me: Acting, body: SubmitBody) -> Submission:
-    """Submit a version of the caller's run, an implementer's: the daemon scores and judges it now."""
-    match me:
-        case Agent(session=session) if (agent := s.get(AgentSession, session)) is not None and (
-            run_id := run_of(agent)
-        ) is not None:
-            run = s.get_one(Run, run_id)
-        case _:
-            raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, f'{me} does no run: only an implementer submits')
+def submit(s: Writing, me: Acting, api: Api, body: SubmitBody) -> Submission:
+    """Submit a version of the caller's run, an implementer's: the daemon scores and judges it now.
+
+    A version that the run submitted already answers as it is, also after the run ended: a retry. Any other is refused
+    before its ``blob``, from a worker elsewhere, is taken into the repo of record.
+    """
+    run = submissions.run_of_agent(s, me)
     with closing(repository(run.campaign)) as repo:
-        try:
-            candidate = submit_version(s, run, repo.version(body.revision), repo, me)
-        except UnknownRevision as e:
-            why = f'the campaign repo has no {body.revision}: submit a commit of your checkout ({e})'
-            raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, why) from e
-        except SubmitRefused as e:
-            raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, str(e)) from e
+        version = _version(repo, body.revision)
+        if version is not None and (own := submissions.resubmitted(s, run, version)) is not None:
+            return _submission(s, own)
+        submissions.refuse(s, run)
+        if version is None:
+            version = _received(repo, api.cas, run, body)
+        candidate = submissions.submit(s, run, version, repo, me)
     s.commit()
     return _submission(s, candidate)
+
+
+def _version(repo: Repository, revision: str) -> Version | None:
+    """The version that ``revision`` names in the repo of record, or None when it lacks it."""
+    try:
+        return repo.version(revision)
+    except UnknownRevision:
+        return None
+
+
+def _received(repo: Repository, cas: Cas, run: Run, body: SubmitBody) -> Version:
+    """Take the version of ``body`` into the repo of record from its blob, and return it.
+
+    Raises:
+        Refusal: there is no blob, it is no address, the CAS lacks it, or the repo cannot take it.
+    """
+    if body.blob is None:
+        why = f'the campaign repo has no {body.revision}: submit a commit of your checkout'
+        raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, why)
+    try:
+        sent = Transfer.model_validate({'blob': body.blob, 'head': body.revision})
+    except ValidationError as e:
+        raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, f'{body.blob} is no blob address: {e}') from e
+    try:
+        repo.receive(cas, sent, run.base.revision)
+        return repo.version(body.revision)
+    except (Missing, VcsError) as e:  # UnknownRevision is one: the blob lacked the version
+        raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, f'{body.revision} did not come: {e}') from e
 
 
 @router.get('/submissions/{candidate}', operation_id='submission')

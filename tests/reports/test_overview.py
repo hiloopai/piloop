@@ -333,20 +333,15 @@ def test_open_runs_say_how_far_they_got(db: Database, campaign: Campaign) -> Non
     ]
 
 
-def test_branches_and_notes_say_where_else_a_run_may_start(db: Database, campaign: Campaign) -> None:
-    """A branch keep starts its own lineage, and a note shows a candidate that regressed.
-
-    A keep that the current evaluator has not measured yet is in no lineage.
-    """
+def test_notes_say_where_else_a_run_may_take_a_change_from(db: Database, campaign: Campaign) -> None:
+    """A note shows a candidate that regressed."""
     live_campaign(db, campaign)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         explore = idea(s, p, 'from the baseline', IdeaStatus.DONE)
-        branch = run(s, explore, RunStatus.SUCCEEDED, 1, 60, 70, branch=True)
-        candidate(s, p, 1, Outcome.KEEP, 2, 65, run_id=branch.id)
-        noted = candidate(s, p, 1, Outcome.INTERESTING, 0.5, 66, run_id=branch.id, verdict_by=f'run#{branch.id}')
+        tried = run(s, explore, RunStatus.SUCCEEDED, 1, 60, 70)
+        noted = candidate(s, p, 1, Outcome.INTERESTING, 0.5, 66, run_id=tried.id, verdict_by=f'run#{tried.id}')
         noted.cause, noted.verdict_reason = Cause.NOTE, 'halves the eval time; against candidate#1: score 0.5 vs 1'
-        s.add(Candidate(campaign_id=p.id, tree_sha='unmeasured', revision='u', verdict=Outcome.KEEP, run_id=branch.id))
         s.commit()
     trajectory = render(db, campaign).split('## Trajectory\n\n')[1].split('## Runs')[0]
     assert trajectory == snapshot("""\
@@ -355,11 +350,8 @@ def test_branches_and_notes_say_where_else_a_run_may_start(db: Database, campaig
 - Trunk keeps (latest 8; when first measured, the gain on its track over the head before it):
   - 10-01 12:00 candidate#1 1 (start): baseline
   - 10-01 12:18 candidate#2 3 (+2) idea#1: score 3
-- Lineages (latest keep of each; a branch keep never moves the head):
-  - trunk from candidate#1 (keep): latest candidate#2 3, 2 kept
-  - branch from candidate#1 (keep): latest candidate#6 —, 2 kept
 - Notes (regressed, kept in view as leads; a worker takes the change of one):
-  - candidate#5 0.5 by run#4: halves the eval time; against candidate#1: score 0.5 vs 1
+  - candidate#4 0.5 by run#4: halves the eval time; against candidate#1: score 0.5 vs 1
 
 """)
 

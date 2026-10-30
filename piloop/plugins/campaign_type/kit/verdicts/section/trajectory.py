@@ -1,5 +1,3 @@
-from typing import assert_never
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -8,14 +6,12 @@ from piloop.config import CampaignConfig
 from piloop.db.models import Campaign, count
 from piloop.plugins.campaign_type.kit.candidates.ids import Cause
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.measure import known, score
 from piloop.plugins.campaign_type.kit.runs.ids import FINISHED_RUNS
 from piloop.plugins.campaign_type.kit.runs.stop import attempt
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
-from piloop.plugins.campaign_type.kit.verdicts.judge import baseline, lineages, track_of, trunk_keeps
-from piloop.plugins.campaign_type.kit.verdicts.verdict import label, noted_by
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Branch, Trunk
+from piloop.plugins.campaign_type.kit.verdicts.judge import baseline, track_of, trunk_keeps
+from piloop.plugins.campaign_type.kit.verdicts.verdict import noted_by
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.reports.overview import num
 from piloop.text import age, cell, metric
@@ -27,7 +23,7 @@ STEPS_SHOWN = 8
 class Trajectory(Section):
     """The trunk: the start, the head, the gain of each track between them, and the latest trunk keeps.
 
-    Then come the lineages of keeps when there is more than one, and the latest notes: other places a run can start.
+    Then come the latest notes: leads that a run can take a change from.
     """
 
     SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
@@ -74,32 +70,14 @@ class Trajectory(Section):
                 f'  - {known(c):%m-%d %H:%M} candidate#{c.id}{on} {num(value)}{delta}{idea}:'
                 f' {cell(c.summary or "—", 80)}'
             )
-        lines += _branches(s, campaign, cfg)
+        lines += _notes(s, campaign, cfg)
         return Rendered(title='Trajectory', blocks=(Lines(lines=tuple(lines)),))
 
 
-def _branches(s: Session, campaign: Campaign, cfg: CampaignConfig) -> list[str]:
-    """List the lineages of keeps if there is more than one, then the latest notes."""
-    found = lineages(s, campaign)
+def _notes(s: Session, campaign: Campaign, cfg: CampaignConfig) -> list[str]:
+    """List the latest notes."""
     evaluator_id = campaign.evaluator_id
     lines = []
-    if len(found) > 1:
-        lines.append('- Lineages (latest keep of each; a branch keep never moves the head):')
-        for line in found:
-            match line.lineage:
-                case Trunk():
-                    root = baseline(s, campaign)
-                    assert root is not None  # a lineage has keeps, so the campaign has its first candidate
-                    start = f'trunk from candidate#{root.id} ({label(root)})'
-                case Branch(root=root_id):
-                    root = s.get_one(Candidate, root_id)
-                    start = f'branch from candidate#{root.id} ({label(root)})'
-                case _:
-                    assert_never(line.lineage)
-            lines.append(
-                f'  - {start}: latest candidate#{line.latest.id} {_values(line.latest, cfg, evaluator_id)},'
-                f' {line.keeps} kept'
-            )
     noted = s.scalars(
         select(Candidate)
         .where(Candidate.campaign_id == campaign.id, Candidate.cause == Cause.NOTE)
@@ -114,10 +92,3 @@ def _branches(s: Session, campaign: Campaign, cfg: CampaignConfig) -> list[str]:
             for c in noted
         ]
     return lines
-
-
-def _values(c: Candidate, cfg: CampaignConfig, evaluator_id: EvaluatorId | None) -> str:
-    """Format the primary of each track on ``c``: ``accuracy 0.91, seconds 3.1``. One track shows the score only."""
-    if not cfg.multitrack:
-        return num(score(c, evaluator_id, cfg.all_tracks[0].primary))
-    return ', '.join(f'{t.primary.name} {num(score(c, evaluator_id, t.primary))}' for t in cfg.all_tracks)

@@ -1,5 +1,6 @@
 """The evaluation's commands, clients of the API: ``piloop eval``, ``piloop measurement add``, ``piloop submit``."""
 
+import time
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from piloop.plugins.campaign_type.kit.evaluation.wire import (
     SubmitBody,
     WaitingSince,
 )
+from piloop.proc import TEMPFAIL
 from piloop.text import age, cell, metric
 
 eval_app = cyclopts.App(
@@ -118,6 +120,13 @@ def submit(
         str | None, cyclopts.Parameter(help='The commit to submit. Default: the one that your checkout is at.')
     ] = None,
     /,
+    *,
+    blob: Annotated[
+        str | None, cyclopts.Parameter(help='The versions that the repo of record lacks, in the CAS.', show=False)
+    ] = None,
+    wait: Annotated[
+        float | None, cyclopts.Parameter(help='Wait this many seconds at most, then exit 75 if no verdict.', show=False)
+    ] = None,
 ) -> None:
     """Score a commit of your run now, and wait for its verdict.
 
@@ -130,9 +139,14 @@ def submit(
 
         with closing(VCS.selected({}).open(Path.cwd())) as checkout:
             revision = checkout.head().revision
+    deadline = None if wait is None else time.monotonic() + wait
     with EvaluationClient.connect(daemon_http()) as client:
-        answer = client.submit(SubmitBody(revision=revision))
+        answer = client.submit(SubmitBody(revision=revision, blob=blob))
         while answer.verdict == PENDING:
-            answer = client.submission(answer.candidate, SubmissionQuery(wait=MAX_POLL_SECONDS))
+            left = MAX_POLL_SECONDS if deadline is None else min(MAX_POLL_SECONDS, deadline - time.monotonic())
+            if left <= 0:
+                common.console.print(f'pending: candidate#{answer.candidate}', markup=False, highlight=False)
+                raise SystemExit(TEMPFAIL)
+            answer = client.submission(answer.candidate, SubmissionQuery(wait=left))
     score = '' if answer.score is None else f' {metric(answer.score)}'
     common.console.print(f'{answer.verdict}{score}', markup=False, highlight=False)

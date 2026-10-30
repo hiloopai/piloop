@@ -102,11 +102,9 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import (
     fallback_track,
     head,
     judge_tracks,
-    node,
     on_moved,
     reproposed,
     short_of_noise,
-    side,
     track_of,
     unjudged,
     verdict_rule,
@@ -121,7 +119,7 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     rejudgeable,
     write,
 )
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Lineage, Sealed, Trunk
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Sealed
 from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.executor.contract import (
     DEADLINE_ENV,
@@ -923,8 +921,8 @@ class RunController:
         (``_follow``).
 
         Each candidate is judged on every track, the run's first (``judge_tracks``), against a bar. The bar starts at
-        the bar of the run's base (``ledger.bar_of``). Each keep becomes the new bar. A run that is not a branch run
-        keeps on the trunk only while its bar is the head. If the head has moved past the bar, a
+        the bar of the run's base (``ledger.bar_of``). Each keep becomes the new bar. A run keeps on the
+        trunk only while its bar is the head. If the head has moved past the bar, a
         keep is rebased onto the head and the merge is judged there (``_judge``, ``_follow``). A commit whose tree is
         already a candidate is that candidate. It is measured only if the current evaluator has not measured it, and it
         keeps its verdict, unless another run reached it (``ledger.reproposed``): then it is judged again on this
@@ -1383,7 +1381,7 @@ class RunController:
         that another run made meanwhile, of the same tree, stays. An ``unmeasured`` commit gets no verdict: its origin
         is ``recovered`` or ``skipped`` instead, with the reason of ``UNMEASURED_REASONS``.
 
-        A keep against a bar that is no longer the head stays off the trunk, unless the run is a branch run. The head
+        A keep against a bar that is no longer the head stays off the trunk. The head
         moved while the run worked or while the daemon measured. The candidate becomes ``interesting``
         (``Cause.MOVED``), and what the verdict rule says follows is done in the same transaction (``ledger.on_moved``):
         by default its merge onto the head, which is judged next (``Judged.merged``). See ``_verdict``.
@@ -1433,7 +1431,7 @@ class RunController:
                     case _:
                         assert_never(unmeasured)
                 s.commit()
-            advanced = verdict_rule(scope.cfg).raises_bar(node(s, candidate), scope.side) or moved
+            advanced = candidate.verdict is Outcome.KEEP or moved
             span.set(
                 verdict=label(candidate),
                 summary=candidate.summary,
@@ -1449,13 +1447,11 @@ class RunController:
         Each track judges it (``judge_tracks``), and the candidate has the best verdict. On the trunk, a candidate
         whose history contains a head that is not the run's bar is judged against the head instead, whatever it scores
         against the bar: the head may have moved below the bar, by a keep by hand. Else a rebase is needed for a keep
-        against a bar that is no longer the head, unless the run is a branch run.
+        against a bar that is no longer the head.
         """
         trunk = head(s, s.get_one(Campaign, candidate.campaign_id), excluding=candidate)
-        match scope.side, trunk:
-            case Trunk(), Candidate() as moved if moved.id != bar_id and scope.repo.contains(
-                candidate.revision, moved.revision
-            ):
+        match trunk:
+            case Candidate() as moved if moved.id != bar_id and scope.repo.contains(candidate.revision, moved.revision):
                 judged = judge_tracks(
                     candidate,
                     moved,
@@ -1463,9 +1459,7 @@ class RunController:
                     scope.cfg,
                     scope.track,
                     self._units_dir,
-                    head=moved,
-                    side=Trunk(),
-                    evidence=self._evidence(s, scope, candidate, moved),
+                    self._evidence(s, scope, candidate, moved),
                 )
                 why = f'the head candidate#{moved.id} is in its history: '
                 return [replace(j, reason=why + j.reason) for j in judged], None
@@ -1479,13 +1473,11 @@ class RunController:
             scope.cfg,
             scope.track,
             self._units_dir,
-            head=trunk,
-            side=scope.side,
-            evidence=self._evidence(s, scope, candidate, bar),
+            self._evidence(s, scope, candidate, bar),
         )
         *others, best = judged
-        match scope.side, best.verdict, trunk:
-            case Trunk(), Outcome.KEEP, Candidate() as moved if moved.id != bar_id:
+        match best.verdict, trunk:
+            case Outcome.KEEP, Candidate() as moved if moved.id != bar_id:
                 reason = MOVED.format(head=moved.id) + best.reason
                 return [*others, replace(best, verdict=Outcome.INTERESTING, reason=reason)], moved
             case _:
@@ -1598,7 +1590,6 @@ class Scope:
     track: Track
     repo: Repository
     evaluator_id: EvaluatorId
-    side: Lineage
 
     @classmethod
     def now(cls, s: Session, run: Run, repo: Repository) -> Scope:
@@ -1613,7 +1604,6 @@ class Scope:
             fallback_track(cfg, run.idea.track if run.idea is not None else None),
             repo,
             evaluator.id,
-            side(run),
         )
 
 

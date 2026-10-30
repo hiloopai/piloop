@@ -23,8 +23,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Origin, Outco
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
-from piloop.plugins.campaign_type.kit.verdicts.judge import bar_of, baseline, head, trunk_keeps
-from piloop.plugins.campaign_type.kit.verdicts.ops import missing_head
+from piloop.plugins.campaign_type.kit.verdicts.judge import bar_of, baseline, head
 from piloop.plugins.host import ContractBroken
 from tests.campaign.test_ops import ACTOR, commit_on, run_candidate
 from tests.conftest import ScriptRuntime
@@ -33,10 +32,8 @@ from tests.daemon.test_run_controller import controller, execute, keep_elsewhere
 
 RULES = {
     'base_bar': 'BaseBar',
-    'every_keep': 'EveryKeep',
     'first_head': 'FirstHead',
     'leaves': 'Leaves',
-    'no_compose': 'NoCompose',
     'astray': 'Astray',
 }
 
@@ -109,43 +106,6 @@ def test_the_bar_of_a_run_is_the_rules_choice_from_the_ancestry_of_its_base(
         bar_of(s, s.get_one(Candidate, lead_id))
 
 
-def test_the_trunk_and_its_head_are_the_keeps_that_raise_the_trunks_bar(
-    db: Database, campaign: Campaign, rules: None
-) -> None:
-    """``every_keep`` lets a branch keep raise the trunk's bar: it is a trunk keep, and the head."""
-    with db.session() as s:
-        root = first(s, s.get_one(Campaign, campaign.id))
-        idea = Idea(track='score', campaign_id=campaign.id, title='t', hypothesis='h', created_by='t')
-        s.add(idea)
-        s.flush()
-        run = Run(
-            campaign_id=idea.campaign_id,
-            idea_id=idea.id,
-            attempt=1,
-            base_candidate_id=root.id,
-            branch=True,
-            harness='h',
-            model='m',
-        )
-        kept = child(s, root, 'branch keep', Outcome.KEEP, run)
-        lead = child(s, root, 'branch lead', Outcome.INTERESTING, run)
-        s.commit()
-        kept_id, lead_id = kept.id, lead.id
-    with db.session() as s:
-        proj = s.get_one(Campaign, campaign.id)
-        root = first(s, proj)
-        assert (trunk_keeps(s, proj), head(s, proj)) == ([root], root)
-        assert missing_head(s, s.get_one(Candidate, lead_id)) is None, (
-            'bootstrap: a branch keep never moves the head, nor would a keep of a branch lead'
-        )
-    select_rule(db, campaign, 'every_keep')
-    with db.session() as s:
-        proj = s.get_one(Campaign, campaign.id)
-        root, kept = first(s, proj), s.get_one(Candidate, kept_id)
-        assert (trunk_keeps(s, proj), head(s, proj)) == ([root, kept], kept)
-        assert head(s, proj, excluding=kept) == root, 'the candidate judged is never its own bar'
-
-
 def test_the_head_is_the_rules_choice_among_the_trunk_keeps(db: Database, campaign: Campaign, rules: None) -> None:
     with db.session() as s:
         root = first(s, s.get_one(Campaign, campaign.id))
@@ -167,10 +127,10 @@ def test_the_head_is_the_rules_choice_among_the_trunk_keeps(db: Database, campai
         head(s, s.get_one(Campaign, campaign.id))
 
 
-def test_a_keep_that_lacks_the_head_is_left_or_merged_without_a_seed_as_the_rule_says(
+def test_a_keep_that_lacks_the_head_is_left_or_merged_and_a_conflict_files_no_idea(
     db: Database, campaign: Campaign, rules: None
 ) -> None:
-    """The keeps by hand of ``ops.set_verdict``: ``leaves`` merges none, ``no_compose`` files no seed on a conflict."""
+    """The keeps by hand of ``ops.set_verdict``: ``leaves`` merges none; a merge that conflicts is recorded, no more."""
     base = Repo(campaign.path).head.commit.hexsha
     old_sha, trunk_sha = commit_on(campaign, base, {'x.txt': 'o\n'}), commit_on(campaign, base, {'x.txt': 't\n'})
     old = run_candidate(db, campaign, Outcome.DISCARD, commit=old_sha)
@@ -188,7 +148,7 @@ def test_a_keep_that_lacks_the_head_is_left_or_merged_without_a_seed_as_the_rule
             f'keeps against its own bar, but the head moved on to candidate#{trunk}: kept by hand: measured by hand',
         ), 'no merge, nothing appended'
         s.commit()
-    select_rule(db, campaign, 'no_compose')
+    select_rule(db, campaign, 'base_bar')
     with db.session() as s:
         kept = verdicts_ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
         assert kept.rebased is not None and kept.rebased.conflicts == ['x.txt']

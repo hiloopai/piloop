@@ -69,6 +69,7 @@ keep 2720458
 - A submission that beats only its parent is recorded, nothing more. The `candidate.judged` event has the gain over
   the parent (`parent_delta`) and over the head (`best_delta`).
 - The implementer gets the verdict and the score, never the reason, the feedback or a per-unit result.
+- A run that claimed no idea submits nothing.
 
 `[evaluator] scoring = "run_end"` scores every commit after the run ends instead, against the run's starting point.
 
@@ -126,12 +127,12 @@ always give the same verdict.
 
 Two runs can start from the same head. When the first keeps, the head moves. A later keep of the second is then
 `interesting`, with the cause `moved`. The daemon merges it onto the new head, and measures and judges the merge
-there. A merge that conflicts adds an open idea, `Compose candidate#N onto the head`.
+there. A merge that conflicts stays `interesting`, and its reason names the paths: piloop files no idea for it.
 
 A commit that already has the head, such as a merge of it, is judged against the head, not against the run's bar.
 
 A verdict set by hand can replace the head. Then piloop cancels the open runs that started from the old head, and
-their ideas are open again, for a run from the new head. A branch run of an older release goes on.
+their ideas are open again, for a run from the new head.
 
 ## Act on a candidate
 

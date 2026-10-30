@@ -623,7 +623,7 @@ class Worker:
             self._lost(grant.lease, GONE.format(what=job.kind))
             self.site.remove(job)  # its worktree is this lease's own: no later lease removes it
             return
-        self.relay.open({job.agent_session: grant.lease})  # a re-attached agent goes on relaying
+        self.relay.open(grant.lease, job)  # a re-attached agent goes on relaying
         if grant.started_at is None or not isinstance(grant.handle, AgentHandle):  # it never started, or unrecorded
             self.site.remove(job)
             self._lost(grant.lease, GONE.format(what='agent'))
@@ -672,7 +672,7 @@ class Worker:
         So what waits for the report reads a finished span.
         """
         runtime = self._runtime(job)
-        self.relay.open({job.agent_session: grant.lease})
+        self.relay.open(grant.lease, job)
         with self._tracer.span('piloop.job', lease=grant.lease, agent_session=job.agent_session) as span:
             report = jobs.run_agent(job, runtime, _Control(self, grant.lease, runtime), self.site, span)
         if report is not None:

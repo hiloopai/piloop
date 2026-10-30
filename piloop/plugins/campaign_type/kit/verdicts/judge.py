@@ -55,18 +55,15 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict import (
 )
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
     VERDICT_RULES,
-    Branch,
     Case,
     Criterion,
     Imported,
     Leave,
-    Lineage,
     Moved,
     Node,
     Ratio,
     Rebase,
     Sealed,
-    Seed,
     Side,
     Stopped,
     Trunk,
@@ -74,7 +71,6 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
 )
 from piloop.plugins.host import ContractBroken
 from piloop.plugins.vcs.contract import Conflicts, Pin, Repository
-from piloop.text import metric
 
 
 def head(s: Session, campaign: Campaign, *, excluding: Candidate | None = None) -> Candidate | None:
@@ -97,20 +93,19 @@ def last_keep_at(s: Session, campaign: Campaign) -> datetime | None:
 
 
 def trunk_keeps(s: Session, campaign: Campaign) -> list[Candidate]:
-    """Return the campaign's trunk keeps, oldest first: its keeps that raise the trunk's bar (``VerdictRule.raises_bar``)."""
+    """Return the campaign's trunk keeps, oldest first: every keep, a reference kept by hand among them."""
     trunk = [n.id for n in _trunk(s, campaign)]
     return list(s.scalars(select(Candidate).where(Candidate.id.in_(trunk)).order_by(Candidate.id)))
 
 
 def _trunk(s: Session, campaign: Campaign) -> list[Node]:
     """Return what the verdict rule reads of the trunk keeps, oldest first."""
-    rule = verdict_rule(campaign.config)
     kept = keeps(campaign).with_only_columns(Candidate.id).order_by(Candidate.id)
-    return [n for n in _nodes(s, kept, campaign.evaluator_id) if rule.raises_bar(n, Trunk())]
+    return list(_nodes(s, kept, campaign.evaluator_id))
 
 
 def verdict_rule(cfg: CampaignConfig) -> VerdictRule:
-    """Return the campaign's verdict rule: ``[plugins.verdict_rule]``, else ``bootstrap``."""
+    """Return the campaign's verdict rule: ``[plugins.verdict_rule]``, else ``noise``."""
     return VERDICT_RULES.selected(cfg.plugins)
 
 
@@ -128,13 +123,8 @@ def _nodes(s: Session, ids: Select[CandidateId], evaluator_id: EvaluatorId | Non
     """
     order = list(s.scalars(ids))
     given = ids.order_by(None)
-    rows = select(Candidate.id, Candidate.verdict, Candidate.origin, Run.branch, Run.base_candidate_id)
-    made = {
-        c: (verdict, _made(origin, branch, base))
-        for c, verdict, origin, branch, base in s.execute(
-            rows.outerjoin(Run, Candidate.run_id == Run.id).where(Candidate.id.in_(given))
-        )
-    }
+    rows = select(Candidate.id, Candidate.verdict, Candidate.origin).where(Candidate.id.in_(given))
+    made = {c: (verdict, _made(origin)) for c, verdict, origin in s.execute(rows)}
     measured = select(Measurement.candidate_id, Measurement.metrics).where(
         Measurement.candidate_id.in_(given),
         Measurement.evaluator_id == evaluator_id,
@@ -147,15 +137,9 @@ def _nodes(s: Session, ids: Select[CandidateId], evaluator_id: EvaluatorId | Non
     return [Node(c, made[c][0], made[c][1], derive(means(results.get(c, [])), found)) for c in order]
 
 
-def _made(origin: Origin, branch: bool | None, base: CandidateId | None) -> Lineage | Imported:
-    """Return where a candidate was made: imported, on the branch of a branch run, else on the trunk."""
-    match origin, branch, base:
-        case Origin.REFERENCE, _, _:
-            return Imported()
-        case _, True, int() as root:
-            return Branch(CandidateId(root))
-        case _:
-            return Trunk()
+def _made(origin: Origin) -> Trunk | Imported:
+    """Return where a candidate was made: imported, else on the trunk."""
+    return Imported() if origin is Origin.REFERENCE else Trunk()
 
 
 def _ancestry(candidate: Candidate) -> Select[CandidateId]:
@@ -411,9 +395,6 @@ def judge(
     cfg: CampaignConfig,
     track: Track,
     units_dir: Path,
-    *,
-    head: Candidate | None,
-    side: Lineage,
     evidence: Evidence,
 ) -> tuple[Outcome, str]:
     """Return the daemon's verdict on ``candidate``, a candidate of ``track``, against ``own``, and the reason.
@@ -422,25 +403,11 @@ def judge(
     starts as the run's base. The run controller keeps a run's candidate on the trunk only while ``own`` is the head. A keep
     against an ``own`` that the head has moved past is rebased onto the head instead (``rebase``).
 
-    On a ``Branch`` (``runs.branch``: its idea pinned another starting point), a run keeps what beats ``own``: a branch
-    keep. Its reason also says whether it is above ``head`` on the track's primary.
-
     The campaign's verdict rule gives the verdict (``decide``): ``[plugins.verdict_rule]``, else ``noise``. It reads
     the candidate's parent and the ``evidence`` too.
     """
     judged = verdict_rule(cfg).decide(case_of(candidate, own, evaluator_id, cfg, track, units_dir, evidence))
-    verdict, reason = judged.verdict, judged.reason
-    mine = metrics(candidate, evaluator_id)
-    primary = track.primary
-    leader = metrics(head, evaluator_id).get(primary.name) if head is not None else None
-    match side, verdict:
-        # a rule from a plugin may keep a candidate that has no primary value
-        case Branch(), Outcome.KEEP if head is not None and leader is not None and primary.name in mine:
-            where = 'above' if primary.better(mine[primary.name], leader) else 'not above'
-            reason += f'; a branch keep, {where} the head candidate#{head.id} ({primary.name} {metric(leader)})'
-        case _:
-            pass
-    return verdict, reason
+    return judged.verdict, judged.reason
 
 
 @dataclass(frozen=True)
@@ -463,9 +430,6 @@ def judge_tracks(
     cfg: CampaignConfig,
     track: Track,
     units_dir: Path,
-    *,
-    head: Candidate | None,
-    side: Lineage,
     evidence: Evidence,
 ) -> list[OnTrack]:
     """Return the verdicts on ``candidate`` against ``own`` (``judge``) on each track, the best last.
@@ -476,10 +440,7 @@ def judge_tracks(
     """
     mine = metrics(candidate, evaluator_id)
     others = [t for t in cfg.all_tracks if t.name != track.name and t.primary.name in mine]
-    judged = [
-        OnTrack(t, *judge(candidate, own, evaluator_id, cfg, t, units_dir, head=head, side=side, evidence=evidence))
-        for t in (track, *others)
-    ]
+    judged = [OnTrack(t, *judge(candidate, own, evaluator_id, cfg, t, units_dir, evidence)) for t in (track, *others)]
     best = next(j for verdict in RANK for j in judged if j.verdict is verdict)
     shown = best if best is judged[0] else replace(best, reason=f'on the {best.track.name} track: {best.reason}')
     return [*(j for j in judged if j is not best), shown]
@@ -540,23 +501,23 @@ def on_moved(
     None when the rule leaves it.
     """
     match verdict_rule(cfg).on_moved(Moved(node(s, candidate), node(s, onto))):
-        case Rebase(conflicts=conflicts):
-            return rebase(s, repo, candidate, onto, conflicts)
+        case Rebase():
+            return rebase(s, repo, candidate, onto)
         case Leave():
             return None
         case never:
             assert_never(never)
 
 
-def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, conflicts: Seed | Leave) -> Rebased:
+def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate) -> Rebased:
     """Merge ``candidate``'s version onto the head ``onto``. Return how: the merged candidate to measure and judge, if any.
 
     ``candidate`` kept against its own bar after the head moved on. So it is ``interesting`` (``Cause.MOVED``), and its
     reason ends with the result of the merge. The merge is a version made without a checkout (``Repository.merge``),
     and kept (``rebase/<candidate>``). A new tree becomes a pending
-    candidate of the same run, with ``onto`` as its parent. A merge that conflicts adds an open idea on the track of its
-    verdict to compose the two by hand when ``conflicts`` is ``Seed``, unless the campaign stopped (``follow_up``). A
-    merged tree that is already a candidate (the head had the change) gives no new candidate. Emits ``Rebased``.
+    candidate of the same run, with ``onto`` as its parent. A merge that conflicts is recorded on the reason and on the
+    event, with its paths: piloop files no idea for it. A merged tree that is already a candidate (the head had the
+    change) gives no new candidate. Emits ``Rebased``.
     """
     campaign = s.get_one(Campaign, candidate.campaign_id)
     subject = REBASED_SUFFIX.sub('', candidate.summary or '')
@@ -564,23 +525,7 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
     merged = repo.merge(onto.revision, candidate.revision, message)
     if isinstance(merged, Conflicts):
         paths = ', '.join(merged.paths)
-        why = (
-            f'it kept against its own bar but its merge onto the head candidate#{onto.id} conflicts in {paths}:'
-            f' from the head, merge candidate#{candidate.id} ({candidate.revision}) and resolve the conflicts'
-        )
-        assert candidate.run is not None  # only a run's candidate is rebased
-        stopped = campaign.status is CampaignStatus.STOPPED
-        match conflicts:
-            case Seed() if not stopped:
-                title = f'Compose candidate#{candidate.id} onto the head'
-                on = track_of(campaign.config, candidate).name  # the track that kept it
-                seeds = follow_up(s, candidate, [title], why, System.DAEMON, track=on)
-            case Seed() | Leave():
-                seeds = []
-            case _:
-                assert_never(conflicts)
-        filed = f': idea#{seeds[0].id} composes it by hand' if seeds else ''
-        candidate.verdict_reason = f'{candidate.verdict_reason}; its merge onto the head conflicts in {paths}{filed}'
+        candidate.verdict_reason = f'{candidate.verdict_reason}; its merge onto the head conflicts in {paths}'
         rebased = Rebased(head=onto.id, conflicts=list(merged.paths))
     else:
         repo.keep(merged.revision, Pin(campaign.name, f'rebase/{candidate.id}'))
@@ -602,13 +547,11 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
 def reproposed(candidate: Candidate, run: Run) -> bool:
     """Return whether ``run``'s commit proposes the known ``candidate`` again, so that the run judges it again.
 
-    It is a ``judgeable`` candidate of another run on the same side of the trunk (``runs.branch``). Its verdict came
-    from another bar, or from a merge onto the head that conflicted. A compose that reproduces the tree must be able to
-    land. A run on the other side never judges it: a branch run's keep of a trunk run's candidate would move the head,
-    and a trunk run's keep of a branch run's candidate never would.
+    It is a ``judgeable`` candidate of another run. Its verdict came from another bar, or from a merge onto the head that
+    conflicted. A compose that reproduces the tree must be able to land.
     """
     other = candidate.run
-    return other is not None and other.id != run.id and other.branch == run.branch and judgeable(candidate)
+    return other is not None and other.id != run.id and judgeable(candidate)
 
 
 def follow_up(
@@ -643,42 +586,6 @@ def follow_up(
         s.flush()
         ideas.append(idea)
     return ideas
-
-
-def side(run: Run) -> Lineage:
-    """Return where ``run`` keeps: on a branch from its base, or on the trunk."""
-    return Branch(run.base_candidate_id) if run.branch else Trunk()
-
-
-def lineage(candidate: Candidate) -> Lineage:
-    """Return the lineage of ``candidate``: the branch of the nearest branch run among its ancestors, else the trunk.
-
-    A branch from the baseline is a different lineage from the trunk that grew from it.
-    """
-    while (run := candidate.run) is not None:
-        if run.branch:
-            return Branch(run.base_candidate_id)
-        candidate = run.base
-    return Trunk()
-
-
-@dataclass(frozen=True)
-class Line:
-    """One lineage of keeps, with its latest keep."""
-
-    lineage: Lineage
-    latest: Candidate
-    keeps: int
-
-
-def lineages(s: Session, campaign: Campaign) -> list[Line]:
-    """Return every lineage of keeps: the trunk first (its latest keep is the head), then the branches, newest first."""
-    found: dict[Lineage, Line] = {}
-    for c in s.scalars(keeps(campaign).order_by(Candidate.id)):
-        at = lineage(c)
-        known = found.get(at)
-        found[at] = Line(at, c, (known.keeps if known else 0) + 1)
-    return sorted(found.values(), key=lambda line: (isinstance(line.lineage, Branch), -line.latest.id))
 
 
 def head_scores(

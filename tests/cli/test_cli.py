@@ -73,6 +73,7 @@ from piloop.plugins.executor.kit.capacity import GB, HostSample
 from piloop.plugins.executor.kit.leases import Leases
 from piloop.plugins.executor.kit.tables import InstanceEnd, WorkerInstance, WorkerInstanceState
 from piloop.plugins.runtime.kit import tags
+from piloop.proc import TEMPFAIL
 from piloop.settings import Settings
 from piloop.store.chunks import Chunked
 from piloop.version import direct_url, installed
@@ -2551,6 +2552,10 @@ def test_submit_scores_the_commit_of_the_checkout_and_prints_its_verdict_and_sco
     assert out().strip() == 'keep 2'
     run_cli(['submit', revision])
     assert out().strip() == 'keep 2', 'its own submission again: its verdict, and no submission spent'
+    later = commit(checkout, 'base\na\nb\n')
+    with pytest.raises(SystemExit) as waited:
+        run_cli(['submit', later, '--wait', '0'])
+    assert (waited.value.code, out().strip()) == (TEMPFAIL, 'pending: candidate#3'), 'not judged yet: call again'
 
 
 def db_campaign(db: Database) -> Campaign:

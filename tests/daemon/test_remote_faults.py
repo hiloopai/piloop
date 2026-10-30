@@ -29,7 +29,7 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind
 from piloop.net import tokens
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
@@ -48,6 +48,7 @@ from tests.agents.test_launcher import MINTED_HARNESS, use_harness
 from tests.conftest import Dial, ScriptRuntime, baseline, factory, home_cas, wait_until, workers_of, write_toml
 from tests.daemon.test_evaluation_queue import held_evaluate
 from tests.daemon.test_run_controller import candidates, execute, make_run, reload_campaign, run_row, set_config
+from tests.daemon.test_submissions import waiting_of
 from tests.fixtures.netfault import Blackhole, CutResponse, Latency, Proxy
 from tests.test_git import by
 
@@ -426,6 +427,38 @@ def test_a_remote_implementers_commits_come_back_as_a_bundle_and_are_scored_and_
     assert net.proxy is not None
     with dial(f'http://127.0.0.1:{net.proxy.port}', net.token) as http, pytest.raises(StaleLease, match='is reported'):
         Remote(http, threading.Event(), Tracer(None)).cli(1, Call(argv=['sql', 'SELECT 1'], token=SecretStr('plt_x')))
+
+
+HARNESS_SUBMITS_ELSEWHERE = (
+    '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "add a line"\nmkdir -p workspace/idea1\n'
+    '"$PILOOP_BIN" submit > workspace/idea1/submitted.txt 2>&1\n"$PILOOP_BIN" run end submitted\n'
+)
+"""An implementer on a worker elsewhere that commits, submits its commit, keeps what it printed, and ends its run."""
+
+
+@pytest.mark.usefixtures('daemon_api')  # the server runs the relayed `piloop submit` against the home's API
+def test_a_remote_implementer_submits_a_commit_that_only_its_worker_has_and_waits_for_its_verdict(
+    db: Database, net: Net, core: RunController, campaign: Campaign, tmp_path: Path
+) -> None:
+    """Its worker sends the commit through the CAS, and calls again while the verdict is not in."""
+    write_toml(Path(campaign.path), HARNESS_SUBMITS_ELSEWHERE)
+    set_config(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1})
+    net.start_worker()
+    run_id = make_run(db, campaign)
+
+    def judge() -> None:
+        wait_until(lambda: waiting_of(db, campaign), 'the submission', timeout=60)
+        [submission] = waiting_of(db, campaign)
+        core.judge_submission(submission.id)
+
+    judging = threading.Thread(target=judge)
+    judging.start()
+    execute(core, db, run_id)
+    judging.join(60)
+    [kept] = candidates(db, run_id)
+    assert (kept.summary, kept.verdict, kept.metrics['score']) == ('add a line', Outcome.KEEP, 2.0)
+    workspace = tmp_path / 'projects' / str(campaign.id) / 'workspace'
+    assert (workspace / 'idea1' / 'submitted.txt').read_text() == 'keep 2\n'
 
 
 HARNESS_PROMPTED = (

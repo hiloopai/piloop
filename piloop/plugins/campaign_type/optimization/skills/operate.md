@@ -100,8 +100,7 @@ Use this for a candidate of another campaign, or a branch.
 - A composition that you made by hand on the head: import it, wait for its measurement or add yours
   (`piloop measurement add`), then `piloop candidate verdict <c> keep --reason '…'`. It is the head then.
 
-Every run starts from the head, so its keeps move the head. A branch keep of an older campaign stays on its branch:
-to bring it onto the trunk, add an idea that merges it into the head.
+Every run starts from the head, so its keeps move the head.
 
 ### Keep a failed result as a lead
 

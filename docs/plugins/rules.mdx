@@ -52,11 +52,10 @@ A verdict rule is a [pure](/plugins/overview#host-and-pure-contracts) provider, 
 A rule has no error case: it returns a verdict for every case. Its `samples` says how many measurements the
 candidate needs first: piloop measures it again once to get them.
 
-The rule also decides the lineage: `bar`, `raises_bar`, `head` and `on_moved` read `Node`s (a candidate's id,
-verdict, where it was made, `Trunk`, `Branch` or `Imported`, and its means), and each has the built-in behaviour as its
-default.
+The rule also decides the lineage: `bar`, `head` and `on_moved` read `Node`s (a candidate's id, verdict, where it was
+made, `Trunk` or `Imported`, and its means), and each has the built-in behaviour as its default.
 
-piloop applies the answers: it moves the head, merges, adds the compose idea, and applies the `Piloop-Note` of a commit.
+piloop applies the answers: it moves the head, merges, and applies the `Piloop-Note` of a commit.
 
 ### Built in
 

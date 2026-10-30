@@ -263,6 +263,20 @@ noise_runs = 1
 provider = "bootstrap"
 ```
 
+### Verdict rules of a plugin
+
+Every run keeps on the trunk now, and piloop files no idea for a merge that conflicts. A verdict rule of a plugin
+changes so:
+
+| 0.5 | 0.6 |
+|---|---|
+| `raises_bar(self, node, lineage)` | Deleted: every keep raises its run's bar and is a trunk keep. |
+| `Branch`, `Lineage` | Deleted: `Node.made` is `Trunk` or `Imported`. |
+| `Rebase(conflicts=Seed())`, `Rebase(conflicts=Leave())` | `Rebase()`: a merge that conflicts names its paths in the reason. |
+| `Seed` | Deleted. |
+
+A keep of a 0.5 branch run, which never moved the head, is `interesting` after the upgrade, so the head stays.
+
 ### A cancelled evaluation is no verdict
 
 `piloop eval cancel` records no measurement. A run's candidate is `skipped`, not a `crash`. A baseline that never

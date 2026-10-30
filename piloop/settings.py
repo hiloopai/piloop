@@ -150,6 +150,12 @@ class AgentSettings(BaseModel):
     at startup, a fault of the host or the harness, not an attempt."""
     detail_chars: int = Field(default=160, gt=1)
     """How many characters of a comment or an error one line of a brief shows: an inbox item, an incident."""
+    relay_wait: timedelta = Field(default=timedelta(minutes=1), gt=timedelta(0), lt=timedelta(minutes=2))
+    """On a worker elsewhere, how long one call of a command that waits, such as ``piloop submit``, waits on the server
+    before the relay calls it again: under the 2 minutes that a relayed call may run."""
+    relay_deadline: timedelta = Field(default=timedelta(hours=6), gt=timedelta(0))
+    """On a worker elsewhere, how long the relay calls a command that waits again, in all, before it gives up: longer
+    than the slowest evaluation that an agent waits for."""
     attach_lines: int = Field(default=40, gt=0)
     """How many lines of an agent's output ``piloop attach`` prints."""
     wake_budget: int = Field(default=2000, ge=0)

@@ -120,14 +120,13 @@ def run_candidate(
     *,
     by: str | None = System.DAEMON,
     parent: int = 1,
-    branch: bool = False,
     commit: str | None = None,
 ) -> CandidateId:
     """A candidate of a run of a new idea from ``parent``, with the daemon's ``verdict`` and one measurement (score 0).
 
     Its commit is ``commit``, else a sha that the repo does not have.
     """
-    idea_id = add_idea(db, campaign.id, f'tried {verdict} {parent} {branch} {by}')
+    idea_id = add_idea(db, campaign.id, f'tried {verdict} {parent} {by}')
     with db.session() as s:
         run = Run(
             campaign_id=campaign.id,
@@ -136,7 +135,6 @@ def run_candidate(
             base_candidate_id=parent,
             harness='script',
             model='m',
-            branch=branch,
         )
         s.add(run)
         s.flush()
@@ -277,7 +275,6 @@ def test_a_hand_keep_off_the_head_is_merged_onto_the_head_for_the_daemon_to_judg
     trunk = run_candidate(me, campaign, Outcome.KEEP, commit=trunk_sha)
     on_head = run_candidate(me, campaign, Outcome.DISCARD, parent=trunk)
     after_it = run_candidate(me, campaign, Outcome.INTERESTING, parent=on_head)
-    branch = run_candidate(me, campaign, Outcome.DISCARD, branch=True)
     with me.session() as s:
         kept = verdicts_ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
         assert kept.old == Outcome.DISCARD and kept.rebased is not None and kept.rebased.head == trunk
@@ -294,15 +291,14 @@ def test_a_hand_keep_off_the_head_is_merged_onto_the_head_for_the_daemon_to_judg
         run.status, run.end = RunStatus.SUCCEEDED, RunEnd.FINISHED
         assert unjudged(merged), 'the run is over: the daemon measures and judges it (ledger.due)'
         verdicts_ops.set_verdict(s, after_it, Outcome.KEEP, reason='its parent builds on the head', actor=ACTOR)
-        verdicts_ops.set_verdict(s, branch, Outcome.KEEP, reason='a branch keep never moves the head', actor=ACTOR)
         s.commit()
         now = head(s, s.get_one(Campaign, 1))
         assert now is not None and now.id == after_it, 'the newest trunk keep'
 
 
-def run_from(db: Database, campaign: Campaign, status: RunStatus, *, base: CandidateId, branch: bool = False) -> RunId:
-    """An open run of a new idea from ``base``: ``branch`` makes it a branch run."""
-    idea_id = add_idea(db, campaign.id, f'{status} on {base} {branch}', IdeaStatus.CLAIMED)
+def run_from(db: Database, campaign: Campaign, status: RunStatus, *, base: CandidateId) -> RunId:
+    """An open run of a new idea from ``base``."""
+    idea_id = add_idea(db, campaign.id, f'{status} on {base}', IdeaStatus.CLAIMED)
     with db.session() as s:
         run = Run(
             campaign_id=campaign.id,
@@ -312,7 +308,6 @@ def run_from(db: Database, campaign: Campaign, status: RunStatus, *, base: Candi
             harness='h',
             model='m',
             status=status,
-            branch=branch,
         )
         s.add(run)
         s.commit()
@@ -324,8 +319,8 @@ def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_i
 ) -> None:
     """A run from the replaced head builds on a tree that is not the head, and its brief says so: it is cancelled.
 
-    Its idea is open again once the run ends, to start from the new head. A branch run and a run whose commits are
-    being scored keep going: what they commit is judged against the head when it has the head.
+    Its idea is open again once the run ends, to start from the new head. A run whose commits are being scored keeps
+    going: what it commits is judged against the head when it has the head.
     """
     kept = run_candidate(me, campaign, Outcome.DISCARD)
     with me.session() as s:
@@ -334,7 +329,6 @@ def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_i
         s.commit()
     queued = run_from(me, campaign, RunStatus.QUEUED, base=CandidateId(1))
     running = run_from(me, campaign, RunStatus.RUNNING, base=CandidateId(1))
-    branch = run_from(me, campaign, RunStatus.RUNNING, base=CandidateId(1), branch=True)
     with me.session() as s:
         done = verdicts_ops.set_verdict(s, kept, Outcome.KEEP, reason='the score misses it', actor=ACTOR)
         s.commit()
@@ -343,7 +337,6 @@ def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_i
             assert [k for k, _, _ in kinds(me, RUN, run_id)] == ['run.cancel_requested', 'run.head_replaced']
             [(event, cancel)] = in_order(s, CancelRequested, Event.target_id == run_id)
             assert (event.actor, cancel.ending) == (ACTOR.signature, Ending.WRAP_UP)
-        assert kinds(me, RUN, branch) == []
         run = s.get_one(Run, running)
         run.status, run.end = RunStatus.FAILED, RunEnd.CANCELLED
         assert run.idea is not None
@@ -364,18 +357,20 @@ def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_i
         )
 
 
-def test_a_hand_keep_off_the_head_whose_merge_conflicts_adds_a_compose_idea(me: Database, campaign: Campaign) -> None:
+def test_a_hand_keep_off_the_head_whose_merge_conflicts_records_the_conflict_and_files_no_idea(
+    me: Database, campaign: Campaign
+) -> None:
     base = Repo(campaign.path).head.commit.hexsha
     old_sha, trunk_sha = commit_on(campaign, base, {'x.txt': 'o\n'}), commit_on(campaign, base, {'x.txt': 't\n'})
     old = run_candidate(me, campaign, Outcome.DISCARD, commit=old_sha)
     trunk = run_candidate(me, campaign, Outcome.KEEP, commit=trunk_sha)
     with me.session() as s:
+        ideas = len(s.scalars(select(Idea)).all())
         kept = verdicts_ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
         assert kept.rebased is not None and (kept.rebased.head, kept.rebased.conflicts) == (trunk, ['x.txt'])
-        [compose] = s.scalars(select(Idea).where(Idea.title.startswith('Compose'))).all()
-        assert (compose.title, compose.status) == (f'Compose candidate#{old} onto the head', IdeaStatus.OPEN)
+        assert len(s.scalars(select(Idea)).all()) == ideas, 'piloop never files an idea'
         reason = s.get_one(Candidate, old).verdict_reason
-        assert reason is not None and reason.endswith(f'idea#{compose.id} composes it by hand')
+        assert reason is not None and reason.endswith('its merge onto the head conflicts in x.txt')
 
 
 def test_a_hand_keep_builds_on_the_head_by_git_where_the_parent_links_miss_it(me: Database, campaign: Campaign) -> None:

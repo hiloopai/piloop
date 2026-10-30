@@ -16,7 +16,6 @@ from pathlib import Path
 from piloop.daemon.loop import Consumer
 from piloop.plugins.archive.contract import ArchiveConfig, Archiver
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
-    Branch,
     Case,
     Criterion,
     Judgement,
@@ -64,7 +63,7 @@ CONTRACTS: dict[str, Contract] = {
     'executor': Contract((ExecutorConfig, Executor), '`piloop/plugins/executor/contract.py`'),
     'network': Contract((NetworkConfig, Network), '`piloop/plugins/network/contract.py`'),
     'verdict-rule': Contract(
-        (VerdictRule, Case, Criterion, Side, Judgement, Node, Branch, Moved, Rebase),
+        (VerdictRule, Case, Criterion, Side, Judgement, Node, Moved, Rebase),
         '`piloop/plugins/campaign_type/kit/verdicts/verdict_rule/contract.py`',
     ),
     'trigger': Contract((Trigger, Pass, Fire), '`piloop/plugins/trigger/contract.py`'),

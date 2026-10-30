@@ -58,6 +58,7 @@ RELAYED: frozenset[Verb] = frozenset(
         ('restore',),
         ('cas', 'get'),
         ('schema',),
+        ('submit',),
     }
 )
 """The commands that the prompts of the built-in roles name, besides the orchestrator's: what ``RoleConfig.RELAYED``

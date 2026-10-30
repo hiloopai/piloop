@@ -194,6 +194,10 @@ class Repository(Protocol):
         """Take the versions of ``transfer`` from ``cas``, and return those from ``base`` to its head, oldest first.
 
         They are the versions that the work made on top of ``base``: not the ones that it merged in from elsewhere.
+
+        Raises:
+            VcsError: the blob is not versions that the repository can take, or it misses one that they build on.
+            Missing: the CAS does not hold the blob.
         """
         ...
 

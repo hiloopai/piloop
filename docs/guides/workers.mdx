@@ -221,7 +221,8 @@ provider's `env`.
 - A clone of the campaign's repo and a copy of the shared [workspace](/concepts/campaigns#files). Its commits
   and its workspace writes come back when it ends. The worker keeps its clones under its home: a new clone starts
   from a copy of the whole repo that the server builds once per campaign, then takes only what is newer.
-- Its `piloop` commands, which the worker relays to the server while the agent's lease is live.
+- Its `piloop` commands, which the worker relays to the server while the agent's lease is live. For
+  `piloop submit`, the worker first sends the commit through the CAS, and waits with the agent for the verdict.
 
 Until it ends, its log files are in the worker's `$PILOOP_HOME`. Its session goes to the server's CAS a few seconds
 after it writes, and at least every 30 seconds. So `piloop attach` and `piloop status` show what it wrote, and a lost

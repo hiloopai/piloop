@@ -11,9 +11,10 @@ from pytest_mock import MockerFixture
 from sqlalchemy import select
 
 from piloop.actor import Agent
+from piloop.campaign.ops import Refused
 from piloop.daemon.main import Daemon
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, Campaign, Comment
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database
 from piloop.ids import Revision
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
@@ -23,7 +24,8 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import Split, current_e
 from piloop.plugins.campaign_type.kit.evaluation.submissions import SubmitRefused, submit, waiting
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import UNSUBMITTED, Measuring, RunController, close_run
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunEnding, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ops import end_run
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged, head, short_of_noise
 from piloop.plugins.escalation.contract import ESCALATION
@@ -139,6 +141,18 @@ def test_a_run_submits_at_most_its_cap_and_never_a_known_tree(
     submitted(db, campaign, run_id, commit(checkout, 'base\nd\n'))
     with pytest.raises(SubmitRefused, match=rf'run#{run_id} used its 3 submissions'):
         submitted(db, campaign, run_id, commit(checkout, 'base\ne\n'))
+
+
+def test_a_run_that_claimed_no_idea_submits_nothing(
+    db: Database, campaign: Campaign, ex: RunController, tmp_path: Path
+) -> None:
+    """Judged on no idea's track, its version could move the head for nothing on the board."""
+    run_id, checkout = running(db, campaign), worktree(campaign, tmp_path)
+    with db.session() as s:
+        s.get_one(Run, run_id).idea_id = None
+        s.commit()
+    with pytest.raises(SubmitRefused, match=rf'run#{run_id} has claimed no idea: `piloop idea claim`'):
+        submitted(db, campaign, run_id, commit(checkout, 'base\na\n'))
 
 
 def test_a_campaign_that_scores_after_the_run_takes_no_submission(
@@ -491,3 +505,32 @@ def test_a_sealed_split_that_crashes_on_the_head_runs_again_once_and_is_never_a_
             select(Measurement.error).where(Measurement.evaluator_id == hidden.id, Measurement.candidate_id == 1)
         )
         assert len(tries.all()) == 2, 'the head ran on the split twice'
+
+
+def ending(db: Database, run_id: RunId, how: RunEnding, reason: str | None = None) -> None:
+    """The run's implementer runs ``piloop run end``."""
+    with db.session() as s:
+        agent = s.scalars(select(AgentSession).where(working_on(run_id))).one()
+        agent.state = AgentSessionState.RUNNING
+        s.commit()
+        end_run(s, how, reason, actor=Agent(role='implementer', session=agent.id))
+        s.commit()
+
+
+def test_a_run_that_submitted_nothing_ends_as_given_up_not_as_submitted(
+    db: Database, campaign: Campaign, ex: RunController, tmp_path: Path
+) -> None:
+    """Its idea goes back to the board with the reason, instead of done with no result."""
+    empty = running(db, campaign)
+    with pytest.raises(
+        Refused, match=rf'^run#{empty} submitted nothing: `piloop submit` first, or `piloop run end gave_up'
+    ):
+        ending(db, empty, RunEnding.SUBMITTED)
+    ending(db, empty, RunEnding.GAVE_UP, 'the cache idea cannot run here')
+    tried = running(db, campaign, 'tried')
+    submitted(db, campaign, tried, commit(worktree(campaign, tmp_path), 'base\na\n'))
+    ending(db, tried, RunEnding.SUBMITTED)
+    set_config(db, campaign, evaluator={'scoring': 'run_end'})
+    ending(
+        db, running(db, campaign, 'after the run'), RunEnding.SUBMITTED
+    )  # every commit is scored after the run: nothing to submit

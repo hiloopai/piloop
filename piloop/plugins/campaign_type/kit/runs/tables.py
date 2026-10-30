@@ -97,10 +97,6 @@ class Run(Tracked, Base):
     base_candidate_id: Mapped[CandidateId]
     """The ``candidates.id`` that the worktree started from. The run's candidates descend from it. A plain integer,
     not a foreign key: candidates reference runs, and SQLite cannot add a foreign key for a cycle afterwards."""
-    branch: Mapped[bool] = mapped_column(default=False, server_default=text('0'))
-    """Whether the run started from an alternative starting point, not the head: it is judged against its own base
-    only, so what it keeps is a branch keep, which never moves the head. The scheduler starts every run from the head;
-    a run of 0.5 that an idea pinned elsewhere is one."""
     harness: Mapped[str]
     model: Mapped[str]
     status: Mapped[RunStatus] = mapped_column(default=RunStatus.QUEUED, server_default=RunStatus.QUEUED.value)

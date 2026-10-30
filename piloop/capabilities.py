@@ -118,8 +118,8 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERD
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Criterion, Ratio, Sealed, Side, Stopped
 from piloop.plugins.metric import Direction
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Judgement, Outcome
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Node, Trunk, Branch, Imported
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Moved, Rebase, Seed, Leave
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Node, Trunk, Imported
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Moved, Rebase, Leave
 from piloop.plugins.metric import number
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.noise import Noise

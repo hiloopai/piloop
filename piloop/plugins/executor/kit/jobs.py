@@ -27,7 +27,7 @@ from covalence import Cid
 from pydantic import SecretStr
 
 from piloop.config import BRIEF_FILE, TRANSCRIPT
-from piloop.ids import CommentId, EnvName
+from piloop.ids import CommentId, EnvName, Revision
 from piloop.otel import Span
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.executor.contract import (
@@ -43,7 +43,7 @@ from piloop.plugins.executor.contract import (
     RepoId,
 )
 from piloop.plugins.executor.kit.clones import Clones, Fetch, of_record, own_replica
-from piloop.plugins.executor.kit.relay import RELAY_ARGV
+from piloop.plugins.executor.kit.relay import RELAY_ARGV, Shipped
 from piloop.plugins.executor.kit.sessions import POLL_SECONDS, SessionFile
 from piloop.plugins.executor.kit.transfers import send_of_record
 from piloop.plugins.harness.contract import MCP, McpLaunch, Usage, UsageReader, expand
@@ -534,3 +534,14 @@ def secret_env(wanted: Mapping[EnvName, EnvName], found: Mapping[str, SecretStr]
     if missing:
         raise MissingSecrets(f'the secrets {", ".join(sorted(set(missing)))} are not set: `piloop secret set <NAME>`')
     return env
+
+
+def ship(site: Machine, job: AgentJob, revision: Revision | None) -> Shipped:
+    """Send ``revision`` of the job's checkout, else the version that it is at, into the CAS (``relay.Ship``).
+
+    What the job's starting version has stays out: the repo of record has it.
+    """
+    with closing(job.artifact.vcs.open(site.cwd(job))) as checkout:
+        version = checkout.head() if revision is None else checkout.version(revision)
+        blob = checkout.send(site.cas, [version.revision], [job.artifact.revision])
+    return Shipped(version.revision, blob)

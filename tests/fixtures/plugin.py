@@ -13,7 +13,6 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
     Case,
     Judgement,
     Leave,
-    Lineage,
     Moved,
     Node,
     Rebase,
@@ -188,13 +187,6 @@ class BaseBar(Bootstrap):
         return ancestry[0].id
 
 
-class EveryKeep(Bootstrap):
-    """``every_keep``: the built-in rule, but every keep raises the bar, a branch run's on the trunk too."""
-
-    def raises_bar(self, node: Node, lineage: Lineage) -> bool:
-        return node.verdict is Outcome.KEEP
-
-
 class FirstHead(Bootstrap):
     """``first_head``: the built-in rule, but the head is the first trunk keep."""
 
@@ -207,13 +199,6 @@ class Leaves(Bootstrap):
 
     def on_moved(self, moved: Moved) -> Rebase | Leave:
         return Leave()
-
-
-class NoCompose(Bootstrap):
-    """``no_compose``: the built-in rule, but a merge onto the head that conflicts files no seed."""
-
-    def on_moved(self, moved: Moved) -> Rebase | Leave:
-        return Rebase(conflicts=Leave())
 
 
 class Astray(Bootstrap):

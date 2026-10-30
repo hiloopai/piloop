@@ -117,6 +117,9 @@ class SubmitBody(Params):
 
     revision: str
     """The version, as the campaign's vcs names one: a commit of the caller's checkout."""
+    blob: str | None = None
+    """The address in the CAS of the versions that the repo of record lacks (``Repository.send``), from a checkout on a
+    worker elsewhere. None: the repo of record has the version. Text, so a client loads no CAS."""
 
 
 class SubmissionQuery(Polled):

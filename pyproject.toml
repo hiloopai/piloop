@@ -278,6 +278,11 @@ pack_seeds = "piloop.plugins.section.bridges:pack_seeds"
 
 # The kinds that events and comments point at, beyond core's, by name: the table of their rows
 # (piloop.db.models.TARGET_KINDS).
+# The commands that name a version of an agent's checkout, which a worker elsewhere sends through the CAS first
+# (piloop.plugins.executor.kit.relay.SHIPPED_GROUP), by their words joined with ".".
+[project.entry-points."piloop.shipped_commands"]
+submit = "piloop.plugins.campaign_type.kit.evaluation.cli:submit"
+
 [project.entry-points."piloop.comment_kinds"]
 escalation = "piloop.campaign.escalations:EscalationWritten"
 decision = "piloop.campaign.escalations:DecisionWritten"

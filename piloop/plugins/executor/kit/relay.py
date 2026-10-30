@@ -20,20 +20,23 @@ Retirement: deleted when agents call typed operations over HTTP, if they ever do
 import subprocess
 import sys
 import threading
-from collections.abc import Callable, Mapping, Sequence
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
+from importlib.metadata import entry_points
 from pathlib import Path
 from socketserver import ThreadingUnixStreamServer
 
 import httpx2 as httpx
+from covalence import Cid
 from pydantic import ValidationError
 
 from piloop.actor import Agent
 from piloop.db.models import AgentSession, Campaign
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId
+from piloop.ids import AgentSessionId, Revision
 from piloop.net import tokens
 from piloop.net.tokens import Caller
 from piloop.plugins.executor.contract import AgentJob, RepoId
@@ -42,8 +45,9 @@ from piloop.plugins.executor.kit.client import Dismissed
 from piloop.plugins.executor.kit.door import RELAY_SECONDS, AgentCall, Call, Relayed
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.role.contract import RELAYED, Verb
-from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, PILOOP_ARGV, child_env
-from piloop.settings import socket_dir
+from piloop.plugins.vcs.contract import VcsError
+from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, PILOOP_ARGV, TEMPFAIL, child_env
+from piloop.settings import AgentSettings, settings, socket_dir
 
 RELAY_ARGV = (sys.executable, '-P', '-m', agent_end.__name__)
 """What an agent's ``piloop`` runs on a worker elsewhere (``jobs.Machine.piloop``): ``door.main``."""
@@ -111,6 +115,29 @@ class Runner:
         return Relayed(stdout=done.stdout, stderr=done.stderr, exit_code=done.returncode)
 
 
+@dataclass(frozen=True)
+class Shipped:
+    """A version of an agent's checkout, sent through the CAS: what the repo of record lacks of it, if anything."""
+
+    revision: Revision
+    blob: Cid | None
+
+
+type Ship = Callable[[AgentJob, Revision | None], Shipped]
+"""Send the version ``revision`` of the job's checkout, else the one that the checkout is at, into the CAS
+(``jobs.ship``)."""
+SHIPPED_GROUP = 'piloop.shipped_commands'
+"""The entry points of the commands that name a version of the agent's checkout, which the server's checkout lacks,
+by the words of the command joined with ``.`` (``submit``). The package that declares the command declares it here.
+On a worker elsewhere, the relay first sends that version through the CAS, then calls
+``<command> <revision> --blob <cid> --wait <relay_wait>``, again while it exits ``TEMPFAIL``."""
+
+
+def shipped_commands() -> frozenset[Verb]:
+    """The commands of ``SHIPPED_GROUP``, as their words."""
+    return frozenset(tuple(ep.name.split('.')) for ep in entry_points(group=SHIPPED_GROUP))
+
+
 type Run = Callable[[AgentJob, Call], Relayed]
 """Run an agent's relayed call on the server (``Runner``)."""
 type Send = Callable[[int, Call], Relayed]
@@ -124,13 +151,17 @@ class Relay:
     and the worker imports no web framework for it.
     """
 
-    def __init__(self, path: Path, send: Send) -> None:
+    def __init__(self, path: Path, send: Send, ship: Ship, agents: AgentSettings | None = None) -> None:
         self.path = path
         """The socket: ``Settings.relay_file``."""
         self._send = send
+        self._ship = ship
+        self._agents = agents if agents is not None else settings.agents
+        """Its ``relay_wait`` and ``relay_deadline``: the home's by default."""
+        self._shipped = shipped_commands()
         self._lock = threading.Lock()
-        self._leases: dict[AgentSessionId, int] = {}
-        """The lease of each agent whose job runs on this worker."""
+        self._leases: dict[AgentSessionId, tuple[int, AgentJob]] = {}
+        """The lease and the job of each agent whose job runs on this worker."""
         self._server: ThreadingUnixStreamServer | None = None
 
     def start(self) -> None:
@@ -140,15 +171,31 @@ class Relay:
         self._server = ThreadingUnixStreamServer(str(self.path), _handler(self))
         threading.Thread(target=self._server.serve_forever, name='relay', daemon=True).start()
 
-    def open(self, leases: Mapping[AgentSessionId, int]) -> None:
-        """Relay the calls of each agent, on its lease: its job runs on this worker."""
+    def open(self, lease: int, job: AgentJob) -> None:
+        """Relay the calls of the job's agent, on ``lease``: its job runs on this worker."""
         with self._lock:
-            self._leases |= leases
+            self._leases[job.agent_session] = (lease, job)
 
     def close(self, lease: int) -> None:
         """Relay nothing more on ``lease``: its job ended."""
         with self._lock:
-            self._leases = {agent: held for agent, held in self._leases.items() if held != lease}
+            self._leases = {agent: held for agent, held in self._leases.items() if held[0] != lease}
+
+    def shipped(self, job: AgentJob, argv: list[str]) -> list[str]:
+        """``argv``, or for a command of ``SHIPPED_GROUP``, the call that names the version it sent (``Ship``).
+
+        The version is the first word after the command, else the one that the agent's checkout is at.
+
+        Raises:
+            VcsError: the checkout has no such version.
+        """
+        if (shipping := verb(argv, self._shipped)) is None:
+            return argv
+        rest = argv[len(shipping) :]
+        named = Revision(rest[0]) if rest and not rest[0].startswith('-') else None
+        sent = self._ship(job, named)
+        blob = [] if sent.blob is None else ['--blob', str(sent.blob)]
+        return [*shipping, sent.revision, *blob, '--wait', f'{self._agents.relay_wait.total_seconds():g}']
 
     def stop(self) -> None:
         """Stop serving."""
@@ -158,17 +205,31 @@ class Relay:
             self.path.unlink(missing_ok=True)
 
     def answer(self, body: bytes) -> tuple[HTTPStatus, Relayed | str]:
-        """What a call gets: what the server's run printed, or why there is none."""
+        """What a call gets: what the server's run printed, or why there is none.
+
+        A command of ``SHIPPED_GROUP`` first sends the version of the agent's checkout that it names through the CAS
+        (``shipped``). A call that exits ``TEMPFAIL`` is not done: the relay sends it again, until ``relay_deadline``.
+        """
         try:
             call = AgentCall.model_validate_json(body)
         except ValidationError as e:
             return HTTPStatus.UNPROCESSABLE_ENTITY, str(e)
         with self._lock:
-            lease = self._leases.get(call.agent)
-        if lease is None:
+            found = self._leases.get(call.agent)
+        if found is None:
             return HTTPStatus.NOT_FOUND, f'agent_session#{call.agent} has no job on this worker: it ended'
+        lease, job = found
         try:
-            return HTTPStatus.OK, self._send(lease, Call(argv=call.argv, stdin=call.stdin, token=call.token))
+            argv = self.shipped(job, call.argv)
+        except VcsError as e:
+            return HTTPStatus.OK, Relayed(stderr=f'piloop: the version did not leave this worker: {e}\n', exit_code=1)
+        deadline = time.monotonic() + self._agents.relay_deadline.total_seconds()
+        try:
+            while (
+                done := self._send(lease, Call(argv=argv, stdin=call.stdin, token=call.token))
+            ).exit_code == TEMPFAIL and time.monotonic() < deadline:
+                pass
+            return HTTPStatus.OK, done
         except StaleLease as e:
             return HTTPStatus.OK, Relayed(stderr=f'piloop: the lease of this agent ended: {e}\n', exit_code=1)
         except (httpx.ConnectError, Dismissed) as e:  # it never reached the command: running it again is safe

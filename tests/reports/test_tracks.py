@@ -150,27 +150,6 @@ def test_watch_shows_the_head_per_track(db: Database, campaign: Campaign) -> Non
     assert panel.title(frame, panel.items(frame)) == snapshot('Candidates score ▁██ 1 → 3 · size █▅▁ 12 → 8')
 
 
-def test_lineages_show_every_track_primary_of_their_latest_keep(db: Database, campaign: Campaign) -> None:
-    two_tracks(db, campaign)
-    with db.session() as s:
-        branch = Run(
-            campaign_id=campaign.id, idea_id=1, attempt=2, base_candidate_id=1, harness='script', model='m', branch=True
-        )
-        s.add(branch)
-        s.flush()
-        candidate(s, s.get_one(Campaign, campaign.id), 1, Outcome.KEEP, 2, 70, run_id=branch.id)
-        s.commit()
-    lines = [
-        line for line in render(db, campaign).splitlines() if line.startswith('  - ') and 'from candidate#' in line
-    ]
-    assert lines == snapshot(
-        [
-            '  - trunk from candidate#1 (keep): latest candidate#4 score 3, size 8, 3 kept',
-            '  - branch from candidate#1 (keep): latest candidate#5 score 2, size 10, 1 kept',
-        ]
-    )
-
-
 def test_a_keep_counts_on_the_track_of_its_verdict_not_of_its_run(db: Database, campaign: Campaign) -> None:
     """The daemon judges a candidate on every track: a score run's candidate kept on size is a size keep."""
     two_tracks(db, campaign)

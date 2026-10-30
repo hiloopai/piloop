@@ -64,9 +64,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     save_units,
     units,
 )
-from piloop.plugins.campaign_type.kit.evaluation.ops import add_measurement
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
-from piloop.plugins.campaign_type.kit.evaluation.wire import Report
 from piloop.plugins.campaign_type.kit.runs import stop as runs_stop
 from piloop.plugins.campaign_type.kit.runs.controller import (
     NOT_ENDED,
@@ -87,11 +85,10 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import (
     Rebased,
     due,
     head,
-    lineages,
 )
 from piloop.plugins.campaign_type.kit.verdicts.ops import Overridden, set_verdict
 from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label, pending
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, Branch, Trunk
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.contract import Source
 from piloop.plugins.executor.kit import jobs
@@ -1132,27 +1129,11 @@ def test_the_head_is_the_latest_trunk_keep_whatever_it_scores(db: Database, camp
         proj = s.get_one(Campaign, campaign.id)
         evaluator_id = proj.evaluator_id
         assert evaluator_id is not None
-        idea = Idea(track='score', campaign_id=campaign.id, title='t', hypothesis='h', created_by='t')
-        s.add(idea)
-        s.flush()
-        branch = Run(
-            campaign_id=idea.campaign_id,
-            idea_id=idea.id,
-            attempt=1,
-            base_candidate_id=1,
-            harness='h',
-            model='m',
-            branch=True,
-        )
-        branch.status, branch.end = RunStatus.SUCCEEDED, RunEnd.FINISHED
-        s.add(branch)
-        s.flush()
         rows = {}
         for tree, verdict, run_id, score in (
             ('a', Outcome.KEEP, None, 9.0),
             ('b', Outcome.KEEP, None, 1.0),
             ('c', Outcome.INTERESTING, None, 99.0),
-            ('d', Outcome.KEEP, branch.id, 50.0),
             ('r', None, None, 5.0),
         ):
             origin = Origin.RUN if verdict else Origin.REFERENCE
@@ -1165,8 +1146,8 @@ def test_the_head_is_the_latest_trunk_keep_whatever_it_scores(db: Database, camp
         s.commit()
         trunk = head(s, proj)
         assert trunk is not None and trunk.tree_sha == 'b', (
-            'b is the latest trunk keep: a lower score than a changes nothing, an interesting is no keep, a branch'
-            ' run keep (d) never moves the head and a reference is never one'
+            'b is the latest trunk keep: a lower score than a changes nothing, an interesting is no keep and a'
+            ' reference is never one'
         )
         assert head(s, proj, excluding=rows['b']) == rows['a'], 'the candidate being judged is never its own bar'
         unscored = Candidate(campaign_id=campaign.id, tree_sha='u', revision='u', origin=Origin.REFERENCE)
@@ -1177,7 +1158,7 @@ def test_the_head_is_the_latest_trunk_keep_whatever_it_scores(db: Database, camp
             insert(Evaluator).values(campaign_id=campaign.id, key='next', definition={}).returning(Evaluator.id)
         )
         assert [c.tree_sha for c in due(s, proj)] == ['b', 'u'], (
-            'under a new evaluator the head, not the older keeps, the branch keep or the measured reference'
+            'under a new evaluator the head, not the older keeps or the measured reference'
         )
 
 
@@ -2404,44 +2385,6 @@ def test_a_run_whose_history_holds_the_head_is_judged_against_the_head_itself(
         assert not s.scalars(select(Event).where(has(Rebased))).all(), 'nothing was merged'
 
 
-def test_a_branch_run_is_judged_against_its_own_base_and_its_keep_never_moves_the_head(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A branch run is judged against its own base, not the head, and its keeps never move the head."""
-    reference = import_empty_solution(db, campaign)
-    write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
-    reload_campaign(db, campaign)
-    ex = controller(db, runtime, tmp_path)
-    ex.remeasure(reference)
-    run_id = make_run(db, campaign)
-    with db.session() as s:
-        run = s.get_one(Run, run_id)
-        run.base_candidate_id, run.branch = reference, True
-        s.commit()
-    execute(ex, db, run_id)
-    [(_, first, first_reason, _, _), (_, second, second_reason, _, _)] = scored(db, run_id)
-    assert (first, first_reason) == (
-        Outcome.KEEP,
-        snapshot(
-            'against candidate#2: score 1 vs 0 (+1; aggregate: no per-unit results); a branch keep, not above the head candidate#1 (score 1)'
-        ),
-    ), 'a gain over its own base keeps on the branch'
-    assert (second, second_reason) == (
-        Outcome.KEEP,
-        snapshot(
-            'against candidate#3: score 2 vs 1 (+1; aggregate: no per-unit results); a branch keep, above the head candidate#1 (score 1)'
-        ),
-    ), 'the bar moved to the branch keep; above the head'
-    with db.session() as s:
-        proj = s.get_one(Campaign, campaign.id)
-        trunk = head(s, proj)
-        assert trunk is not None and trunk.id == 1, 'a branch keep never moves the head, however it scores'
-        assert [(line.lineage, line.latest.summary, line.keeps) for line in lineages(s, proj)] == [
-            (Trunk(), 'baseline', 1),
-            (Branch(reference), 'second', 2),
-        ], "two lineages: the trunk first, then the reference's branch"
-
-
 def keep_elsewhere(
     db: Database,
     campaign: Campaign,
@@ -2479,55 +2422,6 @@ def keep_elsewhere(
         s.add(Measurement(candidate_id=candidate.id, evaluator_id=evaluator_id, metrics=metrics))
         s.commit()
         return candidate.id
-
-
-def test_a_trunk_run_that_merges_a_branch_keep_is_judged_against_the_head_not_the_branch(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A trunk run that merges a branch keep onto the head must beat the head.
-
-    A branch's numbers are never a trunk run's bar. Judged against the branch keep, the merge was a no-op discard,
-    though it beats the head. The merge's parent is the head it merged onto, not the branch.
-    """
-    with db.session() as s:
-        idea = Idea(track='score', campaign_id=campaign.id, title='a branch', hypothesis='h', created_by='t')
-        s.add(idea)
-        s.flush()
-        branch_run = Run(
-            campaign_id=idea.campaign_id,
-            idea_id=idea.id,
-            attempt=1,
-            base_candidate_id=1,
-            harness='h',
-            model='m',
-            branch=True,
-        )
-        s.add(branch_run)
-        s.commit()
-        branch_run_id = branch_run.id
-    kept = keep_elsewhere(
-        db, campaign, 'branch keep', {'solve.txt': 'base\nb\nc\n'}, {'score': 3.0, 'size': 9.0}, run_id=branch_run_id
-    )
-    trunk = keep_elsewhere(db, campaign, 'trunk keep', {'other.txt': 'x\n'}, {'score': 1.0, 'size': 5.0})
-    with db.session() as s:
-        kept_sha = s.get_one(Candidate, kept).revision
-    write_toml(Path(campaign.path), f'#!/bin/sh\ngit merge -q --no-edit {kept_sha}\n')
-    reload_campaign(db, campaign)
-    run_id = make_run(db, campaign)
-    with db.session() as s:
-        s.get_one(Run, run_id).base_candidate_id = trunk
-        s.commit()
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    [(_, verdict, reason, _, parent)] = scored(db, run_id)
-    assert (verdict, reason, parent) == (
-        Outcome.KEEP,
-        f'against candidate#{trunk}: score 3 vs 1 (+2; aggregate: no per-unit results)',
-        trunk,
-    ), 'judged against the head it merged onto'
-    with db.session() as s:
-        new_head = head(s, s.get_one(Campaign, campaign.id))
-        assert new_head is not None and new_head.run_id == run_id, 'the merge is the new head'
-        assert s.get_one(Candidate, kept).verdict is Outcome.KEEP, 'the branch keep keeps its verdict'
 
 
 def test_a_run_pinned_to_a_non_keep_is_judged_against_its_nearest_keep_on_every_metric(
@@ -2641,77 +2535,26 @@ def test_with_a_noisy_metric_a_run_pairs_its_commit_with_its_bar_and_a_merge_wit
         )
 
 
-def test_a_keep_whose_merge_onto_the_head_conflicts_stays_interesting_and_adds_an_idea_to_compose_it(
+def test_a_keep_whose_merge_onto_the_head_conflicts_stays_interesting_and_records_the_conflict(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
+    """piloop files no idea for it: the conflict is on the reason and on the event."""
     run_id = make_run(db, campaign)
     h2 = keep_elsewhere(db, campaign, 'other line', {'solve.txt': 'base\nother\n'}, {'score': 2.0, 'size': 11.0})
     execute(controller(db, runtime, tmp_path), db, run_id)
     [(_, verdict, reason, _, _)] = scored(db, run_id)
     assert (verdict, reason) == (
         Outcome.INTERESTING,
-        snapshot(
-            'keeps against its own bar, but the head moved on to candidate#2: against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results); its merge onto the head conflicts in solve.txt: idea#2 composes it by hand'
-        ),
+        'keeps against its own bar, but the head moved on to candidate#2: against candidate#1: score 2 vs 1 (+1;'
+        ' aggregate: no per-unit results); its merge onto the head conflicts in solve.txt',
     )
     with db.session() as s:
         [x] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
-        [seed] = s.scalars(select(Idea).where(Idea.created_by == System.DAEMON)).all()
-        assert (seed.status, seed.title, seed.track, seed.created_by, seed.provenance) == (
-            IdeaStatus.OPEN,
-            f'Compose candidate#{x.id} onto the head',
-            'score',
-            System.DAEMON,
-            f'candidate#{x.id}',
-        ), 'on the run track'
-        assert seed.hypothesis == (
-            f'Follow-up of candidate#{x.id} (add a line): it kept against its own bar but its merge onto the head'
-            f' candidate#{h2} conflicts in solve.txt: from the head, merge candidate#{x.id} ({x.revision}) and resolve the conflicts'
-        )
+        assert s.scalars(select(Idea).where(Idea.created_by == System.DAEMON)).all() == []
         [event] = s.scalars(select(Event).where(has(Rebased))).all()
         assert (event.target_id, event.payload) == (x.id, Rebased(head=h2, conflicts=['solve.txt']))
         trunk = head(s, s.get_one(Campaign, campaign.id))
         assert trunk is not None and trunk.id == h2
-
-
-def test_a_conflicting_merge_in_a_stopped_campaign_adds_no_idea(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """The final commits of a stopped campaign are still scored, but the daemon files no idea for it."""
-    run_id = make_run(db, campaign)
-    keep_elsewhere(db, campaign, 'other line', {'solve.txt': 'base\nother\n'}, {'score': 2.0, 'size': 11.0})
-    with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
-        s.commit()
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    [(_, verdict, reason, _, _)] = scored(db, run_id)
-    assert verdict is Outcome.INTERESTING
-    assert reason is not None and reason.endswith('its merge onto the head conflicts in solve.txt')
-    with db.session() as s:
-        assert s.scalars(select(Idea).where(Idea.created_by == System.DAEMON)).all() == []
-
-
-def test_a_rejudge_does_not_add_a_compose_idea_again_after_it_was_dropped(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """An idea from this candidate with this title exists, whatever its status or name."""
-    run_id = make_run(db, campaign)
-    keep_elsewhere(db, campaign, 'other line', {'solve.txt': 'base\nother\n'}, {'score': 2.0, 'size': 11.0})
-    ex = controller(db, runtime, tmp_path)
-    execute(ex, db, run_id)
-    with db.session() as s:
-        [x] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
-        [seed] = s.scalars(select(Idea).where(Idea.created_by == System.DAEMON)).all()
-        seed.status = IdeaStatus.DROPPED
-        add_measurement(s, x.id, Report(metrics={'score': 2.0, 'size': 10.0}), actor=System.HUMAN)
-        s.commit()
-        x_id, seed_id = x.id, seed.id
-    ex.rejudge(x_id)
-    with db.session() as s:
-        filed = s.scalars(select(Idea.id).where(Idea.provenance == f'candidate#{x_id}')).all()
-        reason = s.get_one(Candidate, x_id).verdict_reason
-    assert filed == [seed_id], 'the dropped compose idea is not added again under another title'
-    assert reason is not None and reason.endswith('its merge onto the head conflicts in solve.txt')
 
 
 def test_two_sessions_that_register_one_new_tree_share_one_candidate(

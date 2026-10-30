@@ -4,6 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from covalence import Cid
 from sqlalchemy import select
 
 from piloop.actor import Agent, System
@@ -34,7 +35,9 @@ from piloop.plugins.campaign_type.kit.evaluation.wire import (
     SubmissionQuery,
     SubmitBody,
 )
-from piloop.plugins.campaign_type.kit.runs.tables import working_on
+from piloop.plugins.campaign_type.kit.runs.controller import close_run
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
+from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.campaign_type.kit.verdicts.verdict import write
 from piloop.plugins.campaign_type.kit.verdicts.wire import RemeasureBody
 from piloop.settings import Settings
@@ -150,6 +153,11 @@ def test_an_implementer_submits_a_commit_of_its_run_and_reads_only_its_verdict_a
             assert (answer.verdict, answer.score) == ('pending', None)
             with pytest.raises(Refused, match='^the campaign repo has no f00: submit a commit of your checkout'):
                 client.submit(SubmitBody(revision='f00'))
+            with pytest.raises(Refused, match='^nope is no blob address'):
+                client.submit(SubmitBody(revision='f00', blob='nope'))
+            absent = str(Cid.of(b'never stored'))
+            with pytest.raises(Refused, match=f'^f00 did not come: the bundle {absent} is not in the CAS$'):
+                client.submit(SubmitBody(revision='f00', blob=absent))
             assert client.submission(answer.candidate, SubmissionQuery(wait=0.2)).verdict == 'pending', 'no verdict yet'
             again = client.submit(SubmitBody(revision=revision))
             assert again.candidate == answer.candidate, 'its own tree again, while it waits'
@@ -160,11 +168,18 @@ def test_an_implementer_submits_a_commit_of_its_run_and_reads_only_its_verdict_a
             s.add(Measurement(candidate_id=candidate.id, evaluator_id=campaign.evaluator_id, metrics={'score': 2.0}))
             write(candidate, Outcome.KEEP, cause=None, reason='+1', by=System.DAEMON)
             s.commit()
+            run = s.get_one(Run, run_id)
+            close_run(s, run, RunEnd.FINISHED, None)
+            s.commit()
+        with EveryClient.on(cfg.socket_file, me, token) as client:
+            assert client.submit(SubmitBody(revision=revision)).verdict == 'keep', 'a retry after its run ended'
+            with pytest.raises(Refused, match=rf'^run#{run_id} is succeeded, not running$'):
+                client.submit(SubmitBody(revision='f00', blob='nope'))  # refused before its blob is read
         with EveryClient.on(cfg.socket_file, System.HUMAN) as client:
             assert client.submission(answer.candidate, SubmissionQuery(wait=1)) == Submission(
                 candidate=answer.candidate, verdict='keep', score=2.0
             )
-            with pytest.raises(Refused, match='^human does no run: only an implementer submits$'):
+            with pytest.raises(Refused, match='^human has no run: only a worker submits$'):
                 client.submit(SubmitBody(revision=revision))
             with pytest.raises(Refused, match='^no candidate#99$'):
                 client.submission(CandidateId(99), SubmissionQuery())

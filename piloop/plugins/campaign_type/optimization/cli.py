@@ -170,7 +170,7 @@ def candidate_verdict(
     records the old and new verdict with the reason. Only a judgement is overridden, and a measured reference is kept: pending, reference, recovered and
     skipped candidates are refused. A keep of a trunk run that does not build on the head would drop what the head
     kept. So the candidate becomes `interesting`, and its merge onto the head is a new candidate that the daemon
-    measures and judges against the head, as for its own keeps. A merge that conflicts files a seed to compose it.
+    measures and judges against the head, as for its own keeps. A merge that conflicts names its paths in the reason.
     A verdict that replaces the head cancels the open runs that started from the old head, unless they pin it, as
     `piloop run cancel --wrap-up` does. Their ideas run again from the new head once the runs end.
     """

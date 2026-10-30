@@ -5,9 +5,8 @@
 | `VerdictRule.decide(case: Case) -> Judgement` | Return the verdict on `case.candidate` against `case.bar`, and the reason. |
 | `VerdictRule.samples(case: Case) -> int` | Return how many measurements the candidate needs before `decide`. piloop measures it again once to get them. |
 | `VerdictRule.bar(ancestry: Sequence[Node]) -> CandidateId` | Return the bar of a run that starts from `ancestry[0]`. The ancestry goes from it, parent by parent, to its root. |
-| `VerdictRule.raises_bar(node: Node, lineage: Lineage) -> bool` | Return whether `node`, a commit of a run that keeps on `lineage`, becomes the bar of the run's next commits. |
 | `VerdictRule.head(trunk: Sequence[Node]) -> CandidateId \| None` | Return the head among the trunk's keeps, oldest first, or None when there is none. |
-| `VerdictRule.on_moved(moved: Moved) -> Rebase \| Leave` | Return what follows a keep that lacks the head. By default its merge onto the head, and a seed on a conflict. |
+| `VerdictRule.on_moved(moved: Moved) -> Rebase \| Leave` | Return what follows a keep that lacks the head. By default its merge onto the head. |
 | `Case.primary: Criterion` | The primary metric of the candidate's track. |
 | `Case.guardrails: tuple[Criterion, ...]` | The campaign's guardrails, then the primary of every other track. |
 | `Case.candidate: Side` | The candidate that the rule judges. |
@@ -35,9 +34,7 @@
 | `Judgement.reason: str` | Why, as piloop stores and shows it with the verdict. |
 | `Node.id: CandidateId` | The candidate's id. |
 | `Node.verdict: Outcome \| None` | None while it is pending, and for a commit that is never judged. |
-| `Node.made: Lineage \| Imported` | Where it was made: on the side of the run that made it, or imported. The baseline is on the trunk. |
+| `Node.made: Trunk \| Imported` | Where it was made: on the trunk, or imported. |
 | `Node.means: dict[str, float]` | The mean of each metric over its successful measurements under the current evaluator. |
-| `Branch.root: CandidateId` | The candidate that the branch run started from. |
 | `Moved.candidate: Node` | The keep that lacks the head. |
 | `Moved.head: Node` | The head that it lacks. |
-| `Rebase.conflicts: Seed \| Leave` | What follows when the merge conflicts. |
