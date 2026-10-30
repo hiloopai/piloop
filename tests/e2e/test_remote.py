@@ -57,9 +57,11 @@ from tests.isolation import CALLER_ENV
 pytestmark = pytest.mark.e2e
 
 ROLE_TIMEOUT = 300
+MAX_CONCURRENT = 2
+"""The implementers that run at once: one run on each free slot."""
 PLUGINS: dict[str, object] = {
     'role': {
-        'implementer': {'timeout': ROLE_TIMEOUT, 'max_concurrent': 2},
+        'implementer': {'timeout': ROLE_TIMEOUT, 'max_concurrent': MAX_CONCURRENT},
         'research': {'triggers': [], 'max_ideas': 0},
         'watchdog': {'triggers': [], 'interval': 0},
         'orchestrator': {'triggers': ['news'], 'addendum': 'orchestrator.md', 'timeout': ROLE_TIMEOUT},
@@ -139,6 +141,15 @@ RETIRE_WAIT = ROLE_TIMEOUT + 300
 """Seconds to wait for a stop to be over before a campaign retires: its closing review and runs end."""
 
 
+@dataclass(frozen=True)
+class Claim:
+    """A run's implementer, and the idea of the board that it claimed or proposed."""
+
+    agent: int
+    idea: int
+    proposed: bool
+
+
 @dataclass
 class Server:
     """The campaign on the server, and what the tests learn of it as they go."""
@@ -163,6 +174,8 @@ class Server:
     baseline: int = 0
     ideas: dict[str, int] = field(default_factory=dict)
     """The id of each idea that the tests made, by key."""
+    runs: dict[int, Claim] = field(default_factory=dict)
+    """Each run that a free slot queued, by id: its implementer and the idea it claimed or proposed."""
 
     def piloop(self, *args: str) -> str:
         """Run the CLI against the server as the orchestrator, and return its stdout."""
@@ -419,9 +432,12 @@ def test_a_message_wakes_the_orchestrator_that_piloop_launches_and_it_answers(se
 
 @needs(test_the_orchestrator_adds_an_idea, test_a_person_adds_an_idea_that_is_open_on_the_board)
 def test_implementers_run_on_the_servers_workers(server: Server) -> None:
-    """Each idea gets a run, whose implementer names its harness session and runs on a machine of the server."""
-    for key, idea in server.ideas.items():
-        queued = server.seen(lambda e, i=idea: e.kind == 'run.queued' and payload(e)['idea'] == i, f'run of {key}', 300)
+    """Each free slot queues a run from the head. Its implementer names its harness session, runs on a machine of the
+    server, and claims an idea of the board or proposes one of its own."""
+    for _ in range(MAX_CONCURRENT):
+        queued = server.seen(
+            lambda e: e.kind == 'run.queued' and e.subject.id not in server.runs, 'a run on a free slot', 300
+        )
         run = queued.subject.id
         identified = server.seen(
             lambda e, r=run: e.kind == 'agent_session.identified' and payload(e)['subject'] == f'run#{r}',
@@ -430,19 +446,39 @@ def test_implementers_run_on_the_servers_workers(server: Server) -> None:
         )
         agent = identified.subject.id
         running = server.seen(kind_on('agent_session.running', 'agent_session', agent), f'agent#{agent} running', 900)
-        print(f'run#{run} of idea#{idea}: agent#{agent} on {payload(running)["machine"]}')
+        claimed = server.seen(
+            lambda e, a=agent: (
+                e.kind == 'idea.status' and payload(e)['new'] == 'claimed' and e.actor == f'implementer#{a}'
+            ),
+            f'the idea that implementer#{agent} claims',
+            ROLE_TIMEOUT,
+        )
+        idea = claimed.subject.id
+        proposed = any(e.subject.id == idea and e.actor == f'implementer#{agent}' for e in server.of('idea.created'))
+        server.runs[run] = Claim(agent=agent, idea=idea, proposed=proposed)
+        how = 'proposed' if proposed else 'claimed'
+        print(f'run#{run}: agent#{agent} on {payload(running)["machine"]} {how} idea#{idea}')
 
 
 @needs(test_implementers_run_on_the_servers_workers)
 def test_candidates_are_measured_and_judged(server: Server) -> None:
-    """Both runs end, and at least one commit of theirs is measured and judged."""
-    runs = {e.subject.id for e in server.of('run.queued')}
-    for run in runs:
+    """Each run submits a version, asks to end as submitted, and ends; its idea is done; a submission is judged."""
+    for run, claim in server.runs.items():
+        submitted = server.seen(kind_on('run.submitted', 'run', run), f'run#{run} submits', RUNS_WAIT)
+        ending = server.seen(kind_on('run.end_requested', 'run', run), f'run#{run} asks to end', RUNS_WAIT)
+        assert payload(ending)['how'] == 'submitted', payload(ending)
         ended = server.seen(kind_on('run.finished', 'run', run), f'run#{run} finished', RUNS_WAIT)
-        print(f'run#{run}: {payload(ended)}')
+        server.seen(
+            lambda e, i=claim.idea: e.kind == 'idea.status' and e.subject.id == i and payload(e)['new'] == 'done',
+            f'idea#{claim.idea} done',
+            600,
+        )
+        print(
+            f'run#{run}: submitted candidate#{payload(submitted)["candidate"]}, {payload(ended)}; idea#{claim.idea} done'
+        )
 
     def from_runs(e: Envelope) -> bool:
-        return e.kind == 'measurement.recorded' and payload(e)['run'] in runs
+        return e.kind == 'measurement.recorded' and payload(e)['run'] in server.runs
 
     measured = server.seen(from_runs, 'a measurement of a run', 600)
     candidate = payload(measured)['candidate']
@@ -478,14 +514,24 @@ def test_pause_and_resume(server: Server) -> None:
 def test_stop(server: Server) -> None:
     """``piloop campaign stop``: the campaign stops and closes. The stop wakes the orchestrator once, to report; after that
     wake ends, no agent is left and none starts."""
-    server.piloop('campaign', 'stop', server.name, '--reason', 'e2e: the scenario ends')
+    # Each free slot starts a run from the head, so the stop rule's max_runs can stop the campaign first.
+    if server.state().status == 'active':
+        server.piloop('campaign', 'stop', server.name, '--reason', 'e2e: the scenario ends')
     stopped = server.seen(lambda e: e.kind == 'campaign.status' and payload(e)['new'] == 'stopped', 'the stop', 120)
     server.seen(lambda e: e.kind == 'campaign.closed', 'the campaign closed', ROLE_TIMEOUT + 300)
 
     def reports(e: Envelope) -> bool:
         return e.id > stopped.id and e.kind == 'agent_session.started' and payload(e)['role'] == 'orchestrator'
 
-    report = server.seen(reports, 'the orchestrator woken by the stop', 600).subject.id
+    # An orchestrator that a run's news woke before the stop takes the stop as news too, and reports in that wake.
+    asked = {
+        e.subject.id
+        for e in server.of('agent_session.requested')
+        if e.id < stopped.id and payload(e)['role'] == 'orchestrator'
+    }
+    ended = {e.subject.id for e in server.of('agent_session.finished') if e.id < stopped.id}
+    working = sorted(asked - ended)
+    report = working[-1] if working else server.seen(reports, 'the orchestrator woken by the stop', 600).subject.id
     finished = server.seen(kind_on('agent_session.finished', 'agent_session', report), f'orchestrator#{report}', 900)
     server.none(
         lambda e: e.id > finished.id and e.kind == 'agent_session.started', 'an agent started after the report', 90
