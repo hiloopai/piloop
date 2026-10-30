@@ -371,13 +371,20 @@ def show_in_cli() -> None:
 def warn(toml: Path, key: str, message: str, *, removed_in: Version, nth: int = 0) -> None:
     """Warn at the line of ``toml`` that sets ``key`` for the ``nth`` time, or at line 0 if no line sets it.
 
-    A dotted ``key`` (``roles.research.scout``) is set by its table header, or by a line that sets its last part. The
+    A dotted ``key`` (``plugins.role.research``) is set by its table header, or by a line that sets its last part. The
     output looks like a compiler error: ``piloop.toml:12: PiloopDeprecationWarning: …``, then the line.
     """
     lines = _lines(toml, key)
     lineno = lines[nth] if nth < len(lines) else 0
     text = f'{message}; removed in piloop {removed_in}'
     warnings.warn_explicit(text, PiloopDeprecationWarning, str(toml), lineno, registry=_shown)
+
+
+def nth(toml: Path, table: str, key: str) -> int:
+    """How many lines of ``toml`` set ``key`` before the header of ``table``: ``warn``'s ``nth`` for ``table.key``."""
+    lines = toml.read_text().splitlines()
+    header = next((n for n, line in enumerate(lines) if line.strip() == f'[{table}]'), len(lines))
+    return sum(line.partition('=')[0].strip() == key for line in lines[:header])
 
 
 def _lines(toml: Path, key: str) -> list[int]:

@@ -137,13 +137,7 @@ class RoleConfig(Parameters):
     """The MCP servers that the agents of this role get, by the name of their ``[plugins.mcp_server.<name>]`` table.
     Every harness in the role's rotation must be able to take them in the invocation of the role's runtime."""
     writes: list[str] = []
-    """What the agents of this role may write, as their brief states it. Only ``files`` is enforced."""
-    files: Files = Files.SEEDS
-    """What the agents of this role may file with ``piloop idea``: ``nothing``, ``seeds`` or ``ideas``. The CLI
-    refuses the rest."""
-    plan_words: int = Field(default=150, ge=1)
-    """The most words in the plan of an idea that an agent of this role adds or develops: steps that one run can
-    follow, not a protocol. A longer plan is refused."""
+    """What the agents of this role may write, as their brief states it. piloop enforces only a sweep's ``files``."""
     sections: list[SectionName] | None = None
     """What the briefs of this role show after ``brief.md``: the names of sections, in order, the ``context`` among them.
     When unset, the role's own guides, then every installed section that a brief of this kind of role shows by default,
@@ -212,9 +206,8 @@ class ImplementerRole(RoleConfig):
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
     scored after its implementer ended does not count."""
     writes: list[str] = ['versions', 'comments(finding) on your idea', 'comments(note) on your run']
-    """What an implementer may write, as its brief states it."""
-    files: Files = Files.NOTHING
-    """An implementer files no ideas and no seeds. Its hunches go in its finding, which research reads."""
+    """What an implementer may write, as its brief states it. It files no ideas and no seeds: its hunches go in its
+    finding, which research reads."""
     SURFACE: ClassVar[Surface] = Surface.RUN
     recovery_requeues: int = Field(default=2, ge=0)
     """How many times one idea goes back to the queue from the last version of a run that did not succeed: a new
@@ -265,7 +258,7 @@ class Sweep(Pass, Protocol):
 
 
 class SweepRole(RoleConfig):
-    """``[plugins.role.<name>]`` of a sweeping role: the watchdog, research, the scout, or a new role that you define.
+    """``[plugins.role.<name>]`` of a sweeping role: the watchdog, research, or a new role that you define.
 
     A sweep is an agent without a run. Its triggers request it, and nothing is scored when it ends. A table with a new
     name defines a new role, and needs ``prompt`` and ``triggers``.
@@ -285,6 +278,12 @@ class SweepRole(RoleConfig):
     interval: float = Field(default=0, ge=0)
     """The number of seconds between two routine sweeps of the ``cron`` trigger, counted from the start of the last
     one. A sweep that investigates an anomaly is not a routine sweep. 0 turns the timer off."""
+    files: Files = Files.SEEDS
+    """What the agents of this role may file with ``piloop idea``: ``nothing``, ``seeds`` or ``ideas``. The CLI
+    refuses the rest."""
+    plan_words: int = Field(default=150, ge=1)
+    """The most words in the plan of an idea that an agent of this role adds or develops: steps that one run can
+    follow, not a protocol. A longer plan is refused."""
     max_ideas: int = Field(default=1, ge=0)
     """The maximum number of new ideas one sweep may insert, as its brief states it. The seeds it develops do not
     count. ``low_water`` requests enough sweeps to fill the backlog at this many ideas each. 0 pauses the role's new

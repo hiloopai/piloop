@@ -92,13 +92,6 @@ def test_every_built_in_provider_writes_every_part() -> None:
 
 GIT_WORDS = re.compile(r'\bgit\b|commit|worktree|cherry-pick|\bsha\b|trailer', re.IGNORECASE)
 """Words that only a provider's parts may say: git's own, and its name for a version."""
-ALLOWED_WORDS = {
-    'scout.md': (
-        'its recent commits, issues and releases (`gh api repos/<owner>/<repo>/commits`',
-        "a GitHub repo that the scout watches, which is no campaign's",
-    ),
-}
-"""A phrase of a core prompt that may say one of ``GIT_WORDS``, and why."""
 
 
 def git_words(text: str) -> list[str]:
@@ -108,9 +101,6 @@ def git_words(text: str) -> list[str]:
 
 def test_no_core_prompt_says_git_or_commit_outside_the_providers_parts() -> None:
     texts = {p.name: p.read_text() for p in BUILT_IN} | {'TOOLS': '\n'.join(TOOLS)}
-    for name, (phrase, _) in ALLOWED_WORDS.items():
-        assert phrase in texts[name], f'{name} no longer says it: delete it from ALLOWED_WORDS'
-        texts[name] = texts[name].replace(phrase, '')
     assert {name: found for name, text in texts.items() if (found := git_words(text))} == {}
 
 

@@ -887,3 +887,40 @@ def test_0073_names_a_lease_s_job_by_kind_and_row_with_its_runner_moves_the_pool
         ]
         with pytest.raises(sqlite3.IntegrityError, match='leasekind'):
             con.execute("INSERT INTO leases (kind, evaluation_id, job_cid) VALUES ('probe', 5, 'cid')")
+
+
+def test_0074_drops_the_keys_of_the_removed_features_from_each_stored_config(tmp_path: Path) -> None:
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0073')
+    roles = {
+        'scout': {'interval': 60.0, 'seeds': 2},
+        'research': {'max_ideas': 2, 'files': 'ideas', 'plan_words': 90},
+        'watchdog': {'triggers': ['run_failed', 'leaking_funnel', 'leaks', 'cron']},
+        'implementer': {'files': 'nothing', 'timeout': 60.0},
+        'quick': {'runs': True, 'plan_words': 80},
+    }
+    triggers = {'leaks': {'provider': 'leaking_funnel', 'window': 5}, 'cron': {'max_interval': 60.0}}
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for name, config in (('p', {'plugins': {'role': roles, 'trigger': triggers}}), ('q', {'name': 'q'})):
+            con.execute(
+                'INSERT INTO campaigns (name, path, config) VALUES (?, ?, ?)', (name, f'/{name}', dumps(config))
+            )
+    stored = 'SELECT config FROM campaigns ORDER BY id'
+    command.upgrade(cfg, '0074')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == [
+            {
+                'plugins': {
+                    'role': {
+                        'research': {'max_ideas': 2, 'files': 'ideas', 'plan_words': 90},
+                        'watchdog': {'triggers': ['run_failed', 'cron']},
+                        'implementer': {'timeout': 60.0},
+                        'quick': {'runs': True},
+                    },
+                    'trigger': {'cron': {'max_interval': 60.0}},
+                }
+            },
+            {'name': 'q'},
+        ]
+    command.downgrade(cfg, '0073')

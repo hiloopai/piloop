@@ -1,4 +1,4 @@
-"""The incident triggers (a failed run, an agent dead at startup, a leaking funnel) find what wakes an agent; the cost sections show what the progress review weighs."""
+"""The incident triggers (a failed run, an agent dead at startup) find what wakes an agent; the cost sections show what the progress review weighs."""
 
 from pathlib import Path
 from typing import Never
@@ -17,10 +17,9 @@ from piloop.plugins.campaign_type.consumers import RolePass
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement, evaluator_of
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.runs.trigger.leaking_funnel import LeakingFunnel
 from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.section.contract import SECTIONS, Rendering, markdown
 from piloop.plugins.section.reported import REPORTED_SHOWN
@@ -30,7 +29,7 @@ from tests.conftest import RESEARCH, WATCHDOG, cas_of
 from tests.reports.test_overview import NOW, agent, at, candidate, idea, live_campaign, run
 
 
-def fired(s: Session, campaign: Campaign, trigger: RunFailed | DeadAtStartup | LeakingFunnel) -> Fire | None:
+def fired(s: Session, campaign: Campaign, trigger: RunFailed | DeadAtStartup) -> Fire | None:
     """What ``trigger`` of the watchdog fires on a pass now."""
 
     def unread(_: object) -> Never:
@@ -189,31 +188,3 @@ def test_one_candidate_that_scored_exactly_its_parent_has_a_line_of_its_own(db: 
         s.get_one(Measurement, 3).metrics = {'score': 4.0, 'size': 10.0}
         s.commit()
         assert shown(s, campaign, 'same_as_parent') == '', 'nothing to show'
-
-
-def test_a_leaking_funnel_is_an_incident_once_for_each_evaluator(db: Database, campaign: Campaign) -> None:
-    """Fewer than 5 of the last 10 attempts measured: a gate that most runs cannot pass."""
-    with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        evaluator = evaluator_of(s, p)
-        assert evaluator is not None
-        evaluator.created_at = at(0)
-        for n in range(9):
-            row = run(s, idea(s, p, f'idea {n}', IdeaStatus.DONE), RunStatus.FAILED, 1, n, n + 1)
-            if n < 4:
-                candidate(s, p, 1, Outcome.DISCARD, 1, n + 1, run_id=row.id)
-        s.commit()
-        assert fired(s, campaign, LeakingFunnel()) is None, 'nine attempts: not yet a window'
-        run(s, idea(s, p, 'the tenth', IdeaStatus.DONE), RunStatus.TIMED_OUT, 1, 9, 10)
-        s.commit()
-        fire = fired(s, campaign, LeakingFunnel())
-        assert fire is not None and subjects(fire) == ['campaign#1']
-        [event] = fire.events
-        assert isinstance(event, AnomalyReported) and event.line == snapshot(
-            '- campaign#1 leaks, 1h ago: 4 of the last 10 attempts were measured under evaluator#1; the others ended: 1 timed_out, 5 failed'
-        )
-        assert fired(s, campaign, LeakingFunnel(measured=4)) is None, '4 of 10 is enough for a lower bar'
-        watchdog = agent(s, p, WATCHDOG, 0, 5)
-        s.add(Event(actor='daemon', target=TargetRef(TargetKind.AGENT_SESSION, watchdog.id), payload=event, at=NOW))
-        s.commit()
-        assert fired(s, campaign, LeakingFunnel()) is None, 'once for each evaluator'

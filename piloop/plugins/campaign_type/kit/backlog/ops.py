@@ -57,7 +57,7 @@ def files(campaign: Campaign, actor: Actor) -> Files | None:
 
 
 def check_plan(campaign: Campaign, actor: Actor, plan: str | None) -> None:
-    """Refuse a plan longer than ``plan_words`` of the actor's role. An actor that is not a role has no limit.
+    """Refuse a plan longer than ``plan_words`` of the actor's role. An actor that is not a sweep has no limit.
 
     Raises:
         Refused: the plan is too long.
@@ -65,7 +65,7 @@ def check_plan(campaign: Campaign, actor: Actor, plan: str | None) -> None:
     if (
         plan is None
         or (agent := actor.launched) is None
-        or (table := campaign.config.roles.all().get(agent.role)) is None
+        or (table := campaign.config.roles.sweeping().get(agent.role)) is None
     ):
         return
     if (words := len(plan.split())) > table.plan_words:

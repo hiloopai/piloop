@@ -147,7 +147,6 @@ http = "piloop.plugins.cas.http:Http"
 [project.entry-points."piloop.triggers"]
 run_failed = "piloop.plugins.campaign_type.kit.runs.trigger.run_failed:RunFailed"
 dead_at_startup = "piloop.plugins.trigger.dead_at_startup:DeadAtStartup"
-leaking_funnel = "piloop.plugins.campaign_type.kit.runs.trigger.leaking_funnel:LeakingFunnel"
 low_yield = "piloop.plugins.campaign_type.optimization.trigger.low_yield:LowYield"
 cron = "piloop.plugins.trigger.cron:CronTrigger"
 seed = "piloop.plugins.campaign_type.kit.backlog.trigger.seed:SeedTrigger"
@@ -263,6 +262,9 @@ stdio = "piloop.plugins.mcp_server.stdio:StdioServer"
 [project.entry-points."piloop.bridges"]
 implementer_timings = "piloop.deprecated:implementer_timings"
 campaign_finding_grace = "piloop.deprecated:campaign_finding_grace"
+scout_role = "piloop.plugins.role.bridges:scout_role"
+run_role_ideas = "piloop.plugins.role.bridges:run_role_ideas"
+leaking_funnel = "piloop.plugins.trigger.bridges:leaking_funnel"
 
 # The kinds that events and comments point at, beyond core's, by name: the table of their rows
 # (piloop.db.models.TARGET_KINDS).
@@ -304,7 +306,6 @@ review = "piloop.plugins.campaign_type.optimization.skills:REVIEW"
 implementer = "piloop.plugins.role.implementer:ImplementerRole"
 watchdog = "piloop.plugins.campaign_type.kit.runs.role.watchdog:WatchdogRole"
 research = "piloop.plugins.campaign_type.kit.backlog.role.research:ResearchRole"
-scout = "piloop.plugins.campaign_type.kit.backlog.role.scout:ScoutRole"
 orchestrator = "piloop.plugins.role.orchestrator:OrchestratorRole"
 
 [tool.hatch.build.targets.wheel]

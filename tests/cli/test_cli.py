@@ -1591,15 +1591,11 @@ def test_launch_requests_an_implementer(campaign_path: Path, out) -> None:
         'a request is not an agent until the daemon launches it'
     )
     with pytest.raises(
-        SystemExit, match="demo has no sweeping role 'janitor'; it has orchestrator, research, scout, watchdog.$"
+        SystemExit, match="demo has no sweeping role 'janitor'; it has orchestrator, research, watchdog.$"
     ):
         run_cli(['launch', 'demo', 'janitor'])
     with pytest.raises(SystemExit, match='The daemon launches implementers by itself, one for each queued run'):
         run_cli(['launch', 'demo', 'implementer'])
-    run_cli(['launch', 'demo', 'scout', '--reason', 'look outside'])
-    assert out().strip() == 'agent_session#3 scout requested for demo: look outside', (
-        'the scout is a role like any other'
-    )
 
 
 def test_serve_builds_a_daemon(mocker: MockerFixture) -> None:

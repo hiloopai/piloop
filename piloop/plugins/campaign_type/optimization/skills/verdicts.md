@@ -27,7 +27,7 @@ session that worked a past idea.
 - Documents: the reports and logs that `[plugins.memory] documents` in `piloop.toml` names, copied in on `piloop init` and
   when the campaign stops. Search them with `documents_fts MATCH '<words>'`. Point the globs at reports, never at
   anything derived from validation or test data.
-- Briefs of implementers, research and the scout show the current lessons of the repo: the `lessons` section of
+- Briefs of implementers and research show the current lessons of the repo: the `lessons` section of
   `[plugins.role.<kind>] sections`, in its `budget` of tokens. Leave the entry out to turn it off for a role.
 
 ## Judge candidates

@@ -44,8 +44,6 @@ class Role:
     """The file that follows ``prompt`` in an incident sweep, one that got anomalies. None: nothing follows."""
     routine: Traversable | None
     """The file that follows ``prompt`` in every other sweep. None for a role that does runs, or a role without one."""
-    files: Files
-    """What the role may file with ``piloop idea``. The CLI enforces it."""
     ideas: str
     """How this role gives work to the implementers, as the context block of the brief says it.
 
@@ -89,8 +87,17 @@ def role(cfg: CampaignConfig, kind: RoleName, repo: Path) -> Role:
     if isinstance(table, SweepRole):
         incident = _prompt(repo, table.incident_prompt, table.INCIDENT_PROMPT)
         routine = _prompt(repo, table.routine_prompt, table.ROUTINE_PROMPT)
-    ideas = table.IDEAS or IDEAS[table.files]
-    return Role(kind, prompt, incident, routine, table.files, ideas)
+    ideas = table.IDEAS or IDEAS[filed(table)]
+    return Role(kind, prompt, incident, routine, ideas)
+
+
+def filed(table: RoleConfig) -> Files:
+    """What the agents of a role may file with ``piloop idea``: a sweep's ``files``. A role that does runs files nothing."""
+    match table:
+        case SweepRole(files=files):
+            return files
+        case _:
+            return Files.NOTHING
 
 
 def _prompt(repo: Path, configured: str | None, own: Traversable | None) -> Traversable | None:
@@ -125,7 +132,7 @@ def files_of(cfg: CampaignConfig, actor: Actor) -> Files | None:
     if (agent := actor.launched) is None:
         return None
     table = cfg.roles.all().get(agent.role)
-    return None if table is None else table.files
+    return None if table is None else filed(table)
 
 
 def read_brief(cas: Cas, brief: Cid) -> str:

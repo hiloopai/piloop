@@ -3,7 +3,7 @@
 This file is for a coding agent that a human asks to set up, run or review a piloop campaign. To change piloop's own
 code, read [CONTRIBUTING.md](CONTRIBUTING.md) instead.
 
-If `PILOOP_ACTOR` is already set to a `implementer#`, `watchdog#`, `research#` or `scout#` id, piloop started you. Follow
+If `PILOOP_ACTOR` is already set to a `implementer#`, `watchdog#` or `research#` id, piloop started you. Follow
 your brief, and ignore this file and the skills.
 
 piloop runs an autoresearch campaign on a git repo. A daemon starts coding agents (Claude Code, Codex or pi). Each

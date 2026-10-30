@@ -16,7 +16,7 @@ from tests.conftest import SETTLE, ScriptRuntime, run_all, write_toml
 from tests.daemon.test_roles import recording, scheduler
 from tests.daemon.test_run_controller import brief_of, controller, execute, make_run
 
-BUDGETS = {'watchdog': 3300, 'research': 3600, 'scout': 2600, 'orchestrator': 2400}
+BUDGETS = {'watchdog': 3300, 'research': 3600, 'orchestrator': 2400}
 """Words of a sweep's whole brief."""
 IMPLEMENTER = 1200
 """Words of an implementer's whole brief: a third of it is the run's own context."""

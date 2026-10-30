@@ -76,7 +76,6 @@ from tests.conftest import (
     HARNESS_PROMPT_TO_FILE,
     HARNESS_SLEEPS,
     RESEARCH,
-    SCOUT,
     WATCHDOG,
     ScriptRuntime,
     cas_of,
@@ -90,7 +89,7 @@ from tests.conftest import (
     wait_until,
     write_toml,
 )
-from tests.test_vcs import ALLOWED_WORDS, git_words
+from tests.test_vcs import git_words
 from tests.usage.test_usage import READS_PI, SESSIONS
 
 NO_USAGE_FILE = {'provider': 'pi', 'home': '/nonexistent', 'resume': []}
@@ -280,21 +279,21 @@ def test_a_brief_has_its_roles_guides_before_the_context_and_names_the_others(ca
 
 
 def test_the_context_is_a_section_that_a_list_moves_and_its_lines_configure(campaign: Campaign, db: Database) -> None:
-    """A line whose field is empty is left out: the scout writes nothing that its brief lists."""
+    """A line whose field is empty is left out: this watchdog writes nothing that its brief lists."""
     plugins = {
         'section': {'context': {'lines': ['- You are {agent}, in {repo}.', '- You may write: {writes}.']}},
-        'role': {'scout': {'writes': [], 'sections': ['goal', 'context', 'database']}},
+        'role': {'watchdog': {'writes': [], 'sections': ['goal', 'context', 'database']}},
     }
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         p.config = load_campaign_config(Path(campaign.path), plugins=plugins)
-        brief = brief_in(s, p, SCOUT, lines=('- the type',))
+        brief = brief_in(s, p, WATCHDOG, lines=('- the type',))
     assert brief.index('## Goal') < brief.index('## Context') < brief.index('## Working with the piloop database')
     with db.session() as s:
         status = Rendering(s, utcnow(), s.get_one(Campaign, campaign.id), Path('/no/workspace'), cas_of(s))
         assert Context().render(status) is None, 'no agent reads piloop status'
     context = context_of(brief).splitlines()
-    assert (context[0], context[-1]) == (f'- You are scout#7, in {campaign.path}.', '- the type')
+    assert (context[0], context[-1]) == (f'- You are watchdog#7, in {campaign.path}.', '- the type')
     assert not any(line.startswith('- You may write') for line in context)
     with pytest.raises(ConfigError, match=r"'- \{who\}' has the field who: use agent, role,"):
         load_campaign_config(Path(campaign.path), plugins={'section': {'context': {'lines': ['- {who}']}}})
@@ -314,7 +313,7 @@ def test_the_example_queries_of_a_brief_read_its_own_campaign_and_primary(campai
     assert 'campaign_id = 1' not in procedures and '<campaign id>' not in procedures, procedures
 
 
-@pytest.mark.parametrize('kind', [IMPLEMENTER, WATCHDOG, RESEARCH, SCOUT])
+@pytest.mark.parametrize('kind', [IMPLEMENTER, WATCHDOG, RESEARCH])
 @pytest.mark.parametrize('incident', [False, True])
 def test_a_brief_says_git_or_commit_only_in_the_vcs_providers_parts(
     campaign: Campaign, db: Database, mocker: MockerFixture, kind: RoleName, incident: bool
@@ -325,8 +324,6 @@ def test_a_brief_says_git_or_commit_only_in_the_vcs_providers_parts(
     mocker.patch.object(Git, 'prompt', marked)
     with db.session() as s:
         brief = brief_in(s, s.get_one(Campaign, campaign.id), kind, incident=incident)
-    for phrase, _ in ALLOWED_WORDS.values():
-        brief = brief.replace(phrase, '')
     assert git_words(brief) == []
 
 

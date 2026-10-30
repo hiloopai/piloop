@@ -60,17 +60,6 @@ A link that the human pastes (a post, a repo, a paper) is a seed signed `human`,
 PILOOP_ACTOR=human piloop idea seed <name> '<its mechanism, one line>' --from '<link>; targets <the measured loss>'
 ```
 
-### Scout for outside techniques
-
-- This needs `[plugins.role.scout]` in `piloop.toml`, with `interval` set.
-- The scout then sweeps on that timer. Each sweep searches X, GitHub and arXiv for techniques that address a measured
-  loss.
-- A scout sweep files at most `seeds` seeds, signed `scout#…`. The other techniques go to the `techniques` library.
-- `piloop launch <name> scout` asks for a scout sweep now.
-- Each scout sweep leaves a priority-3 `finding` that starts with its problem statement. Read it: a scout that
-  misread the problem searched for the wrong thing.
-- In your digests, report the `scout` row of "ideas by source" next to the `research` row.
-
 ### Point research at the evidence
 
 When you or an implementer write an analysis of where the head loses (against the reference, per slice):

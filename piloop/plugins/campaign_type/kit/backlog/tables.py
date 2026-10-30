@@ -1,4 +1,4 @@
-"""The tables of the ``backlog`` component: ideas, their links, and the techniques that scouts found."""
+"""The tables of the ``backlog`` component: ideas, their links, and the techniques that a past scout found."""
 
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -14,11 +14,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from piloop.db.models import NOW, Base, Campaign, Tracked, by_value, text_checks, utcnow
+from piloop.db.models import NOW, Base, Campaign, EventModel, Tracked, by_value, text_checks, utcnow
 from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+
+EventModel.retire('scout.requested')  # 0.1.0 requested a scout sweep with it; piloop has no scout now
 
 if TYPE_CHECKING:  # runs need the backlog: only the relationship names them
     from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -152,11 +154,9 @@ class IdeaLink(Base):
 
 
 class Technique(Base):
-    """The technique library: outside techniques that a scout sweep found and did not file as a seed. One row per link.
+    """The technique library: outside techniques that a scout sweep of piloop 0.5 or earlier found. One row per link.
 
-    A scout reads it before it searches, and checks every technique it finds against it and ``ideas_fts`` (plain
-    text, ``LIKE``), so each technique is filed once. When a later loss makes a technique relevant, it becomes a seed
-    that cites ``technique#<id>``. Agents write it with raw SQL. Rows are never updated.
+    piloop has no scout now, and nothing writes the table: its rows stay readable with SQL.
     """
 
     __tablename__ = 'techniques'

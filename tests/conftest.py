@@ -176,7 +176,6 @@ headless = ["{{prompt}}"]
 
 WATCHDOG = RoleName('watchdog')
 RESEARCH = RoleName('research')
-SCOUT = RoleName('scout')
 """The names of piloop's sweeping roles. Core names none of its roles but the implementer."""
 
 

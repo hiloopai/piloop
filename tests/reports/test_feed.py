@@ -366,7 +366,6 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
         'roles': {
             'orchestrator': {'triggered': False, 'requested': 1, 'live': 0, 'last_ended': None},
             'research': {'triggered': True, 'requested': 0, 'live': 0, 'last_ended': None},
-            'scout': {'triggered': True, 'requested': 0, 'live': 0, 'last_ended': None},
             'watchdog': {'triggered': True, 'requested': 0, 'live': 0, 'last_ended': '2026-10-26T07:00:00.000000Z'},
         },
         'inbox': 1,

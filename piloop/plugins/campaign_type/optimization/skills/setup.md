@@ -128,11 +128,6 @@ Map each answer to its keys:
   https://piloop.autoresearch.inc/guides/workers.
 - **Prior art → `context`** (a top-level key). List the error analyses and evaluation reports of the repo (where the
   current system loses to a reference). Every sweep that reads the research pack starts from them.
-- **Outside techniques → `[plugins.role.scout]`**, only when the human wants them.
-  - Set `interval` in seconds. The default, 0, keeps the scout off.
-  - The X search needs a `[plugins.mcp_server.xai]` table with `provider = "stdio"` that runs
-    `scripts/xai_search_mcp.py` (https://piloop.autoresearch.inc/guides/mcp-servers), `"xai"` in
-    `[plugins.role.scout] mcp`, and `XAI_API_KEY` in the daemon's environment.
 - **Harnesses → `[plugins.harness] use`, and `model` in each `[plugins.harness.<name>]`.** Remove the harnesses that the human does
   not have.
 - **`link`:** gitignored data or virtualenvs that the evaluate command needs inside a worktree.

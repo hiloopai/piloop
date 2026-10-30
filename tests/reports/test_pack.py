@@ -197,11 +197,10 @@ def test_where_an_idea_comes_from_says_whether_it_may_be_more_than_a_seed(campai
         'human',
         'implementer',
     ]
-    actors = ('implementer#3', 'watchdog#4', 'scout#6', 'research#5', 'orchestrator', 'human')
+    actors = ('implementer#3', 'watchdog#4', 'research#5', 'orchestrator', 'human')
     cfg = load_campaign_config(campaign_path)
     assert [files_of(cfg, ACTORS.validate_python(a)) for a in actors] == [
         Files.NOTHING,
-        Files.SEEDS,
         Files.SEEDS,
         Files.IDEAS,
         None,

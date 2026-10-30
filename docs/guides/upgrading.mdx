@@ -149,6 +149,19 @@ Each use shows a `PiloopDeprecationWarning` with the file, the line, the new key
 one. The [changelog](https://github.com/hiloopai/piloop/blob/main/CHANGELOG.md) lists every deprecation, and
 [Deprecated keys and variables](#deprecated-keys-and-variables) lists those of 0.2.0.
 
+## Upgrading to 0.6.0
+
+### Removed features
+
+These features produced no kept candidate in past campaigns, so they are removed. Their keys still load, with a
+warning, until 0.7.0, and do nothing. What they wrote stays in the database.
+
+| Removed | Its keys |
+|---|---|
+| The scout role. Its `techniques` table stays readable. | `[plugins.role.scout]` |
+| The `leaking_funnel` trigger: `low_yield` finds the runs that reach no measurement. | `"leaking_funnel"` in a role's `triggers`, `[plugins.trigger.leaking_funnel]` |
+| Ideas and seeds that implementers file. An implementer's hunch goes in its finding, which research reads. | `files` and `plan_words` of a role that does runs |
+
 ## Upgrading to 0.5.0
 
 ### Upgrade from 0.4

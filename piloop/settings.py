@@ -222,7 +222,7 @@ class Settings(BaseSettings):
 
     actor: Annotated[Actor, NoDecode] = System.HUMAN
     """Who this process is. Every row it updates records this value in ``updated_by``. The daemon launches each agent
-    with ``<role>#<agent_session_id>``, for example ``implementer#12`` or ``scout#7``."""
+    with ``<role>#<agent_session_id>``, for example ``implementer#12`` or ``watchdog#7``."""
 
     agent_token: SecretStr | None = None
     """The token of the agent that the daemon launched as ``actor``, which its worker sets at its start: its calls act

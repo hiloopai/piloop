@@ -73,7 +73,7 @@ class CampaignAgents(BaseModel):
 class Roles:
     """The campaign's roles: one instance of ``ROLES`` for each, by its name (``[plugins.role.<name>]``).
 
-    Every role is a provider: piloop's (implementer, watchdog, research, scout) and those that packages add, each with
+    Every role is a provider: piloop's (implementer, watchdog, research, orchestrator) and those that packages add, each with
     its table over its defaults, then the roles that the file defines. A table with a new name defines a new role: a
     role that does runs (``ImplementerRole``) with ``runs = true``, else a sweeping role (``SweepRole``).
     """

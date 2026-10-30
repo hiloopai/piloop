@@ -46,7 +46,7 @@ def test_a_signature_parses_into_its_actor_and_dumps_back(signed: str, actor: Ac
         'implementer#',
         '#12',
         'implementer#0',
-        'Scout#3',
+        'Watchdog#3',
         'a#b',
         'a#1#2',
         'controller',
@@ -67,10 +67,10 @@ def test_a_malformed_signature_or_an_unknown_name_is_refused(signed: str) -> Non
 def test_an_actor_is_written_as_its_signature(tmp_path: Path, schema: Path) -> None:
     """``emit`` signs ``events.actor``, and the connection's actor signs ``updated_by``, with the signature."""
     at_head(schema, tmp_path / 'piloop.db')
-    scout = Agent(role='scout', session=3)
-    with closing(Database(f'sqlite:///{tmp_path / "piloop.db"}', actor=scout)) as db, db.session() as s:
-        emit(s, IdeaCreated(), TargetRef(IDEA, 1), scout)
+    watchdog = Agent(role='watchdog', session=3)
+    with closing(Database(f'sqlite:///{tmp_path / "piloop.db"}', actor=watchdog)) as db, db.session() as s:
+        emit(s, IdeaCreated(), TargetRef(IDEA, 1), watchdog)
         s.commit()
-        assert [ACTORS.validate_python(e.actor) for e in s.query(Event)] == [scout]
-    with closing(sql.connect(tmp_path / 'piloop.db', actor=scout)) as con:
-        assert tuple(con.execute('SELECT actor FROM temp.session_actor').fetchone()) == ('scout#3',)
+        assert [ACTORS.validate_python(e.actor) for e in s.query(Event)] == [watchdog]
+    with closing(sql.connect(tmp_path / 'piloop.db', actor=watchdog)) as con:
+        assert tuple(con.execute('SELECT actor FROM temp.session_actor').fetchone()) == ('watchdog#3',)

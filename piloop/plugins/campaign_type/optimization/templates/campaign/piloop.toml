@@ -66,7 +66,6 @@ runs = true                               # its agents do runs; a sweeping role 
 # prompt = "briefs/my-implementer.md"          # a file that replaces the built-in start of this role's brief
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["commits"]                    # what the brief says the role may write; default: what piloop expects of it
-# files = "nothing"                       # what its agents may file with `piloop idea`: nothing, seeds or ideas
 # sections = ["context", "lessons", …]  # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
 # first_message = "Your brief is in {brief}. …"  # the first message of each agent; {brief} is its path
 timeout = 1800                            # seconds one implementer may run
@@ -88,8 +87,9 @@ idle_alert = 1800                         # seconds free slots wait behind propo
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["comments(finding)"]          # what the brief says the role may write; default: what piloop expects of it
 # files = "seeds"                         # what its agents may file with `piloop idea`: nothing, seeds or ideas
+# plan_words = 150                        # the most words in the plan of an idea that its agents file
 runs = false                              # a sweeping role: its triggers start it and nothing it commits is scored
-triggers = ["run_failed", "dead_at_startup", "leaking_funnel", "low_yield", "cron", "stopped"]  # names of [plugins.trigger.<name>]: incidents, the timer below, the stop
+triggers = ["run_failed", "dead_at_startup", "low_yield", "cron", "stopped"]  # names of [plugins.trigger.<name>]: incidents, the timer below, the stop
 # sections = ["context", "lessons", …]  # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
 interval = 1800                           # seconds between two progress reviews of the cron trigger; 0 turns it off
 # continuity = "fresh"                   # or "resume": each sweep continues the last sweep's harness session
@@ -109,7 +109,7 @@ max_concurrent = 1
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["ideas via idea add"]         # what the brief says the role may write; default: what piloop expects of it
 # files = "ideas"                         # what its agents may file with `piloop idea`: nothing, seeds or ideas
-# plan_words = 150                         # the most words in the plan of an idea that its agents file
+# plan_words = 150                        # the most words in the plan of an idea that its agents file
 runs = false                              # a sweeping role
 triggers = ["low_water", "seed", "stalled"]  # a short backlog (see [plugins.trigger.low_water] below), a new seed, a stall
 # interval = 0                            # seconds between two sweeps of a cron trigger, if you add one
@@ -121,28 +121,6 @@ max_ideas = 3                             # new ideas per sweep, after the seeds
 timeout = 900
 max_concurrent = 1                        # sweeps at the same time; more than one duplicate each other's work
 
-[plugins.role.scout]                      # experimental: sweeps that search X, GitHub and arXiv for outside techniques
-# harnesses = ["pi", "claude", "codex"]   # if not set: [plugins.harness] use
-# model = { pi = "..." }                  # over the model of each [plugins.harness.<name>]
-# effort = "high"                         # how hard its agents think, as the harness names it
-# addendum = "briefs/scout.md"            # a file appended to brief.md in this role's briefs only
-# mcp = ["xai"]                           # its search tools: an X search server, for example; none by default
-# prompt = "briefs/my-scout.md"           # a file that replaces the built-in start of this role's brief
-# runtime = "subprocess"                  # if not set: [plugins.runtime] use
-# writes = ["seeds via idea seed"]        # what the brief says the role may write; default: what piloop expects of it
-# files = "seeds"                         # what its agents may file with `piloop idea`: nothing, seeds or ideas
-runs = false                              # a sweeping role
-triggers = ["cron"]                       # the timer below
-interval = 0                              # seconds between two scout sweeps; 0 (the default) turns the scout off
-# continuity = "fresh"                   # or "resume": each sweep continues the last sweep's harness session
-# incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies, if you add that trigger
-# routine_prompt = "briefs/routine.md"    # follows the prompt in every other sweep; none by default
-seeds = 3                                 # the most seeds one scout sweep may file
-# sections = ["context", "lessons", …]  # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
-max_ideas = 1                             # new ideas per sweep for a low_water trigger; the scout files only seeds
-timeout = 900
-max_concurrent = 1
-
 [plugins.role.orchestrator]               # piloop launches the campaign's orchestrator when news arrives for it
 # harnesses = ["claude"]                  # if not set: [plugins.harness] use; it keeps the harness of its last session
 # model = { claude = "claude-opus-5-5" }  # over the model of each [plugins.harness.<name>]
@@ -153,6 +131,7 @@ max_concurrent = 1
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["decisions"]                  # what the brief says the role may write; default: what piloop expects of it
 # files = "ideas"                         # what its agents may file with `piloop idea`: nothing, seeds or ideas
+# plan_words = 150                        # the most words in the plan of an idea that its agents file
 runs = false                              # a sweeping role
 triggers = []                             # off: you run your own orchestrator; ["news"] turns it on
 # continuity = "resume"                   # each agent resumes the last one's session; "fresh" starts each anew

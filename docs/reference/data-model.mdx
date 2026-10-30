@@ -25,7 +25,7 @@ The `optimization` campaign type's tables hold the research:
 - A **candidate** is a distinct state of the code. Its git tree identifies it, and `parent_id` is its lineage.
 - An **evaluator** is one version of the evaluate command and the metrics. `piloop init` adds one when they change.
   A **measurement** is one run of an evaluator on a candidate.
-- A **technique** is an outside technique that a [scout](/concepts/roles#the-built-in-roles) sweep found.
+- A **technique** is an outside technique that a scout sweep of piloop 0.5 or earlier found. Nothing writes them now.
 
 The memory's tables (`lessons`, `documents`, `journal`) and the archive's (`archives`) are their providers'.
 Three columns hold a candidate id or an evaluator id without a foreign key: `campaigns.evaluator_id`,
