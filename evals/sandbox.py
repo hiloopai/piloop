@@ -43,6 +43,7 @@ def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
         img = img.run_commands(f'uv tool install {shlex.quote(arm.piloop)}')
         img = img.env({'PILOOP_HOME': PILOOP_HOME})
     img = img.add_local_dir(TASKS, f'{OPT}/tasks')
+    img = img.add_local_file(ROOT / 'campaign_sealed.py', f'{OPT}/campaign_sealed.py')
     return img.add_local_file(ROOT / 'meter.py', f'{OPT}/meter.py').add_local_file(
         ROOT / 'scorer.py', f'{OPT}/scorer.py'
     )

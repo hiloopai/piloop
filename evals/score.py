@@ -41,18 +41,18 @@ def archives(bundle: Path, revisions: list[str]) -> dict[str, bytes]:
         }
 
 
-def sealed_data(task: Task, settings: Settings) -> bytes:
-    """``<sealed_uri>/<task>/`` as a gzipped tar."""
+def sealed_data(name: str, settings: Settings) -> bytes:
+    """``<sealed_uri>/<name>/`` as a gzipped tar: ``<task>`` holds the holdout, ``<task>.campaign`` a campaign's split."""
     if not settings.sealed_uri:
         raise ValueError('set EVALS_SEALED_URI: the sealed data lives outside this repo')
     bucket, _, prefix = settings.sealed_uri.removeprefix('s3://').partition('/')
     s3 = boto3.client('s3')
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w:gz') as tar:
-        listed = s3.list_objects_v2(Bucket=bucket, Prefix=f'{prefix}/{task.name}/')
+        listed = s3.list_objects_v2(Bucket=bucket, Prefix=f'{prefix}/{name}/')
         for obj in listed.get('Contents', []):
             body = s3.get_object(Bucket=bucket, Key=obj['Key'])['Body'].read()
-            info = tarfile.TarInfo(obj['Key'].removeprefix(f'{prefix}/{task.name}/'))
+            info = tarfile.TarInfo(obj['Key'].removeprefix(f'{prefix}/{name}/'))
             info.size = len(body)
             tar.addfile(info, io.BytesIO(body))
     return buf.getvalue()
@@ -88,7 +88,7 @@ def score(task: Task, bundle: Path, base: str, revisions: list[str], settings: S
     """Score ``revisions`` of ``bundle`` against ``base``, ``score_concurrency`` sandboxes at a time."""
     with tracer.start_as_current_span('evals.score', attributes={'task': task.name, 'revisions': len(revisions)}):
         trees = archives(bundle, [base, *revisions])
-        sealed = sealed_data(task, settings)
+        sealed = sealed_data(task.name, settings)
         parent = context.get_current()
         with ThreadPoolExecutor(settings.score_concurrency) as pool:
             futures = {

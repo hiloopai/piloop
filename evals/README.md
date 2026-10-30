@@ -16,7 +16,10 @@ Every run gets its own Modal sandbox, from the same image: the task's repo at th
 data, both agent CLIs, and, for a piloop arm, that arm's piloop with a fresh home. The agents call models through
 the gateway that `EVALS_GATEWAY` names, with `EVALS_GATEWAY_TOKEN`.
 
-- **piloop arm:** `piloop init` in the repo, with the task's keys, the arm's agents and `max_hours`. The run ends at
+- **piloop arm:** `piloop init` in the repo, with the task's keys, the arm's agents and `max_hours`. An arm with
+  `split = "sealed"` also gets the task's dev command as `[evaluator] dev`, and a sealed split of its own as
+  `[evaluator] sealed`: `EVALS_SEALED_URI/<task>.campaign/`, copied into the campaign's home. It is not the holdout
+  that scores every arm afterwards. The run ends at
   the budget, at `max_hours`, or at the campaign's own stop; then the daemon gets `EVALS_STOP_GRACE_MINUTES` to
   score what was committed.
 - **plain arm:** one Codex or Claude Code session, told to keep `main` at its best version. When it ends early, it

@@ -24,12 +24,15 @@ from pydantic import JsonValue
 
 from evals.model import PiloopArm, PlainArm, Sample, Settings, Task
 from evals.sandbox import OPT, PILOOP_HOME, WORK, Box, image
+from evals.score import sealed_data
 from evals.telemetry import exported, tracer
 from piloop.plugins.harness.codex import toml
 from piloop.plugins.harness.contract import ModelId, Usage
 from piloop.plugins.price_list.genai_prices import GenaiPrices
 
 REPO = f'{WORK}/repo'
+SEALED = f'{PILOOP_HOME}/sealed'
+"""A campaign's own sealed split: in its home, outside every agent's checkout."""
 OUT = f'{WORK}/out'
 SESSIONS = {'claude': '/root/.claude/projects', 'codex': '/root/.codex/sessions'}
 VENDORS = {'claude': 'anthropic', 'codex': 'openai'}
@@ -83,6 +86,14 @@ def piloop_config(task: Task, arm: PiloopArm, settings: Settings, hours: float) 
     own: dict[str, JsonValue] = {
         'plugins': {'runtime': {'use': 'subprocess'}, 'harness': harness, 'stop_rule': {'max_hours': hours}}
     }
+    match arm.split:
+        case 'sealed':
+            script = f'{OPT}/campaign_sealed.py'
+            sealed: list[JsonValue] = ['python3', script, f'{OPT}/tasks/{task.name}', SEALED, task.direction]
+            evaluator: dict[str, JsonValue] = {'dev': list[JsonValue](task.dev), 'sealed': sealed}
+            own['evaluator'] = evaluator
+        case 'visible':
+            pass
     return merge(merge(task.piloop, own), arm.overlay)
 
 
@@ -125,6 +136,9 @@ class Piloop:
         return box.run(f'sqlite3 {PILOOP_HOME}/piloop.db {shlex.quote(query)}').strip()
 
     def start(self, box: Box) -> None:
+        if self.arm.split == 'sealed':
+            box.write(f'{WORK}/campaign.tgz', sealed_data(f'{self.task.name}.campaign', self.settings))
+            box.run(f'mkdir -p {SEALED} && tar xzf {WORK}/campaign.tgz -C {SEALED} && rm {WORK}/campaign.tgz')
         config = piloop_config(self.task, self.arm, self.settings, self.hours)
         box.write(f'{REPO}/piloop.toml', tomli_w.dumps(config).encode())
         box.run(

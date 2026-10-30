@@ -78,6 +78,9 @@ class PiloopArm(Frozen):
     """The rotation of ``[plugins.harness] use``, each with its model."""
     overlay: dict[str, JsonValue] = {}
     """More keys of ``piloop.toml``, merged over the task's and the agents'."""
+    split: Literal['visible', 'sealed'] = 'visible'
+    """``visible``: the daemon scores with the task's evaluator alone. ``sealed``: the campaign also gets the task's dev
+    command as ``[evaluator] dev``, and a sealed split of its own as ``[evaluator] sealed``, kept in its home."""
     resources: Resources
 
 

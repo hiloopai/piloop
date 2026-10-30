@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ from evals.drive import piloop_config, price
 from evals.metrics import at, result
 from evals.model import (
     ARMS,
+    ROOT,
     TASKS,
     Funnel,
     PiloopArm,
@@ -180,3 +182,28 @@ def test_piloop_arms_export_to_the_same_collector(monkeypatch: pytest.MonkeyPatc
         'OTEL_EXPORTER_OTLP_HEADERS': 'authorization=Bearer t',
         'OTEL_RESOURCE_ATTRIBUTES': 'team=x,evals.run=t1/a-1',
     }
+
+
+def test_a_sealed_split_arm_gets_dev_and_its_own_sealed_command():
+    v0 = load_arm('piloop-v0')
+    assert isinstance(v0, PiloopArm) and v0.split == 'sealed'
+    config = piloop_config(Task.load('t1-enwik8'), v0, Settings(gateway='https://gw.example'), 4)
+    assert get(config, 'evaluator', 'dev') == ['uv', 'run', 'python', 'evaluate.py']
+    sealed = get(config, 'evaluator', 'sealed')
+    assert isinstance(sealed, list) and sealed[1] == '/opt/evals/campaign_sealed.py'
+    assert get(config, 'evaluator', 'scoring') == 'submit'
+
+
+def test_campaign_sealed_scores_the_checkout_on_the_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    campaign_sealed = module(ROOT / 'campaign_sealed.py')
+    checkout, sealed = tmp_path / 'checkout', tmp_path / 'sealed'
+    shutil.copytree(TASKS / 't2-circles' / 'repo', checkout)
+    sealed.mkdir()
+    (sealed / 'meta.json').write_text(json.dumps({'n': [4], 'base': {'4': 1.0}, 'ref': {'4': 2.0}}))
+    monkeypatch.chdir(checkout)
+    result = campaign_sealed.main(TASKS / 't2-circles', sealed, 'higher')
+    assert result['status'] == 'ok' and result['direction'] == 'higher'
+    assert result['score'] == pytest.approx(0, abs=1e-6)
+    (checkout / 'packing.py').write_text('def pack(n):\n    return [(0.5, 0.5, 0.6)] * n\n')
+    assert campaign_sealed.main(TASKS / 't2-circles', sealed, 'higher')['status'] == 'crash'
+    assert campaign_sealed.main(TASKS / 't2-circles', sealed, 'lower')['status'] == 'crash'
