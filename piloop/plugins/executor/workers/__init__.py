@@ -179,14 +179,14 @@ class WorkersExecutor:
     def stop(self, timeout: float) -> None:
         """End the agent leases that no worker took, stop the worker's jobs, and wait for their reports.
 
-        A kill that failed is tried once more after the wait. An agent's lease that is still live then ends: a report
-        that comes later is refused, and the next daemon's worker does not take it.
+        A kill that failed is tried once more after the wait. Then the lease of an agent that did not start ends. That of
+        a started agent stays live: its report waits in the worker's spool, and the next daemon applies it (``adopt``).
         """
         self.leases.stop_untaken()
         self.worker.stop()
         self.worker.join(timeout)
         self.worker.stop()
-        self.leases.end_unreported()
+        self.leases.end_unstarted()
         self.scaler.join(timeout)
 
     def hand_over(self) -> None:

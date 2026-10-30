@@ -377,7 +377,10 @@ class RunController:
         self._guarded(run_id, agent_session_id, lambda span: self._finish(run_id, agent_session_id, None, span))
 
     def _guarded(self, run_id: RunId, agent_session_id: AgentSessionId, body: Callable[[Span], None]) -> None:
-        """Run ``body``. A failure fails the run, and closes its implementer if the failure came before the launch."""
+        """Run ``body``. A failure fails the run, and closes its implementer if the failure came before the launch.
+
+        A failure before the launch is no attempt at the idea (``RunEnd.NOT_STARTED``): its agent never ran.
+        """
         with self._tracer.span('piloop.run', run=run_id) as span:
             try:
                 body(span)
@@ -389,14 +392,16 @@ class RunController:
                     unstarted = (AgentSession.id == agent_session_id) & (
                         AgentSession.state == AgentSessionState.STARTING
                     )
-                    s.execute(
+                    closed = s.scalar(
                         update(AgentSession)
                         .where(unstarted)
                         .values(state=AgentSessionState.KILLED, ended_at=utcnow(), error=error)
+                        .returning(AgentSession.id)
                     )
                     s.commit()
-                self._close(span, run_id, RunEnd.FAILED, error)
-                self._settle(span, run_id, idea_id, RunEnd.FAILED, startup_failed=False, last=None)
+                end = RunEnd.FAILED if closed is None else RunEnd.NOT_STARTED
+                self._close(span, run_id, end, error)
+                self._settle(span, run_id, idea_id, end, startup_failed=end is RunEnd.NOT_STARTED, last=None)
 
     def _execute(self, run_id: RunId, agent_session_id: AgentSessionId, span: Span) -> None:
         with self.launcher.lock:

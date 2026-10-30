@@ -1,7 +1,9 @@
 """The core operations behind every executor (``CampaignResults``): a result for a settled row is refused."""
 
+import sqlite3
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,7 @@ from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from piloop.agents import results as results_module
 from piloop.agents.results import (
     AgentEnded,
     AgentSessionFinished,
@@ -55,7 +58,7 @@ from piloop.plugins.executor.contract import (
 from piloop.plugins.runtime.contract import AgentExit, ExitStatus
 from piloop.plugins.vcs.contract import Transfer
 from piloop.plugins.vcs.git import Git
-from piloop.store.tree import put_tree
+from piloop.store.tree import Manifest, Merged, Staged, put_tree
 from tests.agents.test_launcher import MINTED_HARNESS, agent_session, launch, request, use_harness
 from tests.conftest import HARNESS_PROMPT_TO_FILE, RESEARCH, WATCHDOG, ScriptRuntime, baseline, disk
 from tests.test_lease import BRIEF, START
@@ -554,6 +557,55 @@ def test_two_agents_that_change_one_workspace_file_keep_the_first_ones_and_the_s
             (fourth, WorkspaceConflict(kept=['NOTES.md'])),
         ]
     assert not list((tmp_path / 'tmp').iterdir()), 'every staged blob was moved into place or removed'
+
+
+def test_a_workspace_merge_holds_no_write_lock(
+    db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A merge of tens of thousands of files held the write lock past every other writer's busy timeout."""
+    cas = disk(tmp_path)
+    results = CampaignResults(db, Tracer(None), tmp_path, cas, lambda: False)
+    live = tmp_path / 'projects' / str(campaign.id) / 'workspace'
+    live.mkdir(parents=True)
+    workspace = Workspace(
+        place=live.relative_to(tmp_path).as_posix(), manifest=put_tree(cas, live, []).manifest.put(cas)
+    )
+    with db.session() as s:
+        agent = AgentSession(kind=RESEARCH, campaign_id=campaign.id, state=AgentSessionState.RUNNING)
+        s.add(agent)
+        s.commit()
+        agent_session_id = agent.id
+    job = AgentJob(
+        agent_session=agent_session_id,
+        runtime='subprocess',
+        artifact=Source(
+            vcs=Git(), repo=RepoId(campaign.id), revision=baseline(db, campaign.id).revision, workspace=workspace
+        ),
+        place=f'agent_sessions/{agent_session_id}',
+        timeout=60,
+        brief_cid=BRIEF,
+        spec=START,
+    )
+    real = results_module.merge
+    writable: list[bool] = []
+
+    def merge(root: Path, base: Manifest, files: Mapping[str, Staged | None], suffix: str) -> Merged:
+        other = sqlite3.connect(str(db.engine.url.database), timeout=0)
+        try:
+            other.execute('BEGIN IMMEDIATE')
+            other.rollback()
+            writable.append(True)
+        except sqlite3.OperationalError:
+            writable.append(False)
+        finally:
+            other.close()
+        return real(root, base, files, suffix)
+
+    monkeypatch.setattr(results_module, 'merge', merge)
+    report = AgentFinished(process=AgentExit(ExitStatus.EXITED, 200, 0), workspace={'notes.md': cas.put(b'notes')})
+    results.finished(job, report)
+    assert writable == [True], 'another writer could write while the files moved'
+    assert (live / 'notes.md').read_bytes() == b'notes'
 
 
 @pytest.mark.parametrize(

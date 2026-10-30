@@ -1302,7 +1302,7 @@ def test_exception_in_run_is_recorded(
     run = run_row(db, run_id)
     assert run.status is RunStatus.FAILED and run.error is not None and run.error.startswith('NoResultFound')
     with db.session() as s:
-        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.DONE
+        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.PARKED, 'a fault before the launch is no attempt'
     [span] = spans.get_finished_spans()
     assert span.status.status_code is StatusCode.ERROR and [e.name for e in span.events] == ['exception']
 
@@ -1573,14 +1573,24 @@ def test_a_worktree_that_cannot_be_made_is_a_failed_start_that_frees_the_slot(
 def test_a_run_that_fails_before_its_agent_starts_closes_its_implementer(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    """A fault of the daemon before the launch fails the run and closes its implementer, which then holds no slot."""
+    """A fault of the daemon before the launch fails the run and closes its implementer, which then holds no slot.
+
+    The idea was not tried: the run is no attempt, and its idea is parked, not done (a prune that raced the snapshot of
+    the workspace used up the last attempt).
+    """
     mocker.patch('piloop.plugins.vcs.git.commands.open_repo', side_effect=RuntimeError('repo gone'))
-    run_id = make_run(db, campaign)
+    run_id = make_run(db, campaign, max_runs=1)
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
         [w] = s.scalars(select(AgentSession).where(working_on(run_id))).all()
         assert (w.state, w.error, w.ended_at is not None) == (AgentSessionState.KILLED, 'RuntimeError: repo gone', True)
-    assert (run_row(db, run_id).status, run_row(db, run_id).error) == (RunStatus.FAILED, 'RuntimeError: repo gone')
+        run = s.get_one(Run, run_id)
+        assert (run.status, run.end, run.error, run.idea.status) == (
+            RunStatus.FAILED,
+            RunEnd.NOT_STARTED,
+            'RuntimeError: repo gone',
+            IdeaStatus.PARKED,
+        )
 
 
 def test_an_implementer_that_spends_tokens_but_ends_at_once_with_nothing_did_not_start_to_work(

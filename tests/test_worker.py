@@ -442,7 +442,7 @@ def test_an_agent_whose_lease_ends_while_it_starts_is_ended_and_not_reported(
     launching = threading.Thread(target=lambda: outcomes.append(launch(ex, agent_session_id, tmp_path)))
     launching.start()
     assert gate.entered.wait(10)
-    with db.session() as s:  # as a stop does for a job that did not report in time
+    with db.session() as s:  # as a stop does for a job that did not start
         cancel(s, s.scalars(select(Lease)).one(), 'daemon stopped')
         w = s.get_one(AgentSession, agent_session_id)
         w.state, w.ended_at = AgentSessionState.KILLED, utcnow()

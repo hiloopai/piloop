@@ -118,7 +118,7 @@ def default_pools() -> dict[str, Pool]:
     return {SERVE: Pool()}
 
 
-UNREPORTED = 'the daemon stopped, and the job did not report in time'
+UNSTARTED = 'the daemon stopped before the job started'
 NOT_TAKEN = 'the daemon stopped before a worker took the job'
 PAGE = 100
 """How many messages one read returns at most. A worker reads again at once for the rest."""
@@ -1046,13 +1046,16 @@ class Leases:
                     take(s)
                     s.commit()
 
-    def end_unreported(self) -> None:
-        """End the live agent leases: a report that comes later is refused, and no next worker takes them."""
+    def end_unstarted(self) -> None:
+        """End the agent leases whose agent did not start: it made nothing, so a report that comes later is refused.
+
+        A started agent's lease stays live: its report may carry saved work, which the next daemon applies (``adopt``).
+        """
         with self._db.session() as s:
             write_transaction(s)
-            live = (Lease.kind == AGENT) & Lease.state.in_(LIVE_LEASES)
+            live = (Lease.kind == AGENT) & (Lease.state == LeaseState.ACQUIRED)
             for lease in s.scalars(select(Lease).where(live)).all():
-                cancel(s, lease, UNREPORTED)
+                cancel(s, lease, UNSTARTED)
             s.commit()
 
 

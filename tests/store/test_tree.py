@@ -189,6 +189,22 @@ def test_a_file_gone_between_the_walk_and_its_put_is_left_out(tmp_path: Path, wo
     assert 'idea7/copy.npy' not in {e.path for e in stored.manifest.entries}
 
 
+def test_a_path_gone_during_the_walk_is_left_out(workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A prune that removed a listed name, or a directory before the walk listed it, failed an agent's snapshot."""
+    listdir = os.listdir
+
+    def pruned(path: Path) -> list[str]:
+        if Path(path).name == 'arrays':
+            shutil.rmtree(path)
+        return listdir(path)
+
+    monkeypatch.setattr(tree_module.os, 'listdir', pruned)
+    found = walk(workspace, ['idea7', 'pruned.log'])
+    gone = 'gone since it was listed: an agent or a prune removed it'
+    assert found.skipped == {'idea7/arrays': gone, 'pruned.log': gone}
+    assert [rel for rel, _ in found.files] == ['idea7/copy.npy', 'idea7/run.sh']
+
+
 def test_nothing_is_removed_or_written_through_a_symlinked_directory(tmp_path: Path, workspace: Path) -> None:
     """An archived directory moved away and replaced by a symlink to it."""
     store = disk(tmp_path)

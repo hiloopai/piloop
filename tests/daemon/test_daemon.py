@@ -361,7 +361,6 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
             s.add(Comment(target=TargetRef(IDEA, 1), author='implementer#1', kind=FINDING, body='done'))
             s.commit()
     locked = mocker.patch.object(CampaignResults, 'finished', side_effect=OperationalError('', {}, Exception('locked')))
-    mocker.patch.object(workers_of(first.controller).leases, 'end_unreported')  # it dies while it waits for the report
     first.controller.stop(timeout=SETTLE)
     assert locked.called, 'the killed agent reported, and its report waits in the spool'
     mocker.stopall()
@@ -383,6 +382,43 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
         assert s.get_one(Idea, 1).status is idea_status, 'a cut run is not an attempt'
         [kept] = s.scalars(select(Candidate).where(Candidate.run_id == 1)).all()
         assert (kept.summary, kept.verdict) == ('first', verdict)
+    second.shutdown(timeout=5)
+
+
+def test_a_report_that_comes_after_the_stop_ended_keeps_its_work_for_the_next_daemon(
+    campaign_path: Path, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """A stop whose agent's report came after its wait used to refuse the report and fail the run from its old base.
+
+    The stop leaves such an agent to the next daemon, as a crash does: the next daemon applies the spooled report, keeps
+    its commit as recovered, and requeues the idea from it.
+    """
+    hold = tmp_path / 'hold'
+    hold.touch()
+    write_toml(campaign_path, HARNESS_HELD.format(hold=hold), implementer_timeout=60)
+    cfg = Settings(home=tmp_path / 'home')
+    first = Daemon(cfg)
+    campaign = register(first.db, campaign_path)
+    with first.db.session() as s:
+        s.add(Idea(track='score', campaign_id=campaign.id, title='two steps', hypothesis='x', created_by='t'))
+        s.commit()
+    first.scheduler.reap()
+    assert run_all(first.scheduler) == [1]
+    wait_until((cfg.home / 'runs' / '1' / 'agent.pid').exists)
+    locked = mocker.patch.object(CampaignResults, 'finished', side_effect=OperationalError('', {}, Exception('locked')))
+    first.shutdown(timeout=1)
+    assert locked.called, 'the killed agent reported, and its report waits in the spool'
+    mocker.stopall()
+
+    second = Daemon(cfg)
+    second.scheduler.reap()
+    second.scheduler.wait(SETTLE)
+    with second.db.session() as s:
+        run = s.get_one(Run, 1)
+        assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.DAEMON_STOPPED)
+        [kept] = s.scalars(select(Candidate).where(Candidate.run_id == 1)).all()
+        idea = s.get_one(Idea, 1)
+        assert (kept.summary, idea.status, idea.base_candidate_id) == ('first', IdeaStatus.READY, kept.id)
     second.shutdown(timeout=5)
 
 

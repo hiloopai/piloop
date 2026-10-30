@@ -7,6 +7,7 @@ the agent reads it there (``Launcher.launch``), whichever process applied it.
 """
 
 import tempfile
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -446,6 +447,8 @@ class CampaignResults:
         """``[agents] exit_output_chars``: how much of its last output a failed or early end says."""
         self._startup_seconds = startup_seconds
         """``[agents] startup_seconds``: an agent that ends sooner and left nothing never worked."""
+        self._merging = threading.Lock()
+        """Held by a workspace merge: each path's compare-and-swap must not interleave with another merge's."""
 
     def _apply(self, guard: Guard | None, change: Callable[[Session], None]) -> None:
         """Run ``guard``, then ``change``, in one write transaction, and commit. Nothing changes when one raises."""
@@ -488,7 +491,9 @@ class CampaignResults:
     def finished(self, job: Job, report: Report, *, guard: Guard | None = None) -> None:
         """Apply the report once the CAS holds every blob that it names, else raise ``MissingBlobs``.
 
-        Its files go into the job's place in the transaction that applies it: what reads the row closed finds them.
+        Its files go into the job's place in the transaction that applies it: what reads the row closed finds them. An
+        agent's workspace merges before that transaction, as the write lock would wait on every file of it
+        (``_workspace``).
         """
         if missing := self._cas.missing(report.blobs()):
             raise MissingBlobs(f'its report names blobs that the CAS lacks: {", ".join(map(str, missing))}')
@@ -499,13 +504,18 @@ class CampaignResults:
         output = self._last_output(report)
         with tempfile.TemporaryDirectory(dir=self._scratch()) as scratch:
             staged = stage(self._cas, changed, Path(scratch))
+            conflict = (
+                self._workspace(job, workspace, base, staged, changed)
+                if isinstance(job, AgentJob) and workspace is not None and base is not None
+                else None
+            )
 
             def change(s: Session) -> None:
                 if isinstance(job, AgentJob):
                     assert isinstance(report, AgentFinished | AgentNotStarted)  # a report is of its job's kind
                     self._agent(s, job, report, output)
-                    if workspace is not None and base is not None:
-                        self._workspace(s, job, workspace, base, staged, changed)
+                    if conflict is not None:
+                        emit(s, conflict, TargetRef(TargetKind.AGENT_SESSION, job.agent_session), System.DAEMON)
                 else:
                     kind_of(job).apply(s, job, report, Applying(self._home, self._stopping()))
                 write_files(self._cas, report.files, self._home / job.place)
@@ -634,31 +644,37 @@ class CampaignResults:
 
     def _workspace(
         self,
-        s: Session,
         job: AgentJob,
         workspace: Workspace,
         base: Manifest,
         staged: dict[str, Staged | None],
         changed: dict[str, Cid | None],
-    ) -> None:
+    ) -> WorkspaceConflict | None:
         """Merge what the agent wrote or removed in its workspace into the campaign's, path by path (``merge``).
 
         A path that another agent wrote meanwhile keeps that agent's file: this one's goes beside it, named after the
-        agent, and this one's removal is not done. ``WorkspaceConflict`` says which.
+        agent, and this one's removal is not done. The ``WorkspaceConflict`` returned says which.
+
+        One merge at a time, outside the write lock. A merge is idempotent, so a report sent again after a crash merges
+        to the same files; one that the fence then refuses has merged all the same, which keeps what its agent made.
         """
-        w = s.get_one(AgentSession, job.agent_session)
-        merged = merge(self._home / workspace.place, base, staged, f'{w.kind}-{w.id}')
-        if merged.beside or merged.blocked or merged.kept:
-            blocked = {rel: blob for rel in merged.blocked if (blob := changed[rel]) is not None}
-            conflict = WorkspaceConflict(beside=merged.beside, blocked=blocked, kept=merged.kept)
-            emit(s, conflict, TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
-            self._tracer.event(
-                conflict.kind,
-                agent_session=w.id,
-                beside=len(merged.beside),
-                blocked=len(merged.blocked),
-                kept=len(merged.kept),
-            )
+        with self._db.session() as s:
+            w = s.get_one(AgentSession, job.agent_session)
+            suffix = f'{w.kind}-{w.id}'
+        with self._merging:
+            merged = merge(self._home / workspace.place, base, staged, suffix)
+        if not (merged.beside or merged.blocked or merged.kept):
+            return None
+        blocked = {rel: blob for rel in merged.blocked if (blob := changed[rel]) is not None}
+        conflict = WorkspaceConflict(beside=merged.beside, blocked=blocked, kept=merged.kept)
+        self._tracer.event(
+            conflict.kind,
+            agent_session=job.agent_session,
+            beside=len(merged.beside),
+            blocked=len(merged.blocked),
+            kept=len(merged.kept),
+        )
+        return conflict
 
     def _scratch(self) -> Path:
         """``<home>/tmp``, where the blobs of a merge wait: on the disk of the workspace, so that a move is a rename."""

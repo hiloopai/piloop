@@ -226,13 +226,17 @@ class Campaigns:
     def stop(self, leaving: Leaving, timeout: float) -> None:
         """Write what is still open when the daemon stops for good, as ``start`` does for a crashed daemon.
 
-        The executor stopped first, and the daemon waited for the threads in flight. At an in-place restart, nothing is
-        written: the next daemon process adopts the agents.
+        The executor stopped first, and the daemon waited for the threads in flight. An agent that started and did not
+        report in time is left with its run to the next daemon, which applies its report, as after a crash: it may
+        carry saved work. At an in-place restart, nothing is written: the next daemon process adopts the agents.
         """
         match leaving:
             case Leaving.STOP:
                 self._collect()
-                self._fail_open(RunEnd.DAEMON_STOPPED, reaped=False)
+                with self._db.session() as s:
+                    live = s.scalars(select(AgentSession).where(AgentSession.state.in_(LIVE))).all()
+                    unreported = [w.id for w in live if w.handle]
+                self._fail_open(RunEnd.DAEMON_STOPPED, reaped=False, sparing=unreported)
             case Leaving.HAND_OVER:
                 pass
             case _:

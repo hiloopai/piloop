@@ -162,21 +162,24 @@ def walk(root: Path, names: Iterable[str]) -> Walk:
 
     def visit(rel: str) -> None:
         path = root / rel
-        st = path.lstat()
-        if stat.S_ISLNK(st.st_mode):
-            found.links.append(Entry(path=rel, mode=stat.S_IMODE(st.st_mode), link=os.readlink(path)))
-        elif stat.S_ISREG(st.st_mode):
-            found.files.append((rel, st))
-        elif stat.S_ISDIR(st.st_mode):
-            try:
-                children = sorted(os.listdir(path))
-            except PermissionError as e:
-                found.skipped[rel] = f'directory not readable ({e.strerror}): fix its permissions'
-                return
-            for child in children:
-                visit(f'{rel}/{child}')
-        else:
-            found.skipped[rel] = 'not a regular file, directory or symlink: never stored'
+        try:
+            st = path.lstat()
+            if stat.S_ISLNK(st.st_mode):
+                found.links.append(Entry(path=rel, mode=stat.S_IMODE(st.st_mode), link=os.readlink(path)))
+            elif stat.S_ISREG(st.st_mode):
+                found.files.append((rel, st))
+            elif stat.S_ISDIR(st.st_mode):
+                try:
+                    children = sorted(os.listdir(path))
+                except PermissionError as e:
+                    found.skipped[rel] = f'directory not readable ({e.strerror}): fix its permissions'
+                    return
+                for child in children:
+                    visit(f'{rel}/{child}')
+            else:
+                found.skipped[rel] = 'not a regular file, directory or symlink: never stored'
+        except FileNotFoundError:  # agents and the archive's prune change the shared workspace while it is walked
+            found.skipped[rel] = 'gone since it was listed: an agent or a prune removed it'
 
     for name in sorted(names):
         visit(name)

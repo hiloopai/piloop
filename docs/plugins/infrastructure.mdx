@@ -72,6 +72,7 @@ stateDiagram-v2
     acquired --> expired: silent past the toleration
     running --> expired: silent past the toleration
     queued --> cancelled: the daemon stops first
+    acquired --> cancelled: the daemon stops before the job starts
 ```
 
 | Word | Meaning |
