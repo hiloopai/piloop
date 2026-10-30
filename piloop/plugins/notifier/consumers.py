@@ -467,8 +467,8 @@ def due(s: Session, route: Route, now: datetime) -> Due:
     """The items that ``route`` sends now: the one rule of what is due.
 
     An item is an escalation whose campaign's escalation provider says it reaches a human now (``reach``), or another
-    comment of priority 0, of the route's campaign (of none for the home's), that nobody has acknowledged and that a
-    person did not write. It is due when no notifier of the route's name sent it, or sent it ``remind_every`` ago while
+    comment of priority 0, of the route's campaign (of none for the home's), that nobody has acknowledged, that a
+    person did not write, and whose priority is the notifier's ``max_priority`` or more urgent. It is due when no notifier of the route's name sent it, or sent it ``remind_every`` ago while
     its campaign is active: a stopped campaign's items wait in the inbox, and remind again once it is reopened.
     Nothing is due while the backoff of the route's failures since its last send lasts.
     """
@@ -491,6 +491,8 @@ def due(s: Session, route: Route, now: datetime) -> Due:
             (campaign.id if campaign is not None else None) != route.owner
             or _by_a_person(comment.author)
             or comment.id in threaded
+            or comment.priority is None
+            or comment.priority > notifier.max_priority
         ):
             continue
         if comment.kind != CommentKind.ESCALATION:

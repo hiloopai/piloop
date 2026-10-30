@@ -5,7 +5,7 @@ A campaign's ``piloop.toml`` has them, over the defaults of ``config.toml``: a c
 for its items. An item of no campaign goes to the notifiers of ``config.toml``. Each pass of the machinery
 (``consumers``) sends each notifier one message with every item of its own that is due (``due``): an escalation when
 its campaign's ``[plugins.escalation]`` provider says it reaches a human, or another item of priority 0, that nobody
-has acknowledged and that a person did not write. A ``notification.sent`` event on the item records each send by the
+has acknowledged, that a person did not write, and that is as urgent as the notifier's ``max_priority`` or more. A ``notification.sent`` event on the item records each send by the
 notifier's name, so a restart sends nothing twice, and an item goes once to each name.
 
 A failed send is a ``notification.failed`` event, and the items stay due: the next try comes after a backoff that the
@@ -107,6 +107,9 @@ class Notifier(Parameters, ABC):
     link: str | None = None
     """The page of an item, such as ``https://piloop.example.com/inbox/{comment}``. ``{comment}`` is the item's id and
     ``{campaign}`` its campaign's name. Unset: a message names the command that shows the item."""
+    max_priority: int = Field(default=1, ge=0, le=4)
+    """The least urgent priority that it sends, from 0 (urgent) to 4 (someday). A less urgent item waits in the inbox:
+    by default only what needs a human now, 0 and 1. 4 sends every item that is due."""
     remind_every: timedelta | Literal['never'] = timedelta(hours=24)
     """How long after a send an item that nobody acknowledged is sent again. ``"never"``: once."""
     retry: timedelta = Field(default=timedelta(minutes=1), gt=timedelta(0))

@@ -657,7 +657,8 @@ def test_a_prerequisite_that_ended_without_a_keep_parks_the_ideas_after_it_with_
     """A cancelled (parked), rejected, or done-but-kept-nothing prerequisite can never release its dependents.
 
     Left ``ready``, they block forever and the implementer slots sit idle. The daemon parks them, and the ideas after
-    them, and asks for a decision. A prerequisite that kept something, never ran, or is still ``proposed`` does not.
+    them, and asks for one decision for each such prerequisite: one escalation for each parked idea flooded the inbox.
+    A prerequisite that kept something, never ran, or is still ``proposed`` does not.
     """
     (parked, rejected, nothing, kept, never, proposed) = add_ideas(
         db, campaign, 'cancelled', 'rejected', 'kept nothing', 'kept', 'never ran', 'proposed'
@@ -712,37 +713,21 @@ def test_a_prerequisite_that_ended_without_a_keep_parks_the_ideas_after_it_with_
         assert [s.get_one(Idea, i).status for i in (*stranded, chained)] == [IdeaStatus.PARKED] * 4, 'chains too'
         assert [s.get_one(Idea, i).status for i in released] == [IdeaStatus.READY] * 3
         asked = s.scalars(select(Comment).where(Comment.author == DAEMON_ACTOR).order_by(Comment.id)).all()
-        assert [(c.target_id, c.kind, c.priority, details(c)) for c in asked] == snapshot(
-            [
-                (
-                    7,
-                    CommentKind.ESCALATION,
-                    2,
-                    'parked: it runs after idea#1, which is parked. Unlink it (piloop idea unlink 7 after 1) to run it without that change, or set it ready once idea#1 is ready again',
-                ),
-                (
-                    8,
-                    CommentKind.ESCALATION,
-                    2,
-                    'parked: it runs after idea#2, which is rejected. Unlink it (piloop idea unlink 8 after 2) to run it without that change, or set it ready once idea#2 is ready again',
-                ),
-                (
-                    9,
-                    CommentKind.ESCALATION,
-                    2,
-                    'parked: it runs after idea#3, which kept nothing. Unlink it (piloop idea unlink 9 after 3) to run it without that change, or set it ready once idea#3 is ready again',
-                ),
-                (
-                    10,
-                    CommentKind.ESCALATION,
-                    2,
-                    'parked: it runs after idea#7, which is parked. Unlink it (piloop idea unlink 10 after 7) to run it without that change, or set it ready once idea#7 is ready again',
-                ),
-            ]
+        assert [(c.target_id, c.kind, c.priority) for c in asked] == [
+            (parked, CommentKind.ESCALATION, 2),
+            (rejected, CommentKind.ESCALATION, 2),
+            (nothing, CommentKind.ESCALATION, 2),
+        ], 'one escalation for each cause, on it: the chain behind a cancelled idea is one decision'
+        assert [c.body.splitlines()[0] for c in asked[:2]] == [
+            '2 ideas wait for another idea that changed nothing. Do you run them anyway?',
+            'An idea waits for another idea that changed nothing. Do you run it anyway?',
+        ]
+        assert details(asked[0]) == snapshot(
+            'parked: idea#7, idea#10, after idea#1, which is parked. Unlink each (piloop idea unlink 7 after 1; piloop idea unlink 10 after 7) to run it without that change, or set them ready once idea#1 is ready again'
         )
     assert run_all(scheduler) == []
     with db.session() as s:
-        assert s.scalar(select(func.count()).select_from(Comment)) == 4, 'once'
+        assert s.scalar(select(func.count()).select_from(Comment)) == 3, 'once'
 
 
 def test_low_water_does_not_count_blocked_ideas_as_backlog(

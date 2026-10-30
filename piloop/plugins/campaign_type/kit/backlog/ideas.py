@@ -124,9 +124,9 @@ def park_stranded(s: Session, campaign_id: CampaignId) -> dict[IdeaId, IdeaId]:
 
     Such a prerequisite is ``parked`` (a cancel parks it), ``rejected``, or ``done`` after runs that kept nothing. Its
     dependents were meant to build on its change, which never landed, so they would block forever or start on a failed
-    premise. A prerequisite set ``done`` that never ran still releases them: that is a human's decision. Each parked
-    idea gets an escalation that asks whether to run it without the prerequisite. The ideas after a parked one are
-    parked in the same call.
+    premise. A prerequisite set ``done`` that never ran still releases them: that is a human's decision. The ideas after
+    a parked one are parked in the same call. Each prerequisite that ended without a keep gets one escalation, on it,
+    that asks whether to run the ideas that it parked, its chain included, without it.
 
     Returns:
         ``{parked idea id: the prerequisite that stranded it}``.
@@ -148,30 +148,46 @@ def park_stranded(s: Session, campaign_id: CampaignId) -> dict[IdeaId, IdeaId]:
         .order_by(Idea.id, target.id)
     )
     parked: dict[IdeaId, IdeaId] = {}
+    causes: dict[IdeaId, Idea] = {}
+    """The prerequisite at the start of each parked idea's chain: the idea that ended without a keep."""
+    stranded: dict[Idea, list[tuple[Idea, Idea]]] = {}
+    """Each such prerequisite, with the ideas that it parked and the prerequisite of each: one escalation for them."""
     while rows := s.execute(query).all():
         first: dict[Idea, Idea] = {}
         for idea, prerequisite in rows:
             first.setdefault(idea, prerequisite)
         for idea, prerequisite in first.items():
-            outcome = 'kept nothing' if prerequisite.status is IdeaStatus.DONE else f'is {prerequisite.status}'
             idea.status = IdeaStatus.PARKED
-            asked = EscalationView(
-                headline='An idea waits for another idea that changed nothing. Do you run it anyway?',
-                why=f'It must run after another idea, which {outcome}. So it is parked.',
-                choices=(
-                    Choice(id='A', label='Run it without that change.', result='It runs on the head.'),
-                    Choice(
-                        id='B', label='Wait for the other idea.', result='It stays parked until that idea is ready.'
-                    ),
-                ),
-                details=f'parked: it runs after idea#{prerequisite.id}, which {outcome}. Unlink it (piloop idea unlink'
-                f' {idea.id} after {prerequisite.id}) to run it without that change, or set it ready once'
-                f' idea#{prerequisite.id} is ready again',
-            )
-            escalations.escalate(s, TargetRef(IDEA, idea.id), asked, author=System.DAEMON, priority=2)
             parked[idea.id] = prerequisite.id
+            cause = causes[idea.id] = causes.get(prerequisite.id, prerequisite)
+            stranded.setdefault(cause, []).append((idea, prerequisite))
         s.flush()
+    for cause, ideas in stranded.items():
+        escalations.escalate(s, TargetRef(IDEA, cause.id), _stranded(cause, ideas), author=System.DAEMON, priority=2)
     return parked
+
+
+def _stranded(cause: Idea, ideas: list[tuple[Idea, Idea]]) -> EscalationView:
+    """What the escalation asks of the ideas that ``cause`` parked, each with the prerequisite that it runs after."""
+    outcome = 'kept nothing' if cause.status is IdeaStatus.DONE else f'is {cause.status}'
+    match ideas:
+        case [_]:
+            waits, them, they, are, run, stay = 'An idea waits', 'it', 'It', 'it is', 'It runs', 'It stays'
+        case _:
+            waits, them, they, are = f'{len(ideas)} ideas wait', 'them', 'They', 'they are'
+            run, stay = 'They run', 'They stay'
+    unlinks = '; '.join(f'piloop idea unlink {idea.id} after {prerequisite.id}' for idea, prerequisite in ideas)
+    return EscalationView(
+        headline=f'{waits} for another idea that changed nothing. Do you run {them} anyway?',
+        why=f'{they} must run after another idea, which {outcome}. So {are} parked.',
+        choices=(
+            Choice(id='A', label=f'Run {them} without that change.', result=f'{run} on the head.'),
+            Choice(id='B', label='Wait for the other idea.', result=f'{stay} parked until that idea is ready.'),
+        ),
+        details=f'parked: {", ".join(f"idea#{idea.id}" for idea, _ in ideas)}, after idea#{cause.id}, which {outcome}.'
+        f' Unlink each ({unlinks}) to run it without that change, or set them ready once idea#{cause.id} is ready'
+        ' again',
+    )
 
 
 def supersede(s: Session, campaign_id: CampaignId) -> dict[IdeaId, IdeaId]:

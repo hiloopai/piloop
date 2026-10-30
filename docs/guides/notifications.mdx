@@ -34,6 +34,8 @@ Run 41's evaluation takes 3 h, over the 1 h timeout. Raise the timeout, or drop 
 
 - An item is sent when it is an escalation or has priority 0, nobody has acknowledged it, and a person did not write
   it.
+- Only items of priority 0 and 1 are sent: the rest wait in the inbox. `max_priority = 4` sends every priority, and
+  `max_priority = 0` only the urgent ones.
 - Each pass of the daemon sends one message with every new item. `slack_app` posts each item on its own.
 - An item that still waits a day later is sent again as a reminder, while its campaign is active.
   `piloop inbox ack` ends the reminders.

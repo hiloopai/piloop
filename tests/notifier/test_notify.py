@@ -341,6 +341,18 @@ def test_an_escalation_or_a_p0_item_that_waits_and_that_no_person_wrote_is_due(
     assert (found.failures, found.later) == (0, None)
 
 
+@pytest.mark.parametrize(('max_priority', 'sent'), [(None, [0, 1]), (0, [0]), (4, [0, 1, 2, 4])])
+def test_a_notifier_sends_no_item_less_urgent_than_its_max_priority(
+    db: Database, campaign: Campaign, max_priority: int | None, sent: list[int]
+) -> None:
+    """Every escalation went out, at any priority: P2 bookkeeping flooded the channel. By default P2 to P4 wait."""
+    by_priority = {p: write(db, campaign, priority=p) for p in (0, 1, 2, 4)}
+    notifier = Outbox() if max_priority is None else Outbox(max_priority=max_priority)
+    with db.session() as s:
+        found = due(s, route_of(db, campaign, 'outbox', notifier), utcnow())
+    assert [n.comment for n in found.notices] == [by_priority[p] for p in sent]
+
+
 def test_an_item_that_still_waits_after_remind_every_is_sent_again_unless_reminders_are_never(
     db: Database, campaign: Campaign, tmp_path: Path, tracer: Tracer
 ) -> None:

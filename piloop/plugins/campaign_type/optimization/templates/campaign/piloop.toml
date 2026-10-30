@@ -49,7 +49,7 @@ model = "gpt-6.1-sol"
 # [plugins.notifier]                      # who hears of escalations; if not set: the [plugins.notifier] of config.toml
 # use = ["team"]                          # names of [plugins.notifier.<name>]; replaces config.toml's for this campaign
 
-# [plugins.notifier.team]                 # see the Notifications guide (keys: link, remind_every, retry, retry_max)
+# [plugins.notifier.team]                 # see the Notifications guide (keys: link, max_priority, remind_every, retry, retry_max)
 # provider = "slack_app"                  # posts each item as a Slack app and reads the replies (keys: people, timeout, max_items, body_chars, template, reply_priority, api)
 # channel = "C0123ABC"                    # the channel's id; the app's bot must be in it
 # token = { secret = "SLACK_BOT_TOKEN" }  # a secret of this campaign, else of the home
