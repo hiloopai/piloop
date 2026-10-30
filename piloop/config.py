@@ -241,7 +241,7 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     def sections_of(self, name: RoleName) -> list[Section]:
         """What the briefs of a role show, in order: the sections of its ``shown``."""
         found = SECTIONS.instances(self.plugins)
-        return deprecated.context_listed([found[section] for section in self.role(name).shown()], found)
+        return [found[section] for section in self.role(name).shown()]
 
     def triggers_of(self, name: str) -> list[Trigger]:
         """The triggers of a sweeping role, in order: those that its ``triggers`` names. None for a role of runs."""
@@ -527,7 +527,6 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
         raw = tomllib.loads(toml.read_text())
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f'{toml} is not valid TOML: {e}') from e
-    old = deprecated.old_instances(raw)
     deprecated.apply(toml, raw, deprecated.bridges(Scope.CAMPAIGN))
     defaults = settings.campaign_defaults
     raw['plugins'] = merged(defaults, raw.get('plugins', {}))
@@ -556,9 +555,6 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
     for lost in cfg.unreached():
         if _has_table(defaults, lost.capability, lost.name):
             continue  # a default of the home's config.toml: a campaign that does not use it leaves it
-        if (lost.capability, lost.name) in old:
-            deprecated.unused_instance(toml, lost.name, str(lost))
-            continue
         raise ConfigError(f'{toml} is not a valid piloop config (1 problem(s)):\n  {lost}')
     try:
         cfg.check_home(settings.providers)

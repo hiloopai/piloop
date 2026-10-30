@@ -1,11 +1,17 @@
 """``structured``, the default escalation provider: its form, its rules of plain words, its routing and its view."""
 
+import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import JsonValue
 
+from piloop.actor import System
 from piloop.api.views import escalation_lines
+from piloop.campaign import escalations
+from piloop.db.models import Campaign
+from piloop.db.session import Database
 from piloop.ids import CampaignId, CommentId
 from piloop.plugins.escalation.contract import At, Choice, Escalated, EscalationView, Now
 from piloop.plugins.escalation.structured import EXAMPLE, Structured
@@ -110,8 +116,6 @@ def test_the_view_has_the_ask_the_why_and_lettered_choices_and_a_free_text_one_r
         recommended='A',
         details=EXAMPLE.details,
     )
-    old = item(form=None, body='SSO expired\nlog in again at the console\n')
-    assert Structured().view(old) == EscalationView(headline='SSO expired', why='log in again at the console')
 
 
 def test_a_choice_is_a_decision_in_words_and_an_unknown_one_is_refused() -> None:
@@ -121,8 +125,6 @@ def test_a_choice_is_a_decision_in_words_and_an_unknown_one_is_refused() -> None
     )
     with pytest.raises(ValueError, match="comment#7 offers no choice 'C'; it offers A, B"):
         Structured().choose(item(), 'C')
-    with pytest.raises(ValueError, match='offers none: answer in words with `piloop inbox reply`'):
-        Structured().choose(item(form=None), 'A')
 
 
 def test_inbox_show_prints_a_view_without_choices_as_its_ask_and_why() -> None:
@@ -133,3 +135,15 @@ def test_inbox_show_prints_a_view_without_choices_as_its_ask_and_why() -> None:
         '',
         'Agents cannot log in.',
     ]
+
+
+def test_a_free_text_escalation_that_an_older_piloop_filed_takes_no_choice(db: Database, campaign: Campaign) -> None:
+    """A row of 0.4 has no form: every surface shows its body, and a choice on it is refused."""
+    with closing(sqlite3.connect(db.engine.url.database or '')) as con:  # as an older piloop wrote it: no TEMP trigger
+        con.execute(
+            'INSERT INTO comments (target_kind, target_id, author, kind, body, priority)'
+            f" VALUES ('campaign', {campaign.id}, 'implementer#3', 'escalation', 'SSO expired', 1)"
+        )
+        con.commit()
+    with db.session() as s, pytest.raises(escalations.Refused, match='filed as free text, with no choices'):
+        escalations.choose(s, CommentId(1), 'A', author=System.HUMAN)

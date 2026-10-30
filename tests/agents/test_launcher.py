@@ -300,22 +300,6 @@ def test_the_context_is_a_section_that_a_list_moves_and_its_lines_configure(camp
         load_campaign_config(Path(campaign.path), plugins={'section': {'context': {'lines': ['- {who}']}}})
 
 
-def test_a_list_without_the_context_shows_it_after_its_guides(campaign: Campaign, db: Database) -> None:
-    """A list that 0.3 wrote: the guides, the context and the rest, in the order of 0.3's briefs."""
-    with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        p.config = load_campaign_config(
-            Path(campaign.path), plugins={'role': {'scout': {'sections': ['goal', 'database', 'search']}}}
-        )
-        brief = brief_in(s, p, SCOUT)
-    assert (
-        brief.index('## Working with the piloop database')
-        < brief.index('## Search')
-        < brief.index('## Context')
-        < brief.index('## Goal')
-    )
-
-
 def test_the_example_queries_of_a_brief_read_its_own_campaign_and_primary(campaign: Campaign, db: Database) -> None:
     with db.session() as s:
         first = s.get_one(Campaign, campaign.id)
@@ -1129,7 +1113,7 @@ def test_an_agent_knows_when_its_timeout_ends(
     assert before + timeout - 1 <= int(env['PILOOP_DEADLINE']) <= time.time() + timeout
 
 
-def test_a_secret_that_the_home_lacks_fails_the_launch_naming_it_and_until_0_5_comes_from_the_environment(
+def test_a_secret_that_the_home_lacks_fails_the_launch_naming_it_even_when_the_environment_has_it(
     campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     use_harness(
@@ -1143,16 +1127,13 @@ def test_a_secret_that_the_home_lacks_fails_the_launch_naming_it_and_until_0_5_c
     give_watchdog_servers(
         db, campaign, {'probe': {'provider': 'http', 'url': 'https://x', 'bearer_token_env': 'PROBE_TOKEN'}}
     )
-    monkeypatch.delenv('PROBE_TOKEN', raising=False)
+    monkeypatch.setenv('PROBE_TOKEN', 'from-the-environment')
     agent_session_id = request(db, campaign)
     launch(db, runtime, tmp_path, agent_session_id)
     w = agent_session(db, agent_session_id)
     assert w.state is AgentSessionState.KILLED and w.error is not None
     assert w.error.startswith('MissingSecrets: the secrets PROBE_TOKEN are not set: `piloop secret set <NAME>`')
-    assert not (tmp_path / 'w' / 'argv.txt').exists(), 'never started'
-    monkeypatch.setenv('PROBE_TOKEN', 'from-the-environment')
-    launch(db, runtime, tmp_path, request(db, campaign))
-    assert 'PROBE_TOKEN=from-the-environment' in (tmp_path / 'w' / 'env.txt').read_text().splitlines()
+    assert not (tmp_path / 'w' / 'argv.txt').exists(), 'never started: a secret comes from `piloop secret` only'
 
 
 def test_a_harness_env_gives_values_and_secrets_and_a_campaigns_secret_wins_over_the_homes(

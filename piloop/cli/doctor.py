@@ -26,14 +26,13 @@ from piloop.campaign.campaigns import REWRITE_BRIEF, long_brief
 from piloop.cli import skills, upgrade
 from piloop.config import CampaignConfig, ConfigError, ConfigMissing, explain, load_campaign_config
 from piloop.daemon.main import preflight, unbound_failures
-from piloop.daemon.serve import SECRETS_COMMAND_ENV, SecretsError, running_pid, secrets
+from piloop.daemon.serve import running_pid
 from piloop.db.models import utcnow
 from piloop.db.session import described, heads, schema_mismatch, stamps
 from piloop.ids import CampaignId, CampaignStatus
 from piloop.plugins.host import Check, PluginError, Scope, Severity, declared, in_use, refs
 from piloop.plugins.secrets.contract import SECRETS, SecretKey
-from piloop.proc import child_env, environment
-from piloop.settings import Settings, config_file
+from piloop.settings import Settings
 from piloop.text import age
 from piloop.version import code_digest, direct_url, installed
 
@@ -65,21 +64,17 @@ def checks(cfg: Settings) -> list[Check]:
     """
     composed = _plugins(cfg)
     daemon = running_pid(cfg)
-    whose, names, command = _daemon_env(cfg)
-    found_secrets, supplied = _secrets(whose, command)
     first = [
         _cli(cfg),
         _daemon(cfg),
         _database(cfg.home / 'piloop.db', daemon, cfg.actor),
         composed,
-        found_secrets,
     ]
     if composed.fails:
         found = [*first, *_skills(cfg)]
     else:
         campaigns = stored_campaigns(cfg.home / 'piloop.db')
         stored = [c.config for c in campaigns if isinstance(c.config, CampaignConfig)]
-        env = whose, names | supplied
         held = _stored_secrets(cfg)
         found = [
             *first,
@@ -92,7 +87,7 @@ def checks(cfg: Settings) -> list[Check]:
                 and (long := long_brief(Path(c.path), c.config.agents.over(cfg.agents).brief_words)) is not None
             ),
             *(
-                _secrets_of(c, needed, held, env, daemon)
+                _secrets_of(c, needed, held, daemon)
                 for c in campaigns
                 if isinstance(c.config, CampaignConfig) and (needed := _needed(c.config))
             ),
@@ -215,54 +210,6 @@ def _digits(campaign: StoredCampaign) -> Check:
     )
 
 
-def _daemon_env(cfg: Settings) -> tuple[str, set[str], str | None]:
-    """Return whose environment gives the agents their MCP variables, the names in it, and its secrets command.
-
-    It is the environment of the running daemon. Without a daemon, or when its environment cannot be read, it is the
-    environment of this shell, which a ``piloop serve`` started here inherits. It never returns values. The daemon's
-    environment is the one it was exec'd with, so after a first start it lacks what the secrets command printed. The
-    daemon's secrets command is that of its environment, else that of ``config.toml``, as for any setting.
-    """
-    shell = 'this shell', set(child_env()), cfg.secrets_command
-    pid = running_pid(cfg)
-    if pid is None:
-        return shell
-    env = environment(pid)
-    if env is None:  # the daemon ended a moment ago
-        return shell
-    return f'the daemon (pid {pid})', set(env), env.get(SECRETS_COMMAND_ENV, _configured(cfg))
-
-
-def _configured(cfg: Settings) -> str | None:
-    """The ``secrets_command`` of the home's ``config.toml``."""
-    match config_file(cfg.home).get('secrets_command'):
-        case str() as command:
-            return command
-        case _:
-            return None
-
-
-def _secrets(whose: str, command: str | None) -> tuple[Check, set[str]]:
-    """Check the deprecated secrets command. Run it here for the names; never show values."""
-    if command is None:
-        return Check('secrets', 'from `piloop secret set` (no secrets_command)'), set()
-    try:
-        names = set(secrets(command))
-    except SecretsError as e:
-        return Check(
-            'secrets',
-            f'secrets_command of {whose} ({command}) failed: {e}',
-            'fix the command; `piloop serve` refuses to start while it fails',
-        ), set()
-    return Check(
-        'secrets',
-        f'secrets_command of {whose} ({command}) prints {", ".join(sorted(names))}',
-        f'`piloop secret set` each of them, then remove secrets_command ({SECRETS_COMMAND_ENV} or config.toml):'
-        ' piloop 0.5.0 removes it',
-        Severity.WARN,
-    ), names
-
-
 def _needed(config: CampaignConfig) -> list[str]:
     """The secrets that the agents of the campaign's roles get, on each harness of their rotation."""
     return sorted(
@@ -281,27 +228,15 @@ def _set_each(daemon: int | None) -> str:
     return each if daemon is not None else f'`piloop serve --detach`, then {each}: secrets go through the daemon'
 
 
-def _secrets_of(
-    campaign: StoredCampaign, needed: list[str], held: list[SecretKey], env: tuple[str, set[str]], daemon: int | None
-) -> Check:
+def _secrets_of(campaign: StoredCampaign, needed: list[str], held: list[SecretKey], daemon: int | None) -> Check:
     """Check that the secrets that the campaign's agents need are set, by name, never by value.
 
-    A missing one of a stopped campaign is a warning (``StoredCampaign.severity``). A secret that only the environment
-    of the daemon has works until 0.5.0.
+    A missing one of a stopped campaign is a warning (``StoredCampaign.severity``).
     """
     what = f'secrets {campaign.name}'
     have = {k.name for k in held if k.owner in (None, campaign.id)}
-    whose, environ = env
-    missing = [n for n in needed if n not in have and n not in environ]
-    if missing:
+    if missing := [n for n in needed if n not in have]:
         return Check(what, f'not set: {", ".join(missing)}', _set_each(daemon), campaign.severity)
-    if from_env := [n for n in needed if n not in have]:
-        return Check(
-            what,
-            f'{", ".join(from_env)} from the environment of {whose}',
-            '`piloop secret set` each of them: piloop 0.5.0 reads secrets from `piloop secret` only',
-            Severity.WARN,
-        )
     return Check(what, f'{len(needed)} set')
 
 

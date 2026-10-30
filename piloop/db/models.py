@@ -5,7 +5,6 @@ timestamps or statuses. ``docs/reference/schema.mdx`` (the DDL) is generated fro
 """
 
 import sys
-import warnings
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Annotated, ClassVar, Literal, get_args, get_origin
@@ -40,14 +39,12 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.engine import Dialect
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, composite, mapped_column, object_session
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, composite, mapped_column
 from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.types import TypeDecorator
 
-from piloop import deprecated
 from piloop.api.contract import Access
 from piloop.config import CampaignConfig
-from piloop.deprecated import PiloopDeprecationWarning
 from piloop.ids import (
     CORE_KINDS,
     AgentSessionId,
@@ -68,8 +65,7 @@ from piloop.plugins.harness.contract import Usage
 from piloop.plugins.host import Slot
 
 if TYPE_CHECKING:  # the components' tables import this module
-    from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-    from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator
+    pass
 
 
 def utcnow() -> datetime:
@@ -457,39 +453,6 @@ class Campaign(Tracked, Base):
     children fails on the foreign key. Nothing else reads it yet: each campaign runs on its own."""
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
-    @property
-    @deprecated.until('0.5.0', "Campaign.ideas of 0.3: delete it, a core table's link to the backlog's ideas")
-    def ideas(self) -> list[Idea]:
-        """Its ideas by id, as in 0.3, with a warning: select the backlog's ``Idea`` by ``campaign_id`` instead."""
-        from piloop.plugins.campaign_type.kit.backlog.tables import Idea  # here: tables imports this module
-
-        _moved('Campaign.ideas', 'select(Idea).where(Idea.campaign_id == campaign.id)')
-        return list(_session_of(self).scalars(select(Idea).where(Idea.campaign_id == self.id).order_by(Idea.id)))
-
-    @property
-    @deprecated.until('0.5.0', "Campaign.evaluator of 0.3: delete it, a core table's link to the evaluation's table")
-    def evaluator(self) -> Evaluator | None:
-        """Its current evaluator, as in 0.3, with a warning: the evaluation component's ``evaluator_of``."""
-        from piloop.plugins.campaign_type.kit.evaluation.tables import evaluator_of  # here: tables imports this module
-
-        _moved('Campaign.evaluator', 'evaluator_of(s, campaign)')
-        return evaluator_of(_session_of(self), self)
-
-
-def _session_of(row: Base) -> Session:
-    """The session that ``row`` is in. Raises ``ValueError`` for a row in none."""
-    if (s := object_session(row)) is None:
-        raise ValueError(f'{row!r} is in no session')
-    return s
-
-
-def _moved(old: str, new: str) -> None:
-    warnings.warn(
-        f"{old} moved: read {new} of the campaign type kit's components",
-        PiloopDeprecationWarning,
-        stacklevel=3,
-    )
-
 
 NOT_RETIRED = Campaign.status != CampaignStatus.RETIRED
 """The campaigns that hold their names, that the daemon schedules, and that a listing shows unless asked."""
@@ -809,23 +772,3 @@ def _blob_placeholders(target: Base, _context: object) -> None:
                 f' placeholder. Repair it: UPDATE {table} SET {attr.key} = CAST({attr.key} AS TEXT) WHERE id = {row}',
                 file=sys.stderr,
             )
-
-
-type Moved = Literal['Evaluator', 'Idea', 'IdeaLink', 'Run', 'Candidate', 'Measurement', 'Evaluation', 'Technique']
-"""The tables that moved to the campaign type kit's components, which a plugin of 0.3 imported from here."""
-
-
-@deprecated.until('0.5.0', 'the research tables moved to the components: delete this __getattr__ and Moved')
-def __getattr__(name: Moved) -> type[Base]:
-    """``from piloop.db.models import Candidate`` as in 0.3, with a warning: the table is a component's now."""
-    if name not in get_args(Moved.__value__):  # the import system asks for other names too, such as __path__
-        raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
-    from piloop.plugins.campaign_type.optimization import tables  # here: it imports this module; it has them all
-
-    table: type[Base] = getattr(tables, name)
-    warnings.warn(
-        f'piloop.db.models.{name} moved: import it from {table.__module__}',
-        PiloopDeprecationWarning,
-        stacklevel=2,
-    )
-    return table

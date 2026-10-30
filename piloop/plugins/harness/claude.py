@@ -1,24 +1,20 @@
 """``claude``: Claude Code."""
 
 import json
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from piloop import deprecated
 from piloop.plugins.harness.contract import (
     EFFORT,
     MCP,
     PROMPT,
     SESSION_ID,
     USER_CONFIG,
-    Carried,
     Harness,
     McpArgs,
     McpLaunch,
     ModelId,
-    UserConfig,
 )
 from piloop.plugins.harness.kit.jsonl import (
     Counts,
@@ -64,12 +60,6 @@ ISOLATION = ['--setting-sources', 'project']
 """Load the settings of the campaign repo only (``.claude/settings.json``), not the user's or a local file: no user
 ``CLAUDE.md``, skills, plugins, hooks or ``env``. The repo's own ``CLAUDE.md`` still loads, and so do ``--settings``
 and ``--mcp-config`` (measured with Claude Code 2.1.310). The login is not a setting: it still works."""
-AUTH_KEYS = ('apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'forceLoginMethod', 'forceLoginOrgUUID')
-AUTH_ENV = re.compile(
-    r'ANTHROPIC_\w+|CLAUDE_CODE_USE_\w+|CLAUDE_CODE_SKIP_\w+_AUTH|AWS_\w+|CLOUD_ML_REGION|VERTEX_REGION_\w+'
-    r'|HTTPS?_PROXY|NO_PROXY|NODE_EXTRA_CA_CERTS'
-)
-"""The keys of the user's ``settings.json``, and of its ``env``, that log Claude in or route it to a gateway."""
 
 
 def argv(session: str) -> list[str]:
@@ -196,38 +186,6 @@ class Claude(Harness):
     def isolation(self) -> list[str]:
         return ISOLATION
 
-    @deprecated.until(
-        '0.5.0', "auth keys of the user's ~/.claude/settings.json pass to an isolated agent: delete carried"
-    )
-    def carried(self, args: list[str], resume_args: list[str]) -> Carried | None:
-        """The login keys of the user's ``settings.json`` on this machine, which ``--setting-sources project`` skips.
-
-        Its ``AUTH_KEYS`` go into piloop's ``--settings``, and the ``AUTH_ENV`` of its ``env`` into the agent's
-        environment, never into the argv. None when the agent loads the user's settings, or they have none.
-        """
-        if self.user_config is UserConfig.LOAD or USER_CONFIG not in self.headless:
-            return None
-        found = Path(expand_env(f'{self.home}/settings.json')).expanduser()
-        try:
-            user = json.loads(found.read_text())
-        except FileNotFoundError:
-            return None
-        except ValueError:  # Claude Code ignores a settings file that it cannot parse: so does its login
-            return None
-        if not isinstance(user, dict):
-            return None
-        keys = {k: user[k] for k in AUTH_KEYS if k in user}
-        env = user.get('env')
-        env = {k: str(v) for k, v in env.items() if AUTH_ENV.fullmatch(k)} if isinstance(env, dict) else {}
-        if not keys and not env:
-            return None
-        return Carried(
-            args=_with_settings(args, keys),
-            resume_args=_with_settings(resume_args, keys),
-            env=env,
-            names=(*keys, *(f'env.{k}' for k in env)),
-        )
-
     def sessions(self) -> JsonlSessions:
         return JsonlSessions(f'{self.home}/projects/{{cwd}}/{{session_id}}.jsonl', dash_non_alnum, tally, said)
 
@@ -248,13 +206,3 @@ class Claude(Harness):
     def skills_dir(self, settings: Settings) -> Path:
         """``claude_skills_dir``, else ``<home>/skills``."""
         return settings.claude_skills_dir or Path(expand_env(f'{self.home}/skills')).expanduser()
-
-
-def _with_settings(argv: list[str], keys: dict[str, object]) -> list[str]:
-    """``argv`` with ``keys`` under piloop's own ``--settings``, which win: Claude takes only the last ``--settings``."""
-    if not keys or not argv:
-        return argv
-    if SETTINGS_FLAG not in argv:
-        return [SETTINGS_FLAG, json.dumps(keys, separators=(',', ':')), *argv]
-    at = argv.index(SETTINGS_FLAG) + 1
-    return [*argv[:at], json.dumps({**keys, **json.loads(argv[at])}, separators=(',', ':')), *argv[at + 1 :]]

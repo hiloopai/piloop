@@ -64,7 +64,7 @@ jobs:
           exit 1
       - name: enwik8 example, headless
         env:
-          PILOOP_CAMPAIGN_RUNTIME: subprocess
+          PILOOP_CAMPAIGN_PLUGINS__RUNTIME__USE: subprocess
           COLUMNS: 200
         run: |
           export PATH="$HOME/.local/bin:$PATH"
@@ -76,7 +76,7 @@ jobs:
       - name: the example plugins install next to piloop and are selected through the configuration
         env:
           PILOOP_HOME: /tmp/plugins-home
-          PILOOP_CAMPAIGN_RUNTIME: nice
+          PILOOP_CAMPAIGN_PLUGINS__RUNTIME__USE: nice
           PILOOP_CAMPAIGN_PLUGINS__VERDICT_RULE__PROVIDER: min_gain
           PILOOP_CAMPAIGN_PLUGINS__VERDICT_RULE__MIN_GAIN: "100"
           PILOOP_CAMPAIGN_PLUGINS__STOP_RULE__PROVIDER: after_keeps

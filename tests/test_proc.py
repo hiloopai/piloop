@@ -10,7 +10,6 @@ import pytest
 from piloop.proc import (
     AGENT_TOKEN_ENV,
     RESULT_ENV,
-    UNITS_ENV,
     Inherited,
     ResultPipe,
     Started,
@@ -82,10 +81,9 @@ def _eperm(*_: object) -> None:
     raise PermissionError(1, 'Operation not permitted')
 
 
-def test_no_child_inherits_a_units_or_result_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(UNITS_ENV, '/somewhere')
+def test_no_child_inherits_a_result_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(RESULT_ENV, '/somewhere')
-    assert UNITS_ENV not in child_env() and RESULT_ENV not in child_env()
+    assert RESULT_ENV not in child_env()
 
 
 def test_results_reads_lines_of_a_child_that_reopens_the_pipe_for_each(tmp_path: Path) -> None:

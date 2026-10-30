@@ -123,11 +123,13 @@ from tests.conftest import (
     Gate,
     ScriptRuntime,
     baseline,
+    escalation_sql,
     events,
     example,
     factory,
     home_cas,
     pinned,
+    reports,
     serving,
     span_named,
     wait_until,
@@ -878,7 +880,7 @@ def test_evaluate_failure_is_a_crash_verdict(
 
     cfg = load_campaign_config(
         Path(campaign.path),
-        evaluate=['sh', '-c', 'test $(wc -l < solve.txt) -eq 1 && echo METRIC score=1 && echo METRIC size=1 || exit 9'],
+        evaluate=['sh', '-c', f'test $(wc -l < solve.txt) -eq 1 && {reports(score="1", size="1")} || exit 9'],
     )
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = cfg
@@ -903,9 +905,8 @@ def test_a_crash_from_a_fault_of_the_host_is_measured_again_on_request_and_judge
     head moved on, so it is rebased onto the head, and the merge is judged there.
     """
     fault = tmp_path / 'disk-full'
-    measure = (
-        f'test -e {fault} && exit 28; echo METRIC score=$(cat solve.txt other.txt 2>/dev/null | wc -l);'
-        ' echo METRIC size=$(wc -c < solve.txt)'
+    measure = f'test -e {fault} && exit 28; ' + reports(
+        score='$(cat solve.txt other.txt 2>/dev/null | wc -l)', size='$(wc -c < solve.txt)'
     )
     write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=['sh', '-c', measure])
     reload_campaign(db, campaign)
@@ -977,7 +978,7 @@ def test_a_crash_on_the_evaluate_timeout_is_measured_again_on_request_once_the_t
     """A load that slows the evaluator past ``evaluate_timeout`` crashes good code, and its tree cannot be committed
     again. The timeout is no part of the evaluator, so once it is raised, ``piloop candidate remeasure`` measures the
     candidate again under the same evaluator, with the new timeout, and judges it again."""
-    measure = 'test $(wc -l < solve.txt) -gt 1 && sleep 1; echo METRIC score=$(wc -l < solve.txt); echo METRIC size=1'
+    measure = f'test $(wc -l < solve.txt) -gt 1 && sleep 1; {reports(score="$(wc -l < solve.txt)", size="1")}'
     write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=['sh', '-c', measure])
     toml = Path(campaign.path) / 'piloop.toml'
     toml.write_text(toml.read_text().replace('evaluate_timeout = 30', 'evaluate_timeout = 0.2'))
@@ -1009,7 +1010,8 @@ def test_a_crash_on_the_evaluate_timeout_is_measured_again_on_request_once_the_t
 
 LOADED = (
     'lines=$(wc -l < solve.txt); echo $lines >> {order}; grep -qx $lines {fail} 2>/dev/null && exit 3;'
-    ' echo METRIC score=$lines; echo METRIC seconds=$((10 * $(cat {load})))'
+    ' printf \'{{"metrics": {{"score": %s, "seconds": %s}}}}\\n\' "$lines" "$((10 * $(cat {load})))"'
+    ' >> "$PILOOP_RESULT_FILE"'
 )
 """An evaluate whose time is 10 s times the host's load, whatever the tree. It logs the lines of each tree it runs, and
 fails on a tree whose lines are in ``fail``."""
@@ -1093,7 +1095,8 @@ def test_a_paired_evaluation_stops_at_the_first_run_that_fails(
 
 DRIFTING = (
     'load=$(head -n 1 {loads}); tail -n +2 {loads} > {loads}.next; mv {loads}.next {loads};'
-    ' echo METRIC score=$(wc -l < solve.txt); echo METRIC seconds=$(awk -v l=$load "BEGIN {{ print 10 * l }}")'
+    ' printf \'{{"metrics": {{"score": %s, "seconds": %s}}}}\\n\' "$(wc -l < solve.txt)"'
+    ' "$(awk -v l=$load "BEGIN {{ print 10 * l }}")" >> "$PILOOP_RESULT_FILE"'
 )
 """An evaluate whose time is 10 s times the next load of ``loads``, whatever the tree: one line per run."""
 
@@ -1182,9 +1185,7 @@ def test_brief_carries_history_and_comments(
         ' wrap up 0.5 minutes before, between two tool calls: start no command that can run past the deadline.\n'
         in brief
     ), 'the role timeout of 120s'
-    assert "VALUES ('idea', 2, 'implementer#2', 'escalation', 1, '...')" in brief, (
-        'a request is an escalation, never a note'
-    )
+    assert '`piloop escalate idea#2 --priority 1`' in brief, 'a request is an escalation, never a note'
     assert '`piloop schema long_jobs`' in brief, 'how to wait for a long job is a guide away'
     assert 'the daemon kills every process that you started' in brief, 'nothing outlives the harness'
     assert '- A hunch worth a run of its own goes in your finding' in brief and 'idea seed demo' not in brief
@@ -1241,7 +1242,7 @@ def test_an_implementer_brief_names_its_checkout_as_the_place_to_work_and_the_ca
     assert git_words(brief) == []
 
 
-@pytest.mark.parametrize('sections', [['lessons', 'history'], ['history']])
+@pytest.mark.parametrize('sections', [['context', 'lessons', 'history'], ['context', 'history']])
 def test_an_implementer_brief_ends_with_its_roles_sections(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, sections: list[str]
 ) -> None:
@@ -1265,7 +1266,7 @@ def test_an_implementer_brief_ends_with_its_roles_sections(
     execute(controller(db, runtime, tmp_path), db, run_id)
     brief = brief_of(db, run_id)
     line = '- [demo] voting | dead | +0 score (lesson#1)'
-    if len(sections) == 2:
+    if 'lessons' in sections:
         assert brief.index('## Your idea') < brief.index(line) < brief.index('## History'), (
             'after the context, in the order of the list'
         )
@@ -1930,10 +1931,7 @@ def test_an_implementer_that_stops_on_its_open_escalation_is_blocked_and_its_ide
     run_id = make_run(db, campaign, max_runs=2)
     with db.session() as s:
         idea_id, agent_session_id = run_row(db, run_id).idea_id, s.scalars(select(AgentSession.id)).one()
-    ask = (
-        'INSERT INTO comments (target_kind, target_id, author, kind, priority, body) VALUES'
-        f" ('idea', {idea_id}, 'implementer#{agent_session_id}', 'escalation', 1, 'run the audit that I cannot run')"
-    )
+    ask = escalation_sql('idea', idea_id, f'implementer#{agent_session_id}')
     report = (
         'INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES'
         f" ('idea', {idea_id}, 'implementer#{agent_session_id}', 'finding', 'blocked on the audit')"
@@ -2223,7 +2221,7 @@ def test_a_changed_evaluator_measures_again_and_old_numbers_do_not_count(
     execute(controller(db, runtime, tmp_path), db, run_id)
     [added] = candidates(db, run_id)
     assert added.metrics['score'] == 2.0
-    doubled = ['sh', '-c', 'echo METRIC score=$(( 2 * $(wc -l < solve.txt) )); echo METRIC size=1']
+    doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
     write_toml(Path(campaign.path), HARNESS_TRY_AND_REVERT, evaluate=doubled)
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
@@ -2264,7 +2262,7 @@ def test_a_config_change_during_a_run_scores_it_under_the_new_evaluator(
     thread = threading.Thread(target=execute, args=(controller(db, runtime, tmp_path), db, run_id))
     thread.start()
     assert gate.entered.wait(10), 'the implementer is about to start; the run holds the old config'
-    doubled = ['sh', '-c', 'echo METRIC score=$(( 2 * $(wc -l < solve.txt) )); echo METRIC size=1']
+    doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
     write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=doubled)
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
@@ -2288,7 +2286,7 @@ def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     ex = controller(db, runtime, tmp_path)
-    doubled = ['sh', '-c', 'echo METRIC score=$(( 2 * $(wc -l < solve.txt) )); echo METRIC size=1']
+    doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
 
     def then_init[**P](fn: Callable[P, bool]) -> Callable[P, bool]:
         def measured(*args: P.args, **kwargs: P.kwargs) -> bool:
@@ -2329,7 +2327,7 @@ def test_a_config_change_while_a_commit_is_measured_judges_it_and_its_bar_under_
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     ex = controller(db, runtime, tmp_path)
-    doubled = ['sh', '-c', 'echo METRIC score=$(( 2 * $(wc -l < solve.txt) )); echo METRIC size=1']
+    doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
     inits: list[None] = []
 
     def init_during[**P](fn: Callable[P, bool]) -> Callable[P, bool]:
@@ -2363,7 +2361,7 @@ def test_a_config_change_while_a_commit_is_measured_judges_it_and_its_bar_under_
 def test_a_stop_while_a_run_measures_its_bar_judges_nothing(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=['sh', '-c', 'echo METRIC score=7; echo METRIC size=1'])
+    write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=['sh', '-c', reports(score='7', size='1')])
     with db.session() as s:
         sync(s, s.get_one(Campaign, campaign.id))
         s.commit()
@@ -2387,8 +2385,8 @@ def test_a_stop_while_a_run_measures_its_bar_judges_nothing(
 SPLIT_UNITS = [
     'sh',
     '-c',
-    'L=$(wc -l < solve.txt); echo METRIC score=$L; echo METRIC size=$(wc -c < solve.txt);'
-    ' [ -z "$PILOOP_UNITS_FILE" ] || printf \'{"score": {"a": %d, "b": %d}}\' $((2*L-1)) $((1-L)) > "$PILOOP_UNITS_FILE"',
+    'L=$(wc -l < solve.txt); printf \'{"metrics": {"score": %d, "size": %d}, "units": {"score": {"a": %d, "b": %d}}}\\n\''
+    ' $L $(wc -c < solve.txt) $((2*L-1)) $((1-L)) >> "$PILOOP_RESULT_FILE"',
 ]
 """score = lines, split over two units so one more line is +2 on ``a`` and -1 on ``b``: up, but not significantly."""
 
@@ -3515,7 +3513,7 @@ def test_an_evaluation_that_changes_a_linked_input_is_a_crash_and_the_shared_cop
 ) -> None:
     """Read-only is a mode that the evaluate command can change. What it measured on inputs it changed is no
     measurement, and the next job does not get the changed copy."""
-    cooks = 'chmod u+w data/x.csv && echo 0 > data/x.csv && echo METRIC score=9 && echo METRIC size=1'
+    cooks = f'chmod u+w data/x.csv && echo 0 > data/x.csv && {reports(score="9", size="1")}'
     set_config(db, campaign, link=['data'], evaluate=['sh', '-c', cooks])
     candidate = baseline(db, campaign.id).id
     ex = controller(db, runtime, tmp_path, tracer)
@@ -3530,7 +3528,7 @@ def test_an_evaluation_that_changes_a_linked_input_is_a_crash_and_the_shared_cop
         db,
         campaign,
         link=['data'],
-        evaluate=['sh', '-c', 'echo METRIC score=$(cat data/x.csv); echo METRIC size=1'],
+        evaluate=['sh', '-c', reports(score='$(cat data/x.csv)', size='1')],
     )
     ex.remeasure(candidate)
     with db.session() as s:
@@ -3548,7 +3546,10 @@ def test_an_evaluation_that_imports_a_linked_module_finds_its_bytecode_current(
     (data / 'mod.py').write_text('X = 1\n')
     os.utime(data / 'mod.py', ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
     py_compile.compile(str(data / 'mod.py'), doraise=True)
-    imports = "import sys; sys.path.insert(0, 'data'); import mod; print('METRIC score=1'); print('METRIC size=1')"
+    imports = (
+        "import json, os, sys; sys.path.insert(0, 'data'); import mod;"
+        " open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps({'metrics': {'score': 1, 'size': 1}}) + chr(10))"
+    )
     set_config(
         db, campaign, link=['data'], evaluate=['env', '-u', 'PYTHONDONTWRITEBYTECODE', sys.executable, '-c', imports]
     )

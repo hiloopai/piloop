@@ -26,7 +26,6 @@ from pathlib import Path
 from covalence import Cid
 from pydantic import SecretStr
 
-from piloop import deprecated
 from piloop.config import BRIEF_FILE, TRANSCRIPT
 from piloop.ids import CommentId, EnvName
 from piloop.otel import Span
@@ -42,7 +41,6 @@ from piloop.plugins.executor.contract import (
     JobSecrets,
     Prompt,
     RepoId,
-    Site,
 )
 from piloop.plugins.executor.kit.clones import Clones, Fetch, of_record, own_replica
 from piloop.plugins.executor.kit.relay import RELAY_ARGV
@@ -75,9 +73,6 @@ CLONES = 'clones'
 """Where a worker elsewhere keeps its clones, under its home (``clone_of``)."""
 INPUTS_REBUILT = 'inputs.rebuilt'
 """An event: a shared copy of a linked input no longer held its blob (a job changed it), and was made again."""
-LOGIN_CARRIED = 'agent_session.login_carried'
-"""An isolated agent took the login keys of the user's harness settings, which piloop passes on until 0.5.0: set them
-in the harness's ``env``."""
 SESSION_UNSAVED = 'agent_session.session_unsaved'
 """An event: a snapshot of an agent's session file did not go into the CAS. The next one tries again."""
 SESSION_UNRESTORED = 'agent_session.session_unrestored'
@@ -199,7 +194,7 @@ def run_agent(job: AgentJob, runtime: Runtime, control: Control, site: Machine, 
         if site.cas.get_file(job.brief_cid, log_dir / BRIEF_FILE) is None:
             raise LookupError(f'the CAS lacks the brief {job.brief_cid}')
         job, start, unrestored = restore_session(job, job.spec, site, span)
-        spec = rendered(job, start.at(cwd, log_dir, site.env()), control.secrets(), span)
+        spec = rendered(job, start.at(cwd, log_dir, site.env()), control.secrets())
         with closing(site.clones.repository(job.artifact)) as repo:
             spec = replace(spec, shares=(*spec.shares, repo.store()))
     except Exception as e:  # a full disk, a locked index, a missing secret: a fault of the host, not of the agent
@@ -486,12 +481,6 @@ def _reads(queued: list[list[Prompt]], log_dir: Path) -> tuple[list[CommentId], 
     return [p.id for b in queued[max(split - read, 0) : split] for p in b], [p.id for b in queued[split:] for p in b]
 
 
-@deprecated.until('0.5.0', 'remove(job, site) of 0.3.1 is site.remove(job): delete remove')
-def remove(job: Job, site: Site) -> None:
-    """Remove the job's worktree, if it made one: ``Site.remove``."""
-    site.remove(job)
-
-
 def rebuilt(links: Materialised, span: Span) -> Materialised:
     """Record the blobs whose shared copy a job had changed: they were made again for this one."""
     if links.rebuilt:
@@ -503,30 +492,18 @@ class MissingSecrets(LookupError):
     """An agent's job needs secrets that the home does not have. The message names them, never a value."""
 
 
-def rendered(job: AgentJob, spec: AgentSpec, found: JobSecrets, span: Span) -> AgentSpec:
+def rendered(job: AgentJob, spec: AgentSpec, found: JobSecrets) -> AgentSpec:
     """The spec with the job's secrets and token from ``found`` (``Control.secrets``), and ``{mcp}`` expanded.
 
     It also names what a runtime that isolates the agent must let through: its harness's sessions, and its servers.
 
-    piloop's own variables in the spec and the token win over a secret of the same name, and both over the login that
-    an isolated agent takes from the user's setup (``Harness.carried``), which ``span`` notes.
+    piloop's own variables in the spec and the token win over a secret of the same name.
 
     Raises:
         MissingSecrets: a secret is not set.
         McpError: the servers cannot be given to this agent.
     """
-    env = (
-        secret_env(job.secrets, found.values, child_env())
-        | spec.env
-        | {AGENT_TOKEN_ENV: found.token.get_secret_value()}
-    )
-    if job.harness is not None and (carried := job.harness.carried(spec.args, spec.resume_args)) is not None:
-        deprecated.until(
-            '0.5.0', "auth keys of a user's harness settings pass to an isolated agent: delete this branch"
-        )
-        span.event(LOGIN_CARRIED, keys=', '.join(carried.names))
-        spec = replace(spec, args=carried.args, resume_args=carried.resume_args)
-        env = carried.env | env
+    env = secret_env(job.secrets, found.values) | spec.env | {AGENT_TOKEN_ENV: found.token.get_secret_value()}
     reader = job.harness.sessions() if job.harness is not None else None
     spec = replace(
         spec,
@@ -540,13 +517,11 @@ def rendered(job: AgentJob, spec: AgentSpec, found: JobSecrets, span: Span) -> A
     return replace(spec, args=expand(spec.args, mcp), resume_args=expand(spec.resume_args, mcp), env=env | mcp.env)
 
 
-def secret_env(
-    wanted: Mapping[EnvName, EnvName], found: Mapping[str, SecretStr], machine: Mapping[str, str]
-) -> dict[str, str]:
+def secret_env(wanted: Mapping[EnvName, EnvName], found: Mapping[str, SecretStr]) -> dict[str, str]:
     """The variables of ``wanted`` (``AgentJob.secrets``), each with the value of its secret in ``found``.
 
     Raises:
-        MissingSecrets: a secret is neither in ``found`` nor, for now, in ``machine``, the environment of this machine.
+        MissingSecrets: a secret is not in ``found``.
     """
     env: dict[str, str] = {}
     missing: list[str] = []
@@ -554,13 +529,6 @@ def secret_env(
         match found.get(secret):
             case SecretStr() as value:
                 env[variable] = value.get_secret_value()
-            case None if secret in machine:
-                deprecated.until(
-                    '0.5.0',
-                    'a secret from the environment of the machine that runs the job: delete this case,'
-                    ' Settings.secrets_command, Daemon._load_secrets and the environment in doctor._secrets_of',
-                )
-                env[variable] = machine[secret]
             case _:
                 missing.append(secret)
     if missing:

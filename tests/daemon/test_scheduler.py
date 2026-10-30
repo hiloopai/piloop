@@ -115,12 +115,14 @@ from tests.conftest import (
     campaigns_of,
     details,
     disk,
+    escalation_sql,
     events,
     factory,
     home_cas,
     pinned,
     reconfigured,
     register,
+    reports,
     role_of,
     run_all,
     serving,
@@ -327,7 +329,7 @@ def test_a_sweep_checks_out_the_head(db: Database, campaign: Campaign, runtime: 
     wait_until(lambda: git.worktrees_under(Repo(campaign.path), tmp_path / 'agent_sessions') == [])
     hold = tmp_path / 'hold'
     hold.touch()  # The tick measures the head again under the new evaluator: held until the sweep has its brief.
-    evaluate = f'while [ -f {hold} ]; do sleep 0.05; done; echo METRIC score=9; echo METRIC size=9'
+    evaluate = f'while [ -f {hold} ]; do sleep 0.05; done; {reports(score="9", size="9")}'
     with db.session() as s:
         cfg = load_campaign_config(Path(campaign.path), evaluate=['sh', '-c', evaluate])
         s.get_one(Campaign, campaign.id).config = cfg
@@ -1230,10 +1232,7 @@ def test_a_stop_after_the_implementer_left_its_finding_scores_its_run_on_the_nex
         "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', 1, 'implementer#1', 'finding',"
         " 'the handoff is in workspace/HANDOFF.md')"
     )
-    ask = (
-        'INSERT INTO comments (target_kind, target_id, author, kind, priority, body) VALUES'
-        " ('idea', 1, 'implementer#1', 'escalation', 1, 'run the audit')"
-    )
+    ask = escalation_sql('idea', 1, 'implementer#1')
     harness = (
         f'#!/bin/sh\necho step >> solve.txt\ngit commit -qam "step"\n{PILOOP_HINT} sql "{finding}"\n'
         + (f'{PILOOP_HINT} sql "{ask}"\n' if escalated else '')
@@ -1478,8 +1477,10 @@ def test_a_restart_during_an_evaluation_scores_the_run_on_start_and_never_runs_i
     write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
     # the baseline, the run's bar under this new evaluator, is measured at once: the cut is in the run's own evaluation
     held = f'[ -f {hold} ] && [ $(wc -l < solve.txt) -gt 1 ]'
-    wait_then_score = f'while {held}; do sleep 0.05; done; echo METRIC score=$(wc -l < solve.txt)'
-    set_config(db, campaign, evaluate=['sh', '-c', f'{wait_then_score}; echo METRIC size=1'])
+    wait_then_score = f'while {held}; do sleep 0.05; done'
+    set_config(
+        db, campaign, evaluate=['sh', '-c', f'{wait_then_score}; {reports(score="$(wc -l < solve.txt)", size="1")}']
+    )
     first = make_scheduler(db, runtime, tmp_path)
     add_ideas(db, campaign, 'two commits')
     run_all(first)
@@ -1558,9 +1559,7 @@ def test_the_next_pass_measures_a_registered_baseline_with_its_links_and_unpinne
     db: Database, campaign_path: Path, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """Registering measures nothing. The daemon's next pass does, also the first pass of a daemon that restarted."""
-    write_toml(
-        campaign_path, HARNESS_APPEND, evaluate=['sh', '-c', 'echo METRIC score=$(cat data/x.csv); echo METRIC size=1']
-    )
+    write_toml(campaign_path, HARNESS_APPEND, evaluate=['sh', '-c', reports(score='$(cat data/x.csv)', size='1')])
     with db.session() as s:
         campaign, baseline = campaigns.register(s, campaign_path, System.HUMAN)
         s.commit()
@@ -1628,7 +1627,7 @@ def test_a_new_evaluator_measures_the_head_runs_wait_for_it_and_older_keeps_only
         old = s.get_one(Campaign, campaign.id).evaluator_id
         kept = s.scalars(select(Candidate).where(Candidate.run_id == 1)).one()
         assert kept.verdict is Outcome.KEEP
-    doubled = ['sh', '-c', 'echo METRIC score=$(( 2 * $(wc -l < solve.txt) )); echo METRIC size=1']
+    doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
     write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=doubled)
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
@@ -1677,7 +1676,7 @@ def test_after_a_new_evaluator_runs_start_from_the_head_once_the_head_alone_is_m
     sched.wait(SETTLE)
     with db.session() as s:
         older, newer = (s.scalars(select(Candidate).where(Candidate.run_id == r)).one().id for r in (1, 2))
-    doubled = ['sh', '-c', 'echo METRIC score=$(( 2 * $(wc -l < solve.txt) )); echo METRIC size=1']
+    doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
     write_toml(Path(campaign.path), HARNESS_APPEND, max_implementers=2, evaluate=doubled)
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
@@ -1715,7 +1714,7 @@ def test_after_a_new_evaluator_no_run_starts_from_the_best_until_every_keep_is_m
     with db.session() as s:
         older, newer = (s.scalars(select(Candidate).where(Candidate.run_id == r)).one().id for r in (1, 2))
         assert [s.get_one(Candidate, c).verdict for c in (older, newer)] == [Outcome.KEEP, Outcome.KEEP]
-    doubled = ['sh', '-c', 'echo METRIC score=$(( 2 * $(wc -l < solve.txt) )); echo METRIC size=1']
+    doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
     write_toml(Path(campaign.path), HARNESS_APPEND, max_implementers=2, evaluate=doubled)
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
@@ -2107,7 +2106,7 @@ def test_a_run_frees_its_slot_when_its_implementer_ends_and_its_idea_settles_onc
 ) -> None:
     """A run frees its implementer slot when its implementer ends, and its idea settles only when the commits are scored."""
     go = tmp_path / 'go'
-    gated = f'while [ ! -f {go} ]; do sleep 0.05; done; echo METRIC score=$(wc -l < solve.txt); echo METRIC size=1'
+    gated = f'while [ ! -f {go} ]; do sleep 0.05; done; {reports(score="$(wc -l < solve.txt)", size="1")}'
     set_config(db, campaign, evaluate=['sh', '-c', gated])
     first, second = add_ideas(db, campaign, 'first', 'second')
     with db.session() as s:  # the new evaluator never measured the baseline, so only a pin makes it a base
@@ -2963,7 +2962,7 @@ def test_a_stopped_campaign_is_measured_again_only_on_request(
 ) -> None:
     """Measuring a suspicious result again is part of the review after a campaign stops. The head and the bars that
     runs need are moot then: a new evaluator measures nothing unasked."""
-    doubled = ['sh', '-c', 'echo METRIC score=$(( 2 * $(wc -l < solve.txt) )); echo METRIC size=1']
+    doubled = ['sh', '-c', reports(score='$(( 2 * $(wc -l < solve.txt) ))', size='1')]
     write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=doubled)
     with db.session() as s:
         sync(s, s.get_one(Campaign, campaign.id))

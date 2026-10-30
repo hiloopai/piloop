@@ -8,7 +8,6 @@ import signal
 import stat
 import subprocess
 import sys
-import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -21,13 +20,11 @@ from sqlalchemy import select
 from piloop import proc
 from piloop.daemon.serve import (
     SERVE_ARGV,
-    SecretsError,
     _mtime_ns,
     acquire,
     carried_env,
     restart,
     running_pid,
-    secrets,
     service_unit,
 )
 from piloop.db.models import AgentSession, AgentSessionState
@@ -183,23 +180,14 @@ def test_detach_survives_the_cli_and_stop_ends_it(tmp_path: Path) -> None:
 def test_a_daemon_backs_up_a_database_behind_it_before_it_migrates_and_logs_where(tmp_path: Path) -> None:
     cfg = Settings(home=tmp_path / 'home')
     cfg.home.mkdir()
-    command.upgrade(alembic(cfg.home / 'piloop.db'), '0053')
+    command.upgrade(alembic(cfg.home / 'piloop.db'), '0067')
     started = subprocess.run([*PILOOP, 'serve', '--detach'], capture_output=True, text=True, env=env_for(cfg.home))
     assert started.returncode == 0, started.stderr
     pid = int(cfg.pid_file.read_text())
-    [backup] = cfg.home.glob('piloop.db.bak-0053-*')
+    [backup] = cfg.home.glob('piloop.db.bak-0067-*')
     assert piloop(cfg.home, 'stop').returncode == 0
     wait_until(lambda: not alive(pid))
     assert re.search(rf'piloop\.start .*backup={re.escape(str(backup))}', cfg.log_file.read_text())
-
-
-def test_a_detached_start_whose_secrets_command_fails_fails_too(tmp_path: Path) -> None:
-    cfg = Settings(home=tmp_path / 'home')
-    env = env_for(cfg.home) | {'PILOOP_SECRETS_COMMAND': 'echo denied >&2; exit 3'}
-    started = subprocess.run([*PILOOP, 'serve', '--detach'], capture_output=True, text=True, env=env, timeout=60)
-    assert started.returncode == 1 and 'before taking' in started.stderr, 'the child failed before the lock'
-    log = cfg.log_file.read_text()
-    assert 'denied' in log and 'PILOOP_SECRETS_COMMAND (echo denied >&2; exit 3) failed: exit 3' in log
 
 
 def test_restart_execs_the_same_process_keeping_its_environment(tmp_path: Path) -> None:
@@ -212,7 +200,7 @@ def test_restart_execs_the_same_process_keeping_its_environment(tmp_path: Path) 
     restarted = piloop(cfg.home, 'restart', '--timeout', LOADED)
     assert (restarted.returncode, restarted.stdout.strip()) == (0, f'daemon pid {pid} restarted')
     assert running_pid(cfg) == pid and alive(pid), 'the same process, so systemd or launchd still holds it'
-    assert (proc.environment(pid) or {}).get('PILOOP_TEST_MARKER') == 'from-the-unit'
+    assert psutil.Process(pid).environ().get('PILOOP_TEST_MARKER') == 'from-the-unit'
     assert cfg.code_file.read_text() == code_digest(), 'the code it runs, for piloop doctor'
     # it answers on its socket inside its start span, which the log gets when the span ends
     wait_until(lambda: cfg.log_file.read_text().count('piloop.start') == 2)
@@ -359,16 +347,14 @@ def test_the_service_unit_carries_the_settings_of_the_shell_and_no_other_variabl
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     carried = {
-        'PILOOP_SECRETS_COMMAND': "op inject -i '%h/keys'",
         'PILOOP_CLI': 'my <cli> & "co"',
-        'PILOOP_CAMPAIGN_RUNTIME': 'subprocess',
+        'PILOOP_CAMPAIGN_PLUGINS__RUNTIME__USE': 'subprocess',
         'OTEL_EXPORTER_OTLP_ENDPOINT': 'http://localhost:4318',
         'CLAUDE_CONFIG_DIR': '/home/me/claude work',
         'CODEX_HOME': '/home/me/100% codex',
     }
     dropped = {
         'PILOOP_ACTOR': 'orchestrator',
-        'PILOOP_UNITS_FILE': '/home/me/units.json',
         'ANTHROPIC_API_KEY': 'sk-secret',
         'TMUX': '/tmp/tmux-1000/default,1,0',
     }
@@ -382,7 +368,6 @@ def test_the_service_unit_carries_the_settings_of_the_shell_and_no_other_variabl
         "the daemon needs piloop's settings; it must not sign as an agent or get a key that the shell happens to hold"
     )
     unit = service_unit(cfg, BUILT_IN, 'linux')
-    assert 'Environment="PILOOP_SECRETS_COMMAND=op inject -i \'%%h/keys\'"' in unit
     assert 'Environment="PILOOP_CLI=my <cli> & \\"co\\""' in unit
     assert 'Environment="CODEX_HOME=/home/me/100%% codex"' in unit
     assert not any(key in unit for key in dropped)
@@ -398,45 +383,6 @@ def test_the_service_unit_carries_the_variables_that_the_homes_of_the_harnesses_
     assert carried_env([mine]) == ('OTEL_EXPORTER_OTLP_ENDPOINT', 'MINE_HOME')
     env = plistlib.loads(service_unit(Settings(home=tmp_path), [*BUILT_IN, mine], 'darwin').encode())
     assert list(env['EnvironmentVariables']) == ['PILOOP_HOME', 'PATH', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'MINE_HOME']
-
-
-def test_the_secrets_command_prints_name_value_lines() -> None:
-    assert secrets("printf 'EXA_API_KEY=e-1\\n\\nX_2=a=b\\n'") == {'EXA_API_KEY': 'e-1', 'X_2': 'a=b'}
-    assert secrets('printf A=1') == {'A': '1'}, 'no trailing newline needed'
-
-
-@pytest.mark.parametrize(
-    ('command', 'error'),
-    [
-        ('exit 3', 'exit 3'),
-        ('true', 'printed no NAME=value line'),
-        ("printf 'A=hunter2\\nhunter2\\n'", 'line 2 is not NAME=value'),
-        ("printf '1A=hunter2\\n'", 'line 1 is not NAME=value'),
-        ("printf 'A=\\n'", 'A is empty'),
-        ("printf 'A=hunter2 x\\n'", 'A contains whitespace'),
-        ("printf 'A=hunter2\\r\\n'", 'A contains whitespace'),
-        ("printf 'A=hunter2\\nA=hunter2\\n'", 'A is printed twice'),
-    ],
-)
-def test_a_secrets_command_that_fails_or_prints_anything_else_is_refused_without_its_values(
-    command: str, error: str
-) -> None:
-    with pytest.raises(SecretsError) as e:
-        secrets(command)
-    assert str(e.value) == error
-
-
-def test_a_secrets_command_that_cannot_start_or_hangs_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr('piloop.daemon.serve.SECRETS_TIMEOUT_SECONDS', 0.2)
-    started = time.monotonic()
-    with pytest.raises(SecretsError, match=r'^timed out after 0\.2s$'):
-        secrets('sleep 30 & sleep 30')
-    assert time.monotonic() - started < 10, 'the whole group is killed, not just sh'
-    monkeypatch.setenv('PATH', str(tmp_path))
-    with pytest.raises(SecretsError, match='^could not start: '):
-        secrets('true')
 
 
 def _urls(cfg: Settings) -> list[str]:

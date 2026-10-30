@@ -129,7 +129,7 @@ from piloop.ids import (
 )
 from piloop.net import Refusal, tokens
 from piloop.net.acting import MayNotAct, acts_as
-from piloop.net.server import App, asked, authorized, changed, served
+from piloop.net.server import App, asked, authorized, changed
 from piloop.net.tokens import Caller
 from piloop.plugins import limits as limits_module
 from piloop.plugins.campaign_type.kit.candidates.references import ImportRefused
@@ -208,7 +208,7 @@ def acting(request: Request, caller: Annotated[Caller, Depends(reader)]) -> Acto
     except ValidationError as e:
         raise HTTPException(422, f'{named!r} is not an actor, such as orchestrator or implementer#12') from e
     try:
-        return acts_as(caller, actor, served(request).tokens.tokenless)
+        return acts_as(caller, actor)
     except MayNotAct as e:
         raise Refusal(HTTPStatus.FORBIDDEN, Problem.FORBIDDEN, str(e)) from e
 

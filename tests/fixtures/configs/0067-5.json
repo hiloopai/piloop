@@ -1,0 +1,257 @@
+{
+  "context": [
+    "dir/file89.md",
+    "dir/file90.md"
+  ],
+  "evaluate": [
+    "name_81",
+    "/path/82.sh"
+  ],
+  "evaluate_timeout": 7200.0,
+  "link": [
+    "text 86",
+    "dir/file87",
+    "name_88"
+  ],
+  "metrics": [
+    {
+      "direction": "higher",
+      "floor": null,
+      "margin": null,
+      "name": "name_2",
+      "role": "primary",
+      "track": null
+    },
+    {
+      "direction": "lower",
+      "floor": 1.0,
+      "margin": 1.0,
+      "name": "name_3",
+      "role": "guardrail",
+      "track": null
+    },
+    {
+      "direction": "higher",
+      "floor": null,
+      "margin": 1.0,
+      "name": "name_5",
+      "role": "guardrail",
+      "track": null
+    }
+  ],
+  "name": "campaign-1",
+  "plugins": {
+    "stop_rule": {
+      "max_hours": 72.0,
+      "plateau": 30,
+      "hold_at": {
+        "spend": 2000.0
+      },
+      "while_held": "run"
+    },
+    "harness": {
+      "claude": {
+        "model": "name_84"
+      },
+      "codex": {
+        "model": "name_83",
+        "max_concurrent": 4
+      },
+      "use": [
+        "codex"
+      ]
+    },
+    "role": {
+      "implementer": {
+        "addendum": null,
+        "explore_every": 4,
+        "files": "nothing",
+        "harnesses": [
+          "codex"
+        ],
+        "max_concurrent": 3,
+        "mcp": [
+          "firecrawl"
+        ],
+        "model": null,
+        "prompt": null,
+        "recovery_requeues": 2,
+        "runs": true,
+        "runtime": null,
+        "takes": null,
+        "timeout": 28800.0,
+        "writes": [
+          "commits",
+          "comments(finding) on your idea",
+          "comments(note) on your run"
+        ]
+      },
+      "research": {
+        "addendum": null,
+        "files": "ideas",
+        "harnesses": [
+          "codex"
+        ],
+        "incident_prompt": null,
+        "interval": 0.0,
+        "max_concurrent": 1,
+        "max_ideas": 2,
+        "mcp": [
+          "exa",
+          "firecrawl",
+          "xai"
+        ],
+        "model": null,
+        "prompt": null,
+        "routine_prompt": null,
+        "runs": false,
+        "runtime": null,
+        "timeout": 7200.0,
+        "writes": [
+          "seeds via idea develop, or their status to rejected with a note",
+          "ideas via idea add",
+          "comments(finding, escalation) on the campaign",
+          "comments(note) on an idea"
+        ],
+        "triggers": [
+          "research_low_water",
+          "seed"
+        ]
+      },
+      "scout": {
+        "addendum": null,
+        "files": "seeds",
+        "harnesses": [
+          "codex"
+        ],
+        "incident_prompt": null,
+        "interval": 21600.0,
+        "max_concurrent": 1,
+        "max_ideas": 1,
+        "mcp": [
+          "xai",
+          "exa"
+        ],
+        "model": null,
+        "prompt": null,
+        "routine_prompt": null,
+        "runs": false,
+        "runtime": null,
+        "seeds": 3,
+        "timeout": 1800.0,
+        "writes": [
+          "seeds via idea seed (at most the count under Context)",
+          "techniques (the library), by INSERT",
+          "one comments(finding) on the campaign"
+        ],
+        "triggers": [
+          "cron"
+        ]
+      },
+      "watchdog": {
+        "addendum": "dir/file85.md",
+        "files": "seeds",
+        "harnesses": [
+          "codex"
+        ],
+        "incident_prompt": null,
+        "interval": 1800.0,
+        "max_concurrent": 1,
+        "max_ideas": 1,
+        "mcp": [],
+        "model": null,
+        "prompt": null,
+        "routine_prompt": null,
+        "runs": false,
+        "runtime": null,
+        "timeout": 1800.0,
+        "writes": [
+          "comments(escalation, finding, note)",
+          "lessons on the campaign once it stopped",
+          "seeds via idea seed"
+        ],
+        "triggers": [
+          "run_failed",
+          "dead_at_startup"
+        ]
+      }
+    },
+    "runtime": {
+      "use": "subprocess"
+    },
+    "trigger": {
+      "research_low_water": {
+        "provider": "low_water",
+        "buffer": 2
+      }
+    },
+    "fact_source": {
+      "command": {
+        "command": [
+          "sh",
+          "-c",
+          "out=$(\"$@\") && printf '{\"metrics\": {\"billing_usd\": %s}}\\n' \"$out\" >> \"$PILOOP_RESULT_FILE\"",
+          "sh",
+          "/path/98",
+          "--flag99",
+          "/path/100.py"
+        ],
+        "metrics": [
+          "billing_usd"
+        ],
+        "interval": 300.0,
+        "notices": {
+          "billing_usd": [
+            200.0,
+            400.0,
+            600.0,
+            800.0,
+            1000.0,
+            1300.0,
+            1600.0,
+            1800.0
+          ]
+        }
+      },
+      "use": [
+        "campaign",
+        "optimization",
+        "command",
+        "spend"
+      ],
+      "spend": {
+        "facts": [
+          "billing_usd"
+        ]
+      }
+    },
+    "mcp_server": {
+      "exa": {
+        "headers_env": {
+          "x-api-key": "EXA_API_KEY"
+        },
+        "url": "https://example.com/91",
+        "provider": "http"
+      },
+      "firecrawl": {
+        "bearer_token_env": "FIRECRAWL_API_KEY",
+        "url": "https://example.com/92",
+        "provider": "http"
+      },
+      "xai": {
+        "command": [
+          "name_93",
+          "/path/94.py",
+          "text 95",
+          "--flag96",
+          "text 97"
+        ],
+        "env": [
+          "XAI_API_KEY"
+        ],
+        "provider": "stdio"
+      }
+    }
+  },
+  "tracks": {}
+}

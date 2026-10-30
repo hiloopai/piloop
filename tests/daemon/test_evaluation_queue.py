@@ -28,6 +28,7 @@ from tests.conftest import (
     bare_config,
     baseline,
     factory,
+    reports,
     run_all,
     serving,
     wait_until,
@@ -39,7 +40,7 @@ from tests.daemon.test_scheduler import add_ideas, make_scheduler
 
 HARNESS_OWN_LINE = '#!/bin/sh\nbasename "$(dirname "$PWD")" >> solve.txt\ngit commit -qam "own line"\n'
 """Each run appends its own id (``runs/<id>/worktree``), so each run makes a tree of its own."""
-SCORE = 'echo METRIC score=$(wc -l < solve.txt); echo METRIC size=$(wc -c < solve.txt)'
+SCORE = reports(score='$(wc -l < solve.txt)', size='$(wc -c < solve.txt)')
 
 
 def held_evaluate(tmp_path: Path, then: str = SCORE) -> list[str]:

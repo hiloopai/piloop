@@ -41,7 +41,6 @@ LEAVES: dict[str, frozenset[str] | None] = {
     ),
     'plugins/campaign_type/kit/backlog/role/scout.py': frozenset({'cron'}),
     'deprecated.py': None,
-    'plugins/*/bridges.py': None,
     'plugins/campaign_type/kit/backlog/cli.py': frozenset({'seed'}),
     'plugins/role/contract.py': frozenset({'seed', 'sql', 'orchestrator'}),
     'plugins/role/orchestrator.py': frozenset({'seed', 'sql'}),
@@ -59,8 +58,7 @@ LEAVES: dict[str, frozenset[str] | None] = {
 - the backlog component's ``role/research.py``: the default ``model`` of research.
 - ``plugins/role/`` and each component's ``role/``: the default ``triggers`` of the built-in roles, named by kind as in
   ``piloop.toml``: a class would load its provider, and with it the database, when the config models load.
-- ``deprecated.py`` and each capability's ``bridges.py``: the bridges rewrite the keys of earlier releases, which named
-  built-in roles and triggers.
+- ``deprecated.py``: the bridges rewrite the keys of earlier releases, which named built-in roles and triggers.
 - the backlog's ``cli.py``, ``plugins/role/contract.py`` and ``plugins/role/orchestrator.py``: the commands ``piloop
   idea seed`` and ``piloop sql``, and ``orchestrator`` among the names that a new role may not take: the outside
   orchestrator signs with it.

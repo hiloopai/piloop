@@ -77,8 +77,7 @@ uv run python evaluate.py
 
 A non-zero exit, a missing or unknown metric, a value that is not a number, a second line, or a run longer than
 `evaluate_timeout` seconds makes the commit a `crash`. Print the reason on stderr. Fix the seeds and the data splits,
-so that the same code gets the same score. Until 0.5.0, a command that prints `METRIC <name>=<value>` lines instead
-still works, and piloop posts one inbox note for its evaluator.
+so that the same code gets the same score.
 
 <Warning>
   piloop runs the evaluate command from the commit that it measures. An implementer that edits the command changes its

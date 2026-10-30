@@ -246,11 +246,6 @@ class Settings(BaseSettings):
     time>`` next to it, the database as that revision left it. A new copy removes the oldest beyond this number. 0
     writes none. Each copy is about the size of the database."""
 
-    secrets_command: str | None = None
-    """A shell command that prints ``NAME=value`` lines, which the daemon adds to its environment when it starts and on
-    every ``piloop restart``. ``piloop secret set`` replaces it (``Daemon._load_secrets``): until then, a secret that the
-    home lacks is read from that environment."""
-
     otel_exporter_otlp_endpoint: str | None = Field(default=None, validation_alias='OTEL_EXPORTER_OTLP_ENDPOINT')
     """The standard OTLP endpoint. piloop exports traces only when this is set."""
 

@@ -20,7 +20,7 @@ from alembic.operations import Operations
 from sqlalchemy import text
 
 from piloop.db.models import Base
-from piloop.db.triggers import campaigns, changelog, ended, fts, immutable, legacy, links, provenance, roles
+from piloop.db.triggers import campaigns, changelog, ended, fts, immutable, links, provenance, roles
 from piloop.db.triggers.ddl import Event, Trigger
 from piloop.db.triggers.provenance import DAEMON_ACTOR, TRACKED_TABLES
 
@@ -70,23 +70,11 @@ def recreate(op: Operations, table: str, triggers: Iterable[Trigger] = PERSISTEN
 
     A package's revision passes its schema's triggers; piloop's revisions create piloop's own. A trigger that
     ``requires`` a table is created only when that table exists at this point of the migration chain, so a batch
-    migration does not need to know which indexes exist yet. Before a renaming of the schema, a trigger has the names
-    of that schema (``legacy``).
+    migration does not need to know which indexes exist yet.
     """
-    old = legacy.stages(op)
     for trigger in (t for t in triggers if not t.temp):
-        _, on, requires, sql = legacy.rendered(trigger, old)
-        if on == table and (requires is None or _exists(op, requires)):
-            op.execute(sql)
-
-
-def install(op: Operations, names: Iterable[str], triggers: Iterable[Trigger] = PERSISTENT) -> None:
-    """Create the persistent ones of ``triggers`` that ``names`` lists, in the names of the schema at hand (``legacy``)."""
-    wanted, old = set(names), legacy.stages(op)
-    for trigger in (t for t in triggers if not t.temp):
-        name, _, _, sql = legacy.rendered(trigger, old)
-        if name in wanted:
-            op.execute(sql)
+        if trigger.table == table and (trigger.requires is None or _exists(op, trigger.requires)):
+            op.execute(trigger.sql())
 
 
 def _exists(op: Operations, table: str) -> bool:

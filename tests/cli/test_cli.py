@@ -85,11 +85,12 @@ from tests.conftest import (
     hold_lock,
     launched,
     measuring,
+    reports_py,
     serving_api,
     wait_until,
 )
 from tests.daemon.test_serve import alive
-from tests.db.test_migrations import TOO_OLD, alembic
+from tests.db.test_migrations import TOO_OLD, alembic, at_floor
 from tests.test_lease import Recorder
 from tests.usage.test_usage import SAID_SESSIONS
 
@@ -488,7 +489,7 @@ def test_init_blank_then_register_then_reread(tmp_path: Path, out) -> None:
     assert text.startswith('wrote .gitignore\nwrote brief.md\nwrote evaluate.py\nwrote piloop.toml\n')
     assert 'The evaluate command is the referee' in text and 'still the template stub' in text
     assert Repo(path).head.commit.summary == 'campaign: baseline'
-    (path / 'evaluate.py').write_text('print("METRIC score=2")\n')
+    (path / 'evaluate.py').write_text(reports_py(score=2))
     run_cli(['init', str(path)])
     text = out()
     assert 'campaign fresh #1 registered; measuring baseline candidate#1' in text and 'wrote' not in text
@@ -506,7 +507,7 @@ def test_init_names_the_campaign_once(tmp_path: Path, out) -> None:
     path = tmp_path / '2024'
     run_cli(['init', str(path)])
     assert 'name = "campaign-2024"' in (path / 'piloop.toml').read_text(), 'a name of digits would be an id'
-    (path / 'evaluate.py').write_text('print("METRIC score=2")\n')
+    (path / 'evaluate.py').write_text(reports_py(score=2))
     with pytest.raises(SystemExit, match="^'7' is no campaign name: a reference of digits names a campaign by its id$"):
         run_cli(['init', '--name', '7', str(path)])
     with pytest.raises(SystemExit, match=r"""^'a b' is no campaign name: use letters, digits, "\.", "_" and "-"$"""):
@@ -524,7 +525,7 @@ def test_init_example(tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch) -> N
     template = tmp_path / 'templates' / 'demo'
     template.mkdir(parents=True)
     (template / 'piloop.toml').write_text(
-        'name = "demo"\nevaluate = ["sh", "-c", "echo METRIC score=3"]\n'
+        'name = "demo"\nevaluate = ["python3", "-c", "import json, os; open(os.environ[\'PILOOP_RESULT_FILE\'], \'a\').write(json.dumps({\'metrics\': {\'score\': 3}}) + chr(10))"]\n'
         '[[metrics]]\nname = "score"\ndirection = "higher"\nrole = "primary"\n[plugins.harness.pi]\nmodel = "m"\n'
     )
     monkeypatch.setattr(campaign_cli, 'TEMPLATES', tmp_path / 'templates')
@@ -536,7 +537,7 @@ def test_init_example(tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(SystemExit, match="name 'demo' is already used by"):
         run_cli(['init', '--example', 'demo', str(tmp_path / 'e')])
     toml = template / 'piloop.toml'
-    toml.write_text(toml.read_text().replace('"sh"', '"false"').replace('"demo"', '"broken"'))
+    toml.write_text(toml.read_text().replace('"python3"', '"false"').replace('"demo"', '"broken"'))
     with pytest.raises(SystemExit, match='^the baseline failed to evaluate'):
         run_cli(['init', '--example', 'demo', str(tmp_path / 'broken')])
 
@@ -546,7 +547,7 @@ def test_init_names_a_ratio_primary_in_the_baseline_line(tmp_path: Path, out, mo
     template = tmp_path / 'templates' / 'ratio'
     template.mkdir(parents=True)
     (template / 'piloop.toml').write_text(
-        'name = "ratio"\nevaluate = ["sh", "-c", "echo METRIC tokens=512; echo METRIC seconds=2"]\n'
+        "name = \"ratio\"\nevaluate = [\"python3\", \"-c\", \"import json, os; open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps({'metrics': {'tokens': 512, 'seconds': 2}}) + chr(10))\"]\n"
         '[[metrics]]\nname = "tokens_per_s"\ndirection = "higher"\nrole = "primary"\n'
         'ratio = { numerator = "tokens", denominator = "seconds" }\n'
         '[[metrics]]\nname = "tokens"\ndirection = "higher"\n'
@@ -1309,12 +1310,6 @@ def test_agent_messages_takes_the_queue_as_the_hook_of_the_harness_reads_it(
         }
     }
     assert json.loads(out()) == hook
-    queue.write_text('"[piloop] stop after this commit"\n"and say so"\n')
-    run_cli(['agent', 'messages', '--format', 'claude-hook'])
-    assert json.loads(out()) == hook, 'the hook of an agent that 0.3 started'
-    queue.write_text('"one"\n')
-    run_cli(['agent', 'messages', '--format', 'lines'])
-    assert out() == 'one\n'
     queue.write_text('"two"\n')
     with pytest.raises(ValueError, match="unknown harness provider 'nope'"):
         run_cli(['agent', 'messages', '--harness', 'nope'])
@@ -1889,16 +1884,16 @@ def test_migrate_backs_up_the_database_first_and_says_where(out, monkeypatch: py
     """``piloop migrate`` names the copy it wrote before it migrated, and the newest one when there is nothing to do.
     ``migration_backups`` in config.toml (here its variable) sets how many it keeps."""
     database = common.settings.home / 'piloop.db'
-    command.downgrade(alembic(database), '0053')
+    at_floor(database)
     run_cli(['migrate'])
-    [backup] = database.parent.glob('piloop.db.bak-0053-*')
-    assert out().strip() == f'schema: core 0053 → {HEAD}; backup of core 0053: {backup}'
+    [backup] = database.parent.glob('piloop.db.bak-0067-*')
+    assert out().strip() == f'schema: core 0067 → {HEAD}; backup of core 0067: {backup}'
     run_cli(['migrate'])
     assert out().strip() == f'schema: {HEADS}, current; the newest backup: {backup}'
-    command.downgrade(alembic(database), '0053')
+    at_floor(database)
     monkeypatch.setattr(common, 'settings', common.settings.model_copy(update={'migration_backups': 0}))
     run_cli(['migrate'])
-    assert out().strip() == f'schema: core 0053 → {HEAD}; no backup (migration_backups = 0)'
+    assert out().strip() == f'schema: core 0067 → {HEAD}; no backup (migration_backups = 0)'
 
 
 def test_migrate_prints_a_backup_path_wider_than_the_console_on_one_line(out, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1908,10 +1903,10 @@ def test_migrate_prints_a_backup_path_wider_than_the_console_on_one_line(out, mo
     home.mkdir()
     (common.settings.home / 'piloop.db').rename(home / 'piloop.db')
     monkeypatch.setattr(common, 'settings', common.settings.model_copy(update={'home': home}))
-    command.downgrade(alembic(home / 'piloop.db'), '0053')
+    at_floor(home / 'piloop.db')
     run_cli(['migrate'])
-    [backup] = home.glob('piloop.db.bak-0053-*')
-    assert out().strip() == f'schema: core 0053 → {HEAD}; backup of core 0053: {backup}'
+    [backup] = home.glob('piloop.db.bak-0067-*')
+    assert out().strip() == f'schema: core 0067 → {HEAD}; backup of core 0067: {backup}'
     run_cli(['migrate'])
     assert out().strip() == f'schema: {HEADS}, current; the newest backup: {backup}'
 
@@ -1965,7 +1960,6 @@ def test_upgrade_reinstalls_migrates_and_restarts_the_daemon(
         f'ok    daemon: pid {pid} runs the installed {installed()}',
         f'ok    database: {common.settings.home}/piloop.db at schema {HEADS}, current',
         IsStr(regex=r'ok    plugins: (\d+ [\w ]+, )*\d+ [\w ]+; all built in'),
-        'ok    secrets: from `piloop secret set` (no secrets_command)',
         f'ok    skills (pi): current in {common.settings.agent_skills_dir}',
     ], 'the new code checks the install last'
     assert calls() == [['uv', 'tool', 'upgrade', '--reinstall-package', 'piloop', 'piloop']]
@@ -1991,7 +1985,6 @@ def test_upgrade_of_a_checkout_install_without_a_daemon_creates_the_schema(fake_
         'ok    daemon: not running',
         f'ok    database: {common.settings.home}/piloop.db at schema {HEADS}, current',
         IsStr(regex=r'ok    plugins: (\d+ [\w ]+, )*\d+ [\w ]+; all built in'),
-        'ok    secrets: from `piloop secret set` (no secrets_command)',
         f'ok    skills (Agent Skills): current in {common.settings.agent_skills_dir}',
     ]
     assert (
@@ -2209,7 +2202,7 @@ def revision_of(database: Path) -> str:
 
 def test_an_in_place_restart_holds_the_lock_itself_and_migrates() -> None:
     database = common.settings.home / 'piloop.db'
-    command.downgrade(alembic(database), '0053')
+    at_floor(database)
     fd = acquire(common.settings)
     try:
         migrate(
@@ -2243,8 +2236,8 @@ def refuse_each(argv_list: tuple[list[str], ...], database: Path, match: str) ->
 
 def test_the_commands_that_read_refuse_a_database_behind_this_piloop_and_change_nothing(out) -> None:
     database = common.settings.home / 'piloop.db'
-    command.downgrade(alembic(database), '0053')
-    behind = rf'^{re.escape(str(database))} is at schema core 0053, and this piloop .* knows {HEADS}'
+    at_floor(database)
+    behind = rf'^{re.escape(str(database))} is at schema core 0067, and this piloop .* knows {HEADS}'
     refuse_each(READERS, database, rf'{behind}: run `piloop migrate`, which backs it up first$')
     for daemon in hold_lock(common.settings.pid_file):  # a daemon of the older piloop, however it was started
         refuse_each(
@@ -2253,7 +2246,7 @@ def test_the_commands_that_read_refuse_a_database_behind_this_piloop_and_change_
             rf'{behind}: the daemon \(pid {daemon.pid}\) runs an older piloop. `piloop restart` restarts it on this'
             ' piloop, which migrates it$',
         )
-    assert revision_of(database) == '0053' and not list(database.parent.glob('piloop.db.bak-*'))
+    assert revision_of(database) == '0067' and not list(database.parent.glob('piloop.db.bak-*'))
 
 
 def test_an_agent_is_told_to_retry_while_the_daemon_upgrades_and_never_migrates_or_upgrades(
@@ -2261,10 +2254,10 @@ def test_an_agent_is_told_to_retry_while_the_daemon_upgrades_and_never_migrates_
 ) -> None:
     """An agent acts on what a refusal says to run, so the refusal tells it to wait, and the commands refuse it."""
     database = common.settings.home / 'piloop.db'
-    command.downgrade(alembic(database), '0053')
+    at_floor(database)
     home, tools = common.settings.home, common.settings.uv_tool_dir
     monkeypatch.setattr(common, 'settings', Settings(home=home, uv_tool_dir=tools, actor='implementer#3'))
-    behind = rf'^{re.escape(str(database))} is at schema core 0053, and this piloop .* knows {HEADS}'
+    behind = rf'^{re.escape(str(database))} is at schema core 0067, and this piloop .* knows {HEADS}'
     retry = rf'{behind}: the daemon is being upgraded; retry in a minute$'
     refuse_each((['sql', 'SELECT 1'], ['history']), database, retry)
     for _ in hold_lock(common.settings.pid_file):
@@ -2272,7 +2265,7 @@ def test_an_agent_is_told_to_retry_while_the_daemon_upgrades_and_never_migrates_
     calls = fake_bins('uv')
     for verb in ('migrate', 'upgrade'):
         refuse_each(([verb],), database, rf'^`piloop {verb}` is not for agents \(PILOOP_ACTOR=implementer#3\)$')
-    assert calls() == [] and revision_of(database) == '0053'
+    assert calls() == [] and revision_of(database) == '0067'
     monkeypatch.setattr(common, 'settings', Settings(home=home, uv_tool_dir=tools, actor='orchestrator'))
     with pytest.raises(SystemExit, match='^piloop is not installed as a uv tool'):
         run_cli(['upgrade'])  # past the refusal of an agent
@@ -2294,7 +2287,7 @@ def test_the_commands_that_read_refuse_a_database_that_a_newer_piloop_migrated()
 
 
 def too_old(monkeypatch: pytest.MonkeyPatch, database: Path) -> str:
-    """Put ``database`` at 0001 under the releases of a piloop 0.4 (``TOO_OLD``), in this process and in the new code
+    """Put ``database`` at 0067 under the releases of a piloop 0.4 (``TOO_OLD``), in this process and in the new code
     that ``piloop upgrade`` runs, and return the start of the refusal."""
     monkeypatch.setattr(session, 'RELEASES', TOO_OLD)
     patched = (
@@ -2304,9 +2297,9 @@ def too_old(monkeypatch: pytest.MonkeyPatch, database: Path) -> str:
     monkeypatch.setattr(install, 'PILOOP_ARGV', (sys.executable, '-P', '-c', patched))
     for name in [n for n in heads() if n != CORE]:  # a plugin's revisions go first: they change its tables
         command.downgrade(alembic_config(f'sqlite:///{database}', name, disk(database.parent)), 'base')
-    command.downgrade(alembic(database), '0001')
+    at_floor(database)
     return (
-        rf'{re.escape(str(database))} is from piloop 0\.1 \(schema revision core 0001\), and this piloop .* migrates from'
+        rf'{re.escape(str(database))} is from piloop 0\.1 \(schema revision core 0067\), and this piloop .* migrates from'
         r' piloop 0\.3'
     )
 
@@ -2332,7 +2325,7 @@ def test_every_command_refuses_a_database_older_than_the_previous_release_and_ch
     assert re.search(rf'^FAIL  database: {found}.*\n +fix: {fix}$', out(), re.MULTILINE), (
         'doctor reports it the same way'
     )
-    assert revision_of(database) == '0001' and not list(database.parent.glob('piloop.db.bak-*'))
+    assert revision_of(database) == '0067' and not list(database.parent.glob('piloop.db.bak-*'))
 
 
 def test_upgrade_keeps_the_old_daemon_and_the_database_when_the_database_is_older_than_the_previous_release(
@@ -2391,22 +2384,22 @@ def test_init_starts_the_daemon_which_creates_a_missing_database_and_the_readers
 def test_serve_and_migrate_refuse_under_a_daemon_that_a_service_manager_started(out) -> None:
     """The lock is the daemon's, whoever started it: systemd and launchd run `piloop serve`, which takes it."""
     database = common.settings.home / 'piloop.db'
-    command.downgrade(alembic(database), '0053')
+    at_floor(database)
     for daemon in hold_lock(
         common.settings.pid_file
     ):  # not a child of `serve --detach`: as a service manager starts it
         refuse_each(
             (['serve'], ['migrate']),
             database,
-            rf'^the daemon \(pid {daemon.pid}\) runs an older piloop: the database is at schema core 0053, and'
+            rf'^the daemon \(pid {daemon.pid}\) runs an older piloop: the database is at schema core 0067, and'
             rf' this piloop .* would migrate it to {HEADS} under the daemon\. Run `piloop upgrade`',
         )
         with pytest.raises(SystemExit, match=rf'a daemon is already running \(pid {daemon.pid}'):
             run_cli(['serve', '--detach'])
-    assert revision_of(database) == '0053' and not list(database.parent.glob('piloop.db.bak-*'))
+    assert revision_of(database) == '0067' and not list(database.parent.glob('piloop.db.bak-*'))
     run_cli(['migrate'])
-    [backup] = database.parent.glob('piloop.db.bak-0053-*')
-    assert out().strip() == f'schema: core 0053 → {HEAD}; backup of core 0053: {backup}', (
+    [backup] = database.parent.glob('piloop.db.bak-0067-*')
+    assert out().strip() == f'schema: core 0067 → {HEAD}; backup of core 0067: {backup}', (
         'without the daemon, it migrates'
     )
     for _ in hold_lock(common.settings.pid_file):

@@ -6,17 +6,13 @@ import sys
 from functools import partial
 from types import FrameType
 
-from piloop import deprecated
 from piloop.actor import System
 from piloop.daemon.api import Handlers, daemon_state, with_api
 from piloop.daemon.scheduler import Scheduler
 from piloop.daemon.serve import (
     RESTART_SIGNAL,
-    SECRETS_COMMAND_ENV,
-    SecretsError,
     acquire,
     running_pid,
-    secrets,
     serve_argv,
 )
 from piloop.db.models import TARGET_KINDS, utcnow
@@ -129,13 +125,6 @@ class Daemon:
             network.NetworkHost(self._tokens, HomeSecrets(self.db, SECRETS.selected(cfg.providers)))
         )
         self._servers: list[Server] = []
-        try:
-            # Before the remote opens: its credentials can come from the secrets. And before the lock, because
-            # `serve --detach` reports a start when the child holds it, so a failing secrets command must fail first.
-            self._supplied = self._load_secrets()
-        except SystemExit:
-            self.db.close()
-            raise
         self._cas = cas.CAS.selected(cfg.providers).open(cfg.home)
         try:  # after the CAS opens: a revision may move data into it
             self._backup = migrate(
@@ -195,7 +184,6 @@ class Daemon:
             with self.tracer.span(
                 'piloop.start',
                 db=self._cfg.database_url,
-                secrets=self._supplied,
                 backup=None if self._backup is None else str(self._backup),
             ) as span:
                 self._listen(span)
@@ -221,23 +209,6 @@ class Daemon:
             self._cfg.pid_file.unlink(missing_ok=True)
             self._cfg.code_file.unlink(missing_ok=True)
             os.close(lock)
-
-    @deprecated.until('0.5.0', 'secrets_command: agents take their secrets from [plugins.secrets]; delete this method')
-    def _load_secrets(self) -> str | None:
-        """Add the secrets command's output to this process's environment, and return the variable names.
-
-        Every child process inherits the environment. A failing command stops the start. After an in-place restart,
-        the environment still has the previous values. A changed key is overwritten, but a removed key stays until
-        the service manager restarts the daemon.
-        """
-        if self._cfg.secrets_command is None:
-            return None
-        try:
-            values = secrets(self._cfg.secrets_command)
-        except SecretsError as e:
-            raise SystemExit(f'{SECRETS_COMMAND_ENV} ({self._cfg.secrets_command}) failed: {e}') from e
-        os.environ.update(values)
-        return ','.join(sorted(values))
 
     def _listen(self, span: Span) -> None:
         """Serve the API on the home's Unix socket, and on the network's listener when it has one.

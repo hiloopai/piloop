@@ -12,19 +12,13 @@ import sys
 import threading
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 from typing import Self, assert_never
 
 import psutil
 
-from piloop import deprecated
-
 STDERR_IN_ERROR = 500
 """The number of characters of a failed command's stderr that piloop keeps in the error it stores on a row."""
-UNITS_ENV = 'PILOOP_UNITS_FILE'
-"""Where an evaluate command that prints ``METRIC`` lines writes its per-unit results. Set only for piloop's own
-evaluations."""
 RESULT_ENV = 'PILOOP_RESULT_FILE'
 """The pipe that a command which piloop reads writes its results to, one JSON object per line (``ResultPipe``)."""
 ACTOR_ENV = 'PILOOP_ACTOR'
@@ -37,17 +31,6 @@ with it, and as nobody else. ``child_env`` drops it, as it drops ``ACTOR_ENV``."
 PILOOP_ARGV = (sys.executable, '-P', '-m', 'piloop')
 """The command that runs this process's piloop, from any cwd. ``-P`` keeps the cwd off ``sys.path``: an agent's cwd is a
 campaign's worktree, and its own ``json.py`` or ``piloop/`` would otherwise shadow piloop's imports."""
-
-
-@deprecated.until('0.5.0', 'METRIC lines on stdout: delete Channel, Sample.channel and the METRIC_LINES branches')
-class Channel(StrEnum):
-    """How a command that piloop reads reported its results."""
-
-    RESULT = 'result'
-    """JSON lines on ``RESULT_ENV``."""
-    METRIC_LINES = 'metric_lines'
-    """``METRIC <name>=<value>`` lines on stdout, and per-unit results in ``UNITS_ENV``: the protocol before
-    ``RESULT_ENV``."""
 
 
 @dataclass(frozen=True)
@@ -98,15 +81,15 @@ def running(leader: Leader) -> bool:
 def child_env(*drop: str) -> dict[str, str]:
     """The environment for subprocesses: this process's environment without the variables that it must not pass on.
 
-    These are VIRTUAL_ENV, ``UNITS_ENV``, ``RESULT_ENV``, ``ACTOR_ENV``, ``AGENT_TOKEN_ENV`` and ``drop``. Without
-    VIRTUAL_ENV, uv does not warn about the campaign's own virtual environment. Only the commands that piloop reads get
-    ``UNITS_ENV`` and ``RESULT_ENV``, so no agent gets a path of them. The launcher signs each agent and its runtime
+    These are VIRTUAL_ENV, ``RESULT_ENV``, ``ACTOR_ENV``, ``AGENT_TOKEN_ENV`` and ``drop``. Without VIRTUAL_ENV, uv
+    does not warn about the campaign's own virtual environment. Only the commands that piloop reads get ``RESULT_ENV``,
+    so no agent gets a path of it. The launcher signs each agent and its runtime
     tags it, after this.
 
     This is the only place outside ``Settings`` that reads the environment. It passes the values on and does not
     interpret them.
     """
-    dropped = ('VIRTUAL_ENV', UNITS_ENV, RESULT_ENV, ACTOR_ENV, AGENT_TOKEN_ENV, *drop)
+    dropped = ('VIRTUAL_ENV', RESULT_ENV, ACTOR_ENV, AGENT_TOKEN_ENV, *drop)
     return {k: v for k, v in os.environ.items() if k not in dropped}
 
 
@@ -196,14 +179,6 @@ def command_line(pid: int) -> str | None:
     """Return the command line of ``pid``, or None when it is gone or not readable."""
     try:
         return ' '.join(psutil.Process(pid).cmdline())
-    except psutil.Error:
-        return None
-
-
-def environment(pid: int) -> dict[str, str] | None:
-    """Return the environment that ``pid`` started with, or None when it is gone or belongs to another user."""
-    try:
-        return psutil.Process(pid).environ()
     except psutil.Error:
         return None
 

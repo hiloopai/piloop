@@ -1,10 +1,12 @@
 {
-  "version": "0.4.0",
+  "version": "0.5.0",
   "heads": {
-    "core": "0067",
-    "archive/local": "0002",
+    "core": "0073",
+    "archive/local": "0003",
+    "executor/workers": "0001",
     "memory/local": "0002",
-    "optimization": "0004"
+    "optimization": "0004",
+    "secrets/local": "0001"
   },
   "triggers": {
     "agent_sessions_kind": "CREATE TRIGGER agent_sessions_kind BEFORE INSERT ON agent_sessions\nWHEN NEW.campaign_id IS NOT NULL AND (SELECT json_type(config, '$.plugins.role.' || json_quote(NEW.kind)) FROM campaigns WHERE id = NEW.campaign_id) IS NULL\nBEGIN\n  SELECT RAISE(ABORT, 'agent_sessions.kind must be a role of the campaign: a key of plugins.role in its config');\nEND",

@@ -1,0 +1,149 @@
+{
+  "context": [
+    "dir/file39.md",
+    "dir/file40.json",
+    "dir/file41.json",
+    "dir/file42.md",
+    "dir/file43.md",
+    "dir/file44.py"
+  ],
+  "evaluate": [
+    "name_27",
+    "--flag28",
+    "dir/file29.py\n"
+  ],
+  "evaluate_timeout": 3600.0,
+  "link": [
+    "text 33",
+    "dir/file34",
+    "name_35"
+  ],
+  "metrics": [
+    {
+      "direction": "higher",
+      "floor": null,
+      "margin": null,
+      "name": "name_2",
+      "role": "primary",
+      "track": null
+    },
+    {
+      "direction": "higher",
+      "floor": 1.0,
+      "margin": 1.0,
+      "name": "name_3",
+      "role": "guardrail",
+      "track": null
+    }
+  ],
+  "name": "campaign-1",
+  "plugins": {
+    "stop_rule": {
+      "max_hours": 72.0,
+      "max_runs": 40,
+      "max_tokens": 1500000000,
+      "plateau": 10,
+      "target": 7.0,
+      "hold_at": {
+        "spend": 600.0
+      }
+    },
+    "memory": {
+      "provider": "local",
+      "documents": [
+        "dir/file39.md",
+        "dir/file32.md"
+      ]
+    },
+    "harness": {
+      "claude": {
+        "model": "name_31",
+        "max_concurrent": 1
+      },
+      "codex": {
+        "model": "text 30"
+      },
+      "use": [
+        "codex",
+        "claude"
+      ]
+    },
+    "role": {
+      "implementer": {
+        "addendum": null,
+        "explore_every": 0,
+        "harnesses": null,
+        "max_concurrent": 3,
+        "mcp": [],
+        "model": null,
+        "timeout": 43200.0
+      },
+      "research": {
+        "addendum": "dir/file32.md",
+        "harnesses": null,
+        "max_concurrent": 1,
+        "max_ideas": 0,
+        "mcp": [],
+        "model": null,
+        "timeout": 7200.0,
+        "triggers": [
+          "research_low_water",
+          "seed"
+        ]
+      },
+      "watchdog": {
+        "addendum": null,
+        "harnesses": null,
+        "interval": 3600.0,
+        "max_concurrent": 1,
+        "mcp": [],
+        "model": null,
+        "timeout": 900.0
+      }
+    },
+    "runtime": {
+      "use": "subprocess"
+    },
+    "trigger": {
+      "research_low_water": {
+        "provider": "low_water",
+        "buffer": 1
+      }
+    },
+    "fact_source": {
+      "command": {
+        "command": [
+          "sh",
+          "-c",
+          "out=$(\"$@\") && printf '{\"metrics\": {\"billing_usd\": %s}}\\n' \"$out\" >> \"$PILOOP_RESULT_FILE\"",
+          "sh",
+          "/path/36",
+          "--flag37",
+          "/path/38.py"
+        ],
+        "metrics": [
+          "billing_usd"
+        ],
+        "interval": 600.0,
+        "notices": {
+          "billing_usd": [
+            200.0,
+            400.0
+          ]
+        }
+      },
+      "use": [
+        "campaign",
+        "optimization",
+        "command",
+        "spend"
+      ],
+      "spend": {
+        "facts": [
+          "billing_usd"
+        ]
+      }
+    }
+  },
+  "tracks": {}
+}

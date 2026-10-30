@@ -511,11 +511,27 @@ def test_an_agent_whose_session_has_ended_leaves_no_finding(db: Database, tmp_pa
     assert refused == [AgentSessionState.ENDING, AgentSessionState.EXITED, AgentSessionState.KILLED]
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.ORCHESTRATOR)) as orchestrator:
         sql.run(orchestrator, finding.format(FINDING))
+
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
         kinds = con.execute('SELECT kind, count(*) FROM comments GROUP BY kind ORDER BY kind').fetchall()
     assert [tuple(row) for row in kinds] == [('finding', 4), ('note', 6)], (
         'a requested, starting or running agent, and the orchestrator'
     )
+
+
+def test_an_agent_files_an_escalation_with_its_form_only(db: Database, tmp_path: Path) -> None:
+    """``piloop escalate`` checks the form with the campaign's provider: an agent's INSERT without one is refused."""
+    with db.session() as s:
+        campaign = Campaign(name='p', path='/p', config=bare_config('p'))
+        s.add(campaign)
+        s.flush()
+        s.add(AgentSession(kind='implementer', campaign_id=campaign.id, state=AgentSessionState.RUNNING))
+        s.commit()
+    insert = "INSERT INTO comments (target_kind, target_id, author, kind, body, priority{}) VALUES ('run', 7, 'a', 'escalation', 'help', 1{})"
+    with closing(sql.connect(tmp_path / 'piloop.db', actor=Agent(role='implementer', session=1))) as agent:
+        with pytest.raises(sqlite3.IntegrityError, match='an escalation needs its form: `piloop escalate <target>`'):
+            sql.run(agent, insert.format('', ''))
+        sql.run(agent, insert.format(', form', ", '{}'"))
 
 
 def test_only_the_daemon_writes_an_agents_usage_and_session_file(con: sqlite3.Connection) -> None:

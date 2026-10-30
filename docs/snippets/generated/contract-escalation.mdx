@@ -7,7 +7,7 @@
 | `EscalationPolicy.guide() -> str` | What `piloop escalate --guide` prints: the fields, their limits, and an example. |
 | `EscalationPolicy.body(form: JsonValue) -> str` | The plain text of `form`, which `comments.body` keeps for a reader of SQL. |
 | `EscalationPolicy.reach(item: Escalated, now: datetime) -> ToHuman` | When `item` goes to a human through the notifiers, while nobody has acknowledged it. |
-| `EscalationPolicy.view(item: Escalated) -> EscalationView` | How every surface shows `item`. |
+| `EscalationPolicy.view(item: Escalated) -> EscalationView` | How every surface shows `item`, which has its form. |
 | `EscalationPolicy.choose(item: Escalated, choice: str) -> str` | The text of the `decision` that answers `item` with the choice `choice`. |
 | `EscalationView.headline: str` | The decision that is needed, in one sentence. |
 | `EscalationView.why: str` | Why it is needed, in a few short sentences. Empty when the escalation says nothing more. |

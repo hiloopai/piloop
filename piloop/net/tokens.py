@@ -18,7 +18,6 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from piloop import deprecated
 from piloop.actor import Agent, CallerKind
 from piloop.api.contract import Access
 from piloop.api.views import TokenList, TokenMade, TokenView
@@ -118,15 +117,6 @@ def verify(s: Session, secret: str) -> Caller | None:
             return Caller(token.name, token.access, Agent(role=agent.kind, session=agent.id))
 
 
-@deprecated.until('0.5.0', 'an agent that a daemon before agent tokens launched: delete tokenless and its callers')
-def tokenless(s: Session, agent: Agent) -> bool:
-    """Whether ``agent``'s session is live and was launched with no token: by a daemon before agent tokens."""
-    session = s.get(AgentSession, agent.session)
-    if session is None or session.state not in LIVE or session.kind != agent.role:
-        return False
-    return s.scalar(select(Token.id).where(Token.agent_session_id == agent.session)) is None
-
-
 @dataclass(frozen=True)
 class Tokens:
     """The tokens of a database, which a network provider verifies a caller's secret against."""
@@ -145,12 +135,6 @@ class Tokens:
             secret = create(s, name, access)
             s.commit()
         return secret
-
-    @deprecated.until('0.5.0', 'an agent that a daemon before agent tokens launched: delete Tokens.tokenless')
-    def tokenless(self, agent: Agent) -> bool:
-        """``tokenless``, in a session of its own."""
-        with self.db.session() as s:
-            return tokenless(s, agent)
 
     def revoke(self, name: str) -> None:
         """Delete the token called ``name``, if there is one: its next call gets 401."""

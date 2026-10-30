@@ -8,14 +8,15 @@ import math
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
     RESULT,
+    UNITS,
     UNITS_SUM_TOLERANCE,
     Failed,
     Measured,
-    parse_metrics,
-    read_units,
+    _check_units,
     run_evaluate,
 )
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import RESAMPLES, SEED, Over, compare, lower_bound
@@ -40,42 +41,6 @@ def test_the_bootstrap_pairs_units_by_sorted_name_and_measures_gain_in_the_metri
     c = compare(errors, 15.0, 18.0, mine, theirs, 0.95)
     assert (c.gain, c.worst, c.count, c.over) == (3.0, lower_bound([1.0, -1.0, 1.0, 2.0], 0.95), 4, Over.UNITS)
     assert c.worst == -1.0
-
-
-def test_metric_lines_are_name_equals_value_and_everything_else_is_ignored() -> None:
-    stdout = '\n'.join(
-        [
-            'METRIC accuracy=0.83',
-            '  METRIC errors = 12  ',
-            'METRIC bytes=3.69e6',
-            'METRIC seconds=1',
-            'METRIC seconds=0.52',
-            'training done',
-            'METRICS other=1',
-            'metric lower=1',
-            'METRIC broken=12%',
-            'METRIC noequals 3',
-        ]
-    )
-    assert parse_metrics(stdout) == {'accuracy': 0.83, 'errors': 12.0, 'bytes': 3690000.0, 'seconds': 0.52}, (
-        'spaces around the name and the value are allowed; the last line of a name wins; a bad line is skipped'
-    )
-
-
-def test_metric_lines_with_a_non_finite_value_or_an_empty_name_are_skipped() -> None:
-    stdout = '\n'.join(
-        [
-            'METRIC errors=3',
-            'METRIC errors=nan',
-            'METRIC seconds=inf',
-            'METRIC bytes=-Infinity',
-            'METRIC =1',
-            'METRIC   = 2',
-        ]
-    )
-    assert parse_metrics(stdout) == {'errors': 3.0}, (
-        'nan and inf are not measurements, and a metric needs a name: such a line is skipped like any bad line'
-    )
 
 
 def test_a_result_is_one_json_line_of_finite_metrics_units_and_evidence() -> None:
@@ -118,17 +83,23 @@ def test_a_failed_or_incomplete_evaluation_gives_an_error(tmp_path: Path) -> Non
         'a non-zero exit keeps what it reported next to the error: a failed evaluation has a cost too'
     )
     assert evaluate(write({'errors': 3})) == ({'errors': 3.0}, 'evaluate reported no value for: seconds')
-    assert evaluate('echo METRIC errors=3; echo METRIC seconds=2') == ({'errors': 3.0, 'seconds': 2.0}, None), (
-        'METRIC lines on stdout are read until 0.5.0'
-    )
+    assert evaluate('echo METRIC errors=3; echo METRIC seconds=2') == (
+        {},
+        'evaluate wrote a bad result: it wrote no result to PILOOP_RESULT_FILE',
+    ), 'METRIC lines on stdout are only output'
 
 
-def test_a_units_file_maps_each_metric_to_finite_unit_values_that_sum_to_its_value(tmp_path: Path) -> None:
+def test_per_unit_results_map_each_metric_to_finite_unit_values_that_sum_to_its_value(tmp_path: Path) -> None:
     path = tmp_path / 'units.json'
 
     def units(content: object, metrics: dict[str, float]) -> dict[str, dict[str, float]]:
         path.write_text(json.dumps(content))
-        return read_units(path, metrics)
+        try:
+            found = UNITS.validate_json(path.read_bytes())
+        except ValidationError as e:
+            raise ValueError(f'expected {{"<metric>": {{"<unit>": <number>}}}}: {e}') from e
+        _check_units(found, metrics)
+        return found
 
     assert UNITS_SUM_TOLERANCE == 1e-3
     assert units({'errors': {'r1': 2, 'r2': 1.0004}}, {'errors': 3.0, 'seconds': 1.0}) == {

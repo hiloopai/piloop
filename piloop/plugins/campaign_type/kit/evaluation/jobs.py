@@ -41,7 +41,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evalu
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.executor.contract import Applying, Control, Job, JobKind, Report, Settled, Site, Source
 from piloop.plugins.executor.kit.jobs import SHOWN, rebuilt
-from piloop.proc import Channel, kill_group
+from piloop.proc import kill_group
 from piloop.settings import UNITS_DIR
 
 EVALUATION = 'evaluation'
@@ -105,8 +105,6 @@ class Sample(BaseModel):
     seconds: float
     error: str | None = None
     units: dict[str, dict[str, float]] = Field(default_factory=dict)
-    channel: Channel = Channel.RESULT
-    """How the evaluate command reported it: a result, or ``METRIC`` lines until 0.5.0."""
     rung: RungName | None = None
     """The rung of the ladder that it measured. None for the full panel."""
     stopped: str | None = None
@@ -208,8 +206,6 @@ def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: A
     for sample in report.samples:
         pair = next(pending, None) if sample.rung is None else None
         record(s, daemon.home / UNITS_DIR, job.run, job.candidate, evaluator_id, sample, pair=pair)
-    if any(sample.channel is Channel.METRIC_LINES for sample in (*report.samples, *report.bar_samples)):
-        ledger.note_metric_lines(s, evaluation.candidate.campaign_id, evaluator_id)
 
 
 def record(
@@ -311,8 +307,8 @@ def _evaluate(
 def sample(result: EvalResult) -> Sample:
     """What the report says of one line of the evaluate command: what it measured, where it stopped, or why it failed."""
     match result:
-        case Measured(metrics=metrics, seconds=seconds, units=units, channel=channel, rung=rung):
-            return Sample(metrics=metrics, seconds=seconds, units=units, channel=channel, rung=rung)
+        case Measured(metrics=metrics, seconds=seconds, units=units, rung=rung):
+            return Sample(metrics=metrics, seconds=seconds, units=units, rung=rung)
         case StoppedAt(rung=rung, reason=reason, metrics=metrics, seconds=seconds, units=units):
             return Sample(metrics=metrics, seconds=seconds, units=units, rung=rung, stopped=reason)
         case Failed(seconds=seconds, rung=rung) as failed:

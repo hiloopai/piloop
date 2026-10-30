@@ -1,5 +1,4 @@
 import os
-import re
 import signal
 import subprocess
 import threading
@@ -168,33 +167,6 @@ def test_serve_reaps_the_children_an_in_place_restart_handed_over_as_each_exits(
     daemon.serve()  # signals need the main thread
     stopping.join(30)
     assert reaped(early) and reaped(late)
-
-
-def test_serve_merges_what_the_secrets_command_prints_into_its_environment_before_anything_runs(
-    tmp_path: Path, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setenv('FAKE_EXA_KEY', 'before-rotation')  # restored, so the merged values leave with the test
-    monkeypatch.setenv('FAKE_XAI_KEY', 'unset-by-the-test')
-    command = "printf 'FAKE_EXA_KEY=exa-secret\\nFAKE_XAI_KEY=xai-secret\\n'"
-    daemon = Daemon(Settings(home=tmp_path / 'home', secrets_command=command))
-    seen = {}
-    mocker.patch.object(daemon.scheduler, 'reap', side_effect=lambda: seen.update(exa=os.environ['FAKE_EXA_KEY']))
-    mocker.patch.object(daemon.scheduler, 'serve', side_effect=KeyboardInterrupt)
-    daemon.serve()
-    assert seen == {'exa': 'exa-secret'}, 'merged before the reap, so before any child starts'
-    assert os.environ['FAKE_XAI_KEY'] == 'xai-secret'
-    err = capsys.readouterr().err
-    assert 'secrets=FAKE_EXA_KEY,FAKE_XAI_KEY' in err, 'the names, on the start span'
-    assert 'exa-secret' not in err and 'xai-secret' not in err
-
-
-def test_a_failing_secrets_command_fails_the_start_naming_the_command(tmp_path: Path) -> None:
-    """The secrets load before the store opens (a remote's credentials can come from them) and before the lock."""
-    cfg = Settings(home=tmp_path / 'home', secrets_command="printf 'EXA_API_KEY=a b'")
-    failed = "PILOOP_SECRETS_COMMAND (printf 'EXA_API_KEY=a b') failed: EXA_API_KEY contains whitespace"
-    with pytest.raises(SystemExit, match=f'^{re.escape(failed)}$'):
-        Daemon(cfg)
-    assert not cfg.pid_file.exists(), 'nothing ran, no lock was taken'
 
 
 def test_serve_stops_on_sigterm_and_restores_the_handler(tmp_path: Path, mocker: MockerFixture) -> None:

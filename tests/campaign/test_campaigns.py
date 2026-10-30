@@ -25,7 +25,7 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.host import Many, One, Scope, declared
-from tests.conftest import store_config
+from tests.conftest import reports_py, store_config
 
 
 def test_create_campaign_repo(tmp_path: Path, mocker: MockerFixture) -> None:
@@ -79,7 +79,7 @@ def test_blank_template_into_an_existing_repo(tmp_path: Path) -> None:
     toml.write_text(toml.read_text().replace('"uv", "run", "python", "evaluate.py"', '"make", "score"'))
     assert not stub_untouched(dest), 'the stub is untouched but piloop.toml points elsewhere'
     toml.write_text(toml.read_text().replace('"make", "score"', '"uv", "run", "python", "evaluate.py"'))
-    (dest / 'evaluate.py').write_text('print("METRIC score=1")\n')
+    (dest / 'evaluate.py').write_text(reports_py(score=1))
     assert not stub_untouched(dest)
 
 
@@ -204,7 +204,7 @@ def test_init_commits_only_the_files_it_owns_never_another_agents_work(tmp_path:
     (dest / 'tools' / 'score.py').write_text('print(2)  # another agent, mid-edit\n')
     (dest / 'staged.py').write_text('a = 2\n')
     repo.git.add('staged.py')
-    (dest / 'evaluate.py').write_text('print("METRIC score=3")\n')
+    (dest / 'evaluate.py').write_text(reports_py(score=3))
     assert create_campaign_repo(dest, BLANK, {}) == []
     assert repo.head.commit.summary == 'piloop init: evaluate.py'
     assert repo.git.show('--name-only', '--format=', 'HEAD').splitlines() == ['evaluate.py']

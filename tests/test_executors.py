@@ -5,7 +5,6 @@ A run brings its commits back and is scored, an evaluation records its measureme
 and it still reports, and a stop closes a running agent as stopped.
 """
 
-import json
 import subprocess
 import threading
 from collections.abc import Callable, Iterator
@@ -14,7 +13,6 @@ from pathlib import Path, PurePath
 from typing import get_args, get_type_hints
 
 import pytest
-from covalence import Cid
 from git import Repo
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
@@ -27,7 +25,7 @@ from piloop.daemon.main import Daemon
 from piloop.db.events import in_order
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, Lease
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CampaignId, CommentId, Revision, TargetRef
+from piloop.ids import AgentSessionId, CampaignId, CommentId, Revision
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
@@ -36,7 +34,7 @@ from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, KIND, E
 from piloop.plugins.campaign_type.kit.evaluation.measure import request_remeasure
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
 from piloop.plugins.executor.contract import (
     EXECUTORS,
     JOB,
@@ -45,21 +43,17 @@ from piloop.plugins.executor.contract import (
     AgentNotStarted,
     Applying,
     Capacity,
-    EvaluationKey,
-    Job,
     JobKey,
     Prompt,
     RepoId,
     Source,
     key_of,
 )
-from piloop.plugins.executor.kit.jobs import remove
 from piloop.plugins.executor.kit.leases import StaleReport, read_job
 from piloop.plugins.runtime.contract import Handle
-from piloop.plugins.vcs.contract import Pin, RebaseVersion, ReferenceVersion, RunVersion
+from piloop.plugins.vcs.contract import Pin
 from piloop.plugins.vcs.git import Git
 from piloop.settings import Settings
-from piloop.store.tree import Materialised
 from tests.conftest import (
     HARNESS_SLEEPS,
     WATCHDOG,
@@ -423,49 +417,7 @@ def test_a_job_and_a_report_validate_as_the_model_of_their_kind_and_an_unknown_k
         KIND.apply(Session(), job, AgentNotStarted(reason='r'), Applying(Path(), stopping=False))
 
 
-def test_the_names_of_0_3_1_still_make_the_new_values() -> None:
-    """``deprecated.until('0.5.0')``: an executor or a vcs provider of 0.3.1 keeps working."""
-    assert Capacity(agents=1, evaluations=2) == Capacity(1, {EVALUATION: 2})
-    assert Capacity(1, {EVALUATION: None}).evaluations is None
-    with pytest.raises(TypeError, match='Capacity takes agents and slots, not renders'):
-        Capacity(1, renders=2)
-    assert EvaluationKey(3) == JobKey(EVALUATION, 3)
-    agent: dict[str, object] = {'kind': 'agent', 'agent_session': 1, 'runtime': 'subprocess', 'timeout': 1}
-    agent |= {'artifact': {'vcs': {'provider': 'git'}, 'repo': 1, 'revision': 'abc'}, 'brief_cid': str(Cid.of(b'b'))}
-    agent |= {'spec': {'executable': 'true', 'args': []}, 'place': 'runs/4'}
-    old = JOB.validate_python(agent | {'capture': 4})
-    assert isinstance(old, AgentJob) and old.capture == TargetRef(RUN, 4), "a 0.4 job's run id is the run subject"
-    assert json.loads(JOB.dump_json(old))['capture'] == 'run#4'
-    assert (RunVersion('c', 12, 0), RebaseVersion('c', 5), ReferenceVersion('c', 5)) == (
-        Pin('c', 'r12/0'),
-        Pin('c', 'rebase/5'),
-        Pin('c', 'reference/5'),
-    )
+def test_a_pin_name_is_segments_joined_by_slashes() -> None:
+    assert Pin('c', 'r12/0').name == 'r12/0'
     with pytest.raises(ValueError, match="'../x' is not a pin name"):
         Pin('c', '../x')
-    job = AgentJob.model_construct()
-    site = Removing()
-    remove(job, site)
-    assert site.removed == [job]
-
-
-class Removing:
-    """A ``Site`` that only removes."""
-
-    def __init__(self) -> None:
-        self.removed: list[Job] = []
-
-    def log_dir(self, job: Job) -> Path:
-        raise NotImplementedError
-
-    def cwd(self, job: Job) -> Path:
-        raise NotImplementedError
-
-    def checkout(self, job: Job) -> Materialised:
-        raise NotImplementedError
-
-    def files(self, job: Job) -> dict[str, Cid]:
-        raise NotImplementedError
-
-    def remove(self, job: Job) -> None:
-        self.removed.append(job)

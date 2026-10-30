@@ -177,7 +177,6 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'comment.queued': [],
             'comment.undelivered': [],
             'evaluation.cancelled': ['evaluations'],
-            'evaluator.metric_lines': [],
             'fact.read': ['campaigns', 'idle_slots', 'yield_alarm'],
             'idea.base_candidate_id': ['campaigns', 'idle_slots', 'yield_alarm'],
             'idea.created': ['campaigns', 'idle_slots', 'yield_alarm'],

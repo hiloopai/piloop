@@ -151,6 +151,43 @@ one. The [changelog](https://github.com/hiloopai/piloop/blob/main/CHANGELOG.md) 
 
 ## Upgrading to 0.5.0
 
+### Upgrade from 0.4
+
+0.5.0 migrates a database from 0.4's heads or newer: a 0.3 home upgrades through 0.4 first, as
+[Upgrade one release at a time](#upgrade-one-release-at-a-time) says. The migrations before 0.4's heads are squashed
+into one revision for each chain, which a database at 0.4's heads is at already.
+
+### Removed keys
+
+The forms that 0.4 still loaded with a warning are removed. A file that still has one fails as an unknown key, or
+with a message that names what to write:
+
+| Removed | Write instead |
+|---|---|
+| `[harness.<name>]`, `[roles.<name>]`, `harnesses`, `runtime`, `[model]`, `[max_concurrent]`, `[runtimes.<name>]` | [Plugin tables](#plugin-tables) |
+| inline `triggers`, `sections` and `[[facts]]` entries, `[status] sections`, `[mcp.<name>]` | [Plugin tables](#plugin-tables) |
+| `[spend]`, `max_spend` | [Spend is a fact](#spend-is-a-fact) |
+| `[memory] documents` | [Memory documents](#memory-documents) |
+| `wake_budget` | the `budget` of the `lessons` section |
+| `mcp` and `usage` of a harness table, `piloop agent messages --format` | [Harnesses are providers](#harnesses-are-providers) |
+| the `anomaly` trigger | `run_failed` and `dead_at_startup` |
+| `name_claim` of the proxy network | `name_claims` |
+| `evaluations` of a pool | [A pool's slots of each kind of job](#a-pools-slots-of-each-kind-of-job) |
+| `[daemon] startup_breaker` and `startup_window` | [The startup breaker](#the-startup-breaker) |
+| `METRIC` lines, `PILOOP_UNITS_FILE` | [The evaluate command writes a result line](#the-evaluate-command-writes-a-result-line) |
+| `PILOOP_SECRETS_COMMAND`, `secrets_command` | `piloop secret set` |
+| a Claude login in `~/.claude/settings.json` | the harness's `env` ([Agents ignore your own harness setup](#agents-ignore-your-own-harness-setup)) |
+
+A plugin of 0.3.1 that still imports `Campaign.ideas`, `Campaign.evaluator`, a research table from `piloop.db.models`,
+`EvaluationKey`, `Capacity(evaluations=)`, `RunVersion`, `RebaseVersion`, `ReferenceVersion` or `Keep` fails at its
+import: see [Plugin authors](#plugin-authors) and [Executor and vcs plugins](#executor-and-vcs-plugins).
+
+### An escalation has a form
+
+An agent files an escalation with `piloop escalate <target>` and its form. An agent's `INSERT` of an escalation without
+a form is refused, with that command as the fix. An escalation that an older piloop filed as free text still shows as
+its body: answer it with `piloop inbox reply`, since it has no choices.
+
 ### The context is a section
 
 A brief's context is the `context` section. A role's `sections` list puts it where it names it:
@@ -160,8 +197,8 @@ A brief's context is the `context` section. A role's `sections` list puts it whe
 sections = ["database", "search", "context", "goal", "queue", "pack"]
 ```
 
-Until 0.5.0, a list without `context` shows it after the list's guides, as before. Add it to each list. Each section now
-has a `##` heading, and the brief has no `# Guides` or `# Context` heading.
+A list without `context` has no context: add it to each list. Each section has a `##` heading, and the brief has no
+`# Guides` or `# Context` heading.
 
 ### Notifiers are per campaign
 
@@ -222,7 +259,7 @@ finding_grace = 60
 ### The startup breaker
 
 `startup_breaker` and `startup_window` are keys of `[plugins.launch_policy]`. `[daemon] startup_breaker` and
-`startup_window` of `config.toml`, and their variables, still work until 0.5.0, with a warning:
+`startup_window` of `config.toml` no longer load:
 
 ```toml
 [plugins.launch_policy]
@@ -693,7 +730,7 @@ were converted when you upgraded to 0.2.0. While a `PILOOP_PROJECT_<KEY>` variab
 trigger's `kind` in `piloop.toml`, as the sections below say.
 [Deprecated keys](/reference/configuration#deprecated-keys) says what to write instead.
 
-`PILOOP_SECRETS_COMMAND` works until 0.5.0. [Secrets](/guides/secrets#piloop_secrets_command) says how to move its keys.
+`PILOOP_SECRETS_COMMAND` works until 0.5.0: `piloop secret set` each key that it prints.
 
 `[memory] wake_budget` and `[roles.<name>] wake_budget` work until 0.5.0. They are the `budget` of the `lessons` entry
 of a role's [sections](/concepts/roles#sections), and 0 is a list without that entry. The watchdog now reads the

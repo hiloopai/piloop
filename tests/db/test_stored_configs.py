@@ -3,7 +3,8 @@
 ``tests/fixtures/configs/<revision>-<n>.json`` is a ``campaigns.config`` as a real home stored it at that revision,
 structure only: its keys, tables and value types, with every path, name, command and text replaced. Together, the
 files of a revision hold every key and value type that those homes stored at it. Only a revision that this piloop
-migrates from has files: the head of the previous minor release, or a newer one.
+migrates from has files: the head of the previous minor release, or a newer one. The files of 0067 are those that
+real homes stored at 0053, as 0.4's revisions rewrote them.
 """
 
 import sqlite3

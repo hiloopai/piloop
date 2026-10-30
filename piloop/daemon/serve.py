@@ -16,7 +16,7 @@ from collections.abc import Iterable
 from piloop.api.client import answers
 from piloop.plugins.harness.contract import Harness
 from piloop.plugins.network.contract import Address
-from piloop.proc import PILOOP_ARGV, child_env, kill_group
+from piloop.proc import PILOOP_ARGV, child_env
 from piloop.settings import DEFAULT_HOME, Settings, env_names
 
 SERVE_ARGV = [*PILOOP_ARGV, 'serve']
@@ -34,12 +34,8 @@ RESTART_SIGNAL = signal.SIGUSR1
 """Stop as on SIGTERM, then exec ``piloop serve`` in place.
 
 Not SIGHUP, because a closing terminal sends SIGHUP to a daemon in the foreground."""
-SECRETS_COMMAND_ENV = 'PILOOP_SECRETS_COMMAND'
-"""The environment variable for ``Settings.secrets_command``. ``piloop doctor`` reads it from the daemon."""
 CARRIED_ENV = ('OTEL_EXPORTER_OTLP_ENDPOINT',)
 """The variables other than ``PILOOP_*`` that a service unit always carries: where traces go."""
-SECRETS_TIMEOUT_SECONDS = 60
-"""The seconds that the secrets command can take before the daemon refuses to start."""
 SECRET_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 SYSTEMD_UNIT = """[Unit]
 Description=piloop autoresearch daemon
@@ -118,53 +114,6 @@ def running_pid(cfg: Settings) -> int | None:
     finally:
         os.close(fd)
     return int(text) if text.isdigit() else None
-
-
-class SecretsError(Exception):
-    """The secrets command failed or printed something other than ``NAME=value`` lines. It never contains a value."""
-
-
-def secrets(command: str) -> dict[str, str]:
-    """Run the secrets command with ``sh -c`` and parse its output: one ``NAME=value`` line per variable.
-
-    Blank lines are skipped. The command writes its stderr to the daemon's stderr. Its stdout is parsed here and
-    never shown. Errors name the line or the variable, never a value.
-
-    Raises:
-        SecretsError: The command did not start, timed out, exited non-zero or printed nothing. Or it printed a line
-            that is not ``NAME=value``, an empty value, a value with whitespace, or one name twice.
-    """
-    try:
-        proc = subprocess.Popen(['sh', '-c', command], env=child_env(), stdout=subprocess.PIPE, start_new_session=True)
-    except OSError as e:
-        raise SecretsError(f'could not start: {e}') from e
-    with proc:
-        try:
-            out, _ = proc.communicate(timeout=SECRETS_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired as e:
-            # Kill the children too. A child that holds the pipe open blocks the read below.
-            kill_group(proc)
-            proc.communicate()
-            raise SecretsError(f'timed out after {SECRETS_TIMEOUT_SECONDS}s') from e
-    if proc.returncode != 0:
-        raise SecretsError(f'exit {proc.returncode}')
-    values: dict[str, str] = {}
-    for number, line in enumerate(out.decode(errors='replace').split('\n'), 1):
-        if not line:
-            continue
-        name, eq, value = line.partition('=')
-        if not eq or not SECRET_NAME.fullmatch(name):
-            raise SecretsError(f'line {number} is not NAME=value')
-        if not value:
-            raise SecretsError(f'{name} is empty')
-        if any(c.isspace() for c in value):
-            raise SecretsError(f'{name} contains whitespace')
-        if name in values:
-            raise SecretsError(f'{name} is printed twice')
-        values[name] = value
-    if not values:
-        raise SecretsError('printed no NAME=value line')
-    return values
 
 
 def spawn_detached(cfg: Settings, listen: Address | None = None) -> int:

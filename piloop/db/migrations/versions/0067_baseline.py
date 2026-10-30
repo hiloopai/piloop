@@ -1,0 +1,206 @@
+"""Every table, index and trigger as piloop 0.4 left them: core's revisions 0001 to 0067, squashed.
+
+Core's revisions created every table, the plugins' too, before each plugin's chain adopted its own, so this one
+creates them as the plugins' revisions at 0.4's heads left them. A database at 0.4's heads is at this revision
+already, and an older one is refused (``RELEASES``).
+
+Revision ID: 0067
+Revises:
+"""
+
+from collections.abc import Sequence
+
+from alembic import op
+
+revision: str = '0067'
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+SQUASHED = (
+    '0001_initial',
+    '0002_role_names',
+    '0003_unmeasured',
+    '0004_run_roles',
+    '0005_recovered',
+    '0006_research_memory',
+    '0007_lessons',
+    '0008_archives',
+    '0009_archive_pruning',
+    '0010_run_scoring',
+    '0011_role_keys',
+    '0012_codex_input',
+    '0013_evaluations',
+    '0014_pause_a_project',
+    '0015_campaign_tree',
+    '0016_campaigns',
+    '0017_evaluator_runner',
+    '0018_agent_sessions',
+    '0019_leases',
+    '0020_agent_ending',
+    '0021_run_end',
+    '0022_tokens',
+    '0023_lease_workers',
+    '0025_limits',
+    '0026_measurements_pair',
+    '0027_cids',
+    '0028_typed_events',
+    '0029_worker_cursor',
+    '0030_acquire_request',
+    '0031_wrap_up_note',
+    '0032_prompt_queued',
+    '0033_agent_finished_state',
+    '0034_herdr_removed',
+    '0035_remote_agents',
+    '0036_entire_removed',
+    '0037_vcs_source',
+    '0038_trigger_provider',
+    '0039_rule_limits',
+    '0040_roles_in_config',
+    '0041_campaign_closed',
+    '0042_event_milliseconds',
+    '0043_candidate_origin',
+    '0044_worker_instances',
+    '0045_vcs_names',
+    '0046_request_answers',
+    '0047_home_target',
+    '0048_jobs_and_briefs_in_cas',
+    '0049_first_transfers',
+    '0050_secrets',
+    '0051_token_access',
+    '0052_judging_evaluator_key',
+    '0053_sections',
+    '0054_session_files_in_cas',
+    '0055_incident_triggers',
+    '0056_fact_sources',
+    '0057_inherited_mcp_renderer',
+    '0058_message_comments',
+    '0059_comment_in_reply_to',
+    '0060_migrations',
+    '0061_memory_documents',
+    '0062_agent_tokens',
+    '0063_harness_providers',
+    '0064_retired_campaigns',
+    '0065_plugin_instances',
+    '0066_plugin_lists',
+    '0067_billing_fact',
+)
+"""The revisions that this one replaces, oldest first: the fingerprint of each revision after it counts their names
+(``piloop.db.session.fingerprints``), so that it stays what databases recorded before the squash."""
+SCHEMA = (
+    "CREATE VIRTUAL TABLE comments_fts USING fts5(body, content='comments', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2')",
+    "CREATE TABLE \"agent_sessions\" (\n\tid INTEGER NOT NULL, \n\tkind VARCHAR NOT NULL, \n\tcampaign_id INTEGER, \n\trun_id INTEGER, \n\tharness VARCHAR, \n\tmodel VARCHAR, \n\truntime VARCHAR, \n\thandle JSON DEFAULT '{}' NOT NULL, \n\tstate VARCHAR(16) DEFAULT 'requested' NOT NULL, \n\treason VARCHAR, \n\tlog_dir VARCHAR, \n\tstarted_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tended_at DATETIME, \n\terror VARCHAR, \n\tsession_id VARCHAR, \n\tusage JSON, \n\tupdated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_by VARCHAR, machine VARCHAR, session_file VARCHAR, \n\tPRIMARY KEY (id), \n\tCONSTRAINT \"agent_sessions.kind must be a text value\" CHECK (typeof(kind) IN ('text')), \n\tCONSTRAINT \"agent_sessions.model must be a text value\" CHECK (typeof(model) IN ('text', 'null')), \n\tCONSTRAINT \"agent_sessions.harness must be a text value\" CHECK (typeof(harness) IN ('text', 'null')), \n\tCONSTRAINT \"agent_sessions.reason must be a text value\" CHECK (typeof(reason) IN ('text', 'null')), \n\tCONSTRAINT agentsessionstate CHECK (state IN ('requested', 'starting', 'running', 'ending', 'exited', 'killed')), \n\tFOREIGN KEY(run_id) REFERENCES runs (id) ON DELETE SET NULL, \n\tFOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE\n)",
+    'CREATE TABLE limits (\n\t"key" VARCHAR NOT NULL, \n\tvalue JSON NOT NULL, \n\treason VARCHAR NOT NULL, \n\tactor VARCHAR NOT NULL, \n\tat DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tPRIMARY KEY ("key"), \n\tCONSTRAINT "limits.key must be a text value" CHECK (typeof(key) IN (\'text\')), \n\tCONSTRAINT "limits.reason must be a text value" CHECK (typeof(reason) IN (\'text\')), \n\tCONSTRAINT "limits.actor must be a text value" CHECK (typeof(actor) IN (\'text\'))\n)',
+    "CREATE TABLE worker_instances (\n\tid INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \n\tname VARCHAR NOT NULL, \n\tpool VARCHAR NOT NULL, \n\tstate VARCHAR(16) DEFAULT 'starting' NOT NULL, \n\thandle JSON DEFAULT '{}' NOT NULL, \n\trequested_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tregistered_at DATETIME, \n\tended_at DATETIME, \n\t\"end\" VARCHAR(16), \n\tCONSTRAINT \"worker_instances.an ended one says why\" CHECK ((state = 'ended') = (\"end\" IS NOT NULL)), \n\tCONSTRAINT \"worker_instances.name must be a text value\" CHECK (typeof(name) IN ('text')), \n\tCONSTRAINT \"worker_instances.pool must be a text value\" CHECK (typeof(pool) IN ('text')), \n\tUNIQUE (name), \n\tCONSTRAINT workerinstancestate CHECK (state IN ('starting', 'running', 'draining', 'ended')), \n\tCONSTRAINT instanceend CHECK (\"end\" IN ('drained', 'register_timeout', 'start_refused', 'lost', 'gone'))\n)",
+    "CREATE TABLE \"lease_workers\" (\n\tid VARCHAR NOT NULL, \n\tpool VARCHAR NOT NULL, \n\tversion VARCHAR NOT NULL, \n\trunners JSON DEFAULT '[]' NOT NULL, \n\tsample JSON DEFAULT '{}' NOT NULL, \n\tseen_at DATETIME NOT NULL, \n\tno_lease VARCHAR(16), cursor INTEGER DEFAULT 0 NOT NULL, drained_at DATETIME, \n\tPRIMARY KEY (id), \n\tCONSTRAINT \"lease_workers.id must be a text value\" CHECK (typeof(id) IN ('text')), \n\tCONSTRAINT \"lease_workers.pool must be a text value\" CHECK (typeof(pool) IN ('text')), \n\tCONSTRAINT \"lease_workers.version must be a text value\" CHECK (typeof(version) IN ('text')), \n\tCONSTRAINT nolease CHECK (no_lease IN ('draining', 'memory', 'load', 'slots', 'nothing', 'unreachable'))\n)",
+    "CREATE TABLE \"events\" (\n\tid INTEGER NOT NULL,\n\tat DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,\n\tkind VARCHAR NOT NULL GENERATED ALWAYS AS (json_extract(payload, '$.kind')),\n\tactor VARCHAR NOT NULL,\n\ttarget_kind VARCHAR(16) NOT NULL,\n\ttarget_id INTEGER NOT NULL,\n\tpayload JSON NOT NULL,\n\tPRIMARY KEY (id),\n\tCONSTRAINT targetkind CHECK (target_kind IN ('campaign', 'idea', 'run', 'candidate', 'measurement', 'agent_session', 'comment', 'instance', 'home'))\n)",
+    "CREATE TABLE \"leases\" (\n\tid INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \n\tkind VARCHAR(16) NOT NULL, \n\tagent_session_id INTEGER, \n\tevaluation_id INTEGER, \n\tstate VARCHAR(16) DEFAULT 'queued' NOT NULL, \n\tworker VARCHAR, \n\thandle JSON DEFAULT '{}' NOT NULL, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tacquired_at DATETIME, \n\tstarted_at DATETIME, \n\trenewed_at DATETIME, \n\texpires_at DATETIME, \n\trevoked_at DATETIME, \n\tended_at DATETIME, \n\treport_request VARCHAR, \n\treceipt JSON DEFAULT '{}' NOT NULL, \n\tacquire_request VARCHAR, \n\tjob_cid VARCHAR NOT NULL, \n\tCONSTRAINT \"leases.request_id must be a text value\" CHECK (typeof(report_request) IN ('text', 'null')), \n\tCONSTRAINT leasekind CHECK (kind IN ('agent', 'evaluation')), \n\tCONSTRAINT \"leases.worker must be a text value\" CHECK (typeof(worker) IN ('text', 'null')), \n\tCONSTRAINT \"leases.a lease has the job of its kind\" CHECK ((kind = 'agent') = (agent_session_id IS NOT NULL) AND (kind = 'evaluation') = (evaluation_id IS NOT NULL)), \n\tCONSTRAINT leasestate CHECK (state IN ('queued', 'acquired', 'running', 'reported', 'expired', 'cancelled')), \n\tFOREIGN KEY(agent_session_id) REFERENCES agent_sessions (id) ON DELETE CASCADE\n)",
+    'CREATE TABLE first_transfers (\n\tcampaign_id INTEGER NOT NULL, \n\trevision VARCHAR NOT NULL, \n\tblob VARCHAR NOT NULL, \n\tPRIMARY KEY (campaign_id), \n\tCONSTRAINT "first_transfers.revision must be a text value" CHECK (typeof(revision) IN (\'text\')), \n\tCONSTRAINT "first_transfers.blob must be a text value" CHECK (typeof(blob) IN (\'text\')), \n\tFOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE\n)',
+    'CREATE TABLE secrets (\n\tid INTEGER NOT NULL, \n\tcampaign_id INTEGER, \n\tname VARCHAR NOT NULL, \n\tvalue VARCHAR NOT NULL, \n\tPRIMARY KEY (id), \n\tFOREIGN KEY(campaign_id) REFERENCES campaigns (id), \n\tUNIQUE (campaign_id, name)\n)',
+    "CREATE TABLE \"comments\" (\n\tid INTEGER NOT NULL, \n\ttarget_kind VARCHAR(16) NOT NULL, \n\ttarget_id INTEGER NOT NULL, \n\tauthor VARCHAR NOT NULL, \n\tkind VARCHAR(16) DEFAULT 'note' NOT NULL, \n\tbody VARCHAR NOT NULL, \n\tpriority INTEGER, \n\tacked_at DATETIME, \n\tacked_by VARCHAR, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_by VARCHAR, \n\tin_reply_to INTEGER, \n\tPRIMARY KEY (id), \n\tCONSTRAINT \"comments.body must be a text value\" CHECK (typeof(body) IN ('text')), \n\tCONSTRAINT commentkind CHECK (kind IN ('note', 'finding', 'decision', 'escalation', 'message')), \n\tCONSTRAINT targetkind CHECK (target_kind IN ('campaign', 'idea', 'run', 'candidate', 'measurement', 'agent_session', 'comment', 'instance')), \n\tCONSTRAINT \"comments.author must be a text value\" CHECK (typeof(author) IN ('text')), \n\tCONSTRAINT escalation_needs_priority CHECK (kind != 'escalation' OR priority IS NOT NULL), \n\tCONSTRAINT comments_in_reply_to FOREIGN KEY(in_reply_to) REFERENCES comments (id) ON DELETE SET NULL, \n\tCONSTRAINT reply_is_on_a_comment CHECK (in_reply_to IS NULL OR target_kind = 'comment')\n)",
+    'CREATE TABLE migrations (\n\tname VARCHAR NOT NULL, \n\tpackage VARCHAR NOT NULL, \n\tfingerprint INTEGER NOT NULL, \n\tPRIMARY KEY (name)\n)',
+    "CREATE TABLE \"tokens\" (\n\tid INTEGER NOT NULL, \n\tname VARCHAR NOT NULL, \n\taccess VARCHAR(16) NOT NULL, \n\tsha256 VARCHAR NOT NULL, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tagent_session_id INTEGER, \n\tPRIMARY KEY (id), \n\tCONSTRAINT access CHECK (access IN ('read', 'act', 'admin', 'worker')), \n\tCONSTRAINT tokens_agent_session_unique UNIQUE (agent_session_id), \n\tUNIQUE (sha256), \n\tUNIQUE (name)\n)",
+    "CREATE TABLE \"campaigns\" (\n\tid INTEGER NOT NULL, \n\tname VARCHAR NOT NULL, \n\tpath VARCHAR NOT NULL, \n\tconfig JSON NOT NULL, \n\tevaluator_id INTEGER, \n\tstatus VARCHAR(16) DEFAULT 'active' NOT NULL, \n\tstopped_reason VARCHAR, \n\tpaused VARCHAR(16), \n\tpaused_reason VARCHAR, \n\trepo VARCHAR, \n\ttype VARCHAR DEFAULT 'optimization' NOT NULL, \n\tparent_id INTEGER, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_by VARCHAR, \n\tPRIMARY KEY (id), \n\tCONSTRAINT \"campaigns.paused_reason must be a text value\" CHECK (typeof(paused_reason) IN ('text', 'null')), \n\tCONSTRAINT pause CHECK (paused IN ('launches', 'all')), \n\tCONSTRAINT \"campaigns.paused and campaigns.paused_reason go together\" CHECK ((paused IS NULL) = (paused_reason IS NULL)), \n\tCONSTRAINT campaignstatus CHECK (status IN ('active', 'stopped', 'retired')), \n\tFOREIGN KEY(parent_id) REFERENCES campaigns (id)\n)",
+    "CREATE TABLE \"archives\" (\n\tid INTEGER NOT NULL, \n\tcampaign_id INTEGER NOT NULL, \n\tmanifest VARCHAR, \n\tfiles INTEGER DEFAULT 0 NOT NULL, \n\tbytes INTEGER DEFAULT 0 NOT NULL, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tpruned_at DATETIME, \n\tcomplete BOOLEAN DEFAULT 1 NOT NULL, \n\tsubject_kind VARCHAR(16), \n\tsubject_id INTEGER, \n\tPRIMARY KEY (id), \n\tCONSTRAINT targetkind CHECK (subject_kind IN ('campaign', 'idea', 'run', 'candidate', 'measurement', 'agent_session', 'comment', 'instance', 'home')), \n\tCONSTRAINT archives_subject CHECK ((subject_kind IS NULL) = (subject_id IS NULL)), \n\tFOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE\n)",
+    'CREATE TABLE evaluators (\n\tid INTEGER NOT NULL, \n\tcampaign_id INTEGER NOT NULL, \n\t"key" VARCHAR NOT NULL, \n\tdefinition JSON NOT NULL, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, runner VARCHAR DEFAULT \'process\' NOT NULL, \n\tPRIMARY KEY (id), \n\tFOREIGN KEY(campaign_id) REFERENCES "campaigns" (id) ON DELETE CASCADE, \n\tUNIQUE (campaign_id, "key")\n)',
+    "CREATE TABLE ideas (\n\tid INTEGER NOT NULL, \n\tcampaign_id INTEGER NOT NULL, \n\ttitle VARCHAR NOT NULL, \n\thypothesis VARCHAR NOT NULL, \n\ttrack VARCHAR NOT NULL, \n\t\"plan\" VARCHAR, \n\tstatus VARCHAR(16) DEFAULT 'ready' NOT NULL, \n\tpriority INTEGER DEFAULT 2 NOT NULL, \n\tharness VARCHAR, \n\tbase_candidate_id INTEGER, \n\tmax_runs INTEGER DEFAULT 2 NOT NULL, \n\tcreated_by VARCHAR NOT NULL, \n\tprovenance VARCHAR, \n\tfamily VARCHAR, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_by VARCHAR, \n\tPRIMARY KEY (id), \n\tCONSTRAINT \"ideas.created_by must be a text value\" CHECK (typeof(created_by) IN ('text')), \n\tCONSTRAINT \"ideas.family must be a text value\" CHECK (typeof(family) IN ('text', 'null')), \n\tCONSTRAINT \"ideas.harness must be a text value\" CHECK (typeof(harness) IN ('text', 'null')), \n\tCONSTRAINT \"ideas.hypothesis must be a text value\" CHECK (typeof(hypothesis) IN ('text')), \n\tCONSTRAINT \"ideas.plan must be a text value\" CHECK (typeof(plan) IN ('text', 'null')), \n\tCONSTRAINT \"ideas.provenance must be a text value\" CHECK (typeof(provenance) IN ('text', 'null')), \n\tCONSTRAINT \"ideas.title must be a text value\" CHECK (typeof(title) IN ('text')), \n\tCONSTRAINT \"ideas.track must be a text value\" CHECK (typeof(track) IN ('text')), \n\tFOREIGN KEY(campaign_id) REFERENCES \"campaigns\" (id) ON DELETE CASCADE, \n\tUNIQUE (campaign_id, title), \n\tCONSTRAINT ideastatus CHECK (status IN ('seed', 'proposed', 'ready', 'scheduled', 'done', 'parked', 'rejected'))\n)",
+    'CREATE TABLE techniques (\n\tid INTEGER NOT NULL, \n\tcampaign_id INTEGER NOT NULL, \n\ttitle VARCHAR NOT NULL, \n\tmechanism VARCHAR NOT NULL, \n\turl VARCHAR NOT NULL, \n\tcreated_by VARCHAR NOT NULL, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT "techniques.created_by must be a text value" CHECK (typeof(created_by) IN (\'text\')), \n\tCONSTRAINT "techniques.mechanism must be a text value" CHECK (typeof(mechanism) IN (\'text\')), \n\tCONSTRAINT "techniques.title must be a text value" CHECK (typeof(title) IN (\'text\')), \n\tCONSTRAINT "techniques.url must be a text value" CHECK (typeof(url) IN (\'text\')), \n\tFOREIGN KEY(campaign_id) REFERENCES "campaigns" (id) ON DELETE CASCADE, \n\tUNIQUE (campaign_id, url)\n)',
+    "CREATE TABLE idea_links (\n\tidea_id INTEGER NOT NULL, \n\ttarget_id INTEGER NOT NULL, \n\tkind VARCHAR(16) NOT NULL, \n\tPRIMARY KEY (idea_id, target_id, kind), \n\tCONSTRAINT idea_links_not_self CHECK (idea_id != target_id), \n\tFOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE CASCADE, \n\tFOREIGN KEY(target_id) REFERENCES ideas (id) ON DELETE CASCADE, \n\tCONSTRAINT linkkind CHECK (kind IN ('after', 'supersedes'))\n)",
+    "CREATE VIRTUAL TABLE ideas_fts USING fts5(title, hypothesis, plan, content='ideas', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2')",
+    "CREATE TABLE evaluations (\n\tid INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, \n\tcandidate_id INTEGER NOT NULL, \n\tevaluator_id INTEGER NOT NULL, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tstarted_at DATETIME, \n\tcancelled_by VARCHAR, \n\tCONSTRAINT \"evaluations.cancelled_by must be a text value\" CHECK (typeof(cancelled_by) IN ('text', 'null')), \n\tFOREIGN KEY(candidate_id) REFERENCES candidates (id) ON DELETE CASCADE, \n\tFOREIGN KEY(evaluator_id) REFERENCES evaluators (id), \n\tUNIQUE (candidate_id, evaluator_id)\n)",
+    "CREATE TABLE \"runs\" (\n\tid INTEGER NOT NULL, \n\tidea_id INTEGER NOT NULL, \n\trole VARCHAR DEFAULT 'implementer' NOT NULL, \n\tattempt INTEGER NOT NULL, \n\tbase_candidate_id INTEGER NOT NULL, \n\tbranch BOOLEAN DEFAULT 0 NOT NULL, \n\tharness VARCHAR NOT NULL, \n\tmodel VARCHAR NOT NULL, \n\tstatus VARCHAR(16) DEFAULT 'queued' NOT NULL, \n\tscoring BOOLEAN DEFAULT 0 NOT NULL, \n\tstarted_at DATETIME, \n\tfinished_at DATETIME, \n\terror VARCHAR, \n\tlog_dir VARCHAR, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_by VARCHAR, \n\t\"end\" VARCHAR(16), brief_cid VARCHAR, \n\tPRIMARY KEY (id), \n\tCONSTRAINT runstatus CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'timed_out')), \n\tCONSTRAINT \"runs.scoring needs a finished status\" CHECK (scoring = 0 OR status IN ('succeeded', 'failed', 'timed_out')), \n\tCONSTRAINT runend CHECK (\"end\" IN ('finished', 'failed', 'timed_out', 'awaiting_answer', 'cancelled', 'campaign_stopped', 'daemon_stopped', 'stale', 'role_removed', 'not_started', 'worker_lost')), \n\tCONSTRAINT \"runs.end is set once a run is finished\" CHECK ((\"end\" IS NULL) = (status IN ('queued', 'running'))), \n\tCONSTRAINT \"runs.status follows from runs.end\" CHECK (\"end\" IS NULL OR status = CASE \"end\" WHEN 'finished' THEN 'succeeded' WHEN 'timed_out' THEN 'timed_out' ELSE 'failed' END), \n\tFOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE CASCADE, \n\tUNIQUE (idea_id, attempt)\n)",
+    "CREATE TABLE \"measurements\" (\n\tid INTEGER NOT NULL, \n\tcandidate_id INTEGER NOT NULL, \n\tevaluator_id INTEGER NOT NULL, \n\tmetrics JSON DEFAULT '{}' NOT NULL, \n\terror VARCHAR, \n\tseconds DOUBLE, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tpair_id INTEGER, \n\trung VARCHAR, \n\tstopped VARCHAR, \n\tPRIMARY KEY (id), \n\tCONSTRAINT measurements_pair FOREIGN KEY(pair_id) REFERENCES measurements (id) ON DELETE SET NULL, \n\tCONSTRAINT \"measurements.a stop is at a rung, with no error\" CHECK (stopped IS NULL OR (rung IS NOT NULL AND error IS NULL)), \n\tCONSTRAINT \"measurements.rung must be a text value\" CHECK (typeof(rung) IN ('text', 'null')), \n\tCONSTRAINT \"measurements.stopped must be a text value\" CHECK (typeof(stopped) IN ('text', 'null')), \n\tFOREIGN KEY(candidate_id) REFERENCES candidates (id) ON DELETE CASCADE, \n\tFOREIGN KEY(evaluator_id) REFERENCES evaluators (id)\n)",
+    "CREATE TABLE \"candidates\" (\n\tid INTEGER NOT NULL, \n\tcampaign_id INTEGER NOT NULL, \n\trun_id INTEGER, \n\tparent_id INTEGER, \n\ttree_sha VARCHAR NOT NULL, \n\trevision VARCHAR NOT NULL, \n\tsummary VARCHAR, \n\tverdict VARCHAR(16), \n\tverdict_by VARCHAR, \n\tverdict_reason VARCHAR, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_by VARCHAR, \n\torigin VARCHAR(16) DEFAULT 'run' NOT NULL, \n\tcause VARCHAR(16), \n\ttrack VARCHAR, \n\tPRIMARY KEY (id), \n\tCONSTRAINT \"candidates.cause needs interesting\" CHECK (cause IS NULL OR verdict = 'interesting'), \n\tCONSTRAINT \"candidates.verdict_by must be a text value\" CHECK (typeof(verdict_by) IN ('text', 'null')), \n\tCONSTRAINT origin CHECK (origin IN ('baseline', 'run', 'reference', 'recovered', 'skipped')), \n\tCONSTRAINT \"candidates.summary must be a text value\" CHECK (typeof(summary) IN ('text', 'null')), \n\tCONSTRAINT \"candidates.verdict_reason must be a text value\" CHECK (typeof(verdict_reason) IN ('text', 'null')), \n\tCONSTRAINT outcome CHECK (verdict IN ('keep', 'interesting', 'discard', 'crash')), \n\tCONSTRAINT \"candidates.verdict needs a judged origin\" CHECK (verdict IS NULL OR origin IN ('baseline', 'reference', 'run')), \n\tCONSTRAINT cause CHECK (cause IN ('note', 'moved')), \n\tCONSTRAINT \"candidates.track must be a text value\" CHECK (typeof(track) IN ('text', 'null')), \n\tFOREIGN KEY(parent_id) REFERENCES candidates (id), \n\tFOREIGN KEY(run_id) REFERENCES runs (id) ON DELETE SET NULL, \n\tUNIQUE (campaign_id, tree_sha), \n\tFOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE\n)",
+    "CREATE VIRTUAL TABLE documents_fts USING fts5(title, body, content='documents', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2')",
+    "CREATE TABLE lessons (\n\tid INTEGER NOT NULL, \n\tcampaign_id INTEGER NOT NULL, \n\tfamily VARCHAR NOT NULL, \n\tstatus VARCHAR(16) NOT NULL, \n\teffect DOUBLE, \n\tmetric VARCHAR, \n\tbody VARCHAR NOT NULL, \n\tcreated_by VARCHAR NOT NULL, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tPRIMARY KEY (id), \n\tCONSTRAINT \"lessons.effect and lessons.metric go together\" CHECK ((effect IS NULL) = (metric IS NULL)), \n\tCONSTRAINT \"lessons.effect must be a number\" CHECK (typeof(effect) IN ('integer', 'real', 'null')), \n\tCONSTRAINT \"lessons.family must be a text value\" CHECK (typeof(family) IN ('text')), \n\tCONSTRAINT \"lessons.body must be a text value\" CHECK (typeof(body) IN ('text')), \n\tCONSTRAINT \"lessons.created_by must be a text value\" CHECK (typeof(created_by) IN ('text')), \n\tCONSTRAINT \"lessons.metric must be a text value\" CHECK (typeof(metric) IN ('text', 'null')), \n\tFOREIGN KEY(campaign_id) REFERENCES \"campaigns\" (id) ON DELETE CASCADE, \n\tCONSTRAINT lessonstatus CHECK (status IN ('dead', 'promising', 'untested'))\n)",
+    'CREATE TABLE "documents" (\n\tid INTEGER NOT NULL, \n\tcampaign_id INTEGER NOT NULL, \n\tpath VARCHAR NOT NULL, \n\thash VARCHAR NOT NULL, \n\ttitle VARCHAR NOT NULL, \n\tbody VARCHAR NOT NULL, \n\tcreated_by VARCHAR NOT NULL, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tupdated_by VARCHAR, \n\tPRIMARY KEY (id), \n\tCONSTRAINT "documents.path must be a text value" CHECK (typeof(path) IN (\'text\')), \n\tCONSTRAINT "documents.created_by must be a text value" CHECK (typeof(created_by) IN (\'text\')), \n\tCONSTRAINT "documents.title must be a text value" CHECK (typeof(title) IN (\'text\')), \n\tCONSTRAINT "documents.body must be a text value" CHECK (typeof(body) IN (\'text\')), \n\tCONSTRAINT "documents.hash is the blake3 hex digest of body" CHECK (length(hash) = 64 AND hash NOT GLOB \'*[^0-9a-f]*\'), \n\tFOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE, \n\tUNIQUE (campaign_id, path, hash)\n)',
+    'CREATE TABLE "journal" (\n\tid INTEGER NOT NULL, \n\tauthor VARCHAR NOT NULL, \n\tline VARCHAR NOT NULL, \n\tcreated_at DATETIME DEFAULT (CURRENT_TIMESTAMP) NOT NULL, \n\tcampaign_id INTEGER, \n\tPRIMARY KEY (id), \n\tCONSTRAINT "journal.author must be a text value" CHECK (typeof(author) IN (\'text\')), \n\tCONSTRAINT "journal.line is text of 1 to 280 bytes" CHECK (typeof(line) IN (\'text\') AND length(CAST(line AS BLOB)) BETWEEN 1 AND 280), \n\tCONSTRAINT journal_campaign FOREIGN KEY(campaign_id) REFERENCES campaigns (id)\n)',
+    'CREATE INDEX ix_agent_sessions_campaign_kind_state ON agent_sessions (campaign_id, kind, state)',
+    'CREATE INDEX ix_agent_sessions_run ON agent_sessions (run_id)',
+    'CREATE INDEX ix_worker_instances_state ON worker_instances (state)',
+    'CREATE INDEX ix_events_target ON events (target_kind, target_id, id)',
+    'CREATE INDEX ix_events_kind ON events (kind, target_kind, target_id, id)',
+    'CREATE INDEX ix_leases_evaluation ON leases (evaluation_id)',
+    'CREATE UNIQUE INDEX ix_leases_acquire_request ON leases (acquire_request)',
+    'CREATE INDEX ix_leases_state ON leases (state)',
+    'CREATE INDEX ix_leases_agent_session ON leases (agent_session_id)',
+    'CREATE UNIQUE INDEX ux_secrets_home_name ON secrets (name) WHERE campaign_id IS NULL',
+    'CREATE INDEX ix_comments_target ON comments (target_kind, target_id)',
+    'CREATE INDEX ix_comments_inbox ON comments (priority, id) WHERE priority IS NOT NULL AND acked_at IS NULL',
+    "CREATE UNIQUE INDEX ix_campaigns_name ON campaigns (name) WHERE status != 'retired'",
+    'CREATE INDEX ix_archives_campaign_subject ON archives (campaign_id, subject_kind, subject_id)',
+    'CREATE INDEX ix_idea_links_target ON idea_links (target_id, kind)',
+    'CREATE INDEX ix_ideas_campaign_status_priority ON ideas (campaign_id, status, priority)',
+    'CREATE INDEX ix_runs_status ON runs (status)',
+    'CREATE INDEX ix_measurements_candidate_evaluator ON measurements (candidate_id, evaluator_id)',
+    'CREATE INDEX ix_candidates_run ON candidates (run_id)',
+    'CREATE INDEX ix_candidates_parent ON candidates (parent_id)',
+    'CREATE INDEX ix_candidates_campaign_verdict ON candidates (campaign_id, verdict)',
+    'CREATE INDEX ix_lessons_campaign_family ON lessons (campaign_id, family)',
+    'CREATE INDEX ix_journal_campaign ON journal (campaign_id)',
+    "CREATE TRIGGER agent_sessions_updated_at AFTER UPDATE ON agent_sessions\nWHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by\nBEGIN\n  UPDATE agent_sessions SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;\nEND",
+    "CREATE TRIGGER comments_updated_at AFTER UPDATE ON comments\nWHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by\nBEGIN\n  UPDATE comments SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;\nEND",
+    "CREATE TRIGGER comments_escalation_event AFTER INSERT ON comments\nWHEN NEW.kind = 'escalation'\nBEGIN\n  INSERT INTO events (at, actor, target_kind, target_id, payload)\n  VALUES (strftime('%Y-%m-%d %H:%M:%f', 'now'), NEW.author, 'comment', NEW.id, json_object('kind', 'comment.' || NEW.kind, 'target_kind', NEW.target_kind, 'target_id', NEW.target_id, 'in_reply_to', NEW.in_reply_to));\nEND",
+    'CREATE TRIGGER comments_fts_insert AFTER INSERT ON comments\nBEGIN\n  INSERT INTO comments_fts (rowid, body) VALUES (NEW.id, NEW.body);\nEND',
+    "CREATE TRIGGER comments_fts_delete AFTER DELETE ON comments\nBEGIN\n  INSERT INTO comments_fts (comments_fts, rowid, body) VALUES ('delete', OLD.id, OLD.body);\nEND",
+    "CREATE TRIGGER comments_fts_update AFTER UPDATE OF id, body ON comments\nBEGIN\n  INSERT INTO comments_fts (comments_fts, rowid, body) VALUES ('delete', OLD.id, OLD.body);\n  INSERT INTO comments_fts (rowid, body) VALUES (NEW.id, NEW.body);\nEND",
+    "CREATE TRIGGER campaigns_updated_at AFTER UPDATE ON campaigns\nWHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by\nBEGIN\n  UPDATE campaigns SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;\nEND",
+    "CREATE TRIGGER campaigns_parent_insert AFTER INSERT ON campaigns\nWHEN NEW.parent_id IS NOT NULL AND NEW.id IN (WITH RECURSIVE up(id) AS (SELECT NEW.parent_id UNION SELECT p.parent_id FROM campaigns p JOIN up ON p.id = up.id WHERE p.parent_id IS NOT NULL) SELECT id FROM up)\nBEGIN\n  SELECT RAISE(ABORT, 'campaigns.parent_id: a campaign cannot be under itself or under one of its descendants');\nEND",
+    "CREATE TRIGGER campaigns_parent_update AFTER UPDATE OF parent_id ON campaigns\nWHEN NEW.parent_id IS NOT NULL AND NEW.id IN (WITH RECURSIVE up(id) AS (SELECT NEW.parent_id UNION SELECT p.parent_id FROM campaigns p JOIN up ON p.id = up.id WHERE p.parent_id IS NOT NULL) SELECT id FROM up)\nBEGIN\n  SELECT RAISE(ABORT, 'campaigns.parent_id: a campaign cannot be under itself or under one of its descendants');\nEND",
+    "CREATE TRIGGER agent_sessions_kind BEFORE INSERT ON agent_sessions\nWHEN NEW.campaign_id IS NOT NULL AND (SELECT json_type(config, '$.plugins.role.' || json_quote(NEW.kind)) FROM campaigns WHERE id = NEW.campaign_id) IS NULL\nBEGIN\n  SELECT RAISE(ABORT, 'agent_sessions.kind must be a role of the campaign: a key of plugins.role in its config');\nEND",
+    "CREATE TRIGGER ideas_updated_at AFTER UPDATE ON ideas\nWHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by\nBEGIN\n  UPDATE ideas SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;\nEND",
+    "CREATE TRIGGER idea_links_campaign BEFORE INSERT ON idea_links\nWHEN (SELECT campaign_id FROM ideas WHERE id = NEW.idea_id) IS NOT (SELECT campaign_id FROM ideas WHERE id = NEW.target_id)\nBEGIN\n  SELECT RAISE(ABORT, 'idea_links: idea_id and target_id must be ideas of the same campaign');\nEND",
+    'CREATE TRIGGER ideas_fts_insert AFTER INSERT ON ideas\nBEGIN\n  INSERT INTO ideas_fts (rowid, title, hypothesis, plan) VALUES (NEW.id, NEW.title, NEW.hypothesis, NEW.plan);\nEND',
+    "CREATE TRIGGER ideas_fts_delete AFTER DELETE ON ideas\nBEGIN\n  INSERT INTO ideas_fts (ideas_fts, rowid, title, hypothesis, plan) VALUES ('delete', OLD.id, OLD.title, OLD.hypothesis, OLD.plan);\nEND",
+    "CREATE TRIGGER ideas_fts_update AFTER UPDATE OF id, title, hypothesis, plan ON ideas\nBEGIN\n  INSERT INTO ideas_fts (ideas_fts, rowid, title, hypothesis, plan) VALUES ('delete', OLD.id, OLD.title, OLD.hypothesis, OLD.plan);\n  INSERT INTO ideas_fts (rowid, title, hypothesis, plan) VALUES (NEW.id, NEW.title, NEW.hypothesis, NEW.plan);\nEND",
+    "CREATE TRIGGER runs_updated_at AFTER UPDATE ON runs\nWHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by\nBEGIN\n  UPDATE runs SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;\nEND",
+    "CREATE TRIGGER candidates_updated_at AFTER UPDATE ON candidates\nWHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by\nBEGIN\n  UPDATE candidates SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;\nEND",
+    "CREATE TRIGGER lessons_no_replace BEFORE INSERT ON lessons\nWHEN EXISTS (SELECT 1 FROM lessons WHERE id = NEW.id)\nBEGIN\n  SELECT RAISE(ABORT, 'lessons rows are never replaced: insert a new row');\nEND",
+    "CREATE TRIGGER documents_updated_at AFTER UPDATE ON documents\nWHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by\nBEGIN\n  UPDATE documents SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;\nEND",
+    'CREATE TRIGGER documents_fts_insert AFTER INSERT ON documents\nBEGIN\n  INSERT INTO documents_fts (rowid, title, body) VALUES (NEW.id, NEW.title, NEW.body);\nEND',
+    "CREATE TRIGGER documents_fts_delete AFTER DELETE ON documents\nBEGIN\n  INSERT INTO documents_fts (documents_fts, rowid, title, body) VALUES ('delete', OLD.id, OLD.title, OLD.body);\nEND",
+    "CREATE TRIGGER documents_fts_update AFTER UPDATE OF id, title, body ON documents\nBEGIN\n  INSERT INTO documents_fts (documents_fts, rowid, title, body) VALUES ('delete', OLD.id, OLD.title, OLD.body);\n  INSERT INTO documents_fts (rowid, title, body) VALUES (NEW.id, NEW.title, NEW.body);\nEND",
+    "CREATE TRIGGER journal_no_replace BEFORE INSERT ON journal\nWHEN EXISTS (SELECT 1 FROM journal WHERE id = NEW.id)\nBEGIN\n  SELECT RAISE(ABORT, 'journal rows are never replaced: insert a new row');\nEND",
+)
+"""What the revisions left, as SQLite printed it: the tables, then the indexes, then the triggers."""
+TABLES = (
+    'comments_fts',
+    'agent_sessions',
+    'limits',
+    'worker_instances',
+    'lease_workers',
+    'events',
+    'leases',
+    'first_transfers',
+    'secrets',
+    'comments',
+    'migrations',
+    'tokens',
+    'campaigns',
+    'archives',
+    'evaluators',
+    'ideas',
+    'techniques',
+    'idea_links',
+    'ideas_fts',
+    'evaluations',
+    'runs',
+    'measurements',
+    'candidates',
+    'documents_fts',
+    'lessons',
+    'documents',
+    'journal',
+)
+
+
+def upgrade() -> None:
+    connection = op.get_bind()
+    for statement in SCHEMA:
+        connection.exec_driver_sql(statement)
+
+
+def downgrade() -> None:
+    connection = op.get_bind()
+    for table in reversed(TABLES):
+        connection.exec_driver_sql(f'DROP TABLE "{table}"')

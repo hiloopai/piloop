@@ -608,3 +608,26 @@ def test_a_merge_writes_each_path_that_still_holds_its_base_and_puts_the_others_
 
 def test_nothing_changed_where_no_tree_is(tmp_path: Path) -> None:
     assert changed(disk(tmp_path), tmp_path / 'never-made', Manifest(entries=()), {}) == {}
+
+
+def test_an_eviction_skips_a_copy_that_another_eviction_took_meanwhile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The daemon and each worker evict the same copies: one that goes after the listing is not an error."""
+    root = tmp_path / 'inputs'
+    root.mkdir()
+    for name in ('a', 'b'):
+        (root / name).write_bytes(b'x')
+    (root / 'not-a-copy').mkdir()
+    listed = os.scandir
+
+    def gone_after_listing(path: Path) -> list[os.DirEntry[str]]:
+        entries = list(listed(path))
+        (root / 'a').unlink()
+        return entries
+
+    with monkeypatch.context() as patched:
+        patched.setattr(tree_module.os, 'scandir', gone_after_listing)
+        patched.setattr(tree_module, 'free', lambda _root: 0)
+        assert tree_module.evict_unlinked(root, reserve=1) == 1
+    assert list(root.iterdir()) == [root / 'not-a-copy'], 'a directory is no copy'

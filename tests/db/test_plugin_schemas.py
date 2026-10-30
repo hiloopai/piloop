@@ -6,15 +6,14 @@ from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
-from alembic import command
 from sqlalchemy import create_engine
 
 from piloop.actor import System
 from piloop.cli.doctor import _database as database_check
 from piloop.db import sql
 from piloop.db.models import TARGET_KINDS
-from piloop.db.schema import CORE, SCHEMAS
-from piloop.db.session import SchemaAhead, alembic_config, migrate, schema_mismatch, stamps
+from piloop.db.schema import SCHEMAS
+from piloop.db.session import SchemaAhead, migrate, schema_mismatch, stamps
 from tests.conftest import disk
 from tests.daemon.test_roles import installed
 
@@ -82,13 +81,8 @@ def test_an_uninstalled_package_leaves_its_tables_and_a_home_that_migrates_and_o
     assert found.endswith(
         '; warning: the plugin notes (notes = tests.fixtures.notes.tables:SCHEMA) is not installed: its tables stay'
     )
-    command.downgrade(alembic_config(f'sqlite:///{path}', CORE, disk(tmp_path)), '0059')
-    found = database_check(path, None, System.HUMAN)
-    assert found.fix is not None, 'core is behind: migrate'
     migrated(path)
-    assert database_check(path, None, System.HUMAN).found.endswith(
-        '; warning: the plugin notes (an unknown package) is not installed: its tables stay'
-    ), 'core migrated past it: the migrations table lost its row, and its tables stayed'
+    assert stamps(path)['notes'] == '0001', 'core migrates past it, and its tables stay'
     assert rows(path, 'SELECT body FROM notes ORDER BY id') == [('stays',), ('goes with its campaign',)]
     rows(path, "DELETE FROM campaigns WHERE name = 'gone'")
     assert rows(path, 'SELECT body FROM notes') == [('stays',)], 'SQLite cascades without the package'

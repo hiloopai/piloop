@@ -22,7 +22,7 @@ from tests.conftest import SETTLE, ScriptRuntime, factory, register, run_all, wo
 
 TOML = """
 name = "tracks"
-evaluate = ["sh", "-c", "echo METRIC accuracy=$(wc -l < acc.txt); echo METRIC cost=$(wc -l < cost.txt)"]
+evaluate = ["sh", "-c", "printf '{{\\"metrics\\": {{\\"accuracy\\": %s, \\"cost\\": %s}}}}\\n' $(wc -l < acc.txt) $(wc -l < cost.txt) >> \\"$PILOOP_RESULT_FILE\\""]
 evaluate_timeout = 30
 
 [plugins.runtime]

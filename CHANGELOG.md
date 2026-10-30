@@ -5,6 +5,85 @@ All notable changes to piloop are in this file. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, a minor release may contain breaking changes.
 A deprecated configuration key shows a warning for at least one minor release before it is removed.
 
+## [0.5.0](https://github.com/hiloopai/piloop/compare/v0.4.0...v0.5.0) - 2026-10-29
+
+This release has breaking changes, marked **Breaking** below. Read
+[Upgrading](https://piloop.autoresearch.inc/guides/upgrading) before you upgrade.
+
+The upgrade migrates the database from 0.4.0 or newer only. A 0.3 database upgrades through 0.4 first. Upgrade
+`piloop worker` on every machine with the server: the worker protocol is 17, and the server refuses another.
+
+### Added
+
+- Escalations are a plugin. An agent files one with `piloop escalate` and a typed form: one ask in plain words, a short
+  why, options with their results, and the details. A human answers it with `piloop inbox choose`, or with a button
+  in Slack, signed as the person who clicks.
+- A campaign picks its notifiers and their secrets in `piloop.toml`, over the defaults of `config.toml`. One
+  `slack_app` socket serves each app token.
+- A `docker` runtime runs each agent in a container that sees only its own files and the hosts that you allow.
+- Plugins declare the kinds that events and comments point at (`target_kinds`) and their own kinds of comments
+  (`comment_kinds`).
+- A package adds a kind of job: a lease names its job by kind, and a pool has `slots` for each kind.
+- Launch fairness and harness choice are capabilities: `launch_policy` and `harness_choice`.
+- Plugins add to or replace the orchestrator skills.
+- `piloop doctor` runs the checks of each provider in use.
+- A brief's context is a section, and each role sets its first message.
+
+### Changed
+
+- **Breaking:** An agent session works on a subject (`agent_sessions.subject_kind`, `subject_id`) in place of
+  `run_id`. `agent_session.identified` carries `subject`, `groups` and `parent`, and `anomaly.startup` carries
+  `subject`. The upgrade rewrites the stored events.
+- **Breaking:** The worker protocol is 17: upgrade every worker with the server.
+- **Breaking:** `evaluations` of a pool is `slots = { evaluation = n }`.
+- **Breaking:** A campaign's notifiers are its own. A notifier plugin's `send`, `Inbound` and `Listens` change.
+- **Breaking:** `comments.kind` and the target kinds are foreign keys, and the upgrade rebuilds `events` and
+  `comments` once.
+- **Breaking:** The state of a campaign has no `tokens`: read the `tokens` fact.
+- **Breaking:** `startup_relaunches`, `finding_grace` and `wrap_up_lead` are keys of the implementer role.
+  `startup_breaker` and `startup_window` are keys of `[plugins.launch_policy]`.
+- **Breaking:** An agent's escalation without a form is refused: file it with `piloop escalate`.
+- **Breaking:** The plugin API for executors and vcs: `submit(Job)`, `Capacity(agents, slots)`, `JobKey(kind, id)`,
+  `Repository.capture(..., by, ...)` and `Repository.keep(revision, Pin)`.
+- **Breaking:** A role's `sections` list shows the context only where it names `context`.
+
+### Deprecated
+
+These still load until 0.6.0:
+
+- A job that piloop 0.4 queued, which names its run by id: an agent of 0.4 that runs at the upgrade keeps its run.
+- `[daemon] startup_relaunches` and `[agents] finding_grace` and `wrap_up_lead`: write them in
+  `[plugins.role.implementer]`.
+- The notifiers of `config.toml` for a campaign that 0.4 stored, until its next `piloop init`.
+
+### Removed
+
+- Every form that 0.4 bridged with a warning until 0.5.0:
+  - the 0.3 tables and lists of `piloop.toml`: `[harness.<name>]`, `[roles.<name>]`, `harnesses`, `runtime`,
+    `[model]`, `[max_concurrent]`, `[mcp.<name>]`, inline triggers, sections and `[[facts]]`, and `[status] sections`;
+  - `[runtimes.<name>]` of `config.toml`;
+  - `[spend]`, `max_spend`, `[memory] documents`, `wake_budget`, the `mcp` and `usage` of a harness table, the
+    `anomaly` trigger, `name_claim` and the pool's `evaluations`;
+  - `METRIC` lines and `PILOOP_UNITS_FILE`: the evaluate command writes its result line;
+  - `PILOOP_SECRETS_COMMAND` and `secrets_command`: keep the secrets with `piloop secret set`;
+  - a Claude login in `~/.claude/settings.json` that reached the agents: set it in the harness's `env`;
+  - `piloop agent messages --format`;
+  - the 0.3.1 names of the plugin API: `Campaign.ideas`, `Campaign.evaluator`, the research tables of
+    `piloop.db.models`, `EvaluationKey`, `Capacity(evaluations=)`, `RunVersion`, `RebaseVersion`, `ReferenceVersion`
+    and `Keep`.
+
+  Each one now fails as an unknown key, or with a message.
+- The migrations before 0.4's heads, squashed into one baseline for each chain.
+
+### Fixed
+
+- An agent that survives `piloop restart` can still be steered.
+- A campaign retired mid-pass no longer ends the daemon, and configs that 0.4.0 stored load again.
+- A stopped campaign's escalations stop reminding.
+- An inbox item that lands while the news is read is never passed.
+- git that reaches a remote asks no askpass helper of the daemon's environment.
+- A Slack listener's stop no longer waits forever on a reconnect.
+
 ## [0.4.0](https://github.com/hiloopai/piloop/compare/v0.3.1...v0.4.0) - 2026-10-28
 
 This release has breaking changes, marked **Breaking** below. Read

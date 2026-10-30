@@ -53,7 +53,6 @@ from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.contribution import Contributes
 from piloop.plugins.harness.contract import HARNESSES, Harness, Usage
 from piloop.plugins.host import Capability, One, Parameters, Scope, Slot
-from piloop.plugins.mcp_server.bridges import MCP_PROVIDERS
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer
 from piloop.plugins.network.contract import Network
 from piloop.plugins.runtime.contract import AgentExit, AgentStart, Handle, RuntimeFactory
@@ -204,48 +203,19 @@ class AgentJob(Job):
     """Continue this session instead of starting a new one. When the worker cannot write its file back, it starts the
     agent with ``spec`` and says why (``AgentFinished.unrestored``)."""
 
+    @model_validator(mode='before')
+    @classmethod
+    def _capture(cls, data: object) -> object:
+        """A job that a daemon of 0.4 queued captures for a run by its id: its agent may still run at the upgrade."""
+        if not isinstance(data, dict) or not isinstance(run := data.get('capture'), int):
+            return data
+        deprecated.until('0.6.0', 'a job of 0.4 captures for a run id: delete AgentJob._capture')
+        return {**data, 'capture': f'run#{run}'}
+
     @property
     def needs_session_id(self) -> bool:
         """Whether the session id is needed when the agent ends, for the usage: the worker asks the runtime for it."""
         return self.harness is not None and self.harness.needs_session_id
-
-    @model_validator(mode='before')
-    @classmethod
-    def _harness(cls, data: object) -> object:
-        """A job that a 0.3 daemon queued names its MCP renderer and its usage tally, each the name of a harness."""
-        if not isinstance(data, dict) or 'harness' in data or not ({'mcp', 'usage'} & data.keys()):
-            return data
-        deprecated.until('0.5.0', 'a job of a 0.3 daemon names mcp and usage: delete AgentJob._harness')
-        usage = data.get('usage')
-        named = (usage.get('tally') if isinstance(usage, dict) else None) or data.get('mcp')
-        rest = {k: v for k, v in data.items() if k not in ('mcp', 'usage')}
-        return {**rest, 'harness': {'provider': named}} if named is not None else rest
-
-    @model_validator(mode='before')
-    @classmethod
-    def _capture(cls, data: object) -> object:
-        """A job that a daemon of 0.4 or older queued captures for a run by its id: its agent may still run."""
-        if not isinstance(data, dict) or not isinstance(run := data.get('capture'), int):
-            return data
-        deprecated.until('0.5.0', 'a job of 0.4 captures for a run id: delete AgentJob._capture')
-        return {**data, 'capture': f'run#{run}'}
-
-    @model_validator(mode='before')
-    @classmethod
-    def _servers(cls, data: object) -> object:
-        """A job that a daemon of protocol 13 queued carries its servers without their provider."""
-        if not isinstance(data, dict) or not isinstance(servers := data.get('servers'), dict):
-            return data
-        if all(isinstance(t, dict) and 'provider' in t for t in servers.values()):
-            return data
-        deprecated.until(
-            '0.5.0',
-            'the servers of a job of protocol 13 or older (0.3.1 is 7) have no provider: delete AgentJob._servers',
-        )
-        tables = {name: dict(t) if isinstance(t, dict) else t for name, t in servers.items()}
-        for step in MCP_PROVIDERS:
-            step.apply({'plugins': {'mcp_server': tables}})
-        return {**data, 'servers': tables}
 
 
 def job_secrets(s: Session, secrets: SecretsProvider, job: AgentJob) -> JobSecrets:
@@ -560,12 +530,6 @@ type Key = AgentKey | JobKey
 """The key of any job."""
 
 
-@deprecated.until('0.5.0', "EvaluationKey(n) of 0.3.1 is JobKey('evaluation', n): delete EvaluationKey")
-def EvaluationKey(evaluation: int) -> JobKey:
-    """The key of an evaluation's job, as 0.3.1 named it: ``JobKey('evaluation', evaluation)``."""
-    return JobKey('evaluation', evaluation)
-
-
 def key_of(job: Job) -> Key:
     """Return the key of ``job``."""
     return AgentKey(job.agent_session) if isinstance(job, AgentJob) else JobKey(job.kind, kind_of(job).id(job))
@@ -682,25 +646,13 @@ class Capacity:
     slots: Mapping[str, int | None]
     """The free slots of each ``JobKind`` by name. A kind that it does not name has none."""
 
-    def __init__(self, agents: int | None, slots: Mapping[str, int | None] | None = None, **old: int | None) -> None:
-        found = dict(slots or {})
-        if unknown := sorted(set(old) - {'evaluations'}):
-            raise TypeError(f'Capacity takes agents and slots, not {", ".join(unknown)}')
-        if 'evaluations' in old:
-            deprecated.until('0.5.0', "Capacity(evaluations=n) of 0.3.1 is Capacity(slots={'evaluation': n})")
-            found.setdefault('evaluation', old['evaluations'])
+    def __init__(self, agents: int | None, slots: Mapping[str, int | None] | None = None) -> None:
         object.__setattr__(self, 'agents', agents)
-        object.__setattr__(self, 'slots', MappingProxyType(found))
+        object.__setattr__(self, 'slots', MappingProxyType(dict(slots or {})))
 
     def free(self, kind: str) -> int | None:
         """The free slots of jobs of ``kind``: ``AGENT``, or a ``JobKind``'s name. None: no bound."""
         return self.agents if kind == AGENT else self.slots.get(kind, 0)
-
-    @property
-    def evaluations(self) -> int | None:
-        """The free slots of evaluations, as 0.3.1 named them."""
-        deprecated.until('0.5.0', "Capacity.evaluations of 0.3.1 is Capacity.free('evaluation')")
-        return self.free('evaluation')
 
 
 class Executor[C: ExecutorConfig](Contributes, Protocol):

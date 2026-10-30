@@ -71,7 +71,6 @@ def test_a_healthy_install_passes_every_check(
         'ok    daemon: not running',
         f'ok    database: {tmp_path}/piloop.db at schema {HEADS}, current',
         IsStr(regex=r'ok    plugins: (\d+ [\w ]+, )*\d+ [\w ]+; all built in'),
-        'ok    secrets: from `piloop secret set` (no secrets_command)',
         f'ok    campaign demo: {campaign.path}/piloop.toml loads',
         f'ok    skills (pi): current in {cfg.agent_skills_dir}',
         f'ok    harness {Path(campaign.path).parent}/harness.sh: on PATH',
@@ -320,73 +319,13 @@ def test_mcp_servers_are_checked_for_their_commands_and_their_secrets_by_name_on
         set_secret(s, SECRETS.selected({}), System.HUMAN, None, 'EXA_API_KEY', SecretStr('exa-value'))
         set_secret(s, SECRETS.selected({}), System.HUMAN, campaign.id, 'TEAM_KEY', SecretStr('team-value'))
         s.commit()
-    for _holder in hold_lock(cfg.pid_file):
-        monkeypatch.setenv('XAI_API_KEY', 'xai-value')
-        assert by_name(cfg)['secrets demo'].found == 'not set: XAI_API_KEY', (
-            "the daemon's environment, not this shell's"
-        )
-    assert by_name(cfg)['secrets demo'] == Check(
-        'secrets demo',
-        'XAI_API_KEY from the environment of this shell',
-        '`piloop secret set` each of them: piloop 0.5.0 reads secrets from `piloop secret` only',
-        Severity.WARN,
-    )
+    monkeypatch.setenv('XAI_API_KEY', 'xai-value')
+    assert by_name(cfg)['secrets demo'].found == 'not set: XAI_API_KEY', 'the environment holds no secret'
     with db.session() as s:
         set_secret(s, SECRETS.selected({}), System.HUMAN, None, 'XAI_API_KEY', SecretStr('xai-value'))
         s.commit()
     assert by_name(cfg)['secrets demo'] == Check('secrets demo', '3 set')
-    monkeypatch.setattr('piloop.cli.doctor.running_pid', lambda _cfg: 2**30)
-    assert by_name(cfg)['secrets'].found == 'from `piloop secret set` (no secrets_command)', (
-        'no process with that pid: this shell'
-    )
     assert 'value' not in ' '.join(report(checks(cfg)))
-
-
-def test_the_secrets_command_is_deprecated_and_doctor_runs_it_reporting_names_only(
-    cfg: Settings, db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    give_watchdog(
-        db, campaign, {'xai': {'provider': 'stdio', 'command': ['sh'], 'env': ['XAI_API_KEY', 'EXA_API_KEY']}}
-    )
-    for name in ('EXA_API_KEY', 'XAI_API_KEY'):
-        monkeypatch.delenv(name, raising=False)
-    shell = Settings(home=cfg.home, secrets_command="printf 'XAI_API_KEY=%s%s' xai value")
-    found = by_name(shell)
-    assert found['secrets'] == Check(
-        'secrets',
-        "secrets_command of this shell (printf 'XAI_API_KEY=%s%s' xai value) prints XAI_API_KEY",
-        '`piloop secret set` each of them, then remove secrets_command (PILOOP_SECRETS_COMMAND or config.toml):'
-        ' piloop 0.5.0 removes it',
-        Severity.WARN,
-    )
-    assert found['secrets demo'].found == 'not set: EXA_API_KEY', 'what the command prints counts as set'
-
-    monkeypatch.setenv('PILOOP_SECRETS_COMMAND', 'exit 7')
-    for holder in hold_lock(cfg.pid_file):
-        found = by_name(shell)
-        assert found['secrets'] == Check(
-            'secrets',
-            f'secrets_command of the daemon (pid {holder.pid}) (exit 7) failed: exit 7',
-            'fix the command; `piloop serve` refuses to start while it fails',
-        ), "the daemon's command, not this shell's"
-        assert found['secrets demo'].found == 'not set: EXA_API_KEY, XAI_API_KEY'
-    assert 'xaivalue' not in ' '.join(report(checks(shell)))
-
-
-def test_a_daemon_runs_the_secrets_command_of_config_toml_when_its_environment_names_none(
-    cfg: Settings, db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The daemon reads ``secrets_command`` from its environment, else from ``config.toml``, as every setting."""
-    give_watchdog(db, campaign, {'xai': {'provider': 'stdio', 'command': ['sh'], 'env': ['XAI_API_KEY']}})
-    monkeypatch.delenv('XAI_API_KEY', raising=False)
-    monkeypatch.delenv('PILOOP_SECRETS_COMMAND', raising=False)
-    (cfg.home / 'config.toml').write_text('secrets_command = "echo XAI_API_KEY=x"\n')
-    for holder in hold_lock(cfg.pid_file):
-        found = by_name(cfg)
-        assert found['secrets'].found == (
-            f'secrets_command of the daemon (pid {holder.pid}) (echo XAI_API_KEY=x) prints XAI_API_KEY'
-        )
-        assert found['secrets demo'].found == f'XAI_API_KEY from the environment of the daemon (pid {holder.pid})'
 
 
 def give_watchdog(
@@ -524,24 +463,3 @@ def test_the_source_check_never_waits_for_a_password(
     with pytest.raises(upgrade.InstallError, match='failed: exit 128'):
         upgrade.newer(cfg.uv_tool_dir, git_install('main'))
     assert seen.read_text().strip() == 'stdin=[] prompt=0 askpass=[] ssh=ssh -o BatchMode=yes'
-
-
-def test_a_claude_login_in_the_user_s_settings_warns_until_it_moves_to_the_harness_env(
-    cfg: Settings, db: Database, campaign: Campaign, tmp_path: Path
-) -> None:
-    home = tmp_path / 'claude-home'
-    home.mkdir()
-    (home / 'settings.json').write_text(json.dumps({'apiKeyHelper': 'team-key', 'env': {'ANTHROPIC_BASE_URL': 'u'}}))
-    with db.session() as s:
-        row = s.get_one(Campaign, campaign.id)
-        row.config = reconfigured(
-            row.config, plugins={'harness': {'use': ['claude'], 'claude': {'model': 'm', 'home': str(home)}}}
-        )
-        s.commit()
-    assert by_name(cfg)['login of claude'] == Check(
-        'login of claude',
-        "its agents ignore the user's settings, but take apiKeyHelper, env.ANTHROPIC_BASE_URL from them",
-        'set them in its `env` in piloop.toml (a key as `{ secret = "NAME" }`) and `piloop init` the campaign:'
-        ' piloop stops passing them at 0.5.0',
-        Severity.WARN,
-    )

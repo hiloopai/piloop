@@ -20,9 +20,8 @@ from typing import Annotated, ClassVar, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from piloop import deprecated
 from piloop.ids import EnvName
-from piloop.plugins.host import Capability, Check, Many, Parameters, Pick, Scope, Severity, Use
+from piloop.plugins.host import Capability, Check, Many, Parameters, Pick, Scope, Use
 from piloop.plugins.mcp_server.contract import McpServer
 from piloop.settings import Settings
 
@@ -102,19 +101,6 @@ class UserConfig(StrEnum):
     pins. The campaign repo's own files still load, and so does the login of the machine."""
     LOAD = 'load'
     """All of it, as the harness loads it outside piloop."""
-
-
-@deprecated.until('0.5.0', "auth keys of a user's harness settings pass to an isolated agent: delete Carried")
-@dataclass(frozen=True)
-class Carried:
-    """What an agent that ignores the user's setup still takes from it on the machine that runs it: its login."""
-
-    args: list[str]
-    resume_args: list[str]
-    env: dict[str, str]
-    """Variables under the agent's own: piloop's, the harness's ``env`` and the secrets win."""
-    names: tuple[str, ...]
-    """The keys it took, for the warning. Never their values."""
 
 
 class McpError(RuntimeError):
@@ -266,11 +252,6 @@ class Harness(Parameters):
         """The flags that keep its agents from the user's own setup, for ``user_config = "ignore"``. None, by default."""
         return []
 
-    @deprecated.until('0.5.0', "auth keys of a user's harness settings pass to an isolated agent: delete carried")
-    def carried(self, args: list[str], resume_args: list[str]) -> Carried | None:
-        """What an isolated agent takes from the user's setup on this machine, so that its login works. None, by default."""
-        return None
-
     def mcp(self) -> McpRenderer | None:
         """How it takes the MCP servers of a role. None, by default: it takes none."""
         return None
@@ -349,23 +330,8 @@ class Harness(Parameters):
             fix = (
                 'install it, or take it out of `[plugins.harness] use` and the roles in piloop.toml, and `piloop init`'
             )
-            return [Check(name, 'not on PATH', f'{fix} the campaign'), *self._login()]
-        return [Check(name, 'on PATH'), *self._login()]
-
-    @deprecated.until('0.5.0', "auth keys of a user's harness settings pass to an isolated agent: delete _login")
-    def _login(self) -> list[Check]:
-        """Warn when its isolated agents take their login from the user's own settings on this machine."""
-        if (carried := self.carried(self.expanded(self.headless), [])) is None:
-            return []
-        return [
-            Check(
-                f'login of {self.executable}',
-                f"its agents ignore the user's settings, but take {', '.join(carried.names)} from them",
-                'set them in its `env` in piloop.toml (a key as `{ secret = "NAME" }`) and `piloop init` the campaign:'
-                ' piloop stops passing them at 0.5.0',
-                Severity.WARN,
-            )
-        ]
+            return [Check(name, 'not on PATH', f'{fix} the campaign')]
+        return [Check(name, 'on PATH')]
 
     def refuses_servers(self) -> str | None:
         """Return why ``headless`` cannot take MCP servers, or None when it can."""

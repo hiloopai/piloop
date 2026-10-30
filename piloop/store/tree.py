@@ -707,7 +707,12 @@ def evict_unlinked(root: Path, reserve: int, stop: threading.Event | None = None
 
     if not root.is_dir() or enough():
         return 0
-    copies = sorted((entry.stat().st_mtime_ns, entry.path) for entry in os.scandir(root) if entry.is_file())
+    copies = []
+    for entry in os.scandir(root):
+        with contextlib.suppress(FileNotFoundError):  # a worker's eviction may take it between the listing and here
+            if entry.is_file():
+                copies.append((entry.stat().st_mtime_ns, entry.path))
+    copies.sort()
     evicted = 0
     for _, path in copies:
         if enough():

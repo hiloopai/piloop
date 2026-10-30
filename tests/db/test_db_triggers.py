@@ -113,6 +113,7 @@ def test_every_trigger_is_one_statement_named_table_what_and_references_real_col
             'comments_deleted_event',
             'candidates_deleted_event',
             'comments_inserted_event',
+            'comments_escalation_form',
             'agent_sessions_requested_event',
             'ideas_created_event',
             'campaigns_config_event',

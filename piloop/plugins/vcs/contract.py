@@ -22,7 +22,6 @@ from typing import Protocol
 from covalence import Cid
 from pydantic import BaseModel, ConfigDict, SecretStr
 
-from piloop import deprecated
 from piloop.actor import Agent
 from piloop.ids import Revision, TargetRef
 from piloop.plugins.cas.contract import BlobAddress, Cas
@@ -101,28 +100,6 @@ class Pin:
         if not PIN_NAME.fullmatch(self.name):
             raise ValueError(f'{self.name!r} is not a pin name: segments of letters, digits, _ and - joined by /')
 
-
-@deprecated.until('0.5.0', 'RunVersion of 0.3.1 is a Pin: delete RunVersion')
-def RunVersion(campaign: str, run: int, index: int) -> Pin:
-    """The ``index``-th version of a run, oldest first, as 0.3.1 named it."""
-    return Pin(campaign, f'r{run}/{index}')
-
-
-@deprecated.until('0.5.0', 'RebaseVersion of 0.3.1 is a Pin: delete RebaseVersion')
-def RebaseVersion(campaign: str, candidate: int) -> Pin:
-    """The merge of a candidate onto the head, as 0.3.1 named it."""
-    return Pin(campaign, f'rebase/{candidate}')
-
-
-@deprecated.until('0.5.0', 'ReferenceVersion of 0.3.1 is a Pin: delete ReferenceVersion')
-def ReferenceVersion(campaign: str, candidate: int) -> Pin:
-    """A version that a human imported as a reference candidate, as 0.3.1 named it."""
-    return Pin(campaign, f'reference/{candidate}')
-
-
-type Keep = Pin
-"""What ``Repository.keep`` took in 0.3.1, ``deprecated.until('0.5.0')``: a ``Pin``."""
-deprecated.until('0.5.0', 'Keep of 0.3.1 is Pin: delete Keep')
 
 type Fetch = Callable[[Sequence[Revision], Sequence[Revision]], list[Cid]]
 """Ask the repo of record to put what ``revisions`` have beyond the revisions that a replica has into the CAS, and return

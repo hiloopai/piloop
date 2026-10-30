@@ -4,7 +4,6 @@ import json
 import sqlite3
 import sys
 from contextlib import closing
-from functools import partial
 from pathlib import Path
 from typing import Annotated
 
@@ -76,7 +75,7 @@ def _signer() -> Actor:
         if caller is None:
             raise SystemExit('sql error: PILOOP_AGENT_TOKEN is unknown, or its agent ended')
         try:
-            return acts_as(caller, common.settings.actor, partial(tokens.tokenless, s))
+            return acts_as(caller, common.settings.actor)
         except MayNotAct as e:
             raise SystemExit(f'sql error: {e}') from e
 

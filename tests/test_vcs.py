@@ -13,16 +13,10 @@ from piloop.plugins.vcs.git import PROMPTS as GIT_PROMPTS
 
 ROOT = Path(piloop.__file__).parent
 PROVIDER = ROOT / 'plugins' / 'vcs' / 'git'
-GITPYTHON = ('git', 'git.exc')
-"""What migration 0006 imports of GitPython."""
 ALLOWED: dict[str, tuple[tuple[str, ...], str]] = {
     'capabilities.py': (
         ('piloop.plugins.vcs.git',),
         'it re-exports every built-in provider for plugins, and nothing in piloop imports it',
-    ),
-    'db/migrations/versions/0006_research_memory.py': (
-        GITPYTHON,
-        'a migration is frozen at its revision, when every campaign was git',
     ),
     'cli/upgrade.py': ((), "``git ls-remote`` of piloop's own install source, which is no campaign's"),
 }

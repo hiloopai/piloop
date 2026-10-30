@@ -1,135 +1,299 @@
 {
-  "agents": {
-    "brief_words": null,
-    "finding_grace": null,
-    "wrap_up_grace": null
-  },
-  "context": [],
-  "evaluate": [
-    "true"
+  "context": [
+    "dir/file56.md",
+    "dir/file57.md",
+    "dir/file58.md",
+    "dir/file59.py",
+    "dir/file60.py",
+    "dir/file61.py",
+    "dir/file62.py",
+    "dir/file63.py"
   ],
-  "evaluate_timeout": 600.0,
-  "ladder": [],
-  "link": [],
+  "evaluate": [
+    "name_46",
+    "--flag47",
+    "dir/file48.py\n"
+  ],
+  "evaluate_timeout": 7200.0,
+  "link": [
+    "text 53",
+    "dir/file54",
+    "name_55"
+  ],
   "metrics": [
     {
       "direction": "higher",
-      "floor": null,
-      "fraction": null,
-      "margin": null,
-      "name": "score",
-      "ratio": null,
-      "repeats": null,
+      "floor": 1.0,
+      "margin": 1.0,
+      "name": "name_2",
       "role": "primary",
+      "track": "name_3"
+    },
+    {
+      "direction": "higher",
+      "floor": 1.0,
+      "margin": 1.0,
+      "name": "name_4",
+      "role": "primary",
+      "track": "name_5"
+    },
+    {
+      "direction": "lower",
+      "floor": null,
+      "margin": 1.0,
+      "name": "name_6",
+      "role": "guardrail",
+      "track": null
+    },
+    {
+      "direction": "lower",
+      "floor": 1.0,
+      "margin": 1.0,
+      "name": "name_8",
+      "role": "guardrail",
+      "track": null
+    },
+    {
+      "direction": "lower",
+      "floor": null,
+      "margin": null,
+      "name": "name_17",
+      "role": "watch",
       "track": null
     }
   ],
-  "name": "demo",
+  "name": "campaign-1",
   "plugins": {
-    "fact_source": {
-      "campaign": {},
-      "leases": {},
-      "models": {},
-      "optimization": {},
-      "spend": {},
-      "use": [
-        "campaign",
-        "optimization"
+    "stop_rule": {
+      "max_hours": 72.0,
+      "max_runs": 60,
+      "max_tokens": 3000000000,
+      "plateau": 30,
+      "hold_at": {
+        "spend": 600.0
+      }
+    },
+    "memory": {
+      "provider": "local",
+      "documents": [
+        "dir/file56.md"
       ]
     },
     "harness": {
-      "claude": {},
-      "codex": {},
-      "pi": {
-        "model": "m"
+      "claude": {
+        "executable": "claude",
+        "headless": [
+          "-p",
+          "--output-format",
+          "json",
+          "--session-id",
+          "{session_id}",
+          "--model",
+          "{model}",
+          "--effort",
+          "high",
+          "--dangerously-skip-permissions",
+          "{mcp}",
+          "--settings",
+          "{\"autoMemoryEnabled\":false,\"env\":{\"BASH_DEFAULT_TIMEOUT_MS\":\"300000\",\"BASH_MAX_TIMEOUT_MS\":\"600000\"}}",
+          "{prompt}"
+        ],
+        "resume": [],
+        "session_id_pattern": null,
+        "model": "name_50",
+        "max_concurrent": 2
+      },
+      "codex": {
+        "model": "text 49"
       },
       "use": [
-        "pi"
+        "codex",
+        "claude"
       ]
     },
-    "lineage": {
-      "optimization": {},
-      "use": "optimization"
-    },
-    "mcp_server": {},
     "role": {
-      "implementer": {},
-      "orchestrator": {},
-      "research": {},
-      "scout": {},
-      "watchdog": {}
+      "implementer": {
+        "addendum": null,
+        "explore_every": 4,
+        "files": "nothing",
+        "harnesses": [
+          "codex"
+        ],
+        "max_concurrent": 4,
+        "mcp": [
+          "firecrawl"
+        ],
+        "model": null,
+        "prompt": null,
+        "recovery_requeues": 2,
+        "runs": true,
+        "runtime": null,
+        "takes": null,
+        "timeout": 28800.0,
+        "writes": [
+          "commits",
+          "comments(finding) on your idea",
+          "comments(note) on your run"
+        ]
+      },
+      "research": {
+        "addendum": "dir/file52.md",
+        "files": "ideas",
+        "harnesses": null,
+        "incident_prompt": null,
+        "interval": 0.0,
+        "max_concurrent": 1,
+        "max_ideas": 0,
+        "mcp": [
+          "exa",
+          "firecrawl",
+          "xai"
+        ],
+        "model": null,
+        "prompt": null,
+        "routine_prompt": null,
+        "runs": false,
+        "runtime": null,
+        "timeout": 14400.0,
+        "writes": [
+          "seeds via idea develop, or their status to rejected with a note",
+          "ideas via idea add",
+          "comments(finding, escalation) on the project",
+          "comments(note) on an idea"
+        ],
+        "triggers": [
+          "research_low_water",
+          "seed"
+        ]
+      },
+      "scout": {
+        "addendum": null,
+        "files": "seeds",
+        "harnesses": null,
+        "incident_prompt": null,
+        "interval": 0.0,
+        "max_concurrent": 1,
+        "max_ideas": 1,
+        "mcp": [],
+        "model": null,
+        "prompt": null,
+        "routine_prompt": null,
+        "runs": false,
+        "runtime": null,
+        "seeds": 3,
+        "timeout": 900.0,
+        "writes": [
+          "seeds via idea seed (at most the count under Context)",
+          "techniques (the library), by INSERT",
+          "one comments(finding) on the project"
+        ],
+        "triggers": [
+          "cron"
+        ]
+      },
+      "watchdog": {
+        "addendum": "dir/file51.md",
+        "files": "seeds",
+        "harnesses": null,
+        "incident_prompt": null,
+        "interval": 1800.0,
+        "max_concurrent": 1,
+        "max_ideas": 1,
+        "mcp": [],
+        "model": null,
+        "prompt": null,
+        "routine_prompt": null,
+        "runs": false,
+        "runtime": null,
+        "timeout": 1200.0,
+        "writes": [
+          "comments(escalation, finding, note)",
+          "lessons on the project once it stopped",
+          "seeds via idea seed"
+        ],
+        "triggers": [
+          "run_failed",
+          "dead_at_startup"
+        ]
+      }
     },
     "runtime": {
       "use": "subprocess"
     },
-    "section": {
-      "agents": {},
-      "candidates": {},
-      "comments": {},
-      "concepts": {},
-      "cost": {},
-      "database": {},
-      "evaluations": {},
-      "events": {},
-      "funnel": {},
-      "goal": {},
-      "headline": {},
-      "history": {},
-      "idea_comments": {},
-      "idle_queue": {},
-      "inbox": {},
-      "incidents": {},
-      "judging": {},
-      "lessons": {},
-      "links": {},
-      "long_jobs": {},
-      "orchestration": {},
-      "pack": {},
-      "past_campaigns": {},
-      "priorities": {},
-      "provenance": {},
-      "queries": {},
-      "queue": {},
-      "reported": {},
-      "runs": {},
-      "same_as_parent": {},
-      "search": {},
-      "tools": {},
-      "tracks": {},
-      "trajectory": {},
-      "use": [
-        "headline",
-        "goal",
-        "tracks",
-        "trajectory",
-        "runs",
-        "queue",
-        "idle_queue",
-        "agents",
-        "evaluations",
-        "funnel",
-        "yields",
-        "candidates",
-        "same_as_parent",
-        "reported",
-        "inbox",
-        "events"
-      ],
-      "workspace": {},
-      "yields": {}
-    },
     "trigger": {
-      "cron": {},
-      "dead_at_startup": {},
-      "leaking_funnel": {},
-      "low_water": {},
-      "low_yield": {},
-      "news": {},
-      "run_failed": {},
-      "seed": {},
-      "stalled": {},
-      "stopped": {}
+      "research_low_water": {
+        "provider": "low_water",
+        "buffer": 2
+      }
+    },
+    "fact_source": {
+      "command": {
+        "command": [
+          "sh",
+          "-c",
+          "out=$(\"$@\") && printf '{\"metrics\": {\"billing_usd\": %s}}\\n' \"$out\" >> \"$PILOOP_RESULT_FILE\"",
+          "sh",
+          "/path/69",
+          "--flag70",
+          "/path/71.py"
+        ],
+        "metrics": [
+          "billing_usd"
+        ],
+        "interval": 300.0,
+        "notices": {
+          "billing_usd": [
+            150.0,
+            300.0
+          ]
+        }
+      },
+      "use": [
+        "campaign",
+        "optimization",
+        "command",
+        "spend"
+      ],
+      "spend": {
+        "facts": [
+          "billing_usd"
+        ]
+      }
+    },
+    "mcp_server": {
+      "exa": {
+        "headers_env": {
+          "x-api-key": "EXA_API_KEY"
+        },
+        "url": "https://example.com/64",
+        "provider": "http"
+      },
+      "firecrawl": {
+        "bearer_token_env": "FIRECRAWL_API_KEY",
+        "url": "https://example.com/65",
+        "provider": "http"
+      },
+      "xai": {
+        "command": [
+          "name_66",
+          "/path/67.py",
+          "text 68"
+        ],
+        "env": [
+          "XAI_API_KEY"
+        ],
+        "provider": "stdio"
+      }
     }
   },
-  "tracks": {}
+  "tracks": {
+    "name_3": {
+      "addendum": null,
+      "share": 0.5
+    },
+    "name_5": {
+      "addendum": null,
+      "share": 0.5
+    }
+  }
 }

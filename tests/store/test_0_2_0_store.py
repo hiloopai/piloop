@@ -8,31 +8,16 @@ JSON manifest (``put_manifest``); ``staging`` staged one blob to the directory r
 import json
 import os
 import shutil
-import sqlite3
-from contextlib import closing
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config as AlembicConfig
-from covalence import Cid
-from sqlalchemy import create_engine
 
-from piloop.db.session import (
-    CAS_ATTRIBUTE,
-    MIGRATIONS,
-    SchemaMismatch,
-    heads,
-    migrate,
-    stamps,
-    unmigratable,
-)
 from piloop.plugins.cas.cached import REMOTE, CachedCas
 from piloop.plugins.cas.contract import Integrity, integrity
 from piloop.plugins.cas.disk import BoundElsewhere, Disk, DiskCas
 from piloop.plugins.cas.kit.objects import key, named
-from piloop.store.tree import Manifest, cid_of
+from piloop.store.tree import cid_of
 
 FIXTURE = Path(__file__).parents[1] / 'fixtures' / 'store_0_2_0'
 WRITTEN = json.loads((FIXTURE / 'written.json').read_text())
@@ -89,45 +74,3 @@ def test_a_staging_store_of_0_2_0_reads_through_its_remote_and_stays_bound_to_it
         staging(root, remote, 'file:///elsewhere')
     with pytest.raises(BoundElsewhere, match=f'is a cache over {URL}'):
         Disk(path=root).open(tmp_path)
-
-
-def at_0_3(tmp_path: Path, manifest: Cid) -> Path:
-    """A database as piloop 0.3 leaves it, at core 0053, with an archive whose manifest is ``manifest``."""
-    path = tmp_path / 'home' / 'piloop.db'
-    path.parent.mkdir()
-    cfg = AlembicConfig()
-    cfg.set_main_option('script_location', str(MIGRATIONS))
-    cfg.set_main_option('sqlalchemy.url', f'sqlite:///{path}')
-    cfg.attributes[CAS_ATTRIBUTE] = Disk(path=tmp_path / 'cas').open(tmp_path)
-    command.upgrade(cfg, '0053')
-    with closing(sqlite3.connect(path, isolation_level=None)) as con:
-        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('c', '/c', '{}')")
-        con.execute('INSERT INTO archives (campaign_id, manifest) VALUES (1, ?)', (str(manifest),))
-    return path
-
-
-def test_a_home_whose_archive_still_names_a_json_manifest_of_0_2_0_is_refused_and_left_as_it_was(
-    tmp_path: Path,
-) -> None:
-    """piloop 0.3 stores each manifest again at its start; one that it could not read is refused here."""
-    path = at_0_3(tmp_path, MANIFEST)
-    before = path.read_bytes()
-    engine = create_engine(f'sqlite:///{path}')
-    with pytest.raises(
-        SchemaMismatch,
-        match=r'archive 1 still names a manifest of piloop 0\.2: install piloop 0\.3 \(`uv tool install'
-        r" 'piloop==0\.3\.\*'`\) and run `piloop migrate`",
-    ):
-        migrate(engine, cas=Disk(path=tmp_path / 'cas').open(tmp_path), backups=3, daemon=None)
-    engine.dispose()
-    assert path.read_bytes() == before, 'not migrated'
-    assert unmigratable(path) is not None, 'every command says so'
-
-
-def test_a_home_whose_archives_name_dasl_manifests_migrates(tmp_path: Path) -> None:
-    path = at_0_3(tmp_path, Manifest(entries=()).value().cid())
-    assert unmigratable(path) is None
-    engine = create_engine(f'sqlite:///{path}')
-    migrate(engine, cas=Disk(path=tmp_path / 'cas').open(tmp_path), backups=0, daemon=None)
-    engine.dispose()
-    assert stamps(path) == heads()

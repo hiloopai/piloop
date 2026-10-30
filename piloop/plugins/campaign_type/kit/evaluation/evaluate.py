@@ -1,7 +1,7 @@
 """Run the evaluate command in a worktree, and read its result. A timeout kills the whole process group.
 
 The command writes its result to ``RESULT_ENV`` as one JSON object (``Result``), which is checked against the
-campaign's metrics. Until 0.5.0 it may print ``METRIC <name>=<value>`` lines instead (``Channel.METRIC_LINES``).
+campaign's metrics.
 """
 
 import contextlib
@@ -19,11 +19,10 @@ from typing import Annotated, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, ValidationError
 
-from piloop import deprecated
 from piloop.plugins.campaign_type.kit.evaluation.config import Rung
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
-from piloop.proc import RESULT_ENV, STDERR_IN_ERROR, UNITS_ENV, Channel, ResultPipe, child_env, kill_group
+from piloop.proc import RESULT_ENV, STDERR_IN_ERROR, ResultPipe, child_env, kill_group
 
 SENT = frozenset({signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGKILL})
 """The signals that another process sends, a ``pkill`` say: an evaluate that one ends measured nothing of the candidate.
@@ -37,8 +36,6 @@ UNITS_SUM_TOLERANCE = 1e-3
 """The allowed relative difference between a metric's per-unit sum and its value, which can be rounded."""
 RESULT_PIPE = '.result'
 """The pipe in the log directory that ``RESULT_ENV`` names while the command runs."""
-UNITS_FILE = '.units.json'
-"""The file in the log directory that ``UNITS_ENV`` names while the command runs."""
 EVIDENCE_DIR = 'evidence'
 """Where the evidence files that a result names are copied, in the log directory: ``evidence/<label><suffix>``."""
 
@@ -122,8 +119,6 @@ class Measured:
     seconds: float
     units: Units = field(default_factory=dict)
     """The per-unit results that it reported. Empty when it reported none."""
-    channel: Channel = Channel.RESULT
-    """How it reported them."""
     rung: RungName | None = None
     """The rung that it measured. None for the full panel."""
 
@@ -267,7 +262,6 @@ class Reported:
 
     metrics: dict[str, float]
     units: Units
-    channel: Channel
     seconds: float
 
 
@@ -369,14 +363,14 @@ class _Lines:
             return bad
         metrics, units = dict(result.metrics), {m: dict(u) for m, u in result.units.items()}
         if streamed is None:
-            return Reported(metrics, units, Channel.RESULT, seconds)
+            return Reported(metrics, units, seconds)
         return self._judged(streamed, metrics, units, seconds)
 
     def _judged(self, rung: Rung, metrics: dict[str, float], units: Units, seconds: float) -> Measured | StoppedAt:
         """``rung``'s line as measured, or as where the climb stops when the gate says so."""
         reason = None if self.gate is None else self.gate.stop_reason(rung, metrics)
         if reason is None:
-            return Measured(metrics, seconds, units, Channel.RESULT, rung.name)
+            return Measured(metrics, seconds, units, rung.name)
         return StoppedAt(rung.name, reason, metrics, seconds, units)
 
 
@@ -421,7 +415,6 @@ def run_evaluate(
     failed. A climb that stopped ends at its ``StoppedAt`` rung. ``prefix`` names its logs in ``log_dir``. The pipe and
     the units file are in ``log_dir`` while it runs, and removed after, so neither outlives the call.
     """
-    units_file = log_dir / UNITS_FILE
     checks = Checks(required, known, cwd, log_dir / EVIDENCE_DIR, max_evidence_bytes)
     lines = _Lines(step, checks, gate, stop_grace)
 
@@ -429,66 +422,47 @@ def run_evaluate(
         lines.track(proc)
         track(proc)
 
-    try:
-        with ResultPipe(log_dir / RESULT_PIPE, lines.take) as results:
-            env = child_env() | {RESULT_ENV: str(results.path), UNITS_ENV: str(units_file)}
-            done = _run(cmd, cwd=cwd, log_dir=log_dir, prefix=prefix, timeout=timeout, track=both, env=env)
-        stdout = (log_dir / f'{prefix}.stdout').read_text(errors='replace')
-        rungs: list[EvalResult] = list(lines.rungs)
-        if lines.stopped:
-            return rungs
-        seconds = max(done.seconds - sum(r.seconds for r in lines.rungs), 0.0)
-        label = step.label(len(lines.rungs))
-        last = lines.last if lines.bad is None else lines.bad
-        if last is None:
-            last = _unreported(lines, stdout, units_file)
-        kept = last.metrics if isinstance(last, Reported) else {}
-        match done.returncode:
-            case None:
-                return [*rungs, Failed(TimedOut(timeout), seconds, kept, label)]
-            case 0:
-                pass
-            case code if lines.bad is None:
-                stderr = (log_dir / f'{prefix}.stderr').read_text(errors='replace').strip()[-STDERR_IN_ERROR:]
-                why = Exited(code, stderr) if code > 0 else Killed(-code, stderr)
-                return [*rungs, Failed(why, seconds, kept, label)]
-            case _:
-                pass
-        match last:
-            case BadResult() | MissingMetrics():
-                return [*rungs, Failed(last, seconds, rung=label)]
-            case Reported(metrics=metrics, units=units, channel=channel):
-                if missing := (required if step.last is None else set(step.last.stop)) - metrics.keys():
-                    return [*rungs, Failed(MissingMetrics(tuple(sorted(missing))), seconds, metrics, label)]
-                if lines.count and parse_metrics(stdout):
-                    bad = BadResult(
-                        f'it wrote a result to {RESULT_ENV} and printed METRIC lines: drop the METRIC lines'
-                    )
-                    return [*rungs, Failed(bad, seconds, rung=label)]
-                if step.last is not None and gate is not None and (why := gate.stop_reason(step.last, metrics)):
-                    return [*rungs, StoppedAt(step.last.name, why, metrics, seconds, units)]
-                return [*rungs, Measured(metrics, seconds, units, channel, label)]
-            case _:
-                assert_never(last)
-    finally:
-        units_file.unlink(missing_ok=True)
+    with ResultPipe(log_dir / RESULT_PIPE, lines.take) as results:
+        env = child_env() | {RESULT_ENV: str(results.path)}
+        done = _run(cmd, cwd=cwd, log_dir=log_dir, prefix=prefix, timeout=timeout, track=both, env=env)
+    rungs: list[EvalResult] = list(lines.rungs)
+    if lines.stopped:
+        return rungs
+    seconds = max(done.seconds - sum(r.seconds for r in lines.rungs), 0.0)
+    label = step.label(len(lines.rungs))
+    last = lines.last if lines.bad is None else lines.bad
+    if last is None:
+        last = _unreported(lines)
+    kept = last.metrics if isinstance(last, Reported) else {}
+    match done.returncode:
+        case None:
+            return [*rungs, Failed(TimedOut(timeout), seconds, kept, label)]
+        case 0:
+            pass
+        case code if lines.bad is None:
+            stderr = (log_dir / f'{prefix}.stderr').read_text(errors='replace').strip()[-STDERR_IN_ERROR:]
+            why = Exited(code, stderr) if code > 0 else Killed(-code, stderr)
+            return [*rungs, Failed(why, seconds, kept, label)]
+        case _:
+            pass
+    match last:
+        case BadResult() | MissingMetrics():
+            return [*rungs, Failed(last, seconds, rung=label)]
+        case Reported(metrics=metrics, units=units):
+            if missing := (required if step.last is None else set(step.last.stop)) - metrics.keys():
+                return [*rungs, Failed(MissingMetrics(tuple(sorted(missing))), seconds, metrics, label)]
+            if step.last is not None and gate is not None and (why := gate.stop_reason(step.last, metrics)):
+                return [*rungs, StoppedAt(step.last.name, why, metrics, seconds, units)]
+            return [*rungs, Measured(metrics, seconds, units, label)]
+        case _:
+            assert_never(last)
 
 
-def _unreported(lines: _Lines, stdout: str, units_file: Path) -> Reported | BadResult:
-    """What a run that wrote no last line reported: its ``METRIC`` lines until 0.5.0, when it wrote no line at all."""
+def _unreported(lines: _Lines) -> BadResult:
+    """Why a run that wrote no last line has no result."""
     if lines.count:
         return BadResult(f'it stopped after rung {lines.rungs[-1].rung}, before its last line')
-    lines_printed = parse_metrics(stdout)
-    if not lines_printed:
-        return BadResult(f'it wrote no result to {RESULT_ENV}')
-    if lines.step.rungs:
-        return BadResult(f'a ladder reports its rungs on {RESULT_ENV}, not as METRIC lines')
-    deprecated.until('0.5.0', 'METRIC lines on stdout: delete this branch, parse_metrics and UNITS_ENV')
-    try:
-        units = read_units(units_file, lines_printed) if units_file.exists() else {}
-    except ValueError as e:
-        return BadResult(f'{UNITS_ENV}: {e}')
-    return Reported(lines_printed, units, Channel.METRIC_LINES, 0.0)
+    return BadResult(f'it wrote no result to {RESULT_ENV}')
 
 
 def keep_evidence(evidence: dict[str, str], cwd: Path, into: Path, max_bytes: int) -> BadResult | None:
@@ -527,21 +501,6 @@ def _name(signum: int) -> str:
         return f'signal {signum}'
 
 
-@deprecated.until('0.5.0', 'the units file of METRIC lines: delete read_units, UNITS and UNITS_ENV')
-def read_units(path: Path, metrics: dict[str, float]) -> Units:
-    """Validate a units file against the METRIC lines of the same evaluation.
-
-    Raises:
-        ValueError: the file is not ``{metric: {unit: number}}``, or does not fit the metrics (``_check_units``).
-    """
-    try:
-        units = UNITS.validate_json(path.read_bytes())
-    except ValidationError as e:
-        raise ValueError(f'expected {{"<metric>": {{"<unit>": <number>}}}}: {e}') from e
-    _check_units(units, metrics)
-    return units
-
-
 def _check_units(units: Units, metrics: dict[str, float]) -> None:
     """Check per-unit results against the values of the same result.
 
@@ -556,24 +515,3 @@ def _check_units(units: Units, metrics: dict[str, float]) -> None:
         total = math.fsum(values.values())
         if not math.isclose(total, metrics[name], rel_tol=UNITS_SUM_TOLERANCE, abs_tol=1e-9):
             raise ValueError(f'units of {name!r} sum to {total:g}, its value is {metrics[name]:g}')
-
-
-@deprecated.until('0.5.0', 'METRIC lines on stdout: delete parse_metrics; a result goes to RESULT_ENV')
-def parse_metrics(stdout: str) -> dict[str, float]:
-    """Parse ``METRIC name=value`` lines into floats. The caller checks that none is missing.
-
-    Skip a malformed line: one with no name, a value that is not a number, or a value that is NaN or infinite.
-    """
-    metrics: dict[str, float] = {}
-    for line in stdout.splitlines():
-        head, sep, value = line.strip().partition('=')
-        name = head.removeprefix('METRIC ').strip()
-        if not sep or not head.startswith('METRIC ') or not name:
-            continue
-        try:
-            number = float(value.strip())
-        except ValueError:
-            continue
-        if math.isfinite(number):
-            metrics[name] = number
-    return metrics

@@ -185,11 +185,17 @@ class Smoke:
     def process_tags(self, run_id: int | None = None) -> list[str]:
         """The process tags of the run's implementers, or of every agent."""
         rows = self.sql(
-            "SELECT json_extract(handle, '$.token') AS token FROM agent_sessions WHERE token IS NOT NULL"
-            + (" AND subject_kind = 'run' AND subject_id = ?" if run_id is not None else ''),
+            "SELECT json_extract(handle, '$.token') AS token FROM agent_sessions w WHERE token IS NOT NULL"
+            + (f' AND {self.run_of_agent} = ?' if run_id is not None else ''),
             *([run_id] if run_id is not None else []),
         )
         return [r['token'] for r in rows]
+
+    @property
+    def run_of_agent(self) -> str:
+        """The SQL of the run of the agent ``w``: its subject, or the ``run_id`` of a home that piloop 0.4 migrated."""
+        columns = {r['name'] for r in self.sql('SELECT name FROM pragma_table_info(?)', 'agent_sessions')}
+        return "CASE WHEN w.subject_kind = 'run' THEN w.subject_id END" if 'subject_kind' in columns else 'w.run_id'
 
     @property
     def homes(self) -> list[Path]:
@@ -265,12 +271,12 @@ class Smoke:
             lines.append(f'{self.name}: the worker elsewhere logs to {self.elsewhere.home / WORKER_LOG}')
         if not self.db.is_file():
             return lines
+        run = self.run_of_agent
         rows = self.sql(
-            "SELECT w.id, w.kind, CASE WHEN w.subject_kind = 'run' THEN w.subject_id END AS run_id, w.state,"
-            ' w.log_dir, w.usage, r.status, r.error, i.title,'
+            f'SELECT w.id, w.kind, {run} AS run_id, w.state, w.log_dir, w.usage, r.status, r.error, i.title,'
             ' (julianday(w.ended_at) - julianday(w.started_at)) * 86400 AS seconds'
-            " FROM agent_sessions w LEFT JOIN runs r ON w.subject_kind = 'run' AND r.id = w.subject_id LEFT JOIN"
-            ' ideas i ON i.id = r.idea_id ORDER BY w.id'
+            f' FROM agent_sessions w LEFT JOIN runs r ON r.id = {run} LEFT JOIN ideas i ON i.id = r.idea_id'
+            ' ORDER BY w.id'
         )
         lines += [
             '',

@@ -113,13 +113,7 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.Rung,
     capabilities.Tolerance,
     capabilities.Gate,
-    capabilities.Channel,
     capabilities.run_evaluation,
-    capabilities.EvaluationKey,  # bridges of 0.3.1 names, until 0.5.0
-    capabilities.remove,
-    capabilities.RunVersion,
-    capabilities.RebaseVersion,
-    capabilities.ReferenceVersion,
     capabilities.kill_group,
     capabilities.Leases,  # the kit: helpers that an executor may use
     capabilities.Timing,
@@ -136,7 +130,6 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.HttpsNetwork,
     capabilities.Revision,  # a NewType
     capabilities.Fetch,  # type aliases
-    capabilities.Keep,
     capabilities.VcsError,  # what a vcs provider raises
     capabilities.NotARepository,
     capabilities.UnknownRevision,

@@ -24,14 +24,12 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
     Track,
     _Lines,
     no_track,
-    parse_metrics,
     printed,
     run_evaluate,
 )
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.metric import Direction
-from piloop.proc import Channel
 
 HIGHER, LOWER = Direction.HIGHER, Direction.LOWER
 
@@ -66,11 +64,6 @@ def write(result: object) -> str:
     return f"printf '%s\\n' '{json.dumps(result)}' >> \"$PILOOP_RESULT_FILE\""
 
 
-def test_parse_metrics() -> None:
-    out = 'noise\nMETRIC acc=0.83\nMETRIC loss = -1.5e-3\nMETRIC big=1E+20\nMETRICS bad=1\nMETRIC nan=x\nMETRIC=3\n'
-    assert parse_metrics(out) == snapshot({'acc': 0.83, 'loss': -0.0015, 'big': 1e20})
-
-
 def test_an_evaluate_that_its_tracker_refuses_is_killed_and_reaped(tmp_path: Path) -> None:
     """A tracker that raises ends the evaluate command at once, and it is reaped: no zombie, no Popen left running."""
     procs: list[subprocess.Popen[bytes]] = []
@@ -88,7 +81,7 @@ def test_an_evaluate_that_its_tracker_refuses_is_killed_and_reaped(tmp_path: Pat
 
 def test_a_result_is_measured(tmp_path: Path) -> None:
     r = evaluate(tmp_path, f'echo working; {write({"metrics": {"a": 1, "b": 2.5}, "units": {"a": {"x": 1}}})}')
-    assert r == Measured({'a': 1.0, 'b': 2.5}, r.seconds, {'a': {'x': 1.0}}, Channel.RESULT)
+    assert r == Measured({'a': 1.0, 'b': 2.5}, r.seconds, {'a': {'x': 1.0}})
     assert (tmp_path / 'eval.stdout').read_text() == 'working\n', 'stdout is a log'
     assert not (tmp_path / '.result').exists()
 
@@ -173,10 +166,6 @@ def assert_dead(pid: int) -> None:
         (
             f'{write({"metrics": {"a": 1}})}; {write({"metrics": {"a": 2}})}',
             'it wrote a line after its last one',
-        ),
-        (
-            f'echo METRIC a=1; {write({"metrics": {"a": 1}})}',
-            'it wrote a result to PILOOP_RESULT_FILE and printed METRIC lines: drop the METRIC lines',
         ),
         (
             'printf \'{\\n  "metrics": {"a": 1}\\n}\\n\' >> "$PILOOP_RESULT_FILE"',
@@ -280,27 +269,6 @@ def test_bad_evidence_is_a_crash(tmp_path: Path, script: str, error: str) -> Non
     assert not (tmp_path / 'evidence').exists()
 
 
-def test_metric_lines_are_read_until_0_4_0(tmp_path: Path) -> None:
-    """The protocol before the result pipe: METRIC lines, and units in their own file. Any name is kept, as before."""
-    script = 'echo METRIC a=3; echo METRIC other=1; printf \'{"a": {"x": 1, "y": 2}}\' > "$PILOOP_UNITS_FILE"'
-    r = evaluate(tmp_path, script)
-    assert r == Measured({'a': 3.0, 'other': 1.0}, r.seconds, {'a': {'x': 1.0, 'y': 2.0}}, Channel.METRIC_LINES)
-    assert not (tmp_path / '.units.json').exists(), 'the units file never outlives the evaluation'
-
-
-def test_a_bad_units_file_of_metric_lines_is_a_crash(tmp_path: Path) -> None:
-    r = evaluate(tmp_path, 'echo METRIC a=3; printf \'{"a": {"x": 1}}\' > "$PILOOP_UNITS_FILE"')
-    assert isinstance(r, Failed) and r.why == BadResult("PILOOP_UNITS_FILE: units of 'a' sum to 1, its value is 3")
-    r = evaluate(tmp_path, 'echo METRIC a=3; echo nope > "$PILOOP_UNITS_FILE"')
-    assert isinstance(r, Failed) and isinstance(r.why, BadResult)
-    assert r.why.why.startswith('PILOOP_UNITS_FILE: expected {"<metric>": {"<unit>": <number>}}')
-
-
-def test_metric_lines_of_a_failed_command_are_kept(tmp_path: Path) -> None:
-    r = evaluate(tmp_path, 'echo METRIC a=1; exit 2')
-    assert isinstance(r, Failed) and r.printed == {'a': 1.0}
-
-
 SMOKE = Rung(name=RungName('smoke'), stop={'a': Tolerance(floor=0.5)}, evaluate=['smoke'])
 SCREEN = Rung(name=RungName('screen'), stop={'a': Tolerance(margin=0.1)})
 WIDE = Rung(name=RungName('wide'), stop={'b': Tolerance(fraction=0.1)})
@@ -373,7 +341,7 @@ def test_a_rung_that_the_bar_lacks_stops_only_on_a_floor(tmp_path: Path) -> None
 
 def test_a_rungs_own_command_reports_one_line_without_its_name(tmp_path: Path) -> None:
     results = climb(tmp_path, write({'metrics': {'a': 0.9}}), Step(last=SMOKE))
-    assert results == [Measured({'a': 0.9}, results[0].seconds, {}, Channel.RESULT, RungName('smoke'))]
+    assert results == [Measured({'a': 0.9}, results[0].seconds, {}, RungName('smoke'))]
     results = climb(tmp_path, write({'metrics': {'a': 0.2}}), Step(last=SMOKE))
     assert results == [StoppedAt(RungName('smoke'), 'a 0.2 past its floor 0.5', {'a': 0.2}, results[0].seconds)]
 
@@ -385,7 +353,7 @@ def test_a_rungs_own_command_reports_one_line_without_its_name(tmp_path: Path) -
         (write({'metrics': {'a': 1}}), "it reported rung None where 'screen' comes", 'screen'),
         (rung('screen', {'cost': 1}), None, 'screen'),
         (rung('screen', {'a': 0.7}), 'it stopped after rung screen, before its last line', None),
-        ('echo METRIC a=1', 'a ladder reports its rungs on PILOOP_RESULT_FILE, not as METRIC lines', 'screen'),
+        ('echo METRIC a=1', 'it wrote no result to PILOOP_RESULT_FILE', 'screen'),
     ],
 )
 def test_a_climb_that_breaks_the_order_or_lacks_a_stops_metric_fails(

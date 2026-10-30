@@ -99,10 +99,6 @@ def test_a_hold_on_a_fact_needs_a_source_of_it_and_a_source_keeps_its_own_facts(
         (report('{"metrics": {}}'), 'reported no value for: spend'),
         (report('{"metrics": {"spend": 1, "other": 2}}'), 'reported other, which metrics does not name'),
         (report('{"metrics": {"spend": 1}}\n{"metrics": {"spend": 2}}'), 'wrote 2 results'),
-        (
-            ['sh', '-c', 'echo METRIC spend=1; echo \'{"metrics": {"spend": 1}}\' >> "$PILOOP_RESULT_FILE"'],
-            'drop the METRIC lines',
-        ),
         (['/nonexistent/spend'], 'could not start: .*No such file'),
     ],
 )
@@ -121,13 +117,6 @@ def test_the_command_runs_at_the_repo_root_and_reports_as_the_evaluator_does(tmp
     (tmp_path / 'bill').write_text('{"metrics": {"spend": 412.30, "gpu_hours": 3}}\n')
     command = ['sh', '-c', 'echo noise; cat bill >> "$PILOOP_RESULT_FILE"']
     assert read(command, tmp_path, 'spend', 'gpu_hours') == {'spend': 412.3, 'gpu_hours': 3.0}
-
-
-def test_metric_lines_are_read_until_0_4_0(tmp_path: Path) -> None:
-    (tmp_path / 'bill').write_text('noise\nMETRIC spend=412.30\nMETRIC gpu_hours=3\nMETRIC other=1\n')
-    assert read(['cat', 'bill'], tmp_path, 'spend', 'gpu_hours') == {'spend': 412.3, 'gpu_hours': 3.0}, (
-        'the names it reads, whatever else it prints'
-    )
 
 
 def test_each_reading_is_a_fact_read_event_and_the_events_are_the_one_record(db: Database, campaign: Campaign) -> None:
@@ -240,7 +229,7 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
     (Path(campaign.path) / 'piloop.toml').write_text(
         (Path(campaign.path) / 'piloop.toml').read_text()
         + '\n[plugins.fact_source]\nuse = ["campaign", "optimization", "spend"]\n\n[plugins.fact_source.spend]\n'
-        f'provider = "command"\ncommand = ["cat", "{file}"]\nmetrics = ["spend"]\n\n'
+        f'provider = "command"\ncommand = ["sh", "-c", "cat {file} >> \\"$PILOOP_RESULT_FILE\\""]\nmetrics = ["spend"]\n\n'
         '[plugins.stop_rule]\nhold_at = { spend = 2000 }\n'
     )
     with db.session() as s:
@@ -257,12 +246,12 @@ def test_a_source_that_a_sync_adds_is_read_on_the_next_turn_without_a_restart(
     scheduler = make_scheduler(db, runtime, tmp_path)
     scheduler.loop.start()
     file = tmp_path / 'bill'
-    file.write_text('METRIC spend=412.3\n')
+    file.write_text('{"metrics": {"spend": 412.3}}\n')
     toml = Path(campaign.path) / 'piloop.toml'
     toml.write_text(
         toml.read_text()
         + '\n[plugins.fact_source]\nuse = ["campaign", "optimization", "spend"]\n\n[plugins.fact_source.spend]\n'
-        f'provider = "command"\ncommand = ["cat", "{file}"]\nmetrics = ["spend"]\n\n'
+        f'provider = "command"\ncommand = ["sh", "-c", "cat {file} >> \\"$PILOOP_RESULT_FILE\\""]\nmetrics = ["spend"]\n\n'
         '[plugins.stop_rule]\nhold_at = { spend = 1000 }\n'
     )
     with db.session() as s:

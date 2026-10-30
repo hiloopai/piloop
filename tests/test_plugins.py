@@ -147,7 +147,7 @@ def test_two_packages_with_the_same_name_fail_before_the_daemon_starts(
     assert not any(c.active for c in plugins.declared())
     found = doctor.checks(Settings(home=tmp_path / 'home'))
     names = [c.name.split(' ')[0] for c in found]
-    assert names[:5] == ['cli', 'daemon', 'database', 'plugins', 'secrets'] and set(names[5:]) <= {'skills', 'git'}, (
+    assert names[:4] == ['cli', 'daemon', 'database', 'plugins'] and set(names[4:]) <= {'skills', 'git'}, (
         'the checks of campaigns, harnesses and runtimes, which use the plugins, do not run'
     )
     found = [c for c in found if c.name == 'plugins']

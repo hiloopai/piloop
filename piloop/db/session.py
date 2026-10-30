@@ -34,7 +34,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, NewType, Self
 
-from alembic import command, context
+from alembic import command
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, Engine, create_engine, event, make_url
@@ -43,7 +43,6 @@ from sqlalchemy.engine import ExceptionContext
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import ConnectionPoolEntry, NullPool, PoolProxiedConnection
 
-from piloop import deprecated
 from piloop.actor import Actor, Agent
 from piloop.db.models import TARGET_KINDS, KnownCommentKind, KnownKind, Migration, utcnow
 from piloop.db.schema import CORE, SCHEMAS, schemas
@@ -94,6 +93,15 @@ RELEASES = (
     Release(Version(0, 1, 0), {CORE: MigrationRevision('0001')}),
     Release(Version(0, 2, 0), {CORE: MigrationRevision('0018')}),
     Release(Version(0, 3, 0), {CORE: MigrationRevision('0053')}),
+    Release(
+        Version(0, 4, 0),
+        {
+            CORE: MigrationRevision('0067'),
+            'archive/local': MigrationRevision('0002'),
+            'memory/local': MigrationRevision('0002'),
+            'optimization': MigrationRevision('0004'),
+        },
+    ),
 )
 """Every minor release, oldest first. The newest is the floor: this piloop migrates each chain of a database from its
 head there or from a newer revision, never from an older one, so a database upgrades one minor release at a time.
@@ -370,17 +378,11 @@ def scripts() -> dict[str, ScriptDirectory]:
     }
 
 
-def migration_cas() -> Cas:
-    """The home's CAS, in a revision that ``migrate`` runs."""
-    cas: Cas = context.config.attributes[CAS_ATTRIBUTE]
-    return cas
-
-
 def unmigratable(database: Path) -> SchemaMismatch | None:
     """Return why ``migrate`` would refuse ``database``, read read-only, else None.
 
     Another piloop build migrated an installed chain (``foreign``), or core's is older than the floor,
-    the newest of ``RELEASES`` (``SchemaTooOld``), or a schema refuses it (``Schema.refuses``). A database that does not exist, or that was never migrated, can be.
+    the newest of ``RELEASES`` (``SchemaTooOld``). A database that does not exist, or that was never migrated, can be.
     """
     found = stamps(database)
     if CORE not in found:
@@ -389,11 +391,11 @@ def unmigratable(database: Path) -> SchemaMismatch | None:
         if name in found and (refused := foreign(database, name, found[name])) is not None:
             return refused
     floor = RELEASES[-1]
-    order = {name: [r.revision for r in reversed(list(script.walk_revisions()))] for name, script in scripts().items()}
+    order = {name: history(script) for name, script in scripts().items()}
     known = {name: revision for name, revision in found.items() if name in order}
     reached = [r for r in RELEASES if all(order[n].index(known[n]) >= order[n].index(h) for n, h in _shared(r, known))]
     if floor in reached:
-        return _refused(database, found)
+        return None
     before = [r.version.line for r in reached]
     stops = [r.version.line for r in RELEASES if r not in reached]
     origin = f'piloop {before[-1]}' if before else f'a piloop before {stops[0]}'
@@ -406,23 +408,6 @@ def unmigratable(database: Path) -> SchemaMismatch | None:
         f' {floor.version.line} (schema revision {described(floor.heads)}) or newer',
         f'upgrade one release at a time: {steps}, then install this piloop again and run `piloop upgrade`',
     )
-
-
-def _refused(database: Path, found: Stamps) -> SchemaMismatch | None:
-    """Why a schema whose chain is behind its head does not migrate ``database`` yet (``Schema.refuses``), or None."""
-    newest = heads()
-    asked = [
-        refuses
-        for name, schema in schemas().items()
-        if (refuses := schema.refuses) is not None and found.get(name) != newest.get(name)
-    ]
-    if not asked:
-        return None
-    with closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as con:
-        for refuses in asked:
-            if (why := refuses(con)) is not None:
-                return SchemaMismatch(f'{database}: {why.found}', why.fix)
-    return None
 
 
 def _shared(release: Release, found: Stamps) -> list[tuple[str, str]]:
@@ -544,14 +529,26 @@ def behind(database: Path) -> Stamps:
     return {name: found.get(name, 'none') for name, head in heads().items() if found.get(name) != head}
 
 
+def history(script: ScriptDirectory) -> list[str]:
+    """Every revision of ``script``, oldest first, with those that a baseline squashed (``SQUASHED``) before it."""
+    found: list[str] = []
+    for rev in reversed(list(script.walk_revisions())):
+        found += [n.partition('_')[0] for n in getattr(rev.module, 'SQUASHED', ()) if not n.startswith(rev.revision)]
+        found.append(rev.revision)
+    return found
+
+
 def fingerprints(script: ScriptDirectory) -> dict[str, int]:
     """For each revision of ``script``, a hash of the file names of the revisions up to it: a positive int32, never 0.
 
-    Names, not contents: a refactor of a released revision's code must not refuse every database.
+    Names, not contents: a refactor of a released revision's code must not refuse every database. A baseline that
+    squashes a chain's first revisions counts as the names that it lists in ``SQUASHED``, so that each revision after it
+    keeps the fingerprint that databases recorded before the squash.
     """
     history, found = hashlib.sha256(), {}
     for rev in reversed(list(script.walk_revisions())):
-        history.update(f'{Path(rev.path).stem}\n'.encode())
+        for name in getattr(rev.module, 'SQUASHED', (Path(rev.path).stem,)):
+            history.update(f'{name}\n'.encode())
         found[rev.revision] = int.from_bytes(history.digest()[:4]) >> 1 or 1
     return found
 
@@ -584,9 +581,12 @@ def _record(connection: Connection, name: str, package: str) -> None:
 
 def foreign(database: Path, name: str, at: str) -> SchemaAhead | None:
     """Return the refusal of ``database`` if another piloop build migrated the chain of ``name`` to ``at``. Read-only."""
-    known = fingerprints(scripts()[name])
+    script = scripts()[name]
+    known = fingerprints(script)
     if at in known and _fingerprint(database, name) in {0, known[at]}:
         return None
+    if at not in known and at in history(script):
+        return None  # a revision that a baseline squashed: older than the floor, which refuses it (``unmigratable``)
     head = heads().get(name)
     why = f', which knows up to {head}' if at not in known else f': this build has a different {at} or one before it'
     return SchemaAhead(
@@ -600,22 +600,8 @@ def foreign(database: Path, name: str, at: str) -> SchemaAhead | None:
 def _fingerprint(database: Path, name: str) -> int:
     """The fingerprint that the last migration of the chain of ``name`` recorded in ``database``. 0 when none did."""
     with closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as con:
-        try:
-            row = con.execute('SELECT fingerprint FROM migrations WHERE name = ?', (name,)).fetchone()
-        except sqlite3.OperationalError:  # before 0060, which adds migrations
-            row = None
-        if row is not None:
-            return row[0]
-        return _user_version(con) if name == CORE else 0
-
-
-@deprecated.until(
-    '0.5.0', 'a home before revision 0060 has the fingerprint in PRAGMA user_version: delete _user_version'
-)
-def _user_version(con: sqlite3.Connection) -> int:
-    """Core's fingerprint as a database before ``migrations`` kept it."""
-    (mark,) = con.execute('PRAGMA user_version').fetchone()
-    return mark
+        row = con.execute('SELECT fingerprint FROM migrations WHERE name = ?', (name,)).fetchone()
+    return 0 if row is None else row[0]
 
 
 @contextmanager

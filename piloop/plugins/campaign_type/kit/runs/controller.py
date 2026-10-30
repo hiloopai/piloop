@@ -1311,9 +1311,8 @@ class RunController:
             f" `piloop restore {idea.campaign.name} <idea id>` writes back a done idea's files.",
             f'- Leave a finding on your idea when you are done, piped into the SQL tool: INSERT INTO comments'
             f" (target_kind, target_id, author, kind, body) VALUES ('idea', {idea.id}, '{author}', 'finding', '...').",
-            '- Ask for what you cannot do or decide yourself with an escalation, never a note: INSERT INTO comments'
-            f" (target_kind, target_id, author, kind, priority, body) VALUES ('idea', {idea.id}, '{author}',"
-            " 'escalation', 1, '...').",
+            '- Ask for what you cannot do or decide yourself with an escalation, never a note:'
+            f' `piloop escalate idea#{idea.id} --priority 1`, its form as JSON on stdin (`--guide` shows it).',
             '- The history below is what was tried in this campaign: do not repeat it; combine or go elsewhere.',
         ]
         lines += ['', f'## Your idea (idea#{idea.id}): {idea.title}', idea.hypothesis.rstrip()]

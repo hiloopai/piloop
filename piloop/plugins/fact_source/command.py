@@ -8,8 +8,6 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
-from piloop import deprecated
-from piloop.plugins.campaign_type.kit.evaluation.evaluate import parse_metrics
 from piloop.plugins.fact_source.contract import FactReadError
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.proc import RESULT_ENV, STDERR_IN_ERROR, ResultPipe, child_env, kill_group
@@ -74,7 +72,7 @@ class Command(Readings):
                     raise FactReadError(f'timed out after {TIMEOUT}s') from e
         if proc.returncode != 0:
             raise FactReadError(f'exit {proc.returncode}: {err.decode(errors="replace").strip()[-STDERR_IN_ERROR:]}')
-        found = self._found(results.close(), out.decode(errors='replace'), self.metrics)
+        found = self._found(results.close())
         if missing := [name for name in self.metrics if name not in found]:
             raise FactReadError(f'reported no value for: {", ".join(missing)}')
         if unknown := sorted(found.keys() - set(self.metrics)):
@@ -82,21 +80,15 @@ class Command(Readings):
         return found
 
     @staticmethod
-    def _found(lines: list[str], stdout: str, names: list[str]) -> dict[str, float]:
-        """The values of its one result line, or, until 0.5.0, those of ``names`` among its ``METRIC`` lines.
+    def _found(lines: list[str]) -> dict[str, float]:
+        """The values of its one result line.
 
         Raises:
-            FactReadError: It wrote no result, more than one, one that is not a ``Reading``, or both kinds.
+            FactReadError: It wrote no result, more than one, or one that is not a ``Reading``.
         """
-        printed = parse_metrics(stdout)
         match lines:
-            case [] if printed:
-                deprecated.until('0.5.0', 'METRIC lines of the command fact source: delete this branch')
-                return {name: printed[name] for name in names if name in printed}
             case []:
                 raise FactReadError(f'wrote no result to {RESULT_ENV}')
-            case [_] if printed:
-                raise FactReadError(f'wrote a result to {RESULT_ENV} and printed METRIC lines: drop the METRIC lines')
             case [line]:
                 try:
                     return dict(READING.validate_json(line).metrics)

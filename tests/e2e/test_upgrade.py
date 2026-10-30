@@ -3,17 +3,16 @@
     uv run pytest -m e2e tests/e2e/test_upgrade.py -rA [--e2e-model <model>]
 
 piloop ``RELEASE`` from PyPI runs a small enwik8 campaign: a keep, a discard, a cancelled run, notes, an archive of the
-keep's workspace files and a ``research/`` loss table. Its ``piloop.toml`` has the forms of the release that this
-checkout bridges (``harnesses``, ``[model]``, ``[roles.*]``, inline triggers with ``anomaly``, ``[spend]``,
-``[memory] documents``, an evaluate command that prints ``METRIC`` lines), and ``[stop]`` and ``confidence``, which the
-release bridged with a warning and this checkout removed. While two agents of the release work, the user upgrades as
-the upgrading guide says: ``uv tool install --reinstall <this checkout>`` and ``piloop upgrade``. Then every row, ref,
-commit and file of the release is still there, the migrations rewrote only what the guide lists (event payloads, the
-stored configs, the session files, the archives' subjects), the backup is the database before the migration, the new
+keep's workspace files and a ``research/`` loss table. Its ``piloop.toml`` has forms that the release bridged with a
+warning and this checkout removed: ``[roles.*]`` with an inline list of triggers that names ``anomaly``, ``[memory]
+documents`` and ``[spend]``. While two agents of the release work, the user upgrades as the upgrading guide says:
+``uv tool install --reinstall <this checkout>`` and ``piloop upgrade``. Then every row, ref, commit and file of the
+release is still there, the migrations rewrote only what the guide lists (the agents' subjects, the leases' jobs, the
+events that named a run, the stored configs' ``agents``), the backup is the database before the migration, the new
 code cancels one agent and scores the other's run, the removed keys fail as unknown keys, and the store restores what
 both piloops archived.
 
-A home of 0.2 is refused, untouched, with the release to install first.
+A home of 0.3 is refused, untouched, with the release to install first.
 
 Claude only: the release does not know the other harnesses' flags of today.
 """
@@ -48,47 +47,23 @@ from tests.e2e.inventory import Changed, Inventory, Renames, differences, take
 
 pytestmark = pytest.mark.e2e
 
-RELEASE = '0.3.1'
-RELEASE_HEAD = '0053'
-"""The schema revision of core that ``RELEASE`` shipped. It had no other chain."""
-RENAMES = Renames(
-    columns={'archives.idea_id': 'subject_id', 'agent_sessions.run_id': 'subject_id', 'leases.evaluation_id': 'job_id'}
-)
-"""The renames since ``RELEASE`` that the upgrading guide documents: ``archives.idea_id`` (archive's 0002) and
-``agent_sessions.run_id`` (0070), each with ``subject_kind`` beside it, and ``leases.evaluation_id`` (0073), with the
-lease's ``kind`` and its ``runner`` beside it. A rename of a later release goes here."""
-CONFIG_REWRITES = (
-    'roles.*',
-    'status.*',
-    'harnesses',
-    'runtime',
-    'mcp.*',
-    'spend',
-    'spend.*',
-    'memory.*',
-    *(f'{key}.*' for key in ('harness', 'model', 'max_concurrent')),
-    *(f'plugins.{key}.*' for key in ('harness', 'role', 'runtime', 'trigger', 'section', 'fact_source', 'memory')),
-    'plugins.mcp_server.*',
-    'plugins.stop_rule.while_held',
-)
-"""The keys of the stored ``piloop.toml`` that a migration may change, as patterns: it turns the ``anomaly`` trigger
-into ``run_failed`` and ``dead_at_startup`` (revision 0055), makes ``[spend]`` a ``command`` source and its stored
-``closing_review`` the stop rule's ``while_held`` (0056), moves ``[memory] documents`` into ``plugins.memory`` (0061),
-drops a harness table's ``mcp`` and ``usage`` (0063), moves the harnesses, their ``model`` and ``max_concurrent``, the
-roles, ``harnesses`` and ``runtime`` under ``plugins`` (0065), names the instances of the lists of triggers, sections
-and fact sources and moves ``mcp`` to ``plugins.mcp_server`` (0066), and makes the spend source's fact ``billing_usd``,
-which the ``spend`` source sums (0067). The keys that a later ``piloop init`` stores again, such as each role's
-defaults, are not a migration's."""
-DROPPED = {f'campaigns.{c}' for c in ('spend_usd', 'spend_error', 'spend_at')}  # 0056 makes them fact.read events
-"""The columns that this checkout dropped, as the upgrading guide lists them."""
+RELEASE = '0.4.0'
+RELEASE_HEAD = '0067'
+"""The schema revision of core that ``RELEASE`` shipped."""
+RENAMES = Renames(columns={'agent_sessions.run_id': 'subject_id', 'leases.evaluation_id': 'job_id'})
+"""The renames since ``RELEASE`` that the upgrading guide documents: ``agent_sessions.run_id`` (0070), with
+``subject_kind`` beside it, and ``leases.evaluation_id`` (0073), with the lease's ``kind`` and its ``runner`` beside it. A
+rename of a later release goes here."""
+CONFIG_REWRITES = ('agents', 'agents.*', 'plugins.role.implementer.finding_grace')
+"""The keys of the stored ``piloop.toml`` that a migration may change, as patterns: revision 0072 drops the null keys of
+``agents`` that the release stored, and moves ``agents.finding_grace`` to the implementer's. The keys that a later
+``piloop init`` stores again, such as each role's defaults, are not a migration's."""
 QUEUE = re.compile(r'evaluations#\d+: |home/runs/\d+/eval-\d+/')
 """The evaluation queue, rows and worktrees: a daemon's start empties it, and what still needs a measurement asks
 again (``Scheduler.reap``)."""
 CONFIG = {
     'evaluate_timeout': 300,
-    'stop': {'max_hours': 1, 'max_tokens': 20_000_000},
-    'confidence': 0.9,
-    'plugins': {'stop_rule': {'max_runs': 6}},
+    'plugins': {'stop_rule': {'max_runs': 6, 'max_hours': 1, 'max_tokens': 20_000_000}},
     'roles': {
         'implementer': {'max_concurrent': 2, 'timeout': 600},
         'research': {'max_ideas': 0},
@@ -101,12 +76,13 @@ CONFIG = {
     'memory': {'documents': ['brief.md']},
     'spend': {'command': ['echo', '0.5'], 'interval': 60},
 }
-"""Over the release's enwik8 template: two implementers, no research sweep (``max_ideas = 0``) and no progress review.
-The forms of the release that this checkout bridges until 0.5.0, and ``[stop]`` and ``confidence``, which the release
-bridged and this checkout removed: the upgrade leaves them for the user to delete."""
+"""Over the release's enwik8 template, in place of its ``[plugins.role.*]``: two implementers, no research sweep
+(``max_ideas = 0``) and no progress review. ``[roles.*]``, its inline triggers, ``[memory]`` and ``[spend]`` are forms
+that the release bridged with a warning and this checkout removed: the upgrade leaves them for the user to delete."""
 REMOVED_KEYS = {
-    ('stop',): 'stop: Extra inputs are not permitted',
-    ('confidence',): 'confidence = 0.9: Extra inputs are not permitted',
+    ('roles',): 'roles: Extra inputs are not permitted',
+    ('memory',): 'memory: Extra inputs are not permitted',
+    ('spend',): 'spend: Extra inputs are not permitted',
 }
 """Each removed key that the campaign's ``piloop.toml`` still has after the upgrade, and how ``piloop doctor`` names
 it: an unknown key."""
@@ -155,9 +131,9 @@ LIVE = ('NOTES.md', 'research')
 LIVE_STATES = {'requested', 'starting', 'running'}
 """The states of an agent that is not done."""
 OLD_SHAPE = 'old-shape'
-OLD_SHAPE_CONFIG = Path(__file__).parents[1] / 'fixtures' / 'configs' / '0053-2.json'
-"""A second campaign, paused, with the stored config of a real home of the release (``tests/db/test_stored_configs.py``):
-harness tables with ``usage``, which revision 0063 turns into their provider, and codex, which 0065 moves."""
+OLD_SHAPE_CONFIG = Path(__file__).parents[1] / 'fixtures' / 'configs' / '0067-2.json'
+"""A second campaign, paused, with a stored config of a real home as the release left it
+(``tests/db/test_stored_configs.py``), with codex among its harnesses."""
 PLANTED_BACKUPS = [f'piloop.db.bak-{RELEASE_HEAD}-2025010{day}T000000Z' for day in (1, 2, 3)]
 """Backups that piloop wrote before the upgrade, oldest first: the upgrade's own backup pushes out the oldest."""
 NOT_BACKUPS = [
@@ -239,6 +215,9 @@ def upgrade(request: pytest.FixtureRequest, e2e_summary: list[str]) -> Iterator[
         'PILOOP_CLAUDE_SKILLS_DIR': str(root / 'skills' / 'claude'),
     }
     smoke = Smoke(root, 'enwik8', env)
+    smoke.home.mkdir(parents=True)
+    # a shared disk with less than [storage]'s default 20 GB free would evict and archive by pressure all along
+    (smoke.home / 'config.toml').write_text('[storage]\nmin_free_gb = 0\n')
     up = Upgrade(smoke, root)
     up.install(f'piloop=={RELEASE}')
     started = time.monotonic()
@@ -250,21 +229,20 @@ def upgrade(request: pytest.FixtureRequest, e2e_summary: list[str]) -> Iterator[
                 str(tool_python),
                 '-I',  # the release's piloop: in the cwd, the checkout's would come first on sys.path
                 '-c',
-                'import piloop.campaign, pathlib; print(pathlib.Path(piloop.campaign.__file__).parent)',
+                'import piloop.plugins.campaign_type.optimization as o, pathlib; print(pathlib.Path(o.__file__).parent)',
             ],
             capture_output=True,
             text=True,
             check=True,
         ).stdout.strip()
         shutil.copytree(Path(templates) / 'templates' / 'enwik8', smoke.repo)
-        toml = merged(
-            merged(tomllib.loads((smoke.repo / 'piloop.toml').read_text()), CONFIG), {'model': {'claude': model}}
-        )
+        template = tomllib.loads((smoke.repo / 'piloop.toml').read_text())
+        del template['plugins']['role']  # CONFIG's [roles.*] stand for them
+        toml = merged(merged(template, CONFIG), {'plugins': {'harness': {'claude': {'model': model}}}})
         (smoke.repo / 'piloop.toml').write_text(tomli_w.dumps(toml))
         smoke.piloop('init', str(smoke.repo), '--example', 'enwik8')
         smoke.piloop('install-skills')
-        smoke.piloop('serve', '--detach')
-        wait_until((smoke.home / 'serve.pid').is_file)
+        wait_until((smoke.home / 'serve.pid').is_file)  # 0.4's init starts the daemon
         yield up
     finally:
         try:
@@ -284,7 +262,8 @@ def test_the_release_does_real_work(upgrade: Upgrade) -> None:
     smoke = upgrade.smoke
     for key, (title, plan, priority) in IDEAS.items():
         smoke.add_idea(key, title, upgrade.held(plan, key), priority)
-    # the keep's own entry, which the release archives once the idea is done
+    # the keep's own entry, which the release archives once the idea is done; 0.4 makes the workspace with its first agent
+    upgrade.workspace.mkdir(parents=True, exist_ok=True)
     (upgrade.workspace / f'idea{smoke.ideas["keep"]}-eval.txt').write_text('METRIC bytes=3342035\n')
     wait_until(lambda: smoke.run_in('cancelled', {'running'}), timeout=180)
     time.sleep(15)  # into its sleep, so the cancel ends an agent in the middle of its work
@@ -326,7 +305,9 @@ def test_the_release_does_real_work(upgrade: Upgrade) -> None:
     # what the store archives after the upgrade, when the campaign stops
     (workspace / 'scratch').mkdir(exist_ok=True)
     (workspace / 'scratch' / 'bulk.bin').write_bytes(os.urandom(300_000))
-    archived = 'SELECT id FROM archives WHERE idea_id = ? AND complete AND manifest IS NOT NULL'
+    archived = (
+        "SELECT id FROM archives WHERE subject_kind = 'idea' AND subject_id = ? AND complete AND manifest IS NOT NULL"
+    )
     wait_until(lambda: smoke.sql(archived, smoke.ideas['keep']), timeout=300)
     upgrade.archive = smoke.sql(archived, smoke.ideas['keep'])[0]['id']
     log = subprocess.run(['git', 'log', '--format=%s', 'main'], cwd=smoke.repo, capture_output=True, text=True).stdout
@@ -411,7 +392,7 @@ def test_nothing_of_the_release_is_lost(upgrade: Upgrade) -> None:
     assert unexpected == [], '\n'.join(map(str, unexpected))
     live = live_dirs(before)  # an agent at work changes its own directories, and they go when it ends
     files = [f for f in found.files if not any(f'/{n}/' in f or f'-{n.replace("/", "-")}-' in f for n in live)]
-    lost = [d for d in found.lost() if d not in found.files and d not in DROPPED] + files
+    lost = [d for d in found.lost() if d not in found.files] + files
     lost = [d for d in lost if not QUEUE.match(d)]
     assert lost == [], '\n'.join(lost)
     candidates = {r['revision'] for r in before.tables['candidates']}
@@ -563,7 +544,7 @@ def test_the_removed_keys_load_once_the_user_deletes_them(upgrade: Upgrade) -> N
     assert [line for line in proc.stdout.splitlines() if line.startswith('FAIL')] == [], proc.stdout
     assert 'campaign enwik8: ' in proc.stdout and 'piloop.toml loads' in proc.stdout
     warnings = [line for line in proc.stderr.splitlines() if 'Warning' in line]
-    assert all('PiloopDeprecationWarning' in w for w in warnings), proc.stderr  # the forms of 0.3.1, until 0.5.0
+    assert all('PiloopDeprecationWarning' in w for w in warnings), proc.stderr
 
 
 @needs(test_upgrade_with_an_agent_in_flight)
@@ -577,21 +558,21 @@ def test_no_process_of_the_release_is_left(upgrade: Upgrade) -> None:
         raise AssertionError(f'processes left: {smoke.processes()}') from e
 
 
-def test_a_home_of_0_2_is_refused_and_left_as_it_was(piloop_install: Install, tmp_path: Path) -> None:
+def test_a_home_of_0_3_is_refused_and_left_as_it_was(piloop_install: Install, tmp_path: Path) -> None:
     """This piloop migrates from ``RELEASE``'s schema only: it names the release to install first, and changes
-    nothing, on a database that piloop 0.2.1 created."""
+    nothing, on a database that piloop 0.3.1 created."""
     home = tmp_path / 'home'
     env = piloop_install.env(home) | {
         'UV_TOOL_DIR': str(tmp_path / 'uv-tools'),
         'UV_TOOL_BIN_DIR': str(tmp_path / 'bin'),
     }
-    subprocess.run(['uv', 'tool', 'install', '--quiet', '--python', '3.14', 'piloop==0.2.1'], env=env, check=True)
+    subprocess.run(['uv', 'tool', 'install', '--quiet', '--python', '3.14', 'piloop==0.3.1'], env=env, check=True)
     subprocess.run([str(tmp_path / 'bin' / 'piloop'), 'migrate'], env=env, check=True, capture_output=True)
     before = (home / 'piloop.db').read_bytes()
     proc = subprocess.run(['piloop', 'migrate'], env=env, capture_output=True, text=True, timeout=120)
     assert proc.returncode != 0
-    assert 'is from piloop 0.2 (schema revision core 0018)' in proc.stderr, proc.stderr
-    assert "install piloop 0.3 (`uv tool install 'piloop==0.3.*'`)" in proc.stderr, proc.stderr
+    assert 'is from piloop 0.3 (schema revision core 0053)' in proc.stderr, proc.stderr
+    assert "install piloop 0.4 (`uv tool install 'piloop==0.4.*'`)" in proc.stderr, proc.stderr
     assert (home / 'piloop.db').read_bytes() == before
     assert list(home.glob('piloop.db.bak-*')) == []
 
@@ -642,8 +623,7 @@ def opened(inventory: Inventory) -> set[tuple[str, object]]:
 
 def allowed(change: Changed, open_rows: set[tuple[str, object]]) -> bool:
     """A change of a row the campaign still changes; for the campaign row, only its time, signer and the documented
-    rewrite of its stored config; for an event, the documented rewrite to its model; for an agent's usage, the path of
-    its session file, which revision 0054 moves into the CAS."""
+    rewrite of its stored config; for an event, the documented rewrite to its model."""
     match change.table, change.column:
         case 'campaigns', 'config':
             return all(
@@ -651,22 +631,18 @@ def allowed(change: Changed, open_rows: set[tuple[str, object]]) -> bool:
             )
         case 'campaigns', column:
             return column in {'updated_at', 'updated_by'}
+        case 'migrations', 'fingerprint':
+            return True  # each chain records the fingerprint of its new head
         case 'events', 'payload':
             return typed(change)
-        case 'agent_sessions', 'usage':
-            return json.loads(str(change.after)) == {
-                k: v for k, v in json.loads(str(change.before)).items() if k != 'source'
-            }
         case table, _:
             return (table, change.rowid) in open_rows
 
 
 def typed(change: Changed) -> bool:
-    """An event payload that the migrations rewrote: the payload loads as its model (``anomaly.reported``'s ``trigger``,
-    revision 0055; ``anomaly.disk``'s ``subject``, archive's 0002), or a kind that nothing registers only gained its
-    ``kind``.
-
-    ``tests/db/test_event_history.py`` checks each rewrite. This checks that the rows of a real campaign load.
+    """An event payload that the migrations rewrote: the payload loads as its model (``agent_session.identified`` and
+    ``anomaly.startup`` name the subject in place of the run, revision 0070), or a kind that nothing registers only
+    gained its ``kind``. This checks that the rows of a real campaign load.
     """
     importlib.import_module('piloop.daemon.scheduler')  # registers the events of every layer
     importlib.import_module('piloop.plugins.campaign_type.optimization.planner')  # and of the optimization type

@@ -69,6 +69,12 @@ def test_a_server_is_http_or_stdio_and_names_variables_where_they_belong(table: 
         MCP_SERVERS.validated(table)
 
 
+def test_an_http_server_s_address_is_what_a_sandbox_lets_through() -> None:
+    assert HttpServer(url='https://mcp.example/mcp').address == 'mcp.example:443'
+    assert HttpServer(url='http://localhost:8080/mcp').address == 'localhost:8080'
+    assert HttpServer(url='http://gw/mcp').address == 'gw:80'
+
+
 def test_a_job_carries_its_servers_with_their_provider() -> None:
     """``AgentJob.servers`` is the role's servers by name, each with its ``provider``, as a worker reads them back."""
     wire = TypeAdapter(AgentJob.model_fields['servers'].rebuild_annotation())

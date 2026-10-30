@@ -18,7 +18,6 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
 
-from piloop import deprecated
 from piloop.actor import ACTORS, Agent, System
 from piloop.plugins.escalation.contract import At, Choice, Escalated, EscalationPolicy, EscalationView, Now, ToHuman
 
@@ -180,10 +179,6 @@ class Structured(EscalationPolicy):
                 return Now()
 
     def view(self, item: Escalated) -> EscalationView:
-        if item.form is None:  # filed as free text: its first line asks, and the rest says why
-            deprecated.until('0.5.0', 'an escalation filed as free text: refuse an escalation without a form')
-            first, _, rest = item.body.strip().partition('\n')
-            return EscalationView(headline=first, why=rest.strip())
         return self._view(Form.model_validate(item.form))
 
     def _view(self, form: Form) -> EscalationView:

@@ -385,6 +385,25 @@ def escalation() -> Trigger:
     )
 
 
+def escalation_form() -> Trigger:
+    """TEMP: refuse an agent's escalation without its form, which ``piloop escalate`` checks with its provider.
+
+    piloop files every escalation of its own, of a person and of the API with a form. An agent's INSERT has none, and
+    one of an older piloop shows as its body.
+    """
+    return Trigger(
+        'comments_escalation_form',
+        'comments',
+        'BEFORE INSERT',
+        when=(
+            "NEW.kind = 'escalation' AND NEW.form IS NULL"
+            ' AND (SELECT agent_session FROM temp.session_actor) IS NOT NULL'
+        ),
+        body="SELECT RAISE(ABORT, 'an escalation needs its form: `piloop escalate <target>` (`--guide` shows it)')",
+        temp=True,
+    )
+
+
 # The one exception to `changed`: when the daemon writes a brief where there was none, the run starts (`run.started`),
 # and that is not a steer. Anyone else who writes a brief, or the daemon replacing one, steers the run.
 RUN_BRIEF = Trigger(
@@ -534,5 +553,5 @@ CHANGES = (
 """The decisions that are logged. To log another column, add its ``Changed`` model here."""
 TOMBSTONES = (tombstone(IdeaDeleted), tombstone(CommentDeleted), tombstone(CandidateDeleted))
 """The deletes that are logged, with the key columns, so the feed can still say what was there."""
-COMMENTS = (comment_event(),)
+COMMENTS = (comment_event(), escalation_form())
 """Every comment but an escalation, as ``comment.<kind>``. The daemon pushes the forum's to implementers."""

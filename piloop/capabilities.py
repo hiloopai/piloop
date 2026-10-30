@@ -30,7 +30,7 @@ from piloop.plugins.runtime.contract import Runtime, RuntimeConfig
 from piloop.plugins.runtime.subprocess import Subprocess, SubprocessRuntime
 from piloop.plugins.runtime.docker import Docker
 
-from piloop.plugins.harness.contract import HARNESSES, Carried, Harness, SecretRef, UsageReader, UserConfig
+from piloop.plugins.harness.contract import HARNESSES, Harness, SecretRef, UsageReader, UserConfig
 from piloop.settings import Settings, StorageSettings, TracingSettings, EvaluationSettings
 from piloop.settings import DaemonSettings, AgentSettings, WatchSettings
 from piloop.plugins.harness.contract import McpLaunch, McpArgs, McpError, McpRenderer
@@ -185,15 +185,15 @@ from piloop.plugins.campaign_type.kit.evaluation.jobs import run_evaluation
 from piloop.plugins.campaign_type.kit.evaluation.config import Rung, Tolerance
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.executor.contract import AgentFinished, AgentNotStarted, HarnessSession
-from piloop.plugins.executor.contract import AgentKey, EvaluationKey, JobKey, Key
+from piloop.plugins.executor.contract import AgentKey, JobKey, Key
 from piloop.plugins.executor.contract import key_of, Capacity, Prompt
 from piloop.plugins.executor.contract import JobKind, Applying, job_kinds, kind_of, JobSecrets, job_secrets
 from piloop.plugins.executor.contract import Source, RepoId, MissingBlobs, Workspace
 from piloop.plugins.executor.contract import Control, Site
-from piloop.plugins.executor.kit.jobs import Machine, local_site, run_agent, remove
+from piloop.plugins.executor.kit.jobs import Machine, local_site, run_agent
 from piloop.plugins.executor.kit.leases import Leases, Timing, Grant, Answer
 from piloop.plugins.executor.kit.leases import StaleLease
-from piloop.proc import Channel, kill_group
+from piloop.proc import kill_group
 from piloop.plugins.executor.workers import Workers, WorkersExecutor
 from piloop.otel import Tracer, Span, ConsoleProcessor
 from piloop.plugins.runtime.contract import RuntimeFactory
@@ -215,7 +215,7 @@ from piloop.plugins.network.proxy import Proxy
 
 from piloop.ids import Revision
 from piloop.plugins.vcs.contract import VCS, Vcs, Repository, Version, Conflicts, Transfer, Fetch, Captured, Unsaved
-from piloop.plugins.vcs.contract import Pin, Keep, RunVersion, RebaseVersion, ReferenceVersion
+from piloop.plugins.vcs.contract import Pin
 from piloop.plugins.vcs.contract import VcsError, NotARepository, UnknownRevision, CloneFailed
 from piloop.plugins.vcs.contract import Part
 from piloop.plugins.vcs.git import Git, GitRepository

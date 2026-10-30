@@ -13,7 +13,6 @@ from piloop.config import CampaignAgents
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.harness.contract import cleared_env, each_provider
 from piloop.plugins.host import Scope, campaign_defaults
-from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES
 from piloop.settings import UNDER_TEST_ENV, MovedEnv, Settings, StorageSettings, TracingSettings, env_names, expand_env
 
 
@@ -113,21 +112,6 @@ def test_the_actor_is_read_from_its_signature(tmp_path: Path, monkeypatch: pytes
     assert Settings(home=tmp_path).actor == System.HUMAN
 
 
-def test_name_claim_of_the_proxy_network_is_a_list_of_one_name_claims(tmp_path: Path) -> None:
-    """0.3 named a proxy's caller by one claim, ``name_claim``."""
-    network = '[plugins.network]\nprovider = "proxy"\nname_claim = "principal"\n'
-    (tmp_path / 'config.toml').write_text(network)
-    with pytest.warns(PiloopDeprecationWarning, match=r'name_claim is deprecated.*removed in piloop 0\.5\.0') as w:
-        settings = Settings(home=tmp_path)
-    assert w[0].lineno == 3
-    assert settings.plugins['network'] == {'provider': 'proxy', 'name_claims': ['principal']}
-    (tmp_path / 'config.toml').write_text(network + 'name_claims = ["user"]\n')
-    with pytest.warns(PiloopDeprecationWarning):
-        assert Settings(home=tmp_path).plugins['network']['name_claims'] == ['user'], 'name_claims wins'
-    (tmp_path / 'config.toml').write_text(network.replace('proxy', 'https'))
-    assert Settings(home=tmp_path).plugins['network']['name_claim'] == 'principal', 'only the proxy network'
-
-
 def test_slow_write_is_one_ms_read_from_config_toml_and_the_environment_wins(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -172,23 +156,6 @@ def test_the_implementer_s_timings_of_config_toml_are_its_role_s_with_a_warning(
     assert campaign_defaults(home.plugins) == {
         'role': {'implementer': {'startup_relaunches': 4, 'finding_grace': 'PT30S', 'wrap_up_lead': 120}}
     }
-
-
-def test_the_startup_breaker_of_config_toml_is_the_launch_policy_s_with_a_warning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``[daemon] startup_breaker`` and ``startup_window``, which 0.4.0 read, are ``[plugins.launch_policy]`` keys."""
-    (tmp_path / 'config.toml').write_text('[daemon]\nstartup_breaker = 5\nstartup_window = "PT5M"\n')
-    monkeypatch.setenv('PILOOP_DAEMON__STARTUP_BREAKER', '7')
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        home = Settings(home=tmp_path)
-    assert [str(w.message).split('; removed')[0] for w in warned] == [
-        '`daemon.startup_breaker` is deprecated; write `plugins.launch_policy.startup_breaker`',
-        '`daemon.startup_window` is deprecated; write `plugins.launch_policy.startup_window`',
-        'PILOOP_DAEMON__STARTUP_BREAKER is deprecated; set PILOOP_PLUGINS__LAUNCH_POLICY__STARTUP_BREAKER',
-    ]
-    policy = LAUNCH_POLICIES.selected(home.providers)
-    assert (policy.startup_breaker, policy.startup_window) == (7, timedelta(minutes=5)), 'the variable wins'
 
 
 def test_a_moved_variable_source_reads_a_field_as_the_environment_does(monkeypatch: pytest.MonkeyPatch) -> None:

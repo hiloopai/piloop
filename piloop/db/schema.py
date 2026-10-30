@@ -7,8 +7,6 @@ Inspiration: Django's apps, each with its own models and migrations.
 """
 
 import re
-import sqlite3
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,14 +37,6 @@ NAME = re.compile(r'[a-z][a-z0-9]*(_[a-z0-9]+)*(/[a-z][a-z0-9]*(_[a-z0-9]+)*)?')
 
 
 @dataclass(frozen=True)
-class Refusal:
-    """Why a plugin's chain does not migrate a database yet, and what to run first."""
-
-    found: str
-    fix: str
-
-
-@dataclass(frozen=True)
 class Schema:
     """What core or a plugin adds to the database: its tables, its migrations and its triggers."""
 
@@ -62,10 +52,6 @@ class Schema:
     internal: tuple[type[Base], ...] = ()
     """Its tables that only piloop's own machinery reads, such as leases. A brief's list of tables leaves them out;
     ``piloop schema`` prints them."""
-    refuses: Callable[[sqlite3.Connection], Refusal | None] | None = None
-    """Why its chain does not migrate a database yet, read on a read-only connection, or None when it does. It is
-    asked only while the chain is behind its head: what the revisions cannot tell, such as rows that an older
-    release had still to rewrite."""
     protected: tuple[type[Base], ...] = ()
     """Its tables that ``piloop sql`` cannot write: only its provider's commands do, such as ``piloop secret``."""
     hidden: tuple[InstrumentedAttribute[object], ...] = ()

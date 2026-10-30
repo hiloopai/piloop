@@ -89,7 +89,7 @@ def test_an_agent_s_token_acts_as_its_agent_only_and_the_owner_on_the_socket_as_
             'error': 'forbidden',
             'detail': f'owner may not act as {bound}: only the token of {bound} acts as it',
         }, 'without its token, nobody acts as an agent'
-        assert journal('an agent of the daemon before', str(older)).status_code == 200, 'until 0.5.0'
+        assert journal('an agent with no token', str(older)).status_code == 403, 'the owner acts as no agent'
         assert journal('no such agent', 'watchdog#99').status_code == 403
     with db.session() as s:
         signed = {(j.line, j.author) for j in s.scalars(select(Journal))}
@@ -99,7 +99,6 @@ def test_an_agent_s_token_acts_as_its_agent_only_and_the_owner_on_the_socket_as_
         ('agent as None', str(bound)),
         ('agent as human', str(bound)),
         (f'agent as {bound}', str(bound)),
-        ('an agent of the daemon before', str(older)),
     }
     assert not {line for line, _ in signed} & {'posing', 'no such agent'}
 

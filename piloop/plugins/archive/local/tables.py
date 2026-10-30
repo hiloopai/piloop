@@ -1,6 +1,5 @@
 """The table of ``local``: one row for each archiving of a campaign's workspace."""
 
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -8,12 +7,10 @@ from covalence import Cid
 from sqlalchemy import CheckConstraint, ForeignKey, Index, text
 from sqlalchemy.orm import Mapped, composite, mapped_column
 
-from piloop import deprecated
 from piloop.db.models import NOW, Base, CidText, utcnow
-from piloop.db.schema import Refusal, Schema
+from piloop.db.schema import Schema
 from piloop.db.triggers import on
 from piloop.ids import CampaignId, TargetKind, TargetRef
-from piloop.store.tree import RAW
 
 
 class Archive(Base):
@@ -53,27 +50,5 @@ class Archive(Base):
     room, a failure, a stop of the daemon) has only incomplete rows, so it stays due."""
 
 
-@deprecated.until(
-    '0.5.0', 'a 0.3 home with a JSON manifest of 0.2: delete json_manifests, and Schema.refuses if unused'
-)
-def json_manifests(con: sqlite3.Connection) -> Refusal | None:
-    """Why a home whose archive still names a JSON manifest of piloop 0.2 does not migrate, else None.
-
-    piloop 0.3 stored each one again at its start, unless the store could not give it back. This piloop reads none.
-    """
-    if con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archives'").fetchone() is None:
-        return None  # a schema from before the archives
-    rows = con.execute('SELECT id, manifest FROM archives WHERE manifest IS NOT NULL ORDER BY id').fetchall()
-    if not (old := [archive for archive, manifest in rows if Cid(manifest).codec == RAW]):
-        return None
-    return Refusal(
-        f'archive {", ".join(map(str, old))} still names a manifest of piloop 0.2',
-        "install piloop 0.3 (`uv tool install 'piloop==0.3.*'`) and run `piloop migrate`, which stores it again and"
-        ' says what to do when the store cannot give it back, then install this piloop again and run `piloop upgrade`',
-    )
-
-
 TABLES = (Archive,)
-SCHEMA = Schema(
-    tables=TABLES, versions=Path(__file__).parent / 'migrations', triggers=on(TABLES), refuses=json_manifests
-)
+SCHEMA = Schema(tables=TABLES, versions=Path(__file__).parent / 'migrations', triggers=on(TABLES))

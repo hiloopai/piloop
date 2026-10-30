@@ -58,7 +58,8 @@ class Escalated:
     filed: datetime
     body: str
     form: JsonValue | None
-    """What ``EscalationPolicy.form`` returned when it was filed. None for one filed as free text."""
+    """What ``EscalationPolicy.form`` returned when it was filed. None for one that an older piloop filed as free text,
+    which every surface shows as its body: piloop asks the provider of no view or choice for it."""
 
 
 @dataclass(frozen=True)
@@ -110,7 +111,7 @@ class EscalationPolicy(Parameters, ABC):
 
     @abstractmethod
     def view(self, item: Escalated) -> EscalationView:
-        """How every surface shows ``item``."""
+        """How every surface shows ``item``, which has its form."""
 
     @abstractmethod
     def choose(self, item: Escalated, choice: str) -> str:

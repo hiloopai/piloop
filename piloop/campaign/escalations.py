@@ -146,6 +146,10 @@ def choose(s: Session, comment_id: CommentId, choice: str, *, author: Actor) -> 
     if item.kind != CommentKind.ESCALATION:
         raise Refused(f'comment#{comment_id} is a {item.kind}, not an escalation: answer it with `piloop inbox reply`')
     found = escalated(s, item)
+    if found.form is None:
+        raise Refused(
+            f'comment#{comment_id} was filed as free text, with no choices: answer it with `piloop inbox reply`'
+        )
     try:
         text = policy(s, found.campaign).choose(found, choice)
     except ValueError as e:

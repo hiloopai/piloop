@@ -4,7 +4,6 @@ from typing import Annotated
 
 import cyclopts
 
-from piloop import deprecated
 from piloop.cli import common, local
 from piloop.db.models import AgentSession
 from piloop.ids import AgentSessionId
@@ -37,7 +36,6 @@ def messages(
         str | None,
         cyclopts.Parameter(name='--harness', help='The harness whose hook reads them: one message a line without it.'),
     ] = None,
-    form: Annotated[deprecated.MessageFormat | None, cyclopts.Parameter(name='--format', show=False)] = None,
 ) -> None:
     """Take the messages that wait for this agent's turn, and print them.
 
@@ -46,7 +44,8 @@ def messages(
     """
     if common.settings.messages is None:
         raise SystemExit(f'{MESSAGES_ENV} is not set: the runtime of this agent keeps no message queue')
-    name = harness or (deprecated.message_format(form) if form is not None else None)
-    model = HARNESSES.model_of(name) if name is not None else Harness  # before the take: a wrong name loses nothing
+    model = (
+        HARNESSES.model_of(harness) if harness is not None else Harness
+    )  # before the take: a wrong name loses nothing
     if taken := take(common.settings.messages):
         common.console.out(model.messages(taken), highlight=False)

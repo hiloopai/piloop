@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "piloop"
-version = "0.4.0"
+version = "0.5.0"
 description = "Autoresearch for any repo: coding agents try ideas, piloop scores every commit and keeps what wins"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -261,21 +261,8 @@ stdio = "piloop.plugins.mcp_server.stdio:StdioServer"
 
 # The bridges of old keys (piloop.deprecated.BRIDGES): each declares the bridges that it runs after or before
 [project.entry-points."piloop.bridges"]
-plugin_tables = "piloop.deprecated:plugin_tables"
-mcp_tables = "piloop.plugins.mcp_server.bridges:mcp_tables"
-anomaly_trigger = "piloop.plugins.trigger.bridges:anomaly_trigger"
-max_spend = "piloop.plugins.stop_rule.bridges:max_spend"
-wake_budget = "piloop.plugins.section.bridges:wake_budget"
-memory_documents = "piloop.plugins.memory.bridges:memory_documents"
-harness_providers = "piloop.plugins.harness.bridges:harness_providers"
-plugin_lists = "piloop.deprecated:plugin_lists"
-spend_table = "piloop.plugins.fact_source.bridges:spend_table"
-runtime_tables = "piloop.plugins.runtime.bridges:runtime_tables"
-name_claim = "piloop.plugins.network.bridges:name_claim"
 implementer_timings = "piloop.deprecated:implementer_timings"
 campaign_finding_grace = "piloop.deprecated:campaign_finding_grace"
-startup_breaker = "piloop.plugins.launch_policy.bridges:startup_breaker"
-pool_slots = "piloop.plugins.executor.bridges:pool_slots"
 
 # The kinds that events and comments point at, beyond core's, by name: the table of their rows
 # (piloop.db.models.TARGET_KINDS).

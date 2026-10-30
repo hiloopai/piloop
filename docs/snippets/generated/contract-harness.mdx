@@ -14,7 +14,6 @@
 | `Harness.env: dict[EnvName, str \| SecretRef]` | Variables of the agent's environment: a value, or a secret, `{ secret = "NAME" }`. For example a model gateway, `{ ANTHROPIC_BASE_URL = "https://gw.example.com", ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" } }`. When unset, the agent uses the login of the machine that runs it. |
 | `Harness.user_config: UserConfig` | Whether its agents load the user's own setup of the harness: `ignore` or `load`. `{user_config}` in the argv expands to the provider's flags that ignore it, or to nothing. An argv without it loads it. |
 | `Harness.isolation() -> list[str]` | The flags that keep its agents from the user's own setup, for `user_config = "ignore"`. None, by default. |
-| `Harness.carried(args: list[str], resume_args: list[str]) -> Carried \| None` | What an isolated agent takes from the user's setup on this machine, so that its login works. None, by default. |
 | `Harness.mcp() -> McpRenderer \| None` | How it takes the MCP servers of a role. None, by default: it takes none. |
 | `Harness.expanded(argv: list[str]) -> list[str]` | `argv`, its `headless` or `resume`, with the elements that only this provider knows expanded. |
 | `Harness.sessions() -> UsageReader \| None` | How to read the session files that its CLI leaves. None, by default: it leaves none that piloop reads. |

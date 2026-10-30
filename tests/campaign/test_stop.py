@@ -661,7 +661,14 @@ def stop_while_held(db: Database, campaign: Campaign, hold: str, review: str | N
     if hold == 'spend':
         bill = str(Path(campaign.path).parent / 'bill')
         rule = {'hold_at': {'spend': 10}} | ({'while_held': review} if review else {})
-        set_config(db, campaign, plugins={'stop_rule': rule, 'fact_source': with_spend(command=['cat', bill])})
+        set_config(
+            db,
+            campaign,
+            plugins={
+                'stop_rule': rule,
+                'fact_source': with_spend(command=['sh', '-c', f'cat {bill} >> "$PILOOP_RESULT_FILE"']),
+            },
+        )
     (idea,) = add_ideas(db, campaign, 'queued before the stop')
     with db.session() as s:
         s.get_one(Idea, idea).status = IdeaStatus.SCHEDULED
@@ -748,7 +755,7 @@ def test_closing_review_wait_starts_the_review_once_the_spend_hold_lifts(
     assert run_all(sched) == []
     assert campaign_state(db, campaign)[0] is CampaignStatus.STOPPED
     assert closing_reviews(db, campaign) == [AgentSessionState.REQUESTED], 'requested, waiting for the hold'
-    (Path(campaign.path).parent / 'bill').write_text('METRIC spend=3')
+    (Path(campaign.path).parent / 'bill').write_text('{"metrics": {"spend": 3}}\n')
     due_now(db, campaign)
     assert run_all(sched) == [1], 'a spend below the limit: the review starts'
     sched.wait(SETTLE)

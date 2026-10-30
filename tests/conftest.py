@@ -102,6 +102,37 @@ EVALUATE = [
     ' >> "$PILOOP_RESULT_FILE"',
 ]
 
+
+def reports(**metrics: str) -> str:
+    """The shell command that reports ``metrics`` as an evaluate command's result line on ``$PILOOP_RESULT_FILE``.
+
+    Each value is a shell word that prints a number, such as ``'$(wc -l < solve.txt)'`` or ``'1'``.
+    """
+    fields = ', '.join(f'"{name}": %s' for name in metrics)
+    values = ' '.join(f'"{value}"' for value in metrics.values())
+    return f'printf \'{{"metrics": {{{fields}}}}}\\n\' {values} >> "$PILOOP_RESULT_FILE"'
+
+
+def escalation_sql(target_kind: str, target_id: object, author: str) -> str:
+    """An agent's ``piloop sql`` INSERT of an escalation with its form, ready for a double-quoted shell word."""
+    from piloop.plugins.escalation.structured import EXAMPLE  # here: tests import conftest before the plugins load
+
+    form = EXAMPLE.model_dump_json().replace("'", "''")
+    sql = (
+        'INSERT INTO comments (target_kind, target_id, author, kind, priority, body, form) VALUES'
+        f" ('{target_kind}', {target_id}, '{author}', 'escalation', 1, 'run the audit', '{form}')"
+    )
+    return sql.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$').replace('`', '\\`')
+
+
+def reports_py(**metrics: float) -> str:
+    """The Python source of an ``evaluate.py`` that reports ``metrics`` as its result line."""
+    return (
+        'import json, os\n'
+        f"open(os.environ['PILOOP_RESULT_FILE'], 'a').write(json.dumps({{'metrics': {metrics!r}}}) + '\\n')\n"
+    )
+
+
 TOML = """
 name = "demo"
 evaluate = {evaluate}

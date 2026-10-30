@@ -630,7 +630,7 @@ def _notice(
 
 def _view(s: Session, comment: Comment, campaign: Campaign | None) -> EscalationView | None:
     """How an escalation shows, as its campaign's provider says, or None for another comment."""
-    if comment.kind != CommentKind.ESCALATION:
+    if comment.kind != CommentKind.ESCALATION or comment.form is None:  # free text that an older piloop filed
         return None
     return escalations.policy(s, campaign.id if campaign else None).view(escalations.escalated(s, comment))
 
