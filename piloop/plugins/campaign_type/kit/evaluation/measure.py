@@ -5,15 +5,18 @@ controller and the history block agree. What a score means against a bar is the 
 (``piloop.plugins.campaign_type.kit.verdicts.judge``).
 """
 
+import hashlib
 import json
 from collections.abc import Sequence
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
-from statistics import fmean
+from statistics import fmean, stdev
 from typing import Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
 from sqlalchemy import ColumnElement, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
@@ -70,6 +73,37 @@ def current_evaluator(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Ev
         campaign.evaluator_id = evaluator.id
         s.flush()
     return evaluator
+
+
+class Split(StrEnum):
+    """What an evaluation of a version scores."""
+
+    VISIBLE = 'visible'
+    """The evaluate command, with its ladder: what the head, the bars and the verdicts read."""
+    SEALED = 'sealed'
+    """The sealed split (``[evaluator] sealed``): only a would-be keep, and the bar that it would replace."""
+
+
+def sealed_evaluator(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Evaluator | None:
+    """Return the evaluator row of the campaign's sealed split, created if needed, or None without one.
+
+    It is an evaluator of its own, keyed by its command, so its measurements never count as the visible ones. It is
+    never the campaign's current evaluator.
+    """
+    if (command := cfg.evaluator.sealed) is None:
+        return None
+    definition: dict[str, object] = {'sealed': list(command)}
+    key = hashlib.sha256(json.dumps(definition, sort_keys=True).encode()).hexdigest()[:16]
+    row = select(Evaluator).where(Evaluator.campaign_id == campaign.id, Evaluator.key == key)
+    if (found := s.scalar(row)) is not None:
+        return found
+    try:
+        with s.begin_nested():  # two submissions of one campaign judged at once both find none
+            found = Evaluator(campaign_id=campaign.id, key=key, definition=definition)
+            s.add(found)
+    except IntegrityError:
+        return s.scalars(row).one()
+    return found
 
 
 def evaluator_runners() -> tuple[str, ...]:
@@ -178,6 +212,19 @@ def means(rows: Sequence[dict[str, float]]) -> dict[str, float]:
 def score(candidate: Candidate, evaluator_id: EvaluatorId | None, primary: Metric) -> float | None:
     """Return the primary metric under ``evaluator_id``, or None when no successful measurement has it."""
     return metrics(candidate, evaluator_id).get(primary.name)
+
+
+def noise(baseline: Candidate, evaluator_id: EvaluatorId | None, name: str) -> float | None:
+    """Return the standard deviation of metric ``name`` over the baseline's ``full`` measurements under ``evaluator_id``.
+
+    It is the noise that a gain must exceed. None with fewer than two values.
+    """
+    found = [
+        m.metrics[name]
+        for m in baseline.measurements
+        if m.evaluator_id == evaluator_id and full(m) and name in m.metrics
+    ]
+    return stdev(found) if len(found) >= 2 else None
 
 
 def measured(candidate: Candidate, evaluator_id: EvaluatorId | None) -> bool:

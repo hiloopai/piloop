@@ -21,6 +21,8 @@ from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, 
 from piloop.plugins.campaign_type.kit.backlog.ideas import claimable, held
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
+from piloop.plugins.campaign_type.kit.evaluation import submissions
 from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, handed_off
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
@@ -167,11 +169,18 @@ class OptimizationPlanner:
     def remeasure(self, s: Session, campaign: Campaign) -> None:
         """Measure what the current evaluator must measure (``ledger.due``), one candidate at a time per campaign.
 
+        Each submission that waits for its verdict is judged at once, on a thread of its own (``judge_submission``).
+
         After an evaluator change, no candidate has a score from the new evaluator. The head is measured first, and runs
         that are not pinned wait until it has a score (``_queue``). Then the bars that runs need, and the candidates
         that someone asked to measure again. Older keeps are measured again only when someone asks. A candidate that
         someone measured by hand is judged again first (``rejudges``), in the same slot: a rebase can measure its merge.
         """
+        for submission in submissions.waiting(s, campaign):  # each on its own: an implementer waits for it
+            mine = (CANDIDATE, submission.id)
+            if (busy := self._scoring.get(mine)) is None or busy.done():
+                self._tracer.event('candidate.submission', campaign=campaign.name, candidate=submission.id)
+                self._scoring[mine] = self._host.submit(partial(self._controller.judge_submission, submission.id))
         key = (TargetKind.CAMPAIGN, campaign.id)
         if (busy := self._scoring.get(key)) is not None and not busy.done():
             return

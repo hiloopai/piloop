@@ -75,7 +75,7 @@ from piloop.plugins.campaign_type.kit.verdicts.section.trajectory import Traject
 from piloop.plugins.campaign_type.kit.runs.section.runs import Runs
 from piloop.plugins.campaign_type.kit.backlog.section.queue import Queue
 from piloop.plugins.section.agents import Agents
-from piloop.plugins.campaign_type.kit.evaluation.section.dev import Dev
+from piloop.plugins.campaign_type.kit.evaluation.section.measure import Measure
 from piloop.plugins.campaign_type.kit.evaluation.section.evaluations import Evaluations
 from piloop.plugins.campaign_type.kit.evaluation.section.funnel import RunFunnel
 from piloop.plugins.campaign_type.optimization.section.yields import Yields
@@ -115,13 +115,14 @@ from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.role.orchestrator import OrchestratorRole
 
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, VerdictRule, Case
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Criterion, Ratio, Side, Stopped
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Criterion, Ratio, Sealed, Side, Stopped
 from piloop.plugins.metric import Direction
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Judgement, Outcome
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Node, Trunk, Branch, Imported
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Moved, Rebase, Seed, Leave
 from piloop.plugins.metric import number
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.noise import Noise
 
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule, StopCase, Shape, WhileHeld
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource, FactReadError

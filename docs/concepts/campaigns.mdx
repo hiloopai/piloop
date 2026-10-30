@@ -76,7 +76,7 @@ uv run python evaluate.py
 | `score` | With `ok`: the value of the primary, the first metric of `[[metrics]]` with `role = "primary"`. |
 | `direction` | With `ok`: `higher` or `lower`, as the primary's `direction` says. |
 | `metrics` | A number for each other metric, by its name in `[[metrics]]`. Each guardrail is required, a watch metric is optional. |
-| `feedback` | Optional: one line on what the run saw. piloop keeps it with the measurement, and never sends it to an implementer. |
+| `feedback` | Optional: one line on what the run saw. piloop keeps it on the measurement's event and never sends it to an implementer, though an agent can read it with `piloop sql`. |
 | `units` | Optional: the [per-unit results](#per-unit-results). |
 | `evidence` | Optional: files of the worktree that explain the result, by a label, such as `{"errors": "out/errors.md"}`. piloop keeps them with the evaluation's logs, up to `[evaluation] max_evidence_mb` in `config.toml`. |
 

@@ -203,7 +203,15 @@ def test_a_rule_gets_the_rungs_that_each_side_climbed(monkeypatch: pytest.Monkey
     monkeypatch.setattr(judge, 'verdict_rule', shows_rungs)
     cfg = config()
     assert judge.judge(
-        climbed(0.5), climbed(0.7), EvaluatorId(1), cfg, cfg.all_tracks[0], tmp_path, head=None, side=Trunk()
+        climbed(0.5),
+        climbed(0.7),
+        EvaluatorId(1),
+        cfg,
+        cfg.all_tracks[0],
+        tmp_path,
+        head=None,
+        side=Trunk(),
+        evidence=judge.Evidence(),
     ) == (Outcome.INTERESTING, "{'screen': {'accuracy': 0.5}} vs {'screen': {'accuracy': 0.7}}")
 
 
@@ -364,7 +372,7 @@ def test_a_lower_is_better_primary_reads_in_its_own_direction() -> None:
         name='v',
         metrics=[Metric(name='loss', direction=Direction.LOWER, role=MetricRole.PRIMARY)],
         evaluate=['true'],
-        plugins={'harness': {'pi': {'model': 'm'}}},
+        plugins={'harness': {'pi': {'model': 'm'}}, 'verdict_rule': Bootstrap()},
     )
     theirs = {f'u{i}': 1.0 for i in range(30)}
     mine = {f'u{i}': 0.5 for i in range(30)}

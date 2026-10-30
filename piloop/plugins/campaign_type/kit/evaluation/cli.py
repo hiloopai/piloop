@@ -1,5 +1,6 @@
-"""The evaluation's commands, clients of the API: ``piloop eval queue|cancel`` and ``piloop measurement add``."""
+"""The evaluation's commands, clients of the API: ``piloop eval``, ``piloop measurement add``, ``piloop submit``."""
 
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, assert_never
@@ -9,18 +10,21 @@ from pydantic import ValidationError
 from rich.table import Table
 from rich.text import Text
 
+from piloop.api.contract import MAX_POLL_SECONDS
 from piloop.cli import common
 from piloop.cli.client import daemon_http
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.ids import PENDING, CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.wire import (
     CancelledBy,
     EvaluationClient,
     EvaluationState,
     Report,
     RunningSince,
+    SubmissionQuery,
+    SubmitBody,
     WaitingSince,
 )
-from piloop.text import age, cell
+from piloop.text import age, cell, metric
 
 eval_app = cyclopts.App(
     name='eval', help='List or cancel the evaluations that the daemon runs or that wait for a slot.'
@@ -107,3 +111,28 @@ def measurement_add(
     with EvaluationClient.connect(daemon_http()) as client:
         added = client.add_measurement(candidate_id, parsed)
     common.console.print(f'measurement#{added.measurement} of candidate#{candidate_id}: {added.effect}', markup=False)
+
+
+def submit(
+    revision: Annotated[
+        str | None, cyclopts.Parameter(help='The commit to submit. Default: the one that your checkout is at.')
+    ] = None,
+    /,
+) -> None:
+    """Score a commit of your run now, and wait for its verdict.
+
+    piloop runs the campaign's evaluate command on the commit, and judges it against the head. It prints the verdict
+    and the score, such as `keep 0.8312`: `keep` makes it the head, `discard` does not, `crash` failed to run. Each run
+    has a few submissions (`[evaluator] submissions`).
+    """
+    if revision is None:
+        from piloop.plugins.vcs.contract import VCS  # here: only this command reads a checkout; the others load no vcs
+
+        with closing(VCS.selected({}).open(Path.cwd())) as checkout:
+            revision = checkout.head().revision
+    with EvaluationClient.connect(daemon_http()) as client:
+        answer = client.submit(SubmitBody(revision=revision))
+        while answer.verdict == PENDING:
+            answer = client.submission(answer.candidate, SubmissionQuery(wait=MAX_POLL_SECONDS))
+    score = '' if answer.score is None else f' {metric(answer.score)}'
+    common.console.print(f'{answer.verdict}{score}', markup=False, highlight=False)

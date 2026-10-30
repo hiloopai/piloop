@@ -2,7 +2,7 @@
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import ClassVar, Final, Literal, assert_never
@@ -32,6 +32,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     Samples,
     candidates_of,
     derive,
+    full,
     full_clause,
     means,
     measured,
@@ -64,6 +65,7 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
     Node,
     Ratio,
     Rebase,
+    Sealed,
     Seed,
     Side,
     Stopped,
@@ -206,7 +208,8 @@ def fallback_track(cfg: CampaignConfig, name: TrackName | None) -> Track:
 def due(s: Session, campaign: Campaign) -> list[Candidate]:
     """Return what the daemon measures with the current evaluator, most urgent first, each once.
 
-    1. The head: a run starts from it and is judged against it, so the queue waits for it (``head_unmeasured``).
+    1. The head: a run starts from it and is judged against it, so the queue waits for it (``head_unmeasured``). The
+       baseline, until it has ``[evaluator] noise_runs`` measurements (``short_of_noise``).
     2. The bar of each open run (``bar_of`` its base), oldest run first: the run is judged against it.
     3. Each candidate that someone asked to measure again (``requested``), oldest request first, and each that waits
        for a verdict that no run gives (``unjudged``).
@@ -224,14 +227,34 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     waiting = select(Candidate).join(Run).where(Candidate.campaign_id == campaign.id, pending_clause())
     asked = [c for c, _ in requested(s, campaign)]
     active = campaign.status is CampaignStatus.ACTIVE
+    evaluator_id = campaign.evaluator_id
+    noisy = [c for c in [baseline(s, campaign)] if c is not None and short_of_noise(c, evaluator_id, campaign)]
     found = (
-        [head(s, campaign), *(bar_of(s, run.base) for run in s.scalars(open_runs.order_by(Run.id)))] if active else []
+        [head(s, campaign), *noisy, *(bar_of(s, run.base) for run in s.scalars(open_runs.order_by(Run.id)))]
+        if active
+        else []
     )
     found += asked + [c for c in s.scalars(waiting.order_by(Candidate.id)) if unjudged(c)]
     if active:
         found += s.scalars(new_references.order_by(Candidate.id))
-    evaluator_id = campaign.evaluator_id
-    return [c for c in dict.fromkeys(found) if c is not None and (c in asked or not measured(c, evaluator_id))]
+    return [
+        c for c in dict.fromkeys(found) if c is not None and (c in asked or c in noisy or not measured(c, evaluator_id))
+    ]
+
+
+def short_of_noise(candidate: Candidate, evaluator_id: EvaluatorId | None, campaign: Campaign) -> int:
+    """How many more measurements the baseline needs under ``evaluator_id``, for the noise of its score.
+
+    0 for any other candidate, and with ``noise_runs`` below 2: one measurement has no noise. Only a successful
+    measurement counts. Once ``noise_runs`` of them crashed it asks for no more: ``noise_unknown`` escalates.
+    """
+    runs = campaign.config.evaluator.noise_runs
+    if candidate.origin is not Origin.BASELINE or runs < 2:
+        return 0
+    mine = [m for m in candidate.measurements if m.evaluator_id == evaluator_id]
+    if sum(m.error is not None for m in mine) >= runs:
+        return 0
+    return max(runs - sum(full(m) for m in mine), 0)
 
 
 def head_unmeasured(s: Session, campaign: Campaign) -> bool:
@@ -268,6 +291,10 @@ class CandidateJudged(EventModel):
     reason: str | None
     track: TrackName | None = None
     """The track. Null before the daemon judged on every track."""
+    parent_delta: float | None = None
+    """How much better the track's primary is than its parent's: positive when better. Null when either lacks one."""
+    best_delta: float | None = None
+    """How much better the track's primary is than the head's when it was judged. Null when either lacks one."""
 
 
 def unjudged(candidate: Candidate) -> bool:
@@ -331,30 +358,26 @@ def stop_of(candidate: Candidate, evaluator_id: EvaluatorId) -> Stopped | None:
     return None
 
 
-def judge(
+@dataclass(frozen=True)
+class Evidence:
+    """What a verdict reads beyond the two candidates: the noise of each track's primary, and the sealed split's."""
+
+    noise: dict[str, float] = field(default_factory=dict)
+    """The standard deviation of each primary over the baseline's measurements (``noise``), by metric."""
+    sealed: Sealed | None = None
+    """The sealed split's scores of the first track's primary, once piloop scored them."""
+
+
+def case_of(
     candidate: Candidate,
     own: Candidate,
     evaluator_id: EvaluatorId,
     cfg: CampaignConfig,
     track: Track,
     units_dir: Path,
-    *,
-    head: Candidate | None,
-    side: Lineage,
-) -> tuple[Outcome, str]:
-    """Return the daemon's verdict on ``candidate``, a candidate of ``track``, against ``own``, and the reason.
-
-    ``own`` is the run's bar: its last keep, or its last candidate that kept against its bar and was rebased. It
-    starts as the run's base. The run controller keeps a run's candidate on the trunk only while ``own`` is the head. A keep
-    against an ``own`` that the head has moved past is rebased onto the head instead (``rebase``).
-
-    On a ``Branch`` (``runs.branch``: its idea pinned another starting point), a run keeps what beats ``own``: a branch
-    keep. Its reason also says whether it is above ``head`` on the track's primary.
-
-    The campaign's verdict rule gives the verdict (``decide``): ``[plugins.verdict_rule]``, else ``bootstrap``. It
-    reads the candidate's parent too.
-    """
-    mine = metrics(candidate, evaluator_id)
+    evidence: Evidence,
+) -> Case:
+    """Return what the verdict rule reads to judge ``candidate``, a candidate of ``track``, against ``own``."""
     mine_samples, theirs_samples = pairs(candidate, own, evaluator_id)
 
     def as_side(c: Candidate, samples: Samples | None = None) -> Side:
@@ -365,16 +388,49 @@ def judge(
             samples or {},
             stopped=stop_of(c, evaluator_id),
             rungs=rungs(c, evaluator_id),
+            measured=sum(m.evaluator_id == evaluator_id and full(m) for m in c.measurements),
         )
 
     parent = candidate.parent
-    verdict, reason = decide(
-        verdict_rule(cfg),
-        track,
+    first = track.name == cfg.all_tracks[0].name
+    return Case(
+        criterion(track.primary),
+        tuple(map(criterion, track.guardrails)),
         as_side(candidate, mine_samples),
         as_side(own, theirs_samples),
-        parent=as_side(parent) if parent is not None else None,
+        as_side(parent) if parent is not None else None,
+        noise=evidence.noise.get(track.primary.name),
+        sealed=evidence.sealed if first else None,
     )
+
+
+def judge(
+    candidate: Candidate,
+    own: Candidate,
+    evaluator_id: EvaluatorId,
+    cfg: CampaignConfig,
+    track: Track,
+    units_dir: Path,
+    *,
+    head: Candidate | None,
+    side: Lineage,
+    evidence: Evidence,
+) -> tuple[Outcome, str]:
+    """Return the daemon's verdict on ``candidate``, a candidate of ``track``, against ``own``, and the reason.
+
+    ``own`` is the run's bar: its last keep, or its last candidate that kept against its bar and was rebased. It
+    starts as the run's base. The run controller keeps a run's candidate on the trunk only while ``own`` is the head. A keep
+    against an ``own`` that the head has moved past is rebased onto the head instead (``rebase``).
+
+    On a ``Branch`` (``runs.branch``: its idea pinned another starting point), a run keeps what beats ``own``: a branch
+    keep. Its reason also says whether it is above ``head`` on the track's primary.
+
+    The campaign's verdict rule gives the verdict (``decide``): ``[plugins.verdict_rule]``, else ``noise``. It reads
+    the candidate's parent and the ``evidence`` too.
+    """
+    judged = verdict_rule(cfg).decide(case_of(candidate, own, evaluator_id, cfg, track, units_dir, evidence))
+    verdict, reason = judged.verdict, judged.reason
+    mine = metrics(candidate, evaluator_id)
     primary = track.primary
     leader = metrics(head, evaluator_id).get(primary.name) if head is not None else None
     match side, verdict:
@@ -410,6 +466,7 @@ def judge_tracks(
     *,
     head: Candidate | None,
     side: Lineage,
+    evidence: Evidence,
 ) -> list[OnTrack]:
     """Return the verdicts on ``candidate`` against ``own`` (``judge``) on each track, the best last.
 
@@ -420,7 +477,7 @@ def judge_tracks(
     mine = metrics(candidate, evaluator_id)
     others = [t for t in cfg.all_tracks if t.name != track.name and t.primary.name in mine]
     judged = [
-        OnTrack(t, *judge(candidate, own, evaluator_id, cfg, t, units_dir, head=head, side=side))
+        OnTrack(t, *judge(candidate, own, evaluator_id, cfg, t, units_dir, head=head, side=side, evidence=evidence))
         for t in (track, *others)
     ]
     best = next(j for verdict in RANK for j in judged if j.verdict is verdict)

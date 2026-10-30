@@ -216,6 +216,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'run.received': [],
             'run.relaunched': [],
             'run.started': [],
+            'run.submitted': ['campaigns', 'yield_alarm'],
             'secret.deleted': ['listeners'],
             'secret.set': ['listeners'],
             'subject.settled': ['archiver'],

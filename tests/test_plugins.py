@@ -33,6 +33,7 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
     Side,
     VerdictRule,
 )
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.noise import Noise
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.claude import Claude
@@ -335,6 +336,7 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
     campaign_path = Path(campaign.path)
     example(tmp_path / 'site', 'min-gain')
     monkeypatch.syspath_prepend(tmp_path / 'site')
+    forget_loaded()  # the campaign's config loaded the verdict rules before the example was installed
     assert VERDICT_RULES.tier is Tier.PURE and data_errors(VerdictRule) == []
     cfg = load_campaign_config(campaign_path, plugins={'verdict_rule': {'provider': 'min_gain', 'min_gain': 2}})
     rule = VERDICT_RULES.selected(cfg.plugins)
@@ -344,7 +346,7 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
     )
     assert VERDICT_RULES.sources()['min_gain'].release == 'piloop-min-gain 0.1.0'
     home = Settings(home=tmp_path)
-    assert not any(line.startswith('demo: verdict rule') for line in selections(home)), 'demo selects none yet'
+    assert not any(line.startswith('demo: verdict rule min_gain') for line in selections(home)), 'not selected yet'
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
@@ -354,7 +356,7 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
     ) in selections(home)
     plain = load_campaign_config(campaign_path, plugins={'verdict_rule': {'provider': 'bootstrap'}})
     assert plain.plugins['verdict_rule'] == Bootstrap(), 'a rule without fields, given none'
-    assert VERDICT_RULES.selected({}) == Bootstrap(), 'the default'
+    assert VERDICT_RULES.selected({}) == Noise(), 'the default'
     for tables, error in [
         (
             {'verdict_rule': {'provider': 'nope'}},

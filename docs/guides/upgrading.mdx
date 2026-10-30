@@ -234,6 +234,35 @@ The result line names its `status`, and the primary is its `score`:
 A line without `status` still reads as `ok`, with the primary among `metrics`, until 0.7.0. A rung's line keeps its
 form.
 
+### Implementers submit, and the noise decides
+
+A new campaign scores what its implementers submit, judged by the noise of its baseline:
+
+| 0.6 default | What it does | 0.5's behavior |
+|---|---|---|
+| `[evaluator] scoring = "submit"` | An implementer scores a commit with `piloop submit`, up to `submissions` per run. Other commits are `skipped`. | `scoring = "run_end"` |
+| `[plugins.verdict_rule] provider = "noise"` | A mean gain must exceed `m·σ/√n`: `σ` is the noise of the baseline, `n` the candidate's evaluations ([the noise](/concepts/verdict#the-noise)). It must hold on `[evaluator] sealed` too, when that is set. | `provider = "bootstrap"` |
+| `[evaluator] noise_runs = 3` | The baseline is evaluated 3 times under each evaluator. | `noise_runs = 1` |
+
+A campaign that 0.5 made keeps 0.5's behavior: the upgrade stores the three old values in its stored config, where
+its `piloop.toml` did not set them. The repo's `piloop.toml` is not changed, so reading it again with
+`piloop campaign sync` or `piloop init` gives the 0.6 defaults. To switch a campaign to 0.6's scoring, run:
+
+```bash
+piloop campaign sync enwik8
+```
+
+To keep 0.5's scoring through a sync, put the old values in its `piloop.toml`:
+
+```toml
+[evaluator]
+scoring = "run_end"
+noise_runs = 1
+
+[plugins.verdict_rule]
+provider = "bootstrap"
+```
+
 ### A cancelled evaluation is no verdict
 
 `piloop eval cancel` records no measurement. A run's candidate is `skipped`, not a `crash`. A baseline that never

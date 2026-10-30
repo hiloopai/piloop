@@ -4194,6 +4194,159 @@
         }
       }
     },
+    "/v1/submissions": {
+      "post": {
+        "summary": "Submit",
+        "description": "Submit a version of the caller's run, an implementer's: the daemon scores and judges it now.",
+        "operationId": "submit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Submission"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/submissions/{candidate}": {
+      "get": {
+        "summary": "Submission",
+        "description": "A submission's verdict and score. With wait, a long-poll that answers once the verdict is in.",
+        "operationId": "submission",
+        "parameters": [
+          {
+            "name": "candidate",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Candidate"
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 25,
+              "minimum": 0,
+              "description": "Seconds to hold the request while there is nothing to answer yet.",
+              "default": 0,
+              "title": "Wait"
+            },
+            "description": "Seconds to hold the request while there is nothing to answer yet."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Submission"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/runs/end": {
       "post": {
         "summary": "End Run",
@@ -8954,6 +9107,54 @@
         ],
         "title": "Subject",
         "description": "The row that an event is about."
+      },
+      "Submission": {
+        "properties": {
+          "candidate": {
+            "type": "integer",
+            "title": "Candidate"
+          },
+          "verdict": {
+            "type": "string",
+            "title": "Verdict",
+            "description": "The verdict, ``pending`` while piloop scores it, or ``skipped`` when someone cancelled its evaluation."
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score",
+            "description": "The primary's value, on the evaluate command's score. None without one."
+          }
+        },
+        "type": "object",
+        "required": [
+          "candidate",
+          "verdict",
+          "score"
+        ],
+        "title": "Submission",
+        "description": "A submission as its implementer reads it: the verdict and the score, nothing else."
+      },
+      "SubmitBody": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision",
+            "description": "The version, as the campaign's vcs names one: a commit of the caller's checkout."
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "title": "SubmitBody",
+        "description": "A version of the caller's run to score now (``piloop submit``)."
       },
       "SyncBody": {
         "properties": {

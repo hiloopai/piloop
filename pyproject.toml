@@ -58,6 +58,7 @@ idea = "piloop.plugins.campaign_type.kit.backlog.cli:app"
 candidate = "piloop.plugins.campaign_type.optimization.cli:candidate_app"
 measurement = "piloop.plugins.campaign_type.kit.evaluation.cli:measurement_app"
 eval = "piloop.plugins.campaign_type.kit.evaluation.cli:eval_app"
+submit = "piloop.plugins.campaign_type.kit.evaluation.cli:submit"
 store = "piloop.plugins.archive.local.cli:app"
 token = "piloop.cli.token:app"
 agent = "piloop.cli.agents:agent_app"
@@ -157,6 +158,7 @@ news = "piloop.plugins.trigger.news:NewsTrigger"
 
 [project.entry-points."piloop.verdict_rules"]
 bootstrap = "piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap:Bootstrap"
+noise = "piloop.plugins.campaign_type.kit.verdicts.verdict_rule.noise:Noise"
 
 [project.entry-points."piloop.stop_rules"]
 limits = "piloop.plugins.stop_rule.limits:Limits"
@@ -195,7 +197,7 @@ idea_comments = "piloop.plugins.campaign_type.kit.runs.section.idea_comments:Ide
 queue = "piloop.plugins.campaign_type.kit.backlog.section.queue:Queue"
 agents = "piloop.plugins.section.agents:Agents"
 evaluations = "piloop.plugins.campaign_type.kit.evaluation.section.evaluations:Evaluations"
-dev = "piloop.plugins.campaign_type.kit.evaluation.section.dev:Dev"
+measure = "piloop.plugins.campaign_type.kit.evaluation.section.measure:Measure"
 funnel = "piloop.plugins.campaign_type.kit.evaluation.section.funnel:RunFunnel"
 yields = "piloop.plugins.campaign_type.optimization.section.yields:Yields"
 cost = "piloop.plugins.section.cost:Cost"

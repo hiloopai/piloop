@@ -150,8 +150,12 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # timeout = 300
 # max_concurrent = 2
 
-# [evaluator]                             # the commands beside evaluate
+[evaluator]                               # how versions are scored, beside evaluate
 # dev = ["uv", "run", "python", "evaluate.py", "--quick"]  # a fast check that implementers run themselves; piloop never runs it
+# sealed = ["python3", "/srv/sealed/score.py"]  # scores a would-be keep on data outside the repo; it must win there too
+scoring = "submit"                        # submit: what an implementer submits (piloop submit) · run_end: every commit, after the run
+submissions = 3                           # versions that one run may submit
+noise_runs = 3                            # evaluations of the baseline; the stdev of its score is the noise a gain must exceed
 
 # [agents]                                # the agents' wrap-up and the brief's budget; if not set: the home's [agents]
 # wrap_up_grace = 600                     # seconds to save their work after a stop or a cancel with --wrap-up
@@ -178,8 +182,9 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # provider = "<name>"                     # the other keys of the table are its parameters; `piloop plugins` lists them
 #                                         # a capability of several instances: [plugins.<name>.<instance>] for each
 
-# [plugins.verdict_rule]                  # how a candidate is judged; without the table: bootstrap
-# confidence = 0.95                       # a keep needs the primary metric's gain to be above zero at this confidence
+# [plugins.verdict_rule]                  # how a candidate is judged; without the table: noise
+# m = 2                                   # a keep's mean gain over n evaluations must exceed m·σ/√n, σ the noise
+# provider = "bootstrap"                  # instead: a paired bootstrap over units or repeats (keys: confidence)
 
 # [plugins.stop_rule]                     # the limits of the built-in rule `limits`; any one ends the campaign; none: no end
 # target = 0.85                           # the primary metric at the head reaches this value (one track only)

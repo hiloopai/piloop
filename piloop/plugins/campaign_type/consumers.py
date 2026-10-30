@@ -89,6 +89,7 @@ from piloop.plugins.campaign_type.contract import CAMPAIGNS, CannotLaunch, Plann
 from piloop.plugins.campaign_type.kit.backlog.ideas import added_by
 from piloop.plugins.campaign_type.kit.candidates.references import CandidateImported
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded, RemeasureRequested, score
+from piloop.plugins.campaign_type.kit.evaluation.submissions import Submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from piloop.plugins.campaign_type.kit.runs.controller import (
     RUNS,
@@ -172,6 +173,7 @@ CAMPAIGN_STATE: Kinds = frozenset(
         RemeasureRequested,
         RejudgeRequested,
         MeasurementRecorded,
+        Submitted,
         *LIMITS,
     }
 )

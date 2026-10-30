@@ -6,12 +6,13 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
+from piloop.campaign import escalations
 from piloop.campaign.ops import Refused, existing, pause
 from piloop.campaign.stop import held
 from piloop.config import CampaignConfig
 from piloop.db.events import emit
 from piloop.db.models import Campaign, Pause
-from piloop.ids import TargetRef
+from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.measure import record
@@ -23,6 +24,7 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     pending,
     rejudgeable,
 )
+from piloop.plugins.escalation.contract import Choice, EscalationView
 
 
 def hold_on_failed_baseline(s: Session, candidate: Candidate, logs: Path | None) -> None:
@@ -53,6 +55,32 @@ def hold_on_cancelled_baseline(s: Session, candidate: Candidate, actor: Actor) -
         return
     why = f'{actor} cancelled the evaluation of the baseline; `piloop resume {campaign.name}` measures it again'
     pause(s, campaign.id, evals=True, reason=why)
+
+
+def noise_unknown(s: Session, campaign: Campaign, baseline: Candidate, metric: str) -> None:
+    """Escalate, once, that the baseline's evaluations give no noise of ``metric``: too few succeeded.
+
+    Until someone measures the baseline again, the ``noise`` verdict rule keeps nothing. The caller commits.
+    """
+    runs = campaign.config.evaluator.noise_runs
+    asked = EscalationView(
+        headline=f'The noise of {metric} is unknown, so no candidate of {campaign.name} can be kept. What now?',
+        why=(
+            f'Fewer than 2 of the evaluations of the baseline candidate#{baseline.id} succeeded, out of the'
+            f' {runs} of [evaluator] noise_runs.'
+        ),
+        choices=(
+            Choice(
+                id='A',
+                label=f'Fix the evaluator, then `piloop candidate remeasure {baseline.id}`.',
+                result='Its new evaluations give the noise, and the keeps go on.',
+            ),
+            Choice(id='B', label='Set [evaluator] noise_runs = 1.', result='There is no noise: any gain keeps.'),
+        ),
+        recommended='A',
+        details=f'campaign {campaign.name}, baseline candidate#{baseline.id}, metric {metric}',
+    )
+    escalations.escalate_once(s, TargetRef(TargetKind.CAMPAIGN, campaign.id), asked, priority=1)
 
 
 @dataclass(frozen=True)

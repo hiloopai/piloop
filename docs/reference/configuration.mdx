@@ -51,7 +51,7 @@ section.
 | `link` | list\[string\] | `[]` | Repo-relative paths, ignored by git, that piloop puts into every worktree read-only, for example data or virtual environments. Each job gets them as they are when it is made. |
 | `context` | list\[string\] | `[]` | Repo-relative files or globs (for example `docs/error-analysis-*.md`) that hold the campaign's analysis: error analyses, comparisons with a reference, evaluation reports. The research pack lists each one with its outline, newest first, so that every sweep that reads the pack reads them before it proposes work. |
 | `agents` | [CampaignAgents](#campaignagents) | `{}` | `[agents]`: how long the campaign's agents get to wrap up, and its brief's budget. |
-| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "leases": {}, "models": {}, "optimization": {}, "spend": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "notifier": {"slack": {}}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "comments": {}, "concepts": {}, "context": {}, "cost": {}, "database": {}, "dev": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idea_comments": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "judging": {}, "lessons": {}, "links": {}, "long_jobs": {}, "orchestration": {}, "pack": {}, "past_campaigns": {}, "priorities": {}, "provenance": {}, "queries": {}, "queue": {}, "reported": {}, "research_commands": {}, "runs": {}, "same_as_parent": {}, "search": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "yields", "candidates", "same_as_parent", "reported", "inbox", "events"], "workspace": {}, "yields": {}}, "trigger": {"cron": {}, "dead_at_startup": {}, "low_water": {}, "low_yield": {}, "news": {}, "run_failed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
+| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "leases": {}, "models": {}, "optimization": {}, "spend": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "notifier": {"slack": {}}, "role": {"implementer": {}, "orchestrator": {}, "research": {}, "watchdog": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "comments": {}, "concepts": {}, "context": {}, "cost": {}, "database": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idea_comments": {}, "idle_queue": {}, "inbox": {}, "incidents": {}, "judging": {}, "lessons": {}, "links": {}, "long_jobs": {}, "measure": {}, "orchestration": {}, "pack": {}, "past_campaigns": {}, "priorities": {}, "provenance": {}, "queries": {}, "queue": {}, "reported": {}, "research_commands": {}, "runs": {}, "same_as_parent": {}, "search": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "idle_queue", "agents", "evaluations", "funnel", "yields", "candidates", "same_as_parent", "reported", "inbox", "events"], "workspace": {}, "yields": {}}, "trigger": {"cron": {}, "dead_at_startup": {}, "low_water": {}, "low_yield": {}, "news": {}, "run_failed": {}, "stalled": {}, "stopped": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
 
 ## Tolerance
 
@@ -111,11 +111,15 @@ Experimental: campaigns with more than one track.
 
 ## EvaluatorConfig
 
-`[evaluator]`: the campaign's commands beside `evaluate`, the one that scores a version.
+`[evaluator]`: how the campaign's versions are scored, beside `evaluate`, the command that scores one.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `dev` | list\[string\] \| null | `null` | Optional. A fast command (argv) that checks a change, which an implementer runs in its own checkout as often as it likes. Each implementer's brief names it. piloop never runs it and records nothing of it. Example: `["uv", "run", "python", "evaluate.py", "--quick"]`. |
+| `sealed` | list\[string\] \| null | `null` | Optional. The command (argv) that scores a version on the sealed split, as `evaluate` does: its score is the primary. piloop runs it only on a version that would become the new head, and on the head, and keeps the version only if it beats the head there too. Keep its data and its scorer out of the repo, in the home or on the evaluator's machines, so that no implementer reads them. Example: `["python3", "/srv/sealed/score.py"]`. |
+| `scoring` | `submit` \| `run_end` | `"submit"` | Which versions of a run piloop scores: `submit`, those that the implementer submits; `run_end`, every one, after the run ends. |
+| `submissions` | integer | `3` | How many versions one run may submit (`piloop submit`). |
+| `noise_runs` | integer | `3` | How many times piloop evaluates the baseline under each evaluator. The standard deviation of its score is the noise that a gain must exceed (`[plugins.verdict_rule]`). 1: no noise, any gain counts. |
 
 ## Rung
 
@@ -317,8 +321,6 @@ With `provider = "cost"`:
 
 With `provider = "database"`, the table has no other key.
 
-With `provider = "dev"`, the table has no other key.
-
 With `provider = "evaluations"`, the table has no other key.
 
 With `provider = "events"`, the table has no other key.
@@ -360,6 +362,8 @@ With `provider = "lessons"`:
 With `provider = "links"`, the table has no other key.
 
 With `provider = "long_jobs"`, the table has no other key.
+
+With `provider = "measure"`, the table has no other key.
 
 With `provider = "orchestration"`, the table has no other key.
 
@@ -486,13 +490,19 @@ With `provider = "git"`:
 
 ### `[plugins.verdict_rule]`
 
-The verdict rule. Without a table: `bootstrap`.
+The verdict rule. Without a table: `noise`.
 
 With `provider = "bootstrap"`:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `confidence` | number | `0.95` | The confidence level of the paired bootstrap behind the verdict. For a `keep`, the lower bound of the primary's gain must be above zero at this level. A guardrail's margin is tested on the bound at this level too. |
+
+With `provider = "noise"`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `m` | number | `2` | How many standard deviations of the baseline's score a gain must exceed, over the square root of the candidate's evaluations. 0 keeps any gain. |
 
 ## Harness
 
@@ -538,7 +548,7 @@ The keys that every `[plugins.role.<name>]` table accepts. Each role's table bel
 | `addendum` | string \| null | `null` | A repo-relative file that is appended to `brief.md` in the briefs of this role only. Use it for instructions that only this role needs, for example how the research agent searches. |
 | `mcp` | list\[string\] | `[]` | The MCP servers that the agents of this role get, by the name of their `[plugins.mcp_server.<name>]` table. Every harness in the role's rotation must be able to take them in the invocation of the role's runtime. |
 | `writes` | list\[string\] | `[]` | What the agents of this role may write, as their brief states it. piloop enforces only a sweep's `files`. |
-| `sections` | list\[string\] \| null | `null` | What the briefs of this role show after `brief.md`: the names of sections, in order, the `context` among them. When unset, the role's own guides, then every installed section that a brief of this kind of role shows by default, the guides first, in their order (`Section.SHOWN_IN`, `Section.ORDER`). Built in: `agents`, `candidates`, `comments`, `concepts`, `context`, `cost`, `database`, `dev`, `evaluations`, `events`, `funnel`, `goal`, `headline`, `history`, `idea_comments`, `idle_queue`, `inbox`, `incidents`, `judging`, `lessons`, `links`, `long_jobs`, `orchestration`, `pack`, `past_campaigns`, `priorities`, `provenance`, `queries`, `queue`, `reported`, `research_commands`, `runs`, `same_as_parent`, `search`, `tools`, `tracks`, `trajectory`, `workspace`, `yields`. |
+| `sections` | list\[string\] \| null | `null` | What the briefs of this role show after `brief.md`: the names of sections, in order, the `context` among them. When unset, the role's own guides, then every installed section that a brief of this kind of role shows by default, the guides first, in their order (`Section.SHOWN_IN`, `Section.ORDER`). Built in: `agents`, `candidates`, `comments`, `concepts`, `context`, `cost`, `database`, `evaluations`, `events`, `funnel`, `goal`, `headline`, `history`, `idea_comments`, `idle_queue`, `inbox`, `incidents`, `judging`, `lessons`, `links`, `long_jobs`, `measure`, `orchestration`, `pack`, `past_campaigns`, `priorities`, `provenance`, `queries`, `queue`, `reported`, `research_commands`, `runs`, `same_as_parent`, `search`, `tools`, `tracks`, `trajectory`, `workspace`, `yields`. |
 | `first_message` | string | `"Your brief is in {brief}. Read all of it, in parts if a read comes back cut short, then follow it."` | The first message of each agent of this role. `{brief}` is the path of its brief. |
 | `resume_message` | string | `"You continue this session as a new agent, {agent}. Your earlier briefs and work are above. Follow your role as before, with this new context."` | What starts the brief of an agent that resumes the session of the role's last agent. `{agent}` is its signature. |
 

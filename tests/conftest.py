@@ -176,6 +176,13 @@ role = "primary"
 name = "size"
 direction = "lower"
 
+[evaluator]  # 0.5's scoring: a test of submissions and of the noise sets its own
+scoring = "run_end"
+noise_runs = 1
+
+[plugins.verdict_rule]
+provider = "bootstrap"
+
 [plugins.harness.script]
 model = "test-model"
 executable = "{script}"

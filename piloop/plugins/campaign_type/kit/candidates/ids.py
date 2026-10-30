@@ -42,6 +42,8 @@ class Origin(StrEnum):
 
 JUDGED: Final = frozenset({Origin.BASELINE, Origin.RUN})
 """The origins of the candidates that the daemon judges. ``verdict IS NULL`` on one of them means that it is pending."""
+PENDING: Final = 'pending'
+"""How a candidate that waits for its verdict shows (``verdict.label``)."""
 VERDICTED: Final = JUDGED | {Origin.REFERENCE}
 """The origins of the candidates that may have a verdict: those that the daemon judges, and a reference kept by hand."""
 

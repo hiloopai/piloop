@@ -20,6 +20,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 
 from piloop.actor import System
+from piloop.config import CampaignConfig
 from piloop.db import session
 from piloop.db.models import Campaign
 from piloop.db.schema import CORE
@@ -46,6 +47,9 @@ from piloop.db.session import (
 )
 from piloop.db.triggers import PERSISTENT
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
+from piloop.plugins.campaign_type.kit.verdicts.judge import verdict_rule
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
 from piloop.version import Version, installed
 from scripts.release_triggers import PATH as RELEASE_TRIGGERS, ReleaseTriggers
 from tests.conftest import bare_config, disk
@@ -924,6 +928,35 @@ def test_0074_drops_the_keys_of_the_removed_features_from_each_stored_config(tmp
             {'name': 'q'},
         ]
     command.downgrade(cfg, '0073')
+
+
+def test_0078_pins_each_campaign_that_0_5_stored_to_0_5_s_scoring_and_downgrades(tmp_path: Path) -> None:
+    """0.5 had no ``[evaluator]`` and judged with ``bootstrap``. A campaign that it stored scores as it did, until its
+    ``piloop.toml`` is read again: at run end, with ``bootstrap``, and with one evaluation of its baseline."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0077')
+    old = bare_config('p').model_dump(mode='json')
+    del old['evaluator']
+    chosen = {**old, 'name': 'q', 'evaluator': {'noise_runs': 5}, 'plugins': {'verdict_rule': {'provider': 'own'}}}
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for config in (old, chosen):
+            con.execute(
+                'INSERT INTO campaigns (name, path, config) VALUES (?, ?, ?)',
+                (config['name'], f'/{config["name"]}', dumps(config)),
+            )
+    stored = 'SELECT config FROM campaigns ORDER BY id'
+    command.upgrade(cfg, '0078')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        pinned, kept = [loads(c) for (c,) in con.execute(stored)]
+    migrated = CampaignConfig.model_validate(pinned)
+    assert migrated.evaluator.scoring is Scoring.RUN_END and migrated.evaluator.noise_runs == 1
+    assert isinstance(verdict_rule(migrated), Bootstrap)
+    assert kept['evaluator'] == {'noise_runs': 5, 'scoring': 'run_end'}, 'what the file chose stays'
+    assert kept['plugins']['verdict_rule'] == {'provider': 'own'}
+    command.downgrade(cfg, '0077')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == [old, chosen]
 
 
 def test_optimization_0005_maps_the_idea_states_onto_the_board_drops_supersedes_and_families_and_downgrades(

@@ -15,8 +15,22 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import RungName, TrackName
 from piloop.plugins.metric import Direction
 
 
+class Scoring(StrEnum):
+    """Which versions of a run piloop scores."""
+
+    SUBMIT = 'submit'
+    """Those that the implementer submits while it works (``piloop submit``), each as it comes. The others are
+    ``skipped``."""
+    RUN_END = 'run_end'
+    """Every version, after the run ends.
+
+    Kept for the eval suite's arm that turns in-run scoring off (A1): deleted, with ``_score_each`` and the trailers
+    that only it reads, once that ablation reads out.
+    """
+
+
 class EvaluatorConfig(BaseModel):
-    """``[evaluator]``: the campaign's commands beside ``evaluate``, the one that scores a version."""
+    """``[evaluator]``: how the campaign's versions are scored, beside ``evaluate``, the command that scores one."""
 
     model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
 
@@ -24,6 +38,19 @@ class EvaluatorConfig(BaseModel):
     """Optional. A fast command (argv) that checks a change, which an implementer runs in its own checkout as often as
     it likes. Each implementer's brief names it. piloop never runs it and records nothing of it. Example:
     ``["uv", "run", "python", "evaluate.py", "--quick"]``."""
+    sealed: list[str] | None = Field(default=None, min_length=1)
+    """Optional. The command (argv) that scores a version on the sealed split, as ``evaluate`` does: its score is the
+    primary. piloop runs it only on a version that would become the new head, and on the head, and keeps the version
+    only if it beats the head there too. Keep its data and its scorer out of the repo, in the home or on the
+    evaluator's machines, so that no implementer reads them. Example: ``["python3", "/srv/sealed/score.py"]``."""
+    scoring: Scoring = Scoring.SUBMIT
+    """Which versions of a run piloop scores: ``submit``, those that the implementer submits; ``run_end``, every one,
+    after the run ends."""
+    submissions: int = Field(default=3, ge=1)
+    """How many versions one run may submit (``piloop submit``)."""
+    noise_runs: int = Field(default=3, ge=1)
+    """How many times piloop evaluates the baseline under each evaluator. The standard deviation of its score is the
+    noise that a gain must exceed (``[plugins.verdict_rule]``). 1: no noise, any gain counts."""
 
 
 class MetricRole(StrEnum):

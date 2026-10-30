@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from pydantic import ConfigDict, Field
 
 from piloop.api.client import Client
-from piloop.api.contract import Params
+from piloop.api.contract import Params, Polled
 from piloop.api.views import View
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer, CandidateView
@@ -112,8 +112,35 @@ class CandidateDetail(View):
     """Each rung of the ladder that it measured, in the order that it first measured them."""
 
 
+class SubmitBody(Params):
+    """A version of the caller's run to score now (``piloop submit``)."""
+
+    revision: str
+    """The version, as the campaign's vcs names one: a commit of the caller's checkout."""
+
+
+class SubmissionQuery(Polled):
+    """How long to wait for a submission's verdict."""
+
+
+class Submission(View):
+    """A submission as its implementer reads it: the verdict and the score, nothing else."""
+
+    candidate: CandidateId
+    verdict: str
+    """The verdict, ``pending`` while piloop scores it, or ``skipped`` when someone cancelled its evaluation."""
+    score: float | None
+    """The primary's value, on the evaluate command's score. None without one."""
+
+
 class EvaluationClient(Client):
-    """The calls of the evaluation's routes: a candidate, a measurement by hand, the queue, and a cancel."""
+    """The calls of the evaluation's routes: a candidate, a measurement by hand, the queue, a cancel and a submission."""
+
+    def submit(self, body: SubmitBody) -> Submission:
+        return self.post('/v1/submissions', body, Submission)
+
+    def submission(self, candidate: CandidateId, query: SubmissionQuery) -> Submission:
+        return self._get(f'/v1/submissions/{candidate}', query, Submission)
 
     def add_measurement(self, candidate: CandidateId, body: Report) -> MeasurementAdded:
         return self.post(f'/v1/candidates/{candidate}/measurements', body, MeasurementAdded)

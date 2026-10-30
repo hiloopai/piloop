@@ -3,11 +3,11 @@ title: Candidates, the head and the verdict
 description: How piloop decides whether a commit is kept.
 ---
 
-piloop measures each commit and compares it with the result that it must beat. This is the verdict on the first
-commit of the enwik8 example:
+piloop measures each commit that an implementer submits and compares it with the head, the best result so far. This
+is the verdict on the first submission of the enwik8 example:
 
 ```text
-candidate#2 keep: against candidate#1: bytes 2720458 vs 3688775 (-968317; 95% worst case -968317 over 3 pairs); guardrails: seconds 10.9 vs 0.8467 (+10.05; 95% worst case +10.28 over 3 pairs) within its margin 60
+candidate#2 keep: against candidate#1: bytes 2720458 vs 3688775 (+968317; noise 0 over 1 evaluations)
 ```
 
 It came from these metrics in `piloop.toml`:
@@ -40,23 +40,65 @@ repeats = 3       # a time: measure it 3 times next to the bar
 
 | Verdict | When |
 |---|---|
-| `keep` | The primary beat the bar with confidence, and every guardrail held. On the trunk, it is the new head. |
-| `interesting` | The primary improved without enough confidence, or a guardrail got worse by more than its `margin` or `fraction`. |
-| `discard` | The primary did not improve, a guardrail went past its floor, or its climb [stopped at a rung](/concepts/campaigns#the-evaluation-ladder). |
+| `keep` | The primary beat the bar by more than the noise, held on the sealed split, and every guardrail held. On the trunk, it is the new head. |
+| `interesting` | A guardrail got worse by more than its `margin` or `fraction`. |
+| `discard` | The primary did not beat the bar by more than the noise, lost on the sealed split, a guardrail went past its floor, or its climb [stopped at a rung](/concepts/campaigns#the-evaluation-ladder). |
 | `crash` | No successful measurement: the evaluate command failed, timed out, or missed a metric. |
 
-The rule, in order:
+The rule, `noise`, in order:
 
 1. No value for the primary: `discard` when its climb stopped at a rung, else `crash`.
 2. A guardrail past its `floor`: `discard`.
 3. The bar has no score under the current evaluator: `keep`.
-4. The primary is not better than the bar: `discard`.
-5. The primary's worst case at the `confidence` level is not a gain: `interesting`.
-6. A guardrail's worst case is worse than the bar by more than its `margin`, or than its `fraction` of the bar's value: `interesting`.
+4. The gain over the bar is at most `m·σ/√n`: `discard`.
+5. The gain does not hold on the [sealed split](#the-sealed-split): `discard`.
+6. A guardrail worse than the bar by more than its `margin`, or than its `fraction` of the bar's value: `interesting`.
 7. Otherwise: `keep`.
 
-The reason names every guardrail past its floor or margin, whatever rule decided. A candidate whose values equal its
-parent's has `no-op` in its reason: the change did not reach what the evaluate command measures.
+## Submissions
+
+An implementer runs `piloop submit` in its checkout. piloop scores that commit with the evaluate command at once, judges
+it against the head, and prints the verdict and the score:
+
+```text
+keep 2720458
+```
+
+- A run has `[evaluator] submissions` of them, 3 by default. A commit that is not submitted is never scored: at the
+  end of the run it is `skipped`.
+- A submission that beats only its parent is recorded, nothing more. The `candidate.judged` event has the gain over
+  the parent (`parent_delta`) and over the head (`best_delta`).
+- The implementer gets the verdict and the score, never the reason, the feedback or a per-unit result.
+
+`[evaluator] scoring = "run_end"` scores every commit after the run ends instead, against the run's starting point.
+
+## The noise
+
+The same version can score differently from one evaluation to the next. piloop measures how much, then keeps only a
+gain bigger than that.
+
+- **`σ`, the noise:** the standard deviation of the baseline's score over its first `[evaluator] noise_runs`
+  successful evaluations, 3 by default, under each evaluator.
+- **The threshold:** a candidate's mean gain over the bar must exceed `m·σ/√n`. `n` is how many times the candidate
+  was evaluated, and `m` is 2 by default (`[plugins.verdict_rule] m`). A mean of `n` evaluations is `√n` times less
+  noisy than one, so the threshold drops as the evidence grows.
+- **One more evaluation when it is close:** a first gain above 0 but at most `m·σ` runs once more. The mean of the two
+  then has to beat `m·σ/√2`.
+
+With `σ = 2` and `m = 2`, one evaluation needs a gain above 4; two need a mean gain above 2.83. A deterministic score
+has `σ = 0`: any gain keeps. When the baseline's evaluations crash, `σ` is unknown: a gain is `interesting`, never a
+`keep`, and piloop escalates once.
+
+## The sealed split
+
+`[evaluator] sealed` is a second command that scores a version on data that no implementer can read: keep its data
+and its scorer in the home or on the evaluator's machines, outside the repo. piloop runs it only on a submission that
+would become the new head, and on that head once. The submission is kept only when it beats the head there too.
+
+```toml
+[evaluator]
+sealed = ["python3", "/srv/sealed/score.py"]
+```
 
 The daemon never judges three kinds of candidate:
 
@@ -66,9 +108,10 @@ The daemon never judges three kinds of candidate:
 | `skipped` | A commit with a `Piloop-Eval: skip` trailer. |
 | `recovered` | What an implementer left uncommitted when it stopped. The next attempt at the idea starts from it. |
 
-## Confidence
+## The bootstrap rule
 
-How piloop compares a metric depends on what the evaluate command gives it:
+`[plugins.verdict_rule] provider = "bootstrap"` keeps a candidate when its primary beats the bar with confidence. A
+gain that is not significant is `interesting`. How it compares a metric depends on what the evaluate command gives it:
 
 | The evaluate command gives | piloop compares |
 |---|---|
@@ -113,5 +156,5 @@ evaluate commands at a time, a key of its [pool](/guides/workers#capacity). A fr
 fewest running evaluations, then to its head. To stop an evaluation, use `piloop eval cancel`, not `pkill`: the daemon
 runs a killed evaluation once more.
 
-The rule on this page is the built-in verdict rule, `bootstrap`. A plugin can replace it: see
+`noise` and `bootstrap` are the built-in verdict rules. A plugin can replace them: see
 [Verdict rules](/plugins/rules#verdict-rules).

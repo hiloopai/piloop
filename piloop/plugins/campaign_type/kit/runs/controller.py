@@ -6,6 +6,8 @@ The run closes when its implementer ends, so the implementer slot is free while 
 
 import json
 import re
+import threading
+from collections import defaultdict
 from collections.abc import Callable
 from contextlib import ExitStack, closing
 from dataclasses import dataclass, replace
@@ -65,18 +67,22 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Candidate
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
-from piloop.plugins.campaign_type.kit.evaluation.config import Track
+from piloop.plugins.campaign_type.kit.evaluation.config import Metric, Scoring, Track
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, Bar, EvaluationJob, InfraFailed, Sample, record
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
+    Split,
     current_evaluator,
     gate_of,
     measured,
+    noise,
     remeasure_asked,
     score,
+    sealed_evaluator,
 )
-from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline
+from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline, noise_unknown
+from piloop.plugins.campaign_type.kit.evaluation.submissions import submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
@@ -85,10 +91,13 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     MOVED,
     CandidateJudged,
+    Evidence,
     OnTrack,
     RejudgeFailed,
     answer_rejudge,
     bar_of,
+    baseline,
+    case_of,
     criterion,
     fallback_track,
     head,
@@ -96,6 +105,7 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import (
     node,
     on_moved,
     reproposed,
+    short_of_noise,
     side,
     track_of,
     unjudged,
@@ -111,7 +121,7 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     rejudgeable,
     write,
 )
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Lineage, Trunk
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Lineage, Sealed, Trunk
 from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.executor.contract import (
     DEADLINE_ENV,
@@ -136,6 +146,8 @@ type Unmeasured = Literal[Origin.RECOVERED, Origin.SKIPPED]
 """A version that the daemon does not measure: its recovered work, or one that asked to be skipped."""
 UNMEASURED_REASONS: Final[dict[Unmeasured, str]] = {Origin.RECOVERED: RECOVERED_REASON, Origin.SKIPPED: SKIPPED_REASON}
 NOT_ENDED = 'its worker stopped without `piloop run end`'
+UNSUBMITTED = 'not submitted: never measured'
+"""The reason of a version of a run that its implementer did not submit (``[evaluator] scoring = "submit"``)."""
 UNSAVED = 'what the implementer left unsaved could not be saved, agent_session.work_unsaved has it in the CAS'
 RUNS = 'runs'
 """The directory under the home of each run's place: ``runs/<id>``, its implementer's log directory and worktree."""
@@ -265,6 +277,9 @@ class RunController:
         self._jobs: dict[int, EvaluationJob] = {}
         """The job of each evaluation that this daemon asked for, by its queue row, until the row goes: a lost one is
         submitted again. A row without one is another daemon's: a reap drops it, and what needs it asks again."""
+        self._heads: defaultdict[CampaignId, threading.Lock] = defaultdict(threading.Lock)
+        """One lock per campaign, around the judgement of a submission against its head: two submissions that beat the
+        head at once are judged one after the other, the second against the first."""
 
     def configure(self) -> None:
         """Hand the executor its config with the live limits applied (``Executor.configure``), when one changed.
@@ -731,7 +746,9 @@ class RunController:
                 else None
             )
             bar = bar_of(s, parent).id if (asked is not None or paired) and parent is not None else None
-            repeats = asked.repeats if asked is not None else paired or 1
+            repeats = (
+                asked.repeats if asked is not None else paired or short_of_noise(candidate, evaluator_id, campaign) or 1
+            )
             campaign_id, revision = campaign.id, candidate.revision
             vcs, campaign_path = vcs_of(campaign), Path(campaign.path)
         eval_dir = campaign_dir(self._home, campaign_id) / 'measure' / f'{candidate_id}-e{evaluator_id}'
@@ -754,6 +771,76 @@ class RunController:
                 hold_on_failed_baseline(s, s.get_one(Candidate, candidate_id), eval_dir)
                 s.commit()
             self._rejudge(candidate_id, repo, eval_dir)
+
+    def _unsubmitted(
+        self, run_id: RunId, campaign_id: CampaignId, repo: Repository, versions: list[Version]
+    ) -> CandidateId | None:
+        """Keep each new version of the run as ``skipped``, and return its newest submission, or None.
+
+        A version that it submitted is its submission's candidate. A tree that is a candidate already stays as it is.
+        The submissions settle the run's idea, not a skipped version, which has no verdict. ``_settle`` waits for their
+        verdicts.
+        """
+        with self._db.session() as s:
+            run = s.get_one(Run, run_id)
+            name, candidate = run.campaign.name, run.base
+            for version in versions:
+                candidate, created = resolve(
+                    s, campaign_id, version, parent=candidate, run_id=run_id, origin=Origin.SKIPPED
+                )
+                if created:
+                    candidate.verdict_reason = UNSUBMITTED
+            s.commit()
+            mine = submitted(s, run_id)
+        for i, version in enumerate(versions):
+            repo.keep(version.revision, run_pin(name, run_id, i))
+        return mine[-1] if mine else None
+
+    def judge_submission(self, candidate_id: CandidateId) -> None:
+        """Measure a submitted candidate and what the verdict rule needs, and judge it against the head. Never raises.
+
+        The head is the bar: a submission becomes the head only when it beats the head. One that the head moved past
+        while it was measured is measured against the new head too. A failure is no verdict: the span records it, the
+        candidate stays pending, and the next pass of the daemon judges it again.
+        """
+        with self._tracer.span('piloop.submission', candidate=candidate_id) as span:
+            try:
+                self._judge_submission(candidate_id, span)
+            except Exception as e:  # the thread's last frame: what failed goes into the span, never lost
+                span.error(e)
+
+    def _judge_submission(self, candidate_id: CandidateId, span: Span) -> None:
+        with self._db.session() as s:
+            candidate = s.get_one(Candidate, candidate_id)
+            run = candidate.run
+            assert run is not None  # a submission is a run's candidate
+            campaign = s.get_one(Campaign, candidate.campaign_id)
+            run_id, campaign_id, vcs, path = run.id, campaign.id, vcs_of(campaign), Path(campaign.path)
+        eval_dir = self._runs_dir / str(run_id) / f'submission-{candidate_id}'
+        with closing(vcs.open(path)) as repo:
+            while True:
+                with self._db.session() as s:
+                    campaign = s.get_one(Campaign, campaign_id)
+                    candidate = s.get_one(Candidate, candidate_id)
+                    best = head(s, campaign, excluding=candidate) or baseline(s, campaign)
+                    assert best is not None  # a campaign with a run has a baseline
+                    bar_id, judge_now = best.id, pending(candidate)
+                    gate = bar_id if judge_now else None
+                match self._ready(run_id, repo, candidate_id, eval_dir, bar=bar_id, gate=gate, judge_now=judge_now):
+                    case Measuring.STOPPED | Measuring.CANCELLED as halted:
+                        span.set(status=halted)
+                        return
+                    case Scope() as scope:
+                        pass
+                    case never:
+                        assert_never(never)
+                with self._heads[campaign_id]:
+                    with self._db.session() as s:
+                        now = head(s, s.get_one(Campaign, campaign_id), excluding=s.get_one(Candidate, candidate_id))
+                    if now is not None and now.id != bar_id:
+                        continue  # the head moved while it was measured: beat the new one
+                    self._judge(scope, candidate_id, bar_id, span, judge_now=judge_now, unmeasured=None, notes=[])
+                    return
 
     def rejudge(self, candidate_id: CandidateId) -> None:
         """Judge again a candidate that someone measured by hand (``ledger.rejudges``), with all its measurements.
@@ -802,6 +889,25 @@ class RunController:
             self._follow(scope, judged.merged, log_dir)
 
     def _score(
+        self, run_id: RunId, campaign_id: CampaignId, repo: Repository, versions: list[Version], log_dir: Path
+    ) -> CandidateId | None:
+        """Score the versions of a run that ended, as ``[evaluator] scoring`` says. Return the candidate of its idea.
+
+        That candidate settles the run's idea (``release``). ``run_end``: each version, now (``_score_each``).
+        ``submit``: its submissions, which ``judge_submission`` judges as they come; ``_unsubmitted`` keeps the other
+        versions as ``skipped``, and ``_settle`` waits for the verdicts.
+        """
+        with self._db.session() as s:
+            scoring = s.get_one(Run, run_id).campaign.config.evaluator.scoring
+        match scoring:
+            case Scoring.SUBMIT:
+                return self._unsubmitted(run_id, campaign_id, repo, versions)
+            case Scoring.RUN_END:
+                return self._score_each(run_id, campaign_id, repo, versions, log_dir)
+            case never:
+                assert_never(never)
+
+    def _score_each(
         self, run_id: RunId, campaign_id: CampaignId, repo: Repository, versions: list[Version], log_dir: Path
     ) -> CandidateId | None:
         """Turn each new version into a candidate, or find its existing candidate, then measure and judge it.
@@ -865,8 +971,8 @@ class RunController:
                     if known:
                         span.set(status='known')
                         self._tracer.event('candidate.known', run=run_id, revision=revision, candidate=candidate_id)
-                    match self._measure_with_bar(
-                        run_id, repo, candidate_id, log_dir / f'eval-{i}', bar=bar_id, gate=gate
+                    match self._ready(
+                        run_id, repo, candidate_id, log_dir / f'eval-{i}', bar=bar_id, gate=gate, judge_now=judge_now
                     ):
                         case Measuring.STOPPED:
                             span.set(status='cancelled')
@@ -924,7 +1030,10 @@ class RunController:
             with self._tracer.span('piloop.candidate', run=scope.run_id, revision=revision, candidate=current) as span:
                 span.set(rebased=True)
                 eval_dir = log_dir / f'eval-rebased-{current}'
-                match self._measure_with_bar(scope.run_id, scope.repo, current, eval_dir, bar=parent_id, gate=gate):
+                ready = self._ready(
+                    scope.run_id, scope.repo, current, eval_dir, bar=parent_id, gate=gate, judge_now=judge_now
+                )
+                match ready:
                     case Measuring.STOPPED:
                         span.set(status='cancelled')
                         return False
@@ -993,6 +1102,109 @@ class RunController:
                     if ended is not Measuring.MEASURED:
                         return ended
 
+    def _ready(
+        self,
+        run_id: RunId,
+        repo: Repository,
+        candidate_id: CandidateId,
+        eval_dir: Path,
+        *,
+        bar: CandidateId,
+        gate: CandidateId | None,
+        judge_now: bool,
+    ) -> Scope | Halted:
+        """Measure a run's candidate and its ``bar``, and what the verdict rule needs when it is to be judged now.
+
+        Return the scope to judge it in (``_measure_with_bar``, ``_gather``), or how it halted.
+        """
+        match measured := self._measure_with_bar(run_id, repo, candidate_id, eval_dir, bar=bar, gate=gate):
+            case Scope() if judge_now:
+                return self._gather(measured, candidate_id, bar, eval_dir) or measured
+            case _:
+                return measured
+
+    def _evidence(self, s: Session, scope: Scope, candidate: Candidate, bar: Candidate) -> Evidence:
+        """What the verdict on ``candidate`` against ``bar`` reads beyond them.
+
+        That is the noise of each track's primary over the baseline, and the sealed split's scores once both sides
+        have one (``_gather``). With ``noise_runs`` below 2 the noise is 0: any gain counts. A noise that the baseline's
+        evaluations cannot give, because too few succeeded, is left out, and escalated once (``noise_unknown``).
+        """
+        campaign = s.get_one(Campaign, scope.campaign_id)
+        first = baseline(s, campaign)
+        runs = scope.cfg.evaluator.noise_runs
+        found: dict[str, float] = {}
+        for t in scope.cfg.all_tracks:
+            name = t.primary.name
+            if runs < 2 or first is None:
+                found[name] = 0.0
+            elif (sigma := noise(first, scope.evaluator_id, name)) is not None:
+                found[name] = sigma
+            else:
+                noise_unknown(s, campaign, first, name)
+        hidden = sealed_evaluator(s, campaign, scope.cfg)
+        if hidden is None or not all(measured(c, hidden.id) for c in (candidate, bar)):
+            return Evidence(found)
+        primary = scope.cfg.all_tracks[0].primary
+        return Evidence(found, Sealed(score(candidate, hidden.id, primary), score(bar, hidden.id, primary)))
+
+    def _gather(self, scope: Scope, candidate_id: CandidateId, bar_id: CandidateId, eval_dir: Path) -> Halted | None:
+        """Measure what the verdict rule needs before it judges ``candidate_id`` against ``bar_id``. None when done.
+
+        First the measurements that it asks for (``VerdictRule.samples``), once. Then, for a would-be keep of a
+        campaign with a sealed split, the split's score of the candidate and of the bar that it would replace: the bar
+        is scored there once, and once more when that crashed, a fault of the split, not of the candidate.
+        """
+        rule, resampled, resealed = verdict_rule(scope.cfg), False, False
+        while True:
+            with self._db.session() as s:
+                candidate, bar = s.get_one(Candidate, candidate_id), s.get_one(Candidate, bar_id)
+                evidence = self._evidence(s, scope, candidate, bar)
+                case = case_of(candidate, bar, scope.evaluator_id, scope.cfg, scope.track, self._units_dir, evidence)
+                more = 0 if resampled else rule.samples(case) - case.candidate.measured
+                hidden = sealed_evaluator(s, s.get_one(Campaign, scope.campaign_id), scope.cfg)
+                s.commit()
+                sealing = [
+                    c
+                    for c in (candidate, bar)
+                    if hidden is not None and evidence.sealed is None and not measured(c, hidden.id)
+                ]
+                if evidence.sealed is not None and evidence.sealed.bar is None and not resealed:
+                    sealing, resealed = [bar], True
+                revisions = {c.id: c.revision for c in (candidate, bar)}
+            if more > 0:
+                resampled = True
+                paired = bar_id if scope.track.repeats else None
+                ended = self._measure(
+                    scope.run_id,
+                    scope.campaign_id,
+                    scope.cfg,
+                    revisions[candidate_id],
+                    candidate_id,
+                    scope.evaluator_id,
+                    eval_dir,
+                    bar=paired,
+                    repeats=more,
+                )
+                if ended is not Measuring.MEASURED:
+                    return ended
+                continue
+            if not sealing or hidden is None or rule.decide(replace(case, sealed=None)).verdict is not Outcome.KEEP:
+                return None
+            for c in sealing:
+                ended = self._measure(
+                    scope.run_id,
+                    scope.campaign_id,
+                    scope.cfg,
+                    revisions[c.id],
+                    c.id,
+                    hidden.id,
+                    eval_dir / f'sealed-{c.id}',
+                    split=Split.SEALED,
+                )
+                if ended is not Measuring.MEASURED:
+                    return ended
+
     def _measure(
         self,
         run_id: RunId | None,
@@ -1006,6 +1218,7 @@ class RunController:
         bar: CandidateId | None = None,
         repeats: int = 1,
         gate: CandidateId | None = None,
+        split: Split = Split.VISIBLE,
     ) -> Measuring:
         """Measure ``revision`` on the executor, and wait until its measurement is recorded. Return how it ended.
 
@@ -1022,7 +1235,7 @@ class RunController:
         failures = 0
         while True:
             match ended := self._request(
-                run_id, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir, bar, repeats, gate
+                run_id, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir, bar, repeats, gate, split
             ):
                 case InfraFailed(error=error):
                     retry = min(self._evaluation.infra_retry * 2**failures, self._evaluation.infra_retry_max)
@@ -1064,6 +1277,7 @@ class RunController:
         bar: CandidateId | None,
         repeats: int,
         gate: CandidateId | None,
+        split: Split,
     ) -> Measuring | InfraFailed:
         """Ask for one evaluation (``_measure``), and wait until it leaves the queue. Return how it ended.
 
@@ -1087,6 +1301,7 @@ class RunController:
                     if bar is not None:
                         bar_commit = s.get_one(Candidate, bar).revision
                         paired = Bar(candidate=bar, artifact=artifact.model_copy(update={'revision': bar_commit}))
+                    score = Score.of(cfg.all_tracks[0].primary)
                     job = EvaluationJob(
                         evaluation=evaluation.id,
                         candidate=candidate_id,
@@ -1096,7 +1311,7 @@ class RunController:
                         place=eval_dir.relative_to(self._home).as_posix(),
                         command=cfg.evaluate,
                         timeout=cfg.evaluate_timeout,
-                        score=Score.of(cfg.all_tracks[0].primary),
+                        score=score,
                         required=cfg.required,
                         known=cfg.reported,
                         max_evidence_bytes=self._evaluation.max_evidence_bytes,
@@ -1108,6 +1323,13 @@ class RunController:
                         bar=paired,
                         repeats=repeats,
                     )
+                    match split, cfg.evaluator.sealed:
+                        case Split.SEALED, [*command]:  # the score alone, with no ladder
+                            job = job.model_copy(
+                                update={'command': command, 'required': [score.name], 'ladder': [], 'gate': None}
+                            )
+                        case _:
+                            pass
                 s.commit()
                 evaluation_id = evaluation.id
             if job is not None:
@@ -1180,6 +1402,7 @@ class RunController:
                         candidate.origin = origin
                         candidate.verdict_reason = UNMEASURED_REASONS[origin].format(run=scope.run_id)
                     case None:
+                        leader = head(s, s.get_one(Campaign, candidate.campaign_id), excluding=candidate)
                         judged, onto = self._verdict(s, scope, candidate, bar_id)
                         *others, best = judged
                         cause = Cause.MOVED if onto is not None else None
@@ -1191,11 +1414,15 @@ class RunController:
                             merged = rebased.rebased if rebased is not None else None
                         target = TargetRef(CANDIDATE, candidate_id)
                         for j in (*others, replace(best, reason=candidate.verdict_reason or best.reason)):
+                            primary = j.track.primary
+                            mine = score(candidate, scope.evaluator_id, primary)
                             on = CandidateJudged(
                                 verdict=j.verdict,
-                                score=score(candidate, scope.evaluator_id, j.track.primary),
+                                score=mine,
                                 reason=j.reason,
                                 track=j.track.name,
+                                parent_delta=delta(mine, candidate.parent, scope.evaluator_id, primary),
+                                best_delta=delta(mine, leader, scope.evaluator_id, primary),
                             )
                             emit(s, on, target, System.DAEMON)
                         answer_rejudge(s, candidate_id)
@@ -1238,20 +1465,23 @@ class RunController:
                     self._units_dir,
                     head=moved,
                     side=Trunk(),
+                    evidence=self._evidence(s, scope, candidate, moved),
                 )
                 why = f'the head candidate#{moved.id} is in its history: '
                 return [replace(j, reason=why + j.reason) for j in judged], None
             case _:
                 pass
+        bar = s.get_one(Candidate, bar_id)
         judged = judge_tracks(
             candidate,
-            s.get_one(Candidate, bar_id),
+            bar,
             scope.evaluator_id,
             scope.cfg,
             scope.track,
             self._units_dir,
             head=trunk,
             side=scope.side,
+            evidence=self._evidence(s, scope, candidate, bar),
         )
         *others, best = judged
         match scope.side, best.verdict, trunk:
@@ -1276,7 +1506,15 @@ class RunController:
         """After the run's commits are judged, end its ``scoring`` and its claim (``release``).
 
         ``last`` is the newest candidate of the run's versions that got a verdict: it decides whether the idea is done.
+        It first waits until each submission of the run has its verdict (``judge_submission``), however the run ended:
+        its idea is settled on them. A daemon that stops meanwhile leaves the run ``scoring``, for the next one.
         """
+
+        def judged(s: Session) -> bool:
+            return not any(pending(s.get_one(Candidate, c)) for c in submitted(s, run_id))
+
+        if not self._db.wait_until(judged, give_up=self.launcher.cancelled.is_set):
+            return
         with self.launcher.lock:
             if self.launcher.cancelled.is_set():  # stop() ends the claim; the run's end stands
                 return
@@ -1395,6 +1633,12 @@ def _last_measurement(s: Session, candidate_id: CandidateId, evaluator_id: Evalu
         Measurement.candidate_id == candidate_id, Measurement.evaluator_id == evaluator_id
     )
     return s.scalar(found)
+
+
+def delta(mine: float | None, other: Candidate | None, evaluator_id: EvaluatorId, primary: Metric) -> float | None:
+    """How much better ``mine`` is than ``other``'s ``primary``: positive when better. None when either lacks one."""
+    theirs = None if other is None else score(other, evaluator_id, primary)
+    return None if mine is None or theirs is None else primary.gain(mine, theirs)
 
 
 def wrap_up_lead(timeout: float, most: timedelta) -> float:

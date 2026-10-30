@@ -10,7 +10,7 @@ The rule also decides the lineage: the bar of a run (``bar``), which keeps raise
 its default.
 
 The rule reads nothing else: it is a pure provider. ``[plugins.verdict_rule] provider`` in ``piloop.toml`` selects the
-rule, and the other keys of that table are its fields. Without the table, the rule is ``bootstrap``.
+rule, and the other keys of that table are its fields. Without the table, the rule is ``noise``.
 
 This module imports only the Python standard library, the plugin host, the ids and the metric types. A rule imports this
 module, and nothing else of piloop.
@@ -101,6 +101,19 @@ class Side:
     """Where its latest climb of the ladder stopped, if it stopped. ``means`` never include a rung."""
     rungs: dict[RungName, dict[str, float]] = field(default_factory=dict)
     """The mean of each metric at each rung of the ladder that it measured."""
+    measured: int = 1
+    """How many successful measurements of the full panel ``means`` are over."""
+
+
+@dataclass(frozen=True)
+class Sealed:
+    """The primary of each side on the sealed split (``[evaluator] sealed``), scored only for a would-be keep.
+
+    None for a side that the sealed command did not score.
+    """
+
+    candidate: float | None
+    bar: float | None
 
 
 @dataclass(frozen=True)
@@ -117,6 +130,12 @@ class Case:
     """What the candidate must beat: its run's bar (https://piloop.autoresearch.inc/concepts/verdict#the-words)."""
     parent: Side | None = None
     """The candidate's parent, which the candidate changed. None for a candidate without one."""
+    noise: float | None = None
+    """The standard deviation of the primary over the baseline's measurements (``[evaluator] noise_runs``): 0 with
+    ``noise_runs`` below 2. None while it is unknown: fewer than two of them succeeded."""
+    sealed: Sealed | None = None
+    """The sealed split's scores. None without a sealed split, and until the rule would keep the candidate: piloop then
+    scores the split and asks the rule again."""
 
 
 @dataclass(frozen=True)
@@ -203,6 +222,13 @@ class VerdictRule(Parameters, ABC):
     def decide(self, case: Case) -> Judgement:
         """Return the verdict on ``case.candidate`` against ``case.bar``, and the reason."""
 
+    def samples(self, case: Case) -> int:
+        """Return how many measurements the candidate needs before ``decide``. piloop measures it again once to get them.
+
+        By default those that it has (``Side.measured``).
+        """
+        return case.candidate.measured
+
     def bar(self, ancestry: Sequence[Node]) -> CandidateId:
         """Return the bar of a run that starts from ``ancestry[0]``. The ancestry goes from it, parent by parent, to its root.
 
@@ -243,6 +269,6 @@ class VerdictRule(Parameters, ABC):
         return Rebase()
 
 
-VERDICT_RULES = Capability('verdict_rule', VerdictRule, tier=Tier.PURE, table=One(Scope.CAMPAIGN, default='bootstrap'))
-"""The verdict rule capability: every verdict rule by name. The built-in rule is ``bootstrap``
-(``piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap``)."""
+VERDICT_RULES = Capability('verdict_rule', VerdictRule, tier=Tier.PURE, table=One(Scope.CAMPAIGN, default='noise'))
+"""The verdict rule capability: every verdict rule by name. The default is ``noise``
+(``piloop.plugins.campaign_type.kit.verdicts.verdict_rule.noise``); ``bootstrap`` tests a gain with a bootstrap."""

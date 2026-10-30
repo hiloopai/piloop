@@ -16,7 +16,7 @@ from piloop.actor import Actor, System
 from piloop.db.events import emit, latest
 from piloop.db.models import Event, EventModel, ReadBy
 from piloop.ids import TargetRef
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, JUDGED, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, JUDGED, PENDING, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateView
 
@@ -25,8 +25,6 @@ REJUDGED: Final = frozenset({Outcome.CRASH, Outcome.DISCARD, Outcome.INTERESTING
 UNMEASURED: Final = frozenset({Origin.RECOVERED, Origin.SKIPPED})
 """The origins of the candidates that the daemon never measures. A commit of the same tree without the mark is
 measured and judged like a new one."""
-PENDING: Final = 'pending'
-"""How a candidate that waits for its verdict shows (``label``)."""
 
 
 class Refusal(StrEnum):

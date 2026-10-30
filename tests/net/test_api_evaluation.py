@@ -4,27 +4,43 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 
-from piloop.actor import System
+from piloop.actor import Agent, System
 from piloop.api.client import Refused
 from piloop.api.contract import (
     Checkout,
     Problem,
 )
 from piloop.db.models import (
+    AgentSession,
+    AgentSessionState,
     Campaign,
     Pause,
     utcnow,
 )
 from piloop.db.session import Database
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.ids import RoleName
+from piloop.net import tokens
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
-from piloop.plugins.campaign_type.kit.evaluation.wire import CancelledBy, RungResult, RunningSince
+from piloop.plugins.campaign_type.kit.evaluation.wire import (
+    CancelledBy,
+    RungResult,
+    RunningSince,
+    Submission,
+    SubmissionQuery,
+    SubmitBody,
+)
+from piloop.plugins.campaign_type.kit.runs.tables import working_on
+from piloop.plugins.campaign_type.kit.verdicts.verdict import write
 from piloop.plugins.campaign_type.kit.verdicts.wire import RemeasureBody
 from piloop.settings import Settings
 from tests.conftest import EveryClient, serving_api
+from tests.daemon.test_run_controller import set_config
+from tests.daemon.test_submissions import commit, running, worktree
 
 
 def test_the_evaluation_queue_answers_each_state_and_a_cancel_refuses_a_candidate_that_waits_for_nothing(
@@ -114,3 +130,51 @@ def test_a_cancelled_evaluation_of_a_baseline_that_never_measured_pauses_its_mea
             'human cancelled the evaluation of the baseline; `piloop resume demo` measures it again',
         ), 'a cancel records nothing: the pause holds the measurement that a head without a score asks for'
         assert s.get_one(Candidate, added.baseline).measurements == []
+
+
+def test_an_implementer_submits_a_commit_of_its_run_and_reads_only_its_verdict_and_score(
+    db: Database, campaign: Campaign, cfg: Settings, tmp_path: Path
+) -> None:
+    set_config(db, campaign, evaluator={'scoring': 'submit'})
+    run_id = running(db, campaign)
+    revision = commit(worktree(campaign, tmp_path), 'base\na\n')
+    with db.session() as s:
+        agent = s.scalars(select(AgentSession).where(working_on(run_id))).one()
+        agent.state = AgentSessionState.RUNNING
+        me = Agent(role=RoleName('implementer'), session=agent.id)
+        token = tokens.mint_agent(s, me)
+        s.commit()
+    with serving_api(cfg):
+        with EveryClient.on(cfg.socket_file, me, token) as client:
+            answer = client.submit(SubmitBody(revision=revision))
+            assert (answer.verdict, answer.score) == ('pending', None)
+            with pytest.raises(Refused, match='^the campaign repo has no f00: submit a commit of your checkout'):
+                client.submit(SubmitBody(revision='f00'))
+            assert client.submission(answer.candidate, SubmissionQuery(wait=0.2)).verdict == 'pending', 'no verdict yet'
+            again = client.submit(SubmitBody(revision=revision))
+            assert again.candidate == answer.candidate, 'its own tree again, while it waits'
+            with pytest.raises(Refused, match=r'^its tree is candidate#1 already \(keep\): change something first$'):
+                client.submit(SubmitBody(revision=base_revision(db, campaign)))
+        with db.session() as s:
+            candidate = s.get_one(Candidate, answer.candidate)
+            s.add(Measurement(candidate_id=candidate.id, evaluator_id=campaign.evaluator_id, metrics={'score': 2.0}))
+            write(candidate, Outcome.KEEP, cause=None, reason='+1', by=System.DAEMON)
+            s.commit()
+        with EveryClient.on(cfg.socket_file, System.HUMAN) as client:
+            assert client.submission(answer.candidate, SubmissionQuery(wait=1)) == Submission(
+                candidate=answer.candidate, verdict='keep', score=2.0
+            )
+            with pytest.raises(Refused, match='^human does no run: only an implementer submits$'):
+                client.submit(SubmitBody(revision=revision))
+            with pytest.raises(Refused, match='^no candidate#99$'):
+                client.submission(CandidateId(99), SubmissionQuery())
+
+
+def base_revision(db: Database, campaign: Campaign) -> str:
+    with db.session() as s:
+        return (
+            s.scalars(
+                select(Candidate.revision).where(Candidate.campaign_id == campaign.id).order_by(Candidate.id)
+            ).first()
+            or ''
+        )

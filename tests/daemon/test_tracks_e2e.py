@@ -64,6 +64,13 @@ track = "cost"
 margin = 1
 floor = 5
 
+[evaluator]
+scoring = "run_end"
+noise_runs = 1
+
+[plugins.verdict_rule]
+provider = "bootstrap"
+
 [plugins.harness.script]
 model = "test-model"
 executable = "{script}"

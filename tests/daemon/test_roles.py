@@ -36,6 +36,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
+from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.escalation.contract import DECISION
 from piloop.plugins.executor.workers import Workers
@@ -712,6 +713,8 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
         f'  demo: {nice} ([plugins.runtime] use, {stored})',
         f'  demo: {nice} ([plugins.role.watchdog] runtime, {stored})',
         f'  demo: {nice} ([plugins.role.fast] runtime, {stored})',
+        f'  demo: verdict rule bootstrap, from {VERDICT_RULES.sources()["bootstrap"].release} ([plugins.verdict_rule]'
+        f' provider, {stored})',
     ]
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)

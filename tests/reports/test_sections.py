@@ -114,11 +114,13 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     overview += ['funnel', 'yields', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
     assert defaults(Surface.SWEEP) == ['context', 'lessons', 'incidents', *overview, 'tools', 'pack']
-    assert defaults(Surface.RUN) == ['context', 'dev', 'idea_comments', 'lessons', 'queue', 'history'], 'the board too'
+    assert defaults(Surface.RUN) == ['context', 'measure', 'idea_comments', 'lessons', 'queue', 'history'], (
+        'the board too'
+    )
     assert ImplementerRole().shown() == [
         'database',
         'context',
-        'dev',
+        'measure',
         'idea_comments',
         'lessons',
         'queue',
@@ -126,18 +128,26 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     ], 'its guides first'
 
 
-def test_an_implementer_is_told_the_dev_command_which_piloop_never_runs(db: Database, campaign: Campaign) -> None:
+def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaign: Campaign) -> None:
+    """The dev command, which piloop never runs, and which of its commits are scored."""
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        assert markdown(sections('dev'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s))) == '', 'none set'
-    set_config(db, campaign, evaluator={'dev': ['uv', 'run', 'evaluate.py', '--n', '50 rows']})
-    with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        text = markdown(sections('dev'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
-    assert text == snapshot("""\
-## Check a change
+        assert markdown(sections('measure'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s))) == snapshot("""\
+## Measure a change
 
-Run `uv run evaluate.py --n '50 rows'` in your checkout to check a change, as often as you like. It is fast, and piloop never runs it or records what it prints: only the evaluate command scores a version.\
+- After your run ends, piloop scores each of its versions on its own, and judges it. Nothing is scored while you work: do not wait for a score.\
+""")
+    dev = ['uv', 'run', 'evaluate.py', '--n', '50 rows']
+    set_config(db, campaign, evaluator={'dev': dev, 'scoring': 'submit', 'submissions': 2})
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        text = markdown(sections('measure'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
+    assert text == snapshot("""\
+## Measure a change
+
+- `uv run evaluate.py --n '50 rows'` checks a change fast. Run it in your checkout as often as you like: piloop never runs it or records it.
+- `piloop submit` scores the version that your checkout is at, on the full evaluation, and waits for its verdict and score: `keep` makes it the head, `discard` does not beat the head, `crash` did not run.
+- Your run has 2 submissions. A version that you do not submit is never scored.\
 """)
 
 

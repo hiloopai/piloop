@@ -65,8 +65,9 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRequested
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
+from piloop.plugins.campaign_type.kit.verdicts.verdict import write
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.kit.capacity import GB, HostSample
 from piloop.plugins.executor.kit.leases import Leases
@@ -89,7 +90,9 @@ from tests.conftest import (
     serving_api,
     wait_until,
 )
+from tests.daemon.test_run_controller import set_config
 from tests.daemon.test_serve import alive
+from tests.daemon.test_submissions import commit, running, worktree
 from tests.db.test_migrations import TOO_OLD, alembic, at_floor
 from tests.test_lease import Recorder
 from tests.usage.test_usage import SAID_SESSIONS
@@ -2511,3 +2514,50 @@ def test_an_escalation_is_filed_with_its_form_shown_by_its_provider_and_answered
         SystemExit, match='comment#2 is a decision, not an escalation: answer it with `piloop inbox reply`'
     ):
         run_cli(['inbox', 'choose', '2', 'A'])
+
+
+@pytest.mark.usefixtures('api')
+def test_submit_scores_the_commit_of_the_checkout_and_prints_its_verdict_and_score(
+    campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_cli(['init', str(campaign_path)])
+    out()
+    with closing(Database(common.settings.database_url, actor=System.DAEMON)) as db:
+        campaign = db_campaign(db)
+        set_config(db, campaign, evaluator={'scoring': 'submit'})
+        run_id = running(db, campaign)
+        with db.session() as s:
+            session = s.scalars(select(AgentSession.id).where(working_on(run_id))).one()
+    checkout = worktree(campaign, tmp_path)
+    revision = commit(checkout, 'base\na\n')
+    agent = launched(tmp_path, f'implementer#{session}')
+    monkeypatch.setattr(common, 'settings', Settings(home=tmp_path).model_copy(update=agent))
+    monkeypatch.chdir(checkout)
+
+    def judge() -> None:
+        with closing(Database(f'sqlite:///{tmp_path / "piloop.db"}', actor=System.DAEMON)) as db:
+            wait_until(lambda: run_candidate(db, run_id) is not None, 'the submission')
+            with db.session() as s:
+                candidate = s.get_one(Candidate, run_candidate(db, run_id))
+                evaluator = s.get_one(Campaign, candidate.campaign_id).evaluator_id
+                s.add(Measurement(candidate_id=candidate.id, evaluator_id=evaluator, metrics={'score': 2.0}))
+                write(candidate, Outcome.KEEP, cause=None, reason='+1', by=System.DAEMON)
+                s.commit()
+
+    judging = threading.Thread(target=judge)
+    judging.start()
+    run_cli(['submit'])
+    judging.join(30)
+    assert out().strip() == 'keep 2'
+    run_cli(['submit', revision])
+    assert out().strip() == 'keep 2', 'its own submission again: its verdict, and no submission spent'
+
+
+def db_campaign(db: Database) -> Campaign:
+    with db.session() as s:
+        return s.scalars(select(Campaign)).one()
+
+
+def run_candidate(db: Database, run_id: RunId) -> CandidateId | None:
+    with db.session() as s:
+        return s.scalar(select(Candidate.id).where(Candidate.run_id == run_id))
