@@ -59,7 +59,6 @@ from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
 from piloop.plugins.campaign_type.optimization.trigger.low_yield import LowYield
 from piloop.plugins.trigger.cron import CronTrigger
-from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
 from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
 from piloop.plugins.trigger.sql import SqlTrigger
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
@@ -231,7 +230,7 @@ from piloop.plugins.secrets.local import LocalSecrets
 from piloop.ids import CommentKind
 from piloop.plugins.notifier.contract import NOTIFIERS, Notifier, Notice, NoticeKind, NotDelivered
 from piloop.plugins.notifier.contract import MessageRef, Listens, ListenHost, Inbound, Receipt, Act
-from piloop.plugins.notifier.contract import Reply, Ack, FileSeed, Edit, Accepted, Again, Declined, Foreign
+from piloop.plugins.notifier.contract import Reply, Ack, AddIdea, Edit, Accepted, Again, Declined, Foreign
 from piloop.plugins.notifier.kit.slack import SlackText
 from piloop.plugins.notifier.slack import Slack
 from piloop.plugins.notifier.slack_app import SlackApp, SocketListener

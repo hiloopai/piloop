@@ -16,7 +16,7 @@ from piloop.reports.wake import cost
 
 
 class History(Section):
-    """What was tried near the reader's idea: the ideas of its family, the kept ideas, then the newest, in a budget.
+    """What was tried, for the reader of a run: the kept ideas, then the newest, in a budget.
 
     Then the kept lineage, the starting points and the latest findings. ``piloop history`` lists every recent idea.
     """
@@ -33,7 +33,7 @@ class History(Section):
     def render(self, r: Rendering) -> Rendered:
         mine = _idea_of(r.s, r.reader)
         ranked = _ranked(r.s, r.campaign, mine)
-        chosen = f'; the family of idea#{mine.id}, the keeps, then the newest' if mine is not None else ''
+        chosen = f'; besides idea#{mine.id}, the keeps, then the newest' if mine is not None else ''
 
         def text(count: int) -> str:
             shown = sorted(ranked[:count], key=attrgetter('id'))
@@ -54,12 +54,7 @@ def _idea_of(s: Session, reader: AgentSessionId | None) -> Idea | None:
 
 
 def _ranked(s: Session, campaign: Campaign, mine: Idea | None) -> list[Idea]:
-    """The campaign's ideas but ``mine``, most relevant first: its family, the kept ones, then the rest, newest first."""
+    """The campaign's ideas but ``mine``, most relevant first: the kept ones, then the rest, newest first."""
     ideas = s.scalars(select(Idea).where(Idea.campaign_id == campaign.id).order_by(Idea.id.desc())).all()
     kept = {c.run.idea_id for c in s.scalars(keeps(campaign)) if c.run is not None}
-    family = mine.family if mine is not None else None
-
-    def rank(idea: Idea) -> tuple[bool, bool]:
-        return family is None or idea.family != family, idea.id not in kept
-
-    return sorted((i for i in ideas if mine is None or i.id != mine.id), key=rank)
+    return sorted((i for i in ideas if mine is None or i.id != mine.id), key=lambda idea: idea.id not in kept)

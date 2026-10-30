@@ -25,8 +25,8 @@ from piloop.db.models import (
     ReadBy,
 )
 from piloop.ids import CampaignStatus, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -236,7 +236,7 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     )
     found += asked + [c for c in s.scalars(waiting.order_by(Candidate.id)) if unjudged(c)]
     if active:
-        ready = (Idea.campaign_id == campaign.id, Idea.status == IdeaStatus.READY)
+        ready = (Idea.campaign_id == campaign.id, Idea.status == IdeaStatus.OPEN)
         found += [bar_of(s, c) for c in s.scalars(pins.where(*ready).order_by(Idea.id))]
         found += s.scalars(new_references.order_by(Candidate.id))
     evaluator_id = campaign.evaluator_id
@@ -506,12 +506,10 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
     ``candidate`` kept against its own bar after the head moved on. So it is ``interesting`` (``Cause.MOVED``), and its
     reason ends with the result of the merge. The merge is a version made without a checkout (``Repository.merge``),
     and kept (``rebase/<candidate>``). A new tree becomes a pending
-    candidate of the same run, with ``onto`` as its parent. A merge that conflicts files a seed on the track of its verdict to
-    compose the two by hand when ``conflicts`` is ``Seed``, unless the campaign stopped. The seed is not pinned, so it runs from the head
-    (``follow_up``). It supersedes the compose seeds of the run's earlier candidates that ``candidate`` contains
-    (``supersede_composed``). A merged tree that is already a candidate (the head had the change) gives no new
-    candidate. Emits ``Rebased``. The ideas that wait for the run's idea wait for the seed instead
-    (``wait_for_compose``).
+    candidate of the same run, with ``onto`` as its parent. A merge that conflicts adds an open idea on the track of its
+    verdict to compose the two by hand when ``conflicts`` is ``Seed``, unless the campaign stopped. The idea is not
+    pinned, so it starts from the head (``follow_up``). A merged tree that is already a candidate (the head had the
+    change) gives no new candidate. Emits ``Rebased``.
     """
     campaign = s.get_one(Campaign, candidate.campaign_id)
     subject = REBASED_SUFFIX.sub('', candidate.summary or '')
@@ -534,10 +532,7 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
                 seeds = []
             case _:
                 assert_never(conflicts)
-        for seed in seeds:
-            supersede_composed(s, repo, candidate, seed)
-            wait_for_compose(s, candidate.run.idea, seed)
-        filed = f': seed idea#{seeds[0].id} composes it by hand' if seeds else ''
+        filed = f': idea#{seeds[0].id} composes it by hand' if seeds else ''
         candidate.verdict_reason = f'{candidate.verdict_reason}; its merge onto the head conflicts in {paths}{filed}'
         rebased = Rebased(head=onto.id, conflicts=list(merged.paths))
     else:
@@ -555,48 +550,6 @@ def rebase(s: Session, repo: Repository, candidate: Candidate, onto: Candidate, 
             rebased = Rebased(head=onto.id, known=found.id)
     emit(s, rebased, TargetRef(CANDIDATE, candidate.id), System.DAEMON)
     return rebased
-
-
-def supersede_composed(s: Session, repo: Repository, candidate: Candidate, seed: Idea) -> None:
-    """Link ``seed`` as superseding each compose seed of the run's earlier candidates that ``candidate`` contains.
-
-    Composing ``candidate`` composes those too, so ``ideas.supersede`` rejects each one that is still a seed. A run of
-    four chained commits that each conflict on the head then leaves one seed, not four.
-    """
-    earlier = select(Candidate).where(Candidate.run_id == candidate.run_id, Candidate.id != candidate.id)
-    by_provenance = {str(TargetRef(CANDIDATE, c.id)): c for c in s.scalars(earlier)}
-    composes = select(Idea).where(
-        Idea.campaign_id == candidate.campaign_id,
-        Idea.status == IdeaStatus.SEED,
-        Idea.created_by == System.DAEMON,
-        Idea.provenance.in_(by_provenance),
-    )
-    for old in s.scalars(composes):
-        assert old.provenance is not None  # the IN clause matched it
-        if repo.contains(candidate.revision, by_provenance[old.provenance].revision):
-            s.add(IdeaLink(idea_id=seed.id, target_id=old.id, kind=LinkKind.SUPERSEDES))
-
-
-NEVER_RAN = (IdeaStatus.SEED, IdeaStatus.PROPOSED, IdeaStatus.READY)
-"""The statuses of an idea that has not started: the daemon can reject it when it is superseded and has no run
-(``ideas.supersede``), and move its ``after`` links (``wait_for_compose``).
-
-A failed attempt puts an idea back to ``ready`` if it has attempts left. The daemon does not cancel such an idea."""
-
-
-def wait_for_compose(s: Session, idea: Idea, seed: Idea) -> None:
-    """Move the ``after`` links to ``idea`` of the ideas that have not started to ``seed``, the compose of its change.
-
-    Its run's change did not land on the trunk: the merge conflicted. They would start from a head without it, or
-    be parked as stranded once ``idea`` is done. The change lands through the compose now, so they wait for it. A
-    started idea keeps its link: it began without the change. The link triggers log the move.
-    """
-    links = select(IdeaLink).join(Idea, Idea.id == IdeaLink.idea_id)
-    waiting = links.where(IdeaLink.target_id == idea.id, IdeaLink.kind == LinkKind.AFTER, Idea.status.in_(NEVER_RAN))
-    for link in s.scalars(waiting).all():
-        s.delete(link)
-        s.add(IdeaLink(idea_id=link.idea_id, target_id=seed.id, kind=LinkKind.AFTER))
-    s.flush()
 
 
 def reproposed(candidate: Candidate, run: Run) -> bool:
@@ -621,13 +574,12 @@ def follow_up(
     track: TrackName,
     pin: bool = True,
 ) -> list[Idea]:
-    """File one seed per title on ``track``, pinned to ``candidate`` unless ``pin`` is False. Return the new seeds.
+    """Add one open idea per title on ``track``, pinned to ``candidate`` unless ``pin`` is False. Return the new ideas.
 
     A title that the campaign already has gets `` (from candidate#<id>)``. A follow-up already filed from this candidate
-    with that title, under either name and in any status, is not filed again: a rejected compose seed stays rejected
-    when the candidate is judged again. These are seeds, not ready ideas: research develops them before they run. A
-    pinned one runs as a branch run when its candidate is not the computed base (``[plugins.role.implementer] explore_every``). An
-    unpinned one runs from the head, as a trunk run.
+    with that title, under either name and in any status, is not filed again: a dropped compose idea stays dropped
+    when the candidate is judged again. A pinned one runs as a branch run when its candidate is not the computed base
+    (``[plugins.role.implementer] explore_every``). An unpinned one runs from the head, as a trunk run.
     """
     ideas: list[Idea] = []
     hypothesis = f'Follow-up of candidate#{candidate.id} ({candidate.summary or "no summary"})'
@@ -642,7 +594,7 @@ def follow_up(
             campaign_id=candidate.campaign_id,
             title=name,
             hypothesis=f'{hypothesis}: {why}',
-            status=IdeaStatus.SEED,
+            status=IdeaStatus.OPEN,
             track=track,
             base_candidate_id=candidate.id if pin else None,
             provenance=provenance,

@@ -324,7 +324,7 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
 @pytest.mark.parametrize(
     ('finding', 'run_end', 'idea_status', 'verdict'),
     [
-        (False, (RunStatus.FAILED, RunEnd.DAEMON_STOPPED), IdeaStatus.READY, None),
+        (False, (RunStatus.FAILED, RunEnd.DAEMON_STOPPED), IdeaStatus.OPEN, None),
         (True, (RunStatus.SUCCEEDED, RunEnd.FINISHED), IdeaStatus.DONE, Outcome.KEEP),
     ],
     ids=['cut', 'handed off'],
@@ -418,7 +418,7 @@ def test_a_report_that_comes_after_the_stop_ended_keeps_its_work_for_the_next_da
         assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.DAEMON_STOPPED)
         [kept] = s.scalars(select(Candidate).where(Candidate.run_id == 1)).all()
         idea = s.get_one(Idea, 1)
-        assert (kept.summary, idea.status, idea.base_candidate_id) == ('first', IdeaStatus.READY, kept.id)
+        assert (kept.summary, idea.status, idea.base_candidate_id) == ('first', IdeaStatus.OPEN, kept.id)
     second.shutdown(timeout=5)
 
 

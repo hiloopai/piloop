@@ -120,11 +120,11 @@ def test_documented_procedures_work_verbatim(con: sqlite3.Connection) -> None:
     sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
     idea = sql.run(
         con,
-        "INSERT INTO ideas (track, campaign_id, title, hypothesis, plan, priority, created_by, status) VALUES ('score', 1, 't', 'h', NULL, 1, 'me', 'ready')",
+        "INSERT INTO ideas (track, campaign_id, title, hypothesis, plan, priority, created_by, status) VALUES ('score', 1, 't', 'h', NULL, 1, 'me', 'open')",
     )
     assert idea.last_insert_rowid == 1
     row = sql.run(con, 'SELECT status, max_runs, created_at IS NOT NULL FROM ideas').rows[0]
-    assert row == ('ready', 2, 1)
+    assert row == ('open', 2, 1)
     insert = "INSERT INTO comments (target_kind, target_id, author, kind, body{}) VALUES ('idea', 1, 'me', 'escalation', 'help'{})"
     with pytest.raises(sqlite3.IntegrityError, match='CHECK constraint failed: escalation_needs_priority'):
         sql.run(con, insert.format('', ''))
@@ -313,22 +313,22 @@ def test_one_update_of_a_tracked_column_is_one_event_and_the_provenance_stamps_s
         con, "INSERT INTO ideas (track, campaign_id, title, hypothesis, created_by) VALUES ('score', 1, 't', 'h', 'me')"
     )
     (created,) = sql.run(con, 'SELECT updated_at FROM ideas').rows[0]
-    sql.run(con, "UPDATE ideas SET status = 'parked' WHERE id = 1")
+    sql.run(con, "UPDATE ideas SET status = 'dropped' WHERE id = 1")
     assert events(con) == snapshot(
         [
             ('idea.created', 'me', 'idea', 1, '{"kind":"idea.created"}'),
-            ('idea.status', 'human', 'idea', 1, '{"kind":"idea.status","old":"ready","new":"parked"}'),
+            ('idea.status', 'human', 'idea', 1, '{"kind":"idea.status","old":"open","new":"dropped"}'),
         ]
     )
     updated_at, updated_by = sql.run(con, 'SELECT updated_at, updated_by FROM ideas').rows[0]
     assert updated_at != created and updated_by == 'human'
-    sql.run(con, "UPDATE ideas SET status = 'parked' WHERE id = 1")
+    sql.run(con, "UPDATE ideas SET status = 'dropped' WHERE id = 1")
     sql.run(con, "UPDATE ideas SET title = 'renamed' WHERE id = 1")
     assert len(events(con)) == 2, 'the same value again, or an untracked column, is not a change of the tracked one'
-    sql.run(con, "UPDATE ideas SET priority = 0, status = 'ready' WHERE id = 1")
+    sql.run(con, "UPDATE ideas SET priority = 0, status = 'open' WHERE id = 1")
     assert sorted(events(con, since=2)) == [  # one statement: SQLite fires its triggers in an order of its own
         ('idea.priority', 'human', 'idea', 1, '{"kind":"idea.priority","old":2,"new":0}'),
-        ('idea.status', 'human', 'idea', 1, '{"kind":"idea.status","old":"parked","new":"ready"}'),
+        ('idea.status', 'human', 'idea', 1, '{"kind":"idea.status","old":"dropped","new":"open"}'),
     ]
 
 
@@ -423,18 +423,18 @@ def test_deletes_leave_tombstones_and_cascades_too(con: sqlite3.Connection) -> N
                 '{"kind":"comment.deleted","target_kind":"idea","target_id":1,"author":"me","comment_kind":"note","body":"hi"}',
             ),
             (
+                'idea.deleted',
+                'human',
+                'idea',
+                1,
+                '{"kind":"idea.deleted","title":"t","status":"open","hypothesis":"h"}',
+            ),
+            (
                 'candidate.deleted',
                 'human',
                 'candidate',
                 1,
                 '{"kind":"candidate.deleted","tree_sha":"tree","revision":"sha","origin":"run","verdict":"keep"}',
-            ),
-            (
-                'idea.deleted',
-                'human',
-                'idea',
-                1,
-                '{"kind":"idea.deleted","title":"t","status":"ready","hypothesis":"h"}',
             ),
         ]
     ), 'a cascade deletes the child rows too, and each one leaves a tombstone'

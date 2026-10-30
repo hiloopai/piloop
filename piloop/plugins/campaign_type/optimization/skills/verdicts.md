@@ -45,7 +45,7 @@ The bar:
 - With several tracks, the primary metric of every other track is one more guardrail.
 - A keep against a bar that the head has passed is `interesting` with the cause `moved`. The daemon merges it onto the
   head and judges it there.
-- If that merge conflicts, the daemon files a seed `Compose candidate#N onto the head`.
+- If that merge conflicts, the daemon adds an open idea `Compose candidate#N onto the head`.
 - The floors and margins of a track change only through an edit to `piloop.toml`. That is a decision: record it.
 
 Override the verdict when the number is not the full story:
@@ -58,7 +58,7 @@ PILOOP_ACTOR=orchestrator piloop candidate verdict <c> interesting --reason '<wh
 - `keep|interesting|discard|crash`, and only over a judgement: a pending candidate, and a `skipped` or `recovered`
   one, is refused. A `reference` takes only a keep, once it is measured. A keep from an older bar would drop what the head kept, so piloop merges it onto the head
   instead: the candidate is `interesting`, and the merge is a new candidate that the daemon measures and judges against
-  the head. The output names it, or the seed that composes a merge that conflicts.
+  the head. The output names it, or the idea that composes a merge that conflicts.
 - A verdict that replaces the head cancels the open runs that started from the old head, and their ideas run again
   from the new head. The output lists them.
 - You measured it yourself (the daemon's evaluation timed out, say): `piloop measurement add <c> --report <file>`,

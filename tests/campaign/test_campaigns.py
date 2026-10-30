@@ -291,7 +291,7 @@ def test_init_refuses_a_config_that_drops_a_track_that_ideas_are_on_and_keeps_th
             Idea(
                 campaign_id=campaign.id, track=TrackName('score'), title=t, hypothesis='h', created_by='test', status=st
             )
-            for t, st in (('queued', IdeaStatus.READY), ('ran', IdeaStatus.DONE))
+            for t, st in (('queued', IdeaStatus.OPEN), ('ran', IdeaStatus.DONE))
         )
         s.commit()
     renamed = toml.read_text().replace(

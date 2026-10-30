@@ -23,7 +23,7 @@ from piloop.db.models import LIVE, AgentSession, Campaign, Comment, EventModel, 
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import AgentSessionId, CommentKind, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, TypeHost
-from piloop.plugins.campaign_type.kit.backlog.ideas import park_stranded, runnable, supersede, waiting
+from piloop.plugins.campaign_type.kit.backlog.ideas import claimable, held
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
@@ -39,7 +39,7 @@ from piloop.plugins.fact_source.facts import Facts
 from piloop.plugins.role.contract import ImplementerRole, ideas_taken
 from piloop.plugins.trigger.contract import Backlog, TrackBacklog
 
-NO_RUN_ERROR = 'an implementer needs a run; the scheduler requests them from ready ideas'
+NO_RUN_ERROR = 'an implementer needs a run; the scheduler requests them from open ideas'
 
 
 class RunQueued(EventModel):
@@ -94,7 +94,7 @@ def offered(s: Session, campaign: Campaign, cfg: CampaignConfig, role: Implement
     They are on a track with a share. While the head waits for a score from the current evaluator, only pinned ideas.
     """
     live = [t.name for t in cfg.all_tracks if t.share > 0]
-    query = select(Idea).where(Idea.campaign_id == campaign.id, runnable(), Idea.track.in_(live))
+    query = select(Idea).where(Idea.campaign_id == campaign.id, claimable(), Idea.track.in_(live))
     if head_unmeasured(s, campaign):
         query = query.where(Idea.base_candidate_id.is_not(None))
     return taken_by(s, role, query)
@@ -117,14 +117,6 @@ class OptimizationPlanner:
         self._controller = host.controller
         self._scoring: dict[tuple[TargetKind, int], Future[None]] = {}
         """Scoring outside an implementer: a run's resumed scoring by run id, or a campaign's re-measure by campaign id."""
-
-    def tidy(self, s: Session, campaign: Campaign) -> None:
-        """Reject the ideas that a newer idea superseded, and park those after a prerequisite without a keep."""
-        for idea_id, by in supersede(s, campaign.id).items():
-            self._tracer.event('idea.superseded', campaign=campaign.name, idea=idea_id, by=by)
-        for idea_id, prerequisite in park_stranded(s, campaign.id).items():
-            reason = f'after idea#{prerequisite}, which ended without a keep'
-            self._tracer.event('idea.parked', campaign=campaign.name, idea=idea_id, reason=reason)
 
     def drain(self, s: Session, campaign: Campaign) -> None:
         """Fail the campaign's queued runs at its stop: their requested implementers are closed by the pass."""
@@ -195,10 +187,10 @@ class OptimizationPlanner:
         return {f'{kind}#{i}': fut for (kind, i), fut in self._scoring.items()}
 
     def _fail_run(self, s: Session, run: Run, end: RunEnd) -> None:
-        """End ``run`` as ``end`` and return its idea to the queue, unless a human parked or rejected it meanwhile.
+        """End ``run`` as ``end`` and put its idea back on the board, unless someone dropped it meanwhile.
 
         A run that the daemon stopped (``RunEnd.attempt``) is not an attempt, so its idea always goes back to
-        ``ready``. A running run whose implementer left its finding is not failed: it is handed off (``_hand_off``).
+        ``open``. A running run whose implementer left its finding is not failed: it is handed off (``_hand_off``).
         """
         agent_session = s.scalars(
             select(AgentSession).where(working_on(run.id)).order_by(AgentSession.id.desc()).limit(1)
@@ -212,17 +204,17 @@ class OptimizationPlanner:
             return
         close_run(s, run, end, None)
         idea = run.idea
-        if idea.status is IdeaStatus.SCHEDULED and end is RunEnd.CANCELLED:
+        if idea.status is IdeaStatus.CLAIMED and end is RunEnd.CANCELLED:
             settle_cancelled(s, run)
-        elif idea.status is IdeaStatus.SCHEDULED:
-            idea.status = IdeaStatus.READY if attempts(idea) < idea.max_runs else IdeaStatus.DONE
+        elif idea.status is IdeaStatus.CLAIMED:
+            idea.status = IdeaStatus.OPEN if attempts(idea) < idea.max_runs else IdeaStatus.DONE
         self._tracer.event('run.aborted', run=run.id, end=end)
 
     def _hand_off(self, s: Session, run: Run) -> None:
         """Close a run whose implementer left its finding as finished, and leave its commits to be scored on the next start.
 
         The implementer reported that it is done. A job of its own may still keep the run open, but the run is not cut: its
-        idea stays ``scheduled``, so no second run redoes the work. The run thread pins the commits
+        idea stays ``claimed``, so no second run redoes the work. The run thread pins the commits
         (``RunController._keep_cut_work``), and ``reap`` scores them and settles the idea (``runs.scoring``). Its status is
         what the run's end would give (``run_outcome``).
         """
@@ -268,8 +260,8 @@ class OptimizationPlanner:
             ),
         )
         ready, blocked = (
-            Counter(s.scalars(select(Idea.track).where(Idea.campaign_id == campaign.id, which())))
-            for which in (runnable, waiting)
+            Counter(s.scalars(select(Idea.track).where(Idea.campaign_id == campaign.id, which)))
+            for which in (claimable(), (Idea.status == IdeaStatus.OPEN) & held())
         )
         tracks = tuple(
             TrackBacklog(
@@ -297,9 +289,9 @@ class OptimizationPlanner:
         track shares apply to its own runs. The runs that the stop rule leaves and the attempts of an idea count the
         runs of every role.
 
-        A ``ready`` idea with an ``after`` link to an idea that is not ``done`` is skipped and not changed. It stays
-        ``ready`` and is taken when every prerequisite has finished. A runnable idea whose track is not in
-        ``piloop.toml`` is parked with a note that says why (``_park_strays``). An idea on a track with a share of 0
+        An ``open`` idea with an ``after`` link to an idea that is not ``done`` or ``dropped`` is held: it is skipped
+        and not changed, and taken once every prerequisite settles. A claimable idea whose track is not in ``piloop.toml`` is dropped
+        with a note that says why (``_drop_strays``). An idea on a track with a share of 0
         waits. While a new evaluator has not measured the head (``_remeasure`` measures it first), only a pinned idea
         has a base: an unpinned run starts from the head and is judged against it.
         When an exploration run is due (``_explore``), the slot goes first to an idea pinned to an alternative base.
@@ -308,7 +300,7 @@ class OptimizationPlanner:
         nothing more in this pass.
         """
         cfg = campaign.config
-        self._park_strays(s, campaign, cfg)
+        self._drop_strays(s, campaign, cfg)
         runs_left = left.get(facts.RUNS)
         for name, role in cfg.roles.doing_runs().items():
             takes = offered(s, campaign, cfg, role)
@@ -324,26 +316,26 @@ class OptimizationPlanner:
                     break
                 runs_left = None if runs_left is None else runs_left - 1
 
-    def _park_strays(self, s: Session, campaign: Campaign, cfg: CampaignConfig) -> None:
-        """Park each runnable idea whose track is not in ``piloop.toml``, with a note that says how to fix it.
+    def _drop_strays(self, s: Session, campaign: Campaign, cfg: CampaignConfig) -> None:
+        """Drop each claimable idea whose track is not in ``piloop.toml``, with a note that says how to fix it.
 
         Track names are in the config, not in the schema. A track can be renamed or removed, or raw SQL can have a typo.
         """
         names = [t.name for t in cfg.all_tracks]
-        strays = s.scalars(select(Idea).where(Idea.campaign_id == campaign.id, runnable(), Idea.track.not_in(names)))
+        strays = s.scalars(select(Idea).where(Idea.campaign_id == campaign.id, claimable(), Idea.track.not_in(names)))
         for idea in strays:
-            idea.status = IdeaStatus.PARKED
+            idea.status = IdeaStatus.DROPPED
             s.add(
                 Comment(
                     target=TargetRef(IDEA, idea.id),
                     author=DAEMON_ACTOR,
                     kind=CommentKind.NOTE,
-                    body=f'parked: its track {idea.track!r} is not in piloop.toml (tracks: {", ".join(names)}); set'
-                    ' ideas.track to one of them, then set it ready',
+                    body=f'dropped: its track {idea.track!r} is not in piloop.toml (tracks: {", ".join(names)}); set'
+                    ' ideas.track to one of them, then open it',
                 )
             )
             self._tracer.event(
-                'idea.parked', campaign=campaign.name, idea=idea.id, reason=f'unknown track {idea.track}'
+                'idea.dropped', campaign=campaign.name, idea=idea.id, reason=f'unknown track {idea.track}'
             )
 
     def _pick(
@@ -378,7 +370,7 @@ class OptimizationPlanner:
         """Return the most urgent runnable idea pinned to an alternative base if an exploration run is due, else None.
 
         An exploration run is due if none of the role's last ``explore_every - 1`` runs was a branch run. If no such
-        idea is ready, the queue uses its usual order. Instructions to research alone do not make enough branch runs,
+        idea is claimable, the queue uses its usual order. Instructions to research alone do not make enough branch runs,
         so the daemon enforces this. It counts branch runs, not runs since the last exploration, so branch runs that
         research or the orchestrator pinned on their own also count.
         """
@@ -430,8 +422,8 @@ class OptimizationPlanner:
         base = pinned if pin is not None else computed
         if base is None:
             reason = f'pinned candidate#{pin} does not exist' if pin is not None else 'no kept candidate'
-            self._tracer.event('idea.parked', campaign=campaign.name, idea=idea.id, reason=reason)
-            idea.status = IdeaStatus.PARKED
+            self._tracer.event('idea.dropped', campaign=campaign.name, idea=idea.id, reason=reason)
+            idea.status = IdeaStatus.DROPPED
             return True
         attempt = len(idea.runs) + 1
         model = cfg.role_models(role)[harness]
@@ -445,7 +437,7 @@ class OptimizationPlanner:
             model=model,
         )
         s.add(run)
-        idea.status = IdeaStatus.SCHEDULED
+        idea.status = IdeaStatus.CLAIMED
         s.flush()
         queued = RunQueued(
             idea=idea.id,
@@ -464,7 +456,7 @@ class OptimizationPlanner:
                 subject=TargetRef(RUN, run.id),
                 harness=harness,
                 model=model,
-                reason=f'idea#{idea.id} is ready',
+                reason=f'idea#{idea.id} is open',
             )
         )
         return True

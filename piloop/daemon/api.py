@@ -318,7 +318,7 @@ def overview(api: Api, s: Reading, campaigns: Selected) -> Overview:
 
 @router.get('/inbox', operation_id='inbox')
 def inbox(s: Reading, me: Acting, campaign: Narrowed, query: Annotated[InboxQuery, Query()]) -> Inbox:
-    """The inbox items that the caller did not write, and the seeds, at a cursor."""
+    """The inbox items that the caller did not write, at a cursor."""
     with db_feed.snapshot(s) as cursor:
         return feed.inbox_view(s, cursor, me, campaign_id=campaign, kinds=query.kind, acked=query.acked)
 

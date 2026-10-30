@@ -15,6 +15,7 @@ from piloop.db.session import Database
 from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.consumers import RolePass
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
@@ -137,6 +138,7 @@ def test_the_idle_queue_counts_from_the_last_run_and_names_pending_research(db: 
     with db.session() as s:
         s.get_one(Run, 3).status, s.get_one(Run, 3).end = RunStatus.SUCCEEDED, RunEnd.FINISHED
         s.get_one(Run, 3).finished_at = at(70)
+        s.get_one(Idea, 4).status = IdeaStatus.DROPPED  # free once its prerequisite was dropped: the board is empty
         agent(s, s.get_one(Campaign, campaign.id), RESEARCH, 100, 0, state=AgentSessionState.REQUESTED)
         s.commit()
         assert shown(s, campaign, 'idle_queue') == snapshot("""\

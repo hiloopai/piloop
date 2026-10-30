@@ -12,17 +12,16 @@ class LowWaterTrigger(Trigger):
 
     The target is one idea per run slot plus ``buffer``. So ideas exist before slots free up, and a free slot does not
     wait a whole sweep for an idea. The ideas that the role's sweeps in flight can insert already count as backlog.
-    Nothing is requested while every slot of the role is busy. Runnable ideas count. Ideas blocked only by
-    prerequisites in flight also count, because they run when those finish. An idea blocked by a prerequisite that is
-    not running does not count. Below the target, a sweep fires for one of these reasons:
+    Nothing is requested while every slot of the role is busy. Open ideas count, held ones too: they are
+    on the board, and the lead frees or drops them. Below the target, a sweep fires for one of these reasons:
 
     - The campaign has no sweep yet, so there is nothing to wait for.
     - The last batch was killed. Lost prompts, timeouts or a daemon stop say nothing about the backlog, so the batch
       is retried once. A sweep that someone cancelled is not retried: after it, only new results start the next one. This applies to a streak of killed rows no longer than one batch (``max_concurrent``). A second
       killed batch is a systemic fault and counts as a normal last sweep.
     - New results: runs finished since the role's latest row started, which that sweep could not read. A sweep with
-      nothing new to read reads the same history and proposes nothing. So each consecutive sweep that defined no idea
-      doubles the number of finished runs the next sweep waits for. A sweep that defines an idea resets this. The
+      nothing new to read reads the same history and proposes nothing. So each consecutive sweep that added no idea
+      doubles the number of finished runs the next sweep waits for. A sweep that adds an idea resets this. The
       wait is never longer than what can still come: with no run in flight, the finished runs are all there is.
     - The backlog is low. The role keeps sweeping while the backlog is short, not only when results come in or a slot
       is idle. A sweep that defined an idea is followed at once. After empty sweeps, the role rests 2**n − 1 times as

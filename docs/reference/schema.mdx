@@ -338,14 +338,13 @@ CREATE TABLE ideas (
 	hypothesis VARCHAR NOT NULL,
 	track VARCHAR NOT NULL,
 	"plan" VARCHAR,
-	status VARCHAR(16) DEFAULT 'ready' NOT NULL,
+	status VARCHAR(16) DEFAULT 'open' NOT NULL,
 	priority INTEGER DEFAULT 2 NOT NULL,
 	harness VARCHAR,
 	base_candidate_id INTEGER,
 	max_runs INTEGER DEFAULT 2 NOT NULL,
 	created_by VARCHAR NOT NULL,
 	provenance VARCHAR,
-	family VARCHAR,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_by VARCHAR,
@@ -358,9 +357,8 @@ CREATE TABLE ideas (
 	CONSTRAINT "ideas.plan must be a text value" CHECK (typeof(plan) IN ('text', 'null')),
 	CONSTRAINT "ideas.harness must be a text value" CHECK (typeof(harness) IN ('text', 'null')),
 	CONSTRAINT "ideas.provenance must be a text value" CHECK (typeof(provenance) IN ('text', 'null')),
-	CONSTRAINT "ideas.family must be a text value" CHECK (typeof(family) IN ('text', 'null')),
 	FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
-	CONSTRAINT ideastatus CHECK (status IN ('seed', 'proposed', 'ready', 'scheduled', 'done', 'parked', 'rejected'))
+	CONSTRAINT ideastatus CHECK (status IN ('open', 'claimed', 'done', 'dropped'))
 );
 CREATE INDEX ix_ideas_campaign_status_priority ON ideas (campaign_id, status, priority);
 CREATE TABLE techniques (
@@ -387,7 +385,7 @@ CREATE TABLE idea_links (
 	CONSTRAINT idea_links_not_self CHECK (idea_id != target_id),
 	FOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE CASCADE,
 	FOREIGN KEY(target_id) REFERENCES ideas (id) ON DELETE CASCADE,
-	CONSTRAINT linkkind CHECK (kind IN ('after', 'supersedes'))
+	CONSTRAINT linkkind CHECK (kind IN ('after'))
 );
 CREATE INDEX ix_idea_links_target ON idea_links (target_id, kind);
 CREATE TABLE runs (

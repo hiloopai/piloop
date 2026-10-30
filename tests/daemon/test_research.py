@@ -15,7 +15,7 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database
 from piloop.ids import TargetKind
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by
+from piloop.plugins.campaign_type.kit.backlog.ideas import added_by
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -37,7 +37,7 @@ git rev-parse HEAD > workspace/head.txt
 echo note >> solve.txt
 git commit -qam "a sweep may try things"
 {PYTHON} -m piloop idea add "$name" 'target encoding' --hypothesis 'categoricals carry signal' --plan 'encode, refit' \\
-  --priority 1 --base 1 --family encoding --from 'loss table workspace/research/losses.md'
+  --priority 1 --base 1 --from 'loss table workspace/research/losses.md'
 {PYTHON} -m piloop sql "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('campaign', $campaign, '$sig', 'finding', 'proposed target encoding; rejected bigger trees (tried in evaluation#1)')"
 """
 
@@ -64,19 +64,19 @@ def test_research_sweep_inserts_ideas_signed_with_its_implementer_id(
         [idea] = s.scalars(select(Idea)).all()
         assert (idea.created_by, idea.status, idea.priority, idea.base_candidate_id, idea.title) == (
             'research#1',
-            IdeaStatus.READY,
+            IdeaStatus.OPEN,
             1,
             1,
             'target encoding',
         )
-        assert (idea.family, idea.provenance) == ('encoding', 'loss table workspace/research/losses.md')
+        assert idea.provenance == 'loss table workspace/research/losses.md'
         [finding] = s.scalars(select(Comment).where(Comment.target_kind == TargetKind.CAMPAIGN)).all()
         assert (finding.target_id, finding.author, finding.kind) == (campaign.id, 'research#1', FINDING)
     workspace = tmp_path / 'projects' / str(campaign.id) / 'workspace'
     brief = (workspace / 'brief-seen.txt').read_text()
-    assert brief.startswith('# Research sweep') and '- Seeds to develop first: 0, listed in the research pack' in brief
-    assert '- Ideas of your own after the seeds: propose 2 (the backlog holds 0 of ' in brief
-    assert 'Fewer only when what is left duplicates queued work; name that work in your finding.' in brief
+    assert brief.startswith('# Research sweep') and '- Ideas to add: 2 (the board holds 0 of ' in brief
+    assert 'Fewer only when what is left duplicates open work; name that work in your finding.' in brief
+    assert 'seed' not in brief.lower(), 'there are no seeds to develop'
     assert re.search(
         r'^- Measured runs since the last keep: 0, of the \d+ that mark a stall \(two rounds of', brief, re.M
     )
@@ -97,7 +97,7 @@ def test_research_sweep_inserts_ideas_signed_with_its_implementer_id(
     assert re.search(r'^- Sweep started at: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d \(UTC', brief, re.MULTILINE), (
         'the sweep needs its start time to query for ideas concurrent sweeps inserted after the history was read'
     )
-    tail = brief[brief.index('- Seeds to develop first: 0') :]
+    tail = brief[brief.index('- Ideas to add: 2') :]
     assert [line.split('|')[1].strip() for line in tail.splitlines() if line.startswith('| #')] == ['#1']
     assert '## Research pack: metrics' in tail and '## History: kept lineage' in tail
     assert tail.rstrip().endswith(
@@ -108,50 +108,29 @@ def test_research_sweep_inserts_ideas_signed_with_its_implementer_id(
     assert (tmp_path / 'agent_sessions' / '1' / 'transcript.txt').is_file()
 
 
-FAKE_DEVELOPER = f"""#!/bin/sh
-# a research harness stand-in on a seed sweep: develops the oldest seed, rejects the other with a note
+FAKE_PIVOT = f"""#!/bin/sh
+# a research harness stand-in on a stalled sweep: adds the pivot, and drops an open idea it duplicates
 cat ../brief.md > workspace/brief-seen.txt
-{PYTHON} -m piloop idea develop 1 --hypothesis 'a deeper tree fits the interactions' --evidence 'loss table l.md' \\
-  --check 'depth 6 on the dev split; stop below +0.01' --metric score --effect '+0.02: half the interaction loss' \\
-  --family trees
-{PYTHON} -m piloop sql "UPDATE ideas SET status = 'rejected' WHERE id = 2"
+{PYTHON} -m piloop idea add demo 'deeper trees' --hypothesis 'a deeper tree fits the interactions' --from 'l.md'
+{PYTHON} -m piloop sql "UPDATE ideas SET status = 'dropped' WHERE id = 1"
 """
 
 
-def test_a_seed_sweep_develops_one_seed_and_rejects_the_other_however_full_the_backlog(
+def test_a_stalled_sweep_adds_its_pivot_however_full_the_backlog(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """A seed starts a research sweep even when the backlog is at its target.
+    """The backlog is full but the campaign has stalled, so the brief asks for one idea of research's own, the pivot.
 
-    The brief lists the seeds. The backlog is full but the campaign has stalled, so it asks for one idea of research's
-    own, the pivot. The developed seed is ready with its definition, and the sweep counts as one that defined an idea.
+    The sweep adds it, open on the board, and counts as one that added an idea: no back-off.
     """
     configure(
         db,
         campaign,
-        FAKE_DEVELOPER,
+        FAKE_PIVOT,
         implementer={'max_concurrent': 1},
         research={'triggers': [*LOW_WATER, 'stalled'], 'max_ideas': 2},
         trigger=low_water(0),
     )
-    with db.session() as s:
-        for title, by, pointers in (
-            ('deeper trees', 'orchestrator', 'run#3'),
-            ('trees, deeper', 'watchdog#8', 'run#4'),
-        ):
-            s.add(
-                Idea(
-                    track='score',
-                    campaign_id=campaign.id,
-                    title=title,
-                    hypothesis=title,
-                    status=IdeaStatus.SEED,
-                    created_by=by,
-                    provenance=pointers,
-                    base_candidate_id=1 if by.startswith('watchdog') else None,
-                )
-            )
-        s.commit()
     occupy(db, campaign)
     add_ideas(db, campaign, 1)
     finish_a_run(db, campaign, 'tried once')
@@ -159,33 +138,24 @@ def test_a_seed_sweep_develops_one_seed_and_rejects_the_other_however_full_the_b
     controller = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
     scheduler = Scheduler(db, controller, Tracer(None), tmp_path, factory(runtime))
 
-    with serving_api(Settings(home=tmp_path)):  # the sweep's `piloop idea develop` asks the daemon
-        assert run_all(scheduler) == [1], 'the one slot is busy and the backlog is at its target, but two seeds wait'
-        assert last_reason(db) == '2 new seeds to develop; stalled, step 1'
+    with serving_api(Settings(home=tmp_path)):  # the sweep's `piloop idea add` asks the daemon
+        assert run_all(scheduler) == [1], 'the one slot is busy and the backlog is at its target, but it stalled'
+        assert last_reason(db) == 'stalled, step 1'
         scheduler.wait(SETTLE)
     scheduler.stop(timeout=5)
 
     brief = (tmp_path / 'agent_sessions' / '1' / 'brief.md').read_text()
-    assert '- Seeds to develop first: 2, listed in the research pack oldest first.' in brief
-    assert '- Ideas of your own after the seeds: propose 1 (the backlog holds 1 of 1 runnable ideas' in brief
+    assert '- Ideas to add: 1 (the board holds 1 of 1 runnable ideas' in brief
     assert (
         '- Measured runs since the last keep: 2, of the 2 that mark a stall (two rounds of [plugins.role.implementer]'
         ' max_concurrent = 1): stalled, so one of your own ideas pivots (section 3).' in brief
     )
-    assert '- idea#1 by orchestrator: deeper trees — pointers: run#3' in brief
-    assert '- idea#2 by watchdog#8 on candidate#1: trees, deeper — pointers: run#4' in brief
-    assert f'{PYTHON_HINT} idea develop <seed id>' in brief
+    assert f'{PYTHON_HINT} idea add demo' in brief
     with db.session() as s:
-        developed, rejected = s.get_one(Idea, 1), s.get_one(Idea, 2)
-        assert (developed.status, developed.created_by, developed.family) == (IdeaStatus.READY, 'orchestrator', 'trees')
-        assert developed.hypothesis == 'a deeper tree fits the interactions\n\nSeed (orchestrator): deeper trees'
-        assert developed.plan == (
-            'The evaluator should show: depth 6 on the dev split; stop below +0.01\n'
-            'Success: score; expected effect: +0.02: half the interaction loss'
-        )
-        assert developed.provenance == 'loss table l.md; seed pointers: run#3'
-        assert rejected.status is IdeaStatus.REJECTED
-        assert defined_by(s, campaign.id) >= {'research#1'}, 'the sweep defined an idea: no back-off'
+        pivot = s.scalars(select(Idea).where(Idea.title == 'deeper trees')).one()
+        assert (pivot.status, pivot.created_by) == (IdeaStatus.OPEN, 'research#1')
+        assert s.get_one(Idea, 1).status is IdeaStatus.DROPPED
+        assert added_by(s, campaign.id) >= {'research#1'}, 'the sweep added an idea: no back-off'
 
 
 def test_with_several_tracks_research_reads_them_and_which_are_short_of_their_share(
@@ -212,6 +182,7 @@ def test_with_several_tracks_research_reads_them_and_which_are_short_of_their_sh
     assert '- Your cwd is a detached checkout of candidate#1, the head (score=1.0, size=5.0)' in brief
     assert (
         '- Tracks short of their share of the backlog: accuracy 2 (0 of 2 runnable), cost 2 (0 of 2 runnable).'
+        ' Give every idea the track it serves (`--track`); fill the short ones first.'
     ) in brief
     assert '- Tracks: accuracy (primary score, higher is better; share 0.5); cost (primary size, lower' in brief
     assert '## Tracks\n\n- accuracy: score 1 at the head (+0 on the start); 0 trunk keeps;' in brief

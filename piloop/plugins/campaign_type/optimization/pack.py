@@ -6,7 +6,6 @@ repo when a sweep that proposes work starts. ``piloop history`` prints it too. I
 - the metrics with their roles, tracks, margins and floors, and the start and the head on each;
 - the analysis artifacts (``context``) and the shared workspace, newest first, as file pointers
   with an outline;
-- what was tried, by family (``ideas.family``), and the seeds that other roles filed for research to develop;
 - the history (``piloop.plugins.campaign_type.optimization.history``);
 - the latest implementer findings, and the digests and decisions of the orchestrator and the human, by id and first
   line.
@@ -20,7 +19,6 @@ are pointers, not inlined content.
 import heapq
 import io
 import os
-from collections import defaultdict
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,15 +36,14 @@ from piloop.config import CampaignConfig
 from piloop.db.models import Campaign, Comment
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import CommentKind
-from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import MetricRole
 from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
 from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.campaign_type.kit.verdicts.judge import head
-from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
 from piloop.plugins.campaign_type.optimization.history import (
     BRIEF_WIDTH,
@@ -56,7 +53,7 @@ from piloop.plugins.campaign_type.optimization.history import (
     text_row,
     titled_table,
 )
-from piloop.text import HEADING, NONE, cell, metric
+from piloop.text import HEADING, NONE, metric
 
 WALK_ENTRIES = 20_000
 """How much of the workspace the pack lists files from: a sweep's brief never waits for a walk of all of it."""
@@ -65,10 +62,6 @@ OUTLINE_CHARS = 600
 OUTLINE_LEVELS = 3
 MARKDOWN = ('.md', '.markdown')
 """The suffixes of the files that the pack outlines."""
-POINTERS_CHARS = 400
-OUTCOMES = (*Outcome, Origin.RECOVERED, Origin.SKIPPED, PENDING)
-"""Labels of candidates (``verdict.label``), best first. The outcome of an idea is the first in this list that one of
-its candidates has."""
 
 
 class Shown(Protocol):
@@ -87,11 +80,6 @@ class Shown(Protocol):
     @property
     def findings(self) -> int:
         """The latest findings of the implementers."""
-        ...
-
-    @property
-    def seeds(self) -> int:
-        """The oldest seeds that wait for research."""
         ...
 
     @property
@@ -135,9 +123,6 @@ def renderables(
         _metrics(s, campaign, cfg, table_box, heading),
         Text(),
         *_artifacts(campaign, cfg, workspace, heading, shown),
-        _families(s, campaign, table_box, heading),
-        Text(),
-        *_seeds(s, campaign, heading, shown.seeds),
         *history(s, campaign, cfg, table_box=table_box, heading=heading, ideas=ideas, findings=shown.campaign_findings),
         Text(),
         *_agent_session_findings(s, campaign, cfg, heading, shown.findings),
@@ -293,66 +278,6 @@ def _outline(text: str) -> str:
             headings.append(line.strip())
     joined = ' · '.join(headings) or '(no headings)'
     return joined if len(joined) <= OUTLINE_CHARS else joined[: OUTLINE_CHARS - 1] + '…'
-
-
-def _families(s: Session, campaign: Campaign, table_box: box.Box, heading: str) -> Table:
-    """Show what was tried, by family: how many ideas, and their outcomes. The history's ideas table lists the ideas.
-
-    The outcome of an idea is the best verdict of the candidates of its runs. An idea that never ran shows its status.
-    Ideas without a family share the ``—`` row. Families with a keep come first, then the families with more ideas.
-    """
-    ideas = s.scalars(select(Idea).where(Idea.campaign_id == campaign.id).order_by(Idea.id)).all()
-    by_family: defaultdict[str, list[tuple[Idea, str]]] = defaultdict(list)
-    for idea in ideas:
-        by_family[idea.family or NONE].append((idea, _outcome(idea)))
-    table = titled_table(
-        f'{heading}Research pack: what was tried, by mechanism family (ideas.family)',
-        ['family', 'ideas', 'keep', 'interesting', 'discard/crash', 'not run'],
-        table_box,
-    )
-
-    def count(rows: list[tuple[Idea, str]], *outcomes: str) -> int:
-        return sum(outcome in outcomes for _, outcome in rows)
-
-    order = sorted(by_family.items(), key=lambda kv: (-count(kv[1], Outcome.KEEP), -len(kv[1]), kv[0]))
-    for family, rows in order:
-        text_row(
-            table,
-            cell(family, 40),
-            str(len(rows)),
-            str(count(rows, Outcome.KEEP)),
-            str(count(rows, Outcome.INTERESTING)),
-            str(count(rows, Outcome.DISCARD, Outcome.CRASH)),
-            str(sum(not i.runs for i, _ in rows)),
-        )
-    return table
-
-
-def _outcome(idea: Idea) -> str:
-    labels = {label(c) for run in idea.runs for c in run.candidates}
-    return next((str(v) for v in OUTCOMES if v in labels), str(idea.status))
-
-
-def _seeds(s: Session, campaign: Campaign, heading: str, count: int) -> list[RenderableType]:
-    """List the seeds that wait for research, oldest first, with their author, base candidate and pointers."""
-    rows = s.scalars(
-        select(Idea)
-        .where(Idea.campaign_id == campaign.id, Idea.status == IdeaStatus.SEED)
-        .order_by(Idea.id)
-        .limit(count)
-    ).all()
-    title = Text(f'{heading}Research pack: seeds to develop (oldest first)', style='bold')
-    if not rows:
-        return [title, Text('- None.'), Text()]
-    lines = [
-        Text(
-            f'- idea#{i.id} by {i.created_by}'
-            + (f' on candidate#{i.base_candidate_id}' if i.base_candidate_id is not None else '')
-            + f': {cell(i.title)} — pointers: {cell(i.provenance or NONE, POINTERS_CHARS)}'
-        )
-        for i in rows
-    ]
-    return [title, *lines, Text()]
 
 
 def _agent_session_findings(

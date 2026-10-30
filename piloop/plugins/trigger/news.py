@@ -42,7 +42,7 @@ class Urgency(StrEnum):
     NOW = 'now'
     """After ``quiet_seconds``, also while the campaign is quiet: a message, an escalation, the stop."""
     ROUTINE = 'routine'
-    """At most once in ``routine_every``, and only while the campaign runs: a verdict, a seed, an anomaly."""
+    """At most once in ``routine_every``, and only while the campaign runs: a verdict, an anomaly."""
 
 
 def urgency(item: NewsItem) -> Urgency:
@@ -109,7 +109,7 @@ def is_open(p: Pass) -> bool:
 
 
 class NewsTrigger(Trigger):
-    """New inbox items for the role's party, seeds, anomalies, verdicts and the stop: ``piloop inbox wait``'s news.
+    """New inbox items for the role's party, anomalies, verdicts and the stop: ``piloop inbox wait``'s news.
 
     Messages, escalations and the stop wake the role ``quiet_seconds`` after the first news, also while the campaign is
     paused, held or stopped. The rest wakes it at most once in ``routine_every``, and only while the campaign runs.
@@ -122,7 +122,7 @@ class NewsTrigger(Trigger):
     quiet_seconds: float = Field(default=30, ge=0)
     """How long the role waits after the first news to launch an agent, so that one agent takes a burst of it."""
     routine_every: float = Field(default=900, ge=0)
-    """The fewest seconds between two agents that only routine news wakes: verdicts, seeds and anomalies."""
+    """The fewest seconds between two agents that only routine news wakes: verdicts and anomalies."""
 
     def fire(self, p: Pass) -> Steer | None:
         cursor, last = taken(p)

@@ -27,12 +27,12 @@ if TYPE_CHECKING:  # piloop.db.models types campaigns.config with the triggers: 
 
 @dataclass(frozen=True)
 class TrackBacklog:
-    """One track's part of the backlog: its runnable and waiting ideas, and its share of the target."""
+    """One track's part of the backlog: its claimable and held ideas, and its share of the target."""
 
     name: str
     runnable: int
     waiting: int
-    """Ideas that only prerequisites in flight block (``piloop.plugins.campaign_type.kit.backlog.ideas.waiting``)."""
+    """Open ideas that an ``after`` link holds (``piloop.plugins.campaign_type.kit.backlog.ideas.held``)."""
     target: int
     """The track's share of ``Backlog.target``, rounded up. It is 0 for a track with share 0."""
 
@@ -68,12 +68,12 @@ class Backlog:
 
     @property
     def runnable(self) -> int:
-        """The ideas that the queue can take now: ``ready``, not blocked, and on a track with a share."""
+        """The ideas that the queue can take now: ``open``, not held, and on a track with a share."""
         return sum(t.runnable for t in self.tracks)
 
     @property
     def waiting(self) -> int:
-        """The ideas that become runnable when the runs in flight that they wait for finish."""
+        """The open ideas that an ``after`` link holds: the board has them, so a sweep need not add more."""
         return sum(t.waiting for t in self.tracks)
 
     @property
@@ -81,7 +81,7 @@ class Backlog:
         """The ideas missing from the target after the sweeps in flight insert theirs.
 
         This is the sum of the tracks' shortfalls. A surplus on one track does not cover a shortfall on another. If no
-        track is short, it is the negative surplus. An idea that waits for a run in flight is not missing.
+        track is short, it is the negative surplus. A held idea is not missing.
         """
         gaps = [t.gap for t in self.tracks]
         wanted = sum(g for g in gaps if g > 0) if any(g > 0 for g in gaps) else sum(gaps)
@@ -95,9 +95,9 @@ class Backlog:
     def held(self) -> str:
         """Describe the backlog without the sweeps.
 
-        For example: ``1 of 3 runnable ideas, 2 more waiting on runs in flight``.
+        For example: ``1 of 3 runnable ideas, 2 more held by after links``.
         """
-        waits = f', {self.waiting} more waiting on runs in flight' if self.waiting else ''
+        waits = f', {self.waiting} more held by after links' if self.waiting else ''
         return f'{self.runnable} of {self.target} runnable ideas{waits}'
 
     def __str__(self) -> str:
@@ -191,9 +191,9 @@ class Pass(Protocol):
         ...
 
     def empty_sweeps(self, states: tuple[AgentSessionState, ...]) -> list[AgentSession]:
-        """The role's latest rows in ``states``, newest first, until one that defined an idea.
+        """The role's latest rows in ``states``, newest first, until one that added an idea.
 
-        A row defined an idea if it inserted one or developed a seed into one (``piloop.plugins.campaign_type.kit.backlog.ideas.defined_by``).
+        A row added an idea if it inserted one (``piloop.plugins.campaign_type.kit.backlog.ideas.added_by``).
         """
         ...
 

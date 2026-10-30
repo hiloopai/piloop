@@ -161,6 +161,30 @@ warning, until 0.7.0, and do nothing. What they wrote stays in the database.
 | The scout role. Its `techniques` table stays readable. | `[plugins.role.scout]` |
 | The `leaking_funnel` trigger: `low_yield` finds the runs that reach no measurement. | `"leaking_funnel"` in a role's `triggers`, `[plugins.trigger.leaking_funnel]` |
 | Ideas and seeds that implementers file. An implementer's hunch goes in its finding, which research reads. | `files` and `plan_words` of a role that does runs |
+| Seeds. An idea is open on the board from the start, and research adds ideas, not seeds. | `"seed"` in a role's `triggers`, `[plugins.trigger.seed]`, `files = "seeds"` (now `"nothing"`), `[plugins.section.pack] seeds` |
+| Ideas that wait for a review, and the escalation of the slots that wait for them. | `idle_alert` of a role that does runs |
+
+### The board
+
+The ideas of a campaign are a board with four statuses. The migration renames the status of each idea, and of each
+`idea.status` and `idea.deleted` event:
+
+| 0.5 | 0.6 |
+|---|---|
+| `seed`, `proposed`, `ready` | `open` |
+| `scheduled` | `claimed` |
+| `done` | `done` |
+| `parked`, `rejected` | `dropped` |
+
+- `piloop idea status` takes `open` or `dropped`. Only a run makes an idea `done`.
+- `piloop idea seed` and `piloop idea develop` are removed: add an idea with `piloop idea add`. Its `--family`,
+  `--proposed` and `--supersedes` are removed.
+- `supersedes` links and `ideas.family` are deleted. `piloop idea link` takes only `after`.
+- An `after` link holds an idea until its prerequisite is `done` or `dropped`. Nothing parks it: its status does not
+  change.
+- The inbox lists no seeds, and `piloop inbox wait` returns for none. The research pack has no families and no seeds.
+- `idea: <title>` in a notifier's thread adds an open idea. A notifier plugin answers it with `AddIdea`, not
+  `FileSeed`.
 
 ## Upgrading to 0.5.0
 

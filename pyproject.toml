@@ -149,7 +149,6 @@ run_failed = "piloop.plugins.campaign_type.kit.runs.trigger.run_failed:RunFailed
 dead_at_startup = "piloop.plugins.trigger.dead_at_startup:DeadAtStartup"
 low_yield = "piloop.plugins.campaign_type.optimization.trigger.low_yield:LowYield"
 cron = "piloop.plugins.trigger.cron:CronTrigger"
-seed = "piloop.plugins.campaign_type.kit.backlog.trigger.seed:SeedTrigger"
 low_water = "piloop.plugins.campaign_type.kit.backlog.trigger.low_water:LowWaterTrigger"
 stalled = "piloop.plugins.campaign_type.kit.runs.trigger.stalled:StalledTrigger"
 stopped = "piloop.plugins.trigger.stopped:StoppedTrigger"
@@ -265,6 +264,10 @@ campaign_finding_grace = "piloop.deprecated:campaign_finding_grace"
 scout_role = "piloop.plugins.role.bridges:scout_role"
 run_role_ideas = "piloop.plugins.role.bridges:run_role_ideas"
 leaking_funnel = "piloop.plugins.trigger.bridges:leaking_funnel"
+seed_trigger = "piloop.plugins.trigger.bridges:seed_trigger"
+idle_alert = "piloop.plugins.role.bridges:idle_alert"
+seed_files = "piloop.plugins.role.bridges:seed_files"
+pack_seeds = "piloop.plugins.section.bridges:pack_seeds"
 
 # The kinds that events and comments point at, beyond core's, by name: the table of their rows
 # (piloop.db.models.TARGET_KINDS).

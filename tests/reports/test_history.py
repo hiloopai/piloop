@@ -39,7 +39,6 @@ def idea(
     hypothesis: str | None = None,
     *,
     after: tuple[int, ...] = (),
-    supersedes: tuple[int, ...] = (),
     **fields: object,
 ) -> Idea:
     row = Idea(
@@ -48,10 +47,7 @@ def idea(
         title=title,
         hypothesis=hypothesis or f'{title} helps',
         status=status,
-        links=[
-            *(IdeaLink(target_id=t, kind=LinkKind.AFTER) for t in after),
-            *(IdeaLink(target_id=t, kind=LinkKind.SUPERSEDES) for t in supersedes),
-        ],
+        links=[IdeaLink(target_id=t, kind=LinkKind.AFTER) for t in after],
         **{'created_by': 't', **fields},
     )
     s.add(row)
@@ -125,7 +121,7 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
 ) -> None:
     with db.session() as s:
         s.get_one(Candidate, 1).revision = Revision('ba5e11ae0000')
-        kept = idea(s, campaign, 'more lines', priority=1, family='appending', created_by='research#9')
+        kept = idea(s, campaign, 'more lines', priority=1, created_by='research#9')
         e2 = scored(
             s,
             kept,
@@ -134,18 +130,18 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
             tokens=234_444,
         )
         comment(s, IDEA, kept.id, 'appending works | keep appending\nsecond line is not shown')
-        worse = idea(s, campaign, 'fewer lines', family='appending', created_by='implementer#4')
+        worse = idea(s, campaign, 'fewer lines', created_by='implementer#4')
         scored(s, worse, e2.id, (Outcome.DISCARD, {'score': 2, 'size': 8}, None))
-        crashed = idea(s, campaign, 'delete solve.txt', IdeaStatus.REJECTED, priority=3)
+        crashed = idea(s, campaign, 'delete solve.txt', IdeaStatus.DROPPED, priority=3)
         scored(s, crashed, e2.id, (Outcome.CRASH, {}, 'no such file'))
         comment(s, IDEA, crashed.id, 'first attempt: evaluate needs the file')
         comment(s, IDEA, crashed.id, 'second attempt agrees; rejected', author='watchdog#2')
         mixed = idea(s, campaign, 'two commits', after=(kept.id,))
         scored(s, mixed, e2.id, (Outcome.CRASH, {}, 'syntax'), (Outcome.KEEP, {'score': 4, 'size': 16}, None))
-        idea(s, campaign, 'a' * 200, IdeaStatus.READY, 'h' * 200, priority=0, after=(crashed.id, kept.id))
-        idea(s, campaign, 'human should look', IdeaStatus.PROPOSED, 'the metric | is wrong\nsecond line')
-        idea(s, campaign, 'fewer but longer lines', IdeaStatus.READY, supersedes=(worse.id,), after=(mixed.id, kept.id))
-        idea(s, campaign, 'no lines at all', IdeaStatus.READY, supersedes=(worse.id, crashed.id))
+        idea(s, campaign, 'a' * 200, IdeaStatus.OPEN, 'h' * 200, priority=0, after=(crashed.id, kept.id))
+        idea(s, campaign, 'human should look', IdeaStatus.OPEN, 'the metric | is wrong\nsecond line')
+        idea(s, campaign, 'fewer but longer lines', IdeaStatus.OPEN, after=(mixed.id, kept.id))
+        idea(s, campaign, 'no lines at all', IdeaStatus.OPEN)
         comment(
             s, TargetKind.CAMPAIGN, campaign.id, 'batch 1: extend appending\nrejected: deleting', author='research#1'
         )
@@ -158,15 +154,14 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
     has_lines(
         text,
         '### History: ideas (8 of 8)',
-        '| 1 | done | research#9 | appending | — | 1 | more lines | keep 3 (+2 vs candidate#1) (candidate#2) |',
-        '| 2 | done | implementer#4 | appending | superseded by idea#7, idea#8 | 2 | fewer lines'
-        ' | discard 2 (-1 vs candidate#2) (candidate#3) |',
-        '| 3 | rejected | t | — | superseded by idea#8 | 3 | delete solve.txt | crash (candidate#4) |',
-        '| 4 | done | t | — | after idea#1 | 2 | two commits | keep 4 (+1 vs candidate#2) (candidate#6) |',
-        f'| 5 | ready | t | — | blocked by idea#3 (rejected); after idea#1 | 0 | {"a" * 99}… | — |',
-        '| 6 | proposed | t | — | — | 2 | human should look | — |',
-        '| 7 | ready | t | — | after idea#1, idea#4; supersedes idea#2 | 2 | fewer but longer lines | — |',
-        '| 8 | ready | t | — | supersedes idea#2, idea#3 | 2 | no lines at all | — |',
+        '| 1 | done | research#9 | — | 1 | more lines | keep 3 (+2 vs candidate#1) (candidate#2) |',
+        '| 2 | done | implementer#4 | — | 2 | fewer lines | discard 2 (-1 vs candidate#2) (candidate#3) |',
+        '| 3 | dropped | t | — | 3 | delete solve.txt | crash (candidate#4) |',
+        '| 4 | done | t | after idea#1 | 2 | two commits | keep 4 (+1 vs candidate#2) (candidate#6) |',
+        f'| 5 | open | t | after idea#1, idea#3 | 0 | {"a" * 99}… | — |',
+        '| 6 | open | t | — | 2 | human should look | — |',
+        '| 7 | open | t | after idea#1, idea#4 | 2 | fewer but longer lines | — |',
+        '| 8 | open | t | — | 2 | no lines at all | — |',
         '### History: kept lineage',
         '| #1 | — | 1 | — | — | ba5e11a | — | baseline |',
         '| #2 | #1 | 3 | +2 | idea#1 (research#9) | 1100000 | 234k | more lines commit |',
@@ -183,7 +178,7 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
 def test_history_is_bounded_and_counts_what_it_omits(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
         for n in range(SHOWN.ideas + 3):
-            idea(s, campaign, f'idea {n}', IdeaStatus.READY)
+            idea(s, campaign, f'idea {n}', IdeaStatus.OPEN)
         for n in range(SHOWN.campaign_findings + 2):
             comment(s, TargetKind.CAMPAIGN, campaign.id, f'finding {n}', author='research#1')
         s.commit()
@@ -201,7 +196,7 @@ def test_history_worst_case_stays_under_the_documented_size(db: Database, campai
         previous: Idea | None = None
         for n in range(SHOWN.ideas):
             links = (previous.id,) if previous is not None else ()
-            row = idea(s, campaign, f'{n} ' + 't' * 200, IdeaStatus.REJECTED, 'h' * 200, after=links, supersedes=links)
+            row = idea(s, campaign, f'{n} ' + 't' * 200, IdeaStatus.DROPPED, 'h' * 200, after=links)
             scored(s, row, 1, (Outcome.DISCARD, {'score': 0.123456, 'size': 1}, None))
             comment(s, IDEA, row.id, 'f' * 200)
             previous = row
@@ -209,9 +204,7 @@ def test_history_worst_case_stays_under_the_documented_size(db: Database, campai
             comment(s, TargetKind.CAMPAIGN, campaign.id, '\n'.join(['r' * 79] * 30), author='research#1')
         s.commit()
     rendered = render(db, campaign)
-    assert 'blocked by idea#58 (rejected); supersedes idea#58; superseded by idea#60' in rendered, (
-        'every link, both ways'
-    )
+    assert 'after idea#58' in rendered, 'every link: a dropped prerequisite frees its dependent'
     assert len(raw(db, campaign)) < 64_000
     assert len(rendered) < 18_000
 
@@ -229,7 +222,7 @@ def test_history_when_a_human_kept_an_unscored_commit_and_an_idea_builds_on_it(
         scored(s, row, unscored.id, (Outcome.KEEP, {'score': 5, 'size': 1}, None))
         s.commit()
     rendered = render(db, campaign)
-    assert '| 1 | done | t | — | — | 2 | from an unscored base | keep 5 (candidate#3) |' in rendered, (
+    assert '| 1 | done | t | — | 2 | from an unscored base | keep 5 (candidate#3) |' in rendered, (
         'no delta without a base score'
     )
     assert '| #2 | — | — | — | — | y | — | — |' in rendered, 'the unscored base is in the lineage without a value'
@@ -252,16 +245,16 @@ def test_a_comment_is_its_id_and_first_line_and_counts_the_rest() -> None:
     assert line('x' * 500) == f'- comment#7 research#1: {"x" * (FIRST_LINE_CHARS - 1)}…'
 
 
-def test_an_implementers_history_shows_its_family_then_the_keeps_then_the_newest_within_its_budget(
+def test_an_implementers_history_shows_the_keeps_then_the_newest_within_its_budget(
     db: Database, campaign: Campaign
 ) -> None:
     with db.session() as s:
-        kin = idea(s, campaign, 'kin', family='cache')
-        kept = idea(s, campaign, 'kept', family='other')
+        idea(s, campaign, 'older')
+        kept = idea(s, campaign, 'kept')
         scored(s, kept, 1, (Outcome.KEEP, {'score': 0.9, 'size': 1}, None))
         for n in range(30):
-            idea(s, campaign, f'filler {n}', family='other')
-        mine = idea(s, campaign, 'mine', IdeaStatus.READY, family='cache')
+            idea(s, campaign, f'filler {n}')
+        mine = idea(s, campaign, 'mine', IdeaStatus.CLAIMED)
         scored(s, mine, 1, (Outcome.DISCARD, {'score': 0.1, 'size': 1}, None))
         reader = s.scalars(select(AgentSession.id).where(working_on(mine.runs[0].id))).one()
         s.commit()
@@ -280,9 +273,9 @@ def test_an_implementers_history_shows_its_family_then_the_keeps_then_the_newest
         )
         everything = markdown([History(budget=100_000)], Rendering(s, utcnow(), p, Path('/no/workspace'), cas_of(s)))
     shown = [int(line.split('|')[1]) for line in text.splitlines() if re.match(r'\| \d+ ', line)]
-    assert shown[:2] == [kin.id, kept.id] and len(shown) < 32, 'its family and the keeps first, then what fits'
-    assert shown[2:] == list(range(mine.id - len(shown) + 2, mine.id)), 'then the newest, oldest first'
-    assert f'of 33; the family of idea#{mine.id}, the keeps, then the newest)' in text
+    assert shown[:1] == [kept.id] and len(shown) < 31, 'the keeps first, then what fits'
+    assert shown[1:] == list(range(mine.id - len(shown) + 1, mine.id)), 'then the newest, oldest first'
+    assert f'of 33; besides idea#{mine.id}, the keeps, then the newest)' in text
     assert cost(text.split('\n', 2)[2].splitlines()) <= section.budget
     assert '| mine ' in everything and '(33 of 33)' in everything, 'a reader without a run sees every idea'
 

@@ -21,13 +21,13 @@ router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUS
 
 @router.post('/candidates/{candidate}/note', operation_id='note', dependencies=[Depends(actor_access)])
 def note(s: Writing, me: Acting, candidate: AddressedCandidate, body: NoteBody) -> Noted:
-    """Keep a regressed result in view as a lead, with follow-up seeds pinned to it."""
-    _, seeds = optimization_ops.note_candidate(
+    """Keep a regressed result in view as a lead, with follow-up ideas pinned to it."""
+    _, ideas = optimization_ops.note_candidate(
         s, candidate.id, body.reason, actor=me, follow_ups=body.follow_ups, track=body.track
     )
     s.commit()
     with db_feed.snapshot(s) as cursor:
-        return Noted(cursor=cursor, candidate=candidate_view(candidate), seeds=[idea_view(i) for i in seeds])
+        return Noted(cursor=cursor, candidate=candidate_view(candidate), ideas=[idea_view(i) for i in ideas])
 
 
 ROUTERS: tuple[APIRouter, ...] = (

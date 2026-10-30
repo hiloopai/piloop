@@ -1,7 +1,6 @@
 ---
-title: Ideas, seeds and runs
-sidebarTitle: Ideas and runs
-description: An idea is one thing to try. A seed is a hunch that research turns into an idea. A run is one attempt at an idea.
+title: Ideas and runs
+description: An idea is one thing to try, on the campaign's board. A run is one attempt at an idea.
 ---
 
 An **idea** is one thing to try:
@@ -12,61 +11,42 @@ piloop idea add enwik8 "Model the text with an order-2 context mixer" \
 ```
 
 ```text
-idea#2 ready p2: Model the text with an order-2 context mixer
+idea#2 open p2: Model the text with an order-2 context mixer
 ```
 
-The daemon runs the `ready` ideas, most urgent first: priority 0 is urgent, 4 is someday, and 2 is the default. To
-change a status, give the reason:
+The ideas of a campaign are its **board**. The daemon runs the `open` ideas, most urgent first: priority 0 is urgent,
+4 is someday, and 2 is the default. To change a status, give the reason:
 
 ```bash
-piloop idea status 2 parked --reason "wait for the results of idea#1"
+piloop idea status 2 dropped --reason "idea#1 tests the same mechanism"
 ```
 
 ```text
-idea#2 scheduled → parked: wait for the results of idea#1
+idea#2 open → dropped: idea#1 tests the same mechanism
 ```
 
 | Status | Meaning |
 |---|---|
-| `seed` | A hunch that waits for research. |
-| `proposed` | Waits for a human to set it `ready`. Add it with `--proposed`. When implementer slots sit idle behind it for `[plugins.role.implementer] idle_alert` (30 minutes), piloop escalates. |
-| `ready` | Waits for a free implementer. |
-| `scheduled` | A run of it is queued or running, or its commits wait for their verdicts. |
+| `open` | On the board. It waits for a free implementer, unless an `after` link holds it. |
+| `claimed` | A run of it is queued or running, or its commits wait for their verdicts. |
 | `done` | Its run ended and its commits are judged. |
-| `parked` | Set aside: by hand, or when its last attempt failed to start or ended on an open escalation. |
-| `rejected` | Will not run. |
+| `dropped` | Off the board: by hand, or when its last attempt failed to start or ended on an open escalation. `open` puts it back. |
 
 ## Who adds ideas
 
 | Who | What it adds |
 |---|---|
-| You, the orchestrator | Ideas and seeds. You change the priority and status of any idea. |
-| Research | Develops each seed into an idea, or rejects it. Adds ideas of its own. |
-| Watchdog | Seeds, such as a retry that avoids a failure. |
+| You, the orchestrator | Ideas. You change the priority and status of any idea. |
+| Research | Ideas, when the board runs short. |
+| Watchdog | Nothing. Its findings say what it would try. |
 | Implementer | Nothing. Its hunches go in its `finding`, which research reads. |
-| Daemon | Retries an idea whose run failed. Files a seed when a merge conflicts. Rejects an idea that a newer one supersedes. |
-
-## Seeds
-
-A **seed** is a hunch with pointers, for a follow-up that you do not have time to define:
-
-```bash
-piloop idea seed enwik8 "Combine the lzma preset with a preprocessed dictionary" --from "idea#1"
-```
-
-```text
-idea#3 seed: Combine the lzma preset with a preprocessed dictionary; research develops it next
-```
-
-A seed starts a research agent. Research reads the earlier work, then develops the seed into an idea
-(`piloop idea develop`) or rejects it.
+| Daemon | Retries an idea whose run failed. Adds an idea when a merge conflicts. |
 
 ## Where a run starts
 
 | Option of `piloop idea add` | Effect |
 |---|---|
-| `--after 1` | Waits until idea 1 is `done`, then starts from the head, which holds what idea 1 kept. |
-| `--supersedes 1` | A sharper version of idea 1. The daemon rejects idea 1 if it never ran. |
+| `--after 1` | Held until idea 1 is `done` or `dropped`, then starts from the head, which holds what idea 1 kept. |
 | `--base 7` | Starts from candidate 7, not the head. Its keeps move the head only when candidate 7 has the head's changes. |
 | `--harness codex` | Runs on that harness, not the next one of `harnesses`. |
 
@@ -87,9 +67,9 @@ Restore them in a checkout of the implementer's last commit with `piloop cas get
 | How the run ended | What happens to the idea |
 |---|---|
 | It finished | `done` once its commits are judged. |
-| It failed or timed out, and attempts are left | Back to `ready`. The next attempt starts from its last commit. |
-| Its agent never started to work | Not an attempt: the run is queued again, up to two times, then the idea is `parked`. |
-| It stopped on an open escalation | `parked`. Answer with a `decision` comment, then set the idea `ready`. |
+| It failed or timed out, and attempts are left | Back to `open`. The next attempt starts from its last commit. |
+| Its agent never started to work | Not an attempt: the run is queued again, up to two times, then the idea is `dropped`. |
+| It stopped on an open escalation | `dropped`. Answer with a `decision` comment, then set the idea `open`. |
 
 ## Talk to a running implementer
 

@@ -30,7 +30,6 @@ from piloop.api.views import (
     DaemonState,
     InvalidConfig,
     LiveKey,
-    seed_line,
     thread_lines,
 )
 from piloop.cli import common
@@ -145,9 +144,6 @@ def inbox_list(
         f'{len(inbox.items)} item(s){"" if all_ else " unacknowledged"}; `piloop inbox show <id>`,'
         ' `piloop inbox ack <id>`'
     )
-    if seeds := [seed_line(seed) for seed in inbox.seeds]:
-        common.console.print(f'{len(seeds)} seed(s) waiting for research:', markup=False)
-        common.console.print('\n'.join(seeds), markup=False, highlight=False, soft_wrap=True)
 
 
 def inbox_show(comment: Annotated[CommentId, cyclopts.Parameter(help='The id of the item.')], /) -> None:

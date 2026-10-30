@@ -26,8 +26,8 @@ from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import RejudgeRequested
 from piloop.settings import Settings
-from tests.cli.test_cli import research_files, run_cli
-from tests.conftest import at_head, bare_config, launched
+from tests.cli.test_cli import run_cli
+from tests.conftest import at_head, bare_config
 
 pytestmark = pytest.mark.usefixtures('api')
 
@@ -80,33 +80,6 @@ def test_pause_and_resume_hold_the_campaign_say_so_in_status_and_refuse_twice(ca
         run_cli(['resume', 'demo'])
     with pytest.raises(SystemExit, match='a reason is required'):
         run_cli(['pause', 'demo', '--reason', ''])
-
-
-def test_a_sweep_files_its_ideas_for_review_while_the_campaign_is_paused(
-    campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    research_files(campaign_path, 3)
-    run_cli(['init', str(campaign_path)])
-    run_cli(['idea', 'seed', 'demo', 'a hunch', '--from', 'run#2'])
-    run_cli(['pause', 'demo', '--reason', 'review what research files'])
-    out()
-
-    def as_(actor: str, *argv: str) -> None:
-        settings = Settings(home=tmp_path, uv_tool_dir=tmp_path / 'uv-tools', actor=actor)
-        if '#' in actor:
-            settings = settings.model_copy(update=launched(tmp_path, actor))
-        monkeypatch.setattr(common, 'settings', settings)
-        run_cli(list(argv))
-
-    as_('research#8', 'idea', 'add', 'demo', 'during the pause')
-    define = ['--hypothesis', 'h', '--evidence', 'e', '--check', 'c', '--metric', 'score', '--effect', '+1']
-    as_('research#8', 'idea', 'develop', '1', *define)
-    as_('orchestrator', 'idea', 'add', 'demo', 'the orchestrator paused it')
-    assert out().splitlines() == [
-        'idea#2 proposed p2: during the pause (campaign demo is paused: it waits for a review)',
-        'idea#1 proposed p2: a hunch (campaign demo is paused: it waits for a review)',
-        'idea#3 ready p2: the orchestrator paused it',
-    ]
 
 
 def test_candidate_verdict_overrides_with_the_reason_and_refuses_what_is_not_a_judgement(
@@ -171,7 +144,7 @@ def test_a_keep_that_replaces_the_head_says_which_runs_from_the_old_head_it_canc
         )
         s.add(made)
         s.add(Run(idea_id=2, attempt=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING))
-        s.get_one(Idea, 2).status = IdeaStatus.SCHEDULED
+        s.get_one(Idea, 2).status = IdeaStatus.CLAIMED
         s.flush()
         s.add(
             Candidate(campaign_id=1, run_id=made.id, parent_id=1, revision='r', tree_sha='t', verdict=Outcome.DISCARD)
@@ -264,19 +237,19 @@ def test_idea_status_link_unlink_base_and_track_change_an_idea_and_say_what_they
     run_cli(['idea', 'add', 'demo', 'second'])
     out()
     run_cli(['idea', 'link', '2', 'after', '1', '--reason', 'first lands the parser'])
-    run_cli(['idea', 'status', '1', 'parked', '--reason', 'wait for evaluator v2'])
-    run_cli(['idea', 'unlink', '2', 'after', '1', '--reason', 'idea#1 parked'])
+    run_cli(['idea', 'status', '1', 'dropped', '--reason', 'wait for evaluator v2'])
+    run_cli(['idea', 'unlink', '2', 'after', '1', '--reason', 'idea#1 dropped'])
     run_cli(['idea', 'base', '2', '1', '--reason', 'from the baseline'])
     run_cli(['idea', 'base', '2', 'head', '--reason', 'follow the head'])
     assert out().splitlines() == [
         'idea#2 after idea#1',
-        'idea#1 ready → parked: wait for evaluator v2',
+        'idea#1 open → dropped: wait for evaluator v2',
         'idea#2 no longer after idea#1',
         'idea#2 starts from candidate#1',
         'idea#2 starts from the head',
     ]
     with database() as db, db.session() as s:
-        assert s.get_one(Idea, 1).status is IdeaStatus.PARKED
+        assert s.get_one(Idea, 1).status is IdeaStatus.DROPPED
         assert s.scalars(select(IdeaLink)).all() == []
         assert s.get_one(Idea, 2).base_candidate_id is None
         kinds = [e.kind for e in s.scalars(select(Event).where(Event.target_id == 2).order_by(Event.id))]
@@ -297,9 +270,9 @@ def test_idea_status_link_unlink_base_and_track_change_an_idea_and_say_what_they
     with pytest.raises(SystemExit, match="there is no track 'speed'"):
         run_cli(['idea', 'add', 'demo', 'faster', '--track', 'speed'])
     with pytest.raises(SystemExit, match='no candidate#9 in campaign demo'):
-        run_cli(['idea', 'seed', 'demo', 'a hunch', '--from', 'run#1', '--base', '9'])
-    with pytest.raises(SystemExit, match='scheduled is not set by hand'):
-        run_cli(['idea', 'status', '2', 'scheduled', '--reason', 'why'])
+        run_cli(['idea', 'add', 'demo', 'a hunch', '--from', 'run#1', '--base', '9'])
+    with pytest.raises(SystemExit, match='claimed is not set by hand'):
+        run_cli(['idea', 'status', '2', 'claimed', '--reason', 'why'])
 
 
 def test_idea_track_moves_an_idea_to_another_track(campaign_path: Path, out) -> None:
@@ -314,18 +287,14 @@ def test_idea_track_moves_an_idea_to_another_track(campaign_path: Path, out) -> 
     assert out().strip() == 'idea#1 track score → size'
 
 
-def test_a_seed_developed_with_a_link_that_closes_a_cycle_is_refused_whole(campaign_path: Path, out) -> None:
-    """Every way to link ideas is validated: here a seed that an idea runs after would also run after that idea."""
+def test_an_idea_added_with_a_link_that_closes_a_cycle_is_refused_whole(campaign_path: Path, out) -> None:
+    """Every way to link ideas is validated, and an idea whose link is refused is not written."""
     run_cli(['init', str(campaign_path)])
-    run_cli(['idea', 'seed', 'demo', 'a hunch', '--from', 'run#1'])
-    run_cli(['idea', 'add', 'demo', 'after the seed', '--after', '1'])
-    define = ['--hypothesis', 'h', '--evidence', 'e', '--check', 'c', '--metric', 'score', '--effect', '+1']
-    with pytest.raises(SystemExit, match='a cycle: idea#2 already links after idea#1'):
-        run_cli(['idea', 'develop', '1', *define, '--after', '2'])
-    with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
-        assert s.get_one(Idea, 1).status is IdeaStatus.SEED, 'nothing was written'
+    run_cli(['idea', 'add', 'demo', 'first'])
     with pytest.raises(SystemExit, match='no idea#9'):
-        run_cli(['idea', 'add', 'demo', 'after nothing', '--after', '9'])
+        run_cli(['idea', 'add', 'demo', 'after nothing', '--after', '1', '--after', '9'])
+    with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
+        assert s.scalars(select(Idea.title)).all() == ['first'], 'nothing was written'
 
 
 @pytest.mark.usefixtures('api')

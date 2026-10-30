@@ -72,7 +72,7 @@ def settled(s: Session, campaign: Campaign) -> bool:
 class HeadReplaced(EventModel):
     """A verdict set by hand replaced the head that the run started from, so it cancelled the run.
 
-    Once the run ends, its idea is ready again, to start from the new head (``settle_cancelled``).
+    Once the run ends, its idea is open again, to start from the new head (``settle_cancelled``).
     """
 
     READ_BY: ClassVar[ReadBy] = ReadBy.READERS
@@ -82,22 +82,21 @@ class HeadReplaced(EventModel):
 
 
 def settle_cancelled(s: Session, run: Run) -> None:
-    """Set the status of a cancelled run's idea, with a note on the idea that says why.
+    """Open a cancelled run's idea again, with a note on the idea that says why.
 
-    A run that a verdict set by hand cancelled because it replaced the run's head (``HeadReplaced``) runs again: its
-    idea is ``ready``. Any other cancel parks it: a run is cancelled because it is not wanted now.
+    A cancel stops a run, not its idea: another worker may claim it. To take the idea off the board, drop it. A run
+    that a verdict set by hand cancelled because it replaced the run's head (``HeadReplaced``) says so.
     """
     cancel = run_cancel(s, run.id)
     by = f' by {cancel[0].actor}' if cancel is not None else ''
     replaced = latest(s, HeadReplaced, Event.target == TargetRef(RUN, run.id))
+    run.idea.status = IdeaStatus.OPEN
     if replaced is None:
-        run.idea.status = IdeaStatus.PARKED
-        body = f'parked: run#{run.id} was cancelled{by}; set the idea ready to run it again'
+        body = f'open: run#{run.id} was cancelled{by}; drop the idea to take it off the board'
     else:
-        run.idea.status = IdeaStatus.READY
         now = f'candidate#{replaced[1].head}' if replaced[1].head is not None else 'none'
         body = (
-            f'ready: run#{run.id} was cancelled{by}: it started from candidate#{run.base_candidate_id}, which a'
+            f'open: run#{run.id} was cancelled{by}: it started from candidate#{run.base_candidate_id}, which a'
             f' verdict override replaced as the head with {now}; the next run starts from the head'
         )
     s.add(Comment(target=TargetRef(IDEA, run.idea_id), author=DAEMON_ACTOR, kind=CommentKind.NOTE, body=body))

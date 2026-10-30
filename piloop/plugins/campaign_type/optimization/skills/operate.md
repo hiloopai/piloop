@@ -4,15 +4,14 @@
 - one line per track when there are several: its primary at the head, the distance to its floor, its trunk keeps, its
   share against what runs,
 - the trajectory of trunk keeps and the progress against the stop rule's limits,
-- open runs and the ready queue,
+- open runs and the open ideas,
 - the live agents with their last line,
 - the last 8 candidates with their delta against their parent,
 - the anomalies that the daemon detects,
 - the inbox and the latest decisions,
 - the last events with their ages.
 
-`piloop history [<name>]` prints the research pack: metrics, analysis artifacts, what was tried per
-mechanism family, the waiting seeds, every idea, the kept lineage, the starting points, findings and digests.
+`piloop history [<name>]` prints the research pack: metrics, analysis artifacts, every idea, the kept lineage, the starting points, findings and digests.
 
 Give in every digest the head against the baseline (per track when there are several), and the "Ideas by source" line
 of `piloop status <name>`: it shows whether research earns its sweeps.
@@ -22,42 +21,22 @@ of `piloop status <name>`: it shows whether research earns its sweeps.
 ### Add an idea
 
 ```bash
-PILOOP_ACTOR=orchestrator piloop idea add <name> '<title>' --hypothesis '…' --plan '…' --family '<mechanism>' \
+PILOOP_ACTOR=orchestrator piloop idea add <name> '<title>' --hypothesis '…' --plan '…' \
   --from '<what prompted it: comment#…, a digest, a loss table>' --priority 1
 ```
 
-- `--base <candidate>` sets the start. `--after` and `--supersedes` link it to other ideas, in the same write as the
-  idea. Never add a `ready` idea and then insert its `after` link: the daemon can start it in between.
+- `--base <candidate>` sets the start. `--after` links it to other ideas, in the same write as the idea. Never add an
+  `open` idea and then insert its `after` link: the daemon can start it in between.
 - Priority is 0 (urgent) to 4 (someday).
-- Add `--proposed` when the human should look at it first.
 - Your ideas carry context that research does not have: the digests, the loss analysis, the human's direction.
   Write them down as ideas as soon as you see them. Use `--from` to say where they came from.
 
-### File a seed
+### Add the human's link
 
-A seed is a hunch that you have no time to define: a follow-up that a result suggests, two candidates worth
-combining, new data.
-Send it to research as soon as it comes up:
+A link that the human pastes (a post, a repo, a paper) is an idea signed `human`, not signed by you:
 
 ```bash
-PILOOP_ACTOR=orchestrator piloop idea seed <name> '<hunch, one line>' --from '<pointers: candidate#…, comment#…, a path>'
-```
-
-- Add `--base <c>` when the hunch is about the tree of candidate `<c>`.
-- The idea gets status `seed`. It shows in `piloop inbox` and `piloop watch`.
-- It starts a research sweep, however full the backlog is.
-- Research reads the existing work and checks for duplicates and earlier negative results. Then it does one of these:
-  - It develops the seed into a defined idea with `piloop idea develop`: hypothesis, evidence, check and stop rule,
-    metric, expected effect.
-  - It rejects the seed with a `note` that names the evidence that settled it.
-- Watchdogs file seeds the same way, and only seeds.
-- Implementers file no seeds. They put a hunch in their finding.
-- You may develop or reject a seed yourself when you get to it first.
-
-A link that the human pastes (a post, a repo, a paper) is a seed signed `human`, not signed by you:
-
-```bash
-PILOOP_ACTOR=human piloop idea seed <name> '<its mechanism, one line>' --from '<link>; targets <the measured loss>'
+PILOOP_ACTOR=human piloop idea add <name> '<its mechanism, one line>' --from '<link>; targets <the measured loss>'
 ```
 
 ### Point research at the evidence
@@ -74,13 +53,12 @@ The research pack of every sweep then lists it under the analysis artifacts, new
 Use these commands, not SQL. Each one validates, takes `--reason '<why, with ids>'`, signs the change as
 `orchestrator` and records an event, so your decision's `Revert:` line is one more command.
 
-- Park (for now), reject (never), approve, or settle without a run:
-  `piloop idea status <id> parked|rejected|ready|proposed|done --reason '…'`. The reason becomes a `note` on the idea.
-  An idea whose run is open (queued, running or being scored) can only be parked or rejected: its run finishes. Set
-  it ready again after the run, never during it: that would queue a second run.
-- Link an idea that exists: `piloop idea link <id> after|supersedes <target> --reason '…'`. It refuses a link that
-  closes a cycle, and an `after` link to an idea that the daemon took already. When a prerequisite ends without a keep, the
-  daemon parks the ideas after it and escalates. To run one anyway, `piloop idea unlink` it, then set it ready.
+- Drop it, or open it again: `piloop idea status <id> dropped|open --reason '…'`. The
+  reason becomes a `note` on the idea. A claimed idea, whose run is open (queued, running or being scored), can only
+  be dropped: its run finishes. Open it again after the run, never during it: that would queue a second run.
+- Link an idea that exists: `piloop idea link <id> after <target> --reason '…'`. It refuses a link that closes a
+  cycle, and a link from an idea that the daemon took already. An idea is held until each prerequisite is `done` or
+  `dropped`. To free it sooner, `piloop idea unlink` it.
 - Start it from another candidate: `piloop idea base <id> <candidate> --reason '…'`, or `head` to unpin it.
 - Move it to another track: `piloop idea track <id> <track> --reason '…'`.
 - Reprioritize: `UPDATE ideas SET priority = 0 WHERE id = …`, with a `note` that says why.
@@ -98,13 +76,13 @@ Use these commands, not SQL. Each one validates, takes `--reason '<why, with ids
 - A comment on the campaign reaches no implementer. When a decision changes the work of a running implementer, write it on its
   run, not on the campaign.
 - An implementer asks for what it cannot do itself with an escalation. When its run ends before your answer reaches it,
-  the run ends `awaiting_answer` and its idea is parked, also when you acked the escalation. The next run reads your
-  `decision` on the idea in its brief: set the idea `ready`.
+  the run ends `awaiting_answer` and its idea is dropped, also when you acked the escalation. The next run reads your
+  `decision` on the idea in its brief: open the idea.
 
 ### Cancel or extend a run
 
 - A run that became redundant: `piloop run cancel <run> --wrap-up`. The implementer is told to save its work and stop,
-  and ended 10 minutes later, with every process it started. Its commits are scored and its idea is parked. Without
+  and ended 10 minutes later, with every process it started. Its commits are scored and its idea is dropped. Without
   `--wrap-up`, it is ended at once.
 - A run that needs more time than its timeout: `piloop run extend <run> --by 1h`. The implementer is told its new deadline.
 - In a paused campaign, the daemon still measures what a new evaluator or `piloop candidate remeasure` needs, so the
@@ -133,7 +111,7 @@ Branch runs:
 - A run pinned to a candidate that has the head's changes (a merge onto the head, or a compose that cherry-picked it)
   is a trunk run too: its keep can move the head.
 - So pin a follow-up to a lead. Do not tell its implementer to reset onto the lead.
-- One run in `[plugins.role.implementer] explore_every` (default 4) takes the most urgent ready idea pinned to a base other than
+- One run in `[plugins.role.implementer] explore_every` (default 4) takes the most urgent open idea pinned to a base other than
   the head, whatever its priority.
 
 ### Keep a failed result as a lead
@@ -144,14 +122,14 @@ piloop candidate note <c> '<why>' --follow-up '<hunch>'
 
 - `--follow-up` is repeatable.
 - It changes a measured `discard` or `interesting` candidate to `interesting` with the cause `note` and your reason.
-- It files each follow-up as a seed pinned to the candidate. Research develops the seeds.
+- It adds each follow-up as an open idea pinned to the candidate.
 - It is not a keep and not a bar.
 - Implementers note a lead with a `Piloop-Note:` commit trailer, without follow-ups.
 
 ### Refill the backlog
 
 - Run `piloop launch <name> research`.
-- A sweep develops the seeds first. Then, while the backlog is short, it adds up to `max_ideas` ideas of its own.
+- While the backlog is short, a sweep adds up to `max_ideas` ideas.
 - It leaves a `finding` on the campaign.
 - Research sweeps also run by themselves while the backlog is below its target. They wait longer after sweeps that
   define nothing.

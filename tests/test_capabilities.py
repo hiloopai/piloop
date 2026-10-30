@@ -59,7 +59,7 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.Act,
     capabilities.Reply,
     capabilities.Ack,
-    capabilities.FileSeed,
+    capabilities.AddIdea,
     capabilities.Edit,
     capabilities.Receipt,
     capabilities.Accepted,

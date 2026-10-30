@@ -39,4 +39,4 @@ writer gave it a priority.
      the inbox.
    - If the human decided it with you, the decision is theirs. Record it without a priority, and acknowledge it as the
      human: `piloop inbox ack <id>`, with no `PILOOP_ACTOR`.
-4. **Apply** it: un-park or reject the idea, change its priority, or fix `piloop.toml` and run `piloop init .`.
+4. **Apply** it: open or drop the idea, change its priority, or fix `piloop.toml` and run `piloop init .`.

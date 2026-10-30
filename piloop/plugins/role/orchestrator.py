@@ -36,8 +36,6 @@ class OrchestratorRole(SweepRole):
             ('inbox', 'choose'),
             ('escalate',),
             ('idea', 'add'),
-            ('idea', 'seed'),
-            ('idea', 'develop'),
             ('idea', 'status'),
             ('idea', 'link'),
             ('idea', 'unlink'),
@@ -70,7 +68,7 @@ class OrchestratorRole(SweepRole):
         'comments(decision) addressed to the human, with a priority',
         'answers to messages via inbox reply',
         'journal lines',
-        'ideas, seeds, verdicts and the campaign changes of the piloop commands in this brief',
+        'ideas, verdicts and the campaign changes of the piloop commands in this brief',
     ]
     GUIDES = (*READER, 'priorities', 'links', 'research_commands')
     sections: list[SectionName] | None = [

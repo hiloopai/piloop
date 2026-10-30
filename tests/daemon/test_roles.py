@@ -165,7 +165,9 @@ def test_a_role_that_piloop_toml_defines_runs_on_its_sql_trigger_with_its_prompt
     assert brief.startswith('# Review\nRead the latest decision')
     assert '- You are reviewer#1, the reviewer for campaign#1 (demo).' in brief
     assert f'- Why this agent started (context, not a scope): {reason}' in brief
-    assert '- File a seed:' in brief and '- You may write:' not in brief, 'a new role files seeds and states no writes'
+    assert 'You file no ideas.' in brief and '- You may write:' not in brief, (
+        'a new role files no ideas and states no writes'
+    )
     last = tmp_path / 'agent_sessions' / '2' / 'worktree'
     assert Path((tmp_path / 'cwd.txt').read_text().strip()) == last.resolve()
     assert not last.exists(), 'its worktree goes when it ends'
@@ -310,7 +312,7 @@ def test_each_role_that_does_runs_fills_its_own_slots_and_the_implementer_takes_
     queue(db, sched, campaign)
     assert runs_by_role(db) == [(1, 'quick', cheap, 'quick'), (2, 'implementer', cheaper, 'implementer')]
     with db.session() as s:
-        assert s.get_one(Idea, later).status is IdeaStatus.READY, 'both slots are busy'
+        assert s.get_one(Idea, later).status is IdeaStatus.OPEN, 'both slots are busy'
     sched.stop(timeout=5)
 
 
@@ -331,7 +333,7 @@ def test_a_queued_run_of_a_role_that_piloop_toml_no_longer_has_fails_and_its_ide
             AgentSessionState.KILLED,
             'no [plugins.role.quick] in piloop.toml',
         )
-        assert idea.status is IdeaStatus.READY, 'the removed role was not an attempt at the idea'
+        assert idea.status is IdeaStatus.OPEN, 'the removed role was not an attempt at the idea'
     assert run_all(sched) == [2]
     sched.wait(SETTLE)
     sched.stop(timeout=5)

@@ -133,7 +133,6 @@ def test_status_and_inbox_print_one_json_document_with_the_cursor_they_were_read
     run_cli(['inbox', 'demo', '--json', '--kind', 'escalation'])
     inbox = document(InboxDocument, out())
     assert inbox.cursor == end and [i.body for i in inbox.items] == ['a long body ' * 20]
-    assert inbox.seeds == []
     run_cli(['inbox', '--json', '--all', '--kind', 'note'])
     assert document(InboxDocument, out()).items == []
 
@@ -167,21 +166,21 @@ def test_events_reads_after_a_cursor_with_filters_and_says_how_to_read_on(
     )
     assert lines[1] == f'next: piloop events --after {end} --campaign demo --kind acme.raw --kind idea.status'
 
-    threading.Timer(0.3, write, [db, f"UPDATE ideas SET status = 'parked' WHERE id = {first}"]).start()
+    threading.Timer(0.3, write, [db, f"UPDATE ideas SET status = 'dropped' WHERE id = {first}"]).start()
     run_cli(['events', '--after', str(end), '--follow', '--timeout', '30', '--json', '--kind', 'idea.status'])
-    [parked] = document(EventsDocument, out()).events
-    assert parked.payload == {'kind': 'idea.status', 'old': 'ready', 'new': 'parked'}
-    assert parked.subject.campaign == campaign.id
-    run_cli(['events', '--after', str(parked.id), '--follow', '--timeout', '0'])
-    assert out().splitlines() == [f'next: piloop events --after {parked.id}']
+    [dropped] = document(EventsDocument, out()).events
+    assert dropped.payload == {'kind': 'idea.status', 'old': 'open', 'new': 'dropped'}
+    assert dropped.subject.campaign == campaign.id
+    run_cli(['events', '--after', str(dropped.id), '--follow', '--timeout', '0'])
+    assert out().splitlines() == [f'next: piloop events --after {dropped.id}']
     write(db, UNKNOWN)
     monkeypatch.setattr(cli_views, 'MAX_POLL_SECONDS', 0.25)
     polls = polled(monkeypatch)
-    run_cli(['events', '--after', str(parked.id), '--follow', '--timeout', '0.5', '--kind', 'x'])
-    assert out().splitlines() == [f'next: piloop events --after {parked.id + 1} --kind x'], (
+    run_cli(['events', '--after', str(dropped.id), '--follow', '--timeout', '0.5', '--kind', 'x'])
+    assert out().splitlines() == [f'next: piloop events --after {dropped.id + 1} --kind x'], (
         'it asks again after each long-poll, until its own timeout, from the cursor that the last one moved'
     )
-    assert polls == [(parked.id, 0.25), (parked.id + 1, 0.25)]
+    assert polls == [(dropped.id, 0.25), (dropped.id + 1, 0.25)]
 
 
 def polled(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, float]]:
@@ -253,7 +252,7 @@ def test_a_separate_process_joins_a_snapshot_to_the_feed_and_resumes_after_a_dis
 ) -> None:
     before = add_idea(db, campaign.id, 'before the snapshot')
     with db.session() as s:
-        s.get_one(Idea, before).status = IdeaStatus.PARKED
+        s.get_one(Idea, before).status = IdeaStatus.DROPPED
         s.commit()
 
     snap = one_document(StatusDocument, controller(tmp_path, 'status', 'demo', '--json'))
@@ -261,7 +260,7 @@ def test_a_separate_process_joins_a_snapshot_to_the_feed_and_resumes_after_a_dis
     assert cursor == event_ids(db, 0)[-1]
     [state] = snap.campaigns
     assert isinstance(state, views.CampaignState)
-    assert state.ideas['parked'] == 1, 'the snapshot holds what the events up to its cursor did'
+    assert state.ideas['dropped'] == 1, 'the snapshot holds what the events up to its cursor did'
 
     args = ['events', '--follow', '--timeout', '30', '--json', '--limit', '2']
     with subprocess.Popen(
@@ -292,7 +291,7 @@ def test_a_separate_process_joins_a_snapshot_to_the_feed_and_resumes_after_a_dis
         dropped.kill()
     with db.session() as s:
         ops.pause(s, campaign.id, evals=False, reason='night')
-        s.get_one(Idea, idea).status = IdeaStatus.PARKED
+        s.get_one(Idea, idea).status = IdeaStatus.DROPPED
         s.commit()
     write(db, UNKNOWN)
     write(db, BROKEN)

@@ -47,7 +47,7 @@ from piloop.api.contract import (
 )
 from piloop.api.views import AckOutcome, CampaignState, Envelope
 from piloop.ids import AgentSessionId, CampaignId, Ending, RoleName
-from piloop.plugins.campaign_type.kit.backlog.wire import SeedBody
+from piloop.plugins.campaign_type.kit.backlog.wire import IdeaBody
 from piloop.plugins.network.https import TOKEN_ENV, Https
 from tests.conftest import EveryClient
 from tests.e2e.campaign import CHEAPEST_MODEL, CommandFailed, needs
@@ -370,30 +370,19 @@ def test_the_orchestrator_adds_an_idea(server: Server) -> None:
 
 
 @needs(test_measures_the_baseline)
-def test_a_person_files_a_seed_that_the_orchestrator_develops(server: Server) -> None:
-    """The person's seed wakes the orchestrator's ``inbox wait``, which develops it into an idea for the implementers."""
-    after = server.cursor
-    hunch = 'A sieve in a list comprehension is shorter than the trial division loop'
-    seed = server.api.file_seed(server.name, SeedBody(hunch=hunch, provenance=f'candidate#{server.baseline}'))
-    assert seed.idea.status == 'seed', seed.idea
-    assert seed.idea.created_by.startswith((PERSON, SERVICE)), seed.idea  # the token's caller: a person or a service
-    woke = server.piloop('inbox', 'wait', server.name, '--after', str(after), '--timeout', str(WAIT))
-    assert f'idea#{seed.idea.id}' in woke, woke
-    server.piloop(
-        'idea', 'develop', str(seed.idea.id),
-        '--hypothesis', 'One expression replaces the function and both loops.',
-        '--evidence', f'candidate#{server.baseline}: primes.py is a long trial division loop.',
-        '--check', 'python3 evaluate.py prints a smaller bytes value.',
-        '--metric', 'bytes',
-        '--effect', 'About 300 bytes less.',
-        '--plan', 'Rewrite primes.py as a short comprehension that prints the first 50 primes. Run'
-        ' `python3 evaluate.py`, then commit. Change nothing else.',
-        '--priority', '1',
-    )  # fmt: skip
-    developed = server.seen(kind_on('idea.status', 'idea', seed.idea.id), 'the seed developed', 60)
-    assert payload(developed)['old'] == 'seed', payload(developed)
-    server.ideas['seed'] = seed.idea.id
-    print(f'seed idea#{seed.idea.id} by {seed.idea.created_by}: {payload(developed)}')
+def test_a_person_adds_an_idea_that_is_open_on_the_board(server: Server) -> None:
+    """The person's idea is open at once: a worker can claim it, with no one to develop it first."""
+    title = 'A sieve in a list comprehension is shorter than the trial division loop'
+    plan = (
+        'Rewrite primes.py as a short comprehension that prints the first 50 primes. Run `python3 evaluate.py`,'
+        ' then commit. Change nothing else.'
+    )
+    body = IdeaBody(title=title, plan=plan, provenance=f'candidate#{server.baseline}', priority=1)
+    added = server.api.add_idea(server.name, body)
+    assert added.idea.status == 'open', added.idea
+    assert added.idea.created_by.startswith((PERSON, SERVICE)), added.idea  # the token's caller: a person or a service
+    server.ideas['person'] = added.idea.id
+    print(f'idea#{added.idea.id} by {added.idea.created_by}')
 
 
 @needs(test_measures_the_baseline)
@@ -428,7 +417,7 @@ def test_a_message_wakes_the_orchestrator_that_piloop_launches_and_it_answers(se
     )
 
 
-@needs(test_the_orchestrator_adds_an_idea, test_a_person_files_a_seed_that_the_orchestrator_develops)
+@needs(test_the_orchestrator_adds_an_idea, test_a_person_adds_an_idea_that_is_open_on_the_board)
 def test_implementers_run_on_the_servers_workers(server: Server) -> None:
     """Each idea gets a run, whose implementer names its harness session and runs on a machine of the server."""
     for key, idea in server.ideas.items():

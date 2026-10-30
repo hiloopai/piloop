@@ -6,7 +6,7 @@ from piloop.db.triggers.ddl import Trigger
 def same_campaign() -> Trigger:
     """Persistent: refuse an ``idea_links`` row whose two ideas belong to different campaigns.
 
-    A prerequisite or a superseded idea in another campaign would block or reject ideas across campaigns. A CHECK
+    A prerequisite in another campaign would hold ideas across campaigns. A CHECK
     cannot read another row, so this is a trigger. Rows are never updated, so the trigger checks INSERT only.
     ``IS NOT`` also refuses an idea id that does not exist (the foreign key would too, with a less clear message).
     """

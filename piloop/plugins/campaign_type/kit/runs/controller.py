@@ -1,7 +1,7 @@
 """Execute one run: make a worktree, run the implementer, close the run, score its commits and settle the idea.
 
 The run closes when its implementer ends, so the implementer slot is free while the daemon measures the commits. The idea stays
-``scheduled`` until its candidates are judged, because a dependent idea builds on the keeps of its prerequisites.
+``claimed`` until its candidates are judged, because a dependent idea builds on the keeps of its prerequisites.
 """
 
 import json
@@ -1216,17 +1216,17 @@ class RunController:
         startup_failed: bool,
         last: CandidateId | None,
     ) -> None:
-        """After the run's commits are judged, set the idea to ``ready`` if it has attempts left, else to ``done``.
+        """After the run's commits are judged, set the idea to ``open`` if it has attempts left, else to ``done``.
 
         The run's ``scoring`` ends here, whatever the idea's status. If no agent of the run started to work
-        (``startup_failed``), the idea is ``parked`` instead, attempts left or not. It was never tried, a new run would
+        (``startup_failed``), the idea is ``dropped`` instead, attempts left or not. It was never tried, a new run would
         fail the same way, and ``done`` would let the ideas that wait for it start without its result.
 
         A run that did not succeed and made commits requeues its idea from them, attempts left or not, up to
         ``recovery_requeues`` times of the run's role (``RecoveryRequeued`` events): the idea's base becomes the
         candidate of the ``last`` commit, so a new implementer starts from it and finishes the work (``_requeue``).
 
-        A run whose implementer's escalation still waits for an answer (``open_escalation``) parks its idea first, whatever
+        A run whose implementer's escalation still waits for an answer (``open_escalation``) drops its idea first, whatever
         its status. A new run would stop on the same question, and ``done`` would start the ideas that wait for it.
         """
         with self.launcher.lock:
@@ -1235,36 +1235,36 @@ class RunController:
             with self._db.session() as s:
                 run, idea = s.get_one(Run, run_id), s.get_one(Idea, idea_id)
                 run.scoring = False
-                if idea.status is IdeaStatus.SCHEDULED:  # A human may have parked or rejected it meanwhile.
+                if idea.status is IdeaStatus.CLAIMED:  # A human may have dropped it meanwhile.
                     if run.end is RunEnd.CANCELLED:
                         settle_cancelled(s, run)
                     elif (asked := open_escalation(s, run)) is not None:
-                        idea.status = IdeaStatus.PARKED
+                        idea.status = IdeaStatus.DROPPED
                         s.add(
                             Comment(
                                 target=TargetRef(IDEA, idea.id),
                                 author=DAEMON_ACTOR,
                                 kind=CommentKind.NOTE,
-                                body=f'parked: run#{run_id} ended while its escalation comment#{asked} waits for an'
+                                body=f'dropped: run#{run_id} ended while its escalation comment#{asked} waits for an'
                                 ' answer. Answer it with a decision on this idea, which the next run reads in its'
-                                ' brief, then set the idea ready',
+                                ' brief, then open the idea',
                             )
                         )
                     elif last is not None and end is not RunEnd.FINISHED and _requeuable(s, run):
                         _requeue(s, run, s.get_one(Candidate, last), end)
                     elif startup_failed:
-                        idea.status = IdeaStatus.PARKED
+                        idea.status = IdeaStatus.DROPPED
                         s.add(
                             Comment(
                                 target=TargetRef(IDEA, idea.id),
                                 author=DAEMON_ACTOR,
                                 kind=CommentKind.NOTE,
-                                body=f'parked: no agent of run#{run_id} started to work; fix what stopped them (the'
-                                ' errors of its implementers, their anomaly.startup events), then set it ready',
+                                body=f'dropped: no agent of run#{run_id} started to work; fix what stopped them (the'
+                                ' errors of its implementers, their anomaly.startup events), then open it',
                             )
                         )
                     elif end is not RunEnd.FINISHED and attempts(idea) < idea.max_runs:
-                        idea.status = IdeaStatus.READY
+                        idea.status = IdeaStatus.OPEN
                     else:
                         idea.status = IdeaStatus.DONE
                 s.commit()
@@ -1494,12 +1494,12 @@ def _requeues(s: Session, idea: Idea) -> int:
 def _requeuable(s: Session, run: Run) -> bool:
     """Return whether the idea of ``run`` may be requeued from its commits.
 
-    The idea is still ``scheduled`` (a human may have parked it meanwhile), and the run's role allows one more requeue.
+    The idea is still ``claimed`` (a human may have dropped it meanwhile), and the run's role allows one more requeue.
     A role that ``piloop init`` removed while the run ran requeues nothing.
     """
     role = run.idea.campaign.config.roles.doing_runs().get(run.role)
-    scheduled = run.idea.status is IdeaStatus.SCHEDULED
-    return scheduled and role is not None and _requeues(s, run.idea) < role.recovery_requeues
+    claimed = run.idea.status is IdeaStatus.CLAIMED
+    return claimed and role is not None and _requeues(s, run.idea) < role.recovery_requeues
 
 
 def _requeue(s: Session, run: Run, last: Candidate, end: RunEnd) -> None:
@@ -1511,7 +1511,7 @@ def _requeue(s: Session, run: Run, last: Candidate, end: RunEnd) -> None:
     idea = run.idea
     trunk = head(s, idea.campaign)
     moved = not run.branch and trunk is not None and branches(s, idea.campaign, last, trunk)
-    idea.status, idea.base_candidate_id = IdeaStatus.READY, None if moved else last.id
+    idea.status, idea.base_candidate_id = IdeaStatus.OPEN, None if moved else last.id
     emit(s, RecoveryRequeued(run=run.id, candidate=last.id), TargetRef(IDEA, idea.id), System.DAEMON)
     body = (
         f'requeued on the head: run#{run.id} ended {end} after its versions, and the head moved past them. To start'

@@ -45,9 +45,9 @@ key of a role.
 
 | Role | What it does | When it starts |
 |---|---|---|
-| **implementer** | Implements one idea, commits, and writes a `finding`. Its commits are scored. | A ready idea and a free slot. |
-| **research** | Develops seeds into ideas, and adds ideas where the head loses the most. | A new seed, a short backlog, or a stall. |
-| **watchdog** | Investigates failures and reviews progress. Writes comments and seeds, never code. | A failed run, an agent dead at its start, every `interval` seconds when something is new, and once at the stop, for the closing report. |
+| **implementer** | Implements one idea, commits, and writes a `finding`. Its commits are scored. | An open idea and a free slot. |
+| **research** | Adds ideas where the head loses the most. | A short backlog, or a stall. |
+| **watchdog** | Investigates failures and reviews progress. Writes comments, never code. | A failed run, an agent dead at its start, every `interval` seconds when something is new, and once at the stop, for the closing report. |
 | **orchestrator** | Answers messages and escalations, steers the work, and records its decisions. Each one resumes the session of the one before. | News for it, with the `news` trigger. Off until you set it: by default, you run your own [orchestrator](/concepts/orchestrator). |
 
 The implementer **does runs**: it takes ideas from the queue. The others are **sweeps**: their triggers start them,
@@ -110,8 +110,7 @@ prompt = "briefs/reviewer.md"
 triggers = ["new_keep"]
 max_concurrent = 1
 timeout = 900
-files = "seeds"
-writes = ["comments(finding) on a candidate", "seeds via idea seed"]
+writes = ["comments(finding) on a candidate"]
 
 [plugins.trigger.new_keep]
 provider = "sql"

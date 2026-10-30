@@ -56,9 +56,9 @@ from piloop.db.session import Database, alembic_config, described, heads, migrat
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, Ending, TargetKind, TargetRef
 from piloop.plugins import host
-from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by, runnable
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.backlog.ideas import added_by
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import CandidateImported
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -152,26 +152,26 @@ def test_campaign_and_idea_lifecycle(campaign_path: Path, out) -> None:
     ], 'a hand-made campaign: nothing to write; what init waits for comes before the wait'
 
     run_cli(['idea', 'add', 'demo', 'more lines', '--hypothesis', 'lines help', '--priority', '1'])
-    run_cli(['idea', 'add', str(campaign_path), 'later', '--proposed'])
-    run_cli(['idea', 'add', 'demo', 'even more lines', '--after', '1', '--after', '2', '--supersedes', '2'])
+    run_cli(['idea', 'add', str(campaign_path), 'later'])
+    run_cli(['idea', 'add', 'demo', 'even more lines', '--after', '1', '--after', '2'])
     assert out().splitlines() == [
-        'idea#1 ready p1: more lines',
-        'idea#2 proposed p2: later',
-        'idea#3 ready p2: even more lines',
+        'idea#1 open p1: more lines',
+        'idea#2 open p2: later',
+        'idea#3 open p2: even more lines',
     ]
 
     run_cli(['history', 'demo'])
     text = out()
     assert 'History: ideas (3 of 3)' in text and 'History: kept lineage' in text
     assert 'Research pack: metrics' in text and 'Research pack: orchestrator and human digests' in text, 'the pack'
-    assert 'more lines' in text and 'blocked by idea#1 (ready), idea#2 (proposed); supersedes idea#2' in text
+    assert 'more lines' in text and 'held by idea#1 (open), idea#2 (open)' in text
     assert ' baseline ' in text and '## ' not in text, 'a terminal table, not the brief markdown'
 
     run_cli(['status'])
     text = re.sub(r'\b\d+s (old|ago)\b', r'Ns \1', out())  # the second may tick over since init
     assert 'head: candidate#1 · score: 1 · kept: 1 · candidates: 1 · evaluator: #1, Ns old' in text
-    assert '- Ideas: 1 runnable, 1 blocked (idea#3 on idea#1 (ready), idea#2 (proposed));' in text
-    assert '  - idea#1 p1 "more lines" by human, Ns ago\n\n## Agents\n\n- Agents live: none' in text
+    assert '- Ideas: 2 open, 1 held (idea#3 on idea#1 (open), idea#2 (open));' in text
+    assert '  - idea#1 p1 "more lines" by human, Ns ago\n  - idea#2 p2 "later" by human, Ns ago\n\n## Agents' in text
     assert '### Tools' not in text, 'the cheat sheet is for agents'
 
     run_cli(['init', str(campaign_path)])
@@ -186,7 +186,7 @@ def test_campaign_and_idea_lifecycle(campaign_path: Path, out) -> None:
 
 
 @pytest.mark.usefixtures('api')
-def test_every_role_but_the_implementer_files_a_seed_and_only_research_the_orchestrator_and_humans_add_ideas(
+def test_research_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file_none(
     campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     research_files(campaign_path, 1)
@@ -200,158 +200,40 @@ def test_every_role_but_the_implementer_files_a_seed_and_only_research_the_orche
         run_cli(list(argv))
 
     out()
-    as_('orchestrator', 'idea', 'seed', 'demo', 'pad lines', '--from', 'finding comment#9: short lines lose')
-    as_('watchdog#5', 'idea', 'seed', 'demo', 'retry crashed evals', '--from', 'run#2 crashed twice', '--base', '1')
-    as_('research#7', 'idea', 'add', 'demo', 'longer lines', '--family', 'padding', '--base', '1', '--from', 'l.md')
-    as_('orchestrator', 'idea', 'add', 'demo', 'from the digest', '--proposed')
+    as_('research#7', 'idea', 'add', 'demo', 'longer lines', '--base', '1', '--from', 'l.md')
+    as_('orchestrator', 'idea', 'add', 'demo', 'from the digest')
     as_('human', 'idea', 'add', 'demo', 'just try it')
     assert out().splitlines() == [
-        'idea#1 seed: pad lines; research develops it next',
-        'idea#2 seed: retry crashed evals; research develops it next',
-        'idea#3 ready p2: longer lines',
-        'idea#4 proposed p2: from the digest',
-        'idea#5 ready p2: just try it',
-    ], "seeds wait for research; everyone else's ideas run unless asked to wait"
-    with pytest.raises(SystemExit, match=r'watchdog#5 files seeds, not ideas: `piloop idea seed demo'):
-        as_('watchdog#5', 'idea', 'add', 'demo', 'just do it')
-    for verb in (['add', 'demo', 'just do it'], ['seed', 'demo', 'a hunch', '--from', 'run#2']):
-        with pytest.raises(
-            SystemExit, match="implementer#3 files no ideas or seeds: say the hunch in your run's finding"
-        ):
-            as_('implementer#3', 'idea', *verb)
+        'idea#1 open p2: longer lines',
+        'idea#2 open p2: from the digest',
+        'idea#3 open p2: just try it',
+    ], 'every idea is open on the board'
+    for actor in ('watchdog#5', 'implementer#3'):
+        with pytest.raises(SystemExit, match=f"{actor} files no ideas: say the hunch in a note on your run's idea"):
+            as_(actor, 'idea', 'add', 'demo', 'just do it')
     protocol = ' '.join(['step'] * 151)
     with pytest.raises(SystemExit, match=r'the plan has 151 words, and a plan of a research has at most 150'):
         as_('research#7', 'idea', 'add', 'demo', 'a protocol', '--plan', protocol)
-    with pytest.raises(SystemExit, match='a seed needs pointers'):
-        as_('human', 'idea', 'seed', 'demo', 'a whim', '--from', ' ')
-    with pytest.raises(SystemExit, match='no candidate#99 in campaign demo'):
-        as_('human', 'idea', 'seed', 'demo', 'from nowhere', '--from', 'x', '--base', '99')
-
-    as_('orchestrator', 'inbox')
-    assert out().splitlines()[-3:] == [
-        '2 seed(s) waiting for research:',
-        'seed idea#1 (demo) by orchestrator: pad lines — finding comment#9: short lines lose',
-        'seed idea#2 (demo) by watchdog#5: retry crashed evals — run#2 crashed twice',
-    ]
-
-    define = ['--hypothesis', 'pad to 80', '--evidence', 'loss table l.md', '--check', 'one file; stop at no gain']
-    define += ['--metric', 'score', '--effect', '+1']
-    with pytest.raises(SystemExit, match='watchdog#5 files seeds; research develops them'):
-        as_('watchdog#5', 'idea', 'develop', '1', *define)
-    with pytest.raises(SystemExit, match='implementer#3 files no ideas or seeds'):
-        as_('implementer#3', 'idea', 'develop', '1', *define)
-    with pytest.raises(SystemExit, match='a defined idea needs effect'):
-        as_('research#8', 'idea', 'develop', '1', *define[:-2], '--effect', ' ')
-    with pytest.raises(SystemExit, match='no idea#99'):
-        as_('research#8', 'idea', 'develop', '99', *define)
-    with pytest.raises(SystemExit, match='no candidate#99 in campaign demo'):
-        as_('research#8', 'idea', 'develop', '1', *define, '--base', '99')
-    as_('research#8', 'idea', 'develop', '1', *define, '--title', 'pad short lines to 80', '--priority', '1')
-    as_('research#8', 'idea', 'develop', '2', *define, '--plan', 'then all files', '--proposed', '--family', 'retry')
-    assert out().splitlines() == ['idea#1 ready p1: pad short lines to 80', 'idea#2 proposed p2: retry crashed evals']
-    with pytest.raises(SystemExit, match='idea#1 is ready, not a seed: someone took it already'):
-        as_('research#9', 'idea', 'develop', '1', *define)
 
     db = Database(common.settings.database_url, actor=System.HUMAN)
     with db.session() as s:
-        rows = [(i.created_by, i.provenance, i.family, i.base_candidate_id) for i in s.scalars(select(Idea))]
-        assert rows == [
-            ('orchestrator', 'loss table l.md; seed pointers: finding comment#9: short lines lose', None, None),
-            ('watchdog#5', 'loss table l.md; seed pointers: run#2 crashed twice', 'retry', 1),
-            ('research#7', 'l.md', 'padding', 1),
-            ('orchestrator', None, None, None),
-            ('human', None, None, None),
-        ], "a developed seed keeps its filer: whether that role's hunches pay off stays measurable"
-        assert s.get_one(Idea, 2).plan == (
-            'The evaluator should show: one file; stop at no gain\nSuccess: score; expected effect: +1\nthen all files'
-        )
+        rows = [(i.created_by, i.provenance, i.base_candidate_id) for i in s.scalars(select(Idea))]
+        assert rows == [('research#7', 'l.md', 1), ('orchestrator', None, None), ('human', None, None)]
         assert [e.actor for e in s.scalars(select(Event).where(Event.kind == 'idea.created'))] == [
-            'orchestrator',
-            'watchdog#5',
             'research#7',
             'orchestrator',
             'human',
         ]
-        assert defined_by(s, CampaignId(1)) == {'research#7', 'research#8', 'orchestrator', 'human'}
+        assert added_by(s, CampaignId(1)) == {'research#7', 'orchestrator', 'human'}
     db.close()
     with pytest.raises(SystemExit, match='no candidate#99 in campaign demo'):
         as_('human', 'idea', 'add', 'demo', 'from nowhere', '--base', '99')
-
-
-@pytest.mark.usefixtures('api')
-def test_a_seed_developed_with_its_links_is_never_runnable_without_them(
-    campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``develop --after`` writes the idea and its links in one transaction, as ``add --after`` does.
-
-    A link inserted after the idea is ``ready`` comes too late when the daemon takes the idea in between.
-    """
-    research_files(campaign_path, 1)
-    run_cli(['init', str(campaign_path)])
-    settings = Settings(home=tmp_path, uv_tool_dir=tmp_path / 'uv-tools')
-    monkeypatch.setattr(common, 'settings', settings.model_copy(update=launched(tmp_path, 'research#8')))
-    run_cli(['idea', 'add', 'demo', 'the prerequisite'])
-    run_cli(['idea', 'add', 'demo', 'a blunt version'])
-    run_cli(['idea', 'seed', 'demo', 'refit after it', '--from', 'run#2'])
-    define = ['--hypothesis', 'h', '--evidence', 'e', '--check', 'c', '--metric', 'score', '--effect', '+1']
-    run_cli(['idea', 'develop', '3', *define, '--after', '1', '--supersedes', '2'])
-    db = Database(common.settings.database_url, actor=System.HUMAN)
-    with db.session() as s:
-        links = s.execute(select(IdeaLink.idea_id, IdeaLink.target_id, IdeaLink.kind).order_by(IdeaLink.kind)).all()
-        assert [tuple(r) for r in links] == [(3, 1, LinkKind.AFTER), (3, 2, LinkKind.SUPERSEDES)]
-        assert s.scalars(select(Idea.id).where(runnable()).order_by(Idea.id)).all() == [1, 2]
-    db.close()
 
 
 def research_files(campaign_path: Path, most: int) -> None:
     """Set ``[plugins.role.research] max_ideas`` in the campaign's ``piloop.toml`` (the test file sets 0)."""
     toml = campaign_path / 'piloop.toml'
     toml.write_text(re.sub(r'max_ideas = \d+', f'max_ideas = {most}', toml.read_text()))
-
-
-@pytest.mark.usefixtures('api')
-def test_a_sweep_files_its_new_ideas_as_proposed_while_its_role_may_file_none(
-    campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An operator pauses research with ``max_ideas = 0``, and a sweep that started before goes on filing ideas.
-
-    From then on, what a sweep of the role adds waits for a review (``proposed``). A seed that it develops is not a new
-    idea: ``max_ideas`` never counted seeds, so it still becomes ``ready``. Other actors are not limited.
-    """
-    research_files(campaign_path, 1)
-    run_cli(['init', str(campaign_path)])
-
-    def as_(actor: str, *argv: str) -> None:
-        settings = Settings(home=tmp_path, uv_tool_dir=tmp_path / 'uv-tools', actor=actor)
-        if '#' in actor:
-            settings = settings.model_copy(update=launched(tmp_path, actor))
-        monkeypatch.setattr(common, 'settings', settings)
-        run_cli(list(argv))
-
-    as_('research#8', 'idea', 'add', 'demo', 'before the pause')
-    research_files(campaign_path, 0)
-    run_cli(['init', str(campaign_path)])
-    out()
-    as_('research#8', 'idea', 'add', 'demo', 'after the pause')
-    as_('orchestrator', 'idea', 'add', 'demo', 'the orchestrator is not paused')
-    as_('orchestrator', 'idea', 'seed', 'demo', 'a hunch', '--from', 'run#2')
-    define = ['--hypothesis', 'h', '--evidence', 'e', '--check', 'c', '--metric', 'score', '--effect', '+1']
-    as_('research#8', 'idea', 'develop', '4', *define)
-    assert out().splitlines() == [
-        'idea#2 proposed p2: after the pause ([plugins.role.research] max_ideas = 0: it waits for a review)',
-        'idea#3 ready p2: the orchestrator is not paused',
-        'idea#4 seed: a hunch; research develops it next',
-        'idea#4 ready p2: a hunch',
-    ]
-    db = Database(common.settings.database_url, actor=System.HUMAN)
-    with db.session() as s:
-        assert [i.status for i in s.scalars(select(Idea).order_by(Idea.id))] == [
-            IdeaStatus.READY,
-            IdeaStatus.PROPOSED,
-            IdeaStatus.READY,
-            IdeaStatus.READY,
-        ]
-    db.close()
 
 
 @pytest.mark.usefixtures('api')
@@ -1180,14 +1062,14 @@ def test_candidate_note_keeps_a_regressed_result_in_view_with_follow_ups_pinned_
     run_cli(['candidate', 'note', '2', 'halves the eval time', '--follow-up', 'try again', '--follow-up', 'cache it'])
     assert out().splitlines() == [
         'candidate#2 interesting (note): halves the eval time; against candidate#1: score 0 vs 1',
-        'idea#2 seed, pinned to candidate#2: try again (from candidate#2)',
-        'idea#3 seed, pinned to candidate#2: cache it',
+        'idea#2 open, pinned to candidate#2: try again (from candidate#2)',
+        'idea#3 open, pinned to candidate#2: cache it',
     ]
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
         assert s.get_one(Candidate, 2).verdict_by == 'human'
         idea = s.get_one(Idea, 3)
         assert (idea.status, idea.base_candidate_id, idea.created_by, idea.hypothesis) == (
-            IdeaStatus.SEED,
+            IdeaStatus.OPEN,
             2,
             'human',
             'Follow-up of candidate#2 (worse): halves the eval time',
@@ -1208,7 +1090,7 @@ def test_candidate_note_keeps_a_regressed_result_in_view_with_follow_ups_pinned_
     monkeypatch.setattr(
         common, 'settings', common.settings.model_copy(update=launched(common.settings.home, 'implementer#3'))
     )
-    with pytest.raises(SystemExit, match='implementer#3 files no ideas or seeds'):
+    with pytest.raises(SystemExit, match='implementer#3 files no ideas'):
         run_cli(['candidate', 'note', '2', 'worth a look', '--follow-up', 'a hunch'])
 
 
@@ -1332,9 +1214,7 @@ def test_prompt_is_a_note_on_the_agent_and_says_whether_it_arrived(
     run_cli(['init', str(campaign_path)])
     db = Database(common.settings.database_url, actor=common.settings.actor)
     with db.session() as s:
-        idea = Idea(
-            track='score', campaign_id=1, title='x', hypothesis='x', created_by='t', status=IdeaStatus.SCHEDULED
-        )
+        idea = Idea(track='score', campaign_id=1, title='x', hypothesis='x', created_by='t', status=IdeaStatus.CLAIMED)
         s.add(idea)
         s.flush()
         s.add(
@@ -1396,9 +1276,7 @@ def test_campaign_stop_and_cancels_are_requests_that_the_daemon_acts_on(campaign
     run_cli(['init', str(campaign_path)])
     db = Database(common.settings.database_url, actor=common.settings.actor)
     with db.session() as s:
-        idea = Idea(
-            track='score', campaign_id=1, title='x', hypothesis='x', created_by='t', status=IdeaStatus.SCHEDULED
-        )
+        idea = Idea(track='score', campaign_id=1, title='x', hypothesis='x', created_by='t', status=IdeaStatus.CLAIMED)
         s.add(idea)
         s.flush()
         s.add(
@@ -1467,9 +1345,7 @@ def test_run_extend_gives_the_running_implementer_more_time_and_says_how_much_in
     run_cli(['init', str(campaign_path)])
     db = Database(common.settings.database_url, actor=common.settings.actor)
     with db.session() as s:
-        idea = Idea(
-            track='score', campaign_id=1, title='x', hypothesis='x', created_by='t', status=IdeaStatus.SCHEDULED
-        )
+        idea = Idea(track='score', campaign_id=1, title='x', hypothesis='x', created_by='t', status=IdeaStatus.CLAIMED)
         s.add(idea)
         s.flush()
         s.add(
@@ -1743,9 +1619,7 @@ def test_status_without_results(campaign_path: Path, out, mocker: MockerFixture)
     with db.session() as s:
         for c in s.scalars(select(Candidate)):
             c.verdict = Outcome.DISCARD
-        idea = Idea(
-            track='score', campaign_id=1, title='x', hypothesis='x', created_by='t', status=IdeaStatus.SCHEDULED
-        )
+        idea = Idea(track='score', campaign_id=1, title='x', hypothesis='x', created_by='t', status=IdeaStatus.CLAIMED)
         s.add(idea)
         s.flush()
         s.add(
@@ -2126,7 +2000,7 @@ def test_schema_prints_every_guide_and_the_tables_or_only_the_guides_named(out) 
 
 
 @pytest.mark.usefixtures('api')
-def test_with_several_tracks_every_idea_and_seed_names_its_track(campaign_path: Path, out) -> None:
+def test_with_several_tracks_every_idea_names_its_track(campaign_path: Path, out) -> None:
     toml = campaign_path / 'piloop.toml'
     text = toml.read_text().replace('role = "primary"', 'role = "primary"\nmargin = 1')
     text = text.replace(
@@ -2138,9 +2012,9 @@ def test_with_several_tracks_every_idea_and_seed_names_its_track(campaign_path: 
     with pytest.raises(SystemExit, match='demo has tracks score, size: name one with --track'):
         run_cli(['idea', 'add', 'demo', 'more lines'])
     with pytest.raises(SystemExit, match="demo has tracks score, size: there is no track 'speed'"):
-        run_cli(['idea', 'seed', 'demo', 'faster', '--from', 'x', '--track', 'speed'])
+        run_cli(['idea', 'add', 'demo', 'faster', '--track', 'speed'])
     run_cli(['idea', 'add', 'demo', 'shorter lines', '--track', 'size'])
-    run_cli(['idea', 'seed', 'demo', 'more lines', '--from', 'run#1', '--track', 'score'])
+    run_cli(['idea', 'add', 'demo', 'more lines', '--from', 'run#1', '--track', 'score'])
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
         worse = Candidate(campaign_id=1, tree_sha='w', revision='w', summary='w', verdict=Outcome.DISCARD)
         s.add(worse)

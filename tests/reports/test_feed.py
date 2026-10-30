@@ -82,7 +82,7 @@ def test_the_envelope_normalizes_history_without_inventing_and_keeps_unknown_kin
         s.flush()
         s.add(Comment(target=TargetRef(TargetKind.COMMENT, 999), author='human', kind=CommentKind.NOTE, body='x'))
         s.commit()
-        idea.status = IdeaStatus.PARKED
+        idea.status = IdeaStatus.DROPPED
         s.commit()
         ops.pause(s, campaign.id, evals=False, reason='a quiet night')
         s.commit()
@@ -98,7 +98,7 @@ def test_the_envelope_normalizes_history_without_inventing_and_keeps_unknown_kin
         'subject': {'kind': 'idea', 'id': idea_id, 'campaign': campaign.id},
         'actor': 'daemon',
         'time': status['time'],
-        'payload': {'kind': 'idea.status', 'old': 'ready', 'new': 'parked'},
+        'payload': {'kind': 'idea.status', 'old': 'open', 'new': 'dropped'},
     }, 'its payload as stored, its campaign resolved from its subject'
     assert (at := status['time']) is not None and at.endswith('Z') and 'T' in at
     paused = next(e for e in batch['events'] if e['kind'] == 'campaign.paused')
@@ -127,7 +127,7 @@ def test_every_event_has_one_time_format_whoever_wrote_it(db: Database, campaign
         s.flush()
         emit(s, IdeaCreated(), TargetRef(IDEA, idea.id), System.DAEMON)
         s.commit()
-        idea.status = IdeaStatus.PARKED
+        idea.status = IdeaStatus.DROPPED
         s.commit()
     with db.engine.connect() as conn:
         stored = conn.execute(text("SELECT payload ->> '$.kind', at FROM events WHERE id > :start"), {'start': start})
@@ -228,7 +228,7 @@ def test_a_campaign_filter_follows_each_subject_to_its_campaign(
         gone = make_idea(campaign.id, 'gone')
         s.add(gone)
         s.commit()
-        gone.status = IdeaStatus.PARKED
+        gone.status = IdeaStatus.DROPPED
         s.commit()
         s.delete(gone)
         s.commit()
@@ -294,8 +294,8 @@ def escalation(campaign_id: CampaignId, body: str) -> Comment:
 def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Campaign) -> None:
     with db.session() as s, db.session() as other:
         idea = make_idea(campaign.id, 'queued')
-        seed = make_idea(campaign.id, 'a hunch', created_by='scout#3', status=IdeaStatus.SEED, provenance='a paper')
-        s.add_all([idea, seed])
+        dropped = make_idea(campaign.id, 'a hunch', status=IdeaStatus.DROPPED)
+        s.add_all([idea, dropped])
         s.flush()
         candidate = s.scalars(select(Candidate).where(Candidate.campaign_id == campaign.id)).one()
         run = Run(idea_id=idea.id, attempt=1, base_candidate_id=candidate.id, harness='script', model='m')
@@ -318,7 +318,7 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
         )
         s.add(escalation(campaign.id, 'look'))
         s.commit()
-        ids = idea.id, seed.id, candidate.id, run.id, agent_session.id
+        ids = idea.id, candidate.id, run.id, agent_session.id
         with db_feed.snapshot(s) as cursor:
             other.add(escalation(campaign.id, 'after the cursor'))
             other.commit()
@@ -327,7 +327,7 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
         assert feed.read(s, cursor).model_dump()['events'][0]['kind'] == 'comment.escalation', (
             'what the snapshot missed follows it'
         )
-    idea_id, seed_id, candidate_id, run_id, agent_session_id = ids
+    idea_id, candidate_id, run_id, agent_session_id = ids
     assert state.model_dump() == {
         'kind': 'state',
         'id': campaign.id,
@@ -345,7 +345,7 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
         },
         'kept': 1,
         'candidates': 1,
-        'ideas': {**{str(v): 0 for v in IdeaStatus}, 'seed': 1, 'ready': 1},
+        'ideas': {**{str(v): 0 for v in IdeaStatus}, 'open': 1, 'dropped': 1},
         'runnable': 1,
         'runs': [
             {'id': run_id, 'idea': idea_id, 'title': 'queued', 'harness': 'script', 'model': 'm', 'status': 'queued'}
@@ -376,16 +376,7 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
     assert (item['campaign'], item['campaign_name']) == (campaign.id, 'demo')
     assert item['target'] == {'kind': 'campaign', 'id': campaign.id} and item['acked_at'] is None
     assert item['priority'] == 1 and item['created'].endswith('Z')
-    assert inbox['seeds'] == [
-        {
-            'idea': seed_id,
-            'campaign': campaign.id,
-            'campaign_name': 'demo',
-            'created_by': 'scout#3',
-            'title': 'a hunch',
-            'provenance': 'a paper',
-        }
-    ]
+    assert 'seeds' not in inbox
     json.dumps([state.model_dump(mode='json'), inbox])
 
 

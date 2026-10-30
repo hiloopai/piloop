@@ -26,7 +26,6 @@ class WatchdogRole(SweepRole):
     writes: list[str] = [
         'comments(escalation, finding, note)',
         'lessons on the campaign once it stopped',
-        'seeds via idea seed',
     ]
     """What a watchdog may write, as its brief states it."""
 

@@ -47,8 +47,8 @@ def test_the_reads_of_a_ui_answer_agents_their_output_ideas_and_comments(
         s.flush()
         s.add(Candidate(id=2, campaign_id=p.id, run_id=run.id, parent_id=1, tree_sha='t2', revision='r2'))
         s.add(Measurement(candidate_id=2, evaluator_id=1, metrics={'score': 3, 'size': 4}))
-        newer = idea(s, p, 'even more lines', IdeaStatus.READY, priority=1, after=(old.id,), supersedes=(old.id,))
-        idea(s, p, 'a hunch', IdeaStatus.SEED)
+        newer = idea(s, p, 'even more lines', IdeaStatus.OPEN, priority=1, after=(old.id,))
+        idea(s, p, 'a hunch', IdeaStatus.DROPPED)
         s.add(
             AgentSession(
                 kind='research',
@@ -75,15 +75,15 @@ def test_the_reads_of_a_ui_answer_agents_their_output_ideas_and_comments(
         )
         output = client.agent_output(agent.id, OutputQuery(lines=1))
         assert output.lines == ['proposing idea B'], 'the last lines, blank ones left out'
-        listed = client.ideas('demo', IdeasQuery(status=(IdeaStatus.SEED, IdeaStatus.READY)))
-        assert [(i.title, i.after, i.supersedes) for i in listed.ideas] == [
-            ('a hunch', [], []),
-            ('even more lines', [old.id], [old.id]),
+        listed = client.ideas('demo', IdeasQuery(status=(IdeaStatus.DROPPED, IdeaStatus.OPEN)))
+        assert [(i.title, i.after) for i in listed.ideas] == [
+            ('a hunch', []),
+            ('even more lines', [old.id]),
         ], 'in the order of the statuses asked for'
         assert len(client.ideas('demo', IdeasQuery()).ideas) == 3
         shown = client.idea(old.id)
-        assert (shown.idea.superseded_by, shown.hypothesis, [(r.status, r.error) for r in shown.runs]) == (
-            [newer.id],
+        assert (shown.idea.after, shown.hypothesis, [(r.status, r.error) for r in shown.runs]) == (
+            [],
             'more lines helps',
             [('queued', 'no commit')],
         )

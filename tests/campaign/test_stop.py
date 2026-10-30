@@ -306,11 +306,11 @@ def test_max_runs_waits_for_a_finished_run_whose_commits_are_scored(db: Database
             s.commit()
             return reason(db, campaign), runs(s, s.get_one(Campaign, campaign.id))
 
-    assert scoring(True, IdeaStatus.SCHEDULED) == (None, 1), 'its candidates do not exist yet, but it keeps its place'
-    assert scoring(True, IdeaStatus.PARKED) == (None, 1), 'parked meanwhile: it still keeps its place'
+    assert scoring(True, IdeaStatus.CLAIMED) == (None, 1), 'its candidates do not exist yet, but it keeps its place'
+    assert scoring(True, IdeaStatus.DROPPED) == (None, 1), 'parked meanwhile: it still keeps its place'
     add_candidate(db, campaign, run_id, Origin.SKIPPED, SKIPPED_REASON)
     assert scoring(False, IdeaStatus.DONE) == (None, 0), 'only skip commits: it does not count, and another run starts'
-    assert scoring(False, IdeaStatus.SCHEDULED) == (None, 0), 'scored: the status of its idea does not matter'
+    assert scoring(False, IdeaStatus.CLAIMED) == (None, 0), 'scored: the status of its idea does not matter'
 
 
 def test_max_runs_caps_the_runs_queued_in_one_tick(
@@ -571,7 +571,7 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
     add_run(db, campaign)
     (idea,) = add_ideas(db, campaign, 'queued before the stop')
     with db.session() as s:
-        s.get_one(Idea, idea).status = IdeaStatus.SCHEDULED
+        s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
         run = Run(idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
@@ -594,7 +594,7 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
         ]
         run = s.get_one(Run, 2)
         assert (run.status, run.end, run.finished_at is not None) == (RunStatus.FAILED, RunEnd.CAMPAIGN_STOPPED, True)
-        assert s.get_one(Idea, idea).status is IdeaStatus.READY
+        assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
         [(event, finished)] = in_order(s, RunFinished)
         assert (event.target_id, finished) == (2, RunFinished(end=RunEnd.CAMPAIGN_STOPPED, error=None))
         s.add(AgentSession(kind=RESEARCH, campaign_id=campaign.id, reason='by hand, after the stop'))
@@ -615,7 +615,7 @@ def test_a_requested_stop_ends_the_campaign_as_a_stop_condition_does(
     add_run(db, campaign)
     (idea,) = add_ideas(db, campaign, 'queued before the stop')
     with db.session() as s:
-        s.get_one(Idea, idea).status = IdeaStatus.SCHEDULED
+        s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
         run = Run(idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
@@ -631,7 +631,7 @@ def test_a_requested_stop_ends_the_campaign_as_a_stop_condition_does(
     sched.wait(SETTLE)
     assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'stopped by human: machine needed')
     with db.session() as s:
-        assert (s.get_one(Run, 2).end, s.get_one(Idea, idea).status) == (RunEnd.CAMPAIGN_STOPPED, IdeaStatus.READY)
+        assert (s.get_one(Run, 2).end, s.get_one(Idea, idea).status) == (RunEnd.CAMPAIGN_STOPPED, IdeaStatus.OPEN)
         assert s.get_one(AgentSession, 2).reason == 'campaign stopped: stopped by human: machine needed'
         s.get_one(Campaign, campaign.id).status = CampaignStatus.ACTIVE
         s.commit()
@@ -671,7 +671,7 @@ def stop_while_held(db: Database, campaign: Campaign, hold: str, review: str | N
         )
     (idea,) = add_ideas(db, campaign, 'queued before the stop')
     with db.session() as s:
-        s.get_one(Idea, idea).status = IdeaStatus.SCHEDULED
+        s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
         s.add(Run(idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m'))
         if hold == 'pause':
             pause(s, campaign.id, evals=False, reason='too expensive')
@@ -710,7 +710,7 @@ def test_a_requested_stop_ends_a_held_campaign_and_by_default_its_closing_review
     assert run_all(sched) == [1], 'only the closing review launches'
     assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'stopped by human: over budget')
     with db.session() as s:
-        assert (s.get_one(Run, 1).end, s.get_one(Idea, idea).status) == (RunEnd.CAMPAIGN_STOPPED, IdeaStatus.READY)
+        assert (s.get_one(Run, 1).end, s.get_one(Idea, idea).status) == (RunEnd.CAMPAIGN_STOPPED, IdeaStatus.OPEN)
     sched.wait(SETTLE)
     sched.stop(timeout=5)
 
@@ -847,7 +847,7 @@ def test_a_stopped_campaign_gets_one_closing_watchdog_and_no_trigger_requests(
         ] == [(WATCHDOG, 'campaign stopped: max_runs: 1 runs')], (
             'requested exactly once, and no implementer or research request follows'
         )
-        assert s.scalars(select(Run)).all() and s.get_one(Idea, 2).status is IdeaStatus.READY, 'idea b never ran'
+        assert s.scalars(select(Run)).all() and s.get_one(Idea, 2).status is IdeaStatus.OPEN, 'idea b never ran'
         [(event, change)] = in_order(s, CampaignStatusChanged)
         assert (event.actor, event.target_id, change) == (
             'daemon',

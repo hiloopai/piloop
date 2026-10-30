@@ -79,7 +79,7 @@ CREATED = ('idea.created', 't', IdeaCreated())
 """The event of an idea that ``add_idea`` inserts."""
 
 
-def add_idea(db: Database, campaign_id: CampaignId, title: str, status: IdeaStatus = IdeaStatus.READY) -> IdeaId:
+def add_idea(db: Database, campaign_id: CampaignId, title: str, status: IdeaStatus = IdeaStatus.OPEN) -> IdeaId:
     with db.session() as s:
         idea = Idea(
             campaign_id=campaign_id, track='score', title=title, hypothesis=title, status=status, created_by='t'
@@ -193,26 +193,13 @@ def test_a_raw_pause_needs_a_reason_and_a_known_scope(me: Database, tmp_path: Pa
             s.commit()
 
 
-def test_only_a_sweeping_agent_files_its_ideas_for_review_while_the_campaign_is_paused(me: Database) -> None:
+def test_an_agent_whose_role_files_nothing_adds_no_idea_and_the_others_add_open_ideas(me: Database) -> None:
     with me.session() as s:
-        campaign = s.get_one(Campaign, 1)
-        assert backlog_ops.review_first(campaign, Agent(role='research', session=4), new=False) is None, 'not paused'
-        assert (
-            backlog_ops.review_first(campaign, Agent(role='research', session=4), new=True)
-            == '[plugins.role.research] max_ideas = 0'
-        ), 'the test file'
-        ops.pause(s, CampaignId(1), evals=False, reason='why')
-        assert (
-            backlog_ops.review_first(campaign, Agent(role='watchdog', session=5), new=False)
-            == 'campaign demo is paused'
-        )
-        assert (
-            backlog_ops.review_first(campaign, ACTOR, new=True) is None
-            and backlog_ops.review_first(campaign, System.HUMAN, new=True) is None
-        )
-        assert backlog_ops.review_first(campaign, Agent(role='implementer', session=6), new=True) is None, (
-            'an implementer files no ideas anyway'
-        )
+        with pytest.raises(ops.Refused, match='implementer#6 files no ideas'):
+            backlog_ops.add_idea(s, CampaignId(1), 'mine', actor=Agent(role='implementer', session=6))
+        for actor in (ACTOR, System.HUMAN, Agent(role='research', session=4)):
+            idea = backlog_ops.add_idea(s, CampaignId(1), f'by {actor}', actor=actor)
+            assert (idea.status, idea.created_by) == (IdeaStatus.OPEN, actor.signature)
 
 
 def test_a_verdict_override_is_the_actors_with_the_reason_in_its_event(me: Database, campaign: Campaign) -> None:
@@ -305,7 +292,7 @@ def run_from(
     db: Database, campaign: Campaign, status: RunStatus, *, base: CandidateId, pin: bool = False, branch: bool = False
 ) -> RunId:
     """An open run of a new idea from ``base``: the idea pins it with ``pin``, and ``branch`` makes it a branch run."""
-    idea_id = add_idea(db, campaign.id, f'{status} on {base} {pin} {branch}', IdeaStatus.SCHEDULED)
+    idea_id = add_idea(db, campaign.id, f'{status} on {base} {pin} {branch}', IdeaStatus.CLAIMED)
     with db.session() as s:
         s.get_one(Idea, idea_id).base_candidate_id = base if pin else None
         run = Run(
@@ -347,10 +334,10 @@ def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_i
         run.status, run.end = RunStatus.FAILED, RunEnd.CANCELLED
         settle_cancelled(s, run)
         s.commit()
-        assert run.idea.status is IdeaStatus.READY
+        assert run.idea.status is IdeaStatus.OPEN
         [note] = s.scalars(select(Comment).where(Comment.target_id == run.idea_id)).all()
         assert note.body == (
-            f'ready: run#{running} was cancelled by orchestrator: it started from candidate#1, which a verdict'
+            f'open: run#{running} was cancelled by orchestrator: it started from candidate#1, which a verdict'
             f' override replaced as the head with candidate#{kept}; the next run starts from the head'
         )
     back = run_from(me, campaign, RunStatus.RUNNING, base=kept)
@@ -362,7 +349,7 @@ def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_i
         )
 
 
-def test_a_hand_keep_off_the_head_whose_merge_conflicts_files_a_compose_seed(me: Database, campaign: Campaign) -> None:
+def test_a_hand_keep_off_the_head_whose_merge_conflicts_adds_a_compose_idea(me: Database, campaign: Campaign) -> None:
     base = Repo(campaign.path).head.commit.hexsha
     old_sha, trunk_sha = commit_on(campaign, base, {'x.txt': 'o\n'}), commit_on(campaign, base, {'x.txt': 't\n'})
     old = run_candidate(me, campaign, Outcome.DISCARD, commit=old_sha)
@@ -370,10 +357,10 @@ def test_a_hand_keep_off_the_head_whose_merge_conflicts_files_a_compose_seed(me:
     with me.session() as s:
         kept = verdicts_ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
         assert kept.rebased is not None and (kept.rebased.head, kept.rebased.conflicts) == (trunk, ['x.txt'])
-        [seed] = s.scalars(select(Idea).where(Idea.status == IdeaStatus.SEED)).all()
-        assert seed.title == f'Compose candidate#{old} onto the head'
+        [compose] = s.scalars(select(Idea).where(Idea.title.startswith('Compose'))).all()
+        assert (compose.title, compose.status) == (f'Compose candidate#{old} onto the head', IdeaStatus.OPEN)
         reason = s.get_one(Candidate, old).verdict_reason
-        assert reason is not None and reason.endswith(f'seed idea#{seed.id} composes it by hand')
+        assert reason is not None and reason.endswith(f'idea#{compose.id} composes it by hand')
 
 
 def test_a_hand_keep_builds_on_the_head_by_git_where_the_parent_links_miss_it(me: Database, campaign: Campaign) -> None:
@@ -535,60 +522,52 @@ def test_an_idea_status_takes_a_reason_in_a_note_and_refuses_what_is_not_set_by_
     me: Database, campaign: Campaign
 ) -> None:
     idea = add_idea(me, CampaignId(1), 'an idea')
-    seed = add_idea(me, CampaignId(1), 'a hunch', IdeaStatus.SEED)
-    running = add_idea(me, CampaignId(1), 'running', IdeaStatus.SCHEDULED)
+    done = add_idea(me, CampaignId(1), 'done', IdeaStatus.DONE)
+    running = add_idea(me, CampaignId(1), 'running', IdeaStatus.CLAIMED)
     with me.session() as s:
         assert backlog_ops.set_idea_status(
-            s, idea, IdeaStatus.PARKED, reason='after the v2 evaluator', actor=ACTOR
-        ) is (IdeaStatus.READY)
-        backlog_ops.set_idea_status(s, seed, IdeaStatus.REJECTED, reason='dup of idea#1', actor=ACTOR)
-        backlog_ops.set_idea_status(s, running, IdeaStatus.PARKED, reason='redundant', actor=ACTOR)
+            s, idea, IdeaStatus.DROPPED, reason='after the v2 evaluator', actor=ACTOR
+        ) is (IdeaStatus.OPEN)
+        backlog_ops.set_idea_status(s, done, IdeaStatus.OPEN, reason='try it on the new head', actor=ACTOR)
+        backlog_ops.set_idea_status(s, running, IdeaStatus.DROPPED, reason='redundant', actor=ACTOR)
         s.commit()
         notes = s.scalars(select(Comment).order_by(Comment.id)).all()
         assert [(n.target_id, n.author, n.kind, n.body) for n in notes] == [
-            (idea, ACTOR.signature, CommentKind.NOTE, 'ready → parked: after the v2 evaluator'),
-            (seed, ACTOR.signature, CommentKind.NOTE, 'seed → rejected: dup of idea#1'),
-            (running, ACTOR.signature, CommentKind.NOTE, 'scheduled → parked: redundant'),
+            (idea, ACTOR.signature, CommentKind.NOTE, 'open → dropped: after the v2 evaluator'),
+            (done, ACTOR.signature, CommentKind.NOTE, 'done → open: try it on the new head'),
+            (running, ACTOR.signature, CommentKind.NOTE, 'claimed → dropped: redundant'),
         ]
     assert [e[:2] for e in kinds(me, IDEA, idea)] == [CREATED[:2], ('idea.status', ACTOR.signature)], (
         'the trigger, once'
     )
-    other = add_idea(me, CampaignId(1), 'other', IdeaStatus.SEED)
-    busy = add_idea(me, CampaignId(1), 'busy', IdeaStatus.SCHEDULED)
-    parked = run_idea(me, IdeaStatus.PARKED, RunStatus.RUNNING)
-    scoring = run_idea(me, IdeaStatus.PARKED, RunStatus.SUCCEEDED, scoring=True)
+    busy = add_idea(me, CampaignId(1), 'busy', IdeaStatus.CLAIMED)
+    dropped = run_idea(me, IdeaStatus.DROPPED, RunStatus.RUNNING)
+    scoring = run_idea(me, IdeaStatus.DROPPED, RunStatus.SUCCEEDED, scoring=True)
     with me.session() as s:
         for target, status, error in [
-            (parked, IdeaStatus.READY, f'idea#{parked} has an open run: run#\\d+ is running; park or reject it'),
-            (parked, IdeaStatus.DONE, f'idea#{parked} has an open run'),
-            (scoring, IdeaStatus.READY, f'idea#{scoring} has an open run: run#\\d+ is being scored'),
-            (idea, IdeaStatus.PARKED, f'idea#{idea} is parked already'),
-            (idea, IdeaStatus.SCHEDULED, 'scheduled is not set by hand: give proposed, ready, parked, rejected, done'),
-            (idea, IdeaStatus.SEED, 'seed is not set by hand'),
-            (other, IdeaStatus.READY, f'idea#{other} is a seed: research defines it first'),
-            (busy, IdeaStatus.DONE, f'idea#{busy} is scheduled: its run is open; park or reject it'),
-            (IdeaId(99), IdeaStatus.DONE, 'no idea#99'),
+            (dropped, IdeaStatus.OPEN, f'idea#{dropped} has an open run: run#\\d+ is running; drop it'),
+            (dropped, IdeaStatus.DONE, 'done is not set by hand: give open, dropped'),
+            (scoring, IdeaStatus.OPEN, f'idea#{scoring} has an open run: run#\\d+ is being scored'),
+            (idea, IdeaStatus.DROPPED, f'idea#{idea} is dropped already'),
+            (idea, IdeaStatus.CLAIMED, 'claimed is not set by hand: give open, dropped'),
+            (busy, IdeaStatus.OPEN, f'idea#{busy} is claimed: its run is open; drop it'),
+            (IdeaId(99), IdeaStatus.OPEN, 'no idea#99'),
         ]:
             with pytest.raises(ops.Refused, match=error):
                 backlog_ops.set_idea_status(s, target, status, reason='why', actor=ACTOR)
         with pytest.raises(ops.Refused, match='a reason is required'):
-            backlog_ops.set_idea_status(s, idea, IdeaStatus.READY, reason=' ', actor=ACTOR)
+            backlog_ops.set_idea_status(s, idea, IdeaStatus.OPEN, reason=' ', actor=ACTOR)
 
 
 def test_links_are_validated_kept_acyclic_and_leave_events(me: Database, campaign: Campaign, db: Database) -> None:
     a, b, c = (add_idea(me, CampaignId(1), t) for t in 'abc')
-    running = add_idea(me, CampaignId(1), 'running', IdeaStatus.SCHEDULED)
+    running = add_idea(me, CampaignId(1), 'running', IdeaStatus.CLAIMED)
     with me.session() as s:
         backlog_ops.link(s, a, LinkKind.AFTER, b, reason='b lands the parser', actor=ACTOR)
         backlog_ops.link(s, b, LinkKind.AFTER, c, reason='c first', actor=ACTOR)
-        backlog_ops.link(s, running, LinkKind.SUPERSEDES, c, reason='sharper', actor=ACTOR)
         s.commit()
         links = s.scalars(select(IdeaLink).order_by(IdeaLink.idea_id)).all()
-        assert [(lk.idea_id, lk.kind, lk.target_id) for lk in links] == [
-            (a, LinkKind.AFTER, b),
-            (b, LinkKind.AFTER, c),
-            (running, LinkKind.SUPERSEDES, c),
-        ]
+        assert [(lk.idea_id, lk.kind, lk.target_id) for lk in links] == [(a, LinkKind.AFTER, b), (b, LinkKind.AFTER, c)]
     assert kinds(me, IDEA, a) == [
         CREATED,
         ('idea.linked', ACTOR.signature, IdeaLinked(kind='idea.linked', target=b, link_kind=LinkKind.AFTER)),
@@ -607,16 +586,15 @@ def test_links_are_validated_kept_acyclic_and_leave_events(me: Database, campaig
             (c, LinkKind.AFTER, c, f'idea#{c} cannot link to itself'),
             (a, LinkKind.AFTER, b, f'idea#{a} links after idea#{b} already'),
             (a, LinkKind.AFTER, elsewhere, f'idea#{elsewhere} is in another campaign'),
-            (running, LinkKind.AFTER, a, f'idea#{running} is scheduled: its run is open: it started without idea#{a}'),
+            (running, LinkKind.AFTER, a, f'idea#{running} is claimed: its run is open: it started without idea#{a}'),
             (a, LinkKind.AFTER, IdeaId(99), 'no idea#99'),
         ]:
             with pytest.raises(ops.Refused, match=error):
                 backlog_ops.link(s, idea, kind, target, reason='why', actor=ACTOR)
-        backlog_ops.link(s, c, LinkKind.SUPERSEDES, a, reason='another kind closes no cycle', actor=ACTOR)
         with pytest.raises(ops.Refused, match='a reason is required'):
-            backlog_ops.link(s, b, LinkKind.SUPERSEDES, a, reason='', actor=ACTOR)
+            backlog_ops.link(s, b, LinkKind.AFTER, a, reason='', actor=ACTOR)
 
-        backlog_ops.unlink(s, a, LinkKind.AFTER, b, reason='b was rejected', actor=ACTOR)
+        backlog_ops.unlink(s, a, LinkKind.AFTER, b, reason='b was dropped', actor=ACTOR)
         s.commit()
         assert s.get_one(Idea, a).links == []
         with pytest.raises(ops.Refused, match=f'idea#{a} has no after link to idea#{b}'):
@@ -687,7 +665,7 @@ def test_a_track_must_be_in_the_config_and_its_move_says_why(me: Database, campa
         s.get_one(Campaign, 1).config = two
         s.commit()
     idea = add_idea(me, CampaignId(1), 'smaller')
-    running = add_idea(me, CampaignId(1), 'running', IdeaStatus.SCHEDULED)
+    running = add_idea(me, CampaignId(1), 'running', IdeaStatus.CLAIMED)
     with me.session() as s:
         assert backlog_ops.set_track(s, idea, TrackName('size'), reason='it shrinks the output', actor=ACTOR) == 'score'
         s.commit()
@@ -699,7 +677,7 @@ def test_a_track_must_be_in_the_config_and_its_move_says_why(me: Database, campa
             (
                 running,
                 TrackName('size'),
-                f'idea#{running} is scheduled: its run is open: its commits are judged on track score',
+                f'idea#{running} is claimed: its run is open: its commits are judged on track score',
             ),
             (IdeaId(99), TrackName('size'), 'no idea#99'),
         ]:

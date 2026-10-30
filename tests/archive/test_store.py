@@ -127,7 +127,7 @@ def settle(db: Database, idea_id: IdeaId) -> None:
 
 def test_an_entry_belongs_to_a_settled_subject_of_the_campaign_by_its_name(db: Database, campaign: Campaign) -> None:
     idea = add_idea(db, campaign.id, 'one')
-    other = add_idea(db, campaign.id, 'two', IdeaStatus.READY)
+    other = add_idea(db, campaign.id, 'two', IdeaStatus.OPEN)
     unsettled = add_idea(db, campaign.id, 'three')
     agent_session = add_run(db, idea)
     settle(db, other)
@@ -171,7 +171,7 @@ def test_an_idea_is_due_once_settled_and_again_after_a_new_run(db: Database, cam
     add_run(db, first)
     running = add_idea(db, campaign.id, 'running', IdeaStatus.DONE)
     add_run(db, running, RunStatus.RUNNING)
-    add_idea(db, campaign.id, 'ready', IdeaStatus.READY)
+    add_idea(db, campaign.id, 'ready', IdeaStatus.OPEN)
     with db.session() as s:
         assert due(s) == Job(campaign.id, ref(first)), 'an open run holds an idea back, whatever its status'
         s.add(Archive(campaign_id=campaign.id, subject=ref(first)))
@@ -239,7 +239,7 @@ def test_an_archiving_stores_and_keeps_the_files_a_prune_removes_them_and_restor
     db: Database, campaign: Campaign, home: Path, store: ObjectsCas
 ) -> None:
     idea = add_idea(db, campaign.id, 'idea')
-    parked = add_idea(db, campaign.id, 'parked', IdeaStatus.PARKED)
+    parked = add_idea(db, campaign.id, 'parked', IdeaStatus.DROPPED)
     add_run(db, idea)
     workspace = workspace_dir(home, campaign.id)
     write(workspace / f'idea{idea}' / 'arrays' / 'a.npy', os.urandom(5000))

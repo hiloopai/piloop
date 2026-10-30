@@ -48,3 +48,36 @@ def run_role_ideas(toml: Path, raw: dict[str, object], removed_in: Version) -> N
                 removed_in=removed_in,
                 nth=deprecated.nth(toml, f'plugins.role.{name}', key),
             )
+
+
+@deprecated.bridge('0.7.0', 'an idea waits for no review: delete idle_alert')
+def idle_alert(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """``idle_alert`` of a role that does runs is removed: an idea is never ``proposed``, so no slot waits for a review.
+
+    piloop drops it.
+    """
+    roles = deprecated.table_at(raw, 'plugins', 'role') or {}
+    for name, table in [(n, t) for n, t in roles.items() if isinstance(t, dict) and 'idle_alert' in t]:
+        del table['idle_alert']
+        deprecated.warn(
+            toml,
+            f'plugins.role.{name}.idle_alert',
+            'an idea waits for no review now, so idle_alert is removed; delete it',
+            removed_in=removed_in,
+            nth=deprecated.nth(toml, f'plugins.role.{name}', 'idle_alert'),
+        )
+
+
+@deprecated.bridge('0.7.0', 'files = "seeds" is removed: delete seed_files')
+def seed_files(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """``files = "seeds"`` is ``files = "nothing"``: there are no seeds. An idea is open on the board from the start."""
+    roles = deprecated.table_at(raw, 'plugins', 'role') or {}
+    for name, table in [(n, t) for n, t in roles.items() if isinstance(t, dict) and t.get('files') == 'seeds']:
+        table['files'] = 'nothing'
+        deprecated.warn(
+            toml,
+            f'plugins.role.{name}.files',
+            'a seed is an open idea now, so files = "seeds" files nothing; write "nothing" or "ideas"',
+            removed_in=removed_in,
+            nth=deprecated.nth(toml, f'plugins.role.{name}', 'files'),
+        )

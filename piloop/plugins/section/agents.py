@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from piloop.api.views import Lines, Rendered
 from piloop.db.models import ENDED, LIVE, AgentSession, AgentSessionState
-from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by, yields
+from piloop.plugins.campaign_type.kit.backlog.ideas import added_by, yields
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.reports.overview import agent_output, defining, on
 from piloop.text import NONE, age, cell
@@ -37,12 +37,12 @@ class Agents(Section):
             killed = sum(w.state is AgentSessionState.KILLED for w in mine)
             per_kind.append(f'{len(mine)} {kind}' + (f' ({killed} killed)' if killed else ''))
             spend.append(f'{kind} {human(sum(_tokens(w) for w in mine))}')
-        defined = defined_by(s, campaign.id)
+        added = added_by(s, campaign.id)
         barren = []
         for kind in defining(cfg):
             sweeps = [w for w in rows if w.kind == kind and w.state in ENDED]
-            empty = sum(f'{kind}#{w.id}' not in defined for w in sweeps)
-            barren.append(f'; {empty} of {len(sweeps)} ended {kind} sweeps defined no idea')
+            empty = sum(f'{kind}#{w.id}' not in added for w in sweeps)
+            barren.append(f'; {empty} of {len(sweeps)} ended {kind} sweeps added no idea')
         hour = sum(_tokens(w) for w in rows if w.ended_at is not None and now - w.ended_at <= timedelta(hours=1))
         by_source = '; '.join(y.line() for y in yields(s, campaign.id)) or 'none yet'
         lines = (

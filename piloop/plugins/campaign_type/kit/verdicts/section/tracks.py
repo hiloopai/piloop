@@ -3,8 +3,7 @@ from collections import Counter
 from sqlalchemy import select
 
 from piloop.api.views import Lines, Rendered
-from piloop.plugins.campaign_type.kit.backlog.ideas import runnable
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ideas import claimable
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.evaluation.measure import known, score
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
@@ -37,8 +36,7 @@ class Tracks(Section):
         open_runs = campaign_runs(campaign.id).where(Run.status.in_(OPEN_RUNS)).with_only_columns(Idea.track)
         running = Counter(s.scalars(open_runs))
         tracks = select(Idea.track).where(Idea.campaign_id == campaign.id)
-        ready = Counter(s.scalars(tracks.where(runnable())))
-        proposed = Counter(s.scalars(tracks.where(Idea.status == IdeaStatus.PROPOSED)))
+        ready = Counter(s.scalars(tracks.where(claimable())))
         lines = []
         for track in cfg.all_tracks:
             m = track.primary
@@ -56,6 +54,6 @@ class Tracks(Section):
             lines.append(
                 f'- {track.name}: {at}{floor}; {len(mine)} trunk keeps{latest};'
                 f' share {track.share:g} of {cfg.run_slots} slots, {running[track.name]} running;'
-                f' {ready[track.name]} runnable ideas, {proposed[track.name]} proposed.'
+                f' {ready[track.name]} open ideas.'
             )
         return Rendered(title='Tracks', blocks=(Lines(lines=tuple(lines)),))

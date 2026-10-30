@@ -1,4 +1,4 @@
-"""The ``piloop idea`` commands, clients of the API: propose work, and change an idea's status, links, base or track."""
+"""The ``piloop idea`` commands, clients of the API: add an idea, and change its status, links, base or track."""
 
 from typing import Annotated, Literal
 
@@ -9,27 +9,15 @@ from piloop.cli import common
 from piloop.cli.client import campaign_name, daemon_http
 from piloop.cli.common import HARNESS_HELP, CampaignRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.backlog.wire import (
-    BacklogClient,
-    BaseBody,
-    DevelopBody,
-    IdeaBody,
-    SeedBody,
-    StatusBody,
-    TrackBody,
-)
+from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient, BaseBody, IdeaBody, StatusBody, TrackBody
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 
-app = cyclopts.App(
-    name='idea', help='Propose work (a seed, a defined idea) and change an idea: its status, links, base or track.'
-)
+app = cyclopts.App(name='idea', help='Add an idea to the board, and change an idea: its status, links, base or track.')
 PRIORITY_HELP = 'From 0 (urgent) to 4 (someday).'
-FAMILY_HELP = 'The mechanism family. Ideas that try the same mechanism share it.'
 BASE_HELP = 'The candidate id to start from instead of the head. This makes a branch.'
 TRACK_HELP = 'The track it works on. Required when piloop.toml has more than one track.'
-AFTER_HELP = 'An idea id to wait for. Repeatable. The idea runs from the head when all are done.'
-SUPERSEDES_HELP = 'An idea id that this idea refines. Repeatable. The daemon rejects each one that never ran.'
+AFTER_HELP = 'An idea id to wait for. Repeatable. A worker can claim the idea once all are done or dropped.'
 REASON_HELP = 'Why, with ids. It goes into the event or a note on the idea.'
 IdeaArg = Annotated[IdeaId, cyclopts.Parameter(help='The idea.')]
 Reason = Annotated[str, cyclopts.Parameter(help=REASON_HELP)]
@@ -51,151 +39,46 @@ def idea_add(
             name='--from', help='What prompted the idea, with ids or a URL. Example: "finding comment#881: …".'
         ),
     ] = None,
-    family: Annotated[str | None, cyclopts.Parameter(help=FAMILY_HELP)] = None,
     priority: Annotated[int, cyclopts.Parameter(help=PRIORITY_HELP)] = 2,
     harness: Annotated[str | None, cyclopts.Parameter(help=HARNESS_HELP)] = None,
     base: Annotated[CandidateId | None, cyclopts.Parameter(help=BASE_HELP)] = None,
-    proposed: Annotated[
-        bool, cyclopts.Parameter(help='Wait for a review before the daemon schedules the idea.')
-    ] = False,
     track: Annotated[TrackName | None, cyclopts.Parameter(help=TRACK_HELP)] = None,
     after: Annotated[tuple[IdeaId, ...], cyclopts.Parameter(help=AFTER_HELP)] = (),
-    supersedes: Annotated[tuple[IdeaId, ...], cyclopts.Parameter(help=SUPERSEDES_HELP)] = (),
 ) -> None:
-    """Add a defined idea, which the daemon schedules in priority order once it is ready.
+    """Add an idea to the board. It is open.
 
-    The `files` key of a role says whether its agents may add ideas, only file seeds (`piloop idea seed`), or
-    neither. The orchestrator and humans may add ideas. While the `max_ideas` of the actor's role is 0, the idea is
-    proposed: it waits for a review. The idea is signed as PILOOP_ACTOR. The idea and its links are written together,
-    so the daemon never sees the idea without them.
+    The `files` key of a role says whether its agents may add ideas. The orchestrator and humans may add ideas. The
+    idea is signed as PILOOP_ACTOR. The idea and its links are written together, so the daemon never sees the idea
+    without them.
     """
     body = IdeaBody(
         title=title,
         hypothesis=hypothesis,
         plan=plan,
         provenance=from_,
-        family=family,
         priority=priority,
         harness=harness,
         base=base,
-        proposed=proposed,
         track=track,
         after=after,
-        supersedes=supersedes,
     )
     with BacklogClient.connect(daemon_http()) as client:
-        added = client.add_idea(campaign_name(client, ref), body)
-    idea = added.idea
-    common.console.print(
-        f'idea#{idea.id} {idea.status} p{idea.priority}: {idea.title}{waits(added.review)}', markup=False
-    )
-
-
-@app.command(name='seed')
-def idea_seed(
-    ref: CampaignRef,
-    hunch: Annotated[str, cyclopts.Parameter(help='The hunch, in one line: what might move the metric.')],
-    /,
-    *,
-    from_: Annotated[
-        str,
-        cyclopts.Parameter(
-            name='--from',
-            help='Pointers to what prompted the hunch: ids, paths or numbers. Example: "run#7 finding comment#81: …".',
-        ),
-    ],
-    base: Annotated[
-        CandidateId | None,
-        cyclopts.Parameter(help='The candidate id to start from, when the hunch is about that tree.'),
-    ] = None,
-    track: Annotated[TrackName | None, cyclopts.Parameter(help=TRACK_HELP)] = None,
-) -> None:
-    """File a seed: a hunch with pointers, for research to develop into a defined idea or to reject.
-
-    An agent may file a seed when the `files` key of its role allows it. Research reads the earlier work and checks for duplicates and
-    negative results. Then it defines the seed (`piloop idea develop`) or rejects it with the reason. The seed is
-    signed as PILOOP_ACTOR.
-    """
-    with BacklogClient.connect(daemon_http()) as client:
-        idea = client.file_seed(
-            campaign_name(client, ref), SeedBody(hunch=hunch, provenance=from_, base=base, track=track)
-        ).idea
-    common.console.print(f'idea#{idea.id} seed: {hunch}; research develops it next', markup=False)
-
-
-@app.command(name='develop')
-def idea_develop(
-    idea_id: Annotated[IdeaId, cyclopts.Parameter(help='The id of the seed.')],
-    /,
-    *,
-    hypothesis: Annotated[str, cyclopts.Parameter(help='The mechanism, and why it should move the metric.')],
-    evidence: Annotated[
-        str, cyclopts.Parameter(help='What supports it, with ids and paths: runs, findings, candidates, loss tables.')
-    ],
-    check: Annotated[
-        str,
-        cyclopts.Parameter(
-            help='What the evaluator should show if the idea works, and what would show it wrong. Never a gate before a commit.'
-        ),
-    ],
-    metric: Annotated[
-        str, cyclopts.Parameter(help='The metric that decides success: the primary metric, or the slice it targets.')
-    ],
-    effect: Annotated[str, cyclopts.Parameter(help="The expected size of the effect in the metric's units, and why.")],
-    plan: Annotated[str | None, cyclopts.Parameter(help='More steps for the implementer.')] = None,
-    title: Annotated[str | None, cyclopts.Parameter(help="A clearer title. Default: the seed's title.")] = None,
-    family: Annotated[str | None, cyclopts.Parameter(help=FAMILY_HELP)] = None,
-    base: Annotated[CandidateId | None, cyclopts.Parameter(help=BASE_HELP)] = None,
-    priority: Annotated[int | None, cyclopts.Parameter(help=f"{PRIORITY_HELP} Default: the seed's priority.")] = None,
-    proposed: Annotated[
-        bool, cyclopts.Parameter(help='Wait for a human review before the daemon schedules the idea.')
-    ] = False,
-    after: Annotated[tuple[IdeaId, ...], cyclopts.Parameter(help=AFTER_HELP)] = (),
-    supersedes: Annotated[tuple[IdeaId, ...], cyclopts.Parameter(help=SUPERSEDES_HELP)] = (),
-) -> None:
-    """Develop a seed into a defined idea that the daemon can schedule.
-
-    The hypothesis, the evidence, the check, the metric and the effect are all required, because the implementer needs
-    each one. Reject a seed that does not hold up instead, with a note that names the earlier work (see
-    `piloop schema`). The idea is signed as PILOOP_ACTOR. The idea and its links are written together, so the daemon
-    never sees the ready idea without them.
-    """
-    body = DevelopBody(
-        hypothesis=hypothesis,
-        evidence=evidence,
-        check=check,
-        metric=metric,
-        effect=effect,
-        plan=plan,
-        title=title,
-        family=family,
-        base=base,
-        priority=priority,
-        proposed=proposed,
-        after=after,
-        supersedes=supersedes,
-    )
-    with BacklogClient.connect(daemon_http()) as client:
-        developed = client.develop(idea_id, body)
-    idea = developed.idea
-    common.console.print(
-        f'idea#{idea.id} {idea.status} p{idea.priority}: {idea.title}{waits(developed.review)}', markup=False
-    )
+        idea = client.add_idea(campaign_name(client, ref), body).idea
+    common.console.print(f'idea#{idea.id} {idea.status} p{idea.priority}: {idea.title}', markup=False)
 
 
 @app.command(name='status')
 def idea_status(
     idea_id: IdeaArg,
-    status: Annotated[IdeaStatus, cyclopts.Parameter(help='proposed, ready, parked, rejected or done.')],
+    status: Annotated[IdeaStatus, cyclopts.Parameter(help='open or dropped.')],
     /,
     *,
     reason: Reason,
 ) -> None:
     """Set an idea's status, with a note on the idea that says why.
 
-    `ready` queues it, `proposed` waits for a review, `parked` is for now, `rejected` for good, and `done` settles it
-    without a run, so the ideas after it start. A seed is developed first (`piloop idea develop`), and a scheduled
-    idea has an open run: either one can only be parked or rejected. A parked or rejected idea's open run finishes.
+    `open` puts it back on the board, and `dropped` takes it off, which frees the ideas after it. Only a run makes an
+    idea `done`. A claimed idea has an open run: it can only be dropped, and its run finishes.
     """
     with BacklogClient.connect(daemon_http()) as client:
         was = client.set_status(idea_id, StatusBody(status=status, reason=reason)).was
@@ -205,16 +88,16 @@ def idea_status(
 @app.command(name='link')
 def idea_link(
     idea_id: IdeaArg,
-    kind: Annotated[LinkKind, cyclopts.Parameter(help='after: wait until the target is done. supersedes: refine it.')],
+    kind: Annotated[LinkKind, cyclopts.Parameter(help='after: wait until the target is done or dropped.')],
     target_id: Annotated[IdeaId, cyclopts.Parameter(help='The idea it links to.')],
     /,
     *,
     reason: Reason,
 ) -> None:
-    """Link an idea that exists to another idea of its campaign: it runs after the target, or supersedes it.
+    """Link an idea that exists to another idea of its campaign: it waits until the target is done.
 
-    The link is written in one transaction, so the daemon never queues the idea in between. A scheduled idea takes no
-    `after` link: its run started already. A link that closes a cycle of its kind is refused.
+    The link is written in one transaction, so no worker claims the idea in between. A claimed idea takes no link: its
+    run started already. A link that closes a cycle is refused.
     """
     with BacklogClient.connect(daemon_http()) as client:
         client.link(idea_id, kind, target_id, Reasoned(reason=reason))
@@ -224,13 +107,13 @@ def idea_link(
 @app.command(name='unlink')
 def idea_unlink(
     idea_id: IdeaArg,
-    kind: Annotated[LinkKind, cyclopts.Parameter(help='after or supersedes.')],
+    kind: Annotated[LinkKind, cyclopts.Parameter(help='after.')],
     target_id: Annotated[IdeaId, cyclopts.Parameter(help='The idea it links to.')],
     /,
     *,
     reason: Reason,
 ) -> None:
-    """Delete an idea's link, for example an `after` link to a prerequisite that kept nothing, to run the idea anyway."""
+    """Delete an idea's link, for example an `after` link to a prerequisite that is still open, to free the idea."""
     with BacklogClient.connect(daemon_http()) as client:
         client.unlink(idea_id, kind, target_id, Reasoned(reason=reason))
     common.console.print(f'idea#{idea_id} no longer {kind} idea#{target_id}', markup=False)
@@ -273,8 +156,3 @@ def idea_track(
     with BacklogClient.connect(daemon_http()) as client:
         was = client.set_track(idea_id, TrackBody(track=track, reason=reason)).was
     common.console.print(f'idea#{idea_id} track {was} → {track}', markup=False)
-
-
-def waits(held: str | None) -> str:
-    """Return `` (<why>: it waits for a review)`` for an idea that ``review_first`` holds, else nothing."""
-    return f' ({held}: it waits for a review)' if held is not None else ''

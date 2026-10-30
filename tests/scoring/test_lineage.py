@@ -14,10 +14,10 @@ from git import Repo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from piloop.actor import System
 from piloop.config import load_campaign_config
 from piloop.db.models import Campaign
 from piloop.db.session import Database
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -184,7 +184,7 @@ def test_a_keep_that_lacks_the_head_is_left_or_merged_without_a_seed_as_the_rule
     with db.session() as s:
         kept = verdicts_ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
         assert kept.rebased is not None and kept.rebased.conflicts == ['x.txt']
-        assert s.scalars(select(Idea).where(Idea.status == IdeaStatus.SEED)).all() == []
+        assert s.scalars(select(Idea).where(Idea.created_by == System.DAEMON.signature)).all() == [], 'no compose idea'
         assert s.get_one(Candidate, old).verdict_reason == (
             f'keeps against its own bar, but the head moved on to candidate#{trunk}: kept by hand: measured by hand;'
             ' its merge onto the head conflicts in x.txt'

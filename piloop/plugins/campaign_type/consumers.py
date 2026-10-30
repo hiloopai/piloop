@@ -87,7 +87,7 @@ from piloop.db.triggers.changelog import (
 )
 from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CAMPAIGNS, CannotLaunch, Planner, Take
-from piloop.plugins.campaign_type.kit.backlog.ideas import defined_by
+from piloop.plugins.campaign_type.kit.backlog.ideas import added_by
 from piloop.plugins.campaign_type.kit.candidates.references import CandidateImported
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded, RemeasureRequested, score
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
@@ -318,15 +318,13 @@ class Campaigns:
             self._tracer.event('agent_session.kill_failed', agent_session=agent_session.id, error=str(e))
 
     def run(self, turn: Turn) -> datetime | None:
-        """Pass over every campaign: its ideas, its stop rule, its remeasures, its triggers, and the launches.
+        """Pass over every campaign: its stop rule, its remeasures, its triggers, and the launches.
 
         Returns when a pass must come for time alone: the earliest ``due_in`` of a trigger, the end of the hours that the
         stop rule leaves or of a startup pause, or the next reading of a fact source.
 
-        Before the triggers, the pass rejects the ideas that a newer idea superseded (``piloop.plugins.campaign_type.kit.backlog.ideas.supersede``),
-        and parks those after a prerequisite that ended without a keep (``park_stranded``). This also happens for a
-        stopped campaign, which requests nothing and is measured again only on request (``ledger.due``). Then the pass
-        asks the stop rule (``piloop.campaign.stop.check``) of each active campaign, and of each stopped one whose
+        A stopped campaign requests nothing and is measured again only on request (``ledger.due``). The pass asks the
+        stop rule (``piloop.campaign.stop.check``) of each active campaign, and of each stopped one whose
         closing review waits for a hold (``stop.review_waits``). A campaign that it holds gets only the first step. A
         paused campaign (``piloop pause``) gets no triggers, does not stop at a limit of its stop rule, and launches
         nothing, and with ``all`` it is not measured again either. A stop request stops a held or paused campaign too.
@@ -343,7 +341,6 @@ class Campaigns:
                 except ValidationError as e:
                     self._tracer.event('campaign.invalid_config', campaign=campaign.name, error=str(e))
                     continue
-                self._planner(campaign).tidy(s, campaign)
                 answer = escalated(s, campaign, cfg, check_stop(s, campaign, cfg)) if asked(s, campaign, cfg) else GO
                 self._soonest.add(hours_due(campaign, answer, turn.now))
                 held = answer.reason if isinstance(answer, Hold) else None
@@ -905,7 +902,7 @@ class RolePass:
         result says nothing about what was left to propose. The idle rest counts killed sweeps. Otherwise, a harness
         that dies every time would be launched again on every pass.
         """
-        signed = defined_by(self.s, self.campaign.id)
+        signed = added_by(self.s, self.campaign.id)
         ended = self.s.scalars(self.mine().where(AgentSession.state.in_(states)).order_by(AgentSession.id.desc()))
         return list(itertools.takewhile(lambda agent_session: f'{self.role}#{agent_session.id}' not in signed, ended))
 

@@ -6,9 +6,6 @@ Nothing waits for the human. An item is a record to review, and ``piloop inbox a
 
 The orchestrator is any harness that runs the ``piloop-operate`` skill. It learns of new items from the events
 table: ``piloop inbox wait`` blocks until ``news`` returns something, so the orchestrator loops on one command.
-
-The inbox also lists seeds (``seeds``): hunches filed for research that research has not yet developed or rejected.
-They need no action from the human. They are listed so that the human can see what goes to research.
 """
 
 import re
@@ -30,8 +27,6 @@ from piloop.api.views import (
     News,
     NewsItem,
     Relation,
-    Seed,
-    SeedNews,
     StoppedNews,
     Thread,
     VerdictNews,
@@ -39,9 +34,9 @@ from piloop.api.views import (
 from piloop.db import feed as db_feed
 from piloop.db.events import AnomalyReported
 from piloop.db.models import NOT_RETIRED, AgentSession, Campaign, Comment, Event, utcnow
-from piloop.db.triggers.changelog import CampaignStatusChanged, Commented, CommentEdited, IdeaCreated
+from piloop.db.triggers.changelog import CampaignStatusChanged, Commented, CommentEdited
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -102,29 +97,8 @@ def waiting_for(
     return [(c, p) for c, p in found if party_of(c.author) != party]
 
 
-def seeds(s: Session, *, campaign_id: CampaignId | None = None) -> list[tuple[Idea, Campaign]]:
-    """Return the seeds that wait for research, oldest first, with their campaigns. ``campaign_id`` filters them."""
-    query = select(Idea, Campaign).join(Campaign).where(Idea.status == IdeaStatus.SEED).order_by(Idea.id)
-    if campaign_id is not None:
-        query = query.where(Idea.campaign_id == campaign_id)
-    return [(i, p) for i, p in s.execute(query)]
-
-
-def seed_of(idea: Idea, campaign: Campaign) -> Seed:
-    """A seed of ``campaign``, as the inbox lists it."""
-    return Seed(
-        idea=idea.id,
-        campaign=campaign.id,
-        campaign_name=campaign.name,
-        created_by=idea.created_by,
-        title=idea.title,
-        provenance=idea.provenance,
-    )
-
-
 WAKES: Final = tuple(
-    db_feed.Topic(m)
-    for m in (Commented, CommentEdited, CampaignStatusChanged, AnomalyReported, IdeaCreated, CandidateJudged)
+    db_feed.Topic(m) for m in (Commented, CommentEdited, CampaignStatusChanged, AnomalyReported, CandidateJudged)
 )
 """The events that ``news`` reports: what ends ``piloop inbox wait``."""
 
@@ -136,7 +110,6 @@ def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party
 
     - new or edited unacknowledged inbox items that wait for ``party`` (``waiting_for``). The orchestrator's own
       decisions are for the human.
-    - seeds that another party filed.
     - campaigns that the daemon stopped.
     - anomalies that the daemon gave to a watchdog.
     - the verdicts that another party gave: the daemon's, or a person's.
@@ -200,10 +173,6 @@ def _news(
                 agent_session = s.get(AgentSession, e.target_id)
                 if agent_session is not None and campaign_id in (None, agent_session.campaign_id):
                     found.append(AnomalyNews(role=agent_session.kind, agent_session=agent_session.id, line=line))
-            case IdeaCreated() if party_of(e.actor) != party:
-                idea = s.get(Idea, e.target_id)
-                if idea is not None and idea.status is IdeaStatus.SEED and campaign_id in (None, idea.campaign_id):
-                    found.append(SeedNews(seed=seed_of(idea, idea.campaign)))
             case CandidateJudged(verdict=verdict, reason=reason, track=track) if party_of(e.actor) != party:
                 candidate = s.get(Candidate, e.target_id)
                 # one judgement per track: the news is the one of the candidate's verdict

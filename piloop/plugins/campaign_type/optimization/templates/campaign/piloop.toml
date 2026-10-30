@@ -70,9 +70,8 @@ runs = true                               # its agents do runs; a sweeping role 
 # first_message = "Your brief is in {brief}. …"  # the first message of each agent; {brief} is its path
 timeout = 1800                            # seconds one implementer may run
 max_concurrent = 4                        # the most runs at the same time, on all workers together
-explore_every = 4                         # at least 1 run in 4 starts from a pinned idea, when one is ready; 0 = off
+explore_every = 4                         # at least 1 run in 4 starts from a pinned idea, when one is open; 0 = off
 recovery_requeues = 2                     # times an idea is requeued from the last commit of a failed implementer
-idle_alert = 1800                         # seconds free slots wait behind proposed ideas before an escalation; 0 = off
 # wrap_up_lead = 600                      # seconds before its timeout that an implementer is told to wrap up
 # finding_grace = 60                      # seconds after its finding before an implementer is ended
 # startup_relaunches = 2                  # new implementers for a run whose implementer failed to start
@@ -86,7 +85,7 @@ idle_alert = 1800                         # seconds free slots wait behind propo
 # prompt = "briefs/my-watchdog.md"        # a file that replaces the built-in start of this role's brief
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["comments(finding)"]          # what the brief says the role may write; default: what piloop expects of it
-# files = "seeds"                         # what its agents may file with `piloop idea`: nothing, seeds or ideas
+# files = "nothing"                       # what its agents may file with `piloop idea`: nothing or ideas
 # plan_words = 150                        # the most words in the plan of an idea that its agents file
 runs = false                              # a sweeping role: its triggers start it and nothing it commits is scored
 triggers = ["run_failed", "dead_at_startup", "low_yield", "cron", "stopped"]  # names of [plugins.trigger.<name>]: incidents, the timer below, the stop
@@ -95,7 +94,7 @@ interval = 1800                           # seconds between two progress reviews
 # continuity = "fresh"                   # or "resume": each sweep continues the last sweep's harness session
 # incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies; default: watchdog_incident.md
 # routine_prompt = "briefs/review.md"     # follows the prompt in every other sweep; default: watchdog_progress.md
-max_ideas = 1                             # new ideas per sweep for a low_water trigger; the watchdog files only seeds
+max_ideas = 1                             # new ideas per sweep for a low_water trigger; the watchdog files none
 timeout = 600
 max_concurrent = 1
 
@@ -108,16 +107,16 @@ max_concurrent = 1
 # prompt = "briefs/my-research.md"        # a file that replaces the built-in start of this role's brief
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["ideas via idea add"]         # what the brief says the role may write; default: what piloop expects of it
-# files = "ideas"                         # what its agents may file with `piloop idea`: nothing, seeds or ideas
+# files = "ideas"                         # what its agents may file with `piloop idea`: nothing or ideas
 # plan_words = 150                        # the most words in the plan of an idea that its agents file
 runs = false                              # a sweeping role
-triggers = ["low_water", "seed", "stalled"]  # a short backlog (see [plugins.trigger.low_water] below), a new seed, a stall
+triggers = ["low_water", "stalled"]       # a short backlog (see [plugins.trigger.low_water] below), a stall
 # interval = 0                            # seconds between two sweeps of a cron trigger, if you add one
 # sections = ["context", "lessons", …]  # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
 # continuity = "fresh"                   # or "resume": each sweep continues the last sweep's harness session
 # incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies, if you add that trigger
 # routine_prompt = "briefs/routine.md"    # follows the prompt in every other sweep; none by default
-max_ideas = 3                             # new ideas per sweep, after the seeds; 0 pauses them (proposed)
+max_ideas = 3                             # new ideas per sweep; 0 turns low_water off for research
 timeout = 900
 max_concurrent = 1                        # sweeps at the same time; more than one duplicate each other's work
 
@@ -130,7 +129,7 @@ max_concurrent = 1                        # sweeps at the same time; more than o
 # prompt = "briefs/my-orchestrator.md"    # a file that replaces the built-in start of this role's brief
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["decisions"]                  # what the brief says the role may write; default: what piloop expects of it
-# files = "ideas"                         # what its agents may file with `piloop idea`: nothing, seeds or ideas
+# files = "ideas"                         # what its agents may file with `piloop idea`: nothing or ideas
 # plan_words = 150                        # the most words in the plan of an idea that its agents file
 runs = false                              # a sweeping role
 triggers = []                             # off: you run your own orchestrator; ["news"] turns it on
@@ -164,7 +163,7 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # when = "SELECT 1 FROM candidates WHERE campaign_id = :campaign AND verdict = 'keep' AND created_at > :since"
 
 # [plugins.trigger.low_water]             # a built-in trigger's table changes its parameters for every role that names it
-# buffer = 2                              # ideas to keep ready beyond one per run slot
+# buffer = 2                              # open ideas to keep beyond one per run slot
 
 # [plugins.trigger.cron]
 # max_interval = 14400                    # seconds after which a routine sweep starts also when nothing is new

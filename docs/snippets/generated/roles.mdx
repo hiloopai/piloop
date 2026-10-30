@@ -4,5 +4,5 @@
 |---|---|---|---|---|
 | `implementer` | yes | the run queue | `nothing` | A role that does runs. |
 | `orchestrator` | no | the run queue | `ideas` | Decides escalations, answers messages, steers the work and records each decision. |
-| `research` | no | `low_water`, `seed`, `stalled` | `ideas` | Research develops seeds and keeps ideas ready for the implementers. |
-| `watchdog` | no | `run_failed`, `dead_at_startup`, `low_yield`, `cron`, `stopped` | `seeds` | The watchdog investigates the anomalies that the daemon detects and reviews progress. |
+| `research` | no | `low_water`, `stalled` | `ideas` | Research keeps the board stocked with ideas for the workers. |
+| `watchdog` | no | `run_failed`, `dead_at_startup`, `low_yield`, `cron`, `stopped` | `nothing` | The watchdog investigates the anomalies that the daemon detects and reviews progress. |

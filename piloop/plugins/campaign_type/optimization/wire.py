@@ -9,11 +9,11 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 
 
 class NoteBody(Params):
-    """Why a regressed result is worth starting from, and the seeds to pin to it."""
+    """Why a regressed result is worth starting from, and the ideas to pin to it."""
 
     reason: str
     follow_ups: tuple[str, ...] = ()
-    """A seed pinned to the candidate for each, for research to develop."""
+    """An open idea pinned to the candidate for each."""
     track: TrackName | None = None
     """The track of the follow-ups. Default: the track of the candidate's run, else the first track."""
 
@@ -21,8 +21,8 @@ class NoteBody(Params):
 class Noted(CandidateAnswer):
     """A regressed candidate kept in view as a lead."""
 
-    seeds: list[IdeaView]
-    """The follow-ups: seeds pinned to the candidate."""
+    ideas: list[IdeaView]
+    """The follow-ups: open ideas pinned to the candidate."""
 
 
 class OptimizationClient(Client):

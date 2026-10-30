@@ -64,15 +64,15 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Path:
     workspace = tmp_path / 'workspace'
     write(workspace / 'research' / 'losses-c2.md', '# Losses of candidate#2\n', 5)
     with db.session() as s:
-        kept = idea(s, campaign, 'more lines', family='appending', created_by='orchestrator', priority=1)
+        kept = idea(s, campaign, 'more lines', created_by='orchestrator', priority=1)
         e2 = scored(s, kept, 1, (Outcome.KEEP, {'score': 3, 'size': 12}, None))
-        worse = idea(s, campaign, 'fewer lines', family='appending', created_by='research#4')
+        worse = idea(s, campaign, 'fewer lines', created_by='research#4')
         scored(s, worse, e2.id, (Outcome.DISCARD, {'score': 2, 'size': 8}, None))
         odd = idea(s, campaign, 'odd lines', created_by='research#4')
         scored(s, odd, e2.id, (Outcome.INTERESTING, {'score': 3, 'size': 9}, None))
-        idea(s, campaign, 'pad lines', IdeaStatus.SEED, family='padding', created_by='watchdog#7', provenance='run#1')
-        idea(s, campaign, 'ask the human', IdeaStatus.PROPOSED, created_by='human')
-        idea(s, campaign, 'parked lines', IdeaStatus.PARKED, family='padding', created_by='watchdog#3')
+        idea(s, campaign, 'pad lines', IdeaStatus.OPEN, created_by='watchdog#7', provenance='run#1')
+        idea(s, campaign, 'ask the human', IdeaStatus.OPEN, created_by='human')
+        idea(s, campaign, 'dropped lines', IdeaStatus.DROPPED, created_by='watchdog#3')
         comment(s, IDEA, worse.id, 'NEGATIVE: fewer lines lose score\nbecause score counts lines')
         note(s, campaign, 'orchestrator', FINDING, 'digest: best #2 +2 over the start\nby slice: …')
         note(s, campaign, 'human', CommentKind.DECISION, 'no external data')
@@ -100,12 +100,6 @@ def test_the_pack_of_a_campaign(db: Database, campaign: Campaign, tmp_path: Path
         '### Research pack: shared workspace (what agents left in ./workspace/; newest first)',
         '- ./workspace/research/losses-c2.md (1 lines, modified 2026-01-01 00:05 UTC)',
         '  # Losses of candidate#2',
-        '### Research pack: what was tried, by mechanism family (ideas.family)',
-        '| appending | 2 | 1 | 0 | 1 | 0 |',
-        '| padding | 2 | 0 | 0 | 0 | 2 |',
-        '| — | 2 | 0 | 1 | 0 | 1 |',
-        '### Research pack: seeds to develop (oldest first)',
-        '- idea#4 by watchdog#7: pad lines — pointers: run#1',
         '### History: findings on the campaign (last 10)',
         '- comment#4 research#4: batch 1: rejected deleting',
         '### Research pack: latest implementer findings (newest first)',
@@ -118,26 +112,25 @@ def test_the_pack_of_a_campaign(db: Database, campaign: Campaign, tmp_path: Path
         'the lineage shows the gain of each keep and who proposed its idea'
     )
     assert 'not a digest' not in text, "a finding by the daemon is neither an agent's finding nor a digest"
+    assert 'family' not in text and 'seed' not in text, 'the pack has no families and no seeds'
 
 
 def test_an_idea_whose_commits_were_all_skipped_is_skipped_not_a_dead_end(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
     with db.session() as s:
-        scaffold = idea(s, campaign, 'scaffold only', family='scaffolding', created_by='research#4')
+        scaffold = idea(s, campaign, 'scaffold only', created_by='research#4')
         skipped = scored(s, scaffold, 1, (Outcome.DISCARD, {}, None))
         skipped.verdict, skipped.origin = None, Origin.SKIPPED
         s.commit()
     text = render(db, campaign, None)
-    assert '| scaffolding | 1 | 0 | 0 | 0 | 0 |' in text, 'no discard or crash'
-    assert '| research#4 | scaffolding | — | 2 | scaffold only | skipped (candidate#2) |' in text
+    assert '| research#4 | — | 2 | scaffold only | skipped (candidate#2) |' in text
 
 
 def test_an_empty_pack_says_what_is_missing(db: Database, campaign: Campaign, tmp_path: Path) -> None:
     text = render(db, campaign, tmp_path / 'no-such-dir')
     assert '- None configured: `context` in piloop.toml lists them.' in text
     assert 'shared workspace' not in text, 'no section without a workspace directory'
-    assert '### Research pack: seeds to develop (oldest first)\n- None.' in text
     for title in ('latest implementer findings', 'digests and decisions'):
         assert f'{title} (newest first)\n- None yet.' in text
     (tmp_path / 'workspace').mkdir()
@@ -153,8 +146,8 @@ def test_the_pack_is_bounded(db: Database, campaign: Campaign, tmp_path: Path) -
         write(workspace / f'w{n:02}.txt', 'x', n)
     configure(db, campaign, context=['docs/*.md'])
     with db.session() as s:
-        for n in range(max(SHOWN.seeds, SHOWN.findings) + 2):
-            row = idea(s, campaign, f'idea {n} ' + 't' * 200, IdeaStatus.SEED, provenance='p' * 500, family='f' * 80)
+        for n in range(SHOWN.findings + 2):
+            row = idea(s, campaign, f'idea {n} ' + 't' * 200, IdeaStatus.OPEN, provenance='p' * 500)
             comment(s, IDEA, row.id, '\n'.join(['w' * 79] * 30))
         for _ in range(SHOWN.digests + 2):
             note(s, campaign, 'orchestrator', FINDING, '\n'.join(['d' * 79] * 30))
@@ -164,8 +157,6 @@ def test_the_pack_is_bounded(db: Database, campaign: Campaign, tmp_path: Path) -
     assert f'<repo>/docs/a{SHOWN.artifacts + 1:02}.md' in text and '<repo>/docs/a00.md' not in text, 'newest first'
     outlines = [line for line in text.splitlines() if line.startswith('  ## heading 0')]
     assert len(outlines) == SHOWN.artifacts and all(len(line) == OUTLINE_CHARS + 2 for line in outlines)
-    assert text.count('- idea#') == SHOWN.seeds
-    assert '- idea#1 by t: idea 0 ' in text, 'oldest first: research develops the seeds in the order they arrived'
     assert text.count(' implementer#1 on idea#') == SHOWN.findings
     assert text.count(' finding by orchestrator on campaign#') == SHOWN.digests
     pack_only = (
@@ -190,7 +181,7 @@ def test_yields_count_ideas_runs_keeps_and_interesting_per_source(db: Database, 
     assert Yield('implementer', 3, 2, 1, 0).line() == 'implementer 3 ideas, 2 ran → 1 keep, 0 interesting'
 
 
-def test_where_an_idea_comes_from_says_whether_it_may_be_more_than_a_seed(campaign_path: Path) -> None:
+def test_where_an_idea_comes_from_and_which_roles_file_ideas(campaign_path: Path) -> None:
     assert [source(a) for a in ('research#12', 'orchestrator', 'human', 'implementer#3')] == [
         'research',
         'orchestrator',
@@ -201,7 +192,7 @@ def test_where_an_idea_comes_from_says_whether_it_may_be_more_than_a_seed(campai
     cfg = load_campaign_config(campaign_path)
     assert [files_of(cfg, ACTORS.validate_python(a)) for a in actors] == [
         Files.NOTHING,
-        Files.SEEDS,
+        Files.NOTHING,
         Files.IDEAS,
         None,
         None,

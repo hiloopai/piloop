@@ -51,7 +51,7 @@ from piloop.db.events import latest
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, count
 from piloop.ids import CampaignFiles, CampaignId, CampaignStatus, CommentKind, RoleName, TargetKind, TargetRef
 from piloop.plugins.archive.contract import CampaignFilesFreed
-from piloop.plugins.campaign_type.kit.backlog.ideas import queued_ideas
+from piloop.plugins.campaign_type.kit.backlog.ideas import open_ideas
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.tables import produced
@@ -176,7 +176,7 @@ def _state(s: Session, campaign: Campaign, cfg: CampaignConfig, me: Actor) -> Ca
         kept=count(s, keeps(campaign)),
         candidates=count(s, produced(campaign)),
         ideas={str(status): counts.get(status, 0) for status in IdeaStatus},
-        runnable=len(queued_ideas(s, campaign)[1]),
+        runnable=len(open_ideas(s, campaign)[1]),
         runs=[
             OpenRun(
                 id=r.id,
@@ -284,7 +284,6 @@ def inbox_view(
             )
             for c, p in inbox.waiting_for(s, me.party, campaign_id=campaign_id, kinds=kinds, acked=acked)
         ],
-        seeds=[inbox.seed_of(i, p) for i, p in inbox.seeds(s, campaign_id=campaign_id)],
     )
 
 

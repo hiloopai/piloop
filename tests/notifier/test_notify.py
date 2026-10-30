@@ -55,12 +55,12 @@ from piloop.plugins.notifier.contract import (
     Accepted,
     Ack,
     Act,
+    AddIdea,
     Again,
     Answered,
     Choose,
     Declined,
     Edit,
-    FileSeed,
     Foreign,
     Inbound,
     ListenHost,
@@ -623,7 +623,7 @@ def test_piloop_s_answers_in_a_posted_thread_go_back_to_it_and_what_came_from_it
     assert all(n.kind is not NoticeKind.FOLLOW_UP for sent in outbox._sent for n in sent), 'a webhook has no threads'
 
 
-def test_a_reaction_acks_the_item_and_a_seed_is_filed_in_its_campaign(
+def test_a_reaction_acks_the_item_and_an_idea_is_added_to_its_campaign(
     db: Database, campaign: Campaign, tmp_path: Path, tracer: Tracer, mocker: MockerFixture
 ) -> None:
     chat, item, post = posted(db, campaign, tmp_path, tracer)
@@ -631,27 +631,27 @@ def test_a_reaction_acks_the_item_and_a_seed_is_filed_in_its_campaign(
         f'piloop acknowledged comment#{item}'
     )
     assert received(
-        db, tracer, [route_of(db, campaign, 'chat', chat)], inbound(post, FileSeed('halve the window'), 'C/seed')
-    ) == Accepted('piloop filed this as seed idea#1, for research')
+        db, tracer, [route_of(db, campaign, 'chat', chat)], inbound(post, AddIdea('halve the window'), 'C/idea')
+    ) == Accepted('piloop added this as idea#1, open on the board')
     assert received(
-        db, tracer, [route_of(db, campaign, 'chat', chat)], inbound(post, FileSeed(''), 'C/empty')
-    ) == Declined('write the hunch after "idea:", in the thread of an item of a campaign')
-    mocker.patch.object(consumers, 'file_seed', side_effect=BacklogRefused('human:alice files nothing'))
+        db, tracer, [route_of(db, campaign, 'chat', chat)], inbound(post, AddIdea(''), 'C/empty')
+    ) == Declined('write the idea after "idea:", in the thread of an item of a campaign')
+    mocker.patch.object(consumers, 'add_idea', side_effect=BacklogRefused('human:alice files nothing'))
     assert received(
-        db, tracer, [route_of(db, campaign, 'chat', chat)], inbound(post, FileSeed('x'), 'C/refused')
+        db, tracer, [route_of(db, campaign, 'chat', chat)], inbound(post, AddIdea('x'), 'C/refused')
     ) == Declined('human:alice files nothing')
     with db.session() as s:
         acked = s.get_one(Comment, item)
         assert (acked.acked_by, acked.acked_at is not None) == ('human:alice', True)
-        [seed] = s.scalars(select(Idea).where(Idea.campaign_id == campaign.id, Idea.title == 'halve the window')).all()
-        assert (seed.status, seed.created_by, seed.provenance) == (
-            IdeaStatus.SEED,
+        [added] = s.scalars(select(Idea).where(Idea.campaign_id == campaign.id, Idea.title == 'halve the window')).all()
+        assert (added.status, added.created_by, added.provenance) == (
+            IdeaStatus.OPEN,
             'human:alice',
             f'comment#{item}, via chat',
         )
         assert [e.target for e, _ in in_order(s, NotificationReceived)] == [
             TargetRef(TargetKind.COMMENT, item),
-            TargetRef(IDEA, seed.id),
+            TargetRef(IDEA, added.id),
         ]
 
 
@@ -729,15 +729,15 @@ def test_a_click_on_an_escalation_acknowledged_without_an_answer_records_nothing
         assert list(in_order(s, NotificationReceived)) == []
 
 
-def test_an_item_of_no_campaign_takes_no_seed(db: Database, tmp_path: Path, tracer: Tracer) -> None:
+def test_an_item_of_no_campaign_takes_no_idea(db: Database, tmp_path: Path, tracer: Tracer) -> None:
     of_no_campaign(db)
     chat = Chat()
     send_due(host_of(db, tmp_path, tracer, {}), route_of(db, None, 'chat', chat), utcnow())
     [[notice]] = chat._sent
     assert notice.campaign is None
     post = MessageRef(f'C/{notice.comment}.1')
-    assert received(db, tracer, [route_of(db, None, 'chat', chat)], inbound(post, FileSeed('x'))) == Declined(
-        'write the hunch after "idea:", in the thread of an item of a campaign'
+    assert received(db, tracer, [route_of(db, None, 'chat', chat)], inbound(post, AddIdea('x'))) == Declined(
+        'write the idea after "idea:", in the thread of an item of a campaign'
     )
 
 
@@ -863,7 +863,7 @@ def test_an_edit_of_a_reply_changes_it_as_its_author_and_it_waits_to_be_read_aga
 ) -> None:
     chat, item, post = posted(db, campaign, tmp_path, tracer)
     received(db, tracer, [route_of(db, campaign, 'chat', chat)], inbound(post, Reply('aise it', 2), 'C/9'))
-    received(db, tracer, [route_of(db, campaign, 'chat', chat)], inbound(post, FileSeed('a sieve'), 'C/seed'))
+    received(db, tracer, [route_of(db, campaign, 'chat', chat)], inbound(post, AddIdea('a sieve'), 'C/idea'))
     with db.session() as s:
         [reply] = s.scalars(select(Comment).where(Comment.author == 'human:alice')).all()
         ack(s, [reply.id], System.ORCHESTRATOR)

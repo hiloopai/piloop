@@ -129,9 +129,7 @@ def candidate_note(
     *,
     follow_ups: Annotated[
         tuple[str, ...],
-        cyclopts.Parameter(
-            name='--follow-up', help='A seed pinned to the candidate, for research to develop. Repeatable.'
-        ),
+        cyclopts.Parameter(name='--follow-up', help='An open idea pinned to the candidate. Repeatable.'),
     ] = (),
     track: Annotated[
         TrackName | None,
@@ -140,12 +138,12 @@ def candidate_note(
         ),
     ] = None,
 ) -> None:
-    """Keep a regressed result in view as a lead, with follow-up seeds pinned to it.
+    """Keep a regressed result in view as a lead, with follow-up ideas pinned to it.
 
     The verdict becomes `interesting`, with the cause `note` and your reason before the daemon's. It is yours only when
     the note changes it, from a discard: the `candidate.noted` event signs the note. The candidate is not
-    kept and sets no bar, but it stays listed and ideas can start from it. Each `--follow-up` is a seed whose `base_candidate_id` is the
-    candidate. An implementer files no follow-ups. When its candidate does not exist yet, an implementer notes the
+    kept and sets no bar, but it stays listed and ideas can start from it. Each `--follow-up` is an open idea whose
+    `base_candidate_id` is the candidate. An implementer files no follow-ups. When its candidate does not exist yet, an implementer notes the
     version that it saves instead, and the daemon applies the note when it judges the version.
     """
     with OptimizationClient.connect(daemon_http()) as client:
@@ -154,8 +152,8 @@ def candidate_note(
     common.console.print(
         f'candidate#{candidate.id} interesting ({candidate.cause}): {candidate.verdict_reason}', markup=False
     )
-    for idea in noted.seeds:
-        common.console.print(f'idea#{idea.id} seed, pinned to candidate#{candidate.id}: {idea.title}', markup=False)
+    for idea in noted.ideas:
+        common.console.print(f'idea#{idea.id} open, pinned to candidate#{candidate.id}: {idea.title}', markup=False)
 
 
 @candidate_app.command(name='verdict')

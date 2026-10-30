@@ -257,8 +257,8 @@ def test_an_idea_settles_when_it_is_newly_done_with_no_run_open_whoever_writes_i
             run.status, run.end = RunStatus.SUCCEEDED, end_of(RunStatus.SUCCEEDED)
             s.commit()
         assert settled(db)[1:] == [(ACTOR, ids[1], campaign.id)], 'its last open run ended'
-        raw(f"UPDATE ideas SET status = 'ready' WHERE id = {ids[0]}")
-        raw(f"UPDATE ideas SET status = 'parked' WHERE id = {ids[2]}")
+        raw(f"UPDATE ideas SET status = 'open' WHERE id = {ids[0]}")
+        raw(f"UPDATE ideas SET status = 'dropped' WHERE id = {ids[2]}")
         assert len(settled(db)) == 2, 'an idea that leaves done, or ends another way, does not settle'
         raw(f"UPDATE ideas SET status = 'done' WHERE id = {ids[0]}")
         assert settled(db)[2:] == [(System.HUMAN, ids[0], campaign.id)], 'done again: it settles again'

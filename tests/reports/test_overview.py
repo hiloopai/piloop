@@ -13,7 +13,7 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment,
 from piloop.db.session import Database
 from piloop.ids import CampaignStatus, CommentKind, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.backlog.section.queue import BLOCKED_SHOWN
+from piloop.plugins.campaign_type.kit.backlog.section.queue import Queue
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -134,7 +134,7 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
         agent(s, p, IMPLEMENTER, 5, 600, run_id=first.id, usage=spent(1000))
         kept = candidate(s, p, 1, Outcome.KEEP, 3, 18, run_id=first.id)
         candidate(s, p, kept.id, Outcome.DISCARD, 3, 19, run_id=first.id)
-        bad = idea(s, p, 'crash it', IdeaStatus.REJECTED)
+        bad = idea(s, p, 'crash it', IdeaStatus.DROPPED)
         failed = run(s, bad, RunStatus.FAILED, 1, 30, 40, error='boom\nand the rest')
         dead = agent(s, p, IMPLEMENTER, 30, 5, run_id=failed.id, state=AgentSessionState.KILLED, error='dialog')
         startup = StartupAnomaly(
@@ -148,10 +148,10 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
                 at=at(30) + timedelta(seconds=5),
             )
         )
-        pinned = idea(s, p, 'build on longer lines', IdeaStatus.SCHEDULED, after=(good.id,), base_candidate_id=1)
+        pinned = idea(s, p, 'build on longer lines', IdeaStatus.CLAIMED, after=(good.id,), base_candidate_id=1)
         stuck = run(s, pinned, RunStatus.RUNNING, 1, 50, None)
         agent(s, p, IMPLEMENTER, 50, 300, run_id=stuck.id, usage=spent(2000))
-        idea(s, p, 'after the crash', IdeaStatus.READY, after=(bad.id,))
+        idea(s, p, 'after the crash', IdeaStatus.OPEN, after=(bad.id,))
         agent(s, p, RESEARCH, 60, 120, usage=spent(500))
         s.add_all(
             [
@@ -234,7 +234,7 @@ def test_the_overview_of_a_campaign(db: Database, campaign: Campaign) -> None:
         '- comment.note comment#3 0s ago',
     )
     assert 'head: candidate#2 · score: 3 · score vs baseline: 2 · kept: 2 · candidates: 3 · tokens: 3500' in lay
-    assert '- Ideas: 0 runnable, 1 blocked (idea#4 on idea#2 (rejected));' in lay
+    assert '- Ideas: 1 open, 0 held; ' in lay, 'idea#4 is after idea#2, which is dropped: it is free'
     assert '- Agents so far: 3 implementer (1 killed),' in lay
     assert 'evaluations: 3 · crashed: 0 · median: 3 min' in lay
     assert tools.startswith('- `piloop sql "<one statement>"`')
@@ -300,22 +300,22 @@ def test_recent_candidates_say_how_far_each_climbed_the_ladder(db: Database, cam
 """)
 
 
-def test_blocked_ideas_beyond_the_shown_few_are_counted(db: Database, campaign: Campaign) -> None:
+def test_held_ideas_beyond_the_shown_few_are_counted(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        gate = idea(s, p, 'gate', IdeaStatus.PARKED)
-        for n in range(BLOCKED_SHOWN + 1):
-            idea(s, p, f'waits {n}', IdeaStatus.READY, after=(gate.id,))
+        gate = idea(s, p, 'gate', IdeaStatus.CLAIMED)
+        for n in range(Queue().held + 1):
+            idea(s, p, f'waits {n}', IdeaStatus.OPEN, after=(gate.id,))
         s.commit()
-    assert ', 1 more); 0 seed, 0 proposed' in render(db, campaign)
+    assert ', 1 more); 1 claimed, 0 done, 0 dropped' in render(db, campaign)
 
 
 def test_open_runs_say_how_far_they_got(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        waiting = run(s, idea(s, p, 'waiting', IdeaStatus.SCHEDULED), RunStatus.QUEUED, 1, 100, None)
+        waiting = run(s, idea(s, p, 'waiting', IdeaStatus.CLAIMED), RunStatus.QUEUED, 1, 100, None)
         waiting.started_at = None
-        going = run(s, idea(s, p, 'going', IdeaStatus.SCHEDULED), RunStatus.RUNNING, 1, 110, None)
+        going = run(s, idea(s, p, 'going', IdeaStatus.CLAIMED), RunStatus.RUNNING, 1, 110, None)
         s.add(
             AgentSession(
                 kind=IMPLEMENTER, campaign_id=p.id, subject=TargetRef(RUN, going.id), state=AgentSessionState.RUNNING
@@ -370,10 +370,8 @@ def test_the_queue_the_live_agents_the_inbox_and_the_events(db: Database, campai
     (log_dir / 'transcript.txt').write_text('thinking\n\nran evaluate.py: METRIC score=3\n\n')
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        s.get_one(Idea, 2).status = IdeaStatus.DONE  # unblocks idea#4
-        idea(s, p, 'a' * 120, IdeaStatus.READY, priority=0, created_at=at(100))
-        newer = idea(s, p, 'even longer lines', IdeaStatus.READY, priority=1, created_at=at(110))
-        s.add(IdeaLink(idea_id=newer.id, target_id=4, kind=LinkKind.SUPERSEDES))
+        idea(s, p, 'a' * 120, IdeaStatus.OPEN, priority=0, created_at=at(100))
+        idea(s, p, 'even longer lines', IdeaStatus.OPEN, priority=1, created_at=at(110))
         s.add_all(
             [
                 AgentSession(
@@ -398,8 +396,8 @@ def test_the_queue_the_live_agents_the_inbox_and_the_events(db: Database, campai
         '  - run#3 idea#3 "build on longer lines" (script): running 1h, agent_session#3 ended 1h ago',
         '## Queue',
         '  - idea#5 p0 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…" by research#4, 20m ago',
-        '  - idea#6 p1 "even longer lines" by research#4, 10m ago; supersedes idea#4',
-        '  - idea#4 p2 "after the crash" by research#4, 0s ago; after idea#2; superseded by idea#6',
+        '  - idea#6 p1 "even longer lines" by research#4, 10m ago',
+        '  - idea#4 p2 "after the crash" by research#4, 0s ago; after idea#2',
         '## Agents',
         '- Agents live: 1; requested: watchdog#6',
         '  - research#5 script/m 5m, on low_water: 2 ready < 10: ran evaluate.py: METRIC score=3',
@@ -411,7 +409,7 @@ def test_the_queue_the_live_agents_the_inbox_and_the_events(db: Database, campai
         '- idea.created idea#6 0s ago',
         '- idea.created idea#5 0s ago',
     )
-    assert '- Ideas: 3 runnable, 0 blocked;' in text
+    assert '- Ideas: 3 open, 0 held;' in text
 
 
 def test_age_floors_to_the_largest_unit() -> None:

@@ -2,7 +2,7 @@
 
 The history has four parts:
 
-- The ideas: who proposed each one, its family, its outcome, and its links to other ideas. Their hypotheses and the
+- The ideas: who proposed each one, its outcome, and its links to other ideas. Their hypotheses and the
   implementers' findings on them are a query away (``ideas_fts``, ``comments``), so the table leaves them out.
 - The kept lineage: the gain of each keep over its parent, its idea, its commit, and the tokens that the session
   that made it used. An agent can run ``git show`` on the commit.
@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign, Comment, count
 from piloop.ids import TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ideas import links, superseded_by
+from piloop.plugins.campaign_type.kit.backlog.ideas import links
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.references import references
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -40,7 +40,6 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict import label
 from piloop.text import NONE, cell, metric
 from piloop.usage import human
 
-FAMILY_CHARS = 30
 FIRST_LINE_CHARS = 200
 """How much of a comment's first line a brief shows. The rest is a query away: ``comment#<id>`` names the row."""
 BRIEF_WIDTH = 1000
@@ -88,13 +87,10 @@ def renderables(
 
     The findings are those on the campaign of every agent, whatever its role (an author ``<role>#<id>``), each by its id
     and its first line. The findings of the orchestrator and the human are in the pack's digests, and the latest
-    implementer findings in the pack's findings. The ``links`` column shows what blocks an idea
-    and which idea replaces which. This stops a sweep from proposing a superseded idea again or waiting on an idea that
-    will never run.
+    implementer findings in the pack's findings. The ``links`` column shows what holds an idea.
     """
     tracks = cfg.all_tracks
     total = count(s, select(Idea).where(Idea.campaign_id == campaign.id))
-    newer = superseded_by(s, [i.id for i in ideas])
     evaluator_id = campaign.evaluator_id
     kept = s.scalars(keeps(campaign).order_by(Candidate.id)).all()
     campaign_findings = s.scalars(
@@ -114,7 +110,6 @@ def renderables(
             'status',
             *track_column,
             'by',
-            'family',
             'links',
             'prio',
             'title',
@@ -128,8 +123,7 @@ def renderables(
             str(i.status),
             *([i.track] if cfg.multitrack else []),
             i.created_by,
-            cell(i.family or NONE, FAMILY_CHARS),
-            links(i, newer),
+            links(i),
             str(i.priority),
             cell(i.title),
             _outcome(s, i, fallback_track(cfg, i.track).primary, evaluator_id),

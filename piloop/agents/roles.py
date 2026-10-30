@@ -51,24 +51,14 @@ class Role:
     """
 
 
-SEED_HINT = (
-    "- File a seed: `{piloop} idea seed {campaign} '<hunch, one line>' --from '<pointers: ids, paths, numbers>'`"
-    ' (`--base <candidate>` when it is about that tree): research checks it against the existing work and develops it'
-    ' into an idea, or rejects it with the reason.'
-)
 IDEAS: dict[Files, str] = {
     Files.NOTHING: (
-        '- A hunch worth a run of its own goes in your finding, with pointers (ids, paths, the number): research'
-        " reads the implementers' findings. You file no ideas or seeds."
+        '- A hunch worth a run of its own goes in your finding, with pointers (ids, paths, the number). You file'
+        ' no ideas.'
     ),
-    Files.SEEDS: SEED_HINT,
     Files.IDEAS: (
-        "- Develop a seed: `{piloop} idea develop <seed id> --hypothesis '…' --evidence '<ids, paths>' --check"
-        " '<what the evaluator should show if it works>' --metric '<what decides"
-        " success>' --effect '<expected size, in the units of the metric, and why>' [--plan '…'] [--family '…']"
-        " [--title '…'] [--base <candidate>]`.\n"
-        "- Add an idea of your own: `{piloop} idea add {campaign} '<title>' --hypothesis '…' --plan '…' --family"
-        " '<mechanism>' --from '<the evidence, with ids>'` (`--help` for links, a base, a priority)."
+        "- Add an idea: `{piloop} idea add {campaign} '<title>' --hypothesis '…' --plan '…' --from '<the evidence,"
+        " with ids>'` (`--help` for links, a base, a priority)."
     ),
 }
 """The ideas line of the brief for each value of ``files``."""
@@ -209,13 +199,13 @@ def compose_resumed(table: RoleConfig, agent: Agent, sections: str) -> str:
 
 
 def tracks_line(cfg: CampaignConfig, track: Track | None) -> str:
-    """Return the campaign's tracks in one line for a brief. Every idea and seed names one. An implementer learns its own."""
+    """Return the campaign's tracks in one line for a brief. Every idea names one. An implementer learns its own."""
     tracks = '; '.join(
         f'{t.name} (primary {t.primary.name}, {t.primary.direction} is better; share {t.share:g})'
         for t in cfg.all_tracks
     )
     mine = f' Your run is on track {track.name}.' if track is not None else ''
     return (
-        f'- Tracks: {tracks}. Every idea and seed names its track (`--track <name>`); every keep must also hold the'
+        f'- Tracks: {tracks}. Every idea names its track (`--track <name>`); every keep must also hold the'
         f" other tracks' primaries within their margins and floors.{mine}"
     )

@@ -13,7 +13,7 @@
 | `priorities` | How a comment with a priority reaches the human's inbox. | none | 50 | none |
 | `search` | How to search the ideas and the comments in full text. | none | 60 | none |
 | `past_campaigns` | How to read what past campaigns on the repo tried, concluded (`lessons`) and wrote (`documents`). | none | 70 | none |
-| `links` | What `after` and `supersedes` mean, and how to link a new idea. | none | 80 | none |
+| `links` | What `after` means, and how to link a new idea. | none | 80 | none |
 | `research_commands` | The orchestrator's commands for ideas, candidates and runs. | none | 85 | none |
 | `provenance` | Who changed a row, and when: `updated_by` and the change log in `events`. | none | 90 | none |
 | `queries` | Queries of the running runs, the queue and its prerequisites, and what was said about an idea. | none | 95 | none |
@@ -25,7 +25,7 @@
 | `tracks` | One line per track. Nothing with one track. | status, sweep | 120 | none |
 | `trajectory` | The trunk: the start, the head, the gain of each track between them, and the latest trunk keeps. | status, sweep | 130 | none |
 | `runs` | The busy implementer slots, and each open run. | status, sweep | 140 | none |
-| `queue` | The ideas by status, what blocks the blocked ones, and the runnable ideas in queue order. | status, sweep | 150 | none |
+| `queue` | The ideas by status, what holds the held ones, and the claimable ideas in queue order. | status, sweep | 150 | `held`, `ideas` |
 | `idle_queue` | Free implementer slots with no runnable idea, in an active campaign that is not paused: a cost. | status, sweep | 155 | none |
 | `agents` | The agents: the live ones with their last line, the count of each role, the yield of each source, the tokens. | status, sweep | 160 | none |
 | `evaluations` | The evaluations under the current evaluator: how many crashed, their minutes, and the candidates without a verdict. | status, sweep | 170 | none |
@@ -38,5 +38,5 @@
 | `events` | The latest events of the campaign, newest first. | status, sweep | 210 | none |
 | `cost` | What the campaign spent: per keep, since the latest keep, and with `metric` per evaluation and per attempt. | none | 500 | `spend`, `metric` |
 | `tools` | How an agent queries the database, the transcripts and the history, with every table and its columns. | sweep | 900 | none |
-| `pack` | The research pack, which `piloop history` prints: what a sweep needs to propose work. | sweep | 910 | `ideas`, `campaign_findings`, `findings`, `seeds`, `digests`, `artifacts`, `workspace` |
-| `history` | What was tried near the reader's idea: the ideas of its family, the kept ideas, then the newest, in a budget. | run | 920 | `budget`, `findings` |
+| `pack` | The research pack, which `piloop history` prints: what a sweep needs to propose work. | sweep | 910 | `ideas`, `campaign_findings`, `findings`, `digests`, `artifacts`, `workspace` |
+| `history` | What was tried, for the reader of a run: the kept ideas, then the newest, in a budget. | run | 920 | `budget`, `findings` |

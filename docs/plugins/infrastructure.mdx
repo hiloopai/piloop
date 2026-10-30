@@ -342,7 +342,7 @@ notice became: its post, or None when the service gives no id. Or it raises
 A notifier that also has `listen` (`Listens`) takes answers back. `listen` returns a lifecycle that the daemon starts
 and stops. `connection` names what it connects with, never a secret: the instances with the same one share one
 listener. For each answer, it calls `host.received` with an `Inbound`: the post whose thread it is in, the message,
-the service's user, and a `Reply`, `Ack`, `FileSeed`, `Edit` or `Choose`. piloop maps the post to its item, asks `person` of the
+the service's user, and a `Reply`, `Ack`, `AddIdea`, `Edit` or `Choose`. piloop maps the post to its item, asks `person` of the
 notifier that posted it who the user is, writes what it asks as that person,
 and returns `Accepted` or `Declined`, each with what to tell the person, `Answered` for a choice on an escalation
 that someone answered already, `Again` for a redelivery, or `Foreign` for a thread that is not piloop's.

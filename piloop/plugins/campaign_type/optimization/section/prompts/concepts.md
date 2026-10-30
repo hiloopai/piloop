@@ -1,5 +1,5 @@
 - A **campaign** is {vcs:repo} with a `piloop.toml`.
-- A `ready` **idea** gets a **run**: one attempt, on one harness and model, by an **implementer** in {vcs:checkout} at
+- An `open` **idea** gets a **run**: one attempt, on one harness and model, by an **implementer** in {vcs:checkout} at
   the run's base **candidate**. `runs.end` says how it ended, `runs.error` the detail. Only `finished`, `failed`,
   `timed_out` and `awaiting_answer` count as attempts.
 - {vcs:versions}

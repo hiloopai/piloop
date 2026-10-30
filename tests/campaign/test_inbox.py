@@ -41,8 +41,8 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
         other = Campaign(name='other', path='/other', config=campaign.config)
         s.add(other)
         s.flush()
-        mine = idea(s, campaign, 'mine', IdeaStatus.READY)
-        theirs = idea(s, other, 'theirs', IdeaStatus.READY)
+        mine = idea(s, campaign, 'mine', IdeaStatus.OPEN)
+        theirs = idea(s, other, 'theirs', IdeaStatus.OPEN)
         run = Run(idea=mine, attempt=1, base_candidate_id=1, harness='h', model='m')
         s.add(run)
         s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, state=AgentSessionState.EXITED))
@@ -327,7 +327,7 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
                 Comment(author='watchdog#5', kind=CommentKind.ESCALATION, priority=0, body='theirs', **on(other)),
             ]
         )
-        seeds = [
+        ideas = [
             Idea(
                 track='score',
                 campaign_id=p.id,
@@ -339,14 +339,12 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
             )
             for n, (p, status, by) in enumerate(
                 [
-                    (campaign, IdeaStatus.SEED, 'implementer#3'),
-                    (campaign, IdeaStatus.SEED, 'orchestrator'),
-                    (other, IdeaStatus.SEED, 'watchdog#1'),
-                    (campaign, IdeaStatus.READY, 'human'),
+                    (campaign, IdeaStatus.OPEN, 'implementer#3'),
+                    (other, IdeaStatus.OPEN, 'watchdog#1'),
                 ]
             )
         ]
-        s.add_all(seeds)  # each insert emits idea.created, signed by its creator
+        s.add_all(ideas)  # an idea on the board is no news: the lead reads the board
         s.flush()
         run3 = TargetRef(RUN, 3)
         reported = AnomalyReported(subject=run3, trigger='run_failed', line='run#3 failed: boom')
@@ -362,8 +360,6 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
             [
                 'comment#6 escalation p0 on campaign#2 (other) by watchdog#5: theirs',
                 'comment#2 escalation p1 on campaign#1 (demo) by watchdog#1: SSO',
-                'seed idea#1 (demo) by implementer#3: hunch 0 — run#1',
-                'seed idea#3 (other) by watchdog#1: hunch 2 — run#1',
                 'anomaly, watchdog#1 requested: run#3 failed: boom',
                 'candidate#1 keep: score +1 over candidate#1',
                 'campaign demo stopped: max_tokens 100 reached',
@@ -373,12 +369,8 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
         assert news_lines(s, cursor, campaign_id=other.id, me=System.ORCHESTRATOR)[1] == snapshot(
             [
                 'comment#6 escalation p0 on campaign#2 (other) by watchdog#5: theirs',
-                'seed idea#3 (other) by watchdog#1: hunch 2 — run#1',
             ]
         )
-        assert [i.id for i, _ in inbox.seeds(s)] == [1, 2, 3] and [
-            i.id for i, _ in inbox.seeds(s, campaign_id=other.id)
-        ] == [3]
 
 
 def test_news_reads_only_what_wakes_a_page_at_a_time_until_a_page_has_a_line(

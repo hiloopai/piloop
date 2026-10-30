@@ -924,3 +924,124 @@ def test_0074_drops_the_keys_of_the_removed_features_from_each_stored_config(tmp
             {'name': 'q'},
         ]
     command.downgrade(cfg, '0073')
+
+
+def test_optimization_0005_maps_the_idea_states_onto_the_board_drops_supersedes_and_families_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    """Seven states become four, in the rows and in the events, and the links and the column that v0 drops go."""
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0004')
+    old = ('seed', 'proposed', 'ready', 'scheduled', 'done', 'parked', 'rejected')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('c', '/c', '{}')")
+        for i, status in enumerate(old, start=1):
+            con.execute(
+                'INSERT INTO ideas (campaign_id, title, hypothesis, track, status, created_by, family)'
+                " VALUES (1, ?, 'h', 'main', ?, 'human', 'ensembling')",
+                (f'idea {i}', status),
+            )
+        con.execute("INSERT INTO idea_links (idea_id, target_id, kind) VALUES (2, 1, 'after'), (3, 1, 'supersedes')")
+        changes = [('seed', 'ready'), ('ready', 'scheduled'), ('scheduled', 'parked'), ('parked', 'rejected')]
+        for was, now in changes:
+            payload = {'kind': 'idea.status', 'old': was, 'new': now}
+            con.execute(
+                "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('daemon', 'idea', 1, ?)",
+                (dumps(payload),),
+            )
+        deleted = {'kind': 'idea.deleted', 'title': 't', 'status': 'proposed', 'hypothesis': 'h'}
+        con.execute(
+            "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('human', 'idea', 8, ?)",
+            (dumps(deleted),),
+        )
+        for kind, link_kind in (
+            ('idea.linked', 'after'),
+            ('idea.linked', 'supersedes'),
+            ('idea.unlinked', 'supersedes'),
+        ):
+            linked = {'kind': kind, 'target': 1, 'link_kind': link_kind}
+            con.execute(
+                "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('human', 'idea', 3, ?)",
+                (dumps(linked),),
+            )
+    command.upgrade(chain, '0005')
+    statuses = 'SELECT status FROM ideas ORDER BY id'
+    payloads = 'SELECT payload FROM events ORDER BY id'
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [s for (s,) in con.execute(statuses)] == [
+            'open',
+            'open',
+            'open',
+            'claimed',
+            'done',
+            'dropped',
+            'dropped',
+        ]
+        assert con.execute('SELECT idea_id, target_id, kind FROM idea_links').fetchall() == [(2, 1, 'after')]
+        assert 'family' not in [c for _, c, *_ in con.execute('PRAGMA table_info(ideas)')]
+        assert [loads(p) for (p,) in con.execute(payloads)] == [
+            {'kind': 'idea.status', 'old': 'open', 'new': 'open'},
+            {'kind': 'idea.status', 'old': 'open', 'new': 'claimed'},
+            {'kind': 'idea.status', 'old': 'claimed', 'new': 'dropped'},
+            {'kind': 'idea.status', 'old': 'dropped', 'new': 'dropped'},
+            deleted | {'status': 'open'},
+            {'kind': 'idea.linked', 'target': 1, 'link_kind': 'after'},
+        ], 'an event of a supersedes link goes with the link: it could not load'
+
+        with pytest.raises(sqlite3.IntegrityError, match='ideastatus'):
+            con.execute("UPDATE ideas SET status = 'ready' WHERE id = 1")
+        with pytest.raises(sqlite3.IntegrityError, match='linkkind'):
+            con.execute("INSERT INTO idea_links (idea_id, target_id, kind) VALUES (3, 1, 'supersedes')")
+        con.execute("INSERT INTO ideas_fts (ideas_fts) VALUES ('integrity-check')")
+    command.downgrade(chain, '0004')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [s for (s,) in con.execute(statuses)] == [
+            'ready',
+            'ready',
+            'ready',
+            'scheduled',
+            'done',
+            'parked',
+            'parked',
+        ]
+        assert [loads(p).get('new') for (p,) in con.execute(payloads)][:4] == ['ready', 'scheduled', 'parked', 'parked']
+        assert con.execute('SELECT count(family) FROM ideas').fetchone() == (0,)
+
+
+def test_0075_drops_the_keys_of_seeds_and_reviews_from_each_stored_config(tmp_path: Path) -> None:
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0074')
+    roles = {
+        'research': {'triggers': ['low_water', 'seed', 'stalled', 'fresh'], 'files': 'ideas'},
+        'watchdog': {'files': 'seeds', 'triggers': ['cron']},
+        'implementer': {'idle_alert': 'PT30M', 'timeout': 60.0},
+    }
+    triggers = {'seed': {}, 'fresh': {'provider': 'seed'}, 'cron': {'max_interval': 60.0}}
+    sections = {'pack': {'seeds': 20, 'ideas': 60}}
+    config = {'plugins': {'role': roles, 'trigger': triggers, 'section': sections}}
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for name, stored in (('p', config), ('q', {'name': 'q'})):
+            con.execute(
+                'INSERT INTO campaigns (name, path, config) VALUES (?, ?, ?)', (name, f'/{name}', dumps(stored))
+            )
+    stored = 'SELECT config FROM campaigns ORDER BY id'
+    command.upgrade(cfg, '0075')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert [loads(c) for (c,) in con.execute(stored)] == [
+            {
+                'plugins': {
+                    'role': {
+                        'research': {'triggers': ['low_water', 'stalled'], 'files': 'ideas'},
+                        'watchdog': {'files': 'nothing', 'triggers': ['cron']},
+                        'implementer': {'timeout': 60.0},
+                    },
+                    'trigger': {'cron': {'max_interval': 60.0}},
+                    'section': {'pack': {'ideas': 60}},
+                }
+            },
+            {'name': 'q'},
+        ]
+    command.downgrade(cfg, '0074')

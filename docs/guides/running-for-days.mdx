@@ -21,7 +21,7 @@ daemon pid 586609 stopped
 | Command | What happens to the agents |
 |---|---|
 | `piloop restart` | They keep running. The same process starts the installed code again, and connects to each agent. |
-| `piloop stop` | They stop. Their runs are not attempts: the ideas go back to `ready`, and the next run starts from what they left. |
+| `piloop stop` | They stop. Their runs are not attempts: the ideas go back to `open`, and the next run starts from what they left. |
 | A crash | Like a restart: the next daemon connects to the agents that still run. |
 
 The campaigns stay active through all three. To hold one campaign and leave the others running:

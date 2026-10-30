@@ -124,7 +124,7 @@ def _campaigns(con: sqlite3.Connection, v: Volume, cfg: CampaignConfig) -> None:
 
 
 def _ideas(con: sqlite3.Connection, v: Volume, rng: random.Random) -> None:
-    statuses = ['done'] * 70 + ['ready'] * 12 + ['scheduled'] * 4 + ['parked'] * 8 + ['rejected'] * 4 + ['proposed'] * 2
+    statuses = ['done'] * 70 + ['open'] * 14 + ['claimed'] * 4 + ['dropped'] * 12
     con.executemany(
         'INSERT INTO ideas (id, campaign_id, title, hypothesis, status, priority, created_by, track)'
         ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -246,7 +246,7 @@ def _events(con: sqlite3.Connection, v: Volume, rng: random.Random) -> None:
         {'kind': 'run.finished', 'end': 'finished', 'error': None},
         {'kind': 'measurement.recorded', 'candidate': 1, 'metrics': {'score': 0.5}, 'error': None, 'run': 1},
         {'kind': 'candidate.judged', 'verdict': 'discard', 'score': 0.5, 'reason': 'no gain'},
-        {'kind': 'idea.status', 'old': 'ready', 'new': 'scheduled'},
+        {'kind': 'idea.status', 'old': 'open', 'new': 'claimed'},
         {'kind': 'agent_session.started', 'role': 'implementer', 'harness': 'claude', 'model': 'm', 'reason': None},
     ]
     targets = {

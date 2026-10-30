@@ -6,7 +6,7 @@ discard under one campaign's evaluator is not dead under another's: read the ide
 settled.
 
 ```sql
-SELECT p.name AS campaign, i.id, i.status, i.family, i.title,
+SELECT p.name AS campaign, i.id, i.status, i.title,
   (SELECT group_concat(DISTINCT c.verdict) FROM runs r JOIN candidates c ON c.run_id = r.id WHERE r.idea_id = i.id) AS verdicts,
   (SELECT group_concat(json_extract(m.value, '$.name')) FROM json_each(p.config, '$.metrics') m
    WHERE json_extract(m.value, '$.role') = 'primary') AS judged_on

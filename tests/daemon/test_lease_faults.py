@@ -196,7 +196,7 @@ def test_a_worker_killed_during_a_run_loses_its_lease_and_the_run_is_no_attempt(
     assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.WORKER_LOST)
     with db.session() as s:
         idea = s.get_one(Idea, run.idea_id)
-        assert (idea.status, attempts(idea)) == (IdeaStatus.READY, 0), 'a fault of the host, not an attempt'
+        assert (idea.status, attempts(idea)) == (IdeaStatus.OPEN, 0), 'a fault of the host, not an attempt'
         w = s.scalars(select(AgentSession)).one()
         assert w.state is AgentSessionState.KILLED and str(w.error).startswith('worker lost: w2 was silent for')
         assert s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all() == [], 'nothing came back'

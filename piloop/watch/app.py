@@ -381,16 +381,11 @@ def steered(api: Api, agent: AgentSessionId, text: str) -> str:
 
 
 class IdeasTable(PanelTable[IdeaId]):
-    """Panel 3. ``y`` approves (to ``ready``), ``p`` parks and ``x`` rejects, each with a reason.
-
-    ``+`` and ``-`` change the priority. A seed cannot be approved here: research develops it into a defined idea first
-    (``piloop idea develop``), and the API says so.
-    """
+    """Panel 3. ``y`` opens an idea and ``x`` drops it, each with a reason. ``+`` and ``-`` change the priority."""
 
     BINDINGS: ClassVar[list[BindingType]] = [
-        Binding('y', 'review("ready")', 'approve'),
-        Binding('p', 'review("parked")', 'park'),
-        Binding('x', 'review("rejected")', 'reject'),
+        Binding('y', 'review("open")', 'open'),
+        Binding('x', 'review("dropped")', 'drop'),
         Binding('plus', 'priority(-1)', 'more urgent'),
         Binding('minus', 'priority(1)', 'less urgent'),
     ]

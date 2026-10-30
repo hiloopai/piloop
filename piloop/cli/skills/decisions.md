@@ -40,7 +40,7 @@ priority. Do not move away from it.
 | goalpost | target, guardrail or floor, metric, evaluate or scorer, references, stop conditions | 0 |
 | outside the campaign | global config (`~/.claude`, `~/.codex`, the shell), repo trust, a merge, a push to a default branch, deleting data | 0 irreversible, 1 reversible |
 | spend | above the brief's budget / within it | 1 / 3 |
-| scope | finalize, extend or pause a campaign; park or reject an idea a human proposed | 2 |
+| scope | finalize, extend or pause a campaign; drop an idea a human added | 2 |
 | process | requeue, reprioritize, a brief or prompt fix, a workaround for a piloop bug | 3 |
 | routine | a duplicate escalation, a false alarm you verified | 4 |
 

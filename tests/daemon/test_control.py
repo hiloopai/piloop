@@ -47,7 +47,7 @@ def test_a_paused_campaign_launches_nothing_requests_nothing_and_escalates_nothi
     watchdog = request_watchdog(db, campaign)
     pause(db, evals=False)
     assert run_all(sched) == [] and run_all(sched) == []
-    assert statuses(db) == [IdeaStatus.READY], 'no run is queued'
+    assert statuses(db) == [IdeaStatus.OPEN], 'no run is queued'
     with db.session() as s:
         agent_sessions = s.scalars(select(AgentSession)).all()
         assert [(w.id, w.state) for w in agent_sessions] == [(watchdog, AgentSessionState.REQUESTED)], (
@@ -58,7 +58,7 @@ def test_a_paused_campaign_launches_nothing_requests_nothing_and_escalates_nothi
         s.commit()
     launched = run_all(sched)
     assert watchdog in launched and len(launched) == 2, 'the request and the run of the idea'
-    assert statuses(db) == [IdeaStatus.SCHEDULED]
+    assert statuses(db) == [IdeaStatus.CLAIMED]
     sched.stop(timeout=10)
 
 
@@ -281,15 +281,15 @@ def test_a_campaign_retired_while_the_daemon_takes_its_request_launches_nothing(
     scheduler = make_scheduler(db, runtime, tmp_path)
     path = db.engine.url.database
     assert path is not None
-    tidy = OptimizationPlanner.tidy
+    remeasure = OptimizationPlanner.remeasure
 
     def retired_first(planner: OptimizationPlanner, s: Session, read: Campaign) -> None:
         """The retire commits on its own connection, after the pass read the campaign and before it writes."""
         with closing(sqlite3.connect(path, timeout=0.2, isolation_level=None)) as con:
             con.execute("UPDATE campaigns SET status = 'retired' WHERE id = ?", (read.id,))
-        tidy(planner, s, read)
+        remeasure(planner, s, read)
 
-    mocker.patch.object(OptimizationPlanner, 'tidy', autospec=True, side_effect=retired_first)
+    mocker.patch.object(OptimizationPlanner, 'remeasure', autospec=True, side_effect=retired_first)
     assert run_all(scheduler) == []
     with db.session() as s:
         row = s.get_one(AgentSession, asked)
@@ -307,16 +307,16 @@ def test_a_campaign_that_a_feed_read_finds_retired_during_the_pass_drops_out_of_
     scheduler = make_scheduler(db, runtime, tmp_path)
     path = db.engine.url.database
     assert path is not None
-    tidy = OptimizationPlanner.tidy
+    remeasure = OptimizationPlanner.remeasure
 
     def retired_then_read(planner: OptimizationPlanner, s: Session, read: Campaign) -> None:
         """The retire commits on its own connection, then the pass reads the feed, before its quiet phase."""
         with closing(sqlite3.connect(path, timeout=0.2, isolation_level=None)) as con:
             con.execute("UPDATE campaigns SET status = 'retired' WHERE id = ?", (read.id,))
         db_feed.after(s, 0, limit=1)
-        tidy(planner, s, read)
+        remeasure(planner, s, read)
 
-    mocker.patch.object(OptimizationPlanner, 'tidy', autospec=True, side_effect=retired_then_read)
+    mocker.patch.object(OptimizationPlanner, 'remeasure', autospec=True, side_effect=retired_then_read)
     assert run_all(scheduler) == []
     with db.session() as s:
         assert s.get_one(AgentSession, asked).state is AgentSessionState.REQUESTED, 'the pass left it alone'

@@ -2,28 +2,22 @@ These are for the orchestrator and the human. The agents' briefs leave them out.
 
 ### Link ideas that exist
 
-- `after` makes idea `new` wait until idea n is `done`.
-  - Give one `--after` per prerequisite. All of them must be done.
+- `after` makes idea `new` wait until idea n is `done` or `dropped`.
+  - Give one `--after` per prerequisite. All of them must settle.
   - Then `new` starts from the head like any other run. A prerequisite's branch keep is reached only by a pin.
-  - Meanwhile, `new` stays `ready`, and `piloop status` shows it as `blocked by idea#n (<status>)`.
-  - A prerequisite that ends `rejected` or `parked` blocks until someone parks the dependent idea or deletes the link:
-    `piloop idea unlink <new> after <n> --reason '<why>'`.
+  - Meanwhile, `new` stays `open`, and `piloop status` shows it as `held by idea#n (<status>)`.
+  - To free `new` before its prerequisite settles: `piloop idea unlink <new> after <n> --reason '<why>'`.
 - To link an idea that exists already: `piloop idea link <new> after <n> --reason '<why>'`. The link is written in one
   transaction, so the daemon never takes the idea without it. It is refused while the idea's run is open (the daemon
   took it already), and when it would close a cycle.
-- `supersedes` says that `new` is a sharper version of n.
-  - On its next pass, the daemon sets n to `rejected` if it never ran (no run yet, and still `seed`, `proposed` or
-    `ready`), with a `note` on n that names `new`.
-  - If n ran, the daemon leaves it alone.
-- Both ideas must belong to the same campaign and must differ. A pair can have both kinds.
+- Both ideas must belong to the same campaign and must differ.
 
 ### Change an idea
 
 Each command takes `--reason '<why>'`, signs the change with your actor and records it in `events`.
 
-- Park (for now) or reject (for good): `piloop idea status <id> parked` or `rejected`. Also `ready`, `proposed`, and
-  `done`, which settles an idea without a run so that the ideas after it start. The reason becomes a `note` on the
-  idea.
+- Take it off the board: `piloop idea status <id> dropped`. Also `open`, which puts it back, and `done`, which
+  settles an idea without a run so that the ideas after it start. The reason becomes a `note` on the idea.
 - Start it from another candidate: `piloop idea base <id> <candidate>`, or `piloop idea base <id> head` to start from
   the head when it runs.
 - Move it to another track: `piloop idea track <id> <track>`. The track must be in `piloop.toml`.
@@ -67,7 +61,7 @@ daemon never overwrites a verdict that is not its own.
 
 - To keep a result that regressed but is worth starting from in view:
   `piloop candidate note <candidate> '<why>' --follow-up '<hunch>'`. `--follow-up` can repeat.
-- The result is an `interesting` with `cause = 'note'`, plus one seed per follow-up, pinned to it. It is not a keep
+- The result is an `interesting` with `cause = 'note'`, plus one open idea per follow-up, pinned to it. It is not a keep
   and not a bar.
 
 ### Measure again
@@ -82,7 +76,7 @@ daemon never overwrites a verdict that is not its own.
 ### Pause a campaign
 
 - `piloop pause <campaign> --reason '<why>'` launches nothing more: no run, no sweep, no requested agent. Running work
-  finishes and is scored. It raises no escalation. A sweep that runs already files its ideas as `proposed`.
+  finishes and is scored. It raises no escalation.
 - The daemon still measures what a new evaluator or a request needs. `--evals` holds that too.
 - No watchdog starts for an anomaly while paused; it gets the anomaly after the resume. Paused time does not count
   toward `max_hours`.
@@ -93,14 +87,14 @@ daemon never overwrites a verdict that is not its own.
 
 - When a limit in `[plugins.stop_rule]` of `piloop.toml` is reached, or after `piloop campaign stop <campaign> [--kill]`, the daemon:
   - sets `campaigns.status='stopped'` (`stopped_reason` says which condition, or who stopped it);
-  - drops the requests and queued runs pending at that moment (their ideas go back to `ready`);
+  - drops the requests and queued runs pending at that moment (their ideas go back to `open`);
   - tells each running implementer to save its work and stop, and ends it 10 minutes later (`--kill`: at once); its
     versions are scored;
   - checks the `stopped` triggers once those versions are judged: by default, they request one closing watchdog sweep;
   - starts and files nothing more.
 - Stop a campaign with `piloop campaign stop`, not with an UPDATE of `campaigns.status`: an UPDATE gets no closing sweep.
 - `piloop run cancel <run> [--wrap-up]` and `piloop agent cancel <agent-session> [--wrap-up]` end one run or one agent,
-  with every process that it started. A cancelled run's idea is parked.
+  with every process that it started. A cancelled run's idea is dropped.
 - To continue, raise or change the conditions in `piloop.toml` and run `piloop init <path>`.
 - Or by hand: `UPDATE campaigns SET status='active', stopped_reason=NULL WHERE id=<p>`. With the conditions unchanged, it
   stops again at once.

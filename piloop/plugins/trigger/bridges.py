@@ -10,6 +10,8 @@ from piloop.version import Version
 
 LEAKING_FUNNEL = 'leaking_funnel'
 """The removed trigger: ``low_yield`` finds the runs that reach no measurement."""
+SEED = 'seed'
+"""The removed trigger: it started research on new seeds, and an idea is never a seed now."""
 
 
 @deprecated.bridge('0.7.0', 'the leaking_funnel trigger is removed: delete leaking_funnel and LEAKING_FUNNEL')
@@ -18,13 +20,27 @@ def leaking_funnel(toml: Path, raw: dict[str, object], removed_in: Version) -> N
 
     piloop drops it from each role's ``triggers``, and drops each ``[plugins.trigger.<name>]`` of it.
     """
+    _drop(toml, raw, LEAKING_FUNNEL, _REMOVED, removed_in)
+
+
+@deprecated.bridge('0.7.0', 'the seed trigger is removed: delete seed_trigger and SEED')
+def seed_trigger(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """The ``seed`` trigger is removed: an idea is open on the board from the start, so there is no seed to develop.
+
+    piloop drops it from each role's ``triggers``, and drops each ``[plugins.trigger.<name>]`` of it.
+    """
+    _drop(toml, raw, SEED, 'the seed trigger is removed, as an idea is open from the start: delete it', removed_in)
+
+
+def _drop(toml: Path, raw: dict[str, object], provider: str, message: str, removed_in: Version) -> None:
+    """Drop each ``[plugins.trigger.<name>]`` of ``provider``, and each of their names from each role's ``triggers``."""
     tables = deprecated.table_at(raw, 'plugins', 'trigger') or {}
-    names = {name for name, table in tables.items() if _provider(name, table) == LEAKING_FUNNEL}
-    if LEAKING_FUNNEL not in tables:
-        names.add(LEAKING_FUNNEL)
+    names = {name for name, table in tables.items() if _provider(name, table) == provider}
+    if provider not in tables:
+        names.add(provider)
     for name in names & tables.keys():
         del tables[name]
-        deprecated.warn(toml, f'plugins.trigger.{name}', _REMOVED, removed_in=removed_in)
+        deprecated.warn(toml, f'plugins.trigger.{name}', message, removed_in=removed_in)
     for role, table in (deprecated.table_at(raw, 'plugins', 'role') or {}).items():
         triggers = table.get('triggers') if isinstance(table, dict) else None
         if not isinstance(table, dict) or not isinstance(triggers, list):
@@ -36,7 +52,7 @@ def leaking_funnel(toml: Path, raw: dict[str, object], removed_in: Version) -> N
         deprecated.warn(
             toml,
             f'plugins.role.{role}.triggers',
-            _REMOVED,
+            message,
             removed_in=removed_in,
             nth=deprecated.nth(toml, f'plugins.role.{role}', 'triggers'),
         )

@@ -167,7 +167,7 @@ class CampaignState(View):
     ideas: dict[str, int]
     """The number of ideas in each status."""
     runnable: int
-    """The ``ready`` ideas that no prerequisite blocks."""
+    """The ``open`` ideas that no prerequisite holds."""
     runs: list[OpenRun]
     agents: list[LiveAgent]
     """The agents that are starting or running."""
@@ -225,25 +225,6 @@ class Item(View):
     body: str
 
 
-class Seed(View):
-    """A seed that waits for research."""
-
-    idea: IdeaId
-    campaign: CampaignId
-    campaign_name: str
-    created_by: str
-    title: str
-    provenance: str | None
-
-
-def seed_line(seed: Seed) -> str:
-    """One seed as the inbox prints it: who filed it, its title and its provenance."""
-    return (
-        f'seed idea#{seed.idea} ({seed.campaign_name}) by {seed.created_by}: {cell(seed.title)}'
-        f' — {cell(seed.provenance or "")}'
-    )
-
-
 class Inbox(View):
     """What ``piloop inbox`` lists for the caller, read at ``cursor``."""
 
@@ -251,7 +232,6 @@ class Inbox(View):
 
     items: list[Item]
     """The items that the caller did not write, most urgent first, then oldest first."""
-    seeds: list[Seed]
 
 
 class DaemonState(View):
@@ -528,17 +508,6 @@ class AnomalyNews(View):
         return f'anomaly, {self.role}#{self.agent_session} requested: {self.line}'
 
 
-class SeedNews(View):
-    """A seed that someone else filed."""
-
-    kind: Literal['seed_filed'] = 'seed_filed'
-    seed: Seed
-
-    def text(self) -> str:
-        """The item as ``piloop inbox wait`` prints it."""
-        return seed_line(self.seed)
-
-
 class VerdictNews(View):
     """The daemon's verdict on a measured candidate."""
 
@@ -552,7 +521,7 @@ class VerdictNews(View):
         return f'candidate#{self.candidate} {self.verdict}: {cell(self.reason)}'
 
 
-type NewsItem = Annotated[CommentNews | StoppedNews | AnomalyNews | SeedNews | VerdictNews, Field(discriminator='kind')]
+type NewsItem = Annotated[CommentNews | StoppedNews | AnomalyNews | VerdictNews, Field(discriminator='kind')]
 
 
 class News(View):

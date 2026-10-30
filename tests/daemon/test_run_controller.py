@@ -43,13 +43,12 @@ from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.events import emit, has, in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.db.triggers.changelog import IdeaLinked, OriginChanged
+from piloop.db.triggers.changelog import OriginChanged
 from piloop.ids import CampaignId, CampaignStatus, CommentId, Ending, Revision, RoleName, TargetKind, TargetRef
 from piloop.otel import Span, Tracer
 from piloop.plugins import host
-from piloop.plugins.campaign_type.kit.backlog.ideas import park_stranded, runnable, supersede
-from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference, resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -90,7 +89,6 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import (
     due,
     head,
     lineages,
-    supersede_composed,
 )
 from piloop.plugins.campaign_type.kit.verdicts.ops import Overridden, set_verdict
 from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label, pending
@@ -162,7 +160,7 @@ def make_run(
             provenance=provenance,
             created_by='test',
             max_runs=max_runs,
-            status=IdeaStatus.SCHEDULED,
+            status=IdeaStatus.CLAIMED,
         )
         s.add(idea)
         s.flush()
@@ -461,7 +459,7 @@ def test_every_commit_of_a_run_is_a_candidate_before_the_first_is_measured(
     assert (first.verdict, second.verdict, second.metrics['score']) == (Outcome.KEEP, Outcome.KEEP, 3.0)
 
 
-@pytest.mark.parametrize('moved_to', [None, IdeaStatus.PARKED, IdeaStatus.REJECTED])
+@pytest.mark.parametrize('moved_to', [None, IdeaStatus.DROPPED, IdeaStatus.DROPPED])
 def test_a_run_counts_toward_max_runs_from_its_close_to_its_verdict(
     db: Database,
     campaign: Campaign,
@@ -574,7 +572,7 @@ def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_a_new_run_
     with db.session() as s:
         recovered = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
         idea = s.get_one(Idea, run_row(db, run_id).idea_id)
-        assert (idea.status, idea.base_candidate_id) == (IdeaStatus.READY, recovered.id), 'max_runs=1 is spent'
+        assert (idea.status, idea.base_candidate_id) == (IdeaStatus.OPEN, recovered.id), 'max_runs=1 is spent'
         [note] = s.scalars(select(Comment).where(Comment.target_kind == IDEA)).all()
         assert note.body.startswith(f'requeued from candidate#{recovered.id}: run#{run_id} ended failed')
         trunk = head(s, s.get_one(Campaign, campaign.id))
@@ -589,7 +587,7 @@ def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_a_new_run_
     write_toml(Path(campaign.path), HARNESS_APPEND)
     reload_campaign(db, campaign)
     with db.session() as s:
-        s.get_one(Idea, idea_id).status = IdeaStatus.SCHEDULED
+        s.get_one(Idea, idea_id).status = IdeaStatus.CLAIMED
         run = Run(idea_id=idea_id, attempt=2, base_candidate_id=recovered_id, harness='script', model='test-model')
         s.add(run)
         s.flush()
@@ -644,7 +642,7 @@ def test_a_run_that_timed_out_after_its_commits_is_retried_from_its_last_commit(
     [_, second] = candidates(db, run_id)
     with db.session() as s:
         idea = s.get_one(Idea, run_row(db, run_id).idea_id)
-        assert (idea.status, idea.base_candidate_id) == (IdeaStatus.READY, second.id), 'max_runs=1 is spent'
+        assert (idea.status, idea.base_candidate_id) == (IdeaStatus.OPEN, second.id), 'max_runs=1 is spent'
         [note] = s.scalars(select(Comment).where(Comment.target_kind == IDEA)).all()
         assert note.body == (
             f'requeued from candidate#{second.id}: run#{run_id} ended timed_out after its versions; the next run starts'
@@ -681,7 +679,7 @@ def test_a_failed_run_whose_commits_the_head_moved_past_is_retried_on_the_head_w
         moved = head(s, s.get_one(Campaign, campaign.id))
         assert moved is not None and moved.summary == 'add a line'
         idea = s.get_one(Idea, run_row(db, slow).idea_id)
-        assert (idea.status, idea.base_candidate_id) == (IdeaStatus.READY, None), 'on the head'
+        assert (idea.status, idea.base_candidate_id) == (IdeaStatus.OPEN, None), 'on the head'
         [note] = s.scalars(select(Comment).where(Comment.target == TargetRef(IDEA, idea.id))).all()
         base = baseline(db, campaign.id).revision
         assert note.body == (
@@ -749,9 +747,9 @@ def test_an_idea_whose_implementers_keep_dying_is_requeued_from_its_recovered_wo
     for attempt in range(2, 10):
         with db.session() as s:
             idea = s.get_one(Idea, run_row(db, run_id).idea_id)
-            if idea.status is not IdeaStatus.READY:
+            if idea.status is not IdeaStatus.OPEN:
                 break
-            idea.status = IdeaStatus.SCHEDULED
+            idea.status = IdeaStatus.CLAIMED
             run = Run(
                 idea_id=idea.id,
                 attempt=attempt,
@@ -813,9 +811,7 @@ def test_the_role_of_the_run_caps_its_recovery_requeues(
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
         idea = s.get_one(Idea, run_row(db, run_id).idea_id)
-        assert idea.status is IdeaStatus.READY and idea.base_candidate_id is not None, (
-            'requeued from its recovered work'
-        )
+        assert idea.status is IdeaStatus.OPEN and idea.base_candidate_id is not None, 'requeued from its recovered work'
 
 
 def test_no_changes_fails_the_run_and_retries_the_idea(
@@ -828,7 +824,7 @@ def test_no_changes_fails_the_run_and_retries_the_idea(
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.FAILED, NO_CHANGES)
     with db.session() as s:
-        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.READY, 'one attempt left'
+        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.OPEN, 'one attempt left'
 
 
 def test_implementer_failure_after_max_runs_finishes_the_idea(
@@ -1302,7 +1298,7 @@ def test_exception_in_run_is_recorded(
     run = run_row(db, run_id)
     assert run.status is RunStatus.FAILED and run.error is not None and run.error.startswith('NoResultFound')
     with db.session() as s:
-        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.PARKED, 'a fault before the launch is no attempt'
+        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.DROPPED, 'a fault before the launch is no attempt'
     [span] = spans.get_finished_spans()
     assert span.status.status_code is StatusCode.ERROR and [e.name for e in span.events] == ['exception']
 
@@ -1448,11 +1444,11 @@ def test_a_rejection_during_the_run_is_not_undone(
 ) -> None:
     run_id = make_run(db, campaign)
     with db.session() as s:
-        s.get_one(Idea, s.get_one(Run, run_id).idea_id).status = IdeaStatus.REJECTED
+        s.get_one(Idea, s.get_one(Run, run_id).idea_id).status = IdeaStatus.DROPPED
         s.commit()
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
-        assert s.get_one(Idea, 1).status is IdeaStatus.REJECTED
+        assert s.get_one(Idea, 1).status is IdeaStatus.DROPPED
 
 
 def test_implementer_env_points_at_the_daemon_home(
@@ -1512,7 +1508,7 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
         execute(ex, db, run_id)
         with db.session() as s:
             run = s.get_one(Run, run_id)
-            assert (run.status, run.finished_at, run.idea.status) == (RunStatus.QUEUED, None, IdeaStatus.SCHEDULED)
+            assert (run.status, run.finished_at, run.idea.status) == (RunStatus.QUEUED, None, IdeaStatus.CLAIMED)
             rows = s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id)).all()
             assert [w.state for w in rows] == [*[AgentSessionState.EXITED] * launches, AgentSessionState.REQUESTED]
             assert (rows[-1].harness, rows[-1].model) == ('script', 'test-model')
@@ -1524,14 +1520,14 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
         relaunched = in_order(s, RunRelaunched)
         assert [p.launches for _, p in relaunched] == [1, 2]
         idea = s.get_one(Idea, run_row(db, run_id).idea_id)
-        assert idea.status is IdeaStatus.PARKED, 'no agent of its run started to work'
+        assert idea.status is IdeaStatus.DROPPED, 'no agent of its run started to work'
         [note] = s.scalars(select(Comment).where(Comment.target_id == idea.id)).all()
         assert (note.target_kind, note.author, note.kind, note.body) == (
             IDEA,
             'daemon',
             'note',
-            f'parked: no agent of run#{run_id} started to work; fix what stopped them (the errors of its implementers, their'
-            ' anomaly.startup events), then set it ready',
+            f'dropped: no agent of run#{run_id} started to work; fix what stopped them (the errors of its implementers,'
+            ' their anomaly.startup events), then open it',
         )
     run = run_row(db, run_id)
     assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.NOT_STARTED)
@@ -1546,7 +1542,7 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
     for _ in range(3):
         execute(ex, db, retried)
     with db.session() as s:
-        assert s.get_one(Idea, run_row(db, retried).idea_id).status is IdeaStatus.PARKED, (
+        assert s.get_one(Idea, run_row(db, retried).idea_id).status is IdeaStatus.DROPPED, (
             'attempts left, but a new run would fail to start the same way'
         )
 
@@ -1567,7 +1563,7 @@ def test_a_worktree_that_cannot_be_made_is_a_failed_start_that_frees_the_slot(
         assert all('Could not write new index file' in (w.error or '') for w in rows)
         assert s.scalars(select(Event.target_id).where(has(StartupAnomaly))).all() == [w.id for w in rows]
         run = s.get_one(Run, run_id)
-        assert (run.status, run.end, run.idea.status) == (RunStatus.FAILED, RunEnd.NOT_STARTED, IdeaStatus.PARKED)
+        assert (run.status, run.end, run.idea.status) == (RunStatus.FAILED, RunEnd.NOT_STARTED, IdeaStatus.DROPPED)
 
 
 def test_a_run_that_fails_before_its_agent_starts_closes_its_implementer(
@@ -1589,7 +1585,7 @@ def test_a_run_that_fails_before_its_agent_starts_closes_its_implementer(
             RunStatus.FAILED,
             RunEnd.NOT_STARTED,
             'RuntimeError: repo gone',
-            IdeaStatus.PARKED,
+            IdeaStatus.DROPPED,
         )
 
 
@@ -1620,9 +1616,7 @@ def test_an_implementer_that_spends_tokens_but_ends_at_once_with_nothing_did_not
         )
         assert s.scalars(select(Event.target_id).where(has(StartupAnomaly))).all() == [dead.id]
         run = s.get_one(Run, run_id)
-        assert (run.status, run.error, run.idea.status) == (RunStatus.QUEUED, None, IdeaStatus.SCHEDULED), (
-            'the same run'
-        )
+        assert (run.status, run.error, run.idea.status) == (RunStatus.QUEUED, None, IdeaStatus.CLAIMED), 'the same run'
 
 
 @pytest.mark.parametrize('on', ['run', 'agent'])
@@ -1648,7 +1642,7 @@ def test_a_cancel_made_while_the_implementer_starts_survives_a_failed_start(
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
         run = s.get_one(Run, run_id)
-        assert (run.status, run.end, run.idea.status) == (RunStatus.FAILED, RunEnd.CANCELLED, IdeaStatus.PARKED)
+        assert (run.status, run.end, run.idea.status) == (RunStatus.FAILED, RunEnd.CANCELLED, IdeaStatus.OPEN)
         assert [w.state for w in s.scalars(select(AgentSession).where(working_on(run_id)))] == [
             AgentSessionState.KILLED
         ]
@@ -1666,7 +1660,7 @@ def test_a_cancelled_run_whose_implementer_ends_by_itself_first_closes_as_cancel
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
         run = s.get_one(Run, run_id)
-        assert (run.status, run.end, run.idea.status) == (RunStatus.FAILED, RunEnd.CANCELLED, IdeaStatus.PARKED)
+        assert (run.status, run.end, run.idea.status) == (RunStatus.FAILED, RunEnd.CANCELLED, IdeaStatus.OPEN)
         assert [c.verdict for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [Outcome.KEEP]
 
 
@@ -1962,9 +1956,9 @@ def test_an_implementer_that_stops_on_its_open_escalation_is_blocked_and_its_ide
         escalation = s.scalars(select(Comment.id).where(Comment.kind == 'escalation')).one()
         run = s.get_one(Run, run_id)
         assert (run.status, run.end, run.error) == (RunStatus.FAILED, RunEnd.AWAITING_ANSWER, f'comment#{escalation}')
-        assert s.get_one(Idea, idea_id).status is IdeaStatus.PARKED
+        assert s.get_one(Idea, idea_id).status is IdeaStatus.DROPPED
         note = s.scalars(select(Comment).where(Comment.author == 'daemon', Comment.target_id == idea_id)).one()
-        assert f'escalation comment#{escalation}' in note.body and 'set the idea ready' in note.body
+        assert f'escalation comment#{escalation}' in note.body and 'then open the idea' in note.body
         assert [c.verdict for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [Outcome.KEEP], (
             'its commits are scored as any run'
         )
@@ -2029,7 +2023,7 @@ def test_an_escalation_is_answered_once_a_reply_reaches_the_implementer_not_once
     with db.session() as s:
         idea = s.get_one(Idea, idea_id).status
     if blocked:
-        assert (run.end, run.error, idea) == (RunEnd.AWAITING_ANSWER, f'comment#{escalation_id}', IdeaStatus.PARKED), (
+        assert (run.end, run.error, idea) == (RunEnd.AWAITING_ANSWER, f'comment#{escalation_id}', IdeaStatus.DROPPED), (
             "an ack is not an answer, nor is the daemon's own note"
         )
     else:
@@ -2104,7 +2098,7 @@ def test_uncommitted_changes_without_a_finding_are_scored_but_not_an_attempt_tha
     [(summary, verdict, *_)] = scored(db, run_id)
     assert (summary, verdict) == (UNCOMMITTED, Origin.RECOVERED), 'what it left is kept, not judged'
     with db.session() as s:
-        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.READY
+        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.OPEN
 
     run_id = make_run(db, campaign, title='reported', max_runs=2)
     with db.session() as s:
@@ -2181,7 +2175,7 @@ def test_a_stop_between_the_implementers_end_and_the_runs_close_leaves_the_row_t
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.RUNNING, None), 'stop() writes the row, not the dying thread'
     with db.session() as s:
-        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.SCHEDULED, 'and returns the idea'
+        assert s.get_one(Idea, run.idea_id).status is IdeaStatus.CLAIMED, 'and returns the idea'
 
 
 def test_an_evaluator_spawned_after_cancel_is_killed_at_once(
@@ -2898,7 +2892,7 @@ def test_with_a_noisy_metric_a_run_pairs_its_commit_with_its_bar_and_a_merge_wit
         )
 
 
-def test_a_keep_whose_merge_onto_the_head_conflicts_stays_interesting_and_files_a_seed_to_compose_it(
+def test_a_keep_whose_merge_onto_the_head_conflicts_stays_interesting_and_adds_an_idea_to_compose_it(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     run_id = make_run(db, campaign)
@@ -2908,13 +2902,14 @@ def test_a_keep_whose_merge_onto_the_head_conflicts_stays_interesting_and_files_
     assert (verdict, reason) == (
         Outcome.INTERESTING,
         snapshot(
-            'keeps against its own bar, but the head moved on to candidate#2: against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results); its merge onto the head conflicts in solve.txt: seed idea#2 composes it by hand'
+            'keeps against its own bar, but the head moved on to candidate#2: against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results); its merge onto the head conflicts in solve.txt: idea#2 composes it by hand'
         ),
     )
     with db.session() as s:
         [x] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
-        [seed] = s.scalars(select(Idea).where(Idea.status == IdeaStatus.SEED)).all()
-        assert (seed.title, seed.track, seed.base_candidate_id, seed.created_by, seed.provenance) == (
+        [seed] = s.scalars(select(Idea).where(Idea.created_by == System.DAEMON)).all()
+        assert (seed.status, seed.title, seed.track, seed.base_candidate_id, seed.created_by, seed.provenance) == (
+            IdeaStatus.OPEN,
             f'Compose candidate#{x.id} onto the head',
             'score',
             None,
@@ -2931,74 +2926,7 @@ def test_a_keep_whose_merge_onto_the_head_conflicts_stays_interesting_and_files_
         assert trunk is not None and trunk.id == h2
 
 
-def test_a_run_whose_chained_commits_each_conflict_on_the_head_leaves_one_compose_seed(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """The seed of the run's later commit composes the earlier one too, so it supersedes the earlier one's seed."""
-    write_toml(
-        Path(campaign.path),
-        '#!/bin/sh\necho a >> solve.txt\ngit commit -qam first\necho b >> solve.txt\ngit commit -qam second\n',
-    )
-    reload_campaign(db, campaign)
-    run_id = make_run(db, campaign)
-    keep_elsewhere(db, campaign, 'other line', {'solve.txt': 'base\nother\n'}, {'score': 2.0, 'size': 11.0})
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    with db.session() as s:
-        first, second = candidates(db, run_id)
-        seeds = s.scalars(select(Idea).where(Idea.provenance.is_not(None)).order_by(Idea.id)).all()
-        assert [(i.provenance, [o.id for o in i.supersedes]) for i in seeds] == [
-            (f'candidate#{first.id}', []),
-            (f'candidate#{second.id}', [seeds[0].id]),
-        ]
-        supersede_composed(s, GitRepository(Repo(campaign.path), PILOOP), s.get_one(Candidate, first.id), seeds[0])
-        assert seeds[0].supersedes == [], 'the earlier commit does not compose the later one'
-        assert list(supersede(s, campaign.id)) == [seeds[0].id]
-        s.commit()
-        live = s.scalars(select(Idea.provenance).where(Idea.status == IdeaStatus.SEED)).all()
-    assert live == [f'candidate#{second.id}']
-
-
-def test_the_ideas_that_wait_for_a_run_whose_merge_conflicts_wait_for_its_compose_seed_instead(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """An idea after the run's idea started from the old head before the compose landed, and missed the change.
-
-    The run's idea ends without a keep, so its dependents would be parked as stranded. The change lands through the
-    compose seed now: they wait for it instead.
-    """
-    run_id = make_run(db, campaign)
-    keep_elsewhere(db, campaign, 'other line', {'solve.txt': 'base\nother\n'}, {'score': 2.0, 'size': 11.0})
-    with db.session() as s:
-        first = run_row(db, run_id).idea_id
-        later = Idea(campaign_id=campaign.id, title='build on it', hypothesis='h', track='score', created_by='test')
-        started = Idea(
-            campaign_id=campaign.id,
-            title='began',
-            hypothesis='h',
-            track='score',
-            created_by='test',
-            status=IdeaStatus.DONE,
-        )
-        for each in (later, started):
-            each.links.append(IdeaLink(target_id=first, kind=LinkKind.AFTER))
-        s.add_all([later, started])
-        s.commit()
-        later_id, started_id = later.id, started.id
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    with db.session() as s:
-        [seed] = s.scalars(select(Idea).where(Idea.status == IdeaStatus.SEED)).all()
-        assert [(lk.kind, lk.target_id) for lk in s.get_one(Idea, later_id).links] == [(LinkKind.AFTER, seed.id)]
-        assert [lk.target_id for lk in s.get_one(Idea, started_id).links] == [first], 'it began without the change'
-        assert park_stranded(s, campaign.id) == {}, 'not stranded: the change comes with the seed'
-        assert s.scalars(select(Idea.id).where(runnable())).all() == [], 'it waits until the compose is done'
-        moves = in_order(s, IdeaLinked, Event.target == TargetRef(IDEA, later_id))
-        assert {(e.actor, p.kind, p.target) for e, p in moves[1:]} == {
-            (System.DAEMON, 'idea.unlinked', first),
-            (System.DAEMON, 'idea.linked', seed.id),
-        }, 'the feed says that the daemon moved the link'
-
-
-def test_a_conflicting_merge_in_a_stopped_campaign_files_no_seed(
+def test_a_conflicting_merge_in_a_stopped_campaign_adds_no_idea(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """The final commits of a stopped campaign are still scored, but the daemon files no idea for it."""
@@ -3012,21 +2940,21 @@ def test_a_conflicting_merge_in_a_stopped_campaign_files_no_seed(
     assert verdict is Outcome.INTERESTING
     assert reason is not None and reason.endswith('its merge onto the head conflicts in solve.txt')
     with db.session() as s:
-        assert s.scalars(select(Idea).where(Idea.status == IdeaStatus.SEED)).all() == []
+        assert s.scalars(select(Idea).where(Idea.created_by == System.DAEMON)).all() == []
 
 
-def test_a_rejudge_does_not_file_a_compose_seed_again_after_it_was_rejected(
+def test_a_rejudge_does_not_add_a_compose_idea_again_after_it_was_dropped(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """A seed from this candidate with this title exists, whatever its status or name."""
+    """An idea from this candidate with this title exists, whatever its status or name."""
     run_id = make_run(db, campaign)
     keep_elsewhere(db, campaign, 'other line', {'solve.txt': 'base\nother\n'}, {'score': 2.0, 'size': 11.0})
     ex = controller(db, runtime, tmp_path)
     execute(ex, db, run_id)
     with db.session() as s:
         [x] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
-        [seed] = s.scalars(select(Idea).where(Idea.status == IdeaStatus.SEED)).all()
-        seed.status = IdeaStatus.REJECTED
+        [seed] = s.scalars(select(Idea).where(Idea.created_by == System.DAEMON)).all()
+        seed.status = IdeaStatus.DROPPED
         add_measurement(s, x.id, Report(metrics={'score': 2.0, 'size': 10.0}), actor=System.HUMAN)
         s.commit()
         x_id, seed_id = x.id, seed.id
@@ -3034,7 +2962,7 @@ def test_a_rejudge_does_not_file_a_compose_seed_again_after_it_was_rejected(
     with db.session() as s:
         filed = s.scalars(select(Idea.id).where(Idea.provenance == f'candidate#{x_id}')).all()
         reason = s.get_one(Candidate, x_id).verdict_reason
-    assert filed == [seed_id], 'the rejected compose seed is filed again under another title'
+    assert filed == [seed_id], 'the dropped compose idea is not added again under another title'
     assert reason is not None and reason.endswith('its merge onto the head conflicts in solve.txt')
 
 
@@ -3450,7 +3378,7 @@ def test_recovered_work_whose_tree_is_already_a_candidate_still_requeues_its_ide
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
         idea = s.get_one(Idea, run_row(db, run_id).idea_id)
-        assert (idea.status, idea.base_candidate_id) == (IdeaStatus.READY, known.id)
+        assert (idea.status, idea.base_candidate_id) == (IdeaStatus.OPEN, known.id)
         assert s.get_one(Candidate, known.id).verdict is Outcome.KEEP, 'a known tree keeps its verdict'
 
 

@@ -12,25 +12,24 @@ IdeaId = NewType('IdeaId', int)
 
 
 class IdeaStatus(StrEnum):
-    """The lifecycle of an idea. The scheduler picks up ``ready`` ideas in priority order.
+    """Where an idea is on the board.
 
-    A ``seed`` is a rough idea with pointers. An agent whose role's ``files`` allows it files one (``piloop idea
-    seed``). Research develops it into a defined idea (``piloop idea develop``, which makes it ``ready`` or
-    ``proposed``), or rejects it.
-    A ``proposed`` idea is defined and waits for a human to approve it.
+    An ``open`` idea waits for a run, unless an ``after`` link holds it. A ``claimed`` idea has one run that works on
+    it. When that run's commits are judged, the idea is ``done``, or ``open`` again for another attempt. A ``dropped``
+    idea is off the board until someone opens it again.
     """
 
-    SEED = 'seed'
-    PROPOSED = 'proposed'
-    READY = 'ready'
-    SCHEDULED = 'scheduled'
+    OPEN = 'open'
+    CLAIMED = 'claimed'
     DONE = 'done'
-    PARKED = 'parked'
-    REJECTED = 'rejected'
+    DROPPED = 'dropped'
+
+
+SETTLED: Final = (IdeaStatus.DONE, IdeaStatus.DROPPED)
+"""The statuses of a prerequisite that free the ideas after it: it ran to its result, or someone took it off the board."""
 
 
 class LinkKind(StrEnum):
-    """How one idea relates to another in ``idea_links``: it runs *after* the target, or it *supersedes* the target."""
+    """How one idea relates to another in ``idea_links``: it runs *after* the target."""
 
     AFTER = 'after'
-    SUPERSEDES = 'supersedes'

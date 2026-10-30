@@ -236,7 +236,7 @@ class AgentSessionRequested(EventModel):
 
 
 class IdeaCreated(EventModel):
-    """An idea was added: by hand, by an agent, or as a follow-up seed."""
+    """An idea was added: by hand, by an agent, or as a follow-up."""
 
     kind: Literal['idea.created'] = 'idea.created'
 

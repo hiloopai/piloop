@@ -6,9 +6,8 @@
 | `dead_at_startup` | An agent of the campaign did not start to work, and no agent got it yet. The agent gets it to investigate. | none |
 | `low_water` | The backlog of runnable ideas is shorter than its target, and there is a reason to sweep now. | `buffer` |
 | `low_yield` | Of the last `window` finished runs, fewer than `min_scored` scored, or `keepless` scored and none is kept. | `window`, `min_scored`, `keepless` |
-| `news` | New inbox items for the role's party, seeds, anomalies, verdicts and the stop: `piloop inbox wait`'s news. | `quiet_seconds`, `routine_every` |
+| `news` | New inbox items for the role's party, anomalies, verdicts and the stop: `piloop inbox wait`'s news. | `quiet_seconds`, `routine_every` |
 | `run_failed` | A run failed or timed out, and no agent of the campaign got it yet. The agent gets it to investigate. | none |
-| `seed` | A seed was filed after the role's latest agent started, and a slot of the role is free. | none |
 | `sql` | A query on the piloop database returns at least one row. | `when` |
 | `stalled` | The campaign reached a new stall step, and no sweep of the role started in it, however full the backlog is. | `every` |
 | `stopped` | The campaign stopped. It fires once, when the runs that the stop wound down are judged. | none |

@@ -37,23 +37,19 @@ class Files(StrEnum):
     """What the agents of a role may file with ``piloop idea``. The CLI refuses the rest."""
 
     NOTHING = 'nothing'
-    """No ideas and no seeds. A hunch goes in a finding."""
-    SEEDS = 'seeds'
-    """Seeds (``piloop idea seed``), for research to develop."""
+    """No ideas. A hunch goes in a note."""
     IDEAS = 'ideas'
-    """Defined ideas (``piloop idea add``, ``piloop idea develop``) and seeds."""
+    """Ideas for the board (``piloop idea add``)."""
 
 
 type Verb = tuple[str, ...]
-"""A ``piloop`` command by its words, such as ``('idea', 'seed')``."""
+"""A ``piloop`` command by its words, such as ``('idea', 'add')``."""
 
 RELAYED: frozenset[Verb] = frozenset(
     {
         ('sql',),
         ('escalate',),
         ('idea', 'add'),
-        ('idea', 'seed'),
-        ('idea', 'develop'),
         ('idea', 'status'),
         ('candidate', 'import'),
         ('restore',),
@@ -206,7 +202,7 @@ class ImplementerRole(RoleConfig):
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
     scored after its implementer ended does not count."""
     writes: list[str] = ['versions', 'comments(finding) on your idea', 'comments(note) on your run']
-    """What an implementer may write, as its brief states it. It files no ideas and no seeds: its hunches go in its
+    """What an implementer may write, as its brief states it. It files no ideas: its hunches go in its
     finding, which research reads."""
     SURFACE: ClassVar[Surface] = Surface.RUN
     recovery_requeues: int = Field(default=2, ge=0)
@@ -220,10 +216,6 @@ class ImplementerRole(RoleConfig):
     last ``explore_every - 1`` runs did, the next slot goes to the most urgent ready idea that is pinned to a base
     other than the head (a reference, an older keep or a note), whatever its priority. Nothing changes while no such
     idea is ready. 0 turns this off."""
-    idle_alert: timedelta = Field(default=timedelta(minutes=30), ge=timedelta(0))
-    """How long free slots of this role may sit with no runnable idea for them while ideas that the role would take
-    wait in ``proposed``. Then piloop raises one escalation of priority 1, which the notifiers send. piloop
-    acknowledges it when the slots fill, or when no such idea waits. 0 turns this off."""
 
     def refused_takes(self) -> str | None:
         """Why ``takes`` does not run on the ideas table of this piloop's schema, or None when it runs or is unset."""
@@ -278,17 +270,15 @@ class SweepRole(RoleConfig):
     interval: float = Field(default=0, ge=0)
     """The number of seconds between two routine sweeps of the ``cron`` trigger, counted from the start of the last
     one. A sweep that investigates an anomaly is not a routine sweep. 0 turns the timer off."""
-    files: Files = Files.SEEDS
-    """What the agents of this role may file with ``piloop idea``: ``nothing``, ``seeds`` or ``ideas``. The CLI
-    refuses the rest."""
+    files: Files = Files.NOTHING
+    """What the agents of this role may file with ``piloop idea``: ``nothing`` or ``ideas``. The CLI refuses the
+    rest."""
     plan_words: int = Field(default=150, ge=1)
     """The most words in the plan of an idea that an agent of this role adds or develops: steps that one run can
     follow, not a protocol. A longer plan is refused."""
     max_ideas: int = Field(default=1, ge=0)
-    """The maximum number of new ideas one sweep may insert, as its brief states it. The seeds it develops do not
-    count. ``low_water`` requests enough sweeps to fill the backlog at this many ideas each. 0 pauses the role's new
-    ideas: ``low_water`` is off, and an idea that a sweep of the role adds (``piloop idea add``) is ``proposed``, so it
-    waits for a review, also from a sweep that started before the change."""
+    """The maximum number of new ideas one sweep may insert, as its brief states it. ``low_water`` requests enough
+    sweeps to fill the backlog at this many ideas each. 0 turns ``low_water`` off for the role."""
     continuity: Continuity = Continuity.FRESH
     """``fresh``: each agent starts a new harness session. ``resume``: each agent continues the session of the role's
     last agent, written back from the CAS, so it remembers what the agents before it did. The harness needs

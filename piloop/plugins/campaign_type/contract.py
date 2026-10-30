@@ -73,10 +73,6 @@ class Steering:
 class Planner(Protocol):
     """A campaign type at work in one daemon process: what the campaigns' pass asks of it."""
 
-    def tidy(self, s: Session, campaign: Campaign) -> None:
-        """Settle what changed before the stop rule reads the campaign."""
-        ...
-
     def remeasure(self, s: Session, campaign: Campaign) -> None:
         """Measure what must be measured again, unless the stop rule holds the campaign or it is paused."""
         ...

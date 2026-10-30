@@ -45,9 +45,8 @@ from piloop.text import NONE, age, cell, metric
 SPARKS = '▁▂▃▄▅▆▇█'
 STATUS_CHARS = 40
 """How much of a stopped campaign's reason the campaigns screen shows. ``piloop status`` shows all of it."""
-IDEA_ORDER = (IdeaStatus.SEED, IdeaStatus.PROPOSED, IdeaStatus.READY, IdeaStatus.SCHEDULED, IdeaStatus.PARKED)
-"""The statuses that the ideas panel shows, in this order: the seeds for research, then the ideas that wait for a
-review. The panel leaves out done and rejected ideas."""
+IDEA_ORDER = (IdeaStatus.OPEN, IdeaStatus.CLAIMED)
+"""The statuses that the ideas panel shows, in this order: the board. The panel leaves out done and dropped ideas."""
 
 type Cell = str | Text
 
@@ -178,7 +177,7 @@ def status_of(state: CampaignState | InvalidConfig, chars: int | None) -> str:
     return said if chars is None else cell(said, chars)
 
 
-CAMPAIGN_COLUMNS = ('campaign', 'status', 'head', 'vs baseline', 'agents', 'ready', 'inbox', 'last event')
+CAMPAIGN_COLUMNS = ('campaign', 'status', 'head', 'vs baseline', 'agents', 'open', 'inbox', 'last event')
 
 
 def campaigns(
@@ -199,7 +198,7 @@ def campaigns(
                     ', '.join(f'{_value(t.value)} {t.metric}' for t in tracks) or NONE,
                     ', '.join(_value(t.delta, signed=True) for t in tracks) or NONE,
                     f'{len(c.agents)} agents',
-                    f'{c.ideas.get("ready", 0)} ready',
+                    f'{c.ideas.get("open", 0)} open',
                     f'{c.inbox} inbox',
                 )
             case InvalidConfig():
@@ -275,7 +274,7 @@ def on(state: CampaignState, agent: LiveAgent) -> str:
 
 
 class IdeasPanel:
-    """Panel 3: seeds, then proposed, ready, scheduled and parked ideas. The detail is the idea, runs and comments."""
+    """Panel 3: the open ideas, then the claimed ones. The detail is the idea, runs and comments."""
 
     def title(self, frame: Frame, items: Sequence[Item[IdeaId]]) -> str:
         counts = {status: sum(1 for i in items if i.cells[1] == status) for status in IDEA_ORDER}
@@ -310,13 +309,8 @@ class IdeasPanel:
 
 
 def links(idea: IdeaRow) -> str:
-    """Return an idea's links in one cell: ``after idea#1; supersedes idea#2; superseded by idea#7``, or ``—``."""
-    parts = [
-        f'{name} {", ".join(f"idea#{i}" for i in ids)}'
-        for name, ids in (('after', idea.after), ('supersedes', idea.supersedes), ('superseded by', idea.superseded_by))
-        if ids
-    ]
-    return '; '.join(parts) or NONE
+    """Return an idea's links in one cell: ``after idea#1, idea#2``, or ``—``."""
+    return f'after {", ".join(f"idea#{i}" for i in idea.after)}' if idea.after else NONE
 
 
 class CandidatesPanel:

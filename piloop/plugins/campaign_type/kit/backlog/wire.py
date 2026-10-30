@@ -19,7 +19,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 
 
 class IdeaBody(Params):
-    """A defined idea, which the daemon schedules in priority order once it is ready."""
+    """An idea for the board. It is ``open``."""
 
     title: str
     hypothesis: str = ''
@@ -28,58 +28,15 @@ class IdeaBody(Params):
     """The steps for the implementer."""
     provenance: str | None = None
     """What prompted the idea, with ids or a URL."""
-    family: str | None = None
-    """The mechanism family. Ideas that try the same mechanism share it."""
     priority: Priority = 2
     harness: str | None = None
     """The harness to use instead of the rotation."""
     base: CandidateId | None = None
     """The candidate to start from instead of the head. This makes a branch."""
-    proposed: bool = False
-    """Wait for a review before the daemon schedules the idea."""
     track: TrackName | None = None
     """The track it works on. Required when the campaign has more than one track."""
     after: tuple[IdeaId, ...] = ()
-    """The ideas to wait for. The idea runs from the head when all are done."""
-    supersedes: tuple[IdeaId, ...] = ()
-    """The ideas that this idea refines."""
-
-
-class SeedBody(Params):
-    """A seed: a hunch with pointers, for research to develop into a defined idea or to reject."""
-
-    hunch: str
-    provenance: str
-    """Pointers to what prompted the hunch: ids, paths or numbers."""
-    base: CandidateId | None = None
-    """The candidate to start from, when the hunch is about that tree."""
-    track: TrackName | None = None
-    """The track it works on. Required when the campaign has more than one track."""
-
-
-class DevelopBody(Params):
-    """What makes a seed a defined idea: each field that the implementer needs."""
-
-    hypothesis: str
-    """The mechanism, and why it should move the metric."""
-    evidence: str
-    """What supports it, with ids and paths."""
-    check: str
-    """What the evaluator should show if the idea works, and what would show it wrong. Never a gate before a commit."""
-    metric: str
-    """The metric that decides success."""
-    effect: str
-    """The expected size of the effect in the metric's units, and why."""
-    plan: str | None = None
-    title: str | None = None
-    """A clearer title. Default: the seed's."""
-    family: str | None = None
-    base: CandidateId | None = None
-    priority: Priority | None = None
-    """Default: the seed's priority."""
-    proposed: bool = False
-    after: tuple[IdeaId, ...] = ()
-    supersedes: tuple[IdeaId, ...] = ()
+    """The ideas to wait for. A worker can claim the idea once all are done."""
 
 
 class StatusBody(Reasoned):
@@ -117,11 +74,7 @@ class IdeaRow(IdeaView):
 
     created: datetime
     after: list[IdeaId]
-    """The prerequisites: it runs once each one is ``done``."""
-    supersedes: list[IdeaId]
-    """The older ideas that it is a sharper version of."""
-    superseded_by: list[IdeaId]
-    """The newer ideas that are sharper versions of it."""
+    """The prerequisites: a worker can claim it once each one is ``done`` or ``dropped``."""
 
 
 class Ideas(View):
@@ -150,7 +103,6 @@ class IdeaDetail(View):
     hypothesis: str
     plan: str | None
     provenance: str | None
-    family: str | None
     runs: list[IdeaRun]
     """Oldest first."""
 
@@ -175,13 +127,6 @@ class IdeaAnswer(View):
     idea: IdeaView
 
 
-class Defined(IdeaAnswer):
-    """An idea that ``add`` or ``develop`` defined."""
-
-    review: str | None
-    """Why the idea waits for a review, as ``proposed`` although nobody asked: its author's role is held. Else null."""
-
-
 class StatusChanged(IdeaAnswer):
     """An idea whose status changed."""
 
@@ -201,7 +146,7 @@ class TrackChanged(IdeaAnswer):
 
 
 class BacklogClient(Client):
-    """The calls of the backlog's routes: ideas, seeds, links, bases, tracks and statuses."""
+    """The calls of the backlog's routes: ideas, their links, bases, tracks and statuses."""
 
     def ideas(self, campaign: str, query: IdeasQuery) -> Ideas:
         return self._get(f'/v1/campaigns/{segment(campaign)}/ideas', query, Ideas)
@@ -212,14 +157,8 @@ class BacklogClient(Client):
     def set_priority(self, idea: IdeaId, body: PriorityBody) -> PriorityChanged:
         return self.post(f'/v1/ideas/{idea}/priority', body, PriorityChanged)
 
-    def add_idea(self, campaign: str, body: IdeaBody) -> Defined:
-        return self.post(f'/v1/campaigns/{segment(campaign)}/ideas', body, Defined)
-
-    def file_seed(self, campaign: str, body: SeedBody) -> IdeaAnswer:
-        return self.post(f'/v1/campaigns/{segment(campaign)}/seeds', body, IdeaAnswer)
-
-    def develop(self, idea: IdeaId, body: DevelopBody) -> Defined:
-        return self.post(f'/v1/ideas/{idea}/develop', body, Defined)
+    def add_idea(self, campaign: str, body: IdeaBody) -> IdeaAnswer:
+        return self.post(f'/v1/campaigns/{segment(campaign)}/ideas', body, IdeaAnswer)
 
     def set_status(self, idea: IdeaId, body: StatusBody) -> StatusChanged:
         return self.post(f'/v1/ideas/{idea}/status', body, StatusChanged)

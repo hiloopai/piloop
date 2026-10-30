@@ -200,8 +200,7 @@ piloop pause REF --reason TEXT [--evals]
 ```
 
 Pauses one campaign. The daemon queues no run, requests no role and launches no requested agent, so research files no
-ideas. A sweep that is running already files its new and developed ideas as `proposed`, for a review. Running work
-goes on, and its commits are scored. Nothing is escalated. The daemon still measures what a new evaluator or
+ideas. Running work goes on, and its commits are scored. Nothing is escalated. The daemon still measures what a new evaluator or
 `piloop candidate remeasure` needs, so the pause can end on a measured head. `--evals` holds those measurements too.
 The pause is a state of the campaign in the database (`campaigns.paused`), not a file, so it holds wherever you run the
 command. `piloop status` shows it with the reason. The paused time does not count toward `max_hours`, and no limit of
@@ -285,50 +284,18 @@ Prints every campaign under its parent, with its type and its status.
 piloop idea add REF TITLE [options]
 ```
 
-Adds a defined idea. A `ready` idea runs when an implementer slot is free, in order of priority.
+Adds an idea to the board. An `open` idea runs when an implementer slot is free, in order of priority.
 
 | Option | Meaning |
 |---|---|
 | `--hypothesis` | Why the idea should help, and by how much. |
 | `--plan` | Concrete steps for the implementer. |
 | `--from` | What prompted the idea, with ids or a URL. |
-| `--family` | The mechanism family. Ideas that try the same mechanism share it. |
 | `--priority` | 0 (urgent) to 4 (someday). Default 2. |
 | `--harness` | Pin a harness instead of the rotation. |
 | `--base` | The candidate id to start from, instead of the head. |
-| `--proposed` | Wait for a human to approve the idea. |
 | `--track` | The track. Required when the campaign has several. |
 | `--after` | An idea to wait for. Repeat it for several. |
-| `--supersedes` | An idea that this one refines. Repeat it for several. |
-
-### piloop idea seed
-
-```text
-piloop idea seed REF HUNCH --from POINTERS [--base CANDIDATE] [--track TRACK]
-```
-
-Files a seed: a hunch in one line, with pointers to what prompted it. The research agent develops it into an idea,
-or rejects it. See [Seeds](/concepts/ideas-and-runs#seeds).
-
-### piloop idea develop
-
-```text
-piloop idea develop IDEA_ID --hypothesis … --evidence … --check … --metric … --effect … [options]
-```
-
-Develops a seed into a defined idea. Every one of these is required:
-
-| Option | Meaning |
-|---|---|
-| `--hypothesis` | The mechanism, and why it should move the metric. |
-| `--evidence` | What supports it, with ids and paths. |
-| `--check` | What the evaluator should show if the idea works, and what would show it wrong. It is never a gate before a commit. |
-| `--metric` | What decides success: the primary metric, or the part of it that the idea targets. |
-| `--effect` | The expected size of the effect, in the metric's units, and why. |
-
-Optional: `--plan` (at most `plan_words` of the agent's role, 150 by default), `--title`, `--family`, `--base`, `--priority` (default: the seed's), `--proposed`, `--after` and
-`--supersedes`. As with `idea add`, the links are written together with the idea, so the daemon never takes the idea
-without them.
 
 ### piloop idea status
 
@@ -336,24 +303,21 @@ without them.
 piloop idea status IDEA_ID STATUS --reason TEXT
 ```
 
-Sets the status of an idea to `proposed`, `ready`, `parked`, `rejected` or `done`, with a note on the idea that says
-why. `done` settles an idea without a run, so the ideas after it can start. A seed is developed first, and an idea
-whose run is open (queued, running or being scored) can only be parked or rejected: `ready` would queue a second run,
-and `done` would start the ideas after it before its run is judged. A parked or rejected idea's open run finishes and
-is scored.
+Sets the status of an idea to `open` or `dropped`, with a note on the idea that says why. Only a run makes an idea
+`done`. A `claimed` idea, whose run is open (queued, running or being scored), can only be dropped: `open` would queue
+a second run. A dropped idea's open run finishes and is scored.
 
 ### piloop idea link
 
 ```text
-piloop idea link IDEA_ID after|supersedes TARGET_ID --reason TEXT
+piloop idea link IDEA_ID after TARGET_ID --reason TEXT
 ```
 
-Links an idea that exists to another idea of the same campaign: it waits until the target is `done` (`after`), or it
-refines it (`supersedes`). The link is written in one transaction, so the daemon never takes the idea without it. An
-idea whose run is open takes no `after` link, and a link that closes a cycle of its kind is refused. The `--after` and
-`--supersedes` of `idea add` and `idea develop` are checked the same way.
-`piloop idea unlink IDEA_ID after|supersedes TARGET_ID --reason TEXT` deletes a link, for example to a prerequisite
-that kept nothing, to run the idea anyway.
+Links an idea that exists to another idea of the same campaign: it is held until the target is `done` or `dropped`. The link is
+written in one transaction, so the daemon never takes the idea without it. An idea whose run is open takes no link,
+and a link that closes a cycle is refused. The `--after` of `idea add` is checked the same way.
+`piloop idea unlink IDEA_ID after TARGET_ID --reason TEXT` deletes a link, for example to a prerequisite that is
+still open, to run the idea now.
 
 ### piloop idea base
 
@@ -431,8 +395,8 @@ of another campaign, fetch its commit into this repo first: `git fetch <its repo
 piloop candidate note CANDIDATE_ID REASON [--follow-up HUNCH]... [--track TRACK]
 ```
 
-Keeps a measured `discard` or `interesting` candidate in view as a starting point. Each `--follow-up` files a seed
-pinned to the candidate. The `candidate.noted` event records the note and its author; `verdict_by` changes only with
+Keeps a measured `discard` or `interesting` candidate in view as a starting point. Each `--follow-up` adds an open
+idea pinned to the candidate. The `candidate.noted` event records the note and its author; `verdict_by` changes only with
 the verdict. See [Notes](/concepts/verdict#act-on-a-candidate).
 
 ### piloop candidate verdict
@@ -501,8 +465,7 @@ multiplexer that misreads it. See [Watching a campaign](/guides/watch).
 piloop history [REF]
 ```
 
-Prints the research pack: the metrics, the analysis files, what was tried for each mechanism, the latest 60 ideas with
-their outcomes, the kept lineage, the findings and the digests. A research sweep reads it before it proposes ideas.
+Prints the research pack: the metrics, the analysis files, the latest 60 ideas with their outcomes, the kept lineage, the findings and the digests. A research sweep reads it before it proposes ideas.
 
 ### piloop inbox
 
@@ -510,7 +473,7 @@ their outcomes, the kept lineage, the findings and the digests. A research sweep
 piloop inbox [REF] [--kind KIND]... [--all] [--json]
 ```
 
-Lists the unacknowledged items that others wrote to you, most urgent first, then the seeds that wait for research.
+Lists the unacknowledged items that others wrote to you, most urgent first.
 `--kind` keeps only items of the given kind: `note`, `finding`, `decision`, `escalation` or `message`. Repeat it to
 keep several kinds. `--all` includes acknowledged items. `--json` prints them as one JSON document, read at one cursor of the
 [event feed](/reference/event-feed). See [The orchestrator and the inbox](/concepts/orchestrator).
@@ -562,7 +525,7 @@ piloop inbox wait [REF] [--after EVENT_ID] [--timeout SECONDS]
 ```
 
 Blocks until something needs the orchestrator, then prints it, one line each, and the command for the next wait. It
-returns for a new inbox item that someone else wrote, a seed that someone else filed, a campaign that the daemon stopped,
+returns for a new inbox item that someone else wrote, a campaign that the daemon stopped,
 an anomaly that the daemon gave to a watchdog, and the daemon's verdict on a measured candidate. `--after` is the cursor
 that the last wait printed (default: now). `--timeout` (default 1800) is how long to wait before it returns with
 nothing. Set the timeout of your shell tool above it.
@@ -658,7 +621,7 @@ Cancels a queued or running run at once. A queued run never starts, and a run wh
 start is not launched again. A running implementer is ended with
 [every process that it started](/concepts/roles#watch-and-steer-an-agent), also those in sessions of their own. With `--wrap-up`, the implementer is first told to
 save its work and stop, and ended 10 minutes later. The run closes as `cancelled`, unless its implementer left its finding
-before the daemon ended it: a later finding is refused. Its commits are scored, it counts toward no run limit, and its idea is parked: set the idea `ready` to run it again.
+before the daemon ended it: a later finding is refused. Its commits are scored, it counts toward no run limit, and its idea is dropped: set the idea `open` to run it again.
 
 ### piloop run extend
 

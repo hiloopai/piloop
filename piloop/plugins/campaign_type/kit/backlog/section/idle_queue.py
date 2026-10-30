@@ -3,7 +3,7 @@ from sqlalchemy import func, select
 from piloop.api.views import Lines, Rendered
 from piloop.campaign.stop import left
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, CampaignStatus, count
-from piloop.plugins.campaign_type.kit.backlog.ideas import runnable
+from piloop.plugins.campaign_type.kit.backlog.ideas import claimable
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
@@ -30,7 +30,7 @@ class IdleQueue(Section):
         free = cfg.run_slots - count(s, campaign_runs(campaign.id).where(Run.status.in_(OPEN_RUNS)))
         if (runs_left := left(s, campaign, cfg).get(RUNS)) is not None:
             free = min(free, runs_left)
-        if free <= 0 or count(s, select(Idea).where(Idea.campaign_id == campaign.id, runnable())):
+        if free <= 0 or count(s, select(Idea).where(Idea.campaign_id == campaign.id, claimable())):
             return None
         moments = [campaign.created_at]
         for column in (Run.created_at, Run.finished_at):

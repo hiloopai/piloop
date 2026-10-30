@@ -9,7 +9,7 @@ three commands. Each prints one JSON document on stdout. Messages go to stderr. 
 | Command | What it prints |
 |---|---|
 | `piloop status --json` | A snapshot of each campaign, and the cursor it was read at. |
-| `piloop inbox --json` | The inbox items and the seeds, and the cursor they were read at. |
+| `piloop inbox --json` | The inbox items, and the cursor they were read at. |
 | `piloop events --after <cursor> --json` | The events after a cursor, and the next cursor. |
 
 ## Read without a gap
@@ -54,7 +54,7 @@ A read of events:
       "subject": {"kind": "idea", "id": 7, "campaign": 1},
       "actor": "orchestrator",
       "time": "2026-10-19T12:00:00.123456Z",
-      "payload": {"kind": "idea.status", "old": "ready", "new": "parked"}
+      "payload": {"kind": "idea.status", "old": "open", "new": "dropped"}
     }
   ],
   "next": 42,
@@ -76,8 +76,7 @@ and its delta against the baseline; null when there is no keep yet), the `kept` 
 `ideas` in each status, the `runnable` ideas, the open `runs`, the live `agents` and the unacknowledged `inbox` items.
 The `tokens` fact has what its agents spent. It covers the campaigns that `piloop status` would show.
 
-`piloop inbox --json` has `cursor`, `items` and `seeds`, with the filters of `piloop inbox`. Each item and seed has its
-`campaign` and its `campaign_name`.
+`piloop inbox --json` has `cursor` and `items`, with the filters of `piloop inbox`.
 
 A program can also call the daemon's HTTP API, which answers the same documents without `protocol`: see
 [the API](/reference/cli#the-api).

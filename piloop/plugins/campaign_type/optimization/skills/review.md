@@ -70,8 +70,7 @@ The subagents:
    below.
 3. **Orchestrator.** Its session: decisions it took for the human, briefs, status reports compared with the database,
    spend.
-4. **Research and watchdog.** For each idea: where it came from and what it produced. For each seed: who filed it, if
-   it was developed or rejected, what the developed ones produced. Sweeps that produced nothing. What the watchdog
+4. **Research and watchdog.** For each idea: where it came from and what it produced. Sweeps that produced nothing. What the watchdog
    caught and missed.
 5. **Evaluation design.** Is the scoring panel held out? How much does a single unit move the score? Could an agent
    read the labels?

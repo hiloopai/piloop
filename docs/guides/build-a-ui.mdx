@@ -55,7 +55,7 @@ Every view answers with a `cursor`: the id of the newest event that it includes.
 |---|---|
 | `GET /v1/status` | The main facts of each campaign: its state, head, ideas, open runs, live agents, inbox count and tokens. |
 | `GET /v1/overview` | The sections of each campaign's `[plugins.section] use`, as blocks of text, lines, figures and tables. |
-| `GET /v1/inbox` | The inbox items that wait for you, and the seeds. |
+| `GET /v1/inbox` | The inbox items that wait for you. |
 | `GET /v1/inbox/{comment}` | A comment's thread. |
 | `GET /v1/campaigns/{campaign}/lineage` | The campaign as a graph: nodes, parents, the spine and its steps. |
 | `GET /v1/agents/{agent}/output?lines=60` | An agent's last lines of output. |
@@ -85,7 +85,7 @@ A write answers with the row that it changed, at a cursor. Its effects arrive on
 | `POST /v1/inbox/ack` | Acknowledge inbox items. |
 | `POST /v1/inbox/{comment}/reply` | Answer an inbox item in its thread. |
 | `POST /v1/agents/{agent}/prompt` | Send a running agent a message for its next turn. |
-| `POST /v1/ideas/{idea}/status` | Approve, park or reject an idea, with a reason. |
+| `POST /v1/ideas/{idea}/status` | Open, drop or settle an idea, with a reason. |
 | `POST /v1/ideas/{idea}/priority` | Set an idea's priority. |
 | `POST /v1/candidates/{candidate}/verdict` | Overrule a candidate's verdict, with a reason. |
 

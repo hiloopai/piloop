@@ -32,7 +32,6 @@ PILOOP_ACTOR=orchestrator piloop inbox wait [<name>] --after <cursor> --timeout 
 It returns, one line each, as soon as something needs you:
 
 - a new unacknowledged inbox item that someone else wrote,
-- a seed that someone else filed,
 - a campaign that the daemon stopped,
 - an anomaly that the daemon gave to a watchdog,
 - the daemon's verdict on a measured candidate.
@@ -76,7 +75,7 @@ Steps:
    Never raise `hold_at` in `[plugins.stop_rule]` yourself. An escalation that a fact reached its `hold_at` belongs to
    the human.
 7. **Journal** each decision, plan and result as you go, one line with its ids:
-   `PILOOP_ACTOR=orchestrator piloop journal 'parked idea#412 (dup of #398); next: c#486+c#501' --campaign <name>`.
+   `PILOOP_ACTOR=orchestrator piloop journal 'dropped idea#412 (dup of #398); next: c#486+c#501' --campaign <name>`.
    At most 280 bytes. A session that loses its context (a crash, a full window) starts again from `piloop wake`, so
    write what the next session needs, not what the database already says.
 8. **Report** when the human is present, at least every few waits or every hour. Then go back to step 2.

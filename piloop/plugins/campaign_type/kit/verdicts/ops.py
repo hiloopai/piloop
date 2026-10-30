@@ -60,7 +60,7 @@ def set_verdict(
     keep against a bar that is no longer the head: the head is the newest trunk keep, and a keep that lacks the
     head's changes would drop them from the trunk. So the candidate is ``interesting`` (``Cause.MOVED``), and the
     verdict rule says what follows (``ledger.on_moved``). By default its merge onto the head is a pending candidate that
-    the daemon measures and judges against the head (``ledger.unjudged``), and a merge that conflicts files a seed to
+    the daemon measures and judges against the head (``ledger.unjudged``), and a merge that conflicts adds an idea to
     compose it. A keep of a branch run never moves the head. A reference that builds on the head is kept like this
     once the current evaluator scores it, and is the head then. With ``Cause.NOTE``, it keeps a regressed result in
     view as a lead (``verdict.note``), and the verdict stays whoever's it was unless the note changes it.
@@ -68,7 +68,7 @@ def set_verdict(
     Raises:
         Refused: the reason is blank, ``verdict.refusal`` refuses it, it is the first verdict of a reference that the
             current evaluator does not score, or it is a keep off the head of a candidate that no run made, which no
-            seed can compose.
+            idea can compose.
     """
     candidate = existing(s, Candidate, candidate_id, 'candidate')
     why = required_reason(reason)

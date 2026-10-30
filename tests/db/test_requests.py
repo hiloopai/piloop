@@ -52,7 +52,7 @@ def test_an_ask_is_pending_while_it_is_the_latest_of_its_kind_on_its_target_and_
 def queued_run(db: Database, campaign: Campaign, state: AgentSessionState) -> tuple[RunId, AgentSession]:
     with db.session() as s:
         idea = Idea(campaign_id=campaign.id, title='t', hypothesis='h', track='score', created_by='human')
-        idea.status = IdeaStatus.SCHEDULED
+        idea.status = IdeaStatus.CLAIMED
         s.add(idea)
         s.flush()
         run = Run(idea_id=idea.id, attempt=1, base_candidate_id=1, harness='script', model='m')

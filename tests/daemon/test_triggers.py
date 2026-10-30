@@ -20,6 +20,7 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment,
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentKind, Ending, TargetKind, TargetRef
 from piloop.otel import Tracer
+from piloop.plugins.campaign_type.kit.backlog.ideas import claimable
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
@@ -57,8 +58,8 @@ def scheduler(db: Database, runtime: ScriptRuntime, tmp_path: Path) -> Scheduler
     return Scheduler(db, controller, Tracer(None), tmp_path, factory(runtime))
 
 
-LOW_WATER = ['low_water', 'seed']
-"""Research's ``low_water`` trigger, and its ``seed`` trigger."""
+LOW_WATER = ['low_water']
+"""Research's ``low_water`` trigger."""
 
 
 def low_water(buffer: int) -> dict[str, object]:
@@ -331,7 +332,7 @@ def occupy(db: Database, campaign: Campaign, title: str = 'busy') -> RunId:
 
 
 def add_ideas(
-    db: Database, campaign: Campaign, count: int, by: str = 'human', status: IdeaStatus = IdeaStatus.READY
+    db: Database, campaign: Campaign, count: int, by: str = 'human', status: IdeaStatus = IdeaStatus.OPEN
 ) -> list[IdeaId]:
     with db.session() as s:
         ideas = [
@@ -431,33 +432,6 @@ def test_low_water_keeps_sweeping_a_short_backlog_though_every_slot_is_busy_rest
     sched.stop(timeout=5)
 
 
-def test_a_seed_fires_one_research_sweep_however_full_the_backlog_once(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A new seed starts one research sweep, even when the backlog is at its target or ``low_water`` is off.
-
-    A seed is new until a sweep starts after it was filed. A sweep that read the seed and left it does not start
-    another sweep.
-    """
-    configure(db, campaign, research={'max_ideas': 0, 'max_concurrent': 1})
-    sched = scheduler(db, runtime, tmp_path)
-    occupy(db, campaign)
-    assert run_all(sched) == [], 'max_ideas 0 turns low_water off'
-    add_ideas(db, campaign, 1, by='watchdog#9', status=IdeaStatus.SEED)
-    assert run_all(sched) == [1]
-    assert last_reason(db) == '1 new seeds to develop'
-    sched.wait(SETTLE)
-    assert run_all(sched) == [], (
-        'implementer#1 read the seed and left it: the next sweep, whatever fires it, lists it again'
-    )
-    time.sleep(0.01)
-    add_ideas(db, campaign, 1, by='watchdog#3', status=IdeaStatus.SEED)
-    assert run_all(sched) == [2]
-    assert last_reason(db) == '1 new seeds to develop'
-    sched.wait(SETTLE)
-    sched.stop(timeout=5)
-
-
 def test_stalled_sweeps_on_new_results_however_full_the_backlog(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -517,37 +491,6 @@ def test_a_long_stall_gets_one_stalled_sweep_per_stall_step_and_a_keep_ends_it(
         sched.wait(SETTLE)
     assert len(agent_sessions(db, RESEARCH)) == 4, 'the keep ended the stall: four runs mark a new one'
     assert (last_reason(db) or '').startswith('stalled, step 1; 5 runs finished since agent_session#3 started')
-    sched.stop(timeout=5)
-
-
-def test_a_killed_sweep_s_seeds_are_retried_once_and_a_new_seed_waits_for_a_free_research_slot(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    release = tmp_path / 'release'
-    configure(
-        db,
-        campaign,
-        BLOCKING.format(release=release),
-        research={'max_ideas': 0, 'max_concurrent': 1, 'timeout': 0.5},
-    )
-    sched = scheduler(db, runtime, tmp_path)
-    occupy(db, campaign)
-    add_ideas(db, campaign, 1, by='watchdog#9', status=IdeaStatus.SEED)
-    assert run_all(sched) == [1]
-    sched.wait(SETTLE)
-    assert run_all(sched) == [2]
-    assert last_reason(db) == '1 seeds to develop; retrying after agent_session#1 was killed: agent timeout after 0.5s'
-    sched.wait(SETTLE)
-    assert run_all(sched) == [], 'a second killed batch is a systemic fault: no more retries'
-
-    configure(db, campaign, BLOCKING.format(release=release), research={'max_ideas': 0, 'max_concurrent': 1})
-    add_ideas(db, campaign, 1, by='watchdog#10', status=IdeaStatus.SEED)
-    assert run_all(sched) == [3], 'a seed filed after the latest sweep started is new'
-    wait_until(lambda: agent_sessions(db, RESEARCH)[-1][1] is AgentSessionState.RUNNING)
-    add_ideas(db, campaign, 1, by='watchdog#11', status=IdeaStatus.SEED)
-    assert run_all(sched) == [], 'a new seed, but the only research slot is busy'
-    release.touch()
-    sched.wait(SETTLE)
     sched.stop(timeout=5)
 
 
@@ -638,8 +581,8 @@ def test_low_water_sizes_the_batch_to_the_shortfall_net_of_the_sweeps_in_flight(
     with db.session() as s:  # a sweep in flight, started by hand
         s.add(AgentSession(kind=RESEARCH, campaign_id=campaign.id, state=AgentSessionState.RUNNING))
         s.commit()
-    add_ideas(db, campaign, 1, by='research#3', status=IdeaStatus.PROPOSED)
-    assert run_all(sched) == [5, 6], 'six wanted, two coming: two sweeps of two'
+    add_ideas(db, campaign, 1, by='research#3', status=IdeaStatus.DROPPED)
+    assert run_all(sched) == [5, 6], 'six wanted, two coming: two sweeps of two; a dropped idea is off the board'
     assert last_reason(db) == (
         '3 free implementer slots without a runnable idea; 0 of 6 runnable ideas, 2 more from 1 sweeps in flight'
     )
@@ -647,13 +590,12 @@ def test_low_water_sizes_the_batch_to_the_shortfall_net_of_the_sweeps_in_flight(
     sched.stop(timeout=5)
 
 
-def test_low_water_counts_ideas_waiting_only_on_a_prerequisite_in_flight_as_backlog(
+def test_low_water_counts_held_ideas_as_backlog_until_their_prerequisite_settles(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """Low water counts an idea that waits only on prerequisites in flight as backlog.
+    """Low water counts an open idea that an ``after`` link holds as backlog: it is on the board.
 
-    Such an idea runs when its prerequisites finish, with no sweep in between. An idea that waits on a prerequisite
-    that is not running is not backlog.
+    It is claimable once its prerequisites are done or dropped, with no sweep in between.
     """
     configure(
         db,
@@ -665,7 +607,7 @@ def test_low_water_counts_ideas_waiting_only_on_a_prerequisite_in_flight_as_back
     sched = scheduler(db, runtime, tmp_path)
     with db.session() as s:
         prerequisite = s.get_one(Run, occupy(db, campaign)).idea
-        prerequisite.status = IdeaStatus.SCHEDULED
+        prerequisite.status = IdeaStatus.CLAIMED
         s.commit()
         prerequisite_id = prerequisite.id
     occupy(db, campaign, 'busy too')
@@ -683,15 +625,16 @@ def test_low_water_counts_ideas_waiting_only_on_a_prerequisite_in_flight_as_back
         )
         s.commit()
     assert run_all(sched) == [1]
-    assert last_reason(db) == '0 of 3 runnable ideas, 2 more waiting on runs in flight'
+    assert last_reason(db) == '0 of 3 runnable ideas, 2 more held by after links'
     sched.wait(SETTLE)
     add_ideas(db, campaign, 1, by='research#1')
-    assert run_all(sched) == [], 'both slots busy, one idea runnable and two waiting on the run in flight: three'
+    assert run_all(sched) == [], 'both slots busy, one idea runnable and two held: three'
     with db.session() as s:
-        s.get_one(Idea, prerequisite_id).status = IdeaStatus.PARKED
+        s.get_one(Idea, prerequisite_id).status = IdeaStatus.DROPPED
         s.commit()
-    assert run_all(sched) == [2], 'a parked prerequisite is no run in flight: the two behind it are blocked'
-    assert last_reason(db) == '1 of 3 runnable ideas'
+    assert run_all(sched) == [], 'a dropped prerequisite frees the two, and both slots are still busy'
+    with db.session() as s:
+        assert len(s.scalars(select(Idea.id).where(claimable())).all()) == 3, 'nothing holds them now'
     sched.wait(SETTLE)
     sched.stop(timeout=5)
 
@@ -740,10 +683,10 @@ def test_a_sweep_whose_launch_the_stop_rule_stops_never_starts_and_the_stop_clos
     cfg = load_campaign_config(Path(campaign.path), plugins={'stop_rule': {'max_runs': 1}})
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = cfg
-        row = AgentSession(kind=RESEARCH, campaign_id=campaign.id, reason='1 new seeds to develop')
+        row = AgentSession(kind=RESEARCH, campaign_id=campaign.id, reason='by hand')
         s.add(row)
         s.flush()
-        requested = (row.id, AgentSessionState.REQUESTED, '1 new seeds to develop')
+        requested = (row.id, AgentSessionState.REQUESTED, 'by hand')
         row.state, row.harness = AgentSessionState.STARTING, 'script'  # the pass took it to launch
         s.commit()
     finish_a_run(db, campaign, 'one')
@@ -782,7 +725,7 @@ def test_ideas_updated_at_is_bumped_by_raw_sql_and_orm_updates_alike(
 
     time.sleep(0.01)
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
-        sql.run(con, f"UPDATE ideas SET status = 'rejected' WHERE id = {idea.id}")
+        sql.run(con, f"UPDATE ideas SET status = 'dropped' WHERE id = {idea.id}")
     raw, by = stamp()
     assert raw > created and by == 'human'
 
@@ -801,7 +744,7 @@ def test_ideas_updated_at_is_bumped_by_raw_sql_and_orm_updates_alike(
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
         sql.run(
             con,
-            f"UPDATE ideas SET status = 'parked', updated_at = '{pinned:%Y-%m-%d %H:%M:%S.%f}' WHERE id = {idea.id}",
+            f"UPDATE ideas SET status = 'done', updated_at = '{pinned:%Y-%m-%d %H:%M:%S.%f}' WHERE id = {idea.id}",
         )
     assert stamp() == (pinned, 'human'), 'a statement that sets updated_at itself is left alone'
 
@@ -840,7 +783,7 @@ def test_low_water_retries_a_killed_batch_once(
 def test_a_cancelled_sweep_is_not_retried_and_its_row_says_who_cancelled_it(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """A cancel is a decision, not a crash: neither low_water nor seed requests a sweep to replace it."""
+    """A cancel is a decision, not a crash: low_water requests no sweep to replace it."""
     configure(
         db,
         campaign,
@@ -852,10 +795,6 @@ def test_a_cancelled_sweep_is_not_retried_and_its_row_says_who_cancelled_it(
     assert run_all(sched) == [1]
     wait_until(lambda: agent_sessions(db, RESEARCH)[0][1] is AgentSessionState.RUNNING)
     with db.session() as s:
-        old = utcnow() - timedelta(days=1)  # read by the cancelled sweep: no news to the next one
-        seed = Idea(track='score', campaign_id=campaign.id, title='s', hypothesis='h', created_by='t', created_at=old)
-        seed.status = IdeaStatus.SEED
-        s.add(seed)
         request_cancel(s, s.get_one(AgentSession, 1), System.HUMAN, ending=Ending.NOW)
         s.commit()
     assert run_all(sched) == []

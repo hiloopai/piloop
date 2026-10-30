@@ -3,7 +3,7 @@
 It posts with the bot token (``chat.postMessage``, which gives the post's ``ts``), and listens over Socket Mode
 (https://docs.slack.dev/apis/events-api/using-socket-mode): an outbound websocket, so it needs no public URL and works
 behind NAT. An escalation with choices is a Block Kit post, with a button for each choice (``Choose``). A reply in a
-post's thread is a ``Reply``, ``idea: <hunch>`` there files a seed, a ✅ on the post is an ``Ack``, and an edit of a
+post's thread is a ``Reply``, ``idea: <title>`` there adds an open idea, a ✅ on the post is an ``Ack``, and an edit of a
 reply changes it (``Edit``). Only ``people`` can answer. It needs the ``slack`` extra
 (``uv tool install 'piloop[slack]'``), imported when the listener starts.
 """
@@ -25,12 +25,12 @@ from piloop.plugins.host import Check, extra
 from piloop.plugins.notifier.contract import (
     Accepted,
     Ack,
+    AddIdea,
     Again,
     Answered,
     Choose,
     Declined,
     Edit,
-    FileSeed,
     Foreign,
     Inbound,
     ListenHost,
@@ -50,8 +50,8 @@ if TYPE_CHECKING:  # the extra is optional: only a listener that starts imports 
 
 ACKS = frozenset({'white_check_mark', 'heavy_check_mark', 'ballot_box_with_check'})
 """The reactions on a post that acknowledge its item."""
-SEED = 'idea:'
-"""What a reply starts with to file a seed, case aside."""
+IDEA = 'idea:'
+"""What a reply starts with to add an idea, case aside."""
 HINT = 'piloop reads answers in the thread of its posts: reply there, or react with :white_check_mark: to ack.'
 CHOOSE = 'piloop.choose.'
 """What the ``action_id`` of a choice's button starts with: the choice's id follows."""
@@ -191,8 +191,8 @@ class SlackApp(SlackText):
                     return 'hint'
                 said = text.strip()
                 act = (
-                    FileSeed(said[len(SEED) :].strip())
-                    if said.lower().startswith(SEED)
+                    AddIdea(said[len(IDEA) :].strip())
+                    if said.lower().startswith(IDEA)
                     else Reply(said, self.reply_priority)
                 )
                 return Inbound(MessageRef(f'{channel}/{thread}'), MessageRef(f'{channel}/{ts}'), user, act)

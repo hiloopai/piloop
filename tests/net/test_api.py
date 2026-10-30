@@ -346,12 +346,7 @@ def test_a_write_answers_its_cursor_and_refuses_what_its_operation_refuses(
 ) -> None:
     with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         added = client.add_idea('demo', IdeaBody(title='try a cache', priority=1))
-        assert (added.idea.title, added.idea.status, added.idea.created_by, added.review) == (
-            'try a cache',
-            'ready',
-            'human',
-            None,
-        )
+        assert (added.idea.title, added.idea.status, added.idea.created_by) == ('try a cache', 'open', 'human')
         assert client.events(EventsQuery(after=added.cursor)).events == [], 'the cursor passes the write itself'
         paused = client.pause('demo', PauseBody(reason='a review'))
         with pytest.raises(Refused, match=r'^campaign demo is paused already') as twice:
@@ -369,7 +364,7 @@ def test_a_write_answers_its_cursor_and_refuses_what_its_operation_refuses(
             client.reply(CommentId(9), ReplyBody(body='hm'))
         assert missing.value.error == Problem.UNKNOWN_COMMENT
         with pytest.raises(Refused, match='^no idea#9$') as no_idea:
-            client.set_status(IdeaId(9), StatusBody(status=IdeaStatus.PARKED, reason='hm'))
+            client.set_status(IdeaId(9), StatusBody(status=IdeaStatus.DROPPED, reason='hm'))
         with pytest.raises(Refused, match='^no idea#9$') as no_target:
             client.link(added.idea.id, LinkKind.AFTER, IdeaId(9), Reasoned(reason='hm'))
         assert no_idea.value.error == no_target.value.error == Problem.UNKNOWN_IDEA

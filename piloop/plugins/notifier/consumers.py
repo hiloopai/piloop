@@ -30,7 +30,7 @@ from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusCh
 from piloop.ids import HOME, CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
-from piloop.plugins.campaign_type.kit.backlog.ops import file_seed
+from piloop.plugins.campaign_type.kit.backlog.ops import add_idea
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, Lifecycle
 from piloop.plugins.escalation.contract import At, EscalationView, Never, Now
 from piloop.plugins.host import PluginError, Plugins, Scope
@@ -38,12 +38,12 @@ from piloop.plugins.notifier.contract import (
     NOTIFIERS,
     Accepted,
     Ack,
+    AddIdea,
     Again,
     Answered,
     Choose,
     Declined,
     Edit,
-    FileSeed,
     Foreign,
     Inbound,
     ListenHost,
@@ -304,18 +304,16 @@ def received(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inb
                 ack(s, [item.id], person)
                 target = TargetRef(TargetKind.COMMENT, item.id)
                 said = f'piloop acknowledged comment#{item.id}'
-            case FileSeed(hunch=hunch):
+            case AddIdea(title=title):
                 campaign = _campaign(s, item.id)
-                if campaign is None or not hunch:
-                    return Declined('write the hunch after "idea:", in the thread of an item of a campaign')
+                if campaign is None or not title:
+                    return Declined('write the idea after "idea:", in the thread of an item of a campaign')
                 try:
-                    seed = file_seed(
-                        s, campaign, hunch, actor=person, provenance=f'comment#{item.id}, via {route.name}'
-                    )
+                    idea = add_idea(s, campaign, title, actor=person, provenance=f'comment#{item.id}, via {route.name}')
                 except BacklogRefused as e:
                     return Declined(str(e))
-                target = TargetRef(IDEA, seed.id)
-                said = f'piloop filed this as seed idea#{seed.id}, for research'
+                target = TargetRef(IDEA, idea.id)
+                said = f'piloop added this as idea#{idea.id}, open on the board'
             case Choose(choice=choice):
                 if (done := escalations.settled(s, item)) is not None:
                     return _answered(item.id, done)

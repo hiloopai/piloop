@@ -143,7 +143,7 @@ def test_store_status_evict_and_verify(archived, out, monkeypatch: pytest.Monkey
 def test_status_with_a_ready_idea_shows_nothing_archived(campaign_path: Path, out) -> None:
     run_cli(['init', str(campaign_path)])
     db = Database(common.settings.database_url, actor=common.settings.actor)
-    add_idea(db, CampaignId(1), 'waiting', IdeaStatus.READY)
+    add_idea(db, CampaignId(1), 'waiting', IdeaStatus.OPEN)
     out()
     run_cli(['store', 'status'])
     lines = out().splitlines()

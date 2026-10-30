@@ -228,12 +228,12 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
             )
             s.flush()
             s.add(Measurement(candidate_id=n, evaluator_id=1, metrics={'score': value, 'size': 1}, seconds=2))
-        live = idea(s, p, 'longer lines', IdeaStatus.SCHEDULED, created_at=ago(minutes=20))
+        live = idea(s, p, 'longer lines', IdeaStatus.CLAIMED, created_at=ago(minutes=20))
         live_run = Run(idea=live, attempt=1, base_candidate_id=4, harness='pi', model='m', status=RunStatus.RUNNING)
         s.add(live_run)
         s.flush()
-        idea(s, p, 'shorter lines', IdeaStatus.READY, priority=1, created_at=ago(minutes=5))
-        idea(s, p, 'soft voting', IdeaStatus.PROPOSED, priority=2, created_at=ago(minutes=4))
+        idea(s, p, 'shorter lines', IdeaStatus.OPEN, priority=1, created_at=ago(minutes=5))
+        idea(s, p, 'soft voting', IdeaStatus.OPEN, priority=2, created_at=ago(minutes=4))
         s.add_all(
             [
                 AgentSession(
@@ -333,7 +333,7 @@ def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, 
 
     drive(db, None, scenario)
     assert shots[0].startswith(' piloop: 2 campaigns\n')
-    assert {'active', '4 score', '+3', '2 agents', '1 ready', '2 inbox', 'comment.note 1m ago'} <= set(
+    assert {'active', '4 score', '+3', '2 agents', '2 open', '2 inbox', 'comment.note 1m ago'} <= set(
         cells(shots[0], 'demo')
     )
     assert cells(shots[0], 'other')[1] == 'stopped: max_runs: 50 runs, and more wo…'
@@ -596,9 +596,7 @@ def test_the_candidates_are_the_lineage_s_nodes_with_their_detail(db: Database, 
     )
 
 
-def test_ideas_keys_approve_park_reject_with_a_reason_and_move_the_priority(
-    db: Database, live_campaign: Campaign
-) -> None:
+def test_ideas_keys_drop_and_open_with_a_reason_and_move_the_priority(db: Database, live_campaign: Campaign) -> None:
     notes: list[str] = []
 
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
@@ -608,34 +606,28 @@ def test_ideas_keys_approve_park_reject_with_a_reason_and_move_the_priority(
             assert shown in screen_text(app).split('[4] ')[0]
             notes.append(campaign_screen(app).note)
 
-        await note('3', 'y', *'worth a run', 'enter', shown='P2  ready      #4')
-        await note('y', shown='P2  ready      #4')
-        await note('p', 'escape', shown='P2  ready      #4')
-        await note('p', *'later', 'enter', shown='P2  parked     #4')
-        await note('plus', shown='P1  parked     #4')
+        await note('3', 'down', 'y', shown='P2  open     #4')
+        await note('x', 'escape', shown='P2  open     #4')
+        await note('plus', shown='P1  open     #4')
         for shown in ('P2', 'P3', 'P4', 'P4'):
-            await note('minus', shown=f'{shown}  parked     #4')
-        await note('x', *'never', 'enter', shown='Ideas 1 ready · 1 scheduled ')
+            await note('minus', shown=f'{shown}  open     #4')
+        await note('x', *'never', 'enter', shown='Ideas 1 open · 1 claimed ')
 
     drive(db, 'demo', scenario)
     assert notes == [
-        'idea#4 proposed → ready',
-        'idea#4 is ready already',
-        'idea#4 left ready: no reason given',
-        'idea#4 ready → parked',
+        'idea#4 is open already',
+        'idea#4 left open: no reason given',
         'idea#4 priority 1',
         'idea#4 priority 2',
         'idea#4 priority 3',
         'idea#4 priority 4',
         'idea#4 priority 4',
-        'idea#4 parked → rejected',
+        'idea#4 open → dropped',
     ]
     with db.session() as s:
-        assert s.get_one(Idea, 4).status is IdeaStatus.REJECTED
+        assert s.get_one(Idea, 4).status is IdeaStatus.DROPPED
         assert [c.body for c in s.scalars(select(Comment).where(Comment.target_kind == IDEA))] == [
-            'proposed → ready: worth a run',
-            'ready → parked: later',
-            'parked → rejected: never',
+            'open → dropped: never'
         ]
         assert {e.actor for e in s.scalars(select(Event).where(Event.kind.in_(('idea.status', 'idea.priority'))))} == {
             'human'
@@ -643,33 +635,29 @@ def test_ideas_keys_approve_park_reject_with_a_reason_and_move_the_priority(
 
 
 def test_a_review_that_the_api_refuses_says_why(db: Database, live_campaign: Campaign) -> None:
-    with db.session() as s:
-        seed = idea(s, s.get_one(Campaign, live_campaign.id), 'a hunch', IdeaStatus.SEED, created_by='watchdog#9')
-        s.commit()
-        seed_id = seed.id
     notes: list[str] = []
 
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
-        await pilot.press('3', 'y')
+        await pilot.press('3', 'down', 'down', 'y')
         await settle(pilot)
         await pilot.press(*'go', 'enter')
         await settle(pilot)
         notes.append(campaign_screen(app).note)
-        await pilot.press('down', 'y')
+        await pilot.press('up', 'x')
         await settle(pilot)
-        with db.session() as s:  # another client approves it meanwhile
+        with db.session() as s:  # another client drops it meanwhile
             backlog_ops.set_idea_status(
-                s, IdeaId(4), IdeaStatus.READY, reason='from the CLI', actor=System.ORCHESTRATOR
+                s, IdeaId(4), IdeaStatus.DROPPED, reason='from the CLI', actor=System.ORCHESTRATOR
             )
             s.commit()
-        await pilot.press(*'worth a run', 'enter')
+        await pilot.press(*'not now', 'enter')
         await settle(pilot)
         notes.append(campaign_screen(app).note)
 
     drive(db, 'demo', scenario)
     assert notes == [
-        f'idea#{seed_id} is a seed: research defines it first (piloop idea develop {seed_id} …), or park or reject it',
-        'idea#4 is ready already',
+        'idea#2 has an open run: run#2 is running; drop it, or wait for the run to end',
+        'idea#4 is dropped already',
     ]
 
 
@@ -689,7 +677,7 @@ def test_the_ideas_detail(db: Database, live_campaign: Campaign) -> None:
     has_lines(
         detail(shots[0]),
         ' idea#2 longer lines',
-        ' status scheduled · priority 2 · by t 20m ago · links: —',
+        ' status claimed · priority 2 · by t 20m ago · links: —',
         ' hypothesis:',
         ' longer lines helps',
         ' plan:',

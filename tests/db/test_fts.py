@@ -58,7 +58,7 @@ def test_the_index_follows_every_write_through_the_agent_connection(db: Database
         assert hits(con, 'ideas', '"target encoding"') == [2]
         assert hits(con, 'ideas', 'ensem*') == [1, 3], 'prefix queries work (against stems)'
 
-        sql.run(con, "UPDATE ideas SET status = 'parked', priority = 0 WHERE id = 1")
+        sql.run(con, "UPDATE ideas SET status = 'dropped', priority = 0 WHERE id = 1")
         assert hits(con, 'ideas', 'soft') == [1], 'a status change leaves the index alone (and correct)'
         sql.run(con, "UPDATE ideas SET title = 'Hard voting ensemble', plan = 'majority rule' WHERE id = 1")
         assert (hits(con, 'ideas', 'soft'), hits(con, 'ideas', 'majority')) == ([], [1])
@@ -88,8 +88,8 @@ def test_the_documented_search_queries_rank_and_mark_the_hits(db: Database, tmp_
             "WHERE ideas_fts MATCH 'voting OR ensemble' AND i.campaign_id = 1 ORDER BY score LIMIT 10",
         )
         assert [(r[0], r[1], r[2]) for r in ideas.rows] == [
-            (3, 'ready', '…fold accuracy before [voting] sharpens the [ensemble] [vote]'),
-            (1, 'ready', 'Soft [voting] [ensemble]'),
+            (3, 'open', '…fold accuracy before [voting] sharpens the [ensemble] [vote]'),
+            (1, 'open', 'Soft [voting] [ensemble]'),
         ], 'idea#3 matches the stem three times; column -1 lets the snippet pick the column with the most hits'
         best, second = (r[3] for r in ideas.rows)
         assert isinstance(best, float) and isinstance(second, float)

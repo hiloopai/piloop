@@ -59,9 +59,9 @@ def test_status_names_every_track_its_head_its_floor_and_what_works_on_it(db: Da
             Idea(
                 campaign_id=campaign.id,
                 track=TrackName('size'),
-                title='review me',
+                title='try me',
                 hypothesis='h',
-                status=IdeaStatus.PROPOSED,
+                status=IdeaStatus.OPEN,
                 created_by='research#9',
             )
         )
@@ -74,9 +74,9 @@ def test_status_names_every_track_its_head_its_floor_and_what_works_on_it(db: Da
         ' score (score, higher, margin 1, floor 0.5, share 0.75); size (size, lower, margin 2, floor 20, share 0.25)',
         '## Tracks',
         '- score: score 3 at the head (+2 on the start); floor 0.5, 2.5 to spare; 1 trunk keeps,'
-        ' the latest candidate#2 1h ago; share 0.75 of 1 slots, 0 running; 0 runnable ideas, 0 proposed.',
+        ' the latest candidate#2 1h ago; share 0.75 of 1 slots, 0 running; 1 open ideas.',
         '- size: size 8 at the head (-4 on the start); floor 20, 12 to spare; 1 trunk keeps,'
-        ' the latest candidate#4 1h ago; share 0.25 of 1 slots, 2 running; 0 runnable ideas, 1 proposed.',
+        ' the latest candidate#4 1h ago; share 0.25 of 1 slots, 2 running; 1 open ideas.',
         '## Trajectory',
         '- Start candidate#1, head candidate#4: score 1 → 3 (+2, +200.0%); size 12 → 8 (-4, -33.3%); 2 trunk keeps.',
         '  - 10-01 12:18 candidate#2 [score] score 3 (+2) idea#1: score 3',
@@ -96,8 +96,8 @@ def test_status_of_a_campaign_with_no_candidate_says_there_is_no_baseline_yet(db
         s.commit()
     shown = render(db, bare).split('## Tracks\n\n')[1].split('## Runs')[0]
     assert shown == snapshot("""\
-- score: no baseline yet; floor 0.5; 0 trunk keeps; share 0.75 of 1 slots, 0 running; 0 runnable ideas, 0 proposed.
-- size: no baseline yet; floor 20; 0 trunk keeps; share 0.25 of 1 slots, 0 running; 0 runnable ideas, 0 proposed.
+- score: no baseline yet; floor 0.5; 0 trunk keeps; share 0.75 of 1 slots, 0 running; 0 open ideas.
+- size: no baseline yet; floor 20; 0 trunk keeps; share 0.25 of 1 slots, 0 running; 0 open ideas.
 
 ## Trajectory
 
@@ -113,7 +113,7 @@ def test_history_and_pack_show_each_track(db: Database, campaign: Campaign) -> N
         text = full(s, p, cfg)
         packed = pack(s, p, cfg, workspace=None, shown=SHOWN)
     assert text.splitlines()[2] == snapshot(
-        "| id | status    | track | by         | family | links                        | prio | title                 | best candidate (its track's primary)     |"
+        "| id | status  | track | by         | links        | prio | title                 | best candidate (its track's primary)     |"
     )
     assert [line for line in text.splitlines() if line.startswith(('| candidate', '| #4'))] == snapshot(
         [

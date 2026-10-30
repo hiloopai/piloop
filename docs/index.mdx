@@ -38,7 +38,7 @@ flowchart LR
 ```
 
 1. You, your agent or the research agent add **ideas** to the **campaign**: one repo, one goal.
-2. The **daemon**, `piloop serve`, starts an **implementer** for each ready idea. An implementer is a coding agent
+2. The **daemon**, `piloop serve`, starts an **implementer** for each open idea. An implementer is a coding agent
    (Claude Code, Codex or pi) in a **worktree**: its own checkout of the **head**, the best result so far.
 3. The implementer commits. The daemon runs your **evaluate command** on the commit. The command writes one JSON line
    with each metric to `$PILOOP_RESULT_FILE`.

@@ -62,17 +62,15 @@ from piloop.db.models import (
 from piloop.db.requests import answer, pending
 from piloop.db.session import Database
 from piloop.db.triggers import DAEMON_ACTOR
-from piloop.db.triggers.changelog import IdeaStatusChanged
-from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CampaignStatus, CommentId, Ending, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
 from piloop.plugins.campaign_type.contract import CAMPAIGNS
-from piloop.plugins.campaign_type.kit.backlog.ideas import waiting
+from piloop.plugins.campaign_type.kit.backlog.ideas import claimable
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
-from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -161,9 +159,8 @@ def add_ideas(
     *titles: str,
     priority: int = 2,
     harness: str | None = None,
-    status: IdeaStatus = IdeaStatus.READY,
+    status: IdeaStatus = IdeaStatus.OPEN,
     after: tuple[int, ...] = (),
-    supersedes: tuple[int, ...] = (),
     track: str = 'score',
 ) -> list[int]:
     with db.session() as s:
@@ -177,10 +174,7 @@ def add_ideas(
                 harness=harness,
                 status=status,
                 created_by='test',
-                links=[
-                    *(IdeaLink(target_id=a, kind=LinkKind.AFTER) for a in after),
-                    *(IdeaLink(target_id=o, kind=LinkKind.SUPERSEDES) for o in supersedes),
-                ],
+                links=[IdeaLink(target_id=a, kind=LinkKind.AFTER) for a in after],
             )
             for t in titles
         ]
@@ -273,7 +267,7 @@ def test_ready_ideas_become_runs_in_priority_order(
     with db.session() as s:
         run = s.get_one(Run, 1)
         assert (run.idea_id, run.attempt, run.harness, run.model) == (high, 1, 'script', 'test-model')
-        assert s.get_one(Idea, high).status is IdeaStatus.SCHEDULED
+        assert s.get_one(Idea, high).status is IdeaStatus.CLAIMED
         agent_session = s.get_one(AgentSession, 1)
         assert (
             agent_session.kind,
@@ -286,7 +280,7 @@ def test_ready_ideas_become_runs_in_priority_order(
             1,
             'script',
             'test-model',
-            f'idea#{high} is ready',
+            f'idea#{high} is open',
         )
     assert run_all(scheduler) == [], 'max_concurrent=1: the second idea waits'
     scheduler.wait(SETTLE)
@@ -410,7 +404,7 @@ def test_a_harness_at_its_cap_passes_its_turn_and_an_idea_pinned_to_it_waits(
         assert [(r.idea_id, r.harness) for r in s.scalars(select(Run).order_by(Run.id))] == [(a, 'pi'), (b, 'pi')], (
             "script's turn went to pi; once pi was full too nothing more was queued"
         )
-        assert [s.get_one(Idea, i).status for i in (c, d, pinned)] == [IdeaStatus.READY] * 3, 'the pin waits'
+        assert [s.get_one(Idea, i).status for i in (c, d, pinned)] == [IdeaStatus.OPEN] * 3, 'the pin waits'
 
 
 def test_a_sweep_passes_over_a_harness_at_its_cap_and_a_pinned_one_stays_requested(
@@ -491,7 +485,7 @@ def test_a_queued_run_whose_harness_left_the_rotation_launches_on_the_new_one_un
         assert (rerouted.target_id, rerouted.payload) == (runs[0].id, RunRerouted(from_='script', to='pi'))
 
 
-def test_idea_without_a_base_is_parked(
+def test_idea_without_a_base_is_dropped(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     with db.session() as s:
@@ -502,7 +496,7 @@ def test_idea_without_a_base_is_parked(
     scheduler = make_scheduler(db, runtime, tmp_path)
     assert run_all(scheduler) == []
     with db.session() as s:
-        assert s.get_one(Idea, idea).status is IdeaStatus.PARKED
+        assert s.get_one(Idea, idea).status is IdeaStatus.DROPPED
 
 
 def test_a_run_starts_from_the_best_as_of_its_start_not_as_of_the_idea(
@@ -550,7 +544,7 @@ def test_a_pin_is_honored_over_the_after_link_and_the_run_records_both_bases(
         pinned = payload_of(queued, RunQueued)
         assert (pinned.pinned_base, pinned.computed_base) == (1, 2)
         assert run.branch, 'a pin other than the computed base: a branch run, judged against its own base'
-        assert s.get_one(Idea, missing).status is IdeaStatus.PARKED, 'a pin to a candidate that does not exist'
+        assert s.get_one(Idea, missing).status is IdeaStatus.DROPPED, 'a pin to a candidate that does not exist'
         assert s.scalars(select(Run).where(Run.idea_id == missing)).all() == []
 
 
@@ -615,7 +609,7 @@ def test_a_run_pinned_to_a_non_keep_is_a_branch_run_only_when_its_nearest_keep_i
     assert runs == {on_head: (n, False), on_older: (d, True), on_compose: (c, False)}, 'the pin is the base'
 
 
-def test_a_blocked_idea_waits_for_every_prerequisite_then_starts_from_the_head(
+def test_a_held_idea_waits_for_every_prerequisite_then_starts_from_the_head(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     (first,) = add_ideas(db, campaign, 'first', priority=3)
@@ -625,13 +619,13 @@ def test_a_blocked_idea_waits_for_every_prerequisite_then_starts_from_the_head(
 
     assert run_all(scheduler) == [1]
     with db.session() as s:
-        assert s.get_one(Run, 1).idea_id == first, 'the urgent idea is blocked, so the lower priorities run first'
-        assert s.get_one(Idea, third).status is IdeaStatus.READY, 'skipped, not touched'
+        assert s.get_one(Run, 1).idea_id == first, 'the urgent idea is held, so the lower priorities run first'
+        assert s.get_one(Idea, third).status is IdeaStatus.OPEN, 'skipped, not touched'
     scheduler.wait(SETTLE)
     assert run_all(scheduler) == [2]
     with db.session() as s:
         assert s.get_one(Run, 2).idea_id == second, 'one prerequisite done is not enough'
-        assert s.get_one(Idea, third).status is IdeaStatus.READY
+        assert s.get_one(Idea, third).status is IdeaStatus.OPEN
     scheduler.wait(SETTLE)
     with db.session() as s:
         assert [s.get_one(Candidate, c).verdict for c in (2, 3)] == [Outcome.KEEP] * 2, 'scores 2 and 3'
@@ -651,180 +645,52 @@ def test_a_blocked_idea_waits_for_every_prerequisite_then_starts_from_the_head(
         assert s.get_one(Idea, third).status is IdeaStatus.DONE
 
 
-def test_a_prerequisite_that_ended_without_a_keep_parks_the_ideas_after_it_with_an_escalation(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, tracer: Tracer
-) -> None:
-    """A cancelled (parked), rejected, or done-but-kept-nothing prerequisite can never release its dependents.
-
-    Left ``ready``, they block forever and the implementer slots sit idle. The daemon parks them, and the ideas after
-    them, and asks for one decision for each such prerequisite: one escalation for each parked idea flooded the inbox.
-    A prerequisite that kept something, never ran, or is still ``proposed`` does not.
-    """
-    (parked, rejected, nothing, kept, never, proposed) = add_ideas(
-        db, campaign, 'cancelled', 'rejected', 'kept nothing', 'kept', 'never ran', 'proposed'
-    )
-    with db.session() as s:
-        for idea_id, status in (
-            (parked, IdeaStatus.PARKED),
-            (rejected, IdeaStatus.REJECTED),
-            (nothing, IdeaStatus.DONE),
-            (kept, IdeaStatus.DONE),
-            (never, IdeaStatus.DONE),
-            (proposed, IdeaStatus.PROPOSED),
-        ):
-            s.get_one(Idea, idea_id).status = status
-        for idea_id, verdict in ((parked, None), (nothing, Outcome.DISCARD), (kept, Outcome.KEEP)):
-            run = Run(
-                idea_id=idea_id,
-                attempt=1,
-                base_candidate_id=1,
-                harness='h',
-                model='m',
-                status=RunStatus.SUCCEEDED,
-                end=RunEnd.FINISHED,
-            )
-            s.add(run)
-            s.flush()
-            if verdict is not None:
-                s.add(
-                    Candidate(
-                        campaign_id=campaign.id,
-                        run_id=run.id,
-                        tree_sha=f't{run.id}',
-                        revision=f'c{run.id}',
-                        verdict=verdict,
-                    )
-                )
-        s.commit()
-    stop_by_hand(tmp_path, campaign)  # bookkeeping happens, nothing launches
-    stranded = add_ideas(db, campaign, 'after cancelled', after=(parked,))
-    stranded += add_ideas(db, campaign, 'after rejected', after=(rejected,))
-    stranded += add_ideas(db, campaign, 'after kept nothing', after=(nothing, kept))
-    (chained,) = add_ideas(db, campaign, 'after after cancelled', after=(stranded[0],))
-    released = add_ideas(db, campaign, 'after kept', 'after never ran', 'after proposed')
-    with db.session() as s:
-        for idea_id, target in zip(released, (kept, never, proposed), strict=True):
-            s.add(IdeaLink(idea_id=idea_id, target_id=target, kind=LinkKind.AFTER))
-        s.commit()
-    scheduler = make_scheduler(db, runtime, tmp_path, tracer)
-
-    assert run_all(scheduler) == []
-    with db.session() as s:
-        assert [s.get_one(Idea, i).status for i in (*stranded, chained)] == [IdeaStatus.PARKED] * 4, 'chains too'
-        assert [s.get_one(Idea, i).status for i in released] == [IdeaStatus.READY] * 3
-        asked = s.scalars(select(Comment).where(Comment.author == DAEMON_ACTOR).order_by(Comment.id)).all()
-        assert [(c.target_id, c.kind, c.priority) for c in asked] == [
-            (parked, CommentKind.ESCALATION, 2),
-            (rejected, CommentKind.ESCALATION, 2),
-            (nothing, CommentKind.ESCALATION, 2),
-        ], 'one escalation for each cause, on it: the chain behind a cancelled idea is one decision'
-        assert [c.body.splitlines()[0] for c in asked[:2]] == [
-            '2 ideas wait for another idea that changed nothing. Do you run them anyway?',
-            'An idea waits for another idea that changed nothing. Do you run it anyway?',
-        ]
-        assert details(asked[0]) == snapshot(
-            'parked: idea#7, idea#10, after idea#1, which is parked. Unlink each (piloop idea unlink 7 after 1; piloop idea unlink 10 after 7) to run it without that change, or set them ready once idea#1 is ready again'
-        )
-    assert run_all(scheduler) == []
-    with db.session() as s:
-        assert s.scalar(select(func.count()).select_from(Comment)) == 3, 'once'
-
-
-def test_low_water_does_not_count_blocked_ideas_as_backlog(
+def test_an_after_link_holds_an_idea_until_its_prerequisite_is_done_or_dropped_and_parks_nothing(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    set_config(db, campaign, plugins={'role': {'research': {'max_ideas': 1, 'max_concurrent': 1, 'timeout': 20}}})
-    (gate,) = add_ideas(db, campaign, 'gate', status=IdeaStatus.PROPOSED)
-    add_ideas(db, campaign, 'behind the gate', after=(gate,))
-    scheduler = make_scheduler(db, runtime, tmp_path)
-    assert run_all(scheduler) == [1]
-    scheduler.wait(SETTLE)
-    scheduler.stop(timeout=1)
+    """A prerequisite that is done, kept or not, or dropped frees its dependents. One that is claimed or open holds
+    them, through a chain too. Nothing changes their status, and nothing asks the lead."""
+    (dropped, nothing, claimed) = add_ideas(db, campaign, 'dropped', 'kept nothing', 'claimed')
     with db.session() as s:
-        agent_session = s.get_one(AgentSession, 1)
-        assert (agent_session.kind, agent_session.reason) == (
-            RESEARCH,
-            '1 free implementer slots without a runnable idea; 0 of 3 runnable ideas',
-        ), 'one ready idea exists, but it cannot run: the backlog is empty for the research role'
-        assert s.scalars(select(Run)).all() == []
-
-
-def test_an_idea_waits_through_a_chain_of_ideas_that_run_without_a_sweep(db: Database, campaign: Campaign) -> None:
-    """Behind a scheduled idea, a ready one waits, and so does each one after it. Behind a proposed one, none does:
-    it needs a human first, so the chain is no backlog."""
-    (running,) = add_ideas(db, campaign, 'running', status=IdeaStatus.SCHEDULED)
-    (second,) = add_ideas(db, campaign, 'second', after=(running,))
-    add_ideas(db, campaign, 'third', after=(second,))
-    (gate,) = add_ideas(db, campaign, 'gate', status=IdeaStatus.PROPOSED)
-    (behind,) = add_ideas(db, campaign, 'behind the gate', after=(gate,))
-    add_ideas(db, campaign, 'further behind', after=(behind, second))
-    with db.session() as s:
-        assert set(s.scalars(select(Idea.title).where(waiting()))) == {'second', 'third'}
-
-
-def test_a_superseded_idea_that_never_ran_is_rejected_on_tick_and_one_that_ran_is_left_alone(
-    db: Database,
-    campaign: Campaign,
-    runtime: ScriptRuntime,
-    tmp_path: Path,
-    tracer: Tracer,
-    spans: InMemorySpanExporter,
-) -> None:
-    (ready,) = add_ideas(db, campaign, 'ready')
-    (proposed,) = add_ideas(db, campaign, 'proposed', status=IdeaStatus.PROPOSED)
-    (done,) = add_ideas(db, campaign, 'done', status=IdeaStatus.DONE)
-    (parked,) = add_ideas(db, campaign, 'parked', status=IdeaStatus.PARKED)
-    (retrying,) = add_ideas(db, campaign, 'failed once, one attempt left')
-    with db.session() as s:
-        s.add(
-            Run(
-                idea_id=retrying,
-                attempt=1,
-                base_candidate_id=1,
-                harness='h',
-                model='m',
-                status=RunStatus.FAILED,
-                end=RunEnd.FAILED,
-            )
-        )
+        for idea_id, status in (
+            (dropped, IdeaStatus.DROPPED),
+            (nothing, IdeaStatus.DONE),
+            (claimed, IdeaStatus.CLAIMED),
+        ):
+            s.get_one(Idea, idea_id).status = status
         s.commit()
     stop_by_hand(tmp_path, campaign)  # bookkeeping happens, nothing launches
-    add_ideas(db, campaign, 'sharper than both', supersedes=(ready, proposed))
-    add_ideas(db, campaign, 'sharper done', supersedes=(done,))
-    add_ideas(db, campaign, 'sharper parked', supersedes=(parked,))
-    add_ideas(db, campaign, 'sharper still', supersedes=(ready,))
-    add_ideas(db, campaign, 'sharper retry', supersedes=(retrying,))
-    scheduler = make_scheduler(db, runtime, tmp_path, tracer)
+    (after_dropped, after_claimed) = add_ideas(db, campaign, 'after dropped', 'after claimed')
+    (after_nothing,) = add_ideas(db, campaign, 'after kept nothing', after=(nothing,))
+    (chained,) = add_ideas(db, campaign, 'after after dropped', after=(after_dropped,))
+    with db.session() as s:
+        s.add(IdeaLink(idea_id=after_dropped, target_id=dropped, kind=LinkKind.AFTER))
+        s.add(IdeaLink(idea_id=after_claimed, target_id=claimed, kind=LinkKind.AFTER))
+        s.commit()
+    scheduler = make_scheduler(db, runtime, tmp_path)
 
     assert run_all(scheduler) == []
-    assert statuses(db)[:5] == [
-        IdeaStatus.REJECTED,
-        IdeaStatus.REJECTED,
-        IdeaStatus.DONE,
-        IdeaStatus.PARKED,
-        IdeaStatus.READY,
-    ], 'never ran → rejected; ran, parked by a human, or ready again after a failed attempt → untouched'
-    assert statuses(db)[5:] == [IdeaStatus.READY] * 5
     with db.session() as s:
-        logged = s.scalars(select(Event).where(Event.kind == 'idea.status').order_by(Event.id)).all()
-        assert [(e.target_id, e.actor, e.payload) for e in logged] == [
-            (ready, 'daemon', IdeaStatusChanged(old=IdeaStatus.READY, new=IdeaStatus.REJECTED)),
-            (proposed, 'daemon', IdeaStatusChanged(old=IdeaStatus.PROPOSED, new=IdeaStatus.REJECTED)),
-        ], 'the change-log trigger is the only writer of idea.status; the daemon emits nothing by hand'
-        notes = s.scalars(select(Comment).where(Comment.author == 'daemon').order_by(Comment.id)).all()
-        superseded = 'rejected: superseded by idea#{0}. It does not run, even if idea#{0} has not run yet.'
-        assert [(c.target_id, str(c.kind), c.body) for c in notes] == [
-            (ready, 'note', superseded.format(9)),
-            (proposed, 'note', superseded.format(6)),
-        ], 'the newest superseding idea is named where the event cannot say it'
-    traced = [dict(sp.attributes or {}) for sp in spans.get_finished_spans() if sp.name == 'idea.superseded']
-    assert traced == [
-        {'campaign': 'demo', 'idea': ready, 'by': 9},
-        {'campaign': 'demo', 'idea': proposed, 'by': 6},
-    ], 'no open span: own spans'
+        dependents = (after_dropped, after_claimed, after_nothing, chained)
+        assert [s.get_one(Idea, i).status for i in dependents] == [IdeaStatus.OPEN] * 4, 'nothing is parked'
+        assert set(s.scalars(select(Idea.id).where(claimable()))) == {after_dropped, after_nothing}, (
+            'a dropped or a done prerequisite frees its dependents; a claimed one, or an open one up the chain, holds'
+        )
+        assert s.scalars(select(Comment)).all() == [], 'and nothing is escalated'
+
+
+def test_low_water_counts_held_ideas_as_backlog(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A held idea is on the board: research adds no idea for its slot."""
+    set_config(db, campaign, plugins={'role': {'research': {'max_ideas': 1, 'max_concurrent': 1, 'timeout': 20}}})
+    (gate,) = add_ideas(db, campaign, 'gate', status=IdeaStatus.CLAIMED)
+    add_ideas(db, campaign, *(f'behind the gate {n}' for n in range(3)), after=(gate,))
+    scheduler = make_scheduler(db, runtime, tmp_path)
     assert run_all(scheduler) == []
+    scheduler.stop(timeout=1)
     with db.session() as s:
-        assert s.scalar(select(func.count()).select_from(Event).where(Event.kind == 'idea.status')) == 2, 'once'
+        assert s.scalars(select(AgentSession)).all() == [] and s.scalars(select(Run)).all() == []
 
 
 def test_reap(
@@ -850,7 +716,7 @@ def test_reap(
                 session_id='no-spec-to-read-it-with',
             )
         )
-        s.get_one(Idea, idea).status = IdeaStatus.SCHEDULED
+        s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
         s.get_one(Idea, idea).max_runs = 1
         evaluator = s.get_one(Campaign, campaign.id).evaluator_id
         assert evaluator is not None
@@ -894,7 +760,7 @@ def test_reap(
     with db.session() as s:
         run = s.get_one(Run, 1)
         assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.STALE)
-        assert s.get_one(Idea, idea).status is IdeaStatus.READY, 'a crash is not an attempt: its only one remains'
+        assert s.get_one(Idea, idea).status is IdeaStatus.OPEN, 'a crash is not an attempt: its only one remains'
         assert s.get_one(AgentSession, 1).state is AgentSessionState.KILLED
         sweep = s.get_one(AgentSession, 2)
         assert sweep.state is AgentSessionState.KILLED
@@ -1085,11 +951,11 @@ def test_reap_leaves_a_human_decision_alone(
     (idea,) = add_ideas(db, campaign, 'parked meanwhile')
     with db.session() as s:
         s.add(Run(idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING))
-        s.get_one(Idea, idea).status = IdeaStatus.PARKED
+        s.get_one(Idea, idea).status = IdeaStatus.DROPPED
         s.commit()
     make_scheduler(db, runtime, tmp_path).reap()
     with db.session() as s:
-        assert s.get_one(Idea, idea).status is IdeaStatus.PARKED
+        assert s.get_one(Idea, idea).status is IdeaStatus.DROPPED
 
 
 IMPLEMENTER_TIMEOUT = 60
@@ -1123,7 +989,7 @@ def test_stop_kills_in_flight_implementers_and_fails_their_runs(
     with db.session() as s:
         run = s.get_one(Run, 1)
         assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.DAEMON_STOPPED)
-        assert s.get_one(Idea, idea).status is IdeaStatus.READY
+        assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
         assert (s.get_one(AgentSession, 1).state, s.get_one(AgentSession, 1).error) == (
             AgentSessionState.KILLED,
             RunEnd.DAEMON_STOPPED,
@@ -1171,7 +1037,7 @@ def test_stop_keeps_the_work_of_the_runs_it_cuts_and_the_next_run_of_the_idea_st
             (head, Origin.RECOVERED, None),
         ]
         assert all(c.measurements == [] for c in cut), 'never measured'
-        assert (s.get_one(Run, 1).end, s.get_one(Idea, idea).status) == (RunEnd.DAEMON_STOPPED, IdeaStatus.READY)
+        assert (s.get_one(Run, 1).end, s.get_one(Idea, idea).status) == (RunEnd.DAEMON_STOPPED, IdeaStatus.OPEN)
         assert s.get_one(Idea, idea).base_candidate_id == cut[-1].id
         (note,) = s.scalars(select(Comment).where(Comment.author == DAEMON_ACTOR)).all()
         assert note.body.startswith(f'requeued from candidate#{cut[-1].id}: run#1 ended daemon_stopped')
@@ -1200,7 +1066,7 @@ def test_a_cut_run_whose_role_allows_no_requeue_keeps_its_base_and_a_known_tree_
     with db.session() as s:
         assert s.scalars(select(Candidate).where(Candidate.run_id == 1)).all() == [], 'the base, not a new candidate'
         assert s.get_one(Candidate, 1).verdict is Outcome.KEEP
-        assert (s.get_one(Idea, idea).status, s.get_one(Idea, idea).base_candidate_id) == (IdeaStatus.READY, None)
+        assert (s.get_one(Idea, idea).status, s.get_one(Idea, idea).base_candidate_id) == (IdeaStatus.OPEN, None)
 
 
 @pytest.mark.parametrize('escalated', [False, True])
@@ -1236,7 +1102,7 @@ def test_a_stop_after_the_implementer_left_its_finding_scores_its_run_on_the_nex
         run = s.get_one(Run, 1)
         ended = (RunEnd.AWAITING_ANSWER, 'comment#2') if escalated else (RunEnd.FINISHED, None)
         assert (run.end, run.error, run.scoring) == (*ended, True)
-        assert s.get_one(Idea, idea).status is IdeaStatus.SCHEDULED, 'not ready: a second run would redo the work'
+        assert s.get_one(Idea, idea).status is IdeaStatus.CLAIMED, 'not ready: a second run would redo the work'
         notes = s.scalars(select(Comment).where(Comment.author == DAEMON_ACTOR)).all()
         assert notes == [], 'its commits are scored, so no note sends the next run to them'
     [step] = pinned(Repo(campaign.path), 'refs/piloop/demo/r1/')
@@ -1248,7 +1114,7 @@ def test_a_stop_after_the_implementer_left_its_finding_scores_its_run_on_the_nex
     with db.session() as s:
         [candidate] = s.scalars(select(Candidate).where(Candidate.run_id == 1)).all()
         assert (candidate.summary, candidate.verdict) == ('step', Outcome.KEEP)
-        assert s.get_one(Idea, idea).status is (IdeaStatus.PARKED if escalated else IdeaStatus.DONE)
+        assert s.get_one(Idea, idea).status is (IdeaStatus.DROPPED if escalated else IdeaStatus.DONE)
         assert s.get_one(Run, 1).scoring is False
 
 
@@ -1354,7 +1220,7 @@ def test_stop_before_the_implementer_starts_never_starts_it(
     with db.session() as s:
         run = s.get_one(Run, 1)
         assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.DAEMON_STOPPED)
-        assert s.get_one(Idea, idea).status is IdeaStatus.READY
+        assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
         agent_session = s.get_one(AgentSession, 1)
         assert (agent_session.state, agent_session.error, agent_session.handle) == (
             AgentSessionState.KILLED,
@@ -1430,7 +1296,7 @@ def test_stop_kills_the_evaluator_and_scores_nothing_more(
     with db.session() as s:
         run = s.get_one(Run, 1)
         assert (run.status, run.error) == (RunStatus.SUCCEEDED, None), 'closed when its implementer ended'
-        assert s.get_one(Idea, 1).status is IdeaStatus.SCHEDULED, (
+        assert s.get_one(Idea, 1).status is IdeaStatus.CLAIMED, (
             'its run finished and only its scoring was cut: the next daemon scores it, the idea is not run again'
         )
         assert s.get_one(AgentSession, 1).state is AgentSessionState.EXITED, (
@@ -1472,7 +1338,7 @@ def test_a_restart_during_an_evaluation_scores_the_run_on_start_and_never_runs_i
     wait_until(lambda: list((tmp_path / 'runs' / '1' / 'eval-0').glob('lease-*/candidate-0/eval.stdout')))
     first.stop(timeout=10)
     with db.session() as s:
-        assert s.get_one(Idea, 1).status is IdeaStatus.SCHEDULED
+        assert s.get_one(Idea, 1).status is IdeaStatus.CLAIMED
         assert [c.verdict for c in s.scalars(select(Candidate).where(Candidate.run_id == 1))] == [None] * 2
 
     hold.unlink()
@@ -1493,7 +1359,7 @@ def test_a_restart_during_an_evaluation_scores_the_run_on_start_and_never_runs_i
     second.stop(timeout=5)
 
 
-@pytest.mark.parametrize(('before', 'after'), [(IdeaStatus.SCHEDULED, IdeaStatus.READY), (IdeaStatus.PARKED, None)])
+@pytest.mark.parametrize(('before', 'after'), [(IdeaStatus.CLAIMED, IdeaStatus.OPEN), (IdeaStatus.DROPPED, None)])
 def test_a_run_whose_scoring_cannot_resume_returns_its_idea_to_the_queue(
     db: Database,
     campaign: Campaign,
@@ -1623,7 +1489,7 @@ def test_a_new_evaluator_measures_the_head_runs_wait_for_it_and_older_keeps_only
     add_ideas(db, campaign, 'another line')
 
     assert run_all(sched) == [], 'no keep has a score under the new evaluator: the run waits instead of being parked'
-    assert statuses(db) == [IdeaStatus.DONE, IdeaStatus.READY]
+    assert statuses(db) == [IdeaStatus.DONE, IdeaStatus.OPEN]
     sched.wait(SETTLE)
     assert measured_by(db, kept.id) == [(old, 2.0, None), (new, 4.0, None)], 'the head first'
     assert measured_by(db, CandidateId(1)) == [(old, 1.0, None)], 'one at a time'
@@ -1854,7 +1720,7 @@ def running_agent_session(
     """
     (idea,) = add_ideas(db, campaign, title)
     with db.session() as s:
-        s.get_one(Idea, idea).status = IdeaStatus.SCHEDULED
+        s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
         run = Run(
             idea_id=idea,
             attempt=1,
@@ -2104,7 +1970,7 @@ def test_a_run_frees_its_slot_when_its_implementer_ends_and_its_idea_settles_onc
     with db.session() as s:
         run = s.get_one(Run, 1)
         assert (run.status, run.finished_at is not None) == (RunStatus.SUCCEEDED, True), 'closed: its implementer ended'
-        assert s.get_one(Idea, first).status is IdeaStatus.SCHEDULED, 'its commit is not judged yet'
+        assert s.get_one(Idea, first).status is IdeaStatus.CLAIMED, 'its commit is not judged yet'
         assert s.scalars(select(Candidate).where(Candidate.run_id == 1)).one().verdict is None
     assert run_all(scheduler) == [2], 'the one slot is free while run#1 is scored'
     go.touch()
@@ -2220,7 +2086,7 @@ def test_an_implementer_that_the_stop_ends_mid_turn_closes_its_run_as_cut_by_the
         assert [(c.origin, c.verdict) for c in made] == [(Origin.RUN, Outcome.KEEP), (Origin.RECOVERED, None)], (
             'its commit is scored, its draft recovered'
         )
-        assert s.get_one(Idea, idea).status is IdeaStatus.READY, 'requeued from the recovered draft'
+        assert s.get_one(Idea, idea).status is IdeaStatus.OPEN, 'requeued from the recovered draft'
         assert runs(s, s.get_one(Campaign, campaign.id)) == 0, 'cut by the stop: no run limit counts it'
 
 
@@ -2327,7 +2193,7 @@ def test_an_agent_of_no_campaign_winds_down_on_the_home_s_grace(
     scheduler.stop(timeout=5)
 
 
-def test_a_cancelled_implementer_closes_its_run_as_cancelled_scores_its_commits_and_parks_its_idea(
+def test_a_cancelled_implementer_closes_its_run_as_cancelled_scores_its_commits_and_reopens_its_idea(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """``piloop agent cancel``: the run became redundant, so its idea does not run again until it is set ready."""
@@ -2353,9 +2219,9 @@ def test_a_cancelled_implementer_closes_its_run_as_cancelled_scores_its_commits_
         assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.CANCELLED)
         verdicts = [c.verdict for c in s.scalars(select(Candidate).where(Candidate.run_id == 1))]
         assert verdicts == [Outcome.KEEP], 'what it committed is scored'
-        assert s.get_one(Idea, idea).status is IdeaStatus.PARKED
+        assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
         [note] = s.scalars(select(Comment).where(Comment.target_kind == IDEA)).all()
-        assert note.body == 'parked: run#1 was cancelled by human; set the idea ready to run it again'
+        assert note.body == 'open: run#1 was cancelled by human; drop the idea to take it off the board'
         assert runs(s, s.get_one(Campaign, campaign.id)) == 0, 'not an attempt: no run limit counts it'
 
 
@@ -2416,7 +2282,7 @@ def test_a_cancelled_request_never_launches_and_a_cancelled_sweep_is_ended(
     runtime = PromptingRuntime()
     (idea,) = add_ideas(db, campaign, 'queued')
     with db.session() as s:
-        s.get_one(Idea, idea).status = IdeaStatus.SCHEDULED
+        s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
         run = Run(idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
@@ -2439,7 +2305,9 @@ def test_a_cancelled_request_never_launches_and_a_cancelled_sweep_is_ended(
         s.commit()
     lease_running(db)
     scheduler = make_scheduler(db, runtime, tmp_path)
-    assert run_all(scheduler) == [], 'the queued run is cancelled before it launches'
+    assert run_all(scheduler) == [4], (
+        'the queued run is cancelled before it launches: its idea is open again, and a new run of it starts'
+    )
     assert revoked(db) == ['research-2']
     with db.session() as s:
         w = s.get_one(AgentSession, 1)
@@ -2452,7 +2320,10 @@ def test_a_cancelled_request_never_launches_and_a_cancelled_sweep_is_ended(
             AgentSessionState.KILLED,
             'cancelled by human',
         )
-        assert s.get_one(Idea, idea).status is IdeaStatus.PARKED
+        assert [r.end for r in s.scalars(select(Run).where(Run.idea_id == idea).order_by(Run.id))] == [
+            RunEnd.CANCELLED,
+            None,
+        ]
     scheduler.stop(timeout=5)
 
 
@@ -2605,7 +2476,7 @@ def test_every_nth_run_starts_from_an_alternative_base_whatever_its_priority(
     assert queue_one(db, scheduler) == (urgent, False), 'a branch run among the last two: priority order'
     assert queue_one(db, scheduler) == (level, False), 'a pin to the computed base is no alternative'
     (later,) = add_ideas(db, campaign, 'later')
-    assert queue_one(db, scheduler) == (later, False), 'due, but no idea pinned to an alternative base is ready'
+    assert queue_one(db, scheduler) == (later, False), 'due, but no idea pinned to an alternative base is open'
 
 
 def test_explore_every_0_keeps_the_priority_order(
@@ -2677,11 +2548,11 @@ def test_an_idea_on_a_track_the_config_does_not_name_is_parked_and_a_track_at_sh
     (waiting,) = add_ideas(db, campaign, 'cost work', track='cost')
     assert queue(db, make_scheduler(db, runtime, tmp_path), campaign) == []
     with db.session() as s:
-        assert (s.get_one(Idea, stray).status, s.get_one(Idea, waiting).status) == (IdeaStatus.PARKED, IdeaStatus.READY)
+        assert (s.get_one(Idea, stray).status, s.get_one(Idea, waiting).status) == (IdeaStatus.DROPPED, IdeaStatus.OPEN)
         [note] = s.scalars(select(Comment).where(Comment.target_id == stray)).all()
         assert note.body == (
-            "parked: its track 'speed' is not in piloop.toml (tracks: accuracy, cost); set ideas.track to one of"
-            ' them, then set it ready'
+            "dropped: its track 'speed' is not in piloop.toml (tracks: accuracy, cost); set ideas.track to one of"
+            ' them, then open it'
         )
 
 
@@ -2695,7 +2566,6 @@ def test_the_triggers_that_read_no_time_ask_for_no_pass_of_their_own(
         cfg = CampaignConfig.model_validate(p.config)
         on = campaigns_of(scheduler)._pass(s, p, cfg, RESEARCH, role_of(cfg, ResearchRole), utcnow(), left(s, p, cfg))
         for trigger in (
-            SeedTrigger(),
             StalledTrigger(),
             RunFailed(),
             DeadAtStartup(),

@@ -218,7 +218,7 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
         assert [(r.idea_id, r.status) for r in s.scalars(select(Run))] == [(first, RunStatus.SUCCEEDED)], (
             'what ran finished and was scored; nothing else was queued'
         )
-        assert s.get_one(Idea, second).status is IdeaStatus.READY
+        assert s.get_one(Idea, second).status is IdeaStatus.OPEN
         p = s.get_one(Campaign, campaign.id)
         assert progress(s, p, CampaignConfig.model_validate(p.config), p.created_at).endswith(
             ' · spend 1012/300 · no limit stops it: open-ended (launches held: spend at its limit)'

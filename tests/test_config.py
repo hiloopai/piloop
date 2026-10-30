@@ -17,13 +17,13 @@ from piloop.deprecated import PiloopDeprecationWarning
 from piloop.ids import RoleName
 from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
 from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
-from piloop.plugins.campaign_type.kit.backlog.trigger.seed import SeedTrigger
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.campaign_type.kit.verdicts.judge import criterion
+from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.executor.contract import EXECUTORS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.fact_source.contract import FACT_SOURCES
@@ -33,6 +33,7 @@ from piloop.plugins.host import Check
 from piloop.plugins.metric import Direction
 from piloop.plugins.role.contract import Files, ImplementerRole
 from piloop.plugins.role.orchestrator import OrchestratorRole
+from piloop.plugins.section.contract import SECTIONS
 from piloop.plugins.section.goal import Goal
 from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule
@@ -117,8 +118,8 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
     assert (watchdog.harnesses, watchdog.model) == (None, None), 'the campaign rotation and models'
     assert (watchdog.timeout, watchdog.interval) == (600, 1800)
     assert (research.timeout, research.max_ideas) == (900, 3), 'a sweep defines a ranked few ideas'
-    assert research.triggers == ['low_water', 'seed', 'stalled']
-    assert defaults.triggers_of(RESEARCH) == [LowWaterTrigger(buffer=2), SeedTrigger(), StalledTrigger()]
+    assert research.triggers == ['low_water', 'stalled']
+    assert defaults.triggers_of(RESEARCH) == [LowWaterTrigger(buffer=2), StalledTrigger()]
     assert research.max_concurrent == 1, 'concurrent sweeps duplicate each other and race on seeds'
 
 
@@ -545,7 +546,7 @@ def test_a_table_with_a_new_name_defines_a_role_that_needs_a_prompt_file_and_tri
         reviewer(triggers=['timer']), {'timer': {'provider': 'cron', 'every': 3}}
     )
     assert '[plugins.trigger.new_idea] is configured, and nothing uses it: add it to a list that names it' in fails(
-        reviewer(triggers=['seed'])
+        reviewer(triggers=['stalled'])
     )
     filler = load_campaign_config(
         campaign_path,
@@ -794,7 +795,7 @@ def test_the_leaking_funnel_of_0_5_loads_without_the_trigger_and_warns(campaign_
     text = (
         toml.read_text()
         .replace('[plugins.role.watchdog]\n', f'[plugins.role.watchdog]\n{watchdog}\n')
-        .replace('[plugins.role.research]\n', '[plugins.role.research]\ntriggers = ["seed"]\n')
+        .replace('[plugins.role.research]\n', '[plugins.role.research]\ntriggers = ["stalled"]\n')
     )
     tables = '[plugins.trigger.leaks]\nprovider = "leaking_funnel"\n\n[plugins.trigger.leaking_funnel]\nwindow = 3\n'
     toml.write_text(f'{text}\n{tables}')
@@ -807,7 +808,42 @@ def test_the_leaking_funnel_of_0_5_loads_without_the_trigger_and_warns(campaign_
         lines.index('[plugins.trigger.leaking_funnel]') + 1,
     ], 'the line of each'
     assert [type(t).__name__ for t in cfg.triggers_of(WATCHDOG)] == ['RunFailed']
-    assert [type(t).__name__ for t in cfg.triggers_of(RESEARCH)] == ['SeedTrigger'], 'its list is left as it is'
+    assert [type(t).__name__ for t in cfg.triggers_of(RESEARCH)] == ['StalledTrigger'], 'its list is left as it is'
+
+
+def test_the_seed_trigger_of_0_5_loads_without_the_trigger_and_warns(campaign_path: Path) -> None:
+    toml = campaign_path / 'piloop.toml'
+    research = 'triggers = ["low_water", "seed", "stalled"]'
+    text = toml.read_text().replace('[plugins.role.research]\n', f'[plugins.role.research]\n{research}\n')
+    toml.write_text(f'{text}\n[plugins.trigger.seed]\n')
+    lines = toml.read_text().splitlines()
+    with pytest.warns(PiloopDeprecationWarning, match='the seed trigger is removed') as warned:
+        cfg = load_campaign_config(campaign_path)
+    assert sorted(w.lineno for w in warned) == [lines.index(research) + 1, lines.index('[plugins.trigger.seed]') + 1]
+    assert [type(t).__name__ for t in cfg.triggers_of(RESEARCH)] == ['LowWaterTrigger', 'StalledTrigger']
+
+
+def test_the_seeds_and_reviews_of_0_5_load_without_their_keys_and_warn(campaign_path: Path) -> None:
+    """``files = "seeds"`` files nothing now, and ``idle_alert`` and the pack's ``seeds`` go: nothing is a seed."""
+    toml = campaign_path / 'piloop.toml'
+    text = (
+        toml.read_text()
+        .replace('[plugins.role.implementer]\n', '[plugins.role.implementer]\nidle_alert = 60\n')
+        .replace('[plugins.role.watchdog]\n', '[plugins.role.watchdog]\nfiles = "seeds"\n')
+    )
+    toml.write_text(f'{text}\n[plugins.section]\nuse = ["pack"]\n\n[plugins.section.pack]\nseeds = 5\nideas = 7\n')
+    lines = toml.read_text().splitlines()
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        cfg = load_campaign_config(campaign_path)
+    assert sorted((w.lineno, str(w.message).partition(';')[0]) for w in warned) == sorted(
+        [
+            (lines.index('idle_alert = 60') + 1, 'an idea waits for no review now, so idle_alert is removed'),
+            (lines.index('files = "seeds"') + 1, 'a seed is an open idea now, so files = "seeds" files nothing'),
+            (lines.index('seeds = 5') + 1, 'the research pack lists no seeds now'),
+        ]
+    )
+    assert filed(role_of(cfg, WatchdogRole)) is Files.NOTHING
+    assert SECTIONS.instances(cfg.plugins)['pack'] == Pack(ideas=7)
 
 
 def test_files_and_plan_words_of_a_role_that_does_runs_of_0_5_load_without_them_and_warn(campaign_path: Path) -> None:

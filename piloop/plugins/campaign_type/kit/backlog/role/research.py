@@ -1,11 +1,7 @@
 from importlib.resources import files
 
 from pydantic import Field
-from sqlalchemy import select
 
-from piloop.db.models import count
-from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.harness.contract import HarnessKey
@@ -15,16 +11,15 @@ from piloop.plugins.trigger.contract import TriggerName
 
 
 class ResearchRole(SweepRole):
-    """``[plugins.role.research]``: research develops seeds and keeps ideas ready for the implementers."""
+    """``[plugins.role.research]``: research keeps the board stocked with ideas for the workers."""
 
     PROMPT = files(__package__) / 'prompts' / 'research.md'
     GUIDES = (*READER, 'search', 'past_campaigns', 'links')
 
-    triggers: list[TriggerName] = ['low_water', 'seed', 'stalled']
-    """A short backlog, a new seed, and a stall."""
+    triggers: list[TriggerName] = ['low_water', 'stalled']
+    """A short backlog, and a stall."""
     writes: list[str] = [
-        'seeds via idea develop, or their status to rejected with a note',
-        'ideas via idea add',
+        'ideas via idea add, or the status of an open idea to dropped with a note',
         'comments(finding, escalation) on the campaign',
         'comments(note) on an idea',
     ]
@@ -33,19 +28,17 @@ class ResearchRole(SweepRole):
     """The model for each harness in this role, over the harness's ``model``. A table that you set replaces
     this one."""
     files: Files = Files.IDEAS
-    """Research develops seeds into ideas and adds ideas of its own."""
+    """Research adds ideas to the board."""
     timeout: float = 900
     """The number of seconds one sweep may run before it is stopped."""
     max_ideas: int = Field(default=3, ge=0)
-    """The most new ideas of its own that one sweep may insert, best first. The seeds it develops do not count. 0 pauses
-    research's new ideas: ``low_water`` is off, and an idea that a sweep adds is ``proposed``."""
+    """The most new ideas that one sweep may insert, best first. 0 turns ``low_water`` off for research."""
     max_concurrent: int = Field(default=1, ge=1)
     """The maximum number of sweeps that run at the same time, each on the next harness of the rotation. The default
-    is 1: sweeps that run at the same time read the same evidence and often duplicate each other, and two of them can
-    race to develop the same seed."""
+    is 1: sweeps that run at the same time read the same evidence and often duplicate each other."""
 
     def context(self, sweep: Sweep) -> list[str]:
-        """The seeds to develop, this sweep's share of the backlog, the tracks short of their share, and the stall.
+        """This sweep's share of the backlog, the tracks short of their share, and the stall.
 
         The backlog's target has the ``buffer`` of the role's first ``low_water`` trigger, or none without one. The
         stall mark is that of its first ``stalled`` trigger: without one, the role has no stall.
@@ -60,20 +53,17 @@ class ResearchRole(SweepRole):
         pivot = min(most, 1) if stalled else 0  # A stall gets its pivot whatever the backlog holds.
         own = max(min(backlog.short + most, most), pivot)  # This sweep's share of the shortfall.
         campaign = sweep.campaign
-        seeds = count(sweep.s, select(Idea).where(Idea.campaign_id == campaign.id, Idea.status == IdeaStatus.SEED))
         pivots = ': stalled, so one of your own ideas pivots (section 3)' if pivot else ''
         short = ', '.join(
             f'{t.name} {t.gap} ({t.runnable} of {t.target} runnable)' for t in backlog.tracks if t.gap > 0
         )
         tracks = [
-            f'- Tracks short of their share of the backlog: {short or "none"}. Give every idea and every developed seed'
-            ' the track it serves (`--track`); fill the short ones first.'
+            f'- Tracks short of their share of the backlog: {short or "none"}. Give every idea the track it serves'
+            ' (`--track`); fill the short ones first.'
         ]
         return [
-            f'- Seeds to develop first: {seeds}, listed in the research pack oldest first.',
-            f'- Ideas of your own after the seeds: propose {own} (the backlog holds {backlog.held()};'
-            ' developed seeds do not count against it). Fewer only when what is left duplicates queued work;'
-            ' name that work in your finding.',
+            f'- Ideas to add: {own} (the board holds {backlog.held()}). Fewer only when what is left duplicates'
+            ' open work; name that work in your finding.',
             *(tracks if campaign.config.multitrack else []),
             *(
                 [

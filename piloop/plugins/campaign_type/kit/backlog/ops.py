@@ -1,4 +1,4 @@
-"""The operations on the backlog that the API and the CLI run: ideas, seeds, links, bases, tracks and statuses."""
+"""The operations on the backlog that the API and the CLI run: ideas, links, bases, tracks and statuses."""
 
 from collections.abc import Sequence
 
@@ -10,7 +10,6 @@ from piloop.agents.roles import files_of
 from piloop.campaign.ops import Refused, existing, required_reason
 from piloop.db.models import Campaign, Comment
 from piloop.ids import CampaignId, CommentKind, TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ideas import Definition, NotASeed, develop
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
@@ -21,39 +20,14 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.role.contract import Files
 
 
-def review_first(campaign: Campaign, actor: Actor, *, new: bool) -> str | None:
-    """Return why an idea that ``actor`` adds (``new``) or develops waits for a review (``proposed``), or None.
-
-    Only an agent of a sweeping role waits: while the campaign is paused, and for a new idea while its role's
-    ``max_ideas`` is 0 (a sweep reads it once, in its brief; the operator may have set it to 0 since). The orchestrator
-    and humans paused the campaign themselves.
-    """
-    if (agent := actor.launched) is None:
-        return None
-    name = agent.role
-    role = campaign.config.roles.sweeping().get(name)
-    if role is None:
-        return None
-    if campaign.paused is not None:
-        return f'campaign {campaign.name} is paused'
-    if new and role.max_ideas == 0:
-        return f'[plugins.role.{name}] max_ideas = 0'
-    return None
-
-
-def files(campaign: Campaign, actor: Actor) -> Files | None:
-    """Return what ``actor`` may file in ``campaign`` (``[plugins.role.<name>] files``); None when it is not a role.
+def files(campaign: Campaign, actor: Actor) -> None:
+    """Refuse an idea from ``actor`` when its role files none (``[plugins.role.<name>] files``).
 
     Raises:
         Refused: the actor's role files nothing.
     """
-    filed = files_of(campaign.config, actor)
-    if filed is Files.NOTHING:
-        raise Refused(
-            f"{actor} files no ideas or seeds: say the hunch in your run's finding, with pointers."
-            ' Research reads the findings of the implementers.'
-        )
-    return filed
+    if files_of(campaign.config, actor) is Files.NOTHING:
+        raise Refused(f"{actor} files no ideas: say the hunch in a note on your run's idea, with pointers.")
 
 
 def check_plan(campaign: Campaign, actor: Actor, plan: str | None) -> None:
@@ -84,33 +58,24 @@ def add_idea(
     hypothesis: str = '',
     plan: str | None = None,
     provenance: str | None = None,
-    family: str | None = None,
     priority: int = 2,
     harness: str | None = None,
     base: CandidateId | None = None,
-    proposed: bool = False,
     track: TrackName | None = None,
     after: Sequence[IdeaId] = (),
-    supersedes: Sequence[IdeaId] = (),
-) -> tuple[Idea, str | None]:
-    """Add a defined idea, with its links, and return it with why it waits for a review (``review_first``), or None.
+) -> Idea:
+    """Add an ``open`` idea, with its links, and return it.
 
-    The idea is ``ready``, or ``proposed`` with ``proposed`` or a review first. The idea and its links are written in
-    the caller's transaction, so the daemon never sees the idea without them. Emits ``idea.created``.
+    The idea and its links are written in the caller's transaction, so the daemon never sees the idea without them.
+    Emits ``idea.created``.
 
     Raises:
-        Refused: the actor files only seeds or nothing, the base or the track is not the campaign's, or a link is
-            refused (``link``).
+        Refused: the actor files nothing, the base or the track is not the campaign's, or a link is refused (``link``).
     """
     campaign = existing(s, Campaign, campaign_id, 'campaign')
-    if files(campaign, actor) is Files.SEEDS:
-        raise Refused(
-            f'{actor} files seeds, not ideas: `piloop idea seed {campaign.name} "<hunch>" --from "<pointers>"`.'
-            ' Research develops each seed with the whole campaign in view.'
-        )
+    files(campaign, actor)
     check_base(s, campaign, base)
     check_plan(campaign, actor, plan)
-    held = review_first(campaign, actor, new=True)
     idea = Idea(
         campaign_id=campaign.id,
         track=track_for(campaign, track),
@@ -118,114 +83,29 @@ def add_idea(
         hypothesis=hypothesis or title,
         plan=plan,
         provenance=provenance,
-        family=family,
         priority=priority,
         harness=harness,
         base_candidate_id=base,
-        status=IdeaStatus.PROPOSED if proposed or held is not None else IdeaStatus.READY,
+        status=IdeaStatus.OPEN,
         created_by=actor.signature,
     )
     s.add(idea)
     s.flush()
-    _link_all(s, idea, after, supersedes)
-    return idea, held
-
-
-def file_seed(
-    s: Session,
-    campaign_id: CampaignId,
-    hunch: str,
-    *,
-    actor: Actor,
-    provenance: str,
-    base: CandidateId | None = None,
-    track: TrackName | None = None,
-) -> Idea:
-    """File a seed: a hunch with pointers, for research to develop or reject. Emits ``idea.created``.
-
-    Raises:
-        Refused: the actor files nothing, the pointers are blank, or the base or the track is not the campaign's.
-    """
-    campaign = existing(s, Campaign, campaign_id, 'campaign')
-    files(campaign, actor)
-    if not provenance.strip():
-        raise Refused('a seed needs pointers: --from "<ids, paths, numbers>"')
-    check_base(s, campaign, base)
-    idea = Idea(
-        campaign_id=campaign.id,
-        track=track_for(campaign, track),
-        title=hunch,
-        hypothesis=hunch,
-        provenance=provenance,
-        base_candidate_id=base,
-        status=IdeaStatus.SEED,
-        created_by=actor.signature,
-    )
-    s.add(idea)
-    s.flush()
+    for target in after:
+        _link(s, idea, LinkKind.AFTER, target)
     return idea
 
 
-def develop_seed(
-    s: Session,
-    idea_id: IdeaId,
-    definition: Definition,
-    *,
-    actor: Actor,
-    title: str | None = None,
-    family: str | None = None,
-    base: CandidateId | None = None,
-    priority: int | None = None,
-    proposed: bool = False,
-    after: Sequence[IdeaId] = (),
-    supersedes: Sequence[IdeaId] = (),
-) -> tuple[Idea, str | None]:
-    """Develop a seed into a defined idea (``ideas.develop``) with its links, and return it with why it waits.
-
-    Raises:
-        Refused: the actor files only seeds or nothing, the idea is not a seed, the definition lacks a part, the base
-            is not the campaign's, or a link is refused (``link``): a link from a seed can close a cycle.
-    """
-    idea = existing(s, Idea, idea_id, 'idea')
-    if files(idea.campaign, actor) is Files.SEEDS:
-        raise Refused(f'{actor} files seeds; research develops them')
-    check_base(s, idea.campaign, base)
-    check_plan(idea.campaign, actor, definition.plan)
-    held = review_first(idea.campaign, actor, new=False)
-    try:
-        develop(
-            idea,
-            definition,
-            title=title,
-            family=family,
-            base=base,
-            priority=priority,
-            proposed=proposed or held is not None,
-        )
-    except (NotASeed, ValueError) as e:
-        raise Refused(str(e)) from e
-    _link_all(s, idea, after, supersedes)
-    return idea, held
-
-
-def _link_all(s: Session, idea: Idea, after: Sequence[IdeaId], supersedes: Sequence[IdeaId]) -> None:
-    for kind, targets in ((LinkKind.AFTER, after), (LinkKind.SUPERSEDES, supersedes)):
-        for target in targets:
-            _link(s, idea, kind, target)
-
-
-SETTABLE = (IdeaStatus.PROPOSED, IdeaStatus.READY, IdeaStatus.PARKED, IdeaStatus.REJECTED, IdeaStatus.DONE)
-"""The statuses that ``set_idea_status`` sets. ``seed`` is filed and ``scheduled`` is the daemon's."""
-
-
-STOPPING = (IdeaStatus.PARKED, IdeaStatus.REJECTED)
+SETTABLE = (IdeaStatus.OPEN, IdeaStatus.DROPPED)
+"""The statuses that ``set_idea_status`` sets. ``claimed`` and ``done`` are a run's: a done idea has the result of
+its run."""
 
 
 def open_run(idea: Idea) -> Run | None:
     """Return the idea's run that is queued, running or being scored, or None.
 
     While it is open, the daemon still owns the idea: it settles the idea's status when the run's commits are judged,
-    and it judges them on the idea's track. So only parking or rejecting the idea is safe meanwhile.
+    and it judges them on the idea's track. So only dropping the idea is safe meanwhile.
     """
     return next((r for r in idea.runs if r.status in OPEN_RUNS or r.scoring), None)
 
@@ -234,36 +114,31 @@ def check_status(idea: Idea, status: IdeaStatus) -> None:
     """Refuse a status that ``set_idea_status`` would refuse, before a client asks for the reason.
 
     Raises:
-        Refused: ``status`` is the idea's already, or not one of ``SETTABLE``. A seed is defined first (``piloop idea
-            develop``), and an idea that is scheduled or has an open run (``open_run``) can only be parked or rejected:
-            ``ready`` would queue a second run, and ``done`` would start the ideas after it before its run is judged.
+        Refused: ``status`` is the idea's already, or not one of ``SETTABLE``. An idea that is claimed or has an open
+            run (``open_run``) can only be dropped: ``open`` would let a second run claim it.
     """
     if idea.status is status:
         raise Refused(f'idea#{idea.id} is {status} already')
     if status not in SETTABLE:
         raise Refused(f'{status} is not set by hand: give {", ".join(SETTABLE)}')
-    if idea.status is IdeaStatus.SEED and status not in STOPPING:
-        raise Refused(
-            f'idea#{idea.id} is a seed: research defines it first (piloop idea develop {idea.id} …), or park or reject it'
-        )
-    if status not in STOPPING and (busy := _busy(idea)) is not None:
-        raise Refused(f'idea#{idea.id} {busy}; park or reject it, or wait for the run to end')
+    if status is not IdeaStatus.DROPPED and (busy := _busy(idea)) is not None:
+        raise Refused(f'idea#{idea.id} {busy}; drop it, or wait for the run to end')
 
 
 def _busy(idea: Idea) -> str | None:
     """Say why the daemon still owns the idea (``open_run``), or None."""
     if (run := open_run(idea)) is not None:
         return f'has an open run: run#{run.id} is {"being scored" if run.scoring else run.status}'
-    if idea.status is IdeaStatus.SCHEDULED:
-        return 'is scheduled: its run is open'
+    if idea.status is IdeaStatus.CLAIMED:
+        return 'is claimed: its run is open'
     return None
 
 
 def set_idea_status(s: Session, idea_id: IdeaId, status: IdeaStatus, *, reason: str, actor: Actor) -> IdeaStatus:
     """Set the idea's status, with a ``note`` on it that says why, and return the status it had.
 
-    The ``idea.status`` event is the trigger's. Parking or rejecting an idea with an open run lets the run finish; the
-    daemon then leaves the idea as it is.
+    The ``idea.status`` event is the trigger's. Dropping an idea with an open run lets the run finish; the daemon then
+    leaves the idea as it is.
 
     Raises:
         Refused: the reason is blank, or ``check_status`` refuses.
@@ -278,9 +153,9 @@ def set_idea_status(s: Session, idea_id: IdeaId, status: IdeaStatus, *, reason: 
 
 
 def link(s: Session, idea_id: IdeaId, kind: LinkKind, target_id: IdeaId, *, reason: str, actor: Actor) -> None:
-    """Link the idea to ``target``: it runs *after* it, or it *supersedes* it, with a ``note`` that says why.
+    """Link the idea to ``target``: it waits until ``target`` is done, with a ``note`` that says why.
 
-    The link is written in the caller's transaction, so the daemon sees it or queues the idea first, never in between.
+    The link is written in the caller's transaction, so a worker claims the idea before it or never in between.
     The ``idea.linked`` event is the trigger's.
 
     Raises:
@@ -297,8 +172,7 @@ def _link(s: Session, idea: Idea, kind: LinkKind, target_id: IdeaId) -> None:
 
     Raises:
         Refused: the target is missing, the two are one idea or in two campaigns, the link exists, the idea is
-            scheduled or has an open run (an ``after`` link comes too late for its run), or the link closes a cycle of
-            its kind.
+            claimed or has an open run (an ``after`` link comes too late for its run), or the link closes a cycle.
     """
     target = existing(s, Idea, target_id, 'idea')
     if idea.id == target.id:

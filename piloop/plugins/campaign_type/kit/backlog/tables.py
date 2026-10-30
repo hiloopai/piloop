@@ -39,21 +39,12 @@ Base.registry.update_type_annotation_map(
 
 
 class Idea(Tracked, Base):
-    """Something worth trying. The scheduler turns ready ideas into runs.
+    """Something worth trying: a card on the board (``IdeaStatus``). A worker claims an open idea and tries it.
 
-    Anyone can insert an idea: a human, the orchestrator or a research agent. Ideas link to ideas of the same campaign
-    through ``idea_links`` (``IdeaLink``), many-to-many in both directions.
-
-    ``after``: the idea is blocked (``ready``, but never taken) until every prerequisite is ``done``. Its run then
-    starts from the head like any other run, and the head holds every keep on the trunk that the prerequisites made.
-    An idea can pin a ``base_candidate_id`` instead, for example the branch keep of a prerequisite. A prerequisite
-    that ends without a keep (``parked``, ``rejected``, or ``done`` after runs that kept nothing) never releases its
-    dependents: the daemon parks them with an escalation, and the orchestrator or a human deletes the link or sets
-    them ready again. Cycles of prerequisites are not detected: the ideas in a cycle never run and show as blocked.
-
-    ``supersedes``: the idea is a sharper version of the targets. A research sweep uses it to refine rejected, parked
-    or done ideas instead of proposing near-duplicates. The daemon rejects a superseded idea that never ran (it has
-    no run and is still ``seed``, ``proposed`` or ``ready``). A superseded idea that ran keeps its status and results.
+    Anyone can insert an idea: a human, the lead, or a worker that claims it at once (``piloop idea add --claim``).
+    ``after`` links (``IdeaLink``) hold an idea until every prerequisite is ``done`` or ``dropped``: a held idea cannot
+    be claimed. A prerequisite done without a keep frees it too, and nothing changes its status. Cycles are
+    refused (``ops.link``).
     """
 
     __tablename__ = 'ideas'
@@ -61,15 +52,13 @@ class Idea(Tracked, Base):
         UniqueConstraint('campaign_id', 'title'),
         # the queue: the pass and the widget read the ``ready`` ideas of one campaign in priority order
         Index('ix_ideas_campaign_status_priority', 'campaign_id', 'status', 'priority'),
-        *text_checks(
-            'ideas', 'title', 'hypothesis', 'created_by', 'track', nullable=('plan', 'harness', 'provenance', 'family')
-        ),
+        *text_checks('ideas', 'title', 'hypothesis', 'created_by', 'track', nullable=('plan', 'harness', 'provenance')),
     )
 
     id: Mapped[IdeaId] = mapped_column(primary_key=True)
     campaign_id: Mapped[CampaignId] = mapped_column(ForeignKey('campaigns.id', ondelete='CASCADE'))
     title: Mapped[str]
-    """Unique in a campaign, so two research sweeps that pick the same title fail here and do not duplicate the idea."""
+    """Unique in a campaign, so two agents that pick the same title fail here and do not duplicate the idea."""
     hypothesis: Mapped[str]
     """Why this idea should improve the primary metric."""
     track: Mapped[TrackName]
@@ -79,7 +68,7 @@ class Idea(Tracked, Base):
     a note that says why."""
     plan: Mapped[str | None]
     """Concrete steps for the implementer. They are appended to the brief."""
-    status: Mapped[IdeaStatus] = mapped_column(default=IdeaStatus.READY, server_default=IdeaStatus.READY.value)
+    status: Mapped[IdeaStatus] = mapped_column(default=IdeaStatus.OPEN, server_default=IdeaStatus.OPEN.value)
     priority: Mapped[int] = mapped_column(default=2, server_default=text('2'))
     """0 (urgent) to 4 (someday). The scheduler takes the lowest number first."""
     harness: Mapped[str | None]
@@ -97,9 +86,6 @@ class Idea(Tracked, Base):
     provenance: Mapped[str | None]
     """The finding that led to the idea, with ids or a URL. For example ``finding comment#81: timeouts lose the last
     rows``, ``loss table workspace/research/losses.md`` or ``arXiv 2305.11860 via exa``."""
-    family: Mapped[str | None]
-    """The mechanism family: a short lowercase name for ideas that try the same mechanism (``feature engineering``,
-    ``ensembling``, ``test-time training``). The research pack shows what each family produced."""
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
     campaign: Mapped[Campaign] = relationship()
@@ -119,20 +105,15 @@ class Idea(Tracked, Base):
 
     @property
     def after(self) -> list[Idea]:
-        """The prerequisites. Each one must be ``done`` before this idea runs."""
+        """The prerequisites. Each one must be ``done`` or ``dropped`` before this idea can be claimed."""
         return self.targets(LinkKind.AFTER)
-
-    @property
-    def supersedes(self) -> list[Idea]:
-        """The older ideas that this one is a sharper version of."""
-        return self.targets(LinkKind.SUPERSEDES)
 
 
 class IdeaLink(Base):
-    """A directed link between two ideas of one campaign: ``idea_id`` comes *after* or *supersedes* ``target_id``.
+    """A directed link between two ideas of one campaign: ``idea_id`` comes *after* ``target_id``.
 
-    Links are many-to-many in both directions. An idea may wait for several prerequisites, several ideas may wait for
-    it, and a sharper version may replace several earlier ideas. One pair may have both kinds. Rows are inserted and
+    Links are many-to-many in both directions. An idea may wait for several prerequisites, and several ideas may wait
+    for it. Rows are inserted and
     deleted, never updated, so they have no ``updated_at`` or ``updated_by``. A CHECK refuses a link from an idea to
     itself, and a trigger refuses a link across campaigns. When either idea is deleted, the link is deleted too. To add
     a kind of link, add a ``LinkKind`` member (which changes the CHECK) and a rule for it in

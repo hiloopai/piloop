@@ -1,4 +1,4 @@
-"""What optimization does across its components: a note on a candidate keeps it as a lead and files a seed."""
+"""What optimization does across its components: a note on a candidate keeps it as a lead and adds ideas."""
 
 from collections.abc import Sequence
 
@@ -25,9 +25,9 @@ def note_candidate(
     follow_ups: Sequence[str] = (),
     track: TrackName | None = None,
 ) -> tuple[Candidate, list[Idea]]:
-    """Keep a regressed result in view as a lead (``set_verdict``, ``Cause.NOTE``), with a seed pinned to it per follow-up.
+    """Keep a regressed result in view as a lead (``set_verdict``, ``Cause.NOTE``), with an idea pinned to it per follow-up.
 
-    The follow-ups are on ``track``, else on the track of the candidate's run. Returns the candidate and the new seeds.
+    The follow-ups are on ``track``, else on the track of the candidate's run. Returns the candidate and the new ideas.
 
     Raises:
         Refused: the candidate is missing or not a measured discard or interesting, the reason is blank, the actor

@@ -5,8 +5,8 @@ PILOOP_ACTOR=orchestrator piloop pause <name> --reason '<what the pause waits fo
 PILOOP_ACTOR=orchestrator piloop resume <name>
 ```
 
-- Nothing launches: no run, no sweep, no requested agent. Research files no ideas, and a sweep that runs already files
-  its ideas as `proposed`. Running work finishes and is scored.
+- Nothing launches: no run, no sweep, no requested agent. Research files no ideas. Running work finishes and is
+  scored.
 - A pause raises no escalation. `piloop status` shows it with the reason.
 - No agent launches, the incident watchdog included: an anomaly of the running work waits in `piloop status` until the
   resume. Watch the running work yourself during a long pause. Paused time does not count toward `max_hours`.

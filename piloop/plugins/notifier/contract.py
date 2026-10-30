@@ -172,7 +172,7 @@ class NotificationSent(EventModel):
 
 
 class NotificationReceived(EventModel):
-    """On what an answer from a chat service wrote (a reply, an ack's item, a seed): the post ``message`` it came from.
+    """On what an answer from a chat service wrote (a reply, an ack's item, an idea): the post ``message`` it came from.
 
     A redelivered post is dropped, and a reply that came from the service is never sent back to it.
     """
@@ -198,10 +198,10 @@ class Ack:
 
 
 @dataclass(frozen=True)
-class FileSeed:
-    """File a seed in the item's campaign, as ``piloop idea seed`` does, with the item as its pointer."""
+class AddIdea:
+    """Add an open idea to the item's campaign, as ``piloop idea add`` does, with the item as where it came from."""
 
-    hunch: str
+    title: str
 
 
 @dataclass(frozen=True)
@@ -219,7 +219,7 @@ class Choose:
     """The choice's id, such as ``A`` (``Choice.id``)."""
 
 
-type Act = Reply | Ack | FileSeed | Edit | Choose
+type Act = Reply | Ack | AddIdea | Edit | Choose
 """What a person does from a chat service: the provider maps the service's gestures to one."""
 
 

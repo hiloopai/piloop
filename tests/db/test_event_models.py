@@ -94,7 +94,7 @@ def test_every_trigger_writes_an_event_that_loads_as_the_model_that_renders_it(
         statements = [
             "INSERT INTO ideas (track, campaign_id, title, hypothesis, created_by) VALUES ('score', 1, 'a', 'h', 'me')",
             "INSERT INTO ideas (track, campaign_id, title, hypothesis, created_by) VALUES ('score', 1, 'b', 'h', 'me')",
-            "UPDATE ideas SET status = 'parked', priority = 0, track = 'size', base_candidate_id = 1 WHERE id = 1",
+            "UPDATE ideas SET status = 'dropped', priority = 0, track = 'size', base_candidate_id = 1 WHERE id = 1",
             "INSERT INTO idea_links (idea_id, target_id, kind) VALUES (1, 2, 'after')",
             'DELETE FROM idea_links',
             "INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 'tree', 'sha')",

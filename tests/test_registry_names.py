@@ -33,16 +33,13 @@ LEAVES: dict[str, frozenset[str] | None] = {
     'plugins/campaign_type/*/migrations/*.py': None,
     'actor.py': frozenset({'orchestrator'}),
     'daemon/api.py': frozenset({'news'}),
-    'plugins/campaign_type/kit/backlog/role/research.py': frozenset(
-        {'claude', 'codex', 'low_water', 'seed', 'stalled'}
-    ),
+    'plugins/campaign_type/kit/backlog/role/research.py': frozenset({'claude', 'codex', 'low_water', 'stalled'}),
     'plugins/campaign_type/kit/runs/role/watchdog.py': frozenset(
         {'run_failed', 'dead_at_startup', 'low_yield', 'cron', 'stopped'}
     ),
     'deprecated.py': None,
-    'plugins/campaign_type/kit/backlog/cli.py': frozenset({'seed'}),
-    'plugins/role/contract.py': frozenset({'seed', 'sql', 'orchestrator'}),
-    'plugins/role/orchestrator.py': frozenset({'seed', 'sql'}),
+    'plugins/role/contract.py': frozenset({'sql', 'orchestrator'}),
+    'plugins/role/orchestrator.py': frozenset({'sql'}),
     'plugins/archive/local/archiver.py': frozenset({'research'}),
     'plugins/runtime/docker.py': frozenset({'docker'}),
 }
