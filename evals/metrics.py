@@ -78,7 +78,7 @@ def piloop_counts(db: sqlite3.Connection, base: str) -> tuple[Funnel, int, int, 
     funnel = Funnel(
         ideas=one('select count(*) from ideas'),
         runs=one("select count(*) from runs where role = 'implementer'"),
-        submissions=one('select count(*) from candidates where revision != ?', base),
+        submissions=one('select count(*) from candidates where verdict is not null and revision != ?', base),
         kept=one("select count(*) from candidates where verdict = 'keep' and revision != ?", base),
     )
     escalations = one("select count(*) from comments where kind = 'escalation'")

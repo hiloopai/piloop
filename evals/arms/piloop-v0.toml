@@ -2,10 +2,10 @@
 # own. `piloop` names the commit of main under test.
 kind = "piloop"
 name = "piloop-v0"
-piloop = "piloop[modal] @ git+https://github.com/hiloopai/piloop@05fcf7de9ec218246640f10c03eda6c38c03af05"
+piloop = "piloop[modal] @ git+https://github.com/hiloopai/piloop@d838e22814d85ad34efcee16fa70c74d9c44dd1a"
 agents = [
-    { harness = "codex", model = "gpt-6-astra" },
-    { harness = "claude", model = "claude-opus-5-5" },
+    { harness = "codex", model = "gpt-6.1-sol" },
+    # { harness = "claude", model = "claude-opus-5-5" },  # back in once the model gateway serves Claude
 ]
 split = "sealed"
 resources = { cpu = 8, memory_mb = 16384 }
@@ -23,13 +23,15 @@ m = 2
 max_concurrent = 4
 timeout = 3600                           # one hour per run, a fresh session per idea
 
-# The lead: seeds and refills the board, triages escalations, steers running workers, prunes.
+# The lead: seeds and refills the board, triages escalations, steers running workers, prunes. No timer: workers
+# propose their own ideas, so the lead refills only a slot that has nothing to claim (buffer 0).
 [overlay.plugins.role.orchestrator]
 harnesses = ["codex"]
-triggers = ["news", "low_water", "stalled", "run_failed", "cron"]
-interval = 900
+triggers = ["news", "low_water", "stalled", "run_failed"]
 max_ideas = 4
-timeout = 3600
+
+[overlay.plugins.trigger.low_water]
+buffer = 0
 
 [overlay.plugins.role.research]
 triggers = []

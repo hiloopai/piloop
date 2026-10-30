@@ -1,5 +1,5 @@
 # One Codex session that owns the change and the dev evaluator, with no piloop.
 kind = "plain"
 name = "plain-codex"
-agent = { harness = "codex", model = "gpt-6-astra" }
+agent = { harness = "codex", model = "gpt-6.1-sol" }
 resources = { cpu = 2, memory_mb = 4096 }

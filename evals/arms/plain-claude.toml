@@ -1,4 +1,5 @@
-# One Claude Code session that owns the change and the dev evaluator, with no piloop.
+# One Claude Code session that owns the change and the dev evaluator, with no piloop. Out of the pilot until the model
+# gateway serves Claude.
 kind = "plain"
 name = "plain-claude"
 agent = { harness = "claude", model = "claude-opus-5-5" }

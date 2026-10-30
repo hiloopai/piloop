@@ -16,6 +16,7 @@ from evals.model import (
     ARMS,
     ROOT,
     TASKS,
+    Agent,
     Funnel,
     PiloopArm,
     PlainArm,
@@ -107,13 +108,11 @@ def get(value: JsonValue, *keys: str) -> JsonValue:
 
 def test_piloop_config_puts_agents_on_the_gateway():
     settings = Settings(gateway='https://gw.example', gateway_token=SecretStr('t'))
-    control = load_arm('piloop-0.5.0')
-    assert isinstance(control, PiloopArm)
     arm = PiloopArm(
         kind='piloop',
         name='a',
         piloop='piloop==0.5.0',
-        agents=control.agents,
+        agents=[Agent(harness='codex', model='gpt-6.1-sol'), Agent(harness='claude', model='claude-opus-5-5')],
         overlay={'plugins': {'role': {'implementer': {'max_concurrent': 2}}}},
         resources=Resources(cpu=1, memory_mb=512),
     )
