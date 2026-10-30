@@ -60,18 +60,18 @@ def shown(s: Session, campaign: Campaign, *names: str) -> str:
     return markdown(sections, Rendering(s, NOW, s.get_one(Campaign, campaign.id), Path('/no/workspace'), cas_of(s)))
 
 
-def test_a_failed_or_timed_out_run_is_an_incident_and_a_stopped_or_blocked_one_is_not(
+def test_a_failed_or_timed_out_run_is_an_incident_and_a_stopped_or_given_up_one_is_not(
     db: Database, campaign: Campaign
 ) -> None:
-    """A run that the daemon stopped did nothing wrong, and a blocked run's escalation is in the inbox already."""
+    """A run that the daemon stopped did nothing wrong, and a worker that gave up its run said why."""
     live_campaign(db, campaign)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         for status, end in ((RunStatus.TIMED_OUT, None), (RunStatus.FAILED, RunEnd.DAEMON_STOPPED)):
             row = run(s, idea(s, p, f'{status}', IdeaStatus.DONE), status, 1, 60, 70)
             row.end = end or row.end
-        blocked = run(s, idea(s, p, 'blocked', IdeaStatus.DONE), RunStatus.FAILED, 1, 60, 70, error='comment#9')
-        blocked.end = RunEnd.AWAITING_ANSWER
+        given_up = run(s, idea(s, p, 'given up', IdeaStatus.OPEN), RunStatus.FAILED, 1, 60, 70, error='too slow')
+        given_up.end = RunEnd.GAVE_UP
         s.commit()
         fire = fired(s, campaign, RunFailed())
     assert fire is not None and fire.alone

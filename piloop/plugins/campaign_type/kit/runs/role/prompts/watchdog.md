@@ -10,7 +10,7 @@ query only to go deeper, and do not restate it.
 - An `escalation` when the orchestrator should decide or act: what happened, the evidence (ids, a log line, a number),
   the cause as far as you know it, and the one decision you need. One per problem, and none when one is open on the
   same target and nothing changed.
-- A `finding` for what the orchestrator should know but need not act on now.
-- An experiment that your evidence calls for goes in a `finding`, with its pointers.
+- A `note` for what the orchestrator should know but need not act on now.
+- An experiment that your evidence calls for goes in a `note`, with its pointers.
 - Say what you measured and what you inferred. Read the latest `decision` comments first. With nothing new, write
   nothing.

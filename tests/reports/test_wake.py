@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 from piloop.config import load_campaign_config
 from piloop.db.models import Campaign, Comment
 from piloop.db.session import Database
-from piloop.ids import CampaignStatus, CommentKind, TargetKind, TargetRef
+from piloop.ids import CampaignStatus, TargetKind, TargetRef
+from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.memory.local.tables import Journal, Lesson, LessonStatus
 from piloop.plugins.section.contract import Rendering, markdown
 from piloop.plugins.section.lessons import Lessons
@@ -214,7 +215,7 @@ def test_wake_prints_the_journal_newest_lines_in_order_the_inbox_the_active_head
                     target=TargetRef(TargetKind.CAMPAIGN, target),
                     author='w',
                     body=body,
-                    kind=CommentKind.ESCALATION,
+                    kind=ESCALATION,
                     priority=1,
                 )
             )
@@ -274,7 +275,7 @@ def test_wake_and_a_brief_print_no_more_than_their_budget_headings_and_notices_i
                     target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
                     author='w',
                     body='Raise the floor?',
-                    kind=CommentKind.ESCALATION,
+                    kind=ESCALATION,
                     priority=1,
                 )
             )

@@ -4,6 +4,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 from git import Repo
 from pytest_mock import MockerFixture
 from sqlalchemy import delete, select
@@ -118,6 +119,7 @@ def test_two_runs_that_reach_one_tree_share_one_evaluation_and_its_crash(
     assert rows(db) == [], 'the queue is empty'
 
 
+@pytest.mark.usefixtures('submitting')
 def test_a_shared_evaluation_that_cannot_start_is_a_crash_for_every_request(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:

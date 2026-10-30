@@ -81,6 +81,7 @@ from piloop.plugins.vcs.git import commands as git
 from piloop.settings import INPUTS_DIR, RELAY_SOCKET, Settings, socket_at
 from piloop.store import tree as tree_module
 from tests.conftest import (
+    END_RUN,
     Gate,
     ScriptRuntime,
     baseline,
@@ -733,12 +734,13 @@ def test_a_kill_that_fails_is_tried_again_on_the_next_heartbeat(
     assert len(runtime.killed) >= 2
 
 
+@pytest.mark.usefixtures('daemon_api')
 def test_a_worker_killed_after_its_agent_ended_but_before_it_reported_reports_on_its_restart(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
     """``kill -9`` between the end of the agent and its report: the worktree and the pinned commits are still there,
     so the next worker reports them, and the run is scored."""
-    write_toml(Path(campaign.path), '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "a line"\n')
+    write_toml(Path(campaign.path), '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "a line"\n' + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     first = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
@@ -865,6 +867,7 @@ def test_an_evaluator_whose_start_is_refused_by_the_fence_is_killed_at_once(
     assert not measuring.is_alive(), 'its evaluator was killed, though the hold is still there'
 
 
+@pytest.mark.usefixtures('daemon_api')
 def test_a_report_that_cannot_be_sent_keeps_the_worktree_and_a_restarted_worker_scores_the_run(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
@@ -873,7 +876,7 @@ def test_a_report_that_cannot_be_sent_keeps_the_worktree_and_a_restarted_worker_
     The worker sends the report again on each heartbeat. Killed meanwhile, its successor finds the agent ended in
     its worktree, and reports it: the run is scored, not lost.
     """
-    write_toml(Path(campaign.path), '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "a line"\n')
+    write_toml(Path(campaign.path), '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "a line"\n' + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     first = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))

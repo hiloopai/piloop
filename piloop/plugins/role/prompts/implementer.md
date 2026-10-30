@@ -16,25 +16,22 @@ The campaign brief, the board and the state of the campaign follow.
   result. Then improve it and save again.
 - Build no private harness, fixture or audit to decide whether to save. An idea's plan may say what the evaluator
   should show: that is what the score will tell, not a gate before you save.
-- End without a scored version only when the code cannot be made to run. Then say why in your finding.
+- End without a scored version only when the code cannot be made to run. Then say why in your note.
 
 {vcs:save}
 
 ## End your run
 
-- Your run ends when you stop, at your deadline (in the context), or a minute after your finding. Leave your finding
-  last: what you tried, what you expect it to move, what you learned. The next runs read it.
-- When your run ends, the daemon kills every process that you started. Never stop while a job that you need runs:
-  `piloop schema long_jobs` shows how to run and wait for one.
-- A comment on your idea or your run reaches you while you work, as a line that starts with `[piloop]`. A `decision`
-  is an instruction: read it in full and follow it. A note or a finding is information.
+- Leave a note on your idea: what you tried, what you expect it to move, what you learned. The next runs read it. End
+  your run with `piloop run end` (in the context). A run that stops without it fails.
+- The daemon then kills every process that you started: `piloop schema long_jobs` shows how to wait for a job.
+- A message on your idea or your run reaches you as a line that starts with `[piloop]`: follow it.
 - Ask for what you cannot do or decide with `piloop escalate idea#<your idea> --priority <0 to 4>`, never a note: its
   form goes on stdin as JSON (`--guide` prints the fields). One decision in plain words; ids, hashes and paths go in
-  `details`. If an open escalation asks the same, cite it in a note on your run instead. It goes to the orchestrator
-  first. Do not wait for the answer: work on, or save, leave your finding and stop.
+  `details`. If an open escalation asks the same, cite it in a note on your run instead. Do not wait for the answer.
 
 ## Never
 
-- Write to the database anything but comments: progress `note`s on your run, your `finding`, an `escalation`.
+- Write to the database anything but comments: `note`s on your idea or your run, an `escalation`.
 - Touch the campaign checkout, the data files, or another idea's files in `workspace/`. Put what you produce in your
   idea's directory in `workspace/` (the context names it), and never copy the code tree there. {vcs:old_files}

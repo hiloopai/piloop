@@ -196,8 +196,8 @@ def candidate_verdict(
 def history(ref: CampaignRef | None = None, /) -> None:
     """Print the research pack: what a research sweep reads before it proposes ideas.
 
-    It shows the metrics, the analysis artifacts, what was tried per mechanism family, the latest ideas with their
-    outcomes, the kept lineage, the findings and the digests, as many as `[plugins.section.pack]` says. Without a
+    It shows the metrics, the analysis artifacts, the latest ideas with their outcomes, the kept lineage, the latest
+    notes and the digests, as many as `[plugins.section.pack]` says. Without a
     campaign, it uses the campaign that the current directory is in, else the only active campaign, else every campaign.
     """
     # here: it opens the database, and the candidate commands of this module load none of it

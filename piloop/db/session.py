@@ -563,10 +563,8 @@ def _kinds(connection: Connection) -> None:
     for kind, table in TARGET_KINDS.loaded().items():
         row = insert(KnownKind).values(id=kind, owner=owner[table.__tablename__])
         connection.execute(row.on_conflict_do_update(index_elements=[KnownKind.id], set_={'owner': row.excluded.owner}))
-    for comment_kind, model in COMMENT_KINDS.loaded().items():
-        found = insert(KnownCommentKind).values(id=comment_kind, after_end=model.AFTER_END)
-        update = {'after_end': model.AFTER_END}
-        connection.execute(found.on_conflict_do_update(index_elements=[KnownCommentKind.id], set_=update))
+    for comment_kind in COMMENT_KINDS.loaded():
+        connection.execute(insert(KnownCommentKind).values(id=comment_kind).on_conflict_do_nothing())
 
 
 def _record(connection: Connection, name: str, package: str) -> None:

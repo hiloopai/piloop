@@ -4,15 +4,12 @@ from enum import StrEnum
 from typing import Final, NewType
 
 from piloop.ids import (
-    CommentKind,
     RoleName,
     TargetKind,
 )
 
 RUN: Final = TargetKind('run')
 """A run (``runs``). What its comments and events point at."""
-FINDING: Final = CommentKind('finding')
-"""An implementer's report on its idea: it settles the run as finished (``FindingWritten``)."""
 
 RunId = NewType('RunId', int)
 
@@ -40,21 +37,30 @@ FAILED_RUNS = (RunStatus.FAILED, RunStatus.TIMED_OUT)
 FINISHED_RUNS = (RunStatus.SUCCEEDED, *FAILED_RUNS)
 
 
+class RunEnding(StrEnum):
+    """How a worker ends its run (``piloop run end``): the only way a run ends before its timeout."""
+
+    SUBMITTED = 'submitted'
+    """Its work is done: what it saved is its result."""
+    GAVE_UP = 'gave_up'
+    """It stops without a result: its idea goes back to the board for another worker."""
+
+
 class RunEnd(StrEnum):
     """How a run ended. ``runs.error`` adds the detail, when there is one.
 
-    ``finished``: its implementer left its finding, or committed and exited cleanly. ``failed``: its process failed, it
-    made no commit, or only the daemon's commit of what it left uncommitted (the error says which). ``timed_out``: its
-    role's timeout. ``awaiting_answer``: its implementer's escalation waits for an answer (the error names it).
-    ``cancelled``: someone cancelled it. ``campaign_stopped``, ``daemon_stopped``, ``stale`` (a daemon died while it
-    ran) and ``worker_lost``: something else ended it. ``role_removed``: ``piloop init`` removed its role while it was
-    queued. ``not_started``: no agent of it started to work. Only the first four are attempts at the idea.
+    ``finished``: its worker ended it as submitted (``piloop run end submitted``). ``gave_up``: its worker ended it
+    without a result (the error says why). ``failed``: its process failed, or ended without ``piloop run end`` (the
+    error says which). ``timed_out``: its role's timeout. ``cancelled``: someone cancelled it. ``campaign_stopped``,
+    ``daemon_stopped``, ``stale`` (a daemon died while it ran) and ``worker_lost``: something else ended it.
+    ``role_removed``: ``piloop init`` removed its role while it was queued. ``not_started``: no agent of it started to
+    work. Only the first four are attempts at an idea.
     """
 
     FINISHED = 'finished'
+    GAVE_UP = 'gave_up'
     FAILED = 'failed'
     TIMED_OUT = 'timed_out'
-    AWAITING_ANSWER = 'awaiting_answer'
     CANCELLED = 'cancelled'
     CAMPAIGN_STOPPED = 'campaign_stopped'
     DAEMON_STOPPED = 'daemon_stopped'
@@ -69,7 +75,7 @@ class RunEnd(StrEnum):
         return END_STATUS.get(self, RunStatus.FAILED)
 
 
-ATTEMPTS: Final = frozenset({RunEnd.FINISHED, RunEnd.FAILED, RunEnd.TIMED_OUT, RunEnd.AWAITING_ANSWER})
+ATTEMPTS: Final = frozenset({RunEnd.FINISHED, RunEnd.GAVE_UP, RunEnd.FAILED, RunEnd.TIMED_OUT})
 """The ends of a run that tried its idea. The others say that the run was stopped, or that no agent started to work."""
 
 

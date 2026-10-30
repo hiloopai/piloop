@@ -13,7 +13,7 @@ from piloop.plugins.section.contract import Rendering, Section, Surface
 class IdeaComments(Section):
     """``[plugins.section.idea_comments]``: the comments on the reader's idea and on its runs, the latest last.
 
-    A comment on a run is about the idea too, such as a human's decision on an earlier attempt, or a watchdog's finding
+    A comment on a run is about the idea too, such as a human's decision on an earlier attempt, or a watchdog's note
     on why it failed. A run's brief needs them: the next attempt is a new run.
     """
 

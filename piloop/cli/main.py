@@ -27,7 +27,7 @@ app = cyclopts.App(name='piloop', help='Run autoresearch campaigns with coding a
 app.command(views.status)
 app.command(views.events)
 inbox = cyclopts.App(
-    name='inbox', help='Read and acknowledge what the agents address to you: decisions, escalations and findings.'
+    name='inbox', help='Read and acknowledge what the agents address to you: decisions, escalations and notes.'
 )
 inbox.default(views.inbox_list)
 inbox.command(views.inbox_show, name='show')

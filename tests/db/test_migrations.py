@@ -1124,3 +1124,45 @@ def test_0076_drops_the_keys_that_assigned_ideas_from_each_stored_config(tmp_pat
             {'name': 'q'},
         ]
     command.downgrade(cfg, '0075')
+
+
+def test_0077_and_optimization_0007_give_comment_kinds_no_behaviour_end_no_run_awaiting_an_answer_and_downgrade(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'piloop.db'
+    core = alembic(path)
+    command.upgrade(core, '0076')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0006')
+    roles = {'implementer': {'finding_grace': 'PT90S'}, 'research': {}}
+    finished = {'kind': 'run.finished', 'end': 'awaiting_answer', 'error': 'comment#3'}
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute(
+            "INSERT INTO campaigns (name, path, config) VALUES ('c', '/c', ?)", (dumps({'plugins': {'role': roles}}),)
+        )
+        con.execute(
+            'INSERT INTO runs (campaign_id, base_candidate_id, harness, model, status, "end", error)'
+            " VALUES (1, 1, 'h', 'm', 'failed', 'awaiting_answer', 'comment#3')"
+        )
+        con.execute(
+            "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('daemon', 'run', 1, ?)",
+            (dumps(finished),),
+        )
+    command.upgrade(core, '0077')
+    command.upgrade(chain, '0007')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert loads(con.execute('SELECT config FROM campaigns').fetchone()[0]) == {
+            'plugins': {'role': {'implementer': {'end_grace': 'PT90S'}, 'research': {}}}
+        }
+        assert 'after_end' not in [c for _, c, *_ in con.execute('PRAGMA table_info(comment_kinds)')]
+        assert con.execute('SELECT "end", error FROM runs').fetchall() == [('failed', 'comment#3')]
+        assert loads(con.execute('SELECT payload FROM events').fetchone()[0]) == finished | {'end': 'failed'}
+        con.execute('UPDATE runs SET "end" = \'gave_up\' WHERE id = 1')
+    command.downgrade(chain, '0006')
+    command.downgrade(core, '0076')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT "end" FROM runs').fetchall() == [('failed',)]
+        assert loads(con.execute('SELECT config FROM campaigns').fetchone()[0])['plugins']['role']['implementer'] == {
+            'finding_grace': 'PT90S'
+        }
+        assert con.execute("SELECT after_end FROM comment_kinds WHERE id = 'finding'").fetchone() == ('refused',)

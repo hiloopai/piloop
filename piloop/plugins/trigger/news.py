@@ -21,9 +21,10 @@ from piloop.db import feed as db_feed
 from piloop.db.events import has, latest
 from piloop.db.models import OPEN, AgentSession, AgentSessionState, Comment, Event, EventModel, ReadBy
 from piloop.ids import CommentKind, TargetKind
+from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.trigger.contract import Pass, Quiet, Steer, Trigger
 
-URGENT: frozenset[str] = frozenset({CommentKind.MESSAGE, CommentKind.ESCALATION})
+URGENT: frozenset[str] = frozenset({CommentKind.MESSAGE, ESCALATION})
 """The kinds of inbox item that wake the role after ``quiet_seconds`` alone, also in a quiet phase."""
 
 

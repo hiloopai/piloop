@@ -32,7 +32,7 @@ EOF
 
 ### Surfacing policy
 
-The human reviews this table regularly. Follow it as written. When it fits a case badly, say so in a `finding` with a
+The human reviews this table regularly. Follow it as written. When it fits a case badly, say so in a `note` with a
 priority. Do not move away from it.
 
 | category | what | priority |
@@ -44,8 +44,8 @@ priority. Do not move away from it.
 | process | reopen an idea, reprioritize, a brief or prompt fix, a workaround for a piloop bug | 3 |
 | routine | a duplicate escalation, a false alarm you verified | 4 |
 
-Some findings the human should see: a piloop bug, a result that changes the plan, a doubt about the evaluation.
-Post each one as a `finding` with a priority from the same table. Everything else stays in the forum (comments
+Some things the human should see: a piloop bug, a result that changes the plan, a doubt about the evaluation.
+Post each one as a `note` with a priority from the same table. Everything else stays in the forum (comments
 without a priority), out of the inbox.
 
 ## Agents

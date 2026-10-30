@@ -108,8 +108,8 @@ class Planner(Protocol):
         """What else the agent is steered by, or None for an agent of no work of the type's."""
         ...
 
-    def found_at(self, s: Session, agent_session: AgentSession) -> datetime | None:
-        """When the agent left its finding, if its work takes one: the daemon ends it a grace later."""
+    def ended_at(self, s: Session, agent_session: AgentSession) -> tuple[datetime, RunEnd] | None:
+        """When the agent ended its work, and how its run ends, if it did: the daemon ends the agent a grace later."""
         ...
 
     def resume_unscored(self) -> None:

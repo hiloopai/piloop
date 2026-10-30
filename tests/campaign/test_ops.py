@@ -18,7 +18,7 @@ from piloop.campaign import ops
 from piloop.campaign.stop import CancelRequested
 from piloop.config import load_campaign_config
 from piloop.db.events import emit, in_order
-from piloop.db.models import AgentSession, Campaign, Comment, Event, EventModel, Pause
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, EventModel, Pause
 from piloop.db.requests import RequestAnswered
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import (
@@ -41,7 +41,9 @@ from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, w
 from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT, MeasurementId, TrackName
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs import ops as runs_ops
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunEnding, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
 from piloop.plugins.campaign_type.kit.runs.stop import settle_cancelled
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
@@ -544,7 +546,8 @@ def worker(db: Database, status: RunStatus = RunStatus.RUNNING) -> tuple[RunId, 
         )
         s.add(run)
         s.flush()
-        session = AgentSession(kind='implementer', campaign_id=1, subject=TargetRef(RUN, run.id))
+        state = AgentSessionState.RUNNING if status is RunStatus.RUNNING else AgentSessionState.REQUESTED
+        session = AgentSession(kind='implementer', campaign_id=1, subject=TargetRef(RUN, run.id), state=state)
         s.add(session)
         s.commit()
         return run.id, Agent(role='implementer', session=session.id)
@@ -573,8 +576,8 @@ def test_a_worker_claims_one_open_idea_for_its_run_and_every_other_claim_is_refu
     run_id, implementer = worker(me)
     _, ended = worker(me, RunStatus.FAILED)
     for idea, actor, error in [
-        (free, ACTOR, 'orchestrator has no run: only a worker claims an idea'),
-        (free, ended, r'run#\d+ is failed: a run claims while it is open'),
+        (free, ACTOR, 'orchestrator has no run: only a worker has one'),
+        (free, ended, r'run#\d+ is failed already'),
         (held, implementer, f'idea#{held} is held by idea#{first} \\(open\\)'),
         (dropped, implementer, f'idea#{dropped} is dropped: claim an open idea'),
         (claimed, implementer, f'idea#{claimed} is claimed: claim an open idea'),
@@ -653,6 +656,33 @@ def test_a_worker_proposes_its_own_idea_and_claims_it_but_files_none_for_others(
             'halve the window',
         )
         assert s.get_one(Run, run_id).idea_id == idea.id
+
+
+def test_a_worker_ends_its_own_running_run_once_and_gives_a_reason_to_give_up(me: Database, campaign: Campaign) -> None:
+    run_id, implementer = worker(me)
+    _, queued = worker(me, RunStatus.QUEUED)
+    ending_id, ending = worker(me)
+    with me.session() as s:
+        s.get_one(AgentSession, ending.session).state = AgentSessionState.ENDING
+        s.commit()
+    for how, reason, actor, error in [
+        (RunEnding.SUBMITTED, None, ACTOR, 'orchestrator has no run'),
+        (RunEnding.SUBMITTED, None, queued, r'run#\d+ is queued: a run ends while it runs'),
+        (RunEnding.SUBMITTED, None, ending, 'is ending: the daemon ended it before its run ended'),
+        (RunEnding.GAVE_UP, ' ', implementer, 'a reason is required'),
+    ]:
+        with me.session() as s, pytest.raises(ops.Refused, match=error):
+            runs_ops.end_run(s, how, reason, actor=actor)
+    with me.session() as s:
+        assert runs_ops.end_run(s, RunEnding.GAVE_UP, ' too slow ', actor=implementer).id == run_id
+        s.commit()
+        assert runs_ops.end_requested(s, s.get_one(Run, run_id)) == RunEndRequested(
+            how=RunEnding.GAVE_UP, reason='too slow'
+        )
+    with me.session() as s, pytest.raises(ops.Refused, match=f'run#{run_id} was ended already: gave_up'):
+        runs_ops.end_run(s, RunEnding.SUBMITTED, None, actor=implementer)
+    assert [k for k, _, _ in kinds(me, RUN, run_id)] == ['run.end_requested']
+    assert [k for k, _, _ in kinds(me, RUN, ending_id)] == []
 
 
 def test_an_idea_status_takes_a_reason_in_a_note_and_refuses_what_is_not_set_by_hand(

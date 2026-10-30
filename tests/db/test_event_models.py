@@ -9,16 +9,17 @@ from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import func, select
 
 from piloop.actor import System
+from piloop.campaign.escalations import DecisionWritten, EscalationWritten
 from piloop.db import sql
 from piloop.db.events import emit, has, in_order, latest, payload_of
-from piloop.db.models import EVENT, Campaign, Event, EventModel, UnknownEvent
+from piloop.db.models import EVENT, Campaign, Comment, Event, EventModel, UnknownEvent
 from piloop.db.session import Database
 from piloop.db.triggers import changelog
 from piloop.db.triggers.changelog import IdeaCreated
 from piloop.ids import CommentKind, Ref, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
-from piloop.plugins.campaign_type.kit.runs.controller import FindingWritten
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RUN
+from piloop.plugins.campaign_type.kit.runs.ids import RUN
+from piloop.plugins.escalation.contract import DECISION, ESCALATION
 
 
 class Probed(EventModel):
@@ -110,13 +111,7 @@ def test_every_trigger_writes_an_event_that_loads_as_the_model_that_renders_it(
             *(
                 'INSERT INTO comments (target_kind, target_id, author, kind, body, priority)'
                 f" VALUES ('idea', 1, 'me', '{kind}', 'x', 2)"
-                for kind in (
-                    CommentKind.NOTE,
-                    FINDING,
-                    CommentKind.DECISION,
-                    CommentKind.ESCALATION,
-                    CommentKind.MESSAGE,
-                )
+                for kind in (CommentKind.NOTE, DECISION, ESCALATION, CommentKind.MESSAGE)
             ),
             "UPDATE comments SET acked_at = '2026-10-01 12:00:00', acked_by = 'human' WHERE id = 1",
             "UPDATE comments SET body = 'y' WHERE id = 1",
@@ -136,11 +131,29 @@ def test_every_trigger_writes_an_event_that_loads_as_the_model_that_renders_it(
     with db.session() as s:
         models = {e.kind: type(e.payload) for e in s.scalars(select(Event).where(Event.id > start))}
     rendered = [m for m in vars(changelog).values() if isinstance(m, type) and issubclass(m, EventModel) and m.kinds()]
-    found = {kind: model for model in rendered for kind in model.kinds()} | {'comment.finding': FindingWritten}
+    found = {kind: model for model in rendered for kind in model.kinds()} | {
+        'comment.escalation': EscalationWritten,
+        'comment.decision': DecisionWritten,
+    }
     assert models == found, (
         "each model of the change log has its trigger, and the row that it writes loads as the model: a plugin's"
         ' comment kind too'
     )
+
+
+def test_a_finding_of_0_5_still_loads_and_its_event_is_unknown(
+    db: Database, tmp_path: Path, campaign: Campaign
+) -> None:
+    with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
+        sql.run(
+            con,
+            "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('campaign', 1, 'me', 'finding', 'x')",
+        )
+    with db.session() as s:
+        comment = s.scalars(select(Comment).where(Comment.kind == 'finding')).one()
+        event = s.scalars(select(Event).where(Event.kind == 'comment.finding')).one()
+        assert (comment.body, type(event.payload)) == ('x', UnknownEvent)
+        assert 'comment.finding' in EventModel.retired_kinds()
 
 
 def test_a_retired_kind_loads_as_an_unknown_event_and_no_model_takes_it() -> None:

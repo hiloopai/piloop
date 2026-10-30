@@ -43,6 +43,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.settings import Settings, WatchSettings
 from piloop.watch.app import (
     CampaignScreen,
@@ -279,7 +280,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
             [
                 Comment(
                     target=TargetRef(RUN, run.id),
-                    kind=CommentKind.ESCALATION,
+                    kind=ESCALATION,
                     priority=1,
                     acked_at=ago(minutes=20),
                     acked_by='pi',
@@ -289,14 +290,14 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
                 Comment(
                     target=TargetRef(RUN, run.id),
                     author='pi',
-                    kind=CommentKind.DECISION,
+                    kind=DECISION,
                     priority=2,
                     body='Keep #2: the floor holds.\nDetails follow.',
                     created_at=ago(minutes=20),
                 ),
                 Comment(
                     target=TargetRef(TargetKind.CAMPAIGN, p.id),
-                    kind=CommentKind.ESCALATION,
+                    kind=ESCALATION,
                     priority=1,
                     body='Codex cannot start: trust dialog. Environment or harness?\nSecond line.',
                     **comment,
@@ -460,7 +461,7 @@ def test_r_replies_to_the_thread_root_with_a_priority_that_wakes_the_orchestrato
             TargetKind.COMMENT,
             2,
             'human',
-            CommentKind.DECISION,
+            DECISION,
             3,
             'Revert it',
         )
@@ -521,7 +522,7 @@ def test_s_steers_a_running_agent(db: Database, live_campaign: Campaign) -> None
     drive(db, 'demo', scenario)
     with db.session() as s:
         steered = s.scalars(select(Comment).where(Comment.target_kind == TargetKind.AGENT_SESSION)).one()
-        assert (steered.target_id, steered.kind, steered.body) == (1, CommentKind.NOTE, 'try the cheaper model')
+        assert (steered.target_id, steered.kind, steered.body) == (1, CommentKind.MESSAGE, 'try the cheaper model')
     assert notes == [
         f'comment#{steered.id}: queued for agent_session#1; the daemon delivers it',
         'agent_session#2 is not running',
@@ -952,7 +953,7 @@ def _reply_wakes_the_wait(db: Database, campaign: Campaign, env: dict[str, str])
             Comment(
                 target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
                 author='watchdog#3',
-                kind=CommentKind.ESCALATION,
+                kind=ESCALATION,
                 priority=1,
                 body='Codex cannot start: trust dialog.',
             )

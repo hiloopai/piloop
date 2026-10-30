@@ -24,7 +24,7 @@ class WatchdogRole(SweepRole):
     """The number of seconds between two progress reviews, counted from the last review. A sweep that investigates an
     anomaly is not a review. 0 turns the reviews off."""
     writes: list[str] = [
-        'comments(escalation, finding, note)',
+        'comments(escalation, note)',
         'lessons on the campaign once it stopped',
     ]
     """What a watchdog may write, as its brief states it."""

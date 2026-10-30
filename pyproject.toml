@@ -269,12 +269,15 @@ idle_alert = "piloop.plugins.role.bridges:idle_alert"
 seed_files = "piloop.plugins.role.bridges:seed_files"
 run_role_assignment = "piloop.plugins.role.bridges:run_role_assignment"
 track_shares = "piloop.deprecated:track_shares"
+end_grace = "piloop.plugins.role.bridges:end_grace"
+home_end_grace = "piloop.plugins.role.bridges:home_end_grace"
 pack_seeds = "piloop.plugins.section.bridges:pack_seeds"
 
 # The kinds that events and comments point at, beyond core's, by name: the table of their rows
 # (piloop.db.models.TARGET_KINDS).
 [project.entry-points."piloop.comment_kinds"]
-finding = "piloop.plugins.campaign_type.kit.runs.controller:FindingWritten"
+escalation = "piloop.campaign.escalations:EscalationWritten"
+decision = "piloop.campaign.escalations:DecisionWritten"
 
 # The kinds of job besides an agent's, by name (piloop.plugins.executor.contract.JOB_KINDS).
 [project.entry-points."piloop.job_kinds"]

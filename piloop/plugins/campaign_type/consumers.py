@@ -111,7 +111,7 @@ from piloop.plugins.fact_source.contract import FACT_SOURCES
 from piloop.plugins.fact_source.facts import Facts
 from piloop.plugins.host import ContractBroken
 from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchCase, LaunchPolicy, Share
-from piloop.plugins.role.contract import UNPUSHED_KINDS, Continuity, ImplementerRole, SweepRole
+from piloop.plugins.role.contract import PUSHED, Continuity, ImplementerRole, SweepRole
 from piloop.plugins.runtime.contract import handle_for, runtime_for
 from piloop.plugins.section.contract import Rendering
 from piloop.plugins.stop_rule.contract import GO, STOP_RULES, Go, Hold, Stop, WhileHeld
@@ -527,7 +527,7 @@ class Campaigns:
         self._tracer.event('agent_session.requested', campaign=campaign.name, kind=name, reason=reason, count=count)
 
     def _steer(self, s: Session, p: RolePass, steer: Steer) -> None:
-        """Write ``steer`` as a note on the role's newest open row, or on a row requested for it, and its events on it."""
+        """Write ``steer`` as a message to the role's newest open row, or to a row requested for it, and its events on it."""
         row = s.scalars(p.mine().where(AgentSession.state.in_(OPEN)).order_by(AgentSession.id.desc()).limit(1)).first()
         if row is None:
             row = AgentSession(kind=p.role, campaign_id=p.campaign.id, reason=steer.reason)
@@ -536,17 +536,17 @@ class Campaigns:
             self._tracer.event(
                 'agent_session.requested', campaign=p.campaign.name, kind=p.role, reason=steer.reason, count=1
             )
-        note = Comment(
+        message = Comment(
             target=TargetRef(TargetKind.AGENT_SESSION, row.id),
             author=DAEMON_ACTOR,
-            kind=CommentKind.NOTE,
+            kind=CommentKind.MESSAGE,
             body=steer.text,
         )
-        s.add(note)
+        s.add(message)
         s.flush()
         for event in steer.events:
-            emit(s, event, TargetRef(TargetKind.COMMENT, note.id), System.DAEMON)
-        self._tracer.event('agent_session.steered', campaign=p.campaign.name, agent_session=row.id, comment=note.id)
+            emit(s, event, TargetRef(TargetKind.COMMENT, message.id), System.DAEMON)
+        self._tracer.event('agent_session.steered', campaign=p.campaign.name, agent_session=row.id, comment=message.id)
 
     def _pass(
         self,
@@ -802,7 +802,7 @@ class Campaigns:
             notes = s.scalars(
                 select(Comment)
                 .where(Comment.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
-                .where(Comment.kind.not_in(UNPUSHED_KINDS))
+                .where(Comment.kind == PUSHED)
                 .order_by(Comment.id)
             ).all()
             role_pass = self._pass(s, campaign, cfg, agent_session.kind, table, now, left_now(s, campaign, cfg))

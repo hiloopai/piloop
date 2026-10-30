@@ -470,7 +470,7 @@ multiplexer that misreads it. See [Watching a campaign](/guides/watch).
 piloop history [REF]
 ```
 
-Prints the research pack: the metrics, the analysis files, the latest 60 ideas with their outcomes, the kept lineage, the findings and the digests. A research sweep reads it before it proposes ideas.
+Prints the research pack: the metrics, the analysis files, the latest 60 ideas with their outcomes, the kept lineage, the agents' notes and the digests. A research sweep reads it before it proposes ideas.
 
 ### piloop inbox
 
@@ -479,7 +479,7 @@ piloop inbox [REF] [--kind KIND]... [--all] [--json]
 ```
 
 Lists the unacknowledged items that others wrote to you, most urgent first.
-`--kind` keeps only items of the given kind: `note`, `finding`, `decision`, `escalation` or `message`. Repeat it to
+`--kind` keeps only items of the given kind: `note`, `decision`, `escalation` or `message`. Repeat it to
 keep several kinds. `--all` includes acknowledged items. `--json` prints them as one JSON document, read at one cursor of the
 [event feed](/reference/event-feed). See [The orchestrator and the inbox](/concepts/orchestrator).
 
@@ -625,8 +625,8 @@ piloop run cancel RUN_ID [--wrap-up]
 Cancels a queued or running run at once. A queued run never starts, and a run whose implementer fails to
 start is not launched again. A running implementer is ended with
 [every process that it started](/concepts/roles#watch-and-steer-an-agent), also those in sessions of their own. With `--wrap-up`, the implementer is first told to
-save its work and stop, and ended 10 minutes later. The run closes as `cancelled`, unless its implementer left its finding
-before the daemon ended it: a later finding is refused. Its commits are scored, it counts toward no run limit, and its idea is dropped: set the idea `open` to run it again.
+save its work and stop, and ended 10 minutes later. The run closes as `cancelled`, unless its implementer ended it first
+with `piloop run end`: a later end is refused. Its commits are scored, it counts toward no run limit, and its idea is dropped: set the idea `open` to run it again.
 
 ### piloop run extend
 
@@ -640,8 +640,22 @@ Gives the running implementer of a run more time, such as `--by 1h` or `--by 90m
 run#12: agent_session#40 may run 1:00:00 past its timeout
 ```
 
-Its timeout ends it that much later, also on a worker elsewhere. A note on the implementer tells it its new deadline.
-A run that has no running implementer is refused.
+Its timeout ends it that much later, also on a worker elsewhere. A message to the implementer tells it its new
+deadline. A run that has no running implementer is refused.
+
+### piloop run end
+
+```text
+piloop run end submitted|gave_up [--reason <why>]
+```
+
+Ends your own run, as the implementer that works on it. `submitted`: your work is done, and your idea is `done` once
+its commits are judged. `gave_up` needs `--reason`: your idea goes back to `open`. The daemon ends you `end_grace`
+later (60 seconds), with every process that you started. Nothing else ends a run before its deadline.
+
+```text
+run#12 ended as submitted: the daemon ends this session in a moment
+```
 
 ### piloop agent cancel
 

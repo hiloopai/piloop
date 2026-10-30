@@ -87,11 +87,12 @@ an idea goes into the brief of its next run.
 
 | Kind | Use |
 |---|---|
-| `note` | Context, or a short remark. |
-| `finding` | What an agent tried and learned. |
+| `note` | Context, a remark, or what an agent tried and learned, on the board. It reaches no running agent. |
+| `message` | Words to someone. On an agent, or on a run or its idea, it reaches the running agent. On a campaign, it is for the orchestrator. |
 | `decision` | A decision, with the reason and how to revert it. |
-| `escalation` | A question that needs a decision, filed with `piloop escalate`. It always has a priority. |
-| `message` | Someone's word to the orchestrator. |
+| `escalation` | A question that needs a decision, filed with `piloop escalate`. It always has a priority, and holds no run. |
+
+No kind has a side effect: a run ends only with `piloop run end`, or at its deadline.
 
 ## Escalations
 

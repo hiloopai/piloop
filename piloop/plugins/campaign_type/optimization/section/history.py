@@ -18,7 +18,7 @@ from piloop.reports.wake import cost
 class History(Section):
     """What was tried, for the reader of a run: the kept ideas, then the newest, in a budget.
 
-    Then the kept lineage, the starting points and the latest findings. ``piloop history`` lists every recent idea.
+    Then the kept lineage, the starting points and the latest agent notes. ``piloop history`` lists every recent idea.
     """
 
     SHOWN_IN = frozenset({Surface.RUN})
@@ -28,7 +28,7 @@ class History(Section):
     """The size of the section in tokens, at about 4 characters each. The ideas that do not fit are left out, and the
     table's title counts them."""
     findings: int = Field(default=10, ge=0)
-    """How many of the latest findings on the campaign the section lists."""
+    """How many of the latest agent notes on the campaign the section lists."""
 
     def render(self, r: Rendering) -> Rendered:
         mine = _idea_of(r.s, r.reader)

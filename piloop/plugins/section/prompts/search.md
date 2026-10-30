@@ -11,7 +11,7 @@ FROM ideas_fts JOIN ideas i ON i.id = ideas_fts.rowid
 WHERE ideas_fts MATCH 'voting OR ensemble' AND i.campaign_id = <campaign id> ORDER BY score LIMIT 10;
 ```
 
-Comments (findings, decisions, notes) that use a phrase, newest first:
+Comments (notes, decisions, messages) that use a phrase, newest first:
 
 ```sql
 SELECT c.target_kind, c.target_id, c.author, c.kind, snippet(comments_fts, 0, '[', ']', '…', 8) AS hit

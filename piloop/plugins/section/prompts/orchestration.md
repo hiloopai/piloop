@@ -29,18 +29,18 @@ Each command takes `--reason '<why>'`, signs the change with your actor and reco
 
 ### Steer
 
-- A `note`, `finding` or `decision` on a running run, or on the idea of one, also reaches its implementer within seconds.
-  The daemon prompts the implementer with one line:
-  `[piloop] decision on idea#12 by human: <first line> — full text: SELECT body FROM comments WHERE id=<n>`.
+- A `message` on a running run, or on the idea of one, reaches its implementer within seconds. A `note` stays on the
+  board for the runs that read it later. The daemon prompts the implementer with one line:
+  `[piloop] message on idea#12 by human: <first line> — full text: SELECT body FROM comments WHERE id=<n>`.
 - The daemon then records `comment.queued` on the implementer, and `comment.delivered` once the implementer read it.
   An implementer reads it only between two tool calls. When the prompt cannot reach the implementer, or the
-  implementer ends before it read it, the daemon records `comment.undelivered` with the error. The comment is still in
-  the next brief.
+  implementer ends before it read it, the daemon records `comment.undelivered` with the error.
 - Nothing is sent twice, and a daemon restart loses nothing: those events are the record.
 - So put the instruction in the first line of the body, and the reasons below it.
-- Escalations are never pushed to an implementer.
-- `piloop prompt <agent_session_id> '<text>'` steers any running agent with a note on the agent itself, which it gets in
-  full.
+- Only messages are pushed. An escalation or a decision holds no run: a run ends when its implementer ends it, or at
+  its deadline.
+- `piloop prompt <agent_session_id> '<text>'` steers any running agent with a message on the agent itself, which it
+  gets in full.
 
 ### Ask for an agent
 

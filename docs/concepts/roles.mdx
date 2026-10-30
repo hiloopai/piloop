@@ -45,7 +45,7 @@ key of a role.
 
 | Role | What it does | When it starts |
 |---|---|---|
-| **implementer** | Claims one idea, implements it, commits, and writes a `finding`. Its commits are scored. | A free slot. |
+| **implementer** | Claims one idea, implements it, commits, and leaves a `note` on it. Its commits are scored. | A free slot. |
 | **research** | Adds ideas where the head loses the most. | A short backlog, or a stall. |
 | **watchdog** | Investigates failures and reviews progress. Writes comments, never code. | A failed run, an agent dead at its start, every `interval` seconds when something is new, and once at the stop, for the closing report. |
 | **orchestrator** | Answers messages and escalations, steers the work, and records its decisions. Each one resumes the session of the one before. | News for it, with the `news` trigger. Off until you set it: by default, you run your own [orchestrator](/concepts/orchestrator). |
@@ -110,7 +110,7 @@ prompt = "briefs/reviewer.md"
 triggers = ["new_keep"]
 max_concurrent = 1
 timeout = 900
-writes = ["comments(finding) on a candidate"]
+writes = ["comments(note) on a candidate"]
 
 [plugins.trigger.new_keep]
 provider = "sql"
@@ -237,7 +237,7 @@ To run each agent in a container that sees only its own files, see [Run agents i
 | `piloop attach 12` | Prints the last 40 lines that agent 12 wrote. |
 | `piloop prompt 12 "<text>"` | Sends text to the agent's next turn. |
 
-A note on a sweep that has not started yet goes into its brief, under `# Notes`, and reaches it only there.
+A message to a sweep that has not started yet goes into its brief, under `# Notes`, and reaches it only there.
 
 A run's brief, log and transcript are in `~/.piloop/runs/<run>/`, and a sweep's in `~/.piloop/agent_sessions/<id>/`.
 When an agent ends, piloop ends every process that it started, such as a build server.
@@ -248,7 +248,7 @@ When an agent ends, piloop ends every process that it started, such as a build s
 |---|---|
 | `requested` | Waits for a slot. |
 | `starting`, `running` | Its process starts, then works. |
-| `ending` | A stop or a cancel ends it. piloop refuses its finding from now on. |
+| `ending` | A stop, a cancel or its run's end ends it. piloop refuses its `piloop run end` from now on. |
 | `exited`, `killed` | It ended by itself, or piloop ended it. |
 
 ## Sessions

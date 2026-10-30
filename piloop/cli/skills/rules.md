@@ -1,7 +1,7 @@
 ## Rules
 
 - Never change `runs.status` or `events`. Never change `agent_sessions`, except to insert a request.
-- If they look wrong, record what you see in a `finding` on the run, and fix it through a piloop command. When no
+- If they look wrong, record what you see in a `note` on the run, and fix it through a piloop command. When no
   command fixes it, escalate to the human.
 
 Find who changed what:

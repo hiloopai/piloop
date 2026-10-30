@@ -12,7 +12,7 @@ from enum import StrEnum
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 from string import Formatter
-from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, Self
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, Self
 
 from pydantic import Field, field_validator, model_validator
 
@@ -28,9 +28,9 @@ if TYPE_CHECKING:  # piloop.db.models types campaigns.config with the roles: onl
     from piloop.db.models import AgentSession
 
 
-UNPUSHED_KINDS = (CommentKind.ESCALATION, CommentKind.MESSAGE)
-"""Comment kinds that are not sent to a running implementer: escalations are for the human, and messages for the
-orchestrator. Every other kind is, a plugin's included."""
+PUSHED: Final = CommentKind.MESSAGE
+"""The comment kind that the daemon sends to a running agent: a message on it, or on its run or its run's idea. Every
+other kind, a note included, is on the board for the agents that read it."""
 
 
 class Files(StrEnum):
@@ -53,6 +53,7 @@ RELAYED: frozenset[Verb] = frozenset(
         ('idea', 'claim'),
         ('idea', 'propose'),
         ('idea', 'status'),
+        ('run', 'end'),
         ('candidate', 'import'),
         ('restore',),
         ('cas', 'get'),
@@ -188,18 +189,18 @@ class ImplementerRole(RoleConfig):
     at most ``wrap_up_lead``, the daemon tells the implementer to wrap up."""
     wrap_up_lead: timedelta = Field(default=timedelta(minutes=10), ge=timedelta(0))
     """How long before its ``timeout`` the daemon tells an implementer to wrap up, at most a quarter of the timeout."""
-    finding_grace: timedelta = Field(default=timedelta(seconds=60), ge=timedelta(0))
-    """How long after its finding the daemon ends an implementer, and every process that it left: a last commit takes
-    seconds."""
+    end_grace: timedelta = Field(default=timedelta(seconds=60), ge=timedelta(0))
+    """How long after an implementer ended its run (``piloop run end``) the daemon ends it, and every process that it
+    left: its last tool call returns first."""
     startup_relaunches: int = Field(default=2, ge=0)
     """How many times a run is queued again with a new implementer after its implementer failed to start. Then the run
     fails. A failure at startup is a fault of the host or the harness, not an attempt at an idea."""
     max_concurrent: int = Field(default=4, ge=1)
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
     scored after its implementer ended does not count."""
-    writes: list[str] = ['versions', 'comments(finding) on your idea', 'comments(note) on your run']
+    writes: list[str] = ['versions', 'comments(note) on your idea or your run']
     """What an implementer may write, as its brief states it. It files no ideas: its hunches go in its
-    finding, which research reads."""
+    notes, which research reads."""
     SURFACE: ClassVar[Surface] = Surface.RUN
 
 

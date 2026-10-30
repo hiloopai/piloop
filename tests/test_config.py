@@ -734,13 +734,31 @@ def test_a_campaign_s_finding_grace_is_its_implementer_s_with_a_warning(
     toml.write_text(toml.read_text() + '\n[agents]\nfinding_grace = 5\nwrap_up_grace = 7\n')
     with pytest.warns(PiloopDeprecationWarning, match=r'`agents.finding_grace` is deprecated; write `plugins.role'):
         cfg = load_campaign_config(campaign_path)
-    assert cfg.roles.doing_runs()[IMPLEMENTER].finding_grace == timedelta(seconds=5)
+    assert cfg.roles.doing_runs()[IMPLEMENTER].end_grace == timedelta(seconds=5)
     assert cfg.agents.wrap_up_grace == timedelta(seconds=7), 'wrap_up_grace stays the [agents] of every role'
     monkeypatch.setenv('PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE', 'PT9S')
     with pytest.warns(PiloopDeprecationWarning) as warned:
         cfg = load_campaign_config(campaign_path)
     assert any(str(w.message).startswith('PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE is deprecated; set') for w in warned)
-    assert cfg.roles.doing_runs()[IMPLEMENTER].finding_grace == timedelta(seconds=9), 'the variable wins'
+    assert cfg.roles.doing_runs()[IMPLEMENTER].end_grace == timedelta(seconds=9), 'the variable wins'
+
+
+def test_a_role_s_finding_grace_is_its_end_grace_with_a_warning(campaign_path: Path) -> None:
+    """A finding ends no run now: the grace after a worker ends its run is ``end_grace``."""
+    toml = campaign_path / 'piloop.toml'
+    toml.write_text(
+        toml.read_text().replace('[plugins.role.implementer]\n', '[plugins.role.implementer]\nfinding_grace = 5\n')
+    )
+    lines = toml.read_text().splitlines()
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        cfg = load_campaign_config(campaign_path)
+    assert [(w.lineno, str(w.message).split('; removed')[0]) for w in warned] == [
+        (
+            lines.index('finding_grace = 5') + 1,
+            '`plugins.role.<name>.finding_grace` is deprecated; write `plugins.role.<name>.end_grace`',
+        )
+    ]
+    assert cfg.roles.doing_runs()[IMPLEMENTER].end_grace == timedelta(seconds=5)
 
 
 def test_a_scout_table_of_0_5_loads_without_a_scout_and_warns(campaign_path: Path) -> None:

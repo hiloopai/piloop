@@ -1,7 +1,7 @@
 """The role capability's machinery: it steers the agents that run, and winds them down.
 
-It hands each running agent the comments for it (``prompts``) and its extensions (``extensions``), and tells an agent
-to wrap up and ends it when its campaign stops, someone cancels it, its role timeout comes, or it left its finding
+It hands each running agent the messages for it (``prompts``) and its extensions (``extensions``), and tells an agent
+to wrap up and ends it when its campaign stops, someone cancels it, its role timeout comes, or it ended its run
 (``wind_down``).
 """
 
@@ -53,20 +53,25 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
     wrap_up_lead,
 )
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd
+from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
 from piloop.plugins.campaign_type.kit.runs.tables import run_of
 from piloop.plugins.contribution import Contribution, DaemonHost
 from piloop.plugins.executor.contract import AgentKey, Prompt
-from piloop.plugins.role.contract import UNPUSHED_KINDS
+from piloop.plugins.role.contract import PUSHED
 from piloop.settings import AgentSettings
 
 WRAP_UP_PROMPT = (
     '[piloop] {what} ({cause}). Save what you have now, with a summary that says where it stands.'
-    ' Leave your finding and stop. This session ends in {minutes:g} minutes.'
+    ' Leave a note on what you did, then {last}. This session ends in {minutes:g} minutes.'
 )
+END_YOUR_RUN = 'end your run (`piloop run end`)'
+"""How a worker closes, in its wrap-up prompt."""
+STOP = 'stop'
+"""How a sweep closes, in its wrap-up prompt: it has no run to end."""
 
 
-FOUND = 'left its finding'
-"""The ``reason`` of the ``AgentEnded`` of an implementer that the daemon ended after its finding."""
+ENDED = 'ended its run'
+"""The ``reason`` of the ``AgentEnded`` of an implementer that the daemon ended after it ended its run."""
 
 
 TIMEOUT = 'role timeout'
@@ -82,9 +87,9 @@ class TimeCut(StrEnum):
 
 
 WINDING: Kinds = frozenset(
-    {Commented, StopRequested, CancelRequested, CampaignStatusChanged, AgentSessionRunning, AgentSessionExtended}
+    {RunEndRequested, StopRequested, CancelRequested, CampaignStatusChanged, AgentSessionRunning, AgentSessionExtended}
 )
-"""What wakes the wind-down: a finding, a stop or a cancel, an agent that runs, to tell it, and one that got more
+"""What wakes the wind-down: a run's end, a stop or a cancel, an agent that runs, to tell it, and one that got more
 time."""
 
 
@@ -234,24 +239,22 @@ class Agents:
             own = (*own, *steering.signatures)
         on_agent_session = Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session.id)
         settled = {p.comment for _, p in in_order(s, PromptOutcome, on_agent_session)}
-        comments = s.scalars(
-            select(Comment).where(pushed, Comment.kind.not_in(UNPUSHED_KINDS)).order_by(Comment.id)
-        ).all()
+        comments = s.scalars(select(Comment).where(pushed, Comment.kind == PUSHED).order_by(Comment.id)).all()
         return [c for c in comments if c.id not in settled and c.author not in own]
 
     def wind_down(self, turn: Turn) -> datetime | None:
-        """End the implementers that left their finding, and wind down those of stopped campaigns and cancelled agents.
+        """End the implementers that ended their runs, and wind down those of stopped campaigns and cancelled agents.
 
-        An implementer is ended its role's ``finding_grace`` after its finding, with every process that it left running: it
-        reported that it is done, and a job that it forgot must not hold its slot to the role timeout. Its run is
-        finished (``run_outcome``).
+        An implementer is ended its role's ``end_grace`` after it ended its run (``piloop run end``), with every process
+        that it left running: a job that it forgot must not hold its slot to the role timeout. Its run ends as it said
+        (``run_outcome``).
 
         A wrap-up prompt (``WrapUp``) is a note on the agent, which its executor delivers. An implementer whose role
         timeout is ``wrap_up_lead`` away is told to save its work and stop. Its timeout ends it.
 
         An implementer of a stopped campaign is told to save its work and stop, and ended after the grace period
         (``wrap_up_grace``), or at once when the stop request asked to end it ``now``. The runs then close and their
-        commits are scored. An implementer that the daemon ends (``AgentEnded``) without its finding closes its run as
+        commits are scored. An implementer that the daemon ends (``AgentEnded``) before it ended its run closes it as
         cut by the stop (``RunEnd.CAMPAIGN_STOPPED``), not as a failed attempt. Sweeps of a stopped campaign are not
         changed, because their timeouts limit them and the closing review is one of them.
 
@@ -286,9 +289,9 @@ class Agents:
             implementers = select(AgentSession).where(
                 (AgentSession.subject_kind == RUN), AgentSession.state.in_(winding)
             )
-            graces = {w.id: self._finding_grace(s, w) for w in s.scalars(implementers)}
-            found = [i for i, at in graces.items() if at is not None and at <= now]
-            soonest.add(*graces.values())
+            graces = {w.id: grace for w in s.scalars(implementers) if (grace := self._end_grace(s, w)) is not None}
+            found = {i: end for i, (at, end) in graces.items() if at <= now}
+            soonest.add(*(at for at, _ in graces.values()))
             agent_sessions = s.scalars(
                 select(AgentSession)
                 .where(
@@ -300,8 +303,8 @@ class Agents:
                 .order_by(AgentSession.id)
             ).all()
             for agent_session in agent_sessions:
-                if agent_session.id in found:
-                    self._end(s, agent_session, FOUND, RunEnd.FINISHED)
+                if (end := found.get(agent_session.id)) is not None:
+                    self._end(s, agent_session, ENDED, end)
                     continue
                 if agent_session.state is AgentSessionState.ENDING:
                     self._kill(s, agent_session)
@@ -333,7 +336,8 @@ class Agents:
                 if ending is Ending.NOW:
                     self._end(s, agent_session, reason, end)
                 elif told is None:
-                    text = WRAP_UP_PROMPT.format(what=what, cause=cause, minutes=grace.total_seconds() / 60)
+                    last = END_YOUR_RUN if run_of(agent_session) is not None else STOP
+                    text = WRAP_UP_PROMPT.format(what=what, cause=cause, last=last, minutes=grace.total_seconds() / 60)
                     self._wrap_up(s, agent_session, reason, text)
                     soonest.add(now + grace)
                 elif now - told >= grace:
@@ -344,7 +348,9 @@ class Agents:
                 left = self._time_left(s, agent_session, now)
                 if isinstance(left, TimeLeft):
                     cause = left.cut.value.format(timeout=left.timeout)
-                    text = WRAP_UP_PROMPT.format(what='Your time is almost up', cause=cause, minutes=left.minutes)
+                    text = WRAP_UP_PROMPT.format(
+                        what='Your time is almost up', cause=cause, last=END_YOUR_RUN, minutes=left.minutes
+                    )
                     self._wrap_up(s, agent_session, TIMEOUT, text)
                 else:  # when its lead comes, or None once it was told
                     soonest.add(left)
@@ -358,11 +364,11 @@ class Agents:
             return self._agents
         return s.get_one(Campaign, agent_session.campaign_id).config.agents.over(self._agents)
 
-    def _finding_grace(self, s: Session, implementer: AgentSession) -> datetime | None:
-        """When the grace after the implementer's finding ends (its role's ``finding_grace``), or None without one."""
-        found = self._planner_by_id(s, implementer.campaign_id).found_at(s, implementer)
+    def _end_grace(self, s: Session, implementer: AgentSession) -> tuple[datetime, RunEnd] | None:
+        """When the grace after the implementer ended its run ends (its role's ``end_grace``), and its run's end."""
+        ended = self._planner_by_id(s, implementer.campaign_id).ended_at(s, implementer)
         role = s.get_one(Campaign, implementer.campaign_id).config.roles.doing_runs().get(implementer.kind)
-        return None if found is None or role is None else found + role.finding_grace
+        return None if ended is None or role is None else (ended[0] + role.end_grace, ended[1])
 
     def _time_left(self, s: Session, implementer: AgentSession, now: datetime) -> TimeLeft | datetime | None:
         """What an implementer that was not told to wrap up has left, once it is ``wrap_up_lead`` or less.
@@ -408,7 +414,8 @@ class Agents:
         """Kill a wound-down agent, once ``ending``: its executor stops it, and it reports.
 
         The row is ``ending``, with ``AgentEnded``, in a commit before the first kill. SQLite has one writer at a time,
-        so a finding that the agent writes either committed before, and the agent finished first, or is refused.
+        so a run end that the agent asks for either committed before, and the agent ended first, or is refused: its
+        run is not running then.
         """
         end_agent(s, agent_session, reason, end, self._tracer)
         self._kill(s, agent_session)

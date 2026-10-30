@@ -38,7 +38,7 @@ idea#2 open → dropped: idea#1 tests the same mechanism
 |---|---|
 | You, the orchestrator | Ideas. You change the priority and status of any idea. |
 | Research | Ideas, when the board runs short. |
-| Watchdog | Nothing. Its findings say what it would try. |
+| Watchdog | Nothing. Its notes say what it would try. |
 | Implementer | One idea of its own, which it claims at once (`piloop idea propose`). It files none for others. |
 | Daemon | Adds an idea when a merge conflicts. |
 
@@ -61,8 +61,15 @@ piloop idea propose "Model the text with an order-3 context mixer" --hypothesis 
 
 The run tries that idea only. The implementer commits, also when the idea did not work.
 
-The run ends when the implementer exits, at its `timeout`, or a minute after it writes its `finding`. To give it more
-time, use [`piloop run extend`](/reference/cli#piloop-run-extend). Then the daemon scores each new commit. What the implementer left uncommitted becomes a `recovered` commit, which is never measured.
+The implementer ends its run itself, with one of:
+
+```bash
+piloop run end submitted
+piloop run end gave_up --reason "the order-3 model does not fit in memory"
+```
+
+A minute later (`end_grace`), the daemon ends the implementer. The run also ends at its `timeout`. An implementer
+that exits without `piloop run end` fails its run. To give it more time, use [`piloop run extend`](/reference/cli#piloop-run-extend). Then the daemon scores each new commit. What the implementer left uncommitted becomes a `recovered` commit, which is never measured.
 If git refuses that commit, the run fails, and an `agent_session.work_unsaved` event holds the changes as a patch.
 Restore them in a checkout of the implementer's last commit with `piloop cas get <blob> | git apply`.
 
@@ -70,17 +77,17 @@ The claim ends with the run:
 
 | How the run ended | What happens to the idea |
 |---|---|
-| It finished | `done` once its commits are judged. |
-| It failed, timed out or was stopped | Back to `open`, for another implementer. |
+| `submitted` | `done` once its commits are judged. |
+| `gave_up`, failed, timed out or stopped | Back to `open`, for another implementer. |
 | It was cancelled | `dropped`. |
-| It stopped on an open escalation | `dropped`. Answer with a `decision` comment, then set the idea `open`. |
 
 An implementer that never started to work claimed nothing: its run is queued again, up to two times.
 
 ## Talk to a running implementer
 
-A `note`, `finding` or `decision` comment on a running run, or on its idea, reaches the implementer within seconds. It
-gets the first line, up to 200 characters. A comment that cannot reach it goes into the next run's brief.
+A `message` comment on a running run, or on its idea, reaches the implementer within seconds. It gets the first line,
+up to 200 characters. A `note` stays on the board: the runs that claim the idea later read it. An `escalation` holds
+nothing: the run goes on.
 
 An implementer can add a trailer to a commit message:
 

@@ -14,14 +14,13 @@ from piloop.config import load_campaign_config
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment
 from piloop.db.session import Database
-from piloop.ids import TargetKind
+from piloop.ids import CommentKind, TargetKind
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ideas import added_by
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.executor.workers import Workers
 from piloop.settings import Settings
 from tests.conftest import RESEARCH, SETTLE, ScriptRuntime, factory, run_all, serving, serving_api
@@ -41,7 +40,7 @@ echo note >> solve.txt
 git commit -qam "a sweep may try things"
 {PYTHON} -m piloop idea add "$name" 'target encoding' --hypothesis 'categoricals carry signal' --plan 'encode, refit' \\
   --priority 1 --from 'loss table workspace/research/losses.md'
-{PYTHON} -m piloop sql "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('campaign', $campaign, '$sig', 'finding', 'proposed target encoding; rejected bigger trees (tried in evaluation#1)')"
+{PYTHON} -m piloop sql "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('campaign', $campaign, '$sig', 'note', 'proposed target encoding; rejected bigger trees (tried in evaluation#1)')"
 """
 
 
@@ -72,12 +71,12 @@ def test_research_sweep_inserts_ideas_signed_with_its_implementer_id(
             'target encoding',
         )
         assert idea.provenance == 'loss table workspace/research/losses.md'
-        [finding] = s.scalars(select(Comment).where(Comment.target_kind == TargetKind.CAMPAIGN)).all()
-        assert (finding.target_id, finding.author, finding.kind) == (campaign.id, 'research#1', FINDING)
+        [note] = s.scalars(select(Comment).where(Comment.target_kind == TargetKind.CAMPAIGN)).all()
+        assert (note.target_id, note.author, note.kind) == (campaign.id, 'research#1', CommentKind.NOTE)
     workspace = tmp_path / 'projects' / str(campaign.id) / 'workspace'
     brief = (workspace / 'brief-seen.txt').read_text()
     assert brief.startswith('# Research sweep') and '- Ideas to add: 2 (the board holds 0 of ' in brief
-    assert 'Fewer only when what is left duplicates open work; name that work in your finding.' in brief
+    assert 'Fewer only when what is left duplicates open work; name that work in your note.' in brief
     assert 'seed' not in brief.lower(), 'there are no seeds to develop'
     assert re.search(
         r'^- Measured runs since the last keep: 0, of the \d+ that mark a stall \(two rounds of', brief, re.M

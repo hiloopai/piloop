@@ -205,6 +205,22 @@ the run: the idea is `done` after a finished run with a verdict, and `open` agai
 - `[tracks.<name>] share` is removed: workers claim any open idea. It loads with a warning until 0.7.0, and a table
   that it leaves empty goes.
 
+### Run ends and messages
+
+An implementer ends its run itself, with `piloop run end submitted` or `piloop run end gave_up --reason '…'`. The
+daemon ends it `end_grace` later. A run that ends without it fails.
+
+- The `finding` kind is removed: a worker reports in a `note` on its idea, and a sweep in a `note` on the campaign.
+  Old findings stay readable with `piloop sql`. A note ends no run.
+- `[plugins.role.<name>] finding_grace` is `end_grace`. The old key still loads, with a warning, until 0.7.0, and the
+  migration renames it in each stored config.
+- A run ends `gave_up` when its implementer gives up. An escalation holds no run: no run ends `awaiting_answer`, and
+  the migration makes each such run, and its `run.finished` event, `failed`.
+- Only a `message` reaches a running agent: on the agent, or on its run or its idea. `piloop prompt` and the
+  daemon's wrap-up prompts write messages. A `note` stays on the board.
+- `escalation` and `decision` are kinds of the escalation plugin. They work as before. A plugin that names them
+  imports `ESCALATION` and `DECISION` from `piloop.plugins.escalation.kit.kinds`, not from `CommentKind`.
+
 ## Upgrading to 0.5.0
 
 ### Upgrade from 0.4
@@ -292,7 +308,7 @@ component's. A write of a kind that no installed piloop declared fails on the fo
 before. The upgrade rebuilds `comments` once more.
 
 ```sql
-SELECT id, after_end FROM comment_kinds
+SELECT id FROM comment_kinds
 ```
 
 ### `tokens` of a campaign's status
@@ -305,11 +321,11 @@ stop rule counts too.
 `startup_relaunches`, `finding_grace` and `wrap_up_lead` are keys of `[plugins.role.implementer]`, and so of each role
 that does runs. `[daemon] startup_relaunches` and `[agents] finding_grace` and `wrap_up_lead` of `config.toml`, and
 `[agents] finding_grace` of `piloop.toml`, still work until 0.6.0, with a warning. The upgrade moves the key in each
-campaign's stored config:
+campaign's stored config. Since 0.6.0, `finding_grace` is `end_grace`:
 
 ```toml
 [plugins.role.implementer]
-finding_grace = 60
+end_grace = 60
 ```
 
 ### The startup breaker

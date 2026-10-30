@@ -23,7 +23,7 @@ class LessonStatus(StrEnum):
 
 
 class Lesson(Base):
-    """The standing conclusion about one mechanism family (``ideas.family``) of a campaign, for the next campaigns.
+    """The standing conclusion about one mechanism family of a campaign, for the next campaigns.
 
     The closing watchdog writes one for each family that a campaign tried, and the orchestrator may write more. The
     newest lesson for a (campaign, family) is the current one: a new conclusion is a new row, and rows are never
@@ -41,7 +41,7 @@ class Lesson(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     campaign_id: Mapped[CampaignId] = mapped_column(ForeignKey('campaigns.id', ondelete='CASCADE'))
     family: Mapped[str]
-    """The mechanism family, as ``ideas.family`` names it. Case and spacing do not matter when lessons are matched."""
+    """The mechanism family, as the lesson's writer names it. Case and spacing do not matter when lessons are matched."""
     status: Mapped[LessonStatus] = mapped_column(by_value(LessonStatus))
     effect: Mapped[float | None]
     """The best effect that the campaign measured in the family, in the units of ``metric``, with the sign it had: a

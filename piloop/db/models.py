@@ -130,8 +130,7 @@ class Pause(StrEnum):
 class AgentSessionState(StrEnum):
     """The process state of an agent, kept by the daemon. ``requested`` is a request to launch, not a process.
 
-    ``ending``: the daemon ended the agent, for a stop or a cancel, and its process is not gone yet. From then on, a
-    finding that the agent writes is refused.
+    ``ending``: the daemon ended the agent, for a stop, a cancel or its run's end, and its process is not gone yet.
     """
 
     REQUESTED = 'requested'
@@ -332,15 +331,6 @@ EVENT: TypeAdapter[EventModel] = TypeAdapter(Annotated[EventModel, PlainValidato
 A registered kind validates strictly: a payload that does not fit its model raises."""
 
 
-class AfterEnd(StrEnum):
-    """Whether an agent whose session has ended may still write a comment of a kind (``ended.no_late_comment``)."""
-
-    KEPT = 'kept'
-    REFUSED = 'refused'
-    """It settles what the agent worked on, as a finding settles a run: once the daemon ended the agent, it would undo
-    a stop or a cancel."""
-
-
 class Base(DeclarativeBase):
     """The declarative base, with the mappings for JSON, UTC datetimes and enums stored by value."""
 
@@ -363,7 +353,6 @@ class Base(DeclarativeBase):
         Pause: by_value(Pause),
         TargetKind: KindText(TargetKind),
         CommentKind: KindText(CommentKind),
-        AfterEnd: by_value(AfterEnd),
         AgentSessionState: by_value(AgentSessionState),
         LeaseState: by_value(LeaseState),
         Access: by_value(Access),
@@ -574,7 +563,6 @@ class KnownCommentKind(Base):
 
     id: Mapped[CommentKind] = mapped_column(primary_key=True)
     """The kind's name, such as ``note``."""
-    after_end: Mapped[AfterEnd] = mapped_column(default=AfterEnd.KEPT, server_default=AfterEnd.KEPT)
 
 
 class Migration(Base):
@@ -617,7 +605,7 @@ class Comment(Tracked, Base):
     A comment with a ``priority`` is for the human. It stays in the inbox (``piloop inbox``) until someone acknowledges
     it (``acked_at``, ``acked_by``). An escalation always has a priority (a CHECK makes sure). The orchestrator gives
     a priority to every decision it makes for the human, so that the human can review and change each one later. The
-    rest of the forum (implementers that steer each other, research findings) has no priority.
+    rest of the forum (implementers that steer each other, research notes) has no priority.
     """
 
     __tablename__ = 'comments'

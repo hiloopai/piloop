@@ -15,18 +15,18 @@ from piloop.agents.results import CampaignResults
 from piloop.config import load_campaign_config
 from piloop.daemon.main import ACTOR, Daemon
 from piloop.daemon.serve import RESTART_SIGNAL, SERVE_ARGV
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment
+from piloop.db.models import AgentSession, AgentSessionState, Campaign
 from piloop.db.session import Database, migrate
-from piloop.ids import TargetRef
-from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING, IMPLEMENTER, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.proc import Inherited, alive, started
 from piloop.settings import Settings
 from tests.conftest import (
+    END_RUN,
     HARNESS_APPEND,
     HARNESS_NOOP,
     RESEARCH,
@@ -38,13 +38,16 @@ from tests.conftest import (
     claim,
     console_lines,
     disk,
+    end,
     factory,
     queued,
     register,
     run_all,
+    serving_api,
     trace,
     wait_until,
     workers_of,
+    write_script,
     write_toml,
 )
 
@@ -56,84 +59,87 @@ def test_daemon_end_to_end(
     home = tmp_path / 'home'
     runtime = ScriptRuntime()
     daemon = Daemon(Settings(home=home))
-    mocker.patch.object(workers_of(daemon.controller).worker, 'runtime_factory', factory(runtime))
-    campaign = register(daemon.db, campaign_path)
-    with daemon.db.session() as s:
-        s.add(Idea(track='score', campaign_id=campaign.id, title='ok', hypothesis='ok', created_by='t'))
-        s.commit()
+    write_script(campaign_path.parent / 'harness.sh', HARNESS_APPEND + END_RUN)
+    with serving_api(Settings(home=home)):  # each worker's `piloop run end` reaches it
+        mocker.patch.object(workers_of(daemon.controller).worker, 'runtime_factory', factory(runtime))
+        campaign = register(daemon.db, campaign_path)
+        with daemon.db.session() as s:
+            s.add(Idea(track='score', campaign_id=campaign.id, title='ok', hypothesis='ok', created_by='t'))
+            s.commit()
 
-    daemon.scheduler.reap()
-    assert queued(daemon.db, daemon.scheduler, campaign.id, IdeaId(1)) == [1]
-    assert run_all(daemon.scheduler) == [1]
-    daemon.scheduler.wait(SETTLE)
-    with daemon.db.session() as s:
-        run = s.get_one(Run, 1)
-        assert (run.status, run.updated_by) == (RunStatus.SUCCEEDED, ACTOR.signature)
-        assert s.get_one(Idea, 1).status is IdeaStatus.DONE
+        daemon.scheduler.reap()
+        assert queued(daemon.db, daemon.scheduler, campaign.id, IdeaId(1)) == [1]
+        assert run_all(daemon.scheduler) == [1]
+        daemon.scheduler.wait(SETTLE)
+        with daemon.db.session() as s:
+            run = s.get_one(Run, 1)
+            assert (run.status, run.updated_by) == (RunStatus.SUCCEEDED, ACTOR.signature)
+            assert s.get_one(Idea, 1).status is IdeaStatus.DONE
 
-    write_toml(campaign_path, HARNESS_NOOP)
-    with daemon.db.session() as s:
-        s.get_one(Campaign, campaign.id).config = load_campaign_config(campaign_path)
-        s.commit()
-    assert run_all(daemon.scheduler) == [2], 'a fresh run fills the free slot; the successful run woke no watchdog'
-    daemon.scheduler.wait(SETTLE)
-    assert trace(daemon.db) == snapshot(
-        [
-            'idea.created idea',
-            'lease_worker.joined home',
-            'agent_session.requested agent_session',
-            'run.queued run',
-            'idea.status idea',
-            'run.started run',
-            'agent_session.started agent_session',
-            'lease.queued agent_session',
-            'agent_session.running agent_session',
-            'agent_session.finished agent_session',
-            'agent_session.job_ended agent_session',
-            'run.received run',
-            'run.finished run',
-            'lease.queued candidate',
-            'measurement.recorded measurement',
-            'candidate.judged candidate',
-            'candidate.verdict candidate',
-            'idea.status idea',
-            'subject.settled idea',
-            'agent_session.requested agent_session',
-            'run.queued run',
-            'run.started run',
-            'agent_session.started agent_session',
-            'lease.queued agent_session',
-            'agent_session.running agent_session',
-            'agent_session.finished agent_session',
-            'agent_session.job_ended agent_session',
-            'run.received run',
-            'run.finished run',
-        ]
-    ), 'what the first two runs wrote: a claimed run settles its idea; a fresh run that claims nothing settles none'
-    write_toml(campaign_path, HARNESS_APPEND)
-    with daemon.db.session() as s:
-        s.get_one(Campaign, campaign.id).config = load_campaign_config(campaign_path)
-        s.commit()
-    assert run_all(daemon.scheduler) == [3, 4], 'a fresh run, and the watchdog sweep that the failure requests'
-    daemon.scheduler.wait(SETTLE)
-    with daemon.db.session() as s:
-        watchdog = s.get_one(AgentSession, 4)
-        assert (watchdog.kind, watchdog.reason, watchdog.state, watchdog.harness) == (
-            WATCHDOG,
-            'run_failed: run#2 failed',
-            AgentSessionState.EXITED,
-            'script',
+        write_toml(campaign_path, HARNESS_NOOP)
+        with daemon.db.session() as s:
+            s.get_one(Campaign, campaign.id).config = load_campaign_config(campaign_path)
+            s.commit()
+        assert run_all(daemon.scheduler) == [2], 'a fresh run fills the free slot; the successful run woke no watchdog'
+        daemon.scheduler.wait(SETTLE)
+        assert trace(daemon.db) == snapshot(
+            [
+                'idea.created idea',
+                'lease_worker.joined home',
+                'agent_session.requested agent_session',
+                'run.queued run',
+                'idea.status idea',
+                'run.started run',
+                'agent_session.started agent_session',
+                'lease.queued agent_session',
+                'agent_session.running agent_session',
+                'run.end_requested run',
+                'agent_session.finished agent_session',
+                'agent_session.job_ended agent_session',
+                'run.received run',
+                'run.finished run',
+                'lease.queued candidate',
+                'measurement.recorded measurement',
+                'candidate.judged candidate',
+                'candidate.verdict candidate',
+                'idea.status idea',
+                'subject.settled idea',
+                'agent_session.requested agent_session',
+                'run.queued run',
+                'run.started run',
+                'agent_session.started agent_session',
+                'lease.queued agent_session',
+                'agent_session.running agent_session',
+                'agent_session.finished agent_session',
+                'agent_session.job_ended agent_session',
+                'run.received run',
+                'run.finished run',
+            ]
+        ), 'what the first two runs wrote: a claimed run settles its idea; a fresh run that claims nothing settles none'
+        write_toml(campaign_path, HARNESS_APPEND + END_RUN)
+        with daemon.db.session() as s:
+            s.get_one(Campaign, campaign.id).config = load_campaign_config(campaign_path)
+            s.commit()
+        assert run_all(daemon.scheduler) == [3, 4], 'a fresh run, and the watchdog sweep that the failure requests'
+        daemon.scheduler.wait(SETTLE)
+        with daemon.db.session() as s:
+            watchdog = s.get_one(AgentSession, 4)
+            assert (watchdog.kind, watchdog.reason, watchdog.state, watchdog.harness) == (
+                WATCHDOG,
+                'run_failed: run#2 failed',
+                AgentSessionState.EXITED,
+                'script',
+            )
+            assert watchdog.log_dir == str(home / 'agent_sessions' / '4')
+        brief = (home / 'agent_sessions' / '4' / 'brief.md').read_text()
+        assert (
+            'Why this agent started (context, not a scope): run_failed: run#2 failed' in brief
+            and '## This sweep: an incident' in brief
         )
-        assert watchdog.log_dir == str(home / 'agent_sessions' / '4')
-    brief = (home / 'agent_sessions' / '4' / 'brief.md').read_text()
-    assert (
-        'Why this agent started (context, not a scope): run_failed: run#2 failed' in brief
-        and '## This sweep: an incident' in brief
-    )
-    launched = run_all(daemon.scheduler)
-    with daemon.db.session() as s:
-        assert [s.get_one(AgentSession, i).kind for i in launched] == [IMPLEMENTER], 'one sweep per failure'
-    daemon.shutdown(timeout=5)
+        launched = run_all(daemon.scheduler)
+        with daemon.db.session() as s:
+            assert [s.get_one(AgentSession, i).kind for i in launched] == [IMPLEMENTER], 'one sweep per failure'
+        daemon.shutdown(timeout=5)
 
 
 def test_serve_runs_until_interrupted(tmp_path: Path, mocker: MockerFixture) -> None:
@@ -299,6 +305,7 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
     after.close()
     second = Daemon(cfg)
     second.scheduler.reap()
+    end(second.db, RunId(1))
     hold.unlink()
     second.scheduler.wait(SETTLE)
     with second.db.session() as s:
@@ -319,7 +326,7 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
 
 
 @pytest.mark.parametrize(
-    ('finding', 'run_end', 'idea_status', 'verdict'),
+    ('ended', 'run_end', 'idea_status', 'verdict'),
     [
         (False, (RunStatus.FAILED, RunEnd.DAEMON_STOPPED), IdeaStatus.OPEN, None),
         (True, (RunStatus.SUCCEEDED, RunEnd.FINISHED), IdeaStatus.DONE, Outcome.KEEP),
@@ -330,7 +337,7 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
     campaign_path: Path,
     tmp_path: Path,
     mocker: MockerFixture,
-    finding: bool,
+    ended: bool,
     run_end: tuple[RunStatus, RunEnd],
     idea_status: IdeaStatus,
     verdict: Outcome | None,
@@ -339,7 +346,7 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
 
     The first daemon stops its agent, cannot apply the report (a locked database), and dies before it writes the rows.
     The next daemon adopts the agent and applies the spooled report: the run is cut by the stop, not failed, and its
-    commit is kept unmeasured. A run whose implementer left its finding is handed off, and its commit is scored.
+    commit is kept unmeasured. A run whose implementer ended it is handed off, and its commit is scored.
     """
     hold = tmp_path / 'hold'
     hold.touch()
@@ -354,10 +361,8 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
     assert run_all(first.scheduler) == [1]
     wait_until((cfg.home / 'runs' / '1' / 'agent.pid').exists)
     claim(first.db, RunId(1), IdeaId(1))
-    if finding:
-        with first.db.session() as s:
-            s.add(Comment(target=TargetRef(IDEA, 1), author='implementer#1', kind=FINDING, body='done'))
-            s.commit()
+    if ended:
+        end(first.db, RunId(1))
     locked = mocker.patch.object(CampaignResults, 'finished', side_effect=OperationalError('', {}, Exception('locked')))
     first.controller.stop(timeout=SETTLE)
     assert locked.called, 'the killed agent reported, and its report waits in the spool'

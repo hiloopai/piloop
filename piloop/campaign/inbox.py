@@ -1,7 +1,7 @@
 """The human's inbox: every comment with a ``priority`` that nobody has acknowledged yet.
 
 A comment addressed to the human has a priority from 0 (urgent) to 4 (someday). Examples are decisions that the
-orchestrator took for the human, escalations and findings. Other comments have no priority and form the log.
+orchestrator took for the human, escalations and notes that ask for the human. Other comments have no priority and form the log.
 Nothing waits for the human. An item is a record to review, and ``piloop inbox ack`` only marks it as seen.
 
 The orchestrator is any harness that runs the ``piloop-operate`` skill. It learns of new items from the events
@@ -45,6 +45,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
+from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.settings import settings
 from piloop.text import iso
 
@@ -139,7 +140,7 @@ def unanswered(s: Session, waiting: Sequence[tuple[Comment, Campaign | None]]) -
     An answer is a comment on the root of the escalation's thread (``reply``) that is ``in_reply_to`` it, or that is on
     it and answers nothing else.
     """
-    asked = {c.id: c for c, _ in waiting if c.kind == CommentKind.ESCALATION}
+    asked = {c.id: c for c, _ in waiting if c.kind == ESCALATION}
     roots = {c.target_id if c.target_kind == TargetKind.COMMENT else c.id for c in asked.values()}
     on_roots = (Comment.target_kind == TargetKind.COMMENT) & Comment.target_id.in_(roots)
     answered = set[CommentId]()
@@ -216,7 +217,7 @@ def reply(s: Session, comment_id: CommentId, body: str, *, author: Actor, priori
         target=TargetRef(TargetKind.COMMENT, root_of(s, s.get_one(Comment, comment_id)).id),
         in_reply_to=comment_id,
         author=author.signature,
-        kind=CommentKind.DECISION,
+        kind=DECISION,
         priority=priority,
         body=body.strip(),
     )
@@ -280,7 +281,7 @@ def thread(s: Session, root: Comment) -> list[tuple[Comment, Relation]]:
 
     Each part is oldest first. A citation is ``comment#<id>`` in the body, for example ``Re: comment#12`` in a
     decision. Other comments on the same target are not part of the thread. A campaign collects every research
-    finding, and the answer would be lost among them.
+    note, and the answer would be lost among them.
     """
     ref = f'comment#{root.id}'
     reply = Comment.target == TargetRef(TargetKind.COMMENT, root.id)

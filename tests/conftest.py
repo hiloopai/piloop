@@ -56,7 +56,8 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluato
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import EvaluationClient
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunEnding, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ops import end_run
 from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session
 from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
 from piloop.plugins.campaign_type.kit.verdicts.wire import VerdictsClient
@@ -82,6 +83,8 @@ from piloop.text import iso
 
 # Harness stand-ins: any argv that edits the worktree and commits.
 HARNESS_APPEND = '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "add a line"\n'
+END_RUN = '"$PILOOP_BIN" run end submitted\n'
+"""The last line of a worker that is done: it ends its run, which the API that ``submitting`` serves takes."""
 HARNESS_TWO_COMMITS = (
     '#!/bin/sh\necho a >> solve.txt\ngit commit -qam "first"\necho b >> solve.txt\ngit commit -qam "second"\n'
 )
@@ -774,6 +777,19 @@ def serving_api(
         db.close()
 
 
+@pytest.fixture
+def daemon_api(tmp_path: Path) -> Iterator[None]:
+    """Serve the API of the test's home, as the daemon does: a worker's ``piloop run end`` reaches it."""
+    with serving_api(Settings(home=tmp_path)):
+        yield
+
+
+@pytest.fixture
+def submitting(daemon_api: None, campaign_path: Path) -> None:
+    """The campaign's worker adds a line, commits it and ends its run as submitted, through the served API."""
+    write_script(campaign_path.parent / 'harness.sh', HARNESS_APPEND + END_RUN)
+
+
 @contextmanager
 def measuring(cfg: Settings) -> Generator[None]:
     """Measure the baseline of each campaign that registers in ``cfg``'s home, as the daemon's next pass does.
@@ -850,6 +866,15 @@ def claim(db: Database, run_id: RunId, idea_id: IdeaId) -> None:
         worker = latest_agent_session(s, run_id)
         assert worker is not None, f'run#{run_id} has a worker'
         backlog_ops.claim(s, idea_id, actor=Agent(role=worker.kind, session=worker.id))
+        s.commit()
+
+
+def end(db: Database, run_id: RunId, how: RunEnding = RunEnding.SUBMITTED, reason: str | None = None) -> None:
+    """End the running run ``run_id`` as ``how``, as its latest worker does with ``piloop run end``."""
+    with db.session() as s:
+        worker = latest_agent_session(s, run_id)
+        assert worker is not None, f'run#{run_id} has a worker'
+        end_run(s, how, reason, actor=Agent(role=worker.kind, session=worker.id))
         s.commit()
 
 

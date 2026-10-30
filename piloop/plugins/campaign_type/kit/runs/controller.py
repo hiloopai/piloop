@@ -1,4 +1,4 @@
-"""Execute one run: make a worktree, run the implementer, close the run, score its commits and settle the idea.
+"""Execute one run: make a worktree, run the worker, close the run, score its commits and end its claim.
 
 The run closes when its implementer ends, so the implementer slot is free while the daemon measures the commits. The idea stays
 ``claimed`` until its candidates are judged, because a dependent idea builds on the keeps of its prerequisites.
@@ -16,7 +16,7 @@ from typing import ClassVar, Final, Literal, assert_never
 
 from covalence import Cid
 from pydantic import ValidationError
-from sqlalchemy import ColumnElement, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, undefer
 
 from piloop.actor import Actor, Agent, System
@@ -28,7 +28,6 @@ from piloop.agents.results import (
     HandedOver,
     Lost,
     NotStarted,
-    PromptOutcome,
     Ran,
     WorkUnsaved,
 )
@@ -44,13 +43,11 @@ from piloop.campaign.campaigns import (
 )
 from piloop.campaign.stop import run_cancel, seconds, timeout as agent_timeout
 from piloop.config import TRANSCRIPT, CampaignConfig
-from piloop.db.events import emit, has, in_order, latest
+from piloop.db.events import emit, has, latest
 from piloop.db.models import (
-    AfterEnd,
     AgentSession,
     AgentSessionState,
     Campaign,
-    Comment,
     Event,
     EventModel,
     Limit,
@@ -58,13 +55,10 @@ from piloop.db.models import (
     utcnow,
 )
 from piloop.db.session import Database, write_transaction
-from piloop.db.triggers import DAEMON_ACTOR
-from piloop.db.triggers.changelog import Commented
-from piloop.ids import AgentSessionId, CampaignId, CommentId, CommentKind, Revision, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CampaignId, Revision, RoleName, TargetKind, TargetRef
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, Tracer
 from piloop.plugins import limits
-from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Cause, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
@@ -82,9 +76,10 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
 )
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RUN, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunEnding, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
 from piloop.plugins.campaign_type.kit.runs.stop import release
-from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session, working_on
+from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     MOVED,
     CandidateJudged,
@@ -138,11 +133,8 @@ SKIPPED_REASON = 'not evaluated: its version asked to be skipped'
 type Unmeasured = Literal[Origin.RECOVERED, Origin.SKIPPED]
 """A version that the daemon does not measure: its recovered work, or one that asked to be skipped."""
 UNMEASURED_REASONS: Final[dict[Unmeasured, str]] = {Origin.RECOVERED: RECOVERED_REASON, Origin.SKIPPED: SKIPPED_REASON}
-NO_CHANGES = 'implementer saved no versions'
+NOT_ENDED = 'its worker stopped without `piloop run end`'
 UNSAVED = 'what the implementer left unsaved could not be saved, agent_session.work_unsaved has it in the CAS'
-INTERRUPTED = (
-    'implementer stopped without a version or a finding of its own; its unsaved changes are a recovered candidate'
-)
 RUNS = 'runs'
 """The directory under the home of each run's place: ``runs/<id>``, its implementer's log directory and worktree."""
 
@@ -177,11 +169,7 @@ class RunReceived(EventModel):
     revisions: list[Revision]
 
 
-class FindingWritten(Commented):
-    """An implementer wrote its finding: the comment kind ``finding``, which this component declares."""
-
-    AFTER_END: ClassVar[AfterEnd] = AfterEnd.REFUSED
-    kind: Literal['comment.finding'] = 'comment.finding'
+EventModel.retire('comment.finding')  # 0.5's kind of a worker's report; it is a note now, and old rows stay as they are
 
 
 class RunFinished(EventModel):
@@ -507,7 +495,7 @@ class RunController:
         work: Transfer | None,
     ) -> None:
         """Keep the work of a run that a daemon stop cut (``_keep_cut_work``). The stop writes the rows."""
-        cut = not self._left_finding(run_id, agent_session_id)  # else the stop closed it as handed off
+        cut = self._ending(run_id) is None  # else the stop closed it as handed off
         self._keep_cut_work(run_id, name, repo, self._received(run_id, repo, base_revision, work), cut=cut)
         self._stopped(span, run_id)
 
@@ -526,26 +514,23 @@ class RunController:
         """Keep the work of a run that the stop of an earlier daemon process cut, and write the rows that it did not.
 
         That process ended before it read the agent's report, so the run is still open. It ends as the stop would have
-        ended it: ``RunEnd.DAEMON_STOPPED``, not an attempt, or handed off when the implementer left its finding, whose
-        commits are scored now.
+        ended it: ``RunEnd.DAEMON_STOPPED``, not an attempt, or handed off when its worker ended it, whose commits are
+        scored now.
         """
-        finding = self._left_finding(run_id, agent_session_id)
+        ending = self._ending(run_id)
         versions = self._received(run_id, repo, base_revision, work)
-        self._keep_cut_work(run_id, name, repo, versions, cut=not finding)
-        with self._db.session() as s:
-            end, error = handed_off(s, s.get_one(Run, run_id)) if finding else (RunEnd.DAEMON_STOPPED, None)
+        self._keep_cut_work(run_id, name, repo, versions, cut=ending is None)
+        end, error = handed_off(ending) if ending is not None else (RunEnd.DAEMON_STOPPED, None)
         self._close(span, run_id, end, error)
-        last = self._score(run_id, campaign_id, repo, versions, log_dir) if finding and versions else None
+        last = self._score(run_id, campaign_id, repo, versions, log_dir) if ending is not None and versions else None
         self._settle(run_id, end, last)
 
     def _stopped(self, span: Span, run_id: RunId) -> None:
         """Trace the end that a daemon stop writes on the run (``Scheduler._fail_run``), which owns the row."""
         with self._db.session() as s:
-            run, agent = s.get_one(Run, run_id), latest_agent_session(s, run_id)
-            if run.status is RunStatus.RUNNING and agent is not None and finding_of(s, run, agent) is not None:
-                end, error = handed_off(s, run)
-            else:
-                end, error = RunEnd.DAEMON_STOPPED, None
+            run = s.get_one(Run, run_id)
+            ending = end_requested(s, run) if run.status is RunStatus.RUNNING else None
+            end, error = handed_off(ending) if ending is not None else (RunEnd.DAEMON_STOPPED, None)
         span.set(status=end.status, end=end, error=error)
 
     def _ran(
@@ -562,9 +547,8 @@ class RunController:
         """Close the run of an agent that worked (``run_outcome``), score its versions and settle its idea."""
         outcome = ended.process
         versions = self._received(run_id, repo, base_revision, ended.work)
-        finding = self._left_finding(run_id, agent_session_id)
+        ending = self._ending(run_id)
         with self._db.session() as s:
-            asked = open_escalation(s, s.get_one(Run, run_id))
             stop_ended = s.scalar(
                 select(Event.id).where(
                     Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id), has(AgentEnded)
@@ -573,15 +557,12 @@ class RunController:
             cancelled = run_cancel(s, run_id) is not None
             unsaved = latest(s, WorkUnsaved, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
         facts = RunFacts(
-            finding=finding,
+            ending=ending,
             ended=stop_ended is not None,
             cancelled=cancelled,
             timed_out=outcome.status is ExitStatus.TIMED_OUT,
             error=outcome.error,
-            asked=asked,
             unsaved=unsaved[1].error if unsaved is not None else None,
-            versions=len(versions),
-            recovered_only=bool(versions) and all(v.recovered for v in versions),
         )
         end, error = run_outcome(facts)
         self._close(span, run_id, end, error)
@@ -593,8 +574,7 @@ class RunController:
         """Queue the run again with a new implementer, up to its role's ``startup_relaunches``, after it failed to start.
 
         The run stays open, so it keeps its slot, attempt number and brief. The ``implementer#<id>`` in the brief becomes the
-        new implementer's id. The new implementer signs its notes and finding with its own id, and only its own finding counts
-        (``_left_finding``). The scheduler launches the new agent session row like any other. The old implementer's transcript is
+        new implementer's id. The new implementer signs its notes with its own id. The scheduler launches the new agent session row like any other. The old implementer's transcript is
         renamed so that the new one does not overwrite it. A request made while the daemon stops waits for the next
         daemon, as every request does. A cancelled run (``run_cancel``) is not queued again.
         """
@@ -637,8 +617,8 @@ class RunController:
 
         The stop owns the run's row. A run that the stop ``cut`` is not an attempt (``ATTEMPTS``), so its
         commits are not measured: each new one is ``recovered`` (``CUT_REASON``). A run whose implementer had left its
-        finding was handed off: the stop closed it as finished, and the next daemon scores the pinned commits
-        (``resume``).
+        worker had ended it was handed off: the stop closed it as its end says, and the next daemon scores the pinned
+        commits (``resume``).
         """
         if not versions:
             return
@@ -677,10 +657,10 @@ class RunController:
         with self._db.session() as s:
             return s.get_one(Campaign, campaign_id, options=[undefer(Campaign.config)])
 
-    def _left_finding(self, run_id: RunId, agent_session_id: AgentSessionId) -> bool:
-        """Return True if the agent signed a ``finding`` on its idea or its run (``finding_of``)."""
+    def _ending(self, run_id: RunId) -> RunEndRequested | None:
+        """How the run's worker ended the run (``end_requested``), or None."""
         with self._db.session() as s:
-            return finding_of(s, s.get_one(Run, run_id), s.get_one(AgentSession, agent_session_id)) is not None
+            return end_requested(s, s.get_one(Run, run_id))
 
     def resume(self, run_id: RunId) -> None:
         """Score the commits of a closed run and settle its idea, after a daemon stopped while it scored them.
@@ -1196,8 +1176,7 @@ class RunController:
     def _settle(self, run_id: RunId, end: RunEnd, last: CandidateId | None) -> None:
         """After the run's commits are judged, end its ``scoring`` and its claim (``release``).
 
-        ``last`` is the newest candidate of the run's versions that got a verdict: it decides whether the idea is done. A run whose implementer's escalation still waits for an answer (``open_escalation``) drops its idea instead. A
-        new run would stop on the same question, and ``done`` would free the ideas that wait for it.
+        ``last`` is the newest candidate of the run's versions that got a verdict: it decides whether the idea is done.
         """
         with self.launcher.lock:
             if self.launcher.cancelled.is_set():  # stop() ends the claim; the run's end stands
@@ -1205,20 +1184,7 @@ class RunController:
             with self._db.session() as s:
                 run = s.get_one(Run, run_id)
                 run.scoring = False
-                idea = run.idea
-                if idea is not None and idea.status is IdeaStatus.CLAIMED and (asked := open_escalation(s, run)):
-                    idea.status = IdeaStatus.DROPPED
-                    s.add(
-                        Comment(
-                            target=TargetRef(IDEA, idea.id),
-                            author=DAEMON_ACTOR,
-                            kind=CommentKind.NOTE,
-                            body=f'dropped: run#{run_id} ended while its escalation comment#{asked} waits for an'
-                            ' answer. Answer it with a decision on this idea, then open the idea',
-                        )
-                    )
-                else:
-                    release(s, run, end, s.get(Candidate, last) if last is not None else None)
+                release(s, run, end, s.get(Candidate, last) if last is not None else None)
                 s.commit()
 
     def _context(
@@ -1250,8 +1216,10 @@ class RunController:
         lines += [
             f"- Your idea's directory in the shared workspace: `./{WORKSPACE}/idea<your idea>/` (in no version)."
             f" `piloop restore {campaign.name} <idea id>` writes back a done idea's files.",
-            '- Leave a finding on your idea when you are done, piped into the SQL tool: INSERT INTO comments'
-            f" (target_kind, target_id, author, kind, body) VALUES ('idea', <your idea>, '{author}', 'finding', '...').",
+            '- Leave a note on your idea when you are done, piped into the SQL tool: INSERT INTO comments'
+            f" (target_kind, target_id, author, kind, body) VALUES ('idea', <your idea>, '{author}', 'note', '...')."
+            ' Then end your run: `piloop run end submitted` when your work is done, or'
+            " `piloop run end gave_up --reason '…'`. Nothing else ends it before your deadline.",
             '- Ask for what you cannot do or decide yourself with an escalation, never a note:'
             ' `piloop escalate idea#<your idea> --priority 1`, its form as JSON on stdin (`--guide` shows it).',
             '- The history below is what was tried in this campaign: do not repeat it; combine or go elsewhere.',
@@ -1327,33 +1295,12 @@ def wrap_up_lead(timeout: float, most: timedelta) -> float:
     return min(most.total_seconds(), timeout / 4)
 
 
-def about(run: Run) -> ColumnElement[bool]:
-    """Select the comments on ``run``, and on its idea once it claimed one."""
-    on_run = Comment.target == TargetRef(RUN, run.id)
-    return on_run if run.idea_id is None else on_run | (Comment.target == TargetRef(IDEA, run.idea_id))
-
-
-def finding_of(s: Session, run: Run, agent_session: AgentSession) -> Comment | None:
-    """Return the first ``finding`` that ``agent_session`` signed on its run's idea or on the run, as ``<role>#<id>`` or ``run#<id>``.
-
-    A finding is the implementer's report that it is done. Only the implementer's own finding counts: a relaunched run's dead
-    implementer did not finish it.
-    """
-    signed = (Agent(role=agent_session.kind, session=agent_session.id).signature, f'run#{run.id}')
-    return s.scalars(
-        select(Comment)
-        .where(about(run), Comment.kind == FINDING, Comment.author.in_(signed))
-        .order_by(Comment.id)
-        .limit(1)
-    ).first()
-
-
 @dataclass(frozen=True)
 class RunFacts:
     """The facts that decide how a run ended (``run_outcome``), gathered when its implementer ends."""
 
-    finding: bool = False
-    """The implementer left its own finding (``finding_of``): its report that it is done."""
+    ending: RunEndRequested | None = None
+    """How its worker ended it (``piloop run end``), if it did."""
     ended: bool = False
     """The daemon ended the implementer (``AgentEnded``)."""
     cancelled: bool = False
@@ -1362,24 +1309,18 @@ class RunFacts:
     """The implementer ran into its role's timeout."""
     error: str | None = None
     """How the implementer's process failed, a timeout included."""
-    asked: CommentId | None = None
-    """The implementer's escalation that waits for an answer (``open_escalation``)."""
     unsaved: str | None = None
     """Why the save of what the implementer left unsaved failed (``WorkUnsaved``)."""
-    versions: int = 0
-    recovered_only: bool = False
-    """There are versions, and each is the one that the worker saved of unsaved work (``Version.recovered``)."""
 
 
 def run_outcome(facts: RunFacts) -> tuple[RunEnd, str | None]:
     """Return how a run that ``facts`` describe ended, and the error that details it: the first case that matches."""
     match facts:
-        # A finding is the implementer's report that it is done; nothing that ends its process after it undoes that. But a
-        # question it left open blocks the run, or a retry would stop on it and done would release the waiting ideas.
-        case RunFacts(finding=True, asked=int() as comment):
-            return RunEnd.AWAITING_ANSWER, f'comment#{comment}'
-        case RunFacts(finding=True):
+        # The worker ended its run: nothing that ends its process after it undoes that.
+        case RunFacts(ending=RunEndRequested(how=RunEnding.SUBMITTED)):
             return RunEnd.FINISHED, None
+        case RunFacts(ending=RunEndRequested(how=RunEnding.GAVE_UP, reason=reason)):
+            return RunEnd.GAVE_UP, reason
         # A cancel, whether the daemon ended the implementer or it ended by itself first.
         case RunFacts(cancelled=True):
             return RunEnd.CANCELLED, None
@@ -1395,18 +1336,9 @@ def run_outcome(facts: RunFacts) -> tuple[RunEnd, str | None]:
         # What it left unsaved is only in the CAS.
         case RunFacts(unsaved=str() as error):
             return RunEnd.FAILED, f'{UNSAVED}: {error}'
-        # Its question is in the inbox. A commit does not make this a success.
-        case RunFacts(asked=int() as comment):
-            return RunEnd.AWAITING_ANSWER, f'comment#{comment}'
-        # No commit and no finding: nothing was tried.
-        case RunFacts(versions=0):
-            return RunEnd.FAILED, NO_CHANGES
-        # Only what the implementer left uncommitted: it did not finish.
-        case RunFacts(recovered_only=True):
-            return RunEnd.FAILED, INTERRUPTED
-        # It committed and ended cleanly.
+        # It stopped without ending its run.
         case _:
-            return RunEnd.FINISHED, None
+            return RunEnd.FAILED, NOT_ENDED
 
 
 def close_run(s: Session, run: Run, end: RunEnd, error: str | None) -> Run:
@@ -1419,35 +1351,9 @@ def close_run(s: Session, run: Run, end: RunEnd, error: str | None) -> Run:
     return run
 
 
-def handed_off(s: Session, run: Run) -> tuple[RunEnd, str | None]:
-    """The end and error of a run that a stop hands off because its implementer left its finding (``run_outcome``)."""
-    return run_outcome(RunFacts(finding=True, asked=open_escalation(s, run)))
-
-
-def open_escalation(s: Session, run: Run) -> CommentId | None:
-    """Return the id of the first escalation that an implementer of ``run`` wrote on its run or idea and no reply answered.
-
-    The implementer asked for something that it cannot do itself, and the answer has not reached it. An ack is not an
-    answer: an orchestrator can ack and reply while the implementer exits, and the reply then never reaches it. So
-    an escalation is answered when it is acked and a later comment that is not the daemon's reached an agent of the run
-    (``comment.delivered``). An implementer signs as ``<role>#<id>`` or ``run#<id>``. Escalations of other agents on the
-    same idea do not block the run.
-    """
-    sessions = s.scalars(select(AgentSession).where(working_on(run.id))).all()
-    signed = [Agent(role=w.kind, session=w.id).signature for w in sessions]
-    asked = s.scalars(
-        select(Comment)
-        .where(
-            about(run),
-            Comment.kind == CommentKind.ESCALATION,
-            Comment.author.in_([*signed, f'run#{run.id}']),
-        )
-        .order_by(Comment.id)
-    ).all()
-    on_agents = Event.target_kind == TargetKind.AGENT_SESSION, Event.target_id.in_([w.id for w in sessions])
-    read = [p.comment for _, p in in_order(s, PromptOutcome, *on_agents) if p.kind == 'comment.delivered']
-    replies = s.scalars(select(Comment.id).where(Comment.id.in_(read), Comment.author != DAEMON_ACTOR)).all()
-    return next((e.id for e in asked if e.acked_at is None or not any(r > e.id for r in replies)), None)
+def handed_off(ending: RunEndRequested) -> tuple[RunEnd, str | None]:
+    """The end and error of a run that a stop hands off because its worker ended it (``run_outcome``)."""
+    return run_outcome(RunFacts(ending=ending))
 
 
 def unmeasured_of(version: Version) -> Unmeasured | None:
@@ -1465,7 +1371,7 @@ def run_place(run_id: int) -> str:
 
 
 def implementer_of(s: Session, run_id: RunId) -> Actor:
-    """The run's newest implementer, which a note from its finding is by; the daemon for a run that has none."""
+    """The run's newest implementer, which a note on the run is by; the daemon for a run that has none."""
     w = s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id.desc()).limit(1)).first()
     return Agent(role=w.kind, session=w.id) if w is not None else System.DAEMON
 

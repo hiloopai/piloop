@@ -34,7 +34,7 @@ from piloop.plugins.fact_source.kit.readings import FactRead, Readings
 from piloop.plugins.stop_rule.contract import STOP_RULES, Hold
 from piloop.reports.overview import progress
 from tests.campaign.test_stop import add_run
-from tests.conftest import SETTLE, WATCHDOG, ScriptRuntime, run_all, write_toml
+from tests.conftest import END_RUN, SETTLE, WATCHDOG, ScriptRuntime, run_all, write_toml
 from tests.daemon.test_roles import PLUGIN, installed
 from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_watchdog, set_config, stop_campaign
 
@@ -181,6 +181,7 @@ HELD = 'nothing launches until you raise it and run piloop init'
 """How the escalation of ``limits`` at a limit of ``hold_at`` ends."""
 
 
+@pytest.mark.usefixtures('daemon_api')
 def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -188,7 +189,8 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
     hold.touch()  # The first agent works until the limit is reached, so its run is in progress then.
     write_toml(
         Path(campaign.path),
-        f'#!/bin/sh\nwhile [ -f {hold} ]; do sleep 0.05; done\necho line >> solve.txt\ngit commit -qam "add a line"\n',
+        f'#!/bin/sh\nwhile [ -f {hold} ]; do sleep 0.05; done\necho line >> solve.txt\ngit commit -qam "add a line"\n'
+        + END_RUN,
     )
     set_config(db, campaign, plugins=limited(300, command=billing(file), notices={'spend': [100, 200]}))
     first, second = add_ideas(db, campaign, 'first', 'second')
@@ -289,7 +291,8 @@ def test_a_failing_source_holds_launches_and_escalates_once_for_each_series_of_f
     scheduler.wait(SETTLE)
     bill(db, campaign, file, 'oops')
     run_all(scheduler)
-    assert len(daemon_comments(db)) == 2, 'a new series, a new escalation'
+    escalations = [kind for kind, _, _ in daemon_comments(db) if kind == 'escalation']
+    assert len(escalations) == 2, 'a new series, a new escalation'
 
 
 def test_progress_says_when_a_campaign_has_no_reading_yet(db: Database, campaign: Campaign) -> None:

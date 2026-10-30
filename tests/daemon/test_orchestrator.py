@@ -26,6 +26,7 @@ from piloop.ids import AgentSessionId, CommentId, CommentKind, Ending, RoleName,
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Outcome
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.plugins.campaign_type.optimization.section.research_commands import ResearchCommands
+from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.plugins.role.orchestrator import OrchestratorRole
 from piloop.plugins.trigger.news import NewsTaken, Urgency, urgency
 from tests.agents.test_resume import HARNESS, SESSION
@@ -127,7 +128,7 @@ def test_news_launches_the_orchestrator_which_resumes_its_session_and_never_wake
             Comment(
                 target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
                 author=Agent(role=ORCHESTRATOR, session=first).signature,
-                kind=CommentKind.DECISION,
+                kind=DECISION,
                 priority=3,
                 body='[process, reversible] nothing to change',
             )
@@ -155,7 +156,7 @@ def test_an_escalation_that_a_wake_left_unacknowledged_comes_back_in_the_next_wa
         asked = Comment(
             target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
             author='watchdog#9',
-            kind=CommentKind.ESCALATION,
+            kind=ESCALATION,
             priority=1,
             body='which floor?',
         )
@@ -167,7 +168,7 @@ def test_an_escalation_that_a_wake_left_unacknowledged_comes_back_in_the_next_wa
     assert 'escalation waits unacknowledged' not in brief(tmp_path, first), 'news already'
     asked_again = message(db, campaign, 'and now?')
     [second] = wake(db, runtime, tmp_path)
-    [note] = notes(db, second)
+    [note] = messages_to(db, second)
     news, reminder = note.splitlines()[1:]
     assert news == f'- comment#{asked_again} message p1 on campaign#1 (demo) by human:ana: and now?'
     assert re.fullmatch(rf'- 1 escalation waits unacknowledged: comment#{escalation} \(\d+s old\)', reminder)
@@ -200,10 +201,10 @@ def outcomes(db: Database, agent: AgentSessionId) -> list[str]:
         ]
 
 
-def notes(db: Database, agent: AgentSessionId) -> list[str]:
+def messages_to(db: Database, agent: AgentSessionId) -> list[str]:
     with db.session() as s:
         on_it = Comment.target == TargetRef(TargetKind.AGENT_SESSION, agent)
-        return list(s.scalars(select(Comment.body).where(on_it, Comment.kind == CommentKind.NOTE)))
+        return list(s.scalars(select(Comment.body).where(on_it, Comment.kind == CommentKind.MESSAGE)))
 
 
 @pytest.mark.parametrize('hook', [True, False], ids=['in its turn, through the hook', 'when its turn ends'])
@@ -225,7 +226,7 @@ def test_news_that_comes_while_a_wake_runs_reaches_that_wake_once(
             wait_until(lambda: prompts.is_file() and 'stop the lzma runs' in prompts.read_text(), 'the hook')
         hold.unlink()
         wait_until(lambda: agent_sessions(db, ORCHESTRATOR)[0][1] is AgentSessionState.EXITED, 'its end')
-    [_, note] = notes(db, first)
+    [_, note] = messages_to(db, first)
     assert note.startswith('News for you:\n- ') and 'by human:ana: stop the lzma runs' in note
     assert prompts.read_text().count('stop the lzma runs') == 1
     assert outcomes(db, first) == ['comment.delivered', 'comment.queued', 'comment.delivered']
@@ -279,7 +280,9 @@ def test_a_failed_orchestrator_leaves_its_news_to_the_next_and_off_is_the_defaul
         s.add(failed)
         s.flush()
         on_failed = TargetRef(TargetKind.AGENT_SESSION, failed.id)
-        note = Comment(target=on_failed, author='daemon', kind=CommentKind.NOTE, body='News for you:\n- are you there?')
+        note = Comment(
+            target=on_failed, author='daemon', kind=CommentKind.MESSAGE, body='News for you:\n- are you there?'
+        )
         s.add(note)
         s.flush()
         emit(s, NewsTaken(after=0, upto=10_000), TargetRef(TargetKind.COMMENT, note.id), System.DAEMON)
@@ -320,7 +323,7 @@ def test_a_cancelled_wake_takes_its_news_and_news_after_the_cancel_goes_to_the_n
     cancelled = taken(db, wanted).upto
     with db.session() as s:  # as if it came while the cancelled wake still ran
         late = Comment(
-            target=TargetRef(TargetKind.AGENT_SESSION, wanted), author='daemon', kind=CommentKind.NOTE, body=''
+            target=TargetRef(TargetKind.AGENT_SESSION, wanted), author='daemon', kind=CommentKind.MESSAGE, body=''
         )
         s.add(late)
         s.flush()
@@ -348,7 +351,7 @@ def test_one_launched_by_hand_gets_no_notes_and_a_live_one_that_ends_before_it_r
         live_id = live.id
     message(db, campaign, 'one at a time')
     assert wake(db, runtime, tmp_path) == [], 'not a second one: the live one gets a note'
-    [note] = notes(db, live_id)
+    [note] = messages_to(db, live_id)
     assert 'one at a time' in note
     with db.session() as s:
         s.get_one(AgentSession, live_id).state = AgentSessionState.EXITED
@@ -370,7 +373,7 @@ def test_messages_escalations_and_the_stop_are_urgent_and_the_rest_is_routine() 
         )  # fmt: skip
         return CommentNews(comment=view, campaign_name='demo')
 
-    assert [urgency(comment(k)) for k in ('message', 'escalation', 'finding')] == [
+    assert [urgency(comment(k)) for k in ('message', 'escalation', 'note')] == [
         Urgency.NOW,
         Urgency.NOW,
         Urgency.ROUTINE,

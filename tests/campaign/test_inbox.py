@@ -11,11 +11,12 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor, Agent, Orchestrating, Person, Service, System, party_of
 from piloop.api.views import AckOutcome, News, Relation, thread_lines
 from piloop.campaign import inbox
+from piloop.campaign.escalations import DecisionWritten
 from piloop.db import feed as db_feed
 from piloop.db.events import AnomalyReported, emit, in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.db.triggers.changelog import CommentAcked, Commented, CoreCommented, IdeaCreated
+from piloop.db.triggers.changelog import CommentAcked, Commented, IdeaCreated
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -23,9 +24,10 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT, TrackName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RUN
+from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
+from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.settings import DaemonSettings
 from tests.conftest import WATCHDOG
 from tests.reports.test_history import idea
@@ -49,7 +51,7 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
         s.flush()
         s.add(Measurement(candidate_id=1, evaluator_id=1, metrics={'score': 1}))
         s.flush()
-        escalation = dict(author='watchdog', kind=CommentKind.ESCALATION, priority=1)
+        escalation = dict(author='watchdog', kind=ESCALATION, priority=1)
         s.add_all(
             [
                 Comment(target=TargetRef(TargetKind.CAMPAIGN, campaign.id), body='on campaign', **escalation),
@@ -60,8 +62,8 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
                 Comment(target=TargetRef(TargetKind.AGENT_SESSION, 1), body='on implementer', **escalation),
                 Comment(target=TargetRef(IDEA, theirs.id), body='other campaign', **escalation),
                 Comment(target=TargetRef(TargetKind.CAMPAIGN, other.id), body='other campaign too', **escalation),
-                Comment(target=TargetRef(RUN, run.id), author='w', kind=FINDING, body='no'),
-                Comment(target=TargetRef(IDEA, mine.id), author='h', kind=CommentKind.DECISION, body='park'),
+                Comment(target=TargetRef(RUN, run.id), author='w', kind=CommentKind.NOTE, body='no'),
+                Comment(target=TargetRef(IDEA, mine.id), author='h', kind=DECISION, body='park'),
                 Comment(target=TargetRef(TargetKind.COMMENT, 1), body='on a comment of the campaign', **escalation),
                 Comment(target=TargetRef(TargetKind.COMMENT, 7), body='on a comment of the other', **escalation),
                 Comment(target=TargetRef(TargetKind.COMMENT, 11), body='two levels deep', **escalation),
@@ -94,7 +96,7 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
                 [
                     '- comment.escalation comment#11',
                     '- comment.decision comment#10',
-                    '- comment.finding comment#9',
+                    '- comment.note comment#9',
                     '- comment.escalation comment#6',
                     '- comment.escalation comment#5',
                 ],
@@ -113,10 +115,10 @@ def test_most_urgent_first_narrowed_by_kind_until_acknowledged(db: Database, cam
     with db.session() as s:
         s.add_all(
             [
-                Comment(kind=CommentKind.DECISION, priority=3, body='requeued idea#4', **on_campaign),
-                Comment(kind=CommentKind.ESCALATION, priority=1, body='SSO expired', **on_campaign),
-                Comment(kind=CommentKind.DECISION, priority=0, body='lowered the floor', **on_campaign),
-                Comment(kind=FINDING, priority=3, body='half the sweeps add nothing', **on_campaign),
+                Comment(kind=DECISION, priority=3, body='requeued idea#4', **on_campaign),
+                Comment(kind=ESCALATION, priority=1, body='SSO expired', **on_campaign),
+                Comment(kind=DECISION, priority=0, body='lowered the floor', **on_campaign),
+                Comment(kind=CommentKind.NOTE, priority=3, body='half the sweeps add nothing', **on_campaign),
             ]
         )
         s.commit()
@@ -126,7 +128,7 @@ def test_most_urgent_first_narrowed_by_kind_until_acknowledged(db: Database, cam
             'requeued idea#4',
             'half the sweeps add nothing',
         ]
-        assert bodies(inbox.items(s, kinds=[CommentKind.DECISION])) == ['lowered the floor', 'requeued idea#4']
+        assert bodies(inbox.items(s, kinds=[DECISION])) == ['lowered the floor', 'requeued idea#4']
         assert [
             r.line() for r in inbox.ack(s, [CommentId(3), CommentId(1), CommentId(3), CommentId(99)], System.HUMAN)
         ] == [
@@ -169,7 +171,7 @@ def test_every_agent_of_a_role_and_the_outside_orchestrator_are_one_party_for_wh
         cursor = db_feed.newest(s)
         decided = Comment(
             author=earlier.signature,
-            kind=CommentKind.DECISION,
+            kind=DECISION,
             priority=3,
             body='parked idea#1',
             target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
@@ -224,17 +226,11 @@ def test_thread_follows_citations_both_ways_and_the_replies_not_the_rest_of_the_
         on_campaign = dict(target=TargetRef(TargetKind.CAMPAIGN, campaign.id))
         s.add_all(
             [
-                Comment(author='research#2', kind=FINDING, body='a sweep', **on_campaign),
-                Comment(
-                    author='research#2', kind=CommentKind.ESCALATION, priority=1, body='floor exact?', **on_campaign
-                ),
+                Comment(author='research#2', kind=CommentKind.NOTE, body='a sweep', **on_campaign),
+                Comment(author='research#2', kind=ESCALATION, priority=1, body='floor exact?', **on_campaign),
                 Comment(target=TargetRef(TargetKind.COMMENT, 2), author='pi', body='looking'),
-                Comment(
-                    author='pi', kind=CommentKind.DECISION, priority=0, body='floor 2687\nRe: comment#2', **on_campaign
-                ),
-                Comment(
-                    author='pi', kind=CommentKind.DECISION, priority=3, body='see comment#20, not #2', **on_campaign
-                ),
+                Comment(author='pi', kind=DECISION, priority=0, body='floor 2687\nRe: comment#2', **on_campaign),
+                Comment(author='pi', kind=DECISION, priority=3, body='see comment#20, not #2', **on_campaign),
                 Comment(target=TargetRef(IDEA, 4), author='pi', body='as comment#4 decided, comment#2.'),
             ]
         )
@@ -254,10 +250,8 @@ def test_thread_follows_citations_both_ways_and_the_replies_not_the_rest_of_the_
 def test_each_comment_of_a_thread_has_the_thread_of_its_root(db: Database, campaign: Campaign) -> None:
     on_campaign = TargetRef(TargetKind.CAMPAIGN, campaign.id)
     with db.session() as s:
-        s.add(Comment(target=on_campaign, author='research#2', kind=FINDING, body='the login expires'))
-        root = Comment(
-            target=on_campaign, author='watchdog#1', kind=CommentKind.ESCALATION, priority=1, body='SSO, see comment#1'
-        )
+        s.add(Comment(target=on_campaign, author='research#2', kind=CommentKind.NOTE, body='the login expires'))
+        root = Comment(target=on_campaign, author='watchdog#1', kind=ESCALATION, priority=1, body='SSO, see comment#1')
         s.add(root)
         s.commit()
         first = inbox.reply(s, root.id, 'logged in, Re: comment#2', author=System.ORCHESTRATOR, priority=3)
@@ -287,7 +281,7 @@ def test_each_comment_of_a_thread_has_the_thread_of_its_root(db: Database, campa
                 '- comment#4 decision by human, 0s ago, answers comment#3: thanks',
                 '- comment#5 note by pi, 0s ago, a reply: an old reply',
                 '  says nothing',
-                '- comment#1 finding by research#2, 0s ago, cited by it: the login expires',
+                '- comment#1 note by research#2, 0s ago, cited by it: the login expires',
                 '- comment#6 note by pi, 0s ago, cites it: as comment#2 said',
             ]
         )
@@ -302,7 +296,7 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
     with db.session() as s:
         other = Campaign(name='other', path='/other', config=campaign.config)
         s.add(other)
-        s.add(Comment(author='watchdog#1', kind=CommentKind.ESCALATION, priority=1, body='before', **on(campaign)))
+        s.add(Comment(author='watchdog#1', kind=ESCALATION, priority=1, body='before', **on(campaign)))
         s.commit()
         cursor = s.scalar(select(func.max(Event.id)))
         assert cursor is not None
@@ -311,20 +305,18 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
         s.flush()
         s.add_all(
             [
-                Comment(
-                    author='watchdog#1', kind=CommentKind.ESCALATION, priority=1, body='SSO\nlog in', **on(campaign)
-                ),
-                Comment(author='orchestrator', kind=CommentKind.DECISION, priority=3, body='mine', **on(campaign)),
-                Comment(author='research#2', kind=FINDING, body='the forum', **on(campaign)),
+                Comment(author='watchdog#1', kind=ESCALATION, priority=1, body='SSO\nlog in', **on(campaign)),
+                Comment(author='orchestrator', kind=DECISION, priority=3, body='mine', **on(campaign)),
+                Comment(author='research#2', kind=CommentKind.NOTE, body='the forum', **on(campaign)),
                 Comment(
                     author='human',
-                    kind=CommentKind.DECISION,
+                    kind=DECISION,
                     priority=2,
                     body='seen',
                     acked_at=utcnow(),
                     **on(campaign),
                 ),
-                Comment(author='watchdog#5', kind=CommentKind.ESCALATION, priority=0, body='theirs', **on(other)),
+                Comment(author='watchdog#5', kind=ESCALATION, priority=0, body='theirs', **on(other)),
             ]
         )
         ideas = [
@@ -400,7 +392,7 @@ def test_a_reply_answers_the_root_of_the_thread_and_wakes_the_orchestrator_but_n
         item = Comment(
             target=TargetRef(CANDIDATE, 1),
             author='orchestrator',
-            kind=CommentKind.DECISION,
+            kind=DECISION,
             priority=1,
             body='Keep #1.',
         )
@@ -424,14 +416,12 @@ def test_a_reply_answers_the_root_of_the_thread_and_wakes_the_orchestrator_but_n
             TargetKind.COMMENT,
             item.id,
             follow_up.id,
-            CommentKind.DECISION,
+            DECISION,
             2,
             'Revert it: the floor moved.',
         ), 'a reply to a reply goes to the root, one level from a campaign, and says what it answers'
         assert [p for e, p in in_order(s, Commented) if e.target_id == answer.id] == [
-            CoreCommented(
-                kind='comment.decision', target_kind=TargetKind.COMMENT, target_id=item.id, in_reply_to=follow_up.id
-            )
+            DecisionWritten(target_kind=TargetKind.COMMENT, target_id=item.id, in_reply_to=follow_up.id)
         ]
         assert [c.id for c, _ in inbox.thread(s, item)] == [follow_up.id, answer.id]
         assert [c.id for c, _ in inbox.items(s, campaign_id=campaign.id)] == [item.id, answer.id, follow_up.id]
@@ -454,7 +444,7 @@ def test_an_escalation_left_unacknowledged_comes_back_with_its_age_on_each_wait_
                 Comment(
                     target=on_campaign,
                     author=author,
-                    kind=CommentKind.ESCALATION,
+                    kind=ESCALATION,
                     priority=1,
                     body='which floor?',
                     created_at=now - timedelta(minutes=minutes),
@@ -513,7 +503,7 @@ def test_an_item_that_lands_while_news_reads_is_news_now_or_after_its_cursor(
                     Comment(
                         target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
                         author='watchdog#2',
-                        kind=CommentKind.ESCALATION,
+                        kind=ESCALATION,
                         priority=1,
                         body='SSO expired',
                     )

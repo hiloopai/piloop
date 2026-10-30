@@ -14,7 +14,7 @@ from typing import Annotated, ClassVar, Literal
 from pydantic import JsonValue, TypeAdapter
 
 from piloop.db.events import SubjectSettled
-from piloop.db.models import AfterEnd, EventModel, Pause, ReadBy
+from piloop.db.models import EventModel, Pause, ReadBy
 from piloop.db.triggers.ddl import Event, Trigger
 from piloop.db.triggers.provenance import DAEMON_ACTOR, NOW, SESSION_ACTOR
 from piloop.ids import (
@@ -191,9 +191,6 @@ class Commented(EventModel):
     own subclass (``COMMENT_KINDS``). A reader of this model reads them all.
     """
 
-    AFTER_END: ClassVar[AfterEnd] = AfterEnd.KEPT
-    """Whether an agent whose session has ended may still write a comment of the kind."""
-
     target_kind: TargetKind
     target_id: int
     in_reply_to: CommentId | None = None
@@ -203,7 +200,7 @@ class Commented(EventModel):
 class CoreCommented(Commented):
     """A comment of one of core's kinds was written."""
 
-    kind: Literal['comment.note', 'comment.decision', 'comment.escalation', 'comment.message']
+    kind: Literal['comment.note', 'comment.message']
 
 
 def _not_a_comment_kind(name: str, model: type[Commented]) -> str | None:

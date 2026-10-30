@@ -8,6 +8,7 @@ from pydantic import SecretStr, ValidationError
 from piloop.actor import Person, System
 from piloop.db.session import Database
 from piloop.ids import CommentId, CommentKind
+from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.plugins.notifier.contract import NotDelivered, Notice, NoticeKind
 from piloop.plugins.notifier.kit.slack import PLACEHOLDERS
 from piloop.plugins.notifier.slack import Slack
@@ -32,7 +33,7 @@ def notice(
     comment: int = 207,
     *,
     kind: NoticeKind = NoticeKind.NEW,
-    comment_kind: CommentKind = CommentKind.ESCALATION,
+    comment_kind: CommentKind = ESCALATION,
     priority: int = 1,
     campaign: str | None = 'enwik8',
     body: str = BODY,
@@ -44,7 +45,7 @@ def notice(
 
 def test_it_posts_one_message_with_a_block_for_each_item(db: Database, slack: FakeSlack) -> None:
     secrets = home_secrets(db, SLACK_WEBHOOK_URL=slack.url)
-    Slack().send([notice(), notice(208, priority=0, comment_kind=CommentKind.DECISION, body='a\nb')], secrets)
+    Slack().send([notice(), notice(208, priority=0, comment_kind=DECISION, body='a\nb')], secrets)
     assert slack.posts == [
         {
             'text': ':rotating_light: *enwik8* · escalation comment#207 · P1 · from implementer#12\n'

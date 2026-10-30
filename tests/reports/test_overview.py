@@ -11,7 +11,7 @@ from piloop.agents.results import StartupAnomaly
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
-from piloop.ids import CampaignStatus, CommentKind, RoleName, TargetKind, TargetRef
+from piloop.ids import CampaignStatus, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.section.queue import Queue
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
@@ -21,6 +21,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.plugins.section.contract import SECTIONS, Rendering, Surface, defaults, markdown
 from piloop.reports import overview as overview_module
 from piloop.text import LINKED_CHARS, age, block
@@ -159,7 +160,7 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
                 Comment(
                     target=TargetRef(RUN, failed.id),
                     author='watchdog#9',
-                    kind=CommentKind.ESCALATION,
+                    kind=ESCALATION,
                     priority=1,
                     body='run#2 died in a dialog\nevidence below',
                     created_at=at(45),
@@ -167,7 +168,7 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
                 Comment(
                     target=TargetRef(TargetKind.CAMPAIGN, p.id),
                     author='pi',
-                    kind=CommentKind.DECISION,
+                    kind=DECISION,
                     body='keep going',
                     created_at=at(46),
                 ),

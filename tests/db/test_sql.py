@@ -22,7 +22,7 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign
 from piloop.db.schema import tables
 from piloop.db.session import Database
 from piloop.ids import CommentKind
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING
+from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.plugins.memory.local.tables import JOURNAL_LINE_BYTES
 from tests.conftest import WRITER, bare_config
 
@@ -444,7 +444,7 @@ def test_deletes_leave_tombstones_and_cascades_too(con: sqlite3.Connection) -> N
 
 
 def test_every_comment_kind_is_an_event_shaped_like_the_escalation_one(con: sqlite3.Connection) -> None:
-    for kind in (CommentKind.NOTE, FINDING, CommentKind.DECISION, CommentKind.ESCALATION, CommentKind.MESSAGE):
+    for kind in (CommentKind.NOTE, DECISION, ESCALATION, CommentKind.MESSAGE):
         sql.run(
             con,
             'INSERT INTO comments (target_kind, target_id, author, kind, body, priority)'
@@ -460,66 +460,28 @@ def test_every_comment_kind_is_an_event_shaped_like_the_escalation_one(con: sqli
                 '{"kind":"comment.note","target_kind":"run","target_id":7,"in_reply_to":null}',
             ),
             (
-                'comment.finding',
-                'pi',
-                'comment',
-                2,
-                '{"kind":"comment.finding","target_kind":"run","target_id":7,"in_reply_to":null}',
-            ),
-            (
                 'comment.decision',
                 'pi',
                 'comment',
-                3,
+                2,
                 '{"kind":"comment.decision","target_kind":"run","target_id":7,"in_reply_to":null}',
             ),
             (
                 'comment.escalation',
                 'pi',
                 'comment',
-                4,
+                3,
                 '{"kind":"comment.escalation","target_kind":"run","target_id":7,"in_reply_to":null}',
             ),
             (
                 'comment.message',
                 'pi',
                 'comment',
-                5,
+                4,
                 '{"kind":"comment.message","target_kind":"run","target_id":7,"in_reply_to":null}',
             ),
         ]
     ), 'one event per comment: the persistent escalation trigger and the per-connection one never both fire'
-
-
-def test_an_agent_whose_session_has_ended_leaves_no_finding(db: Database, tmp_path: Path) -> None:
-    """Once the daemon ends an agent (``ending``), or it exited, its connection's finding is refused: a finding settles
-    the run as finished, and it would undo the stop or the cancel. Its notes, and any other actor's finding, still land.
-    """
-    with db.session() as s:
-        campaign = Campaign(name='p', path='/p', config=bare_config('p'))
-        s.add(campaign)
-        s.flush()
-        s.add_all(AgentSession(kind='implementer', campaign_id=campaign.id, state=state) for state in AgentSessionState)
-        s.commit()
-    finding = "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('run', 7, 'a', '{}', 'done')"
-    refused = []
-    for session, state in enumerate(AgentSessionState, start=1):
-        with closing(sql.connect(tmp_path / 'piloop.db', actor=Agent(role='implementer', session=session))) as agent:
-            sql.run(agent, finding.format(CommentKind.NOTE))
-            try:
-                sql.run(agent, finding.format(FINDING))
-            except sqlite3.IntegrityError as e:
-                assert str(e) == 'the agent session of this connection has ended: its finding is refused'
-                refused.append(state)
-    assert refused == [AgentSessionState.ENDING, AgentSessionState.EXITED, AgentSessionState.KILLED]
-    with closing(sql.connect(tmp_path / 'piloop.db', actor=System.ORCHESTRATOR)) as orchestrator:
-        sql.run(orchestrator, finding.format(FINDING))
-
-    with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
-        kinds = con.execute('SELECT kind, count(*) FROM comments GROUP BY kind ORDER BY kind').fetchall()
-    assert [tuple(row) for row in kinds] == [('finding', 4), ('note', 6)], (
-        'a requested, starting or running agent, and the orchestrator'
-    )
 
 
 def test_an_agent_files_an_escalation_with_its_form_only(db: Database, tmp_path: Path) -> None:

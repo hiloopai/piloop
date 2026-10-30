@@ -26,6 +26,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.escalation.contract import ESCALATION
 from piloop.reports import feed
 
 RAW = (
@@ -292,7 +293,7 @@ def escalation(campaign_id: CampaignId, body: str) -> Comment:
     return Comment(
         target=TargetRef(TargetKind.CAMPAIGN, campaign_id),
         author='watchdog#2',
-        kind=CommentKind.ESCALATION,
+        kind=ESCALATION,
         priority=1,
         body=body,
     )

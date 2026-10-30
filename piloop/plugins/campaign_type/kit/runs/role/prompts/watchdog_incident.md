@@ -12,4 +12,4 @@ Classify each root cause:
 - **model:** the agent gave up early, ignored the brief, or misjudged its own result.
 
 Write one comment per root cause, on the row it is about: what happened, the class, the evidence, how sure you are,
-and the fix. An escalation when someone must act, else a finding.
+and the fix. An escalation when someone must act, else a note.

@@ -26,14 +26,14 @@ from piloop.api.contract import Access
 from piloop.db.events import in_order
 from piloop.db.models import AgentSession, Campaign, Comment, Event, Lease, LeaseState
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CommentId, TargetKind
+from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind
 from piloop.net import tokens
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
 from piloop.plugins.executor.contract import AGENT, AgentKey, Prompt
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.door import AgentCall, Call
@@ -359,31 +359,33 @@ def test_a_worker_whose_token_is_revoked_stops_its_evaluation_and_exits_non_zero
     assert not measuring.is_alive() and state(db, 1) is LeaseState.REPORTED, 'a new token sends the kept report'
 
 
-RELAYED_FINDING = (
-    "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', 1, 'implementer#1', 'finding',"
+RELAYED_NOTE = (
+    "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', 1, 'implementer#1', 'note',"
     " 'relayed from elsewhere')"
 )
 HARNESS_ELSEWHERE = (
     '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "add a line"\nmkdir -p workspace/idea1\n'
     'echo out > workspace/idea1/out.txt\n'
-    f'"$PILOOP_BIN" sql "{RELAYED_FINDING}" > workspace/idea1/relayed.txt 2>&1\n'
+    f'"$PILOOP_BIN" sql "{RELAYED_NOTE}" > workspace/idea1/relayed.txt 2>&1\n'
     'echo "${PILOOP_HTTPS_TOKEN:-none}" > workspace/idea1/worker-token.txt\n'
+    '"$PILOOP_BIN" run end submitted\n'
 )
-"""An implementer that commits, writes in its workspace, leaves its finding through ``piloop sql``, and looks for its
-worker's token."""
+"""An implementer that commits, writes in its workspace, leaves its note through ``piloop sql``, looks for its
+worker's token, and ends its run through the relay."""
 
 
-def finding(db: Database) -> list[tuple[str, str]]:
-    """Each finding, with who it is signed by in the event feed."""
+def notes(db: Database) -> list[tuple[str, str]]:
+    """Each note, with who it is signed by in the event feed."""
     with db.session() as s:
         rows = s.execute(
             select(Comment.body, Event.actor)
             .join(Event, (Event.target_kind == TargetKind.COMMENT) & (Event.target_id == Comment.id))
-            .where(Comment.kind == FINDING, Event.kind == 'comment.finding')
+            .where(Comment.kind == CommentKind.NOTE, Event.kind == 'comment.note')
         ).all()
     return [(body, actor) for body, actor in rows]
 
 
+@pytest.mark.usefixtures('daemon_api')  # the server runs its relayed `piloop run end` against the home's API
 def test_a_remote_implementers_commits_come_back_as_a_bundle_and_are_scored_and_its_piloop_calls_reach_the_server(
     db: Database, net: Net, core: RunController, campaign: Campaign, tmp_path: Path, dial: Dial, no_git_identity: None
 ) -> None:
@@ -407,7 +409,7 @@ def test_a_remote_implementers_commits_come_back_as_a_bundle_and_are_scored_and_
         assert s.get_one(AgentSession, 1).machine == WORKER, 'piloop attach names it'
     workspace = tmp_path / 'projects' / str(campaign.id) / 'workspace'
     relayed = (workspace / 'idea1' / 'relayed.txt').read_text()
-    assert finding(db) == [('relayed from elsewhere', 'implementer#1')], relayed
+    assert notes(db) == [('relayed from elsewhere', 'implementer#1')], relayed
     assert (workspace / 'idea1' / 'out.txt').read_text() == 'out\n', 'its workspace came back through the CAS'
     assert (workspace / 'idea1' / 'worker-token.txt').read_text() == 'none\n', (
         "the worker's credential is not the agent's"

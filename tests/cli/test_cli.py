@@ -186,10 +186,10 @@ def test_campaign_and_idea_lifecycle(campaign_path: Path, out) -> None:
 
 
 @pytest.mark.usefixtures('api')
-def test_a_worker_claims_an_idea_or_proposes_one_through_the_api_and_signs_the_claim(
+def test_a_worker_claims_or_proposes_an_idea_and_ends_its_run_through_the_api_signed_as_itself(
     campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``piloop idea claim`` and ``piloop idea propose`` act for the caller's run; the claim's event is the worker's."""
+    """``piloop idea claim``, ``piloop idea propose`` and ``piloop run end`` act for the caller's run, signed by it."""
     run_cli(['init', str(campaign_path)])
     run_cli(['idea', 'add', 'demo', 'try a cache'])
     db = Database(common.settings.database_url, actor=System.DAEMON)
@@ -219,6 +219,19 @@ def test_a_worker_claims_an_idea_or_proposes_one_through_the_api_and_signs_the_c
             'each claim is signed by its worker'
         )
         assert s.get_one(Idea, 2).created_by == 'implementer#2'
+        s.execute(update(AgentSession).values(state=AgentSessionState.RUNNING))
+        s.commit()
+    as_('implementer#1', 'run', 'end', 'submitted')
+    as_('implementer#2', 'run', 'end', 'gave_up', '--reason', 'the cache never warms')
+    assert out().splitlines() == [
+        'run#1 ended as submitted: the daemon ends this session in a moment',
+        'run#2 ended as gave_up: the daemon ends this session in a moment',
+    ]
+    with pytest.raises(SystemExit, match='run#1 was ended already: submitted'):
+        as_('implementer#1', 'run', 'end', 'gave_up', '--reason', 'second thoughts')
+    with db.session() as s:
+        ends = s.scalars(select(Event).where(Event.kind == 'run.end_requested').order_by(Event.id)).all()
+        assert [(e.target_id, e.actor) for e in ends] == [(1, 'implementer#1'), (2, 'implementer#2')]
     db.close()
 
 
@@ -646,7 +659,7 @@ def test_inbox_lists_what_waits_shows_one_with_its_thread_and_acknowledges(
             insert + f"('campaign', 1, 'pi', 'decision', 'requeued idea#4, re comment#2\nRevert: park it', 3, {at}),"
             f"('campaign', 1, 'watchdog#2', 'escalation', 'SSO expired; log in?', 1, {at}),"
             f"('campaign', 2, 'pi', 'decision', '[goalpost, reversible] floor 2713 → 2687', 0, {at}),"
-            f"('campaign', 1, 'research#3', 'finding', 'the forum, not the inbox', NULL, {at}),"
+            f"('campaign', 1, 'research#3', 'note', 'the forum, not the inbox', NULL, {at}),"
             f"('comment', 2, 'pi', 'note', 'asked the team in chat', NULL, {at})",
         ]
     )
@@ -1241,7 +1254,7 @@ def test_agent_messages_takes_the_queue_as_the_hook_of_the_harness_reads_it(
 
 
 @pytest.mark.usefixtures('api')
-def test_prompt_is_a_note_on_the_agent_and_says_whether_it_arrived(
+def test_prompt_is_a_message_to_the_agent_and_says_whether_it_arrived(
     campaign_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The daemon delivers the note (``Executor.prompt``): the command waits for its outcome, and says it."""
@@ -1301,7 +1314,7 @@ def test_prompt_is_a_note_on_the_agent_and_says_whether_it_arrived(
         assert (note.target_kind, note.target_id, note.kind, note.author, note.body) == (
             TargetKind.AGENT_SESSION,
             1,
-            CommentKind.NOTE,
+            CommentKind.MESSAGE,
             'human',
             'no answer',
         )

@@ -57,7 +57,7 @@ from piloop.db.models import (
     UnknownEvent,
 )
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.net import tokens
 from piloop.net.server import OPENAPI, Server, app, local_listener
 from piloop.net.tokens import Tokens
@@ -76,6 +76,7 @@ from piloop.plugins.campaign_type.kit.verdicts.wire import RemeasureBody, Verdic
 from piloop.plugins.campaign_type.optimization import api as optimization_api
 from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
 from piloop.plugins.contribution import collect, contributions_of, installed
+from piloop.plugins.escalation.contract import DECISION
 from piloop.plugins.lineage import api as lineage_api
 from piloop.plugins.lineage.wire import LineageClient
 from piloop.plugins.network.contract import NetworkHost
@@ -313,7 +314,7 @@ def comment(db: Database, author: str, body: str) -> None:
             Comment(
                 target=TargetRef(TargetKind.CAMPAIGN, 1),
                 author=author,
-                kind=CommentKind.DECISION,
+                kind=DECISION,
                 priority=2,
                 body=body,
             )

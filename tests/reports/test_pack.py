@@ -13,8 +13,8 @@ from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import Yield, source, yields
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.campaign_type.optimization.pack import OUTLINE_CHARS, pack
+from piloop.plugins.escalation.contract import DECISION
 from piloop.plugins.role.contract import Files
 from tests.conftest import has_lines
 from tests.reports.test_history import SHOWN, comment, compact, idea, scored
@@ -53,7 +53,7 @@ def note(s: Session, campaign: Campaign, author: str, kind: CommentKind, body: s
 
 
 def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Path:
-    """Add ideas from four sources, a keep, a discard, proposals, findings, digests and artifacts."""
+    """Add ideas from four sources, a keep, a discard, proposals, notes, digests and artifacts."""
     repo = Path(campaign.path)
     write(
         repo / 'docs' / 'losses.md', '# Where we lose\n## By slice\n```\n# not a heading\n```\n#12 is no heading\n', 2
@@ -74,10 +74,10 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Path:
         idea(s, campaign, 'ask the human', IdeaStatus.OPEN, created_by='human')
         idea(s, campaign, 'dropped lines', IdeaStatus.DROPPED, created_by='watchdog#3')
         comment(s, IDEA, worse.id, 'NEGATIVE: fewer lines lose score\nbecause score counts lines')
-        note(s, campaign, 'orchestrator', FINDING, 'digest: best #2 +2 over the start\nby slice: …')
-        note(s, campaign, 'human', CommentKind.DECISION, 'no external data')
-        note(s, campaign, 'research#4', FINDING, 'batch 1: rejected deleting')
-        note(s, campaign, 'daemon', FINDING, 'not a digest')
+        note(s, campaign, 'orchestrator', CommentKind.NOTE, 'digest: best #2 +2 over the start\nby slice: …')
+        note(s, campaign, 'human', DECISION, 'no external data')
+        note(s, campaign, 'research#4', CommentKind.NOTE, 'batch 1: rejected deleting')
+        note(s, campaign, 'daemon', CommentKind.NOTE, 'not a digest')
         s.commit()
     return workspace
 
@@ -100,18 +100,18 @@ def test_the_pack_of_a_campaign(db: Database, campaign: Campaign, tmp_path: Path
         '### Research pack: shared workspace (what agents left in ./workspace/; newest first)',
         '- ./workspace/research/losses-c2.md (1 lines, modified 2026-01-01 00:05 UTC)',
         '  # Losses of candidate#2',
-        '### History: findings on the campaign (last 10)',
+        '### History: agent notes on the campaign (last 10)',
         '- comment#4 research#4: batch 1: rejected deleting',
-        '### Research pack: latest implementer findings (newest first)',
+        '### Research pack: latest implementer notes (newest first)',
         '- comment#1 implementer#1 on idea#2: NEGATIVE: fewer lines lose score (+1 lines)',
         '### Research pack: orchestrator and human digests and decisions (newest first)',
         '- comment#3 decision by human on campaign#1: no external data',
-        '- comment#2 finding by orchestrator on campaign#1: digest: best #2 +2 over the start (+1 lines)',
+        '- comment#2 note by orchestrator on campaign#1: digest: best #2 +2 over the start (+1 lines)',
     )
     assert '| #2 | #1 | 3 | +2 | idea#1 (orchestrator) |' in text, (
         'the lineage shows the gain of each keep and who proposed its idea'
     )
-    assert 'not a digest' not in text, "a finding by the daemon is neither an agent's finding nor a digest"
+    assert 'not a digest' not in text, "a note by the daemon is neither an agent's report nor a digest"
     assert 'family' not in text and 'seed' not in text, 'the pack has no families and no seeds'
 
 
@@ -131,7 +131,7 @@ def test_an_empty_pack_says_what_is_missing(db: Database, campaign: Campaign, tm
     text = render(db, campaign, tmp_path / 'no-such-dir')
     assert '- None configured: `context` in piloop.toml lists them.' in text
     assert 'shared workspace' not in text, 'no section without a workspace directory'
-    for title in ('latest implementer findings', 'digests and decisions'):
+    for title in ('latest implementer notes', 'digests and decisions'):
         assert f'{title} (newest first)\n- None yet.' in text
     (tmp_path / 'workspace').mkdir()
     assert '(what agents left in ./workspace/; newest first)\n- Empty.' in render(db, campaign, tmp_path / 'workspace')
@@ -150,7 +150,7 @@ def test_the_pack_is_bounded(db: Database, campaign: Campaign, tmp_path: Path) -
             row = idea(s, campaign, f'idea {n} ' + 't' * 200, IdeaStatus.OPEN, provenance='p' * 500)
             comment(s, IDEA, row.id, '\n'.join(['w' * 79] * 30))
         for _ in range(SHOWN.digests + 2):
-            note(s, campaign, 'orchestrator', FINDING, '\n'.join(['d' * 79] * 30))
+            note(s, campaign, 'orchestrator', CommentKind.NOTE, '\n'.join(['d' * 79] * 30))
         s.commit()
     text = render(db, campaign, workspace)
     assert '- … and 2 older files.' in text and '- … and 3 older files.' in text
@@ -158,9 +158,9 @@ def test_the_pack_is_bounded(db: Database, campaign: Campaign, tmp_path: Path) -
     outlines = [line for line in text.splitlines() if line.startswith('  ## heading 0')]
     assert len(outlines) == SHOWN.artifacts and all(len(line) == OUTLINE_CHARS + 2 for line in outlines)
     assert text.count(' implementer#1 on idea#') == SHOWN.findings
-    assert text.count(' finding by orchestrator on campaign#') == SHOWN.digests
+    assert text.count(' note by orchestrator on campaign#') == SHOWN.digests
     pack_only = (
-        text.split('### History: ideas', 1)[0] + text.split('### History: findings on the campaign (last 10)', 1)[1]
+        text.split('### History: ideas', 1)[0] + text.split('### History: agent notes on the campaign (last 10)', 1)[1]
     )
     assert len(pack_only) < 40_000, 'the module docstring promises about 40 KB on top of the history'
 

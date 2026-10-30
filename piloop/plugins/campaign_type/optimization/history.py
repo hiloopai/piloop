@@ -3,14 +3,14 @@
 The history has four parts:
 
 - The ideas: who proposed each one, its outcome, and its links to other ideas. Their hypotheses and the
-  implementers' findings on them are a query away (``ideas_fts``, ``comments``), so the table leaves them out.
+  implementers' notes on them are a query away (``ideas_fts``, ``comments``), so the table leaves them out.
 - The kept lineage: the gain of each keep over its parent, its idea, its commit, and the tokens that the session
   that made it used. An agent can run ``git show`` on the commit.
 - The starting points: imported references whose changes a worker can take.
-- The latest findings on the campaign, of every role, by id and first line.
+- The latest agent notes on the campaign, of every role, by id and first line.
 
-The caller bounds the size: it picks the ideas and the number of findings. An idea row is about 250 characters, a
-finding up to about 250, and each kept candidate adds one line of about 200.
+The caller bounds the size: it picks the ideas and the number of notes. An idea row is about 250 characters, a
+note up to about 250, and each kept candidate adds one line of about 200.
 """
 
 import io
@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign, Comment, count
-from piloop.ids import TargetKind, TargetRef
+from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import links
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.references import references
@@ -33,7 +33,6 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.measure import climb, score
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.campaign_type.kit.runs.sessions import session_tokens
 from piloop.plugins.campaign_type.kit.verdicts.judge import fallback_track, keeps, track_of
 from piloop.plugins.campaign_type.kit.verdicts.verdict import label
@@ -79,24 +78,24 @@ def renderables(
     findings: int,
     chosen: str = '',
 ) -> list[RenderableType]:
-    """Build the table of ``ideas``, the kept lineage, the starting points and the last ``findings`` on the campaign.
+    """Build the table of ``ideas``, the kept lineage, the starting points and the last ``findings`` agent notes on the campaign.
 
     ``ideas`` are in the order to show. ``chosen`` says how they were picked, in the table's title; empty: the newest.
 
     The agent brief (``history``, with ``heading='### '``) and ``piloop history`` use the same renderables.
 
-    The findings are those on the campaign of every agent, whatever its role (an author ``<role>#<id>``), each by its id
-    and its first line. The findings of the orchestrator and the human are in the pack's digests, and the latest
-    implementer findings in the pack's findings. The ``links`` column shows what holds an idea.
+    The notes are those on the campaign of every agent, whatever its role (an author ``<role>#<id>``), each by its id
+    and its first line. The notes of the orchestrator and the human are in the pack's digests, and the latest
+    implementer notes in the pack's own list. The ``links`` column shows what holds an idea.
     """
     tracks = cfg.all_tracks
     total = count(s, select(Idea).where(Idea.campaign_id == campaign.id))
     evaluator_id = campaign.evaluator_id
     kept = s.scalars(keeps(campaign).order_by(Candidate.id)).all()
-    campaign_findings = s.scalars(
+    notes = s.scalars(
         select(Comment)
         .where(Comment.target == TargetRef(TargetKind.CAMPAIGN, campaign.id))
-        .where(Comment.kind == FINDING, Comment.author.like('%#%'))
+        .where(Comment.kind == CommentKind.NOTE, Comment.author.like('%#%'))
         .order_by(Comment.id.desc())
         .limit(findings)
     ).all()[::-1]
@@ -157,8 +156,8 @@ def renderables(
             human(tokens) if tokens is not None else NONE,
             cell(c.summary or NONE),
         )
-    title = Text(f'{heading}History: findings on the campaign (last {findings})', style='bold')
-    bodies = [comment_line(c, c.author) for c in campaign_findings]
+    title = Text(f'{heading}History: agent notes on the campaign (last {findings})', style='bold')
+    bodies = [comment_line(c, c.author) for c in notes]
     starts = _starting_points(s, campaign, cfg, table_box, heading)
     return [ideas_table, Text(), lineage, Text(), *starts, title, *bodies]
 

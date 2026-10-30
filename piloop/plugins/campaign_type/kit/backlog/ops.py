@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor
 from piloop.agents.roles import files_of
 from piloop.campaign.ops import Refused, existing, required_reason
-from piloop.db.models import AgentSession, Campaign, Comment
+from piloop.db.models import Campaign, Comment
 from piloop.db.session import write_lock
 from piloop.ids import CampaignId, CommentKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import holders
@@ -16,7 +16,8 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatu
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
-from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
+from piloop.plugins.campaign_type.kit.runs.ops import run_of_actor
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.role.contract import Files
 
 
@@ -106,23 +107,6 @@ def _added(
     for target in after:
         _link(s, idea, LinkKind.AFTER, target)
     return idea
-
-
-def run_of_actor(s: Session, actor: Actor) -> Run:
-    """The open run that ``actor``, a worker, works on: queued or running.
-
-    Raises:
-        Refused: the actor is no agent of a run, or its run ended.
-    """
-    agent = actor.launched
-    session = s.get(AgentSession, agent.session) if agent is not None else None
-    run_id = run_of(session) if session is not None else None
-    if run_id is None:
-        raise Refused(f'{actor} has no run: only a worker claims an idea')
-    run = s.get_one(Run, run_id)
-    if run.status not in OPEN_RUNS:
-        raise Refused(f'run#{run.id} is {run.status}: a run claims while it is open')
-    return run
 
 
 def claim(s: Session, idea_id: IdeaId, *, actor: Actor) -> Idea:

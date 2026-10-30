@@ -19,13 +19,13 @@ from sqlalchemy import select
 from piloop.api.contract import Access
 from piloop.db.models import Campaign, Comment, utcnow
 from piloop.db.session import Database
-from piloop.ids import CommentKind
 from piloop.net.tokens import Caller, Tokens
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, EvaluationJob
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
+from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.contract import Capacity, RepoId, Source
 from piloop.plugins.executor.kit import scaling
 from piloop.plugins.executor.kit.capacity import Pool
@@ -312,7 +312,7 @@ def test_three_refused_starts_in_a_row_escalate_and_the_pool_backs_off_between_t
     assert {row.end for row in s.rows()} == {InstanceEnd.START_REFUSED}
     with db.session() as session:
         [escalation] = session.scalars(select(Comment)).all()
-    assert (escalation.kind, escalation.target_kind) == (CommentKind.ESCALATION, INSTANCE)
+    assert (escalation.kind, escalation.target_kind) == (ESCALATION, INSTANCE)
     assert 'no GPU in the region' in escalation.body and 'provisioner.max=0' in escalation.body
 
 

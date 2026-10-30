@@ -11,7 +11,7 @@
 - the inbox and the latest decisions,
 - the last events with their ages.
 
-`piloop history [<name>]` prints the research pack: metrics, analysis artifacts, every idea, the kept lineage, the starting points, findings and digests.
+`piloop history [<name>]` prints the research pack: metrics, analysis artifacts, every idea, the kept lineage, the starting points, the agents' notes and digests.
 
 Give in every digest the head against the baseline (per track when there are several), and the "Ideas by source" line
 of `piloop status <name>`: it shows whether research earns its sweeps.
@@ -64,19 +64,18 @@ Use these commands, not SQL. Each one validates, takes `--reason '<why, with ids
 
 ### Steer an idea
 
-- A comment on the idea goes into its next brief.
-- A `note`, `finding` or `decision` comment (any kind except an escalation) on the idea, or on its *running* run, is
-  queued for that implementer at once. It gets only the first line (up to 200 characters) and a query for
-  the full text, so put the instruction in the first line.
-- `comment.queued` on the implementer says that the comment waits for it, and `comment.delivered` that it read it. It
+- A `note` on the idea is on the board: the runs that claim it later read it. It reaches no running implementer.
+- A `message` on the idea, or on its *running* run, is queued for that implementer at once. It gets only the first
+  line (up to 200 characters) and a query for the full text, so put the instruction in the first line.
+- `comment.queued` on the implementer says that the message waits for it, and `comment.delivered` that it read it. It
   reads only between two tool calls. `comment.undelivered` says why it never did.
-- `piloop prompt <agent-session> '<text>'` writes a note on the agent itself, which it gets in full. It says whether
-  the note is queued.
-- A comment on the campaign reaches no implementer. When a decision changes the work of a running implementer, write it on its
-  run, not on the campaign.
-- An implementer asks for what it cannot do itself with an escalation. When its run ends before your answer reaches it,
-  the run ends `awaiting_answer` and its idea is dropped, also when you acked the escalation. The next run reads your
-  `decision` on the idea in its brief: open the idea.
+- `piloop prompt <agent-session> '<text>'` writes a message to the agent itself, which it gets in full. It says whether
+  the message is queued.
+- A message on the campaign is for you, not for an implementer. To change the work of a running implementer, write a
+  message on its run.
+- An implementer asks for what it cannot do itself with an escalation. The escalation holds nothing: the run goes on,
+  and ends when its implementer runs `piloop run end` or at its deadline. Answer with a message on the run while it
+  runs, or with a note on the idea for the next run.
 
 ### Cancel or extend a run
 
@@ -120,6 +119,6 @@ piloop candidate note <c> '<why>' --follow-up '<hunch>'
 
 - Run `piloop launch <name> research`.
 - While the backlog is short, a sweep adds up to `max_ideas` ideas.
-- It leaves a `finding` on the campaign.
+- It leaves a `note` on the campaign.
 - Research sweeps also run by themselves while the backlog is below its target. They wait longer after sweeps that
   define nothing.

@@ -14,17 +14,18 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import System
 from piloop.campaign.launches import choose_harness, full_harnesses, remove_checkouts
-from piloop.db.events import emit
-from piloop.db.models import LIVE, AgentSession, Campaign, EventModel, ReadBy, count
+from piloop.db.events import emit, latest
+from piloop.db.models import LIVE, AgentSession, Campaign, Event, EventModel, ReadBy, count
 from piloop.ids import AgentSessionId, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, TypeHost
 from piloop.plugins.campaign_type.kit.backlog.ideas import claimable, held
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, finding_of, handed_off
+from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, handed_off
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
 from piloop.plugins.campaign_type.kit.runs.stop import release
-from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of, working_on
+from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of
 from piloop.plugins.campaign_type.kit.verdicts.judge import due, head, head_unmeasured, rejudges
 from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.facts import Facts
@@ -120,11 +121,12 @@ class OptimizationPlanner:
         assert since is not None, 'a running implementer started'
         return Steering(targets, since, (f'run#{run.id}',))
 
-    def found_at(self, s: Session, agent_session: AgentSession) -> datetime | None:
-        """When the implementer left its finding on its run."""
-        assert run_of(agent_session) is not None
-        finding = finding_of(s, s.get_one(Run, run_of(agent_session)), agent_session)
-        return None if finding is None else finding.created_at
+    def ended_at(self, s: Session, agent_session: AgentSession) -> tuple[datetime, RunEnd] | None:
+        """When the implementer ended its run (``piloop run end``), and how the run ends, or None while it did not."""
+        run_id = run_of(agent_session)
+        assert run_id is not None
+        found = latest(s, RunEndRequested, Event.target == TargetRef(RUN, run_id))
+        return None if found is None else (found[0].at, handed_off(found[1])[0])
 
     def resume_unscored(self) -> None:
         """Score each closed run whose commits were not all scored (``runs.scoring``): a previous daemon stopped first."""
@@ -142,30 +144,23 @@ class OptimizationPlanner:
     def _fail_run(self, s: Session, run: Run, end: RunEnd) -> None:
         """End ``run`` as ``end``, and its claim (``release``).
 
-        A running run whose implementer left its finding is not failed: it is handed off (``_hand_off``).
+        A running run whose worker ended it is not failed: it is handed off (``_hand_off``).
         """
-        agent_session = s.scalars(
-            select(AgentSession).where(working_on(run.id)).order_by(AgentSession.id.desc()).limit(1)
-        ).first()
-        if (
-            run.status is RunStatus.RUNNING
-            and agent_session is not None
-            and finding_of(s, run, agent_session) is not None
-        ):
-            self._hand_off(s, run)
+        if run.status is RunStatus.RUNNING and (ending := end_requested(s, run)) is not None:
+            self._hand_off(s, run, ending)
             return
         release(s, close_run(s, run, end, None), end, None)
         self._tracer.event('run.aborted', run=run.id, end=end)
 
-    def _hand_off(self, s: Session, run: Run) -> None:
-        """Close a run whose implementer left its finding as finished, and leave its commits to be scored on the next start.
+    def _hand_off(self, s: Session, run: Run, ending: RunEndRequested) -> None:
+        """Close a run whose worker ended it as its end says, and leave its commits to be scored on the next start.
 
-        The implementer reported that it is done. A job of its own may still keep the run open, but the run is not cut: its
-        idea stays ``claimed``, so no second run redoes the work. The run thread pins the commits
+        The worker ended its run. A job of its own may still keep the run open, but the run is not cut: its idea stays
+        ``claimed``, so no second run redoes the work. The run thread pins the commits
         (``RunController._keep_cut_work``), and ``reap`` scores them and settles the idea (``runs.scoring``). Its status is
         what the run's end would give (``run_outcome``).
         """
-        end, error = handed_off(s, run)
+        end, error = handed_off(ending)
         close_run(s, run, end, error).scoring = True
         self._tracer.event('run.handed_off', run=run.id, end=end)
 

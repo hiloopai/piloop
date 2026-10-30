@@ -12,7 +12,7 @@ import threading
 from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from unittest.mock import DEFAULT
 
 import pytest
@@ -30,7 +30,6 @@ from piloop.agents.results import (
     Ended,
     Lost,
     NotStarted,
-    PromptOutcome,
     StartupAnomaly,
     WorkUnsaved,
     never_worked,
@@ -40,11 +39,11 @@ from piloop.campaign import stop
 from piloop.campaign.campaigns import sync
 from piloop.cli.plugins import selections
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
-from piloop.db.events import emit, has, in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
+from piloop.db.events import has, in_order
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import OriginChanged
-from piloop.ids import CampaignId, CampaignStatus, CommentId, Ending, Revision, TargetKind, TargetRef
+from piloop.ids import CampaignId, CampaignStatus, Ending, Revision, TargetRef
 from piloop.otel import Span, Tracer
 from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
@@ -70,8 +69,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measur
 from piloop.plugins.campaign_type.kit.evaluation.wire import Report
 from piloop.plugins.campaign_type.kit.runs import stop as runs_stop
 from piloop.plugins.campaign_type.kit.runs.controller import (
-    INTERRUPTED,
-    NO_CHANGES,
+    NOT_ENDED,
     RECOVERED_REASON,
     SKIPPED_REASON,
     UNSAVED,
@@ -80,7 +78,8 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
     RunRelaunched,
     run_outcome,
 )
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunEnding, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, working_on
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     CandidateJudged,
@@ -92,6 +91,7 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import (
 from piloop.plugins.campaign_type.kit.verdicts.ops import Overridden, set_verdict
 from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label, pending
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, Branch, Trunk
+from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.contract import Source
 from piloop.plugins.executor.kit import jobs
 from piloop.plugins.executor.kit.jobs import INPUTS_REBUILT
@@ -107,6 +107,7 @@ from piloop.plugins.vcs.git.commands import pin as git_pin
 from piloop.settings import AgentSettings, Settings
 from piloop.store.tree import FICLONE
 from tests.conftest import (
+    END_RUN,
     HARNESS_APPEND,
     HARNESS_COMMITS_AND_LEAVES_DIRT,
     HARNESS_FORGETS_COMMIT,
@@ -289,6 +290,7 @@ def claimed_id(run: Run) -> IdeaId:
     return run.idea_id
 
 
+@pytest.mark.usefixtures('submitting')
 def test_successful_run_scores_the_commit(
     db: Database,
     campaign: Campaign,
@@ -360,6 +362,7 @@ def test_successful_run_scores_the_commit(
             'agent_session.started',
             'lease.queued',
             'agent_session.running',
+            'run.end_requested',
             'agent_session.finished',
             'agent_session.job_ended',
             'run.received',
@@ -392,6 +395,7 @@ HARNESS_WRITES_THE_WORKSPACE = (
 )
 
 
+@pytest.mark.usefixtures('daemon_api')
 def test_what_an_implementer_writes_in_its_workspace_is_merged_into_the_campaigns_after_its_run(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -399,7 +403,7 @@ def test_what_an_implementer_writes_in_its_workspace_is_merged_into_the_campaign
     live = tmp_path / 'projects' / str(campaign.id) / 'workspace'
     live.mkdir(parents=True)
     (live / 'NOTES.md').write_text('the notes\n')
-    write_toml(Path(campaign.path), HARNESS_WRITES_THE_WORKSPACE)
+    write_toml(Path(campaign.path), HARNESS_WRITES_THE_WORKSPACE + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
@@ -501,8 +505,9 @@ def test_a_run_counts_toward_max_runs_from_its_close_to_its_verdict(
         assert s.scalar(select(Run.id).where(runs_stop.unsettled())) is None, f'run#{run_id} settled'
 
 
+@pytest.mark.usefixtures('daemon_api')
 def test_worse_commit_is_discarded(db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path) -> None:
-    write_toml(Path(campaign.path), HARNESS_WORSE)
+    write_toml(Path(campaign.path), HARNESS_WORSE + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
@@ -569,7 +574,7 @@ def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_its_idea_i
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
-    assert (run_row(db, run_id).status, run_row(db, run_id).error) == (RunStatus.FAILED, INTERRUPTED)
+    assert (run_row(db, run_id).status, run_row(db, run_id).error) == (RunStatus.FAILED, NOT_ENDED)
     [(summary, verdict, reason, measurements, _)] = scored(db, run_id)
     assert (summary, verdict, reason, measurements) == (
         UNCOMMITTED,
@@ -581,7 +586,7 @@ def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_its_idea_i
         recovered = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
         assert s.get_one(Idea, claimed_id(run_row(db, run_id))).status is IdeaStatus.OPEN
         assert [c.body for c in s.scalars(select(Comment).where(Comment.target_kind == IDEA))] == [
-            f'open: run#{run_id} gave the idea back; it ended failed: {INTERRUPTED}'
+            f'open: run#{run_id} gave the idea back; it ended failed: {NOT_ENDED}'
         ], 'the note says why, and nothing is requeued'
         trunk = head(s, s.get_one(Campaign, campaign.id))
         assert trunk is not None and trunk.id == baseline(db, campaign.id).id, 'the head did not move'
@@ -599,10 +604,11 @@ TWO_DISCARDS = (
 """Two commits that score below the baseline: neither moves the head."""
 
 
+@pytest.mark.usefixtures('daemon_api')
 def test_dirt_after_a_commit_is_recovered_on_its_own_and_the_commit_is_scored_as_made(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    write_toml(Path(campaign.path), HARNESS_COMMITS_AND_LEAVES_DIRT)
+    write_toml(Path(campaign.path), HARNESS_COMMITS_AND_LEAVES_DIRT + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
@@ -650,7 +656,7 @@ def test_no_changes_fails_the_run_and_opens_its_idea_again(
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path, agents=WORKED), db, run_id)
     run = run_row(db, run_id)
-    assert (run.status, run.error) == (RunStatus.FAILED, NO_CHANGES)
+    assert (run.status, run.error) == (RunStatus.FAILED, NOT_ENDED)
     with db.session() as s:
         assert s.get_one(Idea, run.idea_id).status is IdeaStatus.OPEN, 'the claim ended with the run'
 
@@ -685,6 +691,7 @@ def test_a_role_timeout_that_init_raises_applies_to_the_next_run(
     assert [run_row(db, r).error for r in (first, second)] == ['agent timeout after 0.5s', 'agent timeout after 0.7s']
 
 
+@pytest.mark.usefixtures('submitting')
 def test_evaluate_failure_is_a_crash_verdict(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -990,7 +997,7 @@ def test_brief_carries_history_and_comments(
     assert 'about another idea' not in brief
     assert '| 1 ' in brief and 'first idea' in brief, 'the same history block the research agent reads'
     assert 'Tried so far' not in brief
-    assert '"$PILOOP_BIN" sql' in brief and "'implementer#2', 'finding'" in brief
+    assert '"$PILOOP_BIN" sql' in brief and "'implementer#2', 'note'" in brief
     assert (
         '- Your session ends 2 minutes after it starts, at `$PILOOP_DEADLINE` (Unix time). The daemon tells you to'
         ' wrap up 0.5 minutes before, between two tool calls: start no command that can run past the deadline.\n'
@@ -998,8 +1005,9 @@ def test_brief_carries_history_and_comments(
     ), 'the role timeout of 120s'
     assert '`piloop escalate idea#<your idea> --priority 1`' in brief, 'a request is an escalation, never a note'
     assert '`piloop schema long_jobs`' in brief, 'how to wait for a long job is a guide away'
-    assert 'the daemon kills every process that you started' in brief, 'nothing outlives the harness'
-    assert '- A hunch worth a run of its own goes in your finding' in brief and 'idea seed demo' not in brief
+    assert 'kills every process that you started' in brief, 'nothing outlives the harness'
+    assert '`piloop run end submitted`' in brief and '`piloop run end gave_up' in brief, 'how its run ends'
+    assert '- A hunch worth a run of its own goes in a note' in brief and 'idea seed demo' not in brief
 
 
 def test_the_comments_on_an_idea_are_capped_by_their_section(
@@ -1255,6 +1263,7 @@ def test_a_new_evaluator_measures_what_a_verdict_needs_then_what_someone_asked_f
         assert [c.tree_sha for c in due(s, proj)] == ['crash', 'repeat', 'fresh'], 'measured: no longer due'
 
 
+@pytest.mark.usefixtures('submitting')
 def test_transcript_failure_is_only_an_event(
     db: Database,
     campaign: Campaign,
@@ -1489,18 +1498,16 @@ def test_a_cancelled_run_whose_implementer_ends_by_itself_first_closes_as_cancel
         assert [c.verdict for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [Outcome.KEEP]
 
 
-def test_a_relaunched_implementer_signs_as_itself_and_its_finding_ends_its_run(
+@pytest.mark.usefixtures('daemon_api')
+def test_a_relaunched_implementer_signs_as_itself_and_its_run_end_without_a_commit_counts(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    """A relaunched implementer gets a brief that names it, not the dead implementer, and its own finding counts.
-
-    With no commit, the run has no verdict: its idea is open again.
-    """
+    """A relaunched implementer gets a brief that names it, not the dead implementer, and its own run end counts."""
     run_id = make_run(db, campaign)
     idea_id = claimed_id(run_row(db, run_id))
-    finding = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, '$me', 'finding', 'no effect')"
+    note = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, '$me', 'note', 'no effect')"
     me = 'me=$(grep -o "Sign what you write as .implementer#[0-9]*" ../brief.md | grep -o "implementer#[0-9]*")'
-    write_toml(Path(campaign.path), f'#!/bin/sh\n{me}\n{PILOOP_HINT} sql "{finding}"\n')
+    write_toml(Path(campaign.path), f'#!/bin/sh\n{me}\n{PILOOP_HINT} sql "{note}"\n{END_RUN}')
     reload_campaign(db, campaign)
     start = mocker.patch.object(runtime, 'start', wraps=runtime.start)
     start.side_effect = [RuntimeError('no pickup'), DEFAULT]
@@ -1511,7 +1518,7 @@ def test_a_relaunched_implementer_signs_as_itself_and_its_finding_ends_its_run(
     assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
     with db.session() as s:
         dead, replacement = s.scalars(select(AgentSession.id).where(working_on(run_id)).order_by(AgentSession.id)).all()
-        [author] = s.scalars(select(Comment.author).where(Comment.kind == 'finding')).all()
+        [author] = s.scalars(select(Comment.author).where(Comment.body == 'no effect')).all()
         assert author == f'implementer#{replacement}'
         assert f'implementer#{dead}' not in brief_of(db, run.id) and f'You are implementer#{replacement},' in brief_of(
             db, run.id
@@ -1519,28 +1526,41 @@ def test_a_relaunched_implementer_signs_as_itself_and_its_finding_ends_its_run(
         assert s.get_one(Idea, idea_id).status is IdeaStatus.OPEN
 
 
-@pytest.mark.parametrize('work', ['commit', 'finding'])
-def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it_committed_or_left_a_finding(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, work: str
+@pytest.mark.usefixtures('daemon_api')
+@pytest.mark.parametrize(
+    ('work', 'ended'), [('commit', RunStatus.FAILED), ('note', RunStatus.FAILED), ('end', RunStatus.SUCCEEDED)]
+)
+def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it_committed_wrote_or_ended_its_run(
+    db: Database,
+    campaign: Campaign,
+    runtime: ScriptRuntime,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    work: str,
+    ended: RunStatus,
 ) -> None:
-    """An implementer whose tokens are unknown is not a startup death when it committed or left a finding.
+    """An implementer whose tokens are unknown is not a startup death when it committed, wrote a comment, or ended its run.
 
     The runtime may report no session for an implementer, so its tokens cannot be read. Work done within the startup window
-    proves that it started.
+    proves that it started. Only the run's end makes the run a success.
     """
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))  # no session file: the tokens are unknown
     run_id = make_run(db, campaign)
     idea_id = claimed_id(run_row(db, run_id))
-    finding = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, '$me', 'finding', 'no effect')"
+    note = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, '$me', 'note', 'no effect')"
     me = 'me=$(grep -o "Sign what you write as .implementer#[0-9]*" ../brief.md | grep -o "implementer#[0-9]*")'
-    body = HARNESS_APPEND if work == 'commit' else f'#!/bin/sh\n{me}\n{PILOOP_HINT} sql "{finding}"\n'
-    write_toml(Path(campaign.path), body)
+    bodies = {
+        'commit': HARNESS_APPEND,
+        'note': f'#!/bin/sh\n{me}\n{PILOOP_HINT} sql "{note}"\n',
+        'end': f'#!/bin/sh\n{END_RUN}',
+    }
+    write_toml(Path(campaign.path), bodies[work])
     script = load_campaign_config(Path(campaign.path)).harness['script'].model_dump(mode='json')
     counted = {'headless': ['--session-id', '{session_id}', '{prompt}'], **READS_PI}
     set_config(db, campaign, plugins={'harness': {'script': {**script, **counted}}})
     execute(controller(db, runtime, tmp_path), db, run_id)
     run = run_row(db, run_id)
-    assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
+    assert (run.status, run.error) == (ended, None if ended is RunStatus.SUCCEEDED else NOT_ENDED)
     with db.session() as s:
         assert s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) == 1, 'no relaunch'
         assert not s.scalars(select(Event).where(has(RunRelaunched) | has(StartupAnomaly))).all()
@@ -1561,7 +1581,7 @@ def test_a_fast_implementer_that_left_uncommitted_work_started_and_its_work_is_r
     set_config(db, campaign, plugins={'harness': {'script': {**script, **counted}}})
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
-    assert (run_row(db, run_id).status, run_row(db, run_id).error) == (RunStatus.FAILED, INTERRUPTED)
+    assert (run_row(db, run_id).status, run_row(db, run_id).error) == (RunStatus.FAILED, NOT_ENDED)
     [(summary, verdict, *_)] = scored(db, run_id)
     assert (summary, verdict) == (UNCOMMITTED, Origin.RECOVERED)
     with db.session() as s:
@@ -1587,15 +1607,19 @@ def test_a_startup_death_during_a_stop_leaves_the_run_to_the_stop(
         assert s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) == 1
 
 
-def test_a_finished_run_without_a_judged_version_gives_its_idea_back(
+@pytest.mark.usefixtures('daemon_api')
+def test_a_run_ended_as_submitted_without_a_commit_is_a_result(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """A run that posts a finding and commits nothing succeeds, but has no verdict: its idea is open again, and says why."""
+    """A run whose worker posts a note, commits nothing and ends it as submitted succeeds, and its idea is done.
+
+    Some plans, such as an audit, produce a note and no code.
+    """
     run_id = make_run(db, campaign)
     with db.session() as s:
         idea_id, agent_session_id = claimed_id(run_row(db, run_id)), s.scalars(select(AgentSession.id)).one()
-    finding = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, 'implementer#{agent_session_id}', 'finding', 'arm B: no effect')"
-    write_toml(Path(campaign.path), f'#!/bin/sh\n{PILOOP_HINT} sql "{finding}"\n')
+    note = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, 'implementer#{agent_session_id}', 'note', 'arm B: no effect')"
+    write_toml(Path(campaign.path), f'#!/bin/sh\n{PILOOP_HINT} sql "{note}"\n{END_RUN}')
     reload_campaign(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     run = run_row(db, run_id)
@@ -1608,84 +1632,42 @@ def test_a_finished_run_without_a_judged_version_gives_its_idea_back(
 
 
 TIMEOUT = 'implementer timeout after 1s'
+SUBMITTED = RunEndRequested(how=RunEnding.SUBMITTED)
+GAVE_UP = RunEndRequested(how=RunEnding.GAVE_UP, reason='the window does not fit in memory')
 
 
 @pytest.mark.parametrize(
     ('facts', 'expected'),
     [
         # one case per case of run_outcome, in order
-        pytest.param(
-            RunFacts(finding=True, asked=CommentId(7)), (RunEnd.AWAITING_ANSWER, 'comment#7'), id='finding-asked'
-        ),
-        pytest.param(RunFacts(finding=True), (RunEnd.FINISHED, None), id='finding'),
+        pytest.param(RunFacts(ending=SUBMITTED), (RunEnd.FINISHED, None), id='submitted'),
+        pytest.param(RunFacts(ending=GAVE_UP), (RunEnd.GAVE_UP, GAVE_UP.reason), id='gave-up'),
         pytest.param(RunFacts(cancelled=True), (RunEnd.CANCELLED, None), id='cancel'),
-        pytest.param(RunFacts(ended=True, versions=1), (RunEnd.CAMPAIGN_STOPPED, None), id='stop'),
+        pytest.param(RunFacts(ended=True), (RunEnd.CAMPAIGN_STOPPED, None), id='stop'),
         pytest.param(RunFacts(timed_out=True, error=TIMEOUT), (RunEnd.TIMED_OUT, TIMEOUT), id='timeout'),
-        pytest.param(
-            RunFacts(error='implementer exit 1', versions=1), (RunEnd.FAILED, 'implementer exit 1'), id='error'
-        ),
-        pytest.param(RunFacts(asked=CommentId(7)), (RunEnd.AWAITING_ANSWER, 'comment#7'), id='asked'),
-        pytest.param(RunFacts(), (RunEnd.FAILED, NO_CHANGES), id='nothing'),
-        pytest.param(RunFacts(versions=1, recovered_only=True), (RunEnd.FAILED, INTERRUPTED), id='recovered-only'),
+        pytest.param(RunFacts(error='implementer exit 1'), (RunEnd.FAILED, 'implementer exit 1'), id='error'),
         pytest.param(RunFacts(unsaved='refused'), (RunEnd.FAILED, f'{UNSAVED}: refused'), id='unsaved'),
+        pytest.param(RunFacts(), (RunEnd.FAILED, NOT_ENDED), id='not-ended'),
+        # the overlaps that fix the order: each pair of neighbouring rows, and a run that ends after its worker ended it
+        pytest.param(RunFacts(ending=SUBMITTED, ended=True), (RunEnd.FINISHED, None), id='submitted-stop'),
+        pytest.param(RunFacts(ending=SUBMITTED, cancelled=True), (RunEnd.FINISHED, None), id='submitted-cancel'),
+        pytest.param(
+            RunFacts(ending=SUBMITTED, timed_out=True, error=TIMEOUT), (RunEnd.FINISHED, None), id='submitted-timeout'
+        ),
+        pytest.param(
+            RunFacts(ending=GAVE_UP, error='implementer exit 1'), (RunEnd.GAVE_UP, GAVE_UP.reason), id='gave-up-error'
+        ),
+        pytest.param(RunFacts(ended=True, cancelled=True), (RunEnd.CANCELLED, None), id='cancel-stop'),
+        pytest.param(
+            RunFacts(ended=True, timed_out=True, error=TIMEOUT), (RunEnd.CAMPAIGN_STOPPED, None), id='stop-timeout'
+        ),
+        pytest.param(
+            RunFacts(cancelled=True, timed_out=True, error=TIMEOUT), (RunEnd.CANCELLED, None), id='cancel-timeout'
+        ),
         pytest.param(
             RunFacts(error='implementer exit 1', unsaved='refused'),
             (RunEnd.FAILED, 'implementer exit 1'),
             id='error-unsaved',
-        ),
-        pytest.param(
-            RunFacts(unsaved='refused', asked=CommentId(7), versions=1),
-            (RunEnd.FAILED, f'{UNSAVED}: refused'),
-            id='unsaved-asked-commits',
-        ),
-        pytest.param(RunFacts(versions=2), (RunEnd.FINISHED, None), id='commits'),
-        # the overlaps that fix the order: each pair of neighbouring rows, and a run that ends after its finding
-        pytest.param(
-            RunFacts(finding=True, asked=CommentId(7), timed_out=True, error=TIMEOUT),
-            (RunEnd.AWAITING_ANSWER, 'comment#7'),
-            id='finding-asked-timeout',
-        ),
-        pytest.param(RunFacts(finding=True, ended=True), (RunEnd.FINISHED, None), id='finding-stop'),
-        pytest.param(RunFacts(finding=True, cancelled=True), (RunEnd.FINISHED, None), id='finding-cancel'),
-        pytest.param(
-            RunFacts(finding=True, timed_out=True, error=TIMEOUT, versions=1),
-            (RunEnd.FINISHED, None),
-            id='finding-timeout',
-        ),
-        pytest.param(RunFacts(finding=True, error='implementer exit 1'), (RunEnd.FINISHED, None), id='finding-error'),
-        pytest.param(
-            RunFacts(finding=True, versions=1, recovered_only=True),
-            (RunEnd.FINISHED, None),
-            id='finding-recovered-only',
-        ),
-        pytest.param(
-            RunFacts(ended=True, cancelled=True),
-            (RunEnd.CANCELLED, None),
-            id='cancel-stop',
-        ),
-        pytest.param(
-            RunFacts(ended=True, timed_out=True, error=TIMEOUT),
-            (RunEnd.CAMPAIGN_STOPPED, None),
-            id='stop-timeout',
-        ),
-        pytest.param(
-            RunFacts(cancelled=True, timed_out=True, error=TIMEOUT),
-            (RunEnd.CANCELLED, None),
-            id='cancel-timeout',
-        ),
-        pytest.param(RunFacts(cancelled=True, versions=1), (RunEnd.CANCELLED, None), id='cancel-commits'),
-        pytest.param(
-            RunFacts(timed_out=True, error=TIMEOUT, asked=CommentId(7), versions=1),
-            (RunEnd.TIMED_OUT, TIMEOUT),
-            id='timeout-asked',
-        ),
-        pytest.param(
-            RunFacts(error='implementer exit 1', asked=CommentId(7)),
-            (RunEnd.FAILED, 'implementer exit 1'),
-            id='error-asked',
-        ),
-        pytest.param(
-            RunFacts(asked=CommentId(7), versions=1), (RunEnd.AWAITING_ANSWER, 'comment#7'), id='asked-commits'
         ),
     ],
 )
@@ -1710,152 +1692,71 @@ def test_a_failed_start_or_a_lost_job_while_the_daemon_stops_leaves_the_run_to_t
     assert run_row(db, run_id).status is RunStatus.RUNNING, 'stop() writes the row, not the run thread'
 
 
+@pytest.mark.usefixtures('daemon_api')
 @pytest.mark.parametrize('timed_out', [True, False])
-def test_an_implementer_that_left_its_finding_has_finished_its_run_however_its_process_then_ends(
+def test_an_implementer_that_ended_its_run_has_finished_it_however_its_process_then_ends(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture, timed_out: bool
 ) -> None:
-    """An implementer that committed and left its finding, then timed out or exited non-zero, finished its idea.
+    """An implementer that committed and ended its run as submitted, then timed out or exited non-zero, finished its idea.
 
-    The finding is its report that it is done, as on a daemon stop (``Scheduler._hand_off``): the run succeeds and the
+    Its run's end is its report that it is done, as on a daemon stop (``Scheduler._hand_off``): the run succeeds and the
     idea is ``done``, so no second run redoes the work. A job that it forgot keeps the run open to the timeout. The
     agent session row keeps how its process ended.
     """
     run_id = make_run(db, campaign)
     with db.session() as s:
         idea_id, agent_session_id = claimed_id(run_row(db, run_id)), s.scalars(select(AgentSession.id)).one()
-    finding = (
+    note = (
         'INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES'
-        f" ('idea', {idea_id}, 'implementer#{agent_session_id}', 'finding', 'DONE: added a line')"
+        f" ('idea', {idea_id}, 'implementer#{agent_session_id}', 'note', 'DONE: added a line')"
     )
     end = 'touch ../found\nsleep 30 &\nwait' if timed_out else 'exit 1'
-    body = f'#!/bin/sh\necho line >> solve.txt\ngit commit -qam "a line"\n{PILOOP_HINT} sql "{finding}"\n{end}\n'
+    body = f'#!/bin/sh\necho line >> solve.txt\ngit commit -qam "a line"\n{PILOOP_HINT} sql "{note}"\n{END_RUN}{end}\n'
     write_toml(Path(campaign.path), body)
     reload_campaign(db, campaign)
     wait = runtime.wait
 
-    def time_out_after_the_finding(handle: Handle, deadline: Deadline) -> AgentExit:
+    def time_out_after_the_end(handle: Handle, deadline: Deadline) -> AgentExit:
         wait_until((tmp_path / 'runs' / str(run_id) / 'found').exists)
         return wait(handle, Deadline.after(0.5))
 
-    if timed_out:  # a loaded host can take longer than any short timeout to write the finding
-        mocker.patch.object(runtime, 'wait', side_effect=time_out_after_the_finding)
+    if timed_out:  # a loaded host can take longer than any short timeout to end the run
+        mocker.patch.object(runtime, 'wait', side_effect=time_out_after_the_end)
     execute(controller(db, runtime, tmp_path), db, run_id)
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
     with db.session() as s:
         assert s.get_one(Idea, idea_id).status is IdeaStatus.DONE, 'not retried: its commit got a verdict'
         assert s.get_one(AgentSession, agent_session_id).error == (
-            'agent timeout after 0.5s' if timed_out else 'agent exit 1: 1 row(s) changed, last insert id 1'
+            'agent timeout after 0.5s'
+            if timed_out
+            else f'agent exit 1: 1 row(s) changed, last insert id 1 | run#{run_id} ended as submitted: the daemon ends this session in a moment'
         ), 'an exit says its last output'
         assert [c.verdict for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [Outcome.KEEP]
 
 
-@pytest.mark.parametrize('reported', [True, False])
-def test_an_implementer_that_stops_on_its_open_escalation_is_blocked_and_its_idea_waits_for_the_answer(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, reported: bool
+@pytest.mark.usefixtures('daemon_api')
+def test_an_open_escalation_holds_no_run_whose_worker_ends_it_as_its_verb_says(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """An implementer that asks for a decision and stops before it comes did not succeed, and its idea is not done.
-
-    The run fails as blocked, which no incident sweep investigates, and the idea is parked with a note that names the
-    escalation. A retry would stop on the same question, and ``done`` would release the ideas that wait for it. A
-    finding or a commit does not make it a success.
-    """
+    """An escalation asks the human and changes nothing else: a run whose worker asked, then ended it, ends so."""
     run_id = make_run(db, campaign)
     with db.session() as s:
         idea_id, agent_session_id = claimed_id(run_row(db, run_id)), s.scalars(select(AgentSession.id)).one()
     ask = escalation_sql('idea', idea_id, f'implementer#{agent_session_id}')
-    report = (
-        'INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES'
-        f" ('idea', {idea_id}, 'implementer#{agent_session_id}', 'finding', 'blocked on the audit')"
-    )
     write_toml(
         Path(campaign.path),
-        (
-            f'#!/bin/sh\n{PILOOP_HINT} sql "{ask}"\n'
-            + (f'{PILOOP_HINT} sql "{report}"\n' if reported else '')
-            + 'echo line >> solve.txt\ngit commit -qam "a line"\n'
-        ),
-        # the script runs two `piloop sql` processes before it commits: on a loaded host they outlast 20 s
-        implementer_timeout=600,
+        f'#!/bin/sh\n{PILOOP_HINT} sql "{ask}"\necho line >> solve.txt\ngit commit -qam "a line"\n{END_RUN}',
+        implementer_timeout=600,  # `piloop sql` and `piloop run end` before the deadline, also on a loaded host
     )
     reload_campaign(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
-        escalation = s.scalars(select(Comment.id).where(Comment.kind == 'escalation')).one()
+        assert s.scalars(select(Comment.acked_at).where(Comment.kind == ESCALATION)).all() == [None], 'still asked'
         run = s.get_one(Run, run_id)
-        assert (run.status, run.end, run.error) == (RunStatus.FAILED, RunEnd.AWAITING_ANSWER, f'comment#{escalation}')
-        assert s.get_one(Idea, idea_id).status is IdeaStatus.DROPPED
-        note = s.scalars(select(Comment).where(Comment.author == 'daemon', Comment.target_id == idea_id)).one()
-        assert f'escalation comment#{escalation}' in note.body and 'then open the idea' in note.body
-        assert [c.verdict for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [Outcome.KEEP], (
-            'its commits are scored as any run'
-        )
-
-
-@pytest.mark.parametrize(
-    ('reply', 'blocked'),
-    [
-        pytest.param(None, True, id='acked-without-a-reply'),
-        pytest.param('comment.undelivered', True, id='reply-never-reached-it'),
-        pytest.param('comment.delivered', False, id='reply-read'),
-    ],
-)
-def test_an_escalation_is_answered_once_a_reply_reaches_the_implementer_not_once_it_is_acked(
-    db: Database,
-    campaign: Campaign,
-    runtime: ScriptRuntime,
-    tmp_path: Path,
-    reply: Literal['comment.delivered', 'comment.undelivered'] | None,
-    blocked: bool,
-) -> None:
-    """An orchestrator acked an escalation and answered it while the implementer was exiting. The answer never reached
-    it, the run ended finished and its idea done, so the answer was lost."""
-    run_id = make_run(db, campaign)
-    with db.session() as s:
-        idea_id, agent_session_id = claimed_id(run_row(db, run_id)), s.scalars(select(AgentSession.id)).one()
-        escalation = Comment(
-            target=TargetRef(RUN, run_id),
-            author=f'implementer#{agent_session_id}',
-            kind='escalation',
-            priority=1,
-            body='may I use the cache?',
-            acked_at=utcnow(),
-            acked_by='orchestrator',
-        )
-        s.add(escalation)
-        s.add(
-            Comment(
-                target=TargetRef(IDEA, idea_id),
-                author='watchdog#9',
-                kind='escalation',
-                priority=1,
-                body='not the implementer',
-            )
-        )
-        wrap_up = Comment(
-            target=TargetRef(TargetKind.AGENT_SESSION, agent_session_id), author='daemon', kind='note', body='wrap up'
-        )
-        s.add(wrap_up)
-        s.flush()
-        on_agent = TargetRef(TargetKind.AGENT_SESSION, agent_session_id)
-        emit(s, PromptOutcome(kind='comment.delivered', comment=wrap_up.id), on_agent, System.DAEMON)
-        if reply is not None:
-            answer = Comment(target=TargetRef(IDEA, idea_id), author='orchestrator', kind='decision', body='yes')
-            s.add(answer)
-            s.flush()
-            emit(s, PromptOutcome(kind=reply, comment=answer.id), on_agent, System.DAEMON)
-        s.commit()
-        escalation_id = escalation.id
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    run = run_row(db, run_id)
-    with db.session() as s:
-        idea = s.get_one(Idea, idea_id).status
-    if blocked:
-        assert (run.end, run.error, idea) == (RunEnd.AWAITING_ANSWER, f'comment#{escalation_id}', IdeaStatus.DROPPED), (
-            "an ack is not an answer, nor is the daemon's own note"
-        )
-    else:
-        assert (run.end, run.error, idea) == (RunEnd.FINISHED, None, IdeaStatus.DONE)
+        assert (run.status, run.end, run.error) == (RunStatus.SUCCEEDED, RunEnd.FINISHED, None)
+        assert s.get_one(Idea, idea_id).status is IdeaStatus.DONE
+        assert s.scalars(select(Comment).where(Comment.author == 'daemon', Comment.target_id == idea_id)).all() == []
 
 
 def test_uncommitted_changes_are_saved_on_a_machine_with_no_git_identity(
@@ -1866,7 +1767,7 @@ def test_uncommitted_changes_are_saved_on_a_machine_with_no_git_identity(
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
-    assert (run_row(db, run_id).status, run_row(db, run_id).error) == (RunStatus.FAILED, INTERRUPTED)
+    assert (run_row(db, run_id).status, run_row(db, run_id).error) == (RunStatus.FAILED, NOT_ENDED)
     [(summary, verdict, *_)] = scored(db, run_id)
     assert (summary, verdict) == (UNCOMMITTED, Origin.RECOVERED)
 
@@ -1892,11 +1793,12 @@ def test_a_save_that_fails_fails_the_run_and_keeps_the_unsaved_changes_in_the_ca
     assert patch is not None and b'+line' in patch
 
 
+@pytest.mark.usefixtures('daemon_api')
 def test_an_implementers_own_commit_is_by_the_implementer_on_a_machine_with_no_git_identity(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, no_git_identity: None
 ) -> None:
     """Its job's environment names it: the commit is the implementer's, and no git config is written for it."""
-    write_toml(Path(campaign.path), '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "a line"\n')
+    write_toml(Path(campaign.path), '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "a line"\n' + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
@@ -1909,20 +1811,21 @@ def test_an_implementers_own_commit_is_by_the_implementer_on_a_machine_with_no_g
     assert 'user.name' not in repo.git.config('--list')
 
 
-def test_uncommitted_changes_without_a_finding_are_scored_but_not_an_attempt_that_finished(
+@pytest.mark.usefixtures('daemon_api')
+def test_uncommitted_changes_of_a_run_that_was_not_ended_are_kept_but_not_an_attempt_that_finished(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """An implementer that leaves uncommitted changes and no finding did not finish its idea.
+    """An implementer that leaves uncommitted changes and does not end its run did not finish its idea.
 
-    The daemon commits and scores the changes, but the run fails and the idea is ready again. A finding on the run
-    makes the same run a success.
+    The daemon saves the changes, but the run fails and the idea is open again. A note changes nothing: only
+    ``piloop run end`` makes the same run a success.
     """
     write_toml(Path(campaign.path), HARNESS_FORGETS_COMMIT)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     run = run_row(db, run_id)
-    assert (run.status, run.error) == (RunStatus.FAILED, INTERRUPTED)
+    assert (run.status, run.error) == (RunStatus.FAILED, NOT_ENDED)
     [(summary, verdict, *_)] = scored(db, run_id)
     assert (summary, verdict) == (UNCOMMITTED, Origin.RECOVERED), 'what it left is kept, not judged'
     with db.session() as s:
@@ -1938,16 +1841,24 @@ def test_uncommitted_changes_without_a_finding_are_scored_but_not_an_attempt_tha
             Comment(
                 target=TargetRef(RUN, run_id),
                 author=f'implementer#{agent_session_id}',
-                kind='finding',
+                kind='note',
                 body='x',
             )
         )
-        s.add(Comment(target=TargetRef(IDEA, idea_id), author='watchdog#9', kind='finding', body='y'))
+        s.add(Comment(target=TargetRef(IDEA, idea_id), author='watchdog#9', kind='note', body='y'))
         s.commit()
     write_toml(Path(campaign.path), '#!/bin/sh\necho other >> solve.txt\n')
     reload_campaign(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
-    assert run_row(db, run_id).status is RunStatus.SUCCEEDED, 'it reported where it stands'
+    assert (run_row(db, run_id).status, run_row(db, run_id).error) == (RunStatus.FAILED, NOT_ENDED), (
+        'its notes end no run'
+    )
+
+    run_id = make_run(db, campaign, title='ended')
+    write_toml(Path(campaign.path), '#!/bin/sh\necho more >> solve.txt\n' + END_RUN)
+    reload_campaign(db, campaign)
+    execute(controller(db, runtime, tmp_path), db, run_id)
+    assert run_row(db, run_id).status is RunStatus.SUCCEEDED, 'its worker ended it as submitted'
 
 
 def test_a_cancelled_executor_leaves_the_bookkeeping_to_the_scheduler(
@@ -2648,6 +2559,7 @@ def test_a_run_pinned_to_a_non_keep_is_judged_against_its_nearest_keep_on_every_
     assert f'- candidate#{lead} is not your bar: your versions are judged against candidate#1 (' in brief
 
 
+@pytest.mark.usefixtures('submitting')
 def test_a_keep_that_lost_the_race_to_the_head_is_merged_onto_it_and_judged_there_again_and_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -7,7 +7,7 @@ repo when a sweep that proposes work starts. ``piloop history`` prints it too. I
 - the analysis artifacts (``context``) and the shared workspace, newest first, as file pointers
   with an outline;
 - the history (``piloop.plugins.campaign_type.optimization.history``);
-- the latest implementer findings, and the digests and decisions of the orchestrator and the human, by id and first
+- the latest implementer notes, and the digests and decisions of the orchestrator and the human, by id and first
   line.
 
 The ideas by source and the open escalations are in the campaign overview, which every sweep also reads.
@@ -42,7 +42,6 @@ from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import MetricRole
 from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.campaign_type.kit.verdicts.judge import head
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
 from piloop.plugins.campaign_type.optimization.history import (
@@ -53,6 +52,7 @@ from piloop.plugins.campaign_type.optimization.history import (
     text_row,
     titled_table,
 )
+from piloop.plugins.escalation.contract import DECISION
 from piloop.text import HEADING, NONE, metric
 
 WALK_ENTRIES = 20_000
@@ -74,12 +74,12 @@ class Shown(Protocol):
 
     @property
     def campaign_findings(self) -> int:
-        """The latest findings on the campaign, in the history."""
+        """The latest agent notes on the campaign, in the history."""
         ...
 
     @property
     def findings(self) -> int:
-        """The latest findings of the implementers."""
+        """The latest notes of the implementers on their ideas."""
         ...
 
     @property
@@ -125,7 +125,7 @@ def renderables(
         *_artifacts(campaign, cfg, workspace, heading, shown),
         *history(s, campaign, cfg, table_box=table_box, heading=heading, ideas=ideas, findings=shown.campaign_findings),
         Text(),
-        *_agent_session_findings(s, campaign, cfg, heading, shown.findings),
+        *_implementer_notes(s, campaign, cfg, heading, shown.findings),
         *_digests(s, campaign, heading, shown.digests),
     ]
 
@@ -280,30 +280,30 @@ def _outline(text: str) -> str:
     return joined if len(joined) <= OUTLINE_CHARS else joined[: OUTLINE_CHARS - 1] + '…'
 
 
-def _agent_session_findings(
+def _implementer_notes(
     s: Session, campaign: Campaign, cfg: CampaignConfig, heading: str, count: int
 ) -> list[RenderableType]:
-    """List the latest findings of the agents that did runs."""
+    """List the latest notes of the agents that did runs on their ideas: their reports."""
     by_runs = or_(*(Comment.author.startswith(f'{name}#', autoescape=True) for name in cfg.roles.doing_runs()))
     rows = s.scalars(
         select(Comment)
         .join(Idea, (Comment.target_kind == IDEA) & (Comment.target_id == Idea.id))
-        .where(Idea.campaign_id == campaign.id, Comment.kind == FINDING, by_runs)
+        .where(Idea.campaign_id == campaign.id, Comment.kind == CommentKind.NOTE, by_runs)
         .order_by(Comment.id.desc())
         .limit(count)
     ).all()
-    title = Text(f'{heading}Research pack: latest implementer findings (newest first)', style='bold')
+    title = Text(f'{heading}Research pack: latest implementer notes (newest first)', style='bold')
     lines = [comment_line(c, f'{c.author} on idea#{c.target_id}') for c in rows]
     return [title, *(lines or [Text('- None yet.')]), Text()]
 
 
 def _digests(s: Session, campaign: Campaign, heading: str, count: int) -> list[RenderableType]:
-    """List the latest findings and decisions of the orchestrator or a human."""
+    """List the latest notes and decisions of the orchestrator or a human."""
     rows = s.scalars(
         select(Comment)
         .where(
             campaign_of(Comment.target_kind, Comment.target_id) == campaign.id,
-            Comment.kind.in_((FINDING, CommentKind.DECISION)),
+            Comment.kind.in_((CommentKind.NOTE, DECISION)),
             Comment.author.not_like('%#%'),
             Comment.author != DAEMON_ACTOR,
         )

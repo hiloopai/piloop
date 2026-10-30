@@ -8,7 +8,7 @@ from piloop.plugins.section.contract import Rendering, Section, Surface
 class Pack(Section):
     """The research pack, which ``piloop history`` prints: what a sweep needs to propose work.
 
-    It has the metrics, the analysis files and the workspace, the history, and the latest findings and digests. Its parameters bound each list.
+    It has the metrics, the analysis files and the workspace, the history, and the latest notes and digests. Its parameters bound each list.
 
     Nothing for an agent that got incidents to investigate: the pack is for proposing work.
     """
@@ -19,9 +19,9 @@ class Pack(Section):
     ideas: int = Field(default=60, ge=1)
     """How many of the newest ideas the history lists. ``piloop history`` lists as many."""
     campaign_findings: int = Field(default=10, ge=0)
-    """How many of the latest findings on the campaign the history lists."""
+    """How many of the latest agent notes on the campaign the history lists."""
     findings: int = Field(default=8, ge=0)
-    """How many of the implementers' latest findings the pack lists."""
+    """How many of the implementers' latest notes the pack lists."""
     digests: int = Field(default=5, ge=0)
     """How many of the latest digests and decisions of the orchestrator and the human the pack lists."""
     artifacts: int = Field(default=12, ge=0)

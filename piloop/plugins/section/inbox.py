@@ -6,7 +6,7 @@ from piloop.api.views import Lines, Rendered
 from piloop.campaign import inbox
 from piloop.campaign.inbox import campaign_of
 from piloop.db.models import Comment
-from piloop.ids import CommentKind
+from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.settings import settings
 from piloop.text import age, cell
@@ -26,7 +26,7 @@ class Inbox(Section):
     def render(self, r: Rendering) -> Rendered:
         s, campaign, now = r.s, r.campaign, r.now
         unacked = Comment.priority.is_not(None) & Comment.acked_at.is_(None)
-        said = unacked | Comment.kind.in_((CommentKind.DECISION, CommentKind.ESCALATION))
+        said = unacked | Comment.kind.in_((DECISION, ESCALATION))
         rows = s.scalars(
             select(Comment)
             .where(said, campaign_of(Comment.target_kind, Comment.target_id) == campaign.id)
@@ -34,7 +34,7 @@ class Inbox(Section):
             .limit(COMMENTS_SHOWN)
         ).all()
         waiting = inbox.items(s, campaign_id=campaign.id)
-        asked = [c for c, _ in waiting if c.kind == CommentKind.ESCALATION]
+        asked = [c for c, _ in waiting if c.kind == ESCALATION]
         # an escalation that waits drops off the newest-first list below when more comments follow it, so count it here
         oldest = min(asked, key=attrgetter('id'), default=None)
         escalations = (

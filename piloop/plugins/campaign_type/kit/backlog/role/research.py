@@ -20,7 +20,7 @@ class ResearchRole(SweepRole):
     """A short backlog, and a stall."""
     writes: list[str] = [
         'ideas via idea add, or the status of an open idea to dropped with a note',
-        'comments(finding, escalation) on the campaign',
+        'comments(note, escalation) on the campaign',
         'comments(note) on an idea',
     ]
     """What a research sweep may write, as its brief states it."""
@@ -57,7 +57,7 @@ class ResearchRole(SweepRole):
         tracks = ['- Give every idea the track it serves (`--track`).']
         return [
             f'- Ideas to add: {own} (the board holds {backlog.held()}). Fewer only when what is left duplicates'
-            ' open work; name that work in your finding.',
+            ' open work; name that work in your note.',
             *(tracks if campaign.config.multitrack else []),
             *(
                 [

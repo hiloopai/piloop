@@ -70,7 +70,7 @@ runs = true                               # its agents do runs; a sweeping role 
 timeout = 1800                            # seconds one implementer may run
 max_concurrent = 4                        # the most runs at the same time, on all workers together
 # wrap_up_lead = 600                      # seconds before its timeout that an implementer is told to wrap up
-# finding_grace = 60                      # seconds after its finding before an implementer is ended
+# end_grace = 60                          # seconds after `piloop run end` before an implementer is ended
 # startup_relaunches = 2                  # new implementers for a run whose implementer failed to start
 
 [plugins.role.watchdog]                   # a watchdog investigates anomalies and reviews progress every `interval` seconds
@@ -81,7 +81,7 @@ max_concurrent = 4                        # the most runs at the same time, on a
 # mcp = []                                # the [plugins.mcp_server.<name>] servers that this role's agents get; none by default
 # prompt = "briefs/my-watchdog.md"        # a file that replaces the built-in start of this role's brief
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
-# writes = ["comments(finding)"]          # what the brief says the role may write; default: what piloop expects of it
+# writes = ["comments(note)"]             # what the brief says the role may write; default: what piloop expects of it
 # files = "nothing"                       # what its agents may file with `piloop idea`: nothing or ideas
 # plan_words = 150                        # the most words in the plan of an idea that its agents file
 runs = false                              # a sweeping role: its triggers start it and nothing it commits is scored

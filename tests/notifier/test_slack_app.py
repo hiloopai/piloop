@@ -11,9 +11,9 @@ from pydantic import SecretStr
 
 from piloop.actor import Person, System
 from piloop.db.session import Database
-from piloop.ids import CommentId, CommentKind
+from piloop.ids import CommentId
 from piloop.plugins.contribution import Leaving
-from piloop.plugins.escalation.contract import Choice, EscalationView
+from piloop.plugins.escalation.contract import ESCALATION, Choice, EscalationView
 from piloop.plugins.host import Check
 from piloop.plugins.notifier.contract import (
     Accepted,
@@ -62,9 +62,7 @@ def app_of(slack: FakeSlackApp, **keys: object) -> SlackApp:
 
 
 def notice(comment: int, kind: NoticeKind = NoticeKind.NEW, thread: MessageRef | None = None) -> Notice:
-    return Notice(
-        kind, CommentId(comment), CommentKind.ESCALATION, 1, 'enwik8', 'implementer#1', 'x', None, None, thread
-    )
+    return Notice(kind, CommentId(comment), ESCALATION, 1, 'enwik8', 'implementer#1', 'x', None, None, thread)
 
 
 def test_each_notice_is_a_post_of_its_own_and_an_answer_goes_to_its_thread(
@@ -126,7 +124,7 @@ def escalation(comment: int, view: EscalationView | None = ASKED, kind: NoticeKi
     return Notice(
         kind,
         CommentId(comment),
-        CommentKind.ESCALATION,
+        ESCALATION,
         1,
         'enwik8',
         'orchestrator',

@@ -36,7 +36,7 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment,
 from piloop.db.requests import RequestAnswered, pending
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
-from piloop.ids import CampaignStatus, CommentKind, Ending, TargetKind, TargetRef
+from piloop.ids import CampaignStatus, Ending, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
@@ -44,11 +44,12 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.controller import NO_CHANGES, SKIPPED_REASON, RunFinished
+from piloop.plugins.campaign_type.kit.runs.controller import NOT_ENDED, SKIPPED_REASON, RunFinished
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import runs, runs_without_keep
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
+from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.fact_source.contract import FactReadError
 from piloop.plugins.fact_source.facts import (
     ATTEMPTS,
@@ -284,7 +285,7 @@ def test_a_campaign_that_max_runs_stopped_shows_all_its_runs_in_the_progress_lin
     )
     with db.session() as s:
         run = s.get_one(Run, in_flight)
-        run.status, run.end, run.error = RunStatus.FAILED, RunEnd.FAILED, NO_CHANGES
+        run.status, run.end, run.error = RunStatus.FAILED, RunEnd.FAILED, NOT_ENDED
         run.finished_at = utcnow()
         s.commit()
     assert (reason(db, campaign), progress_line(db, campaign, cfg)) == (None, 'run 1/2'), 'a run without a commit'
@@ -460,7 +461,7 @@ def test_only_runs_that_produced_a_measured_candidate_count_toward_max_runs(db: 
     whose candidate waits for its measurement also counts.
     """
     configure(db, campaign, max_runs=3)
-    add_run(db, campaign, status=RunStatus.FAILED, error=NO_CHANGES, measured=False)
+    add_run(db, campaign, status=RunStatus.FAILED, error=NOT_ENDED, measured=False)
     add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.SKIPPED, SKIPPED_REASON)
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
@@ -482,12 +483,26 @@ def test_plateau_counts_every_finished_attempt_also_one_that_never_reached_the_e
     """
     configure(db, campaign, plateau=4)
     add_run(db, campaign, keep_score=5.0)
-    add_run(db, campaign, status=RunStatus.FAILED, error=NO_CHANGES, measured=False)
+    add_run(db, campaign, status=RunStatus.FAILED, error=NOT_ENDED, measured=False)
     add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.SKIPPED, SKIPPED_REASON)
     add_run(db, campaign, status=RunStatus.SUCCEEDED, measured=False)
     assert reason(db, campaign) is None, 'three runs without a keep'
     add_run(db, campaign, status=RunStatus.FAILED, error='agent exit 1', measured=False)
     assert reason(db, campaign) == 'plateau: 4 runs without a keep', 'none of them scored'
+
+
+def test_a_run_whose_worker_gave_up_is_an_attempt_for_plateau_and_holds_no_place_under_max_runs(
+    db: Database, campaign: Campaign
+) -> None:
+    """Giving up tried the idea: ``plateau`` counts it, as any attempt. With nothing measured, ``max_runs`` does not."""
+    configure(db, campaign, plateau=2)
+    add_run(db, campaign, keep_score=5.0)
+    add_run(db, campaign, status=RunStatus.FAILED, end=RunEnd.GAVE_UP, error='the window does not fit', measured=False)
+    assert reason(db, campaign) is None, 'one attempt without a keep'
+    add_run(db, campaign, status=RunStatus.FAILED, end=RunEnd.GAVE_UP, error='no speedup', measured=False)
+    assert reason(db, campaign) == 'plateau: 2 runs without a keep'
+    with db.session() as s:
+        assert runs(s, s.get_one(Campaign, campaign.id)) == 1, 'only the measured run holds a place under max_runs'
 
 
 def test_reactivating_a_stopped_campaign_starts_a_fresh_plateau_window(db: Database, campaign: Campaign) -> None:
@@ -735,7 +750,7 @@ def test_closing_review_skip_ends_the_stop_at_once_with_an_escalation(
     assert synced == ['demo'], 'the documents are synced, as at every close'
     with db.session() as s:
         last = s.scalars(select(Comment).order_by(Comment.id.desc()).limit(1)).one()
-        assert (last.kind, last.priority, last.author) == (CommentKind.ESCALATION, 0, 'daemon')
+        assert (last.kind, last.priority, last.author) == (ESCALATION, 0, 'daemon')
         assert details(last).startswith(
             'Closing review skipped: the campaign stopped while the stop rule held its launches (spend not known)'
         )
@@ -1244,7 +1259,7 @@ def test_a_rule_that_escalates_lets_the_campaign_go_on_and_tells_a_human_once_pe
         sched.wait(SETTLE)
         sched.stop(timeout=5)
         with db.session() as s:
-            said = s.scalars(select(Comment).where(Comment.kind == CommentKind.ESCALATION).order_by(Comment.id))
+            said = s.scalars(select(Comment).where(Comment.kind == ESCALATION).order_by(Comment.id))
             assert [(c.target, c.author, c.priority, details(c)) for c in said] == [
                 (TargetRef(TargetKind.CAMPAIGN, campaign.id), 'daemon', 0, f'Stop rule escalates: {reason}')
                 for reason in ('$900 since the last keep', '$1,800 since the keep')

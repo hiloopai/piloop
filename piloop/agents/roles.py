@@ -52,8 +52,7 @@ class Role:
 
 IDEAS: dict[Files, str] = {
     Files.NOTHING: (
-        '- A hunch worth a run of its own goes in your finding, with pointers (ids, paths, the number). You file'
-        ' no ideas.'
+        '- A hunch worth a run of its own goes in a note, with pointers (ids, paths, the number). You file no ideas.'
     ),
     Files.IDEAS: (
         "- Add an idea: `{piloop} idea add {campaign} '<title>' --hypothesis '…' --plan '…' --from '<the evidence,"

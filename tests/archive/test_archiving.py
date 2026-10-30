@@ -21,7 +21,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.workers import Workers
 from tests.archive.test_store import files
-from tests.conftest import SETTLE, ScriptRuntime, factory, queued, run_all, serving, wait_until, write_toml
+from tests.conftest import END_RUN, SETTLE, ScriptRuntime, factory, queued, run_all, serving, wait_until, write_toml
 from tests.daemon.test_scheduler import add_ideas
 
 HARNESS_LEAVES_AN_ARRAY = (
@@ -44,10 +44,11 @@ def scheduled(db: Database, runtime: ScriptRuntime, home: Path, store: DiskCas) 
     return made[0]
 
 
+@pytest.mark.usefixtures('daemon_api')
 def test_the_tick_archives_an_idea_once_its_run_is_judged_and_leaves_its_files_for_later(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, campaign_path: Path
 ) -> None:
-    write_toml(campaign_path, HARNESS_LEAVES_AN_ARRAY)
+    write_toml(campaign_path, HARNESS_LEAVES_AN_ARRAY + END_RUN)
     store = DiskCas(tmp_path / 'store')
     scheduler = scheduled(db, runtime, tmp_path, store)
     (idea,) = add_ideas(db, campaign, 'leaves an array')

@@ -129,13 +129,13 @@ class WrapUp(EventModel):
 
 
 class AgentEnded(EventModel):
-    """The daemon ended an agent, with the ``reason`` and the run's ``end``: a stop, a cancel, or its finding.
+    """The daemon ended an agent, with the ``reason`` and the run's ``end``: a stop, a cancel, or its run's end.
 
     An implementer of a stopped campaign is ended when the grace period after its wrap-up prompt is over, or at once for
     a stop that ends it now. Most harnesses take a message only when the turn ends, so the implementer may never have
     read the prompt. The scheduler sets the row ``ending`` and commits it with the event before the kill, so
-    a finding that the agent writes after it is refused. The run ends ``campaign_stopped`` or ``cancelled`` unless its
-    implementer left its finding before.
+    a run end that the agent asks for after it is refused. The run ends ``campaign_stopped`` or ``cancelled`` unless
+    its worker ended it before (``piloop run end``).
     """
 
     READ_BY: ClassVar[ReadBy] = ReadBy.READERS
@@ -211,9 +211,9 @@ UNREAD = 'the agent ended before it read it'
 
 
 def queue_prompt(s: Session, agent_session_id: AgentSessionId, text: str, author: str) -> CommentId | None:
-    """Write ``text`` as a note on a running agent, which the daemon delivers (``Executor.prompt``). The caller commits.
+    """Write ``text`` as a message to a running agent, which the daemon delivers (``Executor.prompt``). The caller commits.
 
-    Return the note's id, or None when the agent is not running.
+    Return the message's id, or None when the agent is not running.
     """
     agent = s.get(AgentSession, agent_session_id)
     if agent is None or agent.state is not AgentSessionState.RUNNING:
@@ -222,7 +222,7 @@ def queue_prompt(s: Session, agent_session_id: AgentSessionId, text: str, author
         target_kind=TargetKind.AGENT_SESSION,
         target_id=agent_session_id,
         author=author,
-        kind=CommentKind.NOTE,
+        kind=CommentKind.MESSAGE,
         body=text,
     )
     s.add(note)
@@ -797,9 +797,10 @@ def _never_worked(s: Session, w: AgentSession, report: AgentFinished, startup_se
     """Return whether a started agent ended within ``startup_seconds`` (``[agents]``) and left nothing behind.
 
     Nothing behind means no change to its checkout (``AgentFinished.changed``: no commit, no uncommitted change outside
-    the links) and no comment signed by it.
+    the links), no comment signed by it, and no event on its subject signed by it, such as its run's end
+    (``piloop run end``).
 
-    A run's work is a change to its worktree or a comment, so that decides for an agent with a run, whatever its
+    A run's work is a change to its worktree, a comment or a write that it signs, so that decides for an agent with a run, whatever its
     harness and its tokens: an agent whose tools fail at launch still reads its brief and says that it is blocked.
     A sweep's work can be rows that no comment signs, so a sweep that spent tokens worked, and only a sweep whose
     harness's usage is read is judged. The tokens can be unknown for a sweep that worked too, when its session id
@@ -811,5 +812,10 @@ def _never_worked(s: Session, w: AgentSession, report: AgentFinished, startup_se
         definition = harness_of(s, w)
         if definition is None or definition.usage() is None or (report.usage is not None and report.usage.total > 0):
             return False
-    signed = select(Comment.id).where(Comment.author == Agent(role=w.kind, session=w.id).signature).limit(1)
-    return s.scalar(signed) is None
+    signature = Agent(role=w.kind, session=w.id).signature
+    commented = select(Comment.id).where(Comment.author == signature).limit(1)
+    if s.scalar(commented) is not None:
+        return False
+    if (subject := w.subject) is None:
+        return True
+    return s.scalar(select(Event.id).where(Event.target == subject, Event.actor == signature).limit(1)) is None

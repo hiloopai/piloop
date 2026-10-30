@@ -140,7 +140,7 @@ def test_the_daemon_s_timings_are_read_from_config_toml_the_environment_wins_and
 def test_the_implementer_s_timings_of_config_toml_are_its_role_s_with_a_warning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``[daemon] startup_relaunches`` and ``[agents] finding_grace`` and ``wrap_up_lead`` are the implementer's."""
+    """``[daemon] startup_relaunches``, ``[agents] finding_grace`` (its ``end_grace``) and ``wrap_up_lead`` are the implementer's."""
     (tmp_path / 'config.toml').write_text(
         '[daemon]\nstartup_relaunches = 4\n[agents]\nfinding_grace = 5\nwrap_up_lead = 120\n'
     )
@@ -149,13 +149,23 @@ def test_the_implementer_s_timings_of_config_toml_are_its_role_s_with_a_warning(
         home = Settings(home=tmp_path)
     assert [str(w.message).split('; removed')[0] for w in warned] == [
         '`daemon.startup_relaunches` is deprecated; write `plugins.role.implementer.startup_relaunches`',
-        '`agents.finding_grace` is deprecated; write `plugins.role.implementer.finding_grace`',
+        '`agents.finding_grace` is deprecated; write `plugins.role.implementer.end_grace`',
         '`agents.wrap_up_lead` is deprecated; write `plugins.role.implementer.wrap_up_lead`',
-        'PILOOP_AGENTS__FINDING_GRACE is deprecated; set PILOOP_PLUGINS__ROLE__IMPLEMENTER__FINDING_GRACE',
+        'PILOOP_AGENTS__FINDING_GRACE is deprecated; set PILOOP_PLUGINS__ROLE__IMPLEMENTER__END_GRACE',
     ]
     assert campaign_defaults(home.plugins) == {
-        'role': {'implementer': {'startup_relaunches': 4, 'finding_grace': 'PT30S', 'wrap_up_lead': 120}}
+        'role': {'implementer': {'startup_relaunches': 4, 'end_grace': 'PT30S', 'wrap_up_lead': 120}}
     }
+
+
+def test_a_role_s_finding_grace_of_config_toml_is_its_end_grace_with_a_warning(tmp_path: Path) -> None:
+    (tmp_path / 'config.toml').write_text('[plugins.role.implementer]\nfinding_grace = 5\n')
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        home = Settings(home=tmp_path)
+    assert [str(w.message).split('; removed')[0] for w in warned] == [
+        '`plugins.role.<name>.finding_grace` is deprecated; write `plugins.role.<name>.end_grace`'
+    ]
+    assert campaign_defaults(home.plugins) == {'role': {'implementer': {'end_grace': 5}}}
 
 
 def test_a_moved_variable_source_reads_a_field_as_the_environment_does(monkeypatch: pytest.MonkeyPatch) -> None:

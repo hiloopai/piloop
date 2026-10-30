@@ -37,6 +37,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.cas.contract import CAS
+from piloop.plugins.escalation.contract import DECISION
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.contract import HARNESSES
 from piloop.plugins.host import Capability, PluginError, compose
@@ -47,6 +48,7 @@ from piloop.plugins.section.contract import SECTIONS
 from piloop.plugins.trigger.contract import TRIGGERS, Quiet
 from piloop.settings import Settings
 from tests.conftest import (
+    END_RUN,
     HARNESS_APPEND,
     RESEARCH,
     SETTLE,
@@ -114,7 +116,7 @@ def decide(db: Database, campaign: Campaign, body: str) -> None:
             Comment(
                 target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
                 author='human',
-                kind=CommentKind.DECISION,
+                kind=DECISION,
                 body=body,
             )
         )
@@ -244,8 +246,9 @@ def test_a_role_that_defines_ideas_is_told_how_many_its_sweep_may_add(
     assert reason is not None and reason.startswith('1 free implementer slots without a runnable idea')
 
 
-HARNESS_SIGNS = '#!/bin/sh\necho "$PILOOP_ACTOR" >> solve.txt\ngit commit -qam "sign"\n'
-"""Commit a tree of one's own: an agent of another role that runs at the same time makes another candidate."""
+HARNESS_SIGNS = '#!/bin/sh\necho "$PILOOP_ACTOR" >> solve.txt\ngit commit -qam "sign"\n' + END_RUN
+"""Commit a tree of one's own and end the run: an agent of another role that runs at the same time makes another
+candidate."""
 QUICK: dict[str, object] = {
     'runs': True,
     'prompt': 'quick.md',
@@ -276,6 +279,7 @@ def queue(db: Database, sched: Scheduler, campaign: Campaign) -> None:
         s.commit()
 
 
+@pytest.mark.usefixtures('daemon_api')
 def test_a_role_that_does_runs_works_with_its_own_prompt_and_its_commits_are_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -385,7 +389,7 @@ def test_a_request_for_a_role_that_piloop_toml_no_longer_has_is_refused(
 
 
 @pytest.mark.usefixtures('no_fresh_runs')
-def test_a_note_on_a_sweep_that_has_not_started_is_in_its_brief_and_is_not_sent_again(
+def test_a_message_to_a_sweep_that_has_not_started_is_in_its_brief_and_is_not_sent_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     configure(db, campaign, '#!/bin/sh\ntrue\n', watchdog={'triggers': []})
@@ -393,13 +397,15 @@ def test_a_note_on_a_sweep_that_has_not_started_is_in_its_brief_and_is_not_sent_
         s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='by hand'))
         s.flush()
         on_it = TargetRef(TargetKind.AGENT_SESSION, 1)
-        s.add(Comment(target=on_it, author='human', kind=CommentKind.NOTE, body='look at run#4 first'))
+        s.add(Comment(target=on_it, author='human', kind=CommentKind.MESSAGE, body='look at run#4 first'))
+        s.add(Comment(target=on_it, author='human', kind=CommentKind.NOTE, body='a note is on the board only'))
         s.commit()
     sched = scheduler(db, recording(runtime, []), tmp_path)
     assert run_all(sched) == [1]
     sched.wait(SETTLE)
     sched.stop(timeout=5)
-    assert '\n# Notes\nlook at run#4 first\n' in (tmp_path / 'agent_sessions' / '1' / 'brief.md').read_text()
+    brief = (tmp_path / 'agent_sessions' / '1' / 'brief.md').read_text()
+    assert '\n# Notes\nlook at run#4 first\n' in brief and 'a note is on the board only' not in brief
     with db.session() as s:
         got = in_order(s, PromptOutcome, Event.target == on_it)
         assert [(o.kind, o.comment) for _, o in got] == [('comment.delivered', 1)]

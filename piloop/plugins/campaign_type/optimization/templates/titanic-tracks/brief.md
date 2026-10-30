@@ -12,7 +12,7 @@
 - `workspace/` is shared by all implementers and kept between runs. Use it for notes, cached features and plots. It is not
   committed.
 - Commit with `git add solve.py && git commit -m "<what you did and why>"`. Every commit is scored, and the message
-  records what you tried. If the idea did not work, commit anyway, say so, and leave a `finding` comment on the idea.
+  records what you tried. If the idea did not work, commit anyway, say so, and leave a `note` on the idea.
 - Do not stop to ask questions. Decide and commit.
 
 ## Two tracks, one trunk

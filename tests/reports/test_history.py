@@ -10,14 +10,14 @@ from piloop.actor import Agent
 from piloop.config import CampaignConfig
 from piloop.db.models import AgentSession, Campaign, Comment, utcnow
 from piloop.db.session import Database
-from piloop.ids import Revision, TargetKind, TargetRef
+from piloop.ids import CommentKind, Revision, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING, IMPLEMENTER, RUN, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.campaign_type.optimization.history import FIRST_LINE_CHARS, comment_line, history, newest
 from piloop.plugins.campaign_type.optimization.section.history import History
@@ -92,7 +92,7 @@ def scored(
 
 
 def comment(s: Session, kind: TargetKind, target: int, body: str, author: str = 'implementer#1') -> None:
-    s.add(Comment(target=TargetRef(kind, target), author=author, kind=FINDING, body=body))
+    s.add(Comment(target=TargetRef(kind, target), author=author, kind=CommentKind.NOTE, body=body))
 
 
 def render(db: Database, campaign: Campaign) -> str:
@@ -168,7 +168,7 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
         '| #1 | — | 1 | — | — | ba5e11a | — | baseline |',
         '| #2 | #1 | 3 | +2 | idea#1 (research#9) | 1100000 | 234k | more lines commit |',
         '| #6 | #5 | 4 | — | idea#4 (t) | 4410000 | — | two commits commit |',
-        '### History: findings on the campaign (last 10)',
+        '### History: agent notes on the campaign (last 10)',
         '- comment#4 research#1: batch 1: extend appending (+1 lines)',
         '- comment#5 watchdog#2: idle: best is #2; try longer lines',
         '- comment#6 research#3: batch 2: nothing new worth proposing',

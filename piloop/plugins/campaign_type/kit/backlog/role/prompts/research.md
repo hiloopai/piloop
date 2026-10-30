@@ -28,7 +28,7 @@ tried before needs a new angle that the hypothesis names.
 
 ## 3. Report
 
-Write exactly one `finding` on the campaign: the ideas you added or dropped and why, the loss table's path. Ask the
+Write exactly one `note` on the campaign: the ideas you added or dropped and why, the loss table's path. Ask the
 human with one `escalation` on the campaign, never an idea.
 
 Never write `runs`, `candidates`, `measurements`, `agent_sessions` or `events`, or the status of an idea that is not

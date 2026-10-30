@@ -30,9 +30,8 @@ from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.campaign_type.kit.runs.ids import FINDING
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, Lifecycle
-from piloop.plugins.escalation.contract import Choice, Escalated, EscalationView, Never, ToHuman
+from piloop.plugins.escalation.contract import DECISION, ESCALATION, Choice, Escalated, EscalationView, Never, ToHuman
 from piloop.plugins.escalation.structured import Structured
 from piloop.plugins.executor.kit.tables import INSTANCE
 from piloop.plugins.executor.workers import Workers
@@ -183,7 +182,7 @@ def no_thread(_body: Callable[[], None]) -> Future[None]:
 def write(
     db: Database,
     campaign: Campaign,
-    kind: CommentKind = CommentKind.ESCALATION,
+    kind: CommentKind = ESCALATION,
     priority: int | None = 1,
     author: str = 'orchestrator',
 ) -> CommentId:
@@ -231,9 +230,7 @@ def configure(db: Database, campaign: Campaign, notifier: Mapping[str, object]) 
 
 def of_no_campaign(db: Database) -> CommentId:
     with db.session() as s:
-        item = Comment(
-            target=TargetRef(INSTANCE, 1), author='daemon', kind=CommentKind.ESCALATION, priority=0, body='x'
-        )
+        item = Comment(target=TargetRef(INSTANCE, 1), author='daemon', kind=ESCALATION, priority=0, body='x')
         s.add(item)
         s.commit()
         return item.id
@@ -324,9 +321,9 @@ def test_an_escalation_or_a_p0_item_that_waits_and_that_no_person_wrote_is_due(
 ) -> None:
     escalation = write(db, campaign)
     due_ones = [
-        write(db, campaign, CommentKind.DECISION, 0, 'orchestrator'),
+        write(db, campaign, DECISION, 0, 'orchestrator'),
         write(db, campaign, CommentKind.NOTE, 0, 'orchestrator via human:alice'),
-        write(db, campaign, FINDING, 0, 'not a signature #'),
+        write(db, campaign, CommentKind.NOTE, 0, 'not a signature #'),
     ]
     write(db, campaign, CommentKind.NOTE, 1)
     write(db, campaign, CommentKind.NOTE, None)
@@ -603,7 +600,7 @@ def test_piloop_s_answers_in_a_posted_thread_go_back_to_it_and_what_came_from_it
         target = TargetRef(TargetKind.COMMENT, item)
         early = s.get_one(Comment, before)
         answer = Comment(
-            target=target, in_reply_to=person_reply.id, author='orchestrator', kind=CommentKind.DECISION, body='raised'
+            target=target, in_reply_to=person_reply.id, author='orchestrator', kind=DECISION, body='raised'
         )
         note = Comment(target=target, author='daemon', kind=CommentKind.NOTE, body='the daemon says')
         on_other = Comment(target=TargetRef(TargetKind.COMMENT, early.id), author='orchestrator', body='not posted')
@@ -688,7 +685,7 @@ def test_a_button_answers_the_escalation_with_its_choice_as_the_person_who_click
     assert received(db, tracer, route, inbound(post, Choose('A'), 'C/a')) == Again(), 'a redelivery'
     with db.session() as s:
         answered = s.get_one(Comment, item)
-        [decision] = s.scalars(select(Comment).where(Comment.kind == CommentKind.DECISION)).all()
+        [decision] = s.scalars(select(Comment).where(Comment.kind == DECISION)).all()
         assert (answered.acked_by, decision.author, decision.in_reply_to, decision.body) == (
             'human:alice',
             'human:alice',
@@ -704,7 +701,7 @@ def test_a_button_answers_the_escalation_with_its_choice_as_the_person_who_click
         'Chose A: Raise it. → Runs cost more.',
     ), 'a second click records no second decision'
     with db.session() as s:
-        assert len(s.scalars(select(Comment).where(Comment.kind == CommentKind.DECISION)).all()) == 1
+        assert len(s.scalars(select(Comment).where(Comment.kind == DECISION)).all()) == 1
 
 
 def test_a_click_on_an_escalation_acknowledged_without_an_answer_records_nothing(
@@ -725,7 +722,7 @@ def test_a_click_on_an_escalation_acknowledged_without_an_answer_records_nothing
         f'comment#{item} was acknowledged already, by daemon. piloop recorded nothing.', 'daemon', None
     )
     with db.session() as s:
-        assert s.scalars(select(Comment).where(Comment.kind == CommentKind.DECISION)).all() == []
+        assert s.scalars(select(Comment).where(Comment.kind == DECISION)).all() == []
         assert list(in_order(s, NotificationReceived)) == []
 
 
@@ -945,7 +942,7 @@ def test_a_provider_decides_whether_an_escalation_reaches_a_human_and_a_broken_c
             Comment(
                 target=TargetRef(INSTANCE, 1),
                 author='daemon',
-                kind=CommentKind.ESCALATION,
+                kind=ESCALATION,
                 priority=0,
                 body='a worker is gone',
             )

@@ -37,7 +37,7 @@ def idea_add(
     from_: Annotated[
         str | None,
         cyclopts.Parameter(
-            name='--from', help='What prompted the idea, with ids or a URL. Example: "finding comment#881: …".'
+            name='--from', help='What prompted the idea, with ids or a URL. Example: "note comment#881: …".'
         ),
     ] = None,
     priority: Annotated[int, cyclopts.Parameter(help=PRIORITY_HELP)] = 2,

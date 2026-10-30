@@ -11,13 +11,14 @@ from piloop.campaign.inbox import items
 from piloop.db.events import AnomalyReported
 from piloop.db.models import Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
-from piloop.ids import CampaignStatus, CommentKind, TargetKind, TargetRef
+from piloop.ids import CampaignStatus, TargetKind, TargetRef
 from piloop.plugins.campaign_type.consumers import RolePass
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
-from piloop.plugins.campaign_type.kit.runs.controller import NO_CHANGES
+from piloop.plugins.campaign_type.kit.runs.controller import NOT_ENDED
 from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
 from piloop.plugins.campaign_type.optimization.trigger.low_yield import LowYield
 from piloop.plugins.campaign_type.optimization.yields import Found, Low, Result, Yield, asked, recent, watch
+from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.escalation.structured import Structured
 from piloop.plugins.section.contract import SECTIONS, Rendering, markdown
 from piloop.plugins.trigger.contract import Fire
@@ -40,7 +41,7 @@ def finished(db: Database, campaign: Campaign, *results: Result) -> None:
     for result in results:
         match result:
             case Result.NO_CANDIDATE:
-                add_run(db, campaign, status=RunStatus.FAILED, error=NO_CHANGES, measured=False)
+                add_run(db, campaign, status=RunStatus.FAILED, error=NOT_ENDED, measured=False)
             case Result.CRASHED:
                 add_run(db, campaign, status=RunStatus.FAILED, error='agent exit 1', measured=False)
             case Result.SKIPPED:
@@ -87,7 +88,7 @@ def watched(db: Database, campaign: Campaign, trigger: LowYield | None = None) -
 
 def escalations(db: Database) -> list[Comment]:
     with db.session() as s:
-        return list(s.scalars(select(Comment).where(Comment.kind == CommentKind.ESCALATION).order_by(Comment.id)))
+        return list(s.scalars(select(Comment).where(Comment.kind == ESCALATION).order_by(Comment.id)))
 
 
 def alarms(db: Database) -> list[str]:

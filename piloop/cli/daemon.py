@@ -76,8 +76,8 @@ def detached(address: Address | None = None) -> None:
 def stop(*, timeout: Annotated[float, cyclopts.Parameter(help='Seconds to wait for the daemon to exit.')] = 30) -> None:
     """Stop the running daemon with SIGTERM, and wait for it to exit.
 
-    The daemon kills the agents that are running, and their runs fail. A run whose implementer already left its finding is
-    finished instead: the next daemon scores its commits.
+    The daemon kills the agents that are running, and their runs fail. A run whose implementer already ran `piloop run end`
+    ends as it said instead: the next daemon scores its commits.
     """
     pid = running_pid(common.settings)
     if pid is None:

@@ -1,4 +1,4 @@
-"""The runs' routes: a run's cancel and extension."""
+"""The runs' routes: a run's cancel, extension and end."""
 
 from http import HTTPStatus
 from typing import Annotated
@@ -16,9 +16,10 @@ from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Writing, actor_access
 from piloop.db import feed as db_feed
 from piloop.db.models import AgentSession, AgentSessionState
 from piloop.net import Refusal
+from piloop.plugins.campaign_type.kit.runs import ops as runs_ops
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
-from piloop.plugins.campaign_type.kit.runs.wire import ExtendBody, Extension, RunAnswer
+from piloop.plugins.campaign_type.kit.runs.wire import EndBody, ExtendBody, Extension, RunAnswer
 
 router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUSALS_DOCUMENTED)
 """The runs' routes, beside the API's."""
@@ -32,6 +33,15 @@ def run_addressed(s: Writing, run: RunId) -> Run:
 
 
 AddressedRun = Annotated[Run, Depends(run_addressed)]
+
+
+@router.post('/runs/end', operation_id='end_run', dependencies=[Depends(actor_access)])
+def end_run(s: Writing, me: Acting, body: EndBody) -> RunAnswer:
+    """End the caller's own running run, as submitted or given up: the daemon then ends its worker."""
+    run = runs_ops.end_run(s, body.how, body.reason, actor=me)
+    s.commit()
+    with db_feed.snapshot(s) as cursor:
+        return RunAnswer(cursor=cursor, run=run.id)
 
 
 @router.post('/runs/{run}/cancel', operation_id='cancel_run', dependencies=[Depends(actor_access)])

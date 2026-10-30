@@ -74,7 +74,7 @@ class CancelRequested(EventModel):
 
     The daemon closes a requested row with its queued run. It ends a running agent with everything it started, as
     ``ending`` says. A starting agent waits until it runs, and a run whose agent then fails to start is not launched
-    again. The run ends ``cancelled`` unless its implementer left its finding, and its commits are scored. An ask
+    again. The run ends ``cancelled`` unless its worker ended it first (``piloop run end``), and its commits are scored. An ask
     (``piloop.db.requests``).
     """
 

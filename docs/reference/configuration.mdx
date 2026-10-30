@@ -323,7 +323,7 @@ With `provider = "history"`:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `budget` | integer | `1000` | The size of the section in tokens, at about 4 characters each. The ideas that do not fit are left out, and the table's title counts them. |
-| `findings` | integer | `10` | How many of the latest findings on the campaign the section lists. |
+| `findings` | integer | `10` | How many of the latest agent notes on the campaign the section lists. |
 
 With `provider = "idea_comments"`:
 
@@ -357,8 +357,8 @@ With `provider = "pack"`:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `ideas` | integer | `60` | How many of the newest ideas the history lists. `piloop history` lists as many. |
-| `campaign_findings` | integer | `10` | How many of the latest findings on the campaign the history lists. |
-| `findings` | integer | `8` | How many of the implementers' latest findings the pack lists. |
+| `campaign_findings` | integer | `10` | How many of the latest agent notes on the campaign the history lists. |
+| `findings` | integer | `8` | How many of the implementers' latest notes the pack lists. |
 | `digests` | integer | `5` | How many of the latest digests and decisions of the orchestrator and the human the pack lists. |
 | `artifacts` | integer | `12` | How many of the newest analysis artifacts (`context`) the pack outlines. |
 | `workspace` | integer | `10` | How many of the newest files of the shared workspace the pack outlines. |
@@ -542,10 +542,10 @@ scored and judged when it ends. A new role of this kind takes the implementer's 
 |---|---|---|---|
 | `timeout` | number | `1800` | The number of seconds one implementer may run before it is stopped. Its brief states it. A quarter of it before, at most `wrap_up_lead`, the daemon tells the implementer to wrap up. |
 | `max_concurrent` | integer | `4` | The maximum number of implementers that run at the same time, on all workers together. A run that is being scored after its implementer ended does not count. |
-| `writes` | list\[string\] | `["versions", "comments(finding) on your idea", "comments(note) on your run"]` | What an implementer may write, as its brief states it. It files no ideas: its hunches go in its finding, which research reads. |
+| `writes` | list\[string\] | `["versions", "comments(note) on your idea or your run"]` | What an implementer may write, as its brief states it. It files no ideas: its hunches go in its notes, which research reads. |
 | `runs` | boolean | `true` | The agents of this role do runs. A table without `runs = true` is a sweeping role. |
 | `wrap_up_lead` | duration | `"PT10M"` | How long before its `timeout` the daemon tells an implementer to wrap up, at most a quarter of the timeout. |
-| `finding_grace` | duration | `"PT1M"` | How long after its finding the daemon ends an implementer, and every process that it left: a last commit takes seconds. |
+| `end_grace` | duration | `"PT1M"` | How long after an implementer ended its run (`piloop run end`) the daemon ends it, and every process that it left: its last tool call returns first. |
 | `startup_relaunches` | integer | `2` | How many times a run is queued again with a new implementer after its implementer failed to start. Then the run fails. A failure at startup is a fault of the host or the harness, not an attempt at an idea. |
 
 ## SweepRole
@@ -590,7 +590,7 @@ name defines a new role, and needs `prompt` and `triggers`.
 | `model` | dict\[string, string\] \| null | `{"claude": "claude-opus-5-5", "codex": "gpt-6.1-sol"}` | The model for each harness in this role, over the harness's `model`. A table that you set replaces this one. |
 | `timeout` | number | `900` | The number of seconds one sweep may run before it is stopped. |
 | `max_concurrent` | integer | `1` | The maximum number of sweeps that run at the same time, each on the next harness of the rotation. The default is 1: sweeps that run at the same time read the same evidence and often duplicate each other. |
-| `writes` | list\[string\] | `["ideas via idea add, or the status of an open idea to dropped with a note", "comments(finding, escalation) on the campaign", "comments(note) on an idea"]` | What a research sweep may write, as its brief states it. |
+| `writes` | list\[string\] | `["ideas via idea add, or the status of an open idea to dropped with a note", "comments(note, escalation) on the campaign", "comments(note) on an idea"]` | What a research sweep may write, as its brief states it. |
 | `triggers` | list\[string\] | `["low_water", "stalled"]` | A short backlog, and a stall. |
 | `files` | `nothing` \| `ideas` | `"ideas"` | Research adds ideas to the board. |
 | `max_ideas` | integer | `3` | The most new ideas that one sweep may insert, best first. 0 turns `low_water` off for research. |
@@ -601,7 +601,7 @@ name defines a new role, and needs `prompt` and `triggers`.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `writes` | list\[string\] | `["comments(escalation, finding, note)", "lessons on the campaign once it stopped"]` | What a watchdog may write, as its brief states it. |
+| `writes` | list\[string\] | `["comments(escalation, note)", "lessons on the campaign once it stopped"]` | What a watchdog may write, as its brief states it. |
 | `triggers` | list\[string\] | `["run_failed", "dead_at_startup", "low_yield", "cron", "stopped"]` | A failed run, an agent dead at startup or a low yield requests an incident sweep, the timer requests a progress review when something is new, and the campaign's stop requests the closing review. |
 | `interval` | number | `1800` | The number of seconds between two progress reviews, counted from the last review. A sweep that investigates an anomaly is not a review. 0 turns the reviews off. |
 
@@ -860,14 +860,16 @@ With `provider = "local"`, the table has no other key.
 
 These keys still work. Each one shows a `PiloopDeprecationWarning` that names the file, the key, its replacement and the release that removes it. The changelog lists them too.
 
-- A `piloop.toml`'s `[agents] finding_grace` is `[plugins.role.implementer] finding_grace`. `PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE` moves the same way (`moved_env`).
+- A `piloop.toml`'s `[agents] finding_grace` is `[plugins.role.implementer] end_grace`. `PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE` moves the same way (`moved_env`).
 - `idle_alert` of a role that does runs is removed: an idea is never `proposed`, so no slot waits for a review. piloop drops it.
 - The `leaking_funnel` trigger is removed: `low_yield` does its work. piloop drops it from each role's `triggers`, and drops each `[plugins.trigger.<name>]` of it.
 - `[plugins.section.pack] seeds` is removed: there are no seeds, so the research pack lists none.
 - `takes`, `explore_every` and `recovery_requeues` are removed: the scheduler assigns no idea. Each run starts from the head, and its worker claims an idea. piloop drops the keys.
-- `files` and `plan_words` of a role that does runs are removed: its agents file no ideas and no seeds. piloop drops them. An implementer's hunch goes in its finding, which research reads.
+- `files` and `plan_words` of a role that does runs are removed: its agents file no ideas and no seeds. piloop drops them. An implementer's hunch goes in a note, which research reads.
 - `[plugins.role.scout]` is removed with the scout role: piloop drops the table, and no scout starts.
 - `files = "seeds"` is `files = "nothing"`: there are no seeds. An idea is open on the board from the start.
 - The `seed` trigger is removed: an idea is open on the board from the start, so there is no seed to develop. piloop drops it from each role's `triggers`, and drops each `[plugins.trigger.<name>]` of it.
 - `share` of a `[tracks.<name>]` is removed: workers claim any open idea, so no track has a share of the slots. piloop drops it, and drops a table that it leaves empty.
+- A role's `finding_grace` is its `end_grace`: the daemon ends a worker that grace after it ended its run.
 - In `config.toml`, `[daemon] startup_relaunches`, `[agents] finding_grace` and `wrap_up_lead` are the role's. They are keys of `[plugins.role.implementer]`, the defaults of every campaign's implementer, and their variables move the same way (`moved_env`). A role of your own that does runs gets the role's defaults, not these.
+- In `config.toml`, a role's `finding_grace` is its `end_grace`, as in `piloop.toml`.

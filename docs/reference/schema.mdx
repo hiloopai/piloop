@@ -42,9 +42,7 @@ CREATE TABLE campaigns (
 CREATE UNIQUE INDEX ix_campaigns_name ON campaigns (name) WHERE status != 'retired';
 CREATE TABLE comment_kinds (
 	id VARCHAR(16) NOT NULL,
-	after_end VARCHAR(16) DEFAULT 'kept' NOT NULL,
-	PRIMARY KEY (id),
-	CONSTRAINT afterend CHECK (after_end IN ('kept', 'refused'))
+	PRIMARY KEY (id)
 );
 CREATE TABLE limits (
 	"key" VARCHAR NOT NULL,
@@ -413,7 +411,7 @@ CREATE TABLE runs (
 	CONSTRAINT fk_runs_campaign_id_campaigns FOREIGN KEY(campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE,
 	FOREIGN KEY(idea_id) REFERENCES ideas (id) ON DELETE CASCADE,
 	CONSTRAINT runstatus CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'timed_out')),
-	CONSTRAINT runend CHECK ("end" IN ('finished', 'failed', 'timed_out', 'awaiting_answer', 'cancelled', 'campaign_stopped', 'daemon_stopped', 'stale', 'role_removed', 'not_started', 'worker_lost'))
+	CONSTRAINT runend CHECK ("end" IN ('finished', 'gave_up', 'failed', 'timed_out', 'cancelled', 'campaign_stopped', 'daemon_stopped', 'stale', 'role_removed', 'not_started', 'worker_lost'))
 );
 CREATE INDEX ix_runs_campaign_id ON runs (campaign_id);
 CREATE INDEX ix_runs_status ON runs (status);

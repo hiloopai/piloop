@@ -362,7 +362,9 @@ def test_a_package_s_comment_kind_is_checked_when_the_daemon_starts_and_one_of_p
 ) -> None:
     installed(monkeypatch, [EntryPoint('praise', f'{__name__}:Praised', COMMENT_KINDS.group)])
     check_declared()
-    assert set(COMMENT_KINDS.loaded()) == {'finding', 'praise'}, "beside the runs component's finding"
+    assert set(COMMENT_KINDS.loaded()) == {'decision', 'escalation', 'praise'}, (
+        "beside the escalation capability's kinds"
+    )
     db = Database(f'sqlite:///{tmp_path / "piloop.db"}', actor=System.DAEMON)
     migrate(db.engine, cas=disk(tmp_path), backups=0, daemon=None)
     with db.session() as s:

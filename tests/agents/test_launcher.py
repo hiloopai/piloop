@@ -244,9 +244,9 @@ def test_brief_is_role_prompt_campaign_brief_guides_then_the_context_section(cam
 - Why this agent started (context, not a scope): timer
 - piloop: `{PILOOP_HINT}` is this daemon's piloop. Run every `piloop` command of this brief with it.
 - SQL tool: `{PILOOP_HINT} sql -`, with the statement on stdin from a quoted heredoc (`<<'EOF'`).
-- You may write: comments(escalation, finding, note), lessons on the campaign once it stopped.
+- You may write: comments(escalation, note), lessons on the campaign once it stopped.
 - `{PILOOP_HINT} schema <guide>` prints another guide: links, research_commands, provenance, queries, orchestration, long_jobs, workspace.
-- A hunch worth a run of its own goes in your finding, with pointers (ids, paths, the number). You file no ideas.
+- A hunch worth a run of its own goes in a note, with pointers (ids, paths, the number). You file no ideas.
 - extra line"""
     )
 

@@ -20,7 +20,7 @@ from alembic.operations import Operations
 from sqlalchemy import text
 
 from piloop.db.models import Base
-from piloop.db.triggers import campaigns, changelog, ended, fts, immutable, links, provenance, roles
+from piloop.db.triggers import campaigns, changelog, fts, immutable, links, provenance, roles
 from piloop.db.triggers.ddl import Event, Trigger
 from piloop.db.triggers.provenance import DAEMON_ACTOR, TRACKED_TABLES
 
@@ -53,7 +53,6 @@ TEMP: tuple[Trigger, ...] = (
     *changelog.TOMBSTONES,
     *changelog.COMMENTS,
     *changelog.OUTBOX,
-    *ended.ENDED_AGENTS,
     *immutable.EVENTS,
 )
 """The triggers in ``sqlite_temp_master`` of every connection."""

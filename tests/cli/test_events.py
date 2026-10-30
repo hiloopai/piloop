@@ -24,10 +24,11 @@ from piloop.campaign import campaigns as campaign_module, ops
 from piloop.cli import common, main as cli, views as cli_views
 from piloop.db.models import Campaign, Comment, Event
 from piloop.db.session import Database
-from piloop.ids import CampaignId, CommentKind, TargetKind, TargetRef
+from piloop.ids import CampaignId, TargetKind, TargetRef
 from piloop.net.server import Server
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.escalation.contract import ESCALATION
 from piloop.settings import Settings
 
 EVENT = "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('acme', 'campaign', 1, '{}')"
@@ -113,7 +114,7 @@ def test_status_and_inbox_print_one_json_document_with_the_cursor_they_were_read
             Comment(
                 target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
                 author='watchdog#2',
-                kind=CommentKind.ESCALATION,
+                kind=ESCALATION,
                 priority=0,
                 body='a long body ' * 20,
             )

@@ -6,6 +6,7 @@ This module imports no provider: the bridges run before any provider loads.
 from pathlib import Path
 
 from piloop import deprecated
+from piloop.plugins.host import Scope
 from piloop.version import Version
 
 
@@ -29,7 +30,7 @@ RUN_ROLE_KEYS = ('files', 'plan_words')
 def run_role_ideas(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """``files`` and ``plan_words`` of a role that does runs are removed: its agents file no ideas and no seeds.
 
-    piloop drops them. An implementer's hunch goes in its finding, which research reads.
+    piloop drops them. An implementer's hunch goes in a note, which research reads.
     """
     from piloop.plugins.role.contract import ROLES, ImplementerRole  # here: a bridges module imports no provider
 
@@ -104,3 +105,26 @@ def run_role_assignment(toml: Path, raw: dict[str, object], removed_in: Version)
                 removed_in=removed_in,
                 nth=deprecated.nth(toml, f'plugins.role.{name}', key),
             )
+
+
+END_GRACE = deprecated.Move('plugins.role.*.finding_grace', 'plugins.role.*.end_grace')
+"""``finding_grace`` of a role that does runs, as its ``end_grace``: a finding ends no run now."""
+
+
+@deprecated.bridge(
+    '0.7.0', 'finding_grace is end_grace: delete end_grace and END_GRACE', after=('campaign_finding_grace',)
+)
+def end_grace(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """A role's ``finding_grace`` is its ``end_grace``: the daemon ends a worker that grace after it ended its run."""
+    deprecated.move_keys(toml, raw, END_GRACE, removed_in)
+
+
+@deprecated.bridge(
+    '0.7.0',
+    'finding_grace is end_grace in config.toml too: delete home_end_grace',
+    Scope.HOME,
+    after=('implementer_timings',),
+)
+def home_end_grace(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """In ``config.toml``, a role's ``finding_grace`` is its ``end_grace``, as in ``piloop.toml``."""
+    deprecated.move_keys(toml, raw, END_GRACE, removed_in)

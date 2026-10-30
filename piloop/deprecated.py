@@ -299,7 +299,7 @@ def table_at(raw: dict[str, object], *path: str) -> dict[str, object] | None:
 
 IMPLEMENTER_TIMINGS = (
     Move('daemon.startup_relaunches', 'plugins.role.implementer.startup_relaunches'),
-    Move('agents.finding_grace', 'plugins.role.implementer.finding_grace'),
+    Move('agents.finding_grace', 'plugins.role.implementer.end_grace'),
     Move('agents.wrap_up_lead', 'plugins.role.implementer.wrap_up_lead'),
 )
 """The implementer's timings of ``config.toml``, as the defaults of its role in every campaign of the home."""
@@ -322,7 +322,7 @@ def implementer_timings(toml: Path, raw: dict[str, object], removed_in: Version)
         move_keys(toml, raw, move, removed_in)
 
 
-CAMPAIGN_FINDING_GRACE = (Move('agents.finding_grace', 'plugins.role.implementer.finding_grace'),)
+CAMPAIGN_FINDING_GRACE = (Move('agents.finding_grace', 'plugins.role.implementer.end_grace'),)
 """A campaign's ``[agents] finding_grace``, as its implementer's."""
 
 
@@ -332,7 +332,7 @@ CAMPAIGN_FINDING_GRACE = (Move('agents.finding_grace', 'plugins.role.implementer
     env=CAMPAIGN_FINDING_GRACE,
 )
 def campaign_finding_grace(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """A ``piloop.toml``'s ``[agents] finding_grace`` is ``[plugins.role.implementer] finding_grace``.
+    """A ``piloop.toml``'s ``[agents] finding_grace`` is ``[plugins.role.implementer] end_grace``.
 
     ``PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE`` moves the same way (``moved_env``).
     """

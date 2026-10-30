@@ -1,11 +1,14 @@
 """The mechanism of escalations: file one with its form, and answer one with a choice. The policy is a provider's.
 
+The kinds ``escalation`` and ``decision`` are declared here (``EscalationWritten``, ``DecisionWritten``), not by core.
+
 ``[plugins.escalation]`` of the campaign's ``piloop.toml`` chooses the provider (``piloop.plugins.escalation``). It
 checks the form, writes its plain text, says when it reaches a human, and how it shows. Core stores the form on the
 comment (``comments.form``) and never reads it.
 """
 
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import JsonValue, ValidationError
 from sqlalchemy import literal, select
@@ -14,8 +17,28 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor, System
 from piloop.campaign.inbox import ack, campaign_of, root_of
 from piloop.db.models import Campaign, Comment
-from piloop.ids import CampaignId, CommentId, CommentKind, TargetKind, TargetRef
-from piloop.plugins.escalation.contract import ESCALATIONS, Escalated, EscalationPolicy, EscalationView
+from piloop.db.triggers.changelog import Commented
+from piloop.ids import CampaignId, CommentId, TargetKind, TargetRef
+from piloop.plugins.escalation.contract import (
+    DECISION,
+    ESCALATION,
+    ESCALATIONS,
+    Escalated,
+    EscalationPolicy,
+    EscalationView,
+)
+
+
+class EscalationWritten(Commented):
+    """An escalation was filed."""
+
+    kind: Literal['comment.escalation'] = 'comment.escalation'
+
+
+class DecisionWritten(Commented):
+    """A decision was written."""
+
+    kind: Literal['comment.decision'] = 'comment.decision'
 
 
 class Refused(Exception):
@@ -72,9 +95,7 @@ def escalate(s: Session, target: TargetRef, asked: Asked, *, author: Actor, prio
             fix.
     """
     form, body = _drafted(s, target, asked)
-    comment = Comment(
-        target=target, author=author.signature, kind=CommentKind.ESCALATION, priority=priority, body=body, form=form
-    )
+    comment = Comment(target=target, author=author.signature, kind=ESCALATION, priority=priority, body=body, form=form)
     s.add(comment)
     s.flush()
     return comment
@@ -83,9 +104,7 @@ def escalate(s: Session, target: TargetRef, asked: Asked, *, author: Actor, prio
 def escalate_once(s: Session, target: TargetRef, asked: EscalationView, *, priority: int) -> Comment | None:
     """File piloop's own escalation on ``target``, unless one on it says the same already: None then. The caller commits."""
     form, body = _drafted(s, target, asked)
-    said = select(Comment.id).where(
-        Comment.target == target, Comment.kind == CommentKind.ESCALATION, Comment.body == body
-    )
+    said = select(Comment.id).where(Comment.target == target, Comment.kind == ESCALATION, Comment.body == body)
     if s.scalar(said.limit(1)) is not None:
         return None
     return escalate(s, target, asked, author=System.DAEMON, priority=priority)
@@ -125,7 +144,7 @@ class Settled:
 
 def settled(s: Session, item: Comment) -> Settled | None:
     """Whether ``item`` has a ``decision`` reply, or an acknowledgement: then a choice would be a second answer."""
-    latest = select(Comment).where(Comment.in_reply_to == item.id, Comment.kind == CommentKind.DECISION)
+    latest = select(Comment).where(Comment.in_reply_to == item.id, Comment.kind == DECISION)
     if (decision := s.scalars(latest.order_by(Comment.id.desc()).limit(1)).first()) is not None:
         return Settled(decision.author, decision.body)
     if item.acked_by is not None:
@@ -143,7 +162,7 @@ def choose(s: Session, comment_id: CommentId, choice: str, *, author: Actor) -> 
         Refused: The comment is no escalation, or it offers no such choice.
     """
     item = s.get_one(Comment, comment_id)
-    if item.kind != CommentKind.ESCALATION:
+    if item.kind != ESCALATION:
         raise Refused(f'comment#{comment_id} is a {item.kind}, not an escalation: answer it with `piloop inbox reply`')
     found = escalated(s, item)
     if found.form is None:
@@ -158,7 +177,7 @@ def choose(s: Session, comment_id: CommentId, choice: str, *, author: Actor) -> 
         target=TargetRef(TargetKind.COMMENT, root_of(s, item).id),
         in_reply_to=item.id,
         author=author.signature,
-        kind=CommentKind.DECISION,
+        kind=DECISION,
         priority=DECISION_PRIORITY,
         body=text,
     )

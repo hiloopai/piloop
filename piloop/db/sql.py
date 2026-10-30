@@ -201,7 +201,7 @@ def install_actor(con: sqlite3.Connection, actor: Actor) -> None:
     """Make every UPDATE through ``con`` record ``actor`` in ``updated_by``, and log tracked changes in ``events``.
 
     It creates a TEMP table and TEMP triggers, for this connection only. An agent's connection also records its agent
-    session, so that a finding after its end is refused (``piloop.db.triggers.ended``).
+    session.
     """
     con.executescript(declared().actor_sql)
     sign(con, actor)

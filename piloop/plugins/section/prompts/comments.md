@@ -1,6 +1,6 @@
 - `INSERT INTO comments (target_kind, target_id, author, kind, body)`, piped into `piloop sql -`.
 - Refer to other rows in the body as `idea#12`, `run#7`, `candidate#30`.
-- Kinds: `note`, `finding`, `decision`. A lesson is a row of `lessons` ("Remember past campaigns").
+- Kinds: `note`, `message`, `decision`. A lesson is a row of `lessons` ("Remember past campaigns").
 - Every comment also inserts a `comment.<kind>` event (a trigger).
 - A comment on an idea, or on any of its runs, goes into the brief of the idea's next run.
 - A brief shows other comments by id and first line, so put the gist in the first line. `SELECT body FROM comments

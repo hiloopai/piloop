@@ -126,12 +126,10 @@ class CommentKind(str):
     __slots__ = ()
 
     NOTE: ClassVar[CommentKind]
-    DECISION: ClassVar[CommentKind]
-    ESCALATION: ClassVar[CommentKind]
-    """Asks for a decision, and is always in the human's inbox."""
+    """On the board: on an idea, a run or a candidate, for whoever reads it. The daemon sends it to no one."""
     MESSAGE: ClassVar[CommentKind]
-    """Someone's word to the orchestrator on a campaign (``piloop message``). The orchestrator answers it with
-    ``piloop inbox reply``."""
+    """To someone: on an agent, or on a run or its idea, the daemon sends it to the running agent (``piloop prompt``);
+    on a campaign, it is for the orchestrator (``piloop message``), who answers it with ``piloop inbox reply``."""
 
     @classmethod
     def __get_pydantic_core_schema__(cls, _source: object, _handler: GetCoreSchemaHandler) -> CoreSchema:
@@ -139,12 +137,8 @@ class CommentKind(str):
 
 
 CommentKind.NOTE = CommentKind('note')
-CommentKind.DECISION = CommentKind('decision')
-CommentKind.ESCALATION = CommentKind('escalation')
 CommentKind.MESSAGE = CommentKind('message')
-CORE_COMMENT_KINDS: Final = frozenset(
-    {CommentKind.NOTE, CommentKind.DECISION, CommentKind.ESCALATION, CommentKind.MESSAGE}
-)
+CORE_COMMENT_KINDS: Final = frozenset({CommentKind.NOTE, CommentKind.MESSAGE})
 """Core's comment kinds. A plugin's kind takes none of their names."""
 
 

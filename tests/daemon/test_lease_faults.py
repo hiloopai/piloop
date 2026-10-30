@@ -54,6 +54,7 @@ from tests.conftest import (
     ScriptRuntime,
     at_head,
     baseline,
+    end,
     factory,
     register,
     serving,
@@ -385,6 +386,7 @@ def test_a_daemon_killed_during_a_run_keeps_the_lease_and_the_next_daemon_finish
     thread.join(30)
     scheduler = next_daemon(db, tmp_path)
     scheduler.reap()
+    end(db, run_id)
     hold.unlink()
     scheduler.wait(SETTLE)
     run = run_row(db, run_id)
@@ -429,6 +431,7 @@ def test_a_real_daemon_killed_during_a_run_is_followed_by_one_that_finishes_it_o
         with (tmp_path / 'second.log').open('w') as log:
             daemons.append(subprocess.Popen(SERVE_ARGV, stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env))
         wait_until(lambda: 'agent_session.reattached' in (tmp_path / 'second.log').read_text(), timeout=60)
+        end(db, RunId(1))
         hold.unlink()
         wait_until(
             lambda: run_row(db, RunId(1)).status is RunStatus.SUCCEEDED and not run_row(db, RunId(1)).scoring,

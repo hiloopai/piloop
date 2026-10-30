@@ -1,6 +1,8 @@
 """The escalation capability: what an escalation holds, who sees it when, and how every surface shows it.
 
-Core keeps the mechanism: an escalation is a comment of kind ``escalation``, its typed payload is ``comments.form``,
+Core keeps the mechanism: an escalation is a comment of kind ``escalation`` (``ESCALATION``), and its answer one of
+kind ``decision`` (``DECISION``): kinds that ``piloop.campaign.escalations`` declares. Its typed payload is
+``comments.form``,
 ``piloop escalate`` files one, and ``piloop inbox choose`` answers one with a choice. Everything else is a provider's
 policy: the fields of the form and their limits (``form``), when it reaches a human (``reach``), and the view that
 the notifiers, ``piloop inbox show`` and the API render (``view``). ``[plugins.escalation]`` in ``piloop.toml``
@@ -10,11 +12,20 @@ chooses the provider of a campaign: ``structured`` by default.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
-from piloop.ids import CampaignId, CommentId
+from piloop.ids import CampaignId, CommentId, CommentKind
 from piloop.plugins.host import Capability, One, Parameters, Scope
+
+# TODO: core still special-cases these kinds: the inbox, the news trigger, the notifiers, the inbox section, the API's
+# thread view, and the comments CHECK that an escalation has a priority. Those special cases are deleted when the
+# escalation plugin owns its event models and its inbox rules.
+ESCALATION: Final = CommentKind('escalation')
+"""Asks for a decision (``piloop escalate``), and is always in the human's inbox, with a priority."""
+DECISION: Final = CommentKind('decision')
+"""A decision for the human: the orchestrator's, a choice of an escalation (``piloop inbox choose``), or a reply."""
 
 
 class Choice(BaseModel):
