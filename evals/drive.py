@@ -36,6 +36,8 @@ SEALED = f'{PILOOP_HOME}/sealed'
 OUT = f'{WORK}/out'
 SESSIONS = {'claude': '/root/.claude/projects', 'codex': '/root/.codex/sessions'}
 VENDORS = {'claude': 'anthropic', 'codex': 'openai'}
+HALT = 'halt'
+"""A file in a run's directory that stops it at the next sample, with its text as the reason."""
 BASE_DATE = '2026-01-01T00:00:00Z'
 """The date of the starting commit, so that every arm starts from the same commit id."""
 PLAIN_PROMPT = """You work alone in this repository, and no one will answer questions. Read brief.md and do the task.
@@ -282,6 +284,7 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
                 settings, img, cpu=r.cpu, memory_mb=r.memory_mb, hours=hours + 1, network=True, env=env, run=name
             )
         span.set_attribute('modal.sandbox', box.sandbox.object_id)
+        (out / 'sandbox').write_text(box.sandbox.object_id)
         try:
             with tracer.start_as_current_span('evals.prepare'):
                 base = prepare(box, task)
@@ -329,7 +332,10 @@ def watch(
     log: Path,
     started: float,
 ) -> str:
-    """Sample the spend into ``log`` until the budget, the hours or the run's own end, then stop the run. Why."""
+    """Sample the spend into ``log`` until a stop, then stop the run. Why it stopped.
+
+    A stop is a ``HALT`` file beside ``log``, the budget, the hours, or the run's own end.
+    """
     stopped = ''
     with log.open('w') as f:
 
@@ -343,7 +349,10 @@ def watch(
 
         while not stopped:
             now = record()
-            if now.usd >= budget:
+            halt = log.parent / HALT
+            if halt.exists():
+                stopped = f'halted: {halt.read_text().strip()}'
+            elif now.usd >= budget:
                 stopped = 'budget'
             elif now.hours >= hours:
                 stopped = 'hours'

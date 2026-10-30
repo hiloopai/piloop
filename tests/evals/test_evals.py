@@ -2,6 +2,8 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
@@ -10,7 +12,7 @@ import pytest
 from pydantic import JsonValue, SecretStr
 
 from evals import meter
-from evals.drive import piloop_config, price
+from evals.drive import HALT, piloop_config, price
 from evals.metrics import at, result
 from evals.model import (
     ARMS,
@@ -28,6 +30,7 @@ from evals.model import (
     Task,
     load_arm,
 )
+from evals.pilot import guard, spent
 from evals.report import write
 from evals.score import Score
 from evals.telemetry import exported
@@ -206,3 +209,28 @@ def test_campaign_sealed_scores_the_checkout_on_the_split(tmp_path: Path, monkey
     (checkout / 'packing.py').write_text('def pack(n):\n    return [(0.5, 0.5, 0.6)] * n\n')
     assert campaign_sealed.main(TASKS / 't2-circles', sealed, 'higher')['status'] == 'crash'
     assert campaign_sealed.main(TASKS / 't2-circles', sealed, 'lower')['status'] == 'crash'
+
+
+def test_the_guard_halts_every_unfinished_run_at_the_ceiling(tmp_path: Path):
+    settings = Settings(results=tmp_path, poll_seconds=0.01)
+    for name, usd, finished in (('a-1', 400, True), ('b-1', 700, False)):
+        run = tmp_path / 't' / name
+        run.mkdir(parents=True)
+        (run / 'spend.jsonl').write_text(Sample(hours=1, models_usd=usd, compute_usd=0).model_dump_json())
+        if finished:
+            (run / 'run.json').write_text('{}')
+    assert spent(settings) == 1100
+    done = threading.Event()
+    watcher = threading.Thread(target=guard, args=(settings, 1000, done))
+    watcher.start()
+    halt = tmp_path / 't' / 'b-1' / HALT
+    try:
+        for _ in range(500):
+            if halt.exists():
+                break
+            time.sleep(0.01)
+    finally:
+        done.set()
+        watcher.join()
+    assert 'ceiling of $1000' in halt.read_text()
+    assert not (tmp_path / 't' / 'a-1' / HALT).exists()

@@ -1,16 +1,14 @@
 """``uv run python -m evals``: run an arm on a task, score a run, and write the report."""
 
-import json
 from pathlib import Path
 
 from cyclopts import App
 from rich.console import Console
 
 from evals.drive import drive
-from evals.metrics import heads_of, result
 from evals.model import Result, Settings, Task, load_arm
+from evals.pilot import pilot as run_pilot, scored
 from evals.report import write
-from evals.score import Score, score
 from evals.telemetry import traced
 
 app = App(help=__doc__)
@@ -45,17 +43,38 @@ def rescore(run: Path) -> None:
         scored(run, settings)
 
 
-def scored(run: Path, settings: Settings) -> None:
-    """Score what ``run`` has not scored yet, and write its ``result.json``."""
-    meta = json.loads((run / 'run.json').read_text())
-    task = Task.load(meta['task'])
-    known = run / 'scores.json'
-    scores = {k: Score.model_validate(v) for k, v in json.loads(known.read_text()).items()} if known.exists() else {}
-    wanted = [rev for rev, _ in heads_of(run) if rev not in scores]
-    if wanted or meta['base'] not in scores:
-        scores |= score(task, run / 'export' / 'out' / 'repo.bundle', meta['base'], wanted, settings)
-        known.write_text(json.dumps({k: v.model_dump() for k, v in scores.items()}, indent=2))
-    (run / 'result.json').write_text(result(run, scores).model_dump_json(indent=2))
+@app.command
+def pilot(
+    tasks: list[str],
+    *,
+    arms: list[str],
+    budget: float = 60,
+    hours: float = 4,
+    concurrency: int = 10,
+    ceiling: float = 1000,
+) -> None:
+    """Run many arms on many tasks from this one process, under one $ ceiling for all of them.
+
+    Args:
+        tasks: Directories of ``tasks/``.
+        arms: ``<arm>=<repeats>``, each arm a file of ``arms/`` or the path of an arm's file.
+        budget: The cap of each run on models plus compute, in USD.
+        hours: The cap of each run on wall-clock time.
+        concurrency: How many runs go at once.
+        ceiling: The cap on the spend of all runs together: at it, every run still going stops.
+    """
+    settings = Settings()
+    plan = [(load_arm(name), int(n)) for name, _, n in (a.partition('=') for a in arms)]
+    with traced(settings):
+        run_pilot(
+            [Task.load(t) for t in tasks],
+            plan,
+            budget=budget,
+            hours=hours,
+            concurrency=concurrency,
+            ceiling=ceiling,
+            settings=settings,
+        )
 
 
 @app.command
