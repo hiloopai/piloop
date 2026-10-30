@@ -208,7 +208,9 @@ the run: the idea is `done` after a finished run with a verdict, and `open` agai
 ### Run ends and messages
 
 An implementer ends its run itself, with `piloop run end submitted` or `piloop run end gave_up --reason '…'`. The
-daemon ends it `end_grace` later. A run that ends without it fails.
+daemon ends it `end_grace` later. A run that ends without it fails, except in a campaign that keeps 0.5's
+`scoring = "run_end"`: there an implementer that committed and exits cleanly finishes its run, as in 0.5, so a run in
+flight at the upgrade, whose brief never named the verb, still finishes.
 
 - The `finding` kind is removed: a worker reports in a `note` on its idea, and a sweep in a `note` on the campaign.
   Old findings stay readable with `piloop sql`. A note ends no run.

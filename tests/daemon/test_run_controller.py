@@ -52,6 +52,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, 
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference, resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import jobs as evaluation_jobs, queue
+from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import CHANGED_INPUTS
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.jobs import INPUTS_CHANGED
@@ -1510,7 +1511,7 @@ def test_a_relaunched_implementer_signs_as_itself_and_its_run_end_without_a_comm
 
 @pytest.mark.usefixtures('daemon_api')
 @pytest.mark.parametrize(
-    ('work', 'ended'), [('commit', RunStatus.FAILED), ('note', RunStatus.FAILED), ('end', RunStatus.SUCCEEDED)]
+    ('work', 'ended'), [('commit', RunStatus.SUCCEEDED), ('note', RunStatus.FAILED), ('end', RunStatus.SUCCEEDED)]
 )
 def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it_committed_wrote_or_ended_its_run(
     db: Database,
@@ -1524,7 +1525,8 @@ def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it
     """An implementer whose tokens are unknown is not a startup death when it committed, wrote a comment, or ended its run.
 
     The runtime may report no session for an implementer, so its tokens cannot be read. Work done within the startup window
-    proves that it started. Only the run's end makes the run a success.
+    proves that it started. Its run is a success when it ended it, or, in a campaign that scores every version after the
+    run as this one does, when it committed and exited cleanly.
     """
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))  # no session file: the tokens are unknown
     run_id = make_run(db, campaign)
@@ -1629,6 +1631,7 @@ GAVE_UP = RunEndRequested(how=RunEnding.GAVE_UP, reason='the window does not fit
         pytest.param(RunFacts(timed_out=True, error=TIMEOUT), (RunEnd.TIMED_OUT, TIMEOUT), id='timeout'),
         pytest.param(RunFacts(error='implementer exit 1'), (RunEnd.FAILED, 'implementer exit 1'), id='error'),
         pytest.param(RunFacts(unsaved='refused'), (RunEnd.FAILED, f'{UNSAVED}: refused'), id='unsaved'),
+        pytest.param(RunFacts(scoring=Scoring.RUN_END, committed=True), (RunEnd.FINISHED, None), id='run-end-scoring'),
         pytest.param(RunFacts(), (RunEnd.FAILED, NOT_ENDED), id='not-ended'),
         # the overlaps that fix the order: each pair of neighbouring rows, and a run that ends after its worker ended it
         pytest.param(RunFacts(ending=SUBMITTED, ended=True), (RunEnd.FINISHED, None), id='submitted-stop'),
@@ -1651,6 +1654,13 @@ GAVE_UP = RunEndRequested(how=RunEnding.GAVE_UP, reason='the window does not fit
             (RunEnd.FAILED, 'implementer exit 1'),
             id='error-unsaved',
         ),
+        pytest.param(
+            RunFacts(unsaved='refused', scoring=Scoring.RUN_END, committed=True),
+            (RunEnd.FAILED, f'{UNSAVED}: refused'),
+            id='unsaved-run-end-scoring',
+        ),
+        pytest.param(RunFacts(scoring=Scoring.RUN_END), (RunEnd.FAILED, NOT_ENDED), id='run-end-scoring-no-commit'),
+        pytest.param(RunFacts(committed=True), (RunEnd.FAILED, NOT_ENDED), id='submit-scoring-commit'),
     ],
 )
 def test_how_a_run_ended_is_the_first_row_that_holds(facts: RunFacts, expected: tuple[RunEnd, str | None]) -> None:

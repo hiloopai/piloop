@@ -69,7 +69,8 @@ piloop run end gave_up --reason "the order-3 model does not fit in memory"
 ```
 
 A minute later (`end_grace`), the daemon ends the implementer. The run also ends at its `timeout`. An implementer
-that exits without `piloop run end` fails its run. To give it more time, use [`piloop run extend`](/reference/cli#piloop-run-extend). Then the daemon scores each new commit. What the implementer left uncommitted becomes a `recovered` commit, which is never measured.
+that exits without `piloop run end` fails its run, unless its campaign scores every version after the run
+(`[evaluator] scoring = "run_end"`) and it committed: then the run finishes. To give it more time, use [`piloop run extend`](/reference/cli#piloop-run-extend). Then the daemon scores each new commit. What the implementer left uncommitted becomes a `recovered` commit, which is never measured.
 If git refuses that commit, the run fails, and an `agent_session.work_unsaved` event holds the changes as a patch.
 Restore them in a checkout of the implementer's last commit with `piloop cas get <blob> | git apply`.
 

@@ -587,6 +587,7 @@ class RunController:
             )
             cancelled = run_cancel(s, run_id) is not None
             unsaved = latest(s, WorkUnsaved, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
+            scoring = s.get_one(Run, run_id).campaign.config.evaluator.scoring
         facts = RunFacts(
             ending=ending,
             ended=stop_ended is not None,
@@ -594,6 +595,8 @@ class RunController:
             timed_out=outcome.status is ExitStatus.TIMED_OUT,
             error=outcome.error,
             unsaved=unsaved[1].error if unsaved is not None else None,
+            scoring=scoring,
+            committed=any(not v.recovered for v in versions),
         )
         end, error = run_outcome(facts)
         self._close(span, run_id, end, error)
@@ -1658,6 +1661,10 @@ class RunFacts:
     """How the implementer's process failed, a timeout included."""
     unsaved: str | None = None
     """Why the save of what the implementer left unsaved failed (``WorkUnsaved``)."""
+    scoring: Scoring = Scoring.SUBMIT
+    """How its campaign scores its runs (``[evaluator] scoring``): only a run of ``submit`` ends with the verb."""
+    committed: bool = False
+    """It saved a version of its own, not only what it left unsaved (``Version.recovered``)."""
 
 
 def run_outcome(facts: RunFacts) -> tuple[RunEnd, str | None]:
@@ -1683,6 +1690,10 @@ def run_outcome(facts: RunFacts) -> tuple[RunEnd, str | None]:
         # What it left unsaved is only in the CAS.
         case RunFacts(unsaved=str() as error):
             return RunEnd.FAILED, f'{UNSAVED}: {error}'
+        # A campaign that scores every version after the run, as 0.5 did: a clean exit after a commit ends the run, as it
+        # did then.
+        case RunFacts(scoring=Scoring.RUN_END, committed=True):
+            return RunEnd.FINISHED, None
         # It stopped without ending its run.
         case _:
             return RunEnd.FAILED, NOT_ENDED

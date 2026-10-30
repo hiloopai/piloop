@@ -34,7 +34,7 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, KIND, EvaluationJob
 from piloop.plugins.campaign_type.kit.evaluation.measure import request_remeasure
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.controller import NOT_ENDED, RunController
+from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.executor.contract import (
     EXECUTORS,
@@ -360,7 +360,9 @@ def test_a_job_that_the_daemon_queues_names_no_path_under_its_home(
         jobs = [read_job(disk(home), lease.id, lease.job_cid) for lease in s.scalars(select(Lease).order_by(Lease.id))]
     assert {job.kind for job in jobs} == {'agent', 'evaluation'}
     run = run_row(db, run_id)
-    assert (run.status, run.error) == (RunStatus.FAILED, NOT_ENDED), 'it ran to its end, which its worker did not ask'
+    assert (run.status, run.error) == (RunStatus.SUCCEEDED, None), (
+        'it committed and exited, and its campaign scores at run end'
+    )
     assert (home / 'runs' / str(run_id) / 'transcript.txt').is_file()
     for job in jobs:
         dumped = JOB.dump_python(job, mode='json')
