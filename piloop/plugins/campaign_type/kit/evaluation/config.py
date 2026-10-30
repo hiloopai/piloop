@@ -22,10 +22,9 @@ class Scoring(StrEnum):
     """Those that the implementer submits while it works (``piloop submit``), each as it comes. The others are
     ``skipped``."""
     RUN_END = 'run_end'
-    """Every version, after the run ends.
+    """Every version, after the run ends: 0.5's scoring, which the upgrade pins on the campaigns that 0.5 stored.
 
-    Kept for the eval suite's arm that turns in-run scoring off (A1): deleted, with ``_score_each`` and the trailers
-    that only it reads, once that ablation reads out.
+    It goes with the other 0.5 bridges: its ``deprecated.until`` marker is in ``RunController._score``.
     """
 
 

@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, undefer
 
+from piloop import deprecated
 from piloop.actor import Actor, Agent, System
 from piloop.agents.launcher import Launcher
 from piloop.agents.results import (
@@ -901,6 +902,11 @@ class RunController:
             case Scoring.SUBMIT:
                 return self._unsubmitted(run_id, campaign_id, repo, versions)
             case Scoring.RUN_END:
+                deprecated.until(
+                    '0.7.0',
+                    "0.5's scoring: delete Scoring.RUN_END, _score_each and the trailers that only it reads, and a"
+                    ' revision that sets scoring = "submit" where 0078 pinned run_end',
+                )
                 return self._score_each(run_id, campaign_id, repo, versions, log_dir)
             case never:
                 assert_never(never)

@@ -252,7 +252,8 @@ its `piloop.toml` did not set them. The repo's `piloop.toml` is not changed, so 
 piloop campaign sync enwik8
 ```
 
-To keep 0.5's scoring through a sync, put the old values in its `piloop.toml`:
+To keep 0.5's scoring through a sync, put the old values in its `piloop.toml`. `scoring = "run_end"` works until
+0.7.0:
 
 ```toml
 [evaluator]

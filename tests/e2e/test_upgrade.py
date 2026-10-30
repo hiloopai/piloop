@@ -50,14 +50,51 @@ pytestmark = pytest.mark.e2e
 RELEASE = '0.4.0'
 RELEASE_HEAD = '0067'
 """The schema revision of core that ``RELEASE`` shipped."""
-RENAMES = Renames(columns={'agent_sessions.run_id': 'subject_id', 'leases.evaluation_id': 'job_id'})
+IDEA_STATES = {
+    'seed': 'open',
+    'proposed': 'open',
+    'ready': 'open',
+    'scheduled': 'claimed',
+    'done': 'done',
+    'parked': 'dropped',
+    'rejected': 'dropped',
+}
+RENAMES = Renames(
+    columns={'agent_sessions.run_id': 'subject_id', 'leases.evaluation_id': 'job_id'},
+    values={('ideas', 'status', old): new for old, new in IDEA_STATES.items()},
+)
 """The renames since ``RELEASE`` that the upgrading guide documents: ``agent_sessions.run_id`` (0070), with
-``subject_kind`` beside it, and ``leases.evaluation_id`` (0073), with the lease's ``kind`` and its ``runner`` beside it. A
-rename of a later release goes here."""
-CONFIG_REWRITES = ('agents', 'agents.*', 'plugins.role.implementer.finding_grace')
+``subject_kind`` beside it, ``leases.evaluation_id`` (0073), with the lease's ``kind`` and its ``runner`` beside it, and
+the idea states, which optimization revision 0005 maps onto the board. A rename of a later release goes here."""
+DROPPED = {'ideas.family', 'ideas.harness', 'ideas.base_candidate_id', 'ideas.max_runs', 'runs.branch'}
+"""The columns that the upgrading guide documents as removed: an idea's family (optimization 0005), what assigned it
+to a run (0006), and branch runs (0008)."""
+CONFIG_REWRITES = (
+    'agents',
+    'agents.*',
+    'plugins.role.implementer.finding_grace',
+    'plugins.role.implementer.end_grace',
+    'plugins.trigger.*',
+    'plugins.role.*.triggers',
+    'plugins.role.*.idle_alert',
+    'plugins.role.*.files',
+    'plugins.section.pack.seeds',
+    'plugins.role.*.takes',
+    'plugins.role.*.explore_every',
+    'plugins.role.*.recovery_requeues',
+    'tracks.*.share',
+    'evaluator',
+    'evaluator.scoring',
+    'evaluator.noise_runs',
+    'plugins.verdict_rule',
+    'plugins.verdict_rule.provider',
+)
 """The keys of the stored ``piloop.toml`` that a migration may change, as patterns: revision 0072 drops the null keys of
-``agents`` that the release stored, and moves ``agents.finding_grace`` to the implementer's. The keys that a later
-``piloop init`` stores again, such as each role's defaults, are not a migration's."""
+``agents`` that the release stored, and moves ``agents.finding_grace`` to the implementer's, which 0077 renames
+``end_grace``. 0075 drops the seed trigger and the keys that filed seeds, 0076 the keys that assigned ideas, and 0078
+pins 0.5's scoring. The keys that a later ``piloop init`` stores again, such as each role's defaults, are not a
+migration's."""
+
 QUEUE = re.compile(r'evaluations#\d+: |home/runs/\d+/eval-\d+/')
 """The evaluation queue, rows and worktrees: a daemon's start empties it, and what still needs a measurement asks
 again (``Scheduler.reap``)."""
@@ -392,7 +429,7 @@ def test_nothing_of_the_release_is_lost(upgrade: Upgrade) -> None:
     assert unexpected == [], '\n'.join(map(str, unexpected))
     live = live_dirs(before)  # an agent at work changes its own directories, and they go when it ends
     files = [f for f in found.files if not any(f'/{n}/' in f or f'-{n.replace("/", "-")}-' in f for n in live)]
-    lost = [d for d in found.lost() if d not in found.files] + files
+    lost = [d for d in found.lost() if d not in found.files and d not in DROPPED] + files
     lost = [d for d in lost if not QUEUE.match(d)]
     assert lost == [], '\n'.join(lost)
     candidates = {r['revision'] for r in before.tables['candidates']}
