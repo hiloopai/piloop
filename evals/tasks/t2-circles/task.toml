@@ -1,0 +1,17 @@
+name = "t2-circles"
+metric = "sum_radii"
+direction = "higher"
+dev = ["uv", "run", "python", "evaluate.py"]
+dev_base = 2.1666666644999997            # the square grid of the starting packing.py
+dev_ref = 2.63598                        # the best known sum of radii at n = 26
+
+[piloop]
+name = "t2-circles"
+evaluate = ["uv", "run", "python", "evaluate.py"]
+evaluate_timeout = 600
+link = [".venv"]
+
+[[piloop.metrics]]
+name = "sum_radii"
+direction = "higher"
+role = "primary"

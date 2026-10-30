@@ -1,0 +1,10 @@
+# piloop v0 with the always-on lead. `piloop` names the commit of main under test: pin it before a run.
+# TODO: set the lead's keys in `overlay` once v0's lead role is on main; until then this runs main's defaults.
+kind = "piloop"
+name = "piloop-v0"
+piloop = "piloop[modal] @ git+https://github.com/hiloopai/piloop@main"
+agents = [
+    { harness = "codex", model = "gpt-6-astra" },
+    { harness = "claude", model = "claude-opus-5-5" },
+]
+resources = { cpu = 8, memory_mb = 16384 }

@@ -1,0 +1,31 @@
+name = "t1-enwik8"
+metric = "bytes"
+direction = "lower"
+dev = ["uv", "run", "python", "evaluate.py"]
+dev_base = 3688775                 # zlib level 9, plus compressor.py
+dev_ref = 2720585                  # lzma preset 9 extreme, plus a compressor.py of the same size
+data = [
+    "curl -fsSL --retry 3 -o enwik8.zip https://mattmahoney.net/dc/enwik8.zip",
+    "echo '547994d9980ebed1288380d652999f38a14fe291a6247c157c3d33d4932534bc  enwik8.zip' | sha256sum -c -",
+    "mkdir -p data && python3 -c \"import zipfile; z = zipfile.ZipFile('enwik8.zip'); open('data/dev.bin', 'wb').write(z.open('enwik8').read(10**7))\"",
+    "rm enwik8.zip",
+]
+
+[piloop]
+name = "t1-enwik8"
+evaluate = ["uv", "run", "python", "evaluate.py"]
+evaluate_timeout = 900
+link = ["data", ".venv"]
+
+[[piloop.metrics]]
+name = "bytes"
+direction = "lower"
+role = "primary"
+
+[[piloop.metrics]]
+name = "seconds"
+direction = "lower"
+role = "guardrail"
+margin = 60
+floor = 120
+repeats = 3

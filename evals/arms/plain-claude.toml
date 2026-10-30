@@ -1,0 +1,5 @@
+# One Claude Code session that owns the change and the dev evaluator, with no piloop.
+kind = "plain"
+name = "plain-claude"
+agent = { harness = "claude", model = "claude-opus-5-5" }
+resources = { cpu = 2, memory_mb = 4096 }

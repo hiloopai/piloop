@@ -11,3 +11,4 @@ piloop/templates/*/data/
 *.db
 *.db-wal
 *.db-shm
+evals/results/
