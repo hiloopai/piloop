@@ -101,6 +101,12 @@ would become the new head, and on that head once. The submission is kept only wh
 sealed = ["python3", "/srv/sealed/score.py"]
 ```
 
+A result of the sealed command that piloop refuses, such as a `direction` that is not the primary's or no `score`, is
+a fault of the setup, not of the submission: no implementer can change that command. The submission gets no verdict
+and waits, its sealed evaluation runs again after `[evaluation] infra_retry`, and piloop escalates once. Fix the
+command and run `piloop campaign sync`: the waiting submissions are then scored with the new one. A sealed command
+that fails on a submission, such as an exit 1, is the submission's fault: it is not kept.
+
 The daemon never judges three kinds of candidate:
 
 | `candidates.origin` | What it is |

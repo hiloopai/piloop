@@ -131,7 +131,7 @@ def test_a_failure_that_is_not_the_candidates_says_why_and_a_gone_version_is_the
     """An infra error, a worktree that piloop could not make and an evaluate that another process killed measured nothing
     of the candidate. A version that the repo lacks never runs: it is the candidate's crash."""
     assert [
-        Failed(why, 0).infra
+        Failed(why, 0).infra(sealed=False)
         for why in (Said(Status.INFRA_ERROR, None), NotRun('no worktree'), Killed(signal.SIGKILL, ''))
     ] == [Infra.REPORTED, Infra.NOT_RUN, Infra.KILLED]
     candidates = [
@@ -142,8 +142,21 @@ def test_a_failure_that_is_not_the_candidates_says_why_and_a_gone_version_is_the
         Exited(1, ''),
         TimedOut(5),
     ]
-    assert [Failed(why, 0).infra for why in candidates] == [None] * 6
+    assert [Failed(why, 0).infra(sealed=False) for why in candidates] == [None] * 6
     assert Failed(Gone("'abc' names no commit"), 0).error == "'abc' names no commit"
+
+
+def test_a_result_of_the_sealed_command_that_piloop_refuses_is_its_setup_s_fault() -> None:
+    """A candidate cannot change the sealed command, which is outside its repo: a bad result or a missing score of it
+    measured nothing of the candidate. From the evaluate command, which the candidate's repo holds, it is the
+    candidate's crash, as is a sealed command that fails on the candidate."""
+    refused = (
+        BadResult('it reports the direction lower; [[metrics]] says score is higher'),
+        MissingMetrics(('score',)),
+    )
+    assert [Failed(why, 0).infra(sealed=True) for why in refused] == [Infra.SEALED] * 2
+    assert [Failed(why, 0).infra(sealed=False) for why in refused] == [None] * 2
+    assert Failed(Exited(1, ''), 0).infra(sealed=True) is None
 
 
 def test_an_ok_result_that_exits_non_zero_is_a_crash(tmp_path: Path) -> None:

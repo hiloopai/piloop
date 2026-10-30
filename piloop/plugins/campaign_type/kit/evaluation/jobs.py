@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import System
 from piloop.db.events import emit
-from piloop.db.models import EventModel, ReadBy
+from piloop.db.models import Campaign, EventModel, ReadBy
 from piloop.ids import TargetRef
 from piloop.otel import Span
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
@@ -28,6 +28,7 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
     EvalResult,
     Failed,
     Gone,
+    Infra,
     InputsChanged,
     Killed,
     Measured,
@@ -42,6 +43,7 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, RungName
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.campaign_type.kit.evaluation.measure import evaluator_runners, save_units
+from piloop.plugins.campaign_type.kit.evaluation.ops import sealed_refused
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.executor.contract import Applying, Control, Job, JobKind, Report, Settled, Site, Source
@@ -54,6 +56,15 @@ EVALUATION = 'evaluation'
 """The name of the kind (``piloop.job_kinds``)."""
 INPUTS_CHANGED = 'inputs.changed'
 """An event: an evaluation changed a linked input that it read, so what it measured is a crash, not a measurement."""
+
+
+class InfraError(BaseModel):
+    """Why an evaluation measured nothing of its candidate (``Failed.infra``), and its error."""
+
+    model_config = ConfigDict(frozen=True)
+
+    why: Infra
+    error: str
 
 
 class InfraFailed(EventModel):
@@ -117,6 +128,9 @@ class EvaluationJob(Job):
     """The bar to run next to the candidate. None: the candidate alone."""
     repeats: int = Field(default=1, ge=1)
     """How many times the evaluator runs on the candidate, and on the bar."""
+    sealed: bool = False
+    """It scores the sealed split (``[evaluator] sealed``): a result of its command that piloop refuses is the setup's
+    fault, not the candidate's (``Failed.infra``)."""
 
 
 class Sample(BaseModel):
@@ -145,7 +159,7 @@ class EvaluationReport(Report):
     """The candidate's samples. The first one ran first."""
     bar_samples: list[Sample] = Field(default_factory=list)
     """The bar's samples of a paired evaluation: the i-th ran next to the i-th of ``samples``."""
-    infra_error: str | None = None
+    infra_error: InfraError | None = None
     """Set when its last run failed for a cause that is not the candidate's (``Failed.infra``): then no sample of it
     counts, and it records no measurement."""
 
@@ -213,7 +227,7 @@ def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: A
 
     A cancelled evaluation records nothing (``queue.cancel``). Nor does one that ends while the daemon stops: its
     evaluator was killed, and the next daemon measures it again. Nor does an infra error: it emits ``InfraFailed``, and
-    its request asks again.
+    its request asks again. A sealed command whose result piloop refuses escalates too, once (``sealed_refused``).
     """
     evaluation = s.get(Evaluation, job.evaluation)
     if evaluation is None or evaluation.started_at is None:
@@ -221,9 +235,11 @@ def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: A
     s.delete(evaluation)
     if daemon.stopping or evaluation.cancelled_by is not None:
         return
-    if report.infra_error is not None:
-        failed = InfraFailed(evaluation=evaluation.id, error=report.infra_error)
+    if (infra := report.infra_error) is not None:
+        failed = InfraFailed(evaluation=evaluation.id, error=infra.error)
         emit(s, failed, TargetRef(CANDIDATE, job.candidate), System.DAEMON)
+        if infra.why is Infra.SEALED:
+            sealed_refused(s, s.get_one(Campaign, s.get_one(Candidate, job.candidate).campaign_id), infra.error)
         return
     evaluator_id = evaluation.evaluator_id
     bar = job.bar
@@ -296,8 +312,10 @@ def run_evaluation(job: EvaluationJob, control: Control, site: Site, span: Span)
         last = climb[-1]
         span.set(error=last.error, stopped=last.stopped)
         samples[side].extend(climb)
-        if isinstance(failed := results[-1], Failed) and failed.infra is not None:
-            return EvaluationReport(samples=climb, infra_error=failed.error, files=site.files(job))
+        if isinstance(failed := results[-1], Failed) and (why := failed.infra(sealed=job.sealed)) is not None:
+            return EvaluationReport(
+                samples=climb, infra_error=InfraError(why=why, error=failed.error), files=site.files(job)
+            )
         if last.error is not None or last.stopped is not None or control.asked() or control.stopping():
             break
     return EvaluationReport(samples=samples[Tree.CANDIDATE], bar_samples=samples[Tree.BAR], files=site.files(job))

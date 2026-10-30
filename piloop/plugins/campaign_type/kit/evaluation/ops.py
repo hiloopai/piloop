@@ -83,6 +83,35 @@ def noise_unknown(s: Session, campaign: Campaign, baseline: Candidate, metric: s
     escalations.escalate_once(s, TargetRef(TargetKind.CAMPAIGN, campaign.id), asked, priority=1)
 
 
+def sealed_refused(s: Session, campaign: Campaign, error: str) -> None:
+    """Escalate, once, that the sealed command writes a result that piloop refuses. The caller commits.
+
+    No candidate gets a verdict while that lasts: each would-be keep waits, and its sealed evaluation runs again.
+    """
+    asked = EscalationView(
+        headline=f'The sealed command of {campaign.name} writes results that piloop refuses. No candidate can be kept.',
+        why=(
+            'The command in [evaluator] sealed scores each candidate that would be kept. piloop refuses its results.'
+            ' These candidates wait, and piloop runs the command again later.'
+        ),
+        choices=(
+            Choice(
+                id='A',
+                label='Fix the command in [evaluator] sealed, then `piloop campaign sync`.',
+                result='The waiting candidates are scored with the fixed command.',
+            ),
+            Choice(
+                id='B',
+                label='Remove [evaluator] sealed, then `piloop campaign sync`.',
+                result='Keeps are judged on the visible split alone.',
+            ),
+        ),
+        recommended='A',
+        details=f'campaign {campaign.name}: {error}',
+    )
+    escalations.escalate_once(s, TargetRef(TargetKind.CAMPAIGN, campaign.id), asked, priority=1)
+
+
 @dataclass(frozen=True)
 class Added:
     """What ``add_measurement`` recorded, and what it does to the candidate's verdict."""

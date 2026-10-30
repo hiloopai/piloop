@@ -20,6 +20,7 @@ from piloop.ids import Revision
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.jobs import InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.measure import Split, current_evaluator, noise, sealed_evaluator
 from piloop.plugins.campaign_type.kit.evaluation.submissions import SubmitRefused, submit, waiting
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
@@ -44,6 +45,7 @@ from tests.conftest import (
     workers_of,
     write_toml,
 )
+from tests.daemon.test_evaluation_queue import queued_executor
 from tests.daemon.test_run_controller import controller, keep_elsewhere, make_run, run_row, set_config
 
 SUBMIT = {'scoring': 'submit', 'noise_runs': 1}
@@ -505,6 +507,47 @@ def test_a_sealed_split_that_crashes_on_the_head_runs_again_once_and_is_never_a_
             select(Measurement.error).where(Measurement.evaluator_id == hidden.id, Measurement.candidate_id == 1)
         )
         assert len(tries.all()) == 2, 'the head ran on the split twice'
+
+
+BAD_SEALED = [
+    'sh',
+    '-c',
+    'printf \'%s\\n\' \'{"status": "ok", "score": 1, "direction": "lower"}\' >> "$PILOOP_RESULT_FILE"',
+]
+"""A sealed command whose result piloop refuses: the campaign's primary, score, is higher-is-better."""
+SEALED_AGREES = ['sh', '-c', reports(score='$(wc -l < solve.txt)', size='1')]
+"""A sealed command that scores as the visible split does."""
+
+
+def test_a_sealed_result_that_piloop_refuses_is_no_verdict_and_escalates_once_until_the_command_is_fixed(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A candidate cannot change the sealed command: its bad result is the setup's fault, never a discard. The
+    submission waits while its sealed evaluation runs again, one escalation says why, and a fixed command judges it."""
+    set_config(db, campaign, evaluator={**SUBMIT, 'sealed': BAD_SEALED}, plugins=NOISE)
+    ex = queued_executor(db, runtime, tmp_path, 1)
+    candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
+    judging = threading.Thread(target=ex.judge_submission, args=(candidate,))
+    judging.start()
+    wait_until(lambda: len(failures(db)) >= 2, 'the sealed evaluation failed twice, and waits to run again')
+    assert verdict(db, candidate) == (None, None), 'no verdict, and no discard'
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        hidden = sealed_evaluator(s, p, p.config)
+        assert hidden is not None
+        assert s.scalars(select(Measurement).where(Measurement.evaluator_id == hidden.id)).all() == []
+        [escalation] = s.scalars(select(Comment).where(Comment.kind == ESCALATION)).all()
+        assert 'it reports the direction lower; [[metrics]] says score is higher' in escalation.body
+    set_config(db, campaign, evaluator={**SUBMIT, 'sealed': SEALED_AGREES}, plugins=NOISE)
+    judging.join(30)
+    assert not judging.is_alive(), 'a new sealed command ends the wait for the old one'
+    ex.judge_submission(candidate)
+    assert verdict(db, candidate)[0] is Outcome.KEEP
+
+
+def failures(db: Database) -> list[InfraFailed]:
+    with db.session() as s:
+        return [e for _, e in in_order(s, InfraFailed)]
 
 
 def ending(db: Database, run_id: RunId, how: RunEnding, reason: str | None = None) -> None:

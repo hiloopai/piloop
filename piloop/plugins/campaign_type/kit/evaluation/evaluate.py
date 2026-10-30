@@ -253,6 +253,9 @@ class Infra(StrEnum):
     """piloop could not make its worktree or its inputs."""
     KILLED = 'killed'
     """Another process killed it, on its retry too (``jobs._evaluate``)."""
+    SEALED = 'sealed'
+    """The sealed command (``[evaluator] sealed``) wrote a result that piloop refuses, or no score: its setup is at
+    fault, as no candidate can change that command."""
 
 
 type Unmeasured = Literal[Status.CRASH, Status.TIMEOUT, Status.INFRA_ERROR]
@@ -282,11 +285,12 @@ class Failed:
     rung: RungName | None = None
     """The rung that failed. None for the full panel."""
 
-    @property
-    def infra(self) -> Infra | None:
+    def infra(self, *, sealed: bool) -> Infra | None:
         """Why the failure is not the candidate's, so the evaluation measured nothing of it, or None when it is.
 
-        A version that the repo lacks is the candidate's (``Gone``): it would run again forever. An evaluate that the
+        ``sealed``: the command is the sealed split's, outside the candidate's repo, so a result of it that piloop
+        refuses is the setup's fault. The evaluate command is in the repo: a bad result of it is the candidate's. A
+        version that the repo lacks is the candidate's (``Gone``): it would run again forever. An evaluate that the
         kernel's OOM killer ends is ``KILLED`` too, so a candidate that takes too much memory runs again, until someone
         cancels it.
         """
@@ -297,6 +301,8 @@ class Failed:
                 return Infra.NOT_RUN
             case Killed() as killed if killed.sent:
                 return Infra.KILLED
+            case BadResult() | MissingMetrics() if sealed:
+                return Infra.SEALED
             case _:
                 return None
 

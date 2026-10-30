@@ -19,7 +19,7 @@ from typing import ClassVar, Final, Literal, assert_never
 
 from covalence import Cid
 from pydantic import ValidationError
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, undefer
 
 from piloop import deprecated
@@ -1237,7 +1237,8 @@ class RunController:
         An evaluation that failed for a cause that is not its candidate's records nothing (``InfraFailed``): it waits in
         the queue, where ``piloop eval queue`` lists it and ``piloop eval cancel`` cancels it, and runs again after
         ``[evaluation] infra_retry``, twice as long after each failure up to ``infra_retry_max``. Each failure is an
-        event. It ends once it measures, someone cancels it, or the daemon stops.
+        event. It ends once it measures, someone cancels it, the daemon stops, or, on the sealed split, a new
+        ``[evaluator] sealed`` replaces its command (``_replaced``): the candidate's next judgement uses the new one.
         """
         failures = 0
         while True:
@@ -1267,10 +1268,26 @@ class RunController:
                         with self._db.session() as s:
                             after = _last_measurement(s, candidate_id, evaluator_id)
                         return Measuring.MEASURED if after != before else Measuring.CANCELLED
+                    if split is Split.SEALED and self._replaced(campaign_id, evaluator_id, row):
+                        return Measuring.CANCELLED
                 case Measuring():
                     return ended
                 case never:
                     assert_never(never)
+
+    def _replaced(self, campaign_id: CampaignId, evaluator_id: EvaluatorId, row: int) -> bool:
+        """Whether the campaign's sealed command is no longer ``evaluator_id``'s.
+
+        Then ``row``, its evaluation that waits to run again, leaves the queue.
+        """
+        with self.launcher.lock, self._db.session() as s:
+            campaign = s.get_one(Campaign, campaign_id)
+            current = sealed_evaluator(s, campaign, campaign.config)
+            if current is not None and current.id == evaluator_id:
+                return False
+            s.execute(delete(Evaluation).where(Evaluation.id == row, Evaluation.started_at.is_(None)))
+            s.commit()
+            return True
 
     def _request(
         self,
@@ -1333,7 +1350,13 @@ class RunController:
                     match split, cfg.evaluator.sealed:
                         case Split.SEALED, [*command]:  # the score alone, with no ladder
                             job = job.model_copy(
-                                update={'command': command, 'required': [score.name], 'ladder': [], 'gate': None}
+                                update={
+                                    'command': command,
+                                    'required': [score.name],
+                                    'ladder': [],
+                                    'gate': None,
+                                    'sealed': True,
+                                }
                             )
                         case _:
                             pass
