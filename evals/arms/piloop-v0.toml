@@ -2,13 +2,13 @@
 # own. `piloop` names the commit of main under test.
 kind = "piloop"
 name = "piloop-v0"
-piloop = "piloop[modal] @ git+https://github.com/hiloopai/piloop@736173d6943c5604609676b4e38971bcd89e9797"
+piloop = "piloop[modal] @ git+https://github.com/hiloopai/piloop@187600116174236e096c676ed569e368ba708904"
 agents = [
     { harness = "codex", model = "gpt-6.1-sol" },
     # { harness = "claude", model = "claude-opus-5-5" },  # back in once the model gateway serves Claude
 ]
 split = "sealed"
-resources = { cpu = 8, memory_mb = 16384 }
+resources = { cpu = 8, memory_mb = 16384, gpus = 2 }   # gpus: on a GPU task, two, so dev runs don't queue behind the daemon's evaluations
 
 [overlay.evaluator]
 scoring = "submit"

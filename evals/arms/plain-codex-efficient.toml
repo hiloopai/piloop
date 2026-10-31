@@ -1,0 +1,6 @@
+# plain-codex with one instruction on keeping its dev loop fast and cheap.
+kind = "plain"
+name = "plain-codex-efficient"
+agent = { harness = "codex", model = "gpt-6.1-sol" }
+instruction = "Your dev loop is your speed limit. Keep each dev eval as fast and cheap as it can be while it still tells ideas apart: screen on the cheapest signal that ranks them, cache what doesn't change, and slow the loop only when the gain is worth it. Note each eval's time."
+resources = { cpu = 2, memory_mb = 4096 }

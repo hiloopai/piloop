@@ -1,7 +1,7 @@
 """Score one tree inside a scoring sandbox, with only the standard library: the dev metrics, then the sealed score.
 
 Usage: ``python scorer.py <task dir> <data dir> <work dir>``, where the work dir holds ``tree.tgz``, ``base.tgz`` and
-``sealed.tgz``. The tree gets the task's own ``evaluate.py`` and dev data over its own. It writes one JSON object to
+``sealed.tgz``. The tree gets the task's own ``evaluate.py`` and dev data (``data/``) over its own. It writes one JSON object to
 ``<work dir>/score.json``:
 ``{"dev": {"metrics": ...} | null, "dev_error": str, "sealed": <what sealed.py printed>}``.
 """
@@ -21,8 +21,8 @@ def main(task: Path, data: Path, work: Path) -> dict[str, object]:
             tar.extractall(work / name, filter='data')
     tree = work / 'tree'
     shutil.copy(task / 'repo' / 'evaluate.py', tree / 'evaluate.py')
-    if data.is_dir():
-        shutil.copytree(data, tree, dirs_exist_ok=True)
+    if (data / 'data').is_dir():  # the dev data only: the rest of the task's data is in the starting commit
+        shutil.copytree(data / 'data', tree / 'data', dirs_exist_ok=True)
     dev = subprocess.run([sys.executable, 'evaluate.py'], cwd=tree, capture_output=True, text=True)
     lines = dev.stdout.strip().splitlines()
     out = work / 'sealed.json'

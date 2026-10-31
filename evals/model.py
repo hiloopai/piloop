@@ -32,6 +32,11 @@ class Task(Frozen):
     """The dev metric of the starting repo: normalised score 0."""
     dev_ref: float
     """A strong known value of the dev metric: normalised score 1."""
+    setup: list[str] = []
+    """Shell lines that install the task's tools into the image as root, before its data: a compiler, a toolchain,
+    the packages its scorer imports."""
+    gpu: str | None = None
+    """The Modal GPU type of every sandbox that runs the task, such as ``L4``. None: CPU only."""
     data: list[str] = []
     """Shell lines that write the dev data into the current directory when the image is built. It is copied into the
     repo, and git ignores it."""
@@ -65,6 +70,9 @@ class Resources(Frozen):
 
     cpu: float = Field(gt=0)
     memory_mb: int = Field(gt=0)
+    gpus: int = Field(default=1, ge=1)
+    """How many of the task's GPUs the sandbox gets, when the task has a GPU type. ``gpu-lock`` gives each evaluation
+    one of them to itself."""
 
 
 class PiloopArm(Frozen):
@@ -81,6 +89,11 @@ class PiloopArm(Frozen):
     split: Literal['visible', 'sealed'] = 'visible'
     """``visible``: the daemon scores with the task's evaluator alone. ``sealed``: the campaign also gets the task's dev
     command as ``[evaluator] dev``, and a sealed split of its own as ``[evaluator] sealed``, kept in its home."""
+    instruction: str = ''
+    """A paragraph added to what each worker reads: a piloop arm's implementer brief, a plain session's prompt."""
+    env: dict[str, str] = {}
+    """Variables of the arm's sandbox, which a task's evaluator may read: ``EVALS_DEV_LOOP = "slow"`` turns a warm
+    dev loop off."""
     resources: Resources
 
 
@@ -92,6 +105,11 @@ class PlainArm(Frozen):
     agent: Agent
     effort: str = 'high'
     """How hard it thinks, as the harness names it: piloop's default for its roles."""
+    instruction: str = ''
+    """A paragraph added to what each worker reads: a piloop arm's implementer brief, a plain session's prompt."""
+    env: dict[str, str] = {}
+    """Variables of the arm's sandbox, which a task's evaluator may read: ``EVALS_DEV_LOOP = "slow"`` turns a warm
+    dev loop off."""
     resources: Resources
 
 
@@ -145,6 +163,26 @@ class Funnel(Frozen):
     kept: int
 
 
+class Loop(Frozen):
+    """A run's feedback loop."""
+
+    dev_evals: int
+    dev_p50_s: float | None
+    dev_p90_s: float | None
+    dev_per_hour: float
+    submissions_per_hour: float
+    usd_per_experiment: float | None
+    """Spend over dev evaluations plus submissions."""
+    verdict_p50_s: float | None
+    """Submitted to judged. None: a plain session, which judges itself."""
+    visible_p50_s: float | None
+    """Submitted to measured on the visible split: the queue plus the evaluation."""
+    sealed_p50_s: float | None
+    """Measured on the visible split to measured on the sealed split."""
+    drift: float | None
+    """The median dev evaluation of the last third of the run over that of the first third: above 1, the loop slowed."""
+
+
 class Result(Frozen):
     """One run of an arm on a task: ``results/<task>/<arm>-<repeat>.json``."""
 
@@ -169,6 +207,8 @@ class Result(Frozen):
     restarts: int | None = None
     """How many times the daemon's supervisor started it again after it died. None: a plain arm, or a run whose daemon
     had no supervisor."""
+    loop: Loop | None = None
+    """The run's feedback loop. None: a result written before it was measured."""
 
     @property
     def first_keep(self) -> Point | None:
@@ -215,6 +255,11 @@ class Settings(BaseSettings):
     """The CPU cores of each scoring sandbox: the dev and sealed evaluators run one after the other."""
     score_memory_mb: int = 4096
     codex_thread_seconds: float = 120
+    codex_reasoning_summary: str = 'detailed'
+    """How much of its reasoning each Codex agent summarises into its session file (``model_reasoning_summary``)."""
+    evaluation_nice: int = 10
+    """The ``nice`` of a piloop arm's evaluations, its own and its workers' dev runs: the daemon keeps CPU for its
+    database."""
     daemon_start_seconds: float = 60
     """How long a piloop daemon gets to answer after its supervisor starts it."""
     otlp_endpoint: str | None = Field(default=None, validation_alias='OTEL_EXPORTER_OTLP_ENDPOINT')

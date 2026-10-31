@@ -401,6 +401,7 @@ exclude = [
     "piloop/db/migrations/versions",
     "piloop/plugins/*/*/migrations",
     "piloop/plugins/campaign_type/optimization/templates",  # projects with their own deps
+    "evals/tasks/t3-airbench/repo",  # runs on its own Python, with torch
     "tests/typing",  # wrong on purpose: tests/test_typing.py checks it
 ]
 

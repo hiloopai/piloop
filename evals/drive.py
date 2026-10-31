@@ -43,6 +43,8 @@ SUPERVISE = (
 """Run the daemon in the foreground and start it again after an exit other than 0: one line per restart in
 ``restarts``. ``piloop stop`` ends it with 0, and the loop with it."""
 HALT = 'halt'
+INSTRUCTION = 'worker-instruction.md'
+"""The file of an arm's instruction in the campaign's checkout, out of git: the implementer's ``addendum``."""
 """A file in a run's directory that stops it at the next sample, with its text as the reason."""
 BASE_DATE = '2026-01-01T00:00:00Z'
 """The date of the starting commit, so that every arm starts from the same commit id."""
@@ -65,9 +67,17 @@ def merge(base: dict[str, JsonValue], over: dict[str, JsonValue]) -> dict[str, J
 
 
 def codex_gateway(settings: Settings) -> dict[str, JsonValue]:
-    """The ``-c`` keys that send Codex to the gateway, with the token from ``GATEWAY_TOKEN``."""
+    """The ``-c`` keys of every Codex agent: the gateway, and the summaries of its reasoning.
+
+    The gateway takes the token from ``GATEWAY_TOKEN``. The session file keeps the summaries, so that a run's reasoning
+    can be read afterwards.
+    """
     provider = {'name': 'gateway', 'base_url': f'{settings.gateway}/v1', 'env_key': 'GATEWAY_TOKEN'}
-    return {'model_provider': 'gateway', 'model_providers': {'gateway': {**provider, 'wire_api': 'responses'}}}
+    return {
+        'model_provider': 'gateway',
+        'model_providers': {'gateway': {**provider, 'wire_api': 'responses'}},
+        'model_reasoning_summary': settings.codex_reasoning_summary,
+    }
 
 
 def piloop_config(task: Task, arm: PiloopArm, settings: Settings, hours: float) -> dict[str, JsonValue]:
@@ -94,11 +104,17 @@ def piloop_config(task: Task, arm: PiloopArm, settings: Settings, hours: float) 
     own: dict[str, JsonValue] = {
         'plugins': {'runtime': {'use': 'subprocess'}, 'harness': harness, 'stop_rule': {'max_hours': hours}}
     }
+    nice: list[JsonValue] = ['nice', '-n', str(settings.evaluation_nice)]
+    evaluate = task.piloop.get('evaluate')
+    if isinstance(evaluate, list):
+        own['evaluate'] = [*nice, *evaluate]
+    if arm.instruction:
+        own = merge(own, {'plugins': {'role': {'implementer': {'addendum': INSTRUCTION}}}})
     match arm.split:
         case 'sealed':
             script = f'{OPT}/campaign_sealed.py'
-            sealed: list[JsonValue] = ['python3', script, f'{OPT}/tasks/{task.name}', SEALED, task.direction]
-            evaluator: dict[str, JsonValue] = {'dev': list[JsonValue](task.dev), 'sealed': sealed}
+            sealed: list[JsonValue] = [*nice, 'python3', script, f'{OPT}/tasks/{task.name}', SEALED, task.direction]
+            evaluator: dict[str, JsonValue] = {'dev': [*nice, *task.dev], 'sealed': sealed}
             own['evaluator'] = evaluator
         case 'visible':
             pass
@@ -148,6 +164,9 @@ class Piloop:
             box.write(f'{WORK}/campaign.tgz', sealed_data(f'{self.task.name}.campaign', self.settings))
             box.run(f'mkdir -p {SEALED} && tar xzf {WORK}/campaign.tgz -C {SEALED} && rm {WORK}/campaign.tgz')
         config = piloop_config(self.task, self.arm, self.settings, self.hours)
+        if self.arm.instruction:
+            box.write(f'{REPO}/{INSTRUCTION}', self.arm.instruction.encode())
+            box.run(f'cd {REPO} && echo {INSTRUCTION} >> .git/info/exclude')
         box.write(f'{REPO}/piloop.toml', tomli_w.dumps(config).encode())
         box.run(f'cd {REPO} && echo piloop.toml >> .git/info/exclude')
         box.start(SUPERVISE)
@@ -231,7 +250,8 @@ class Plain:
 
     def start(self, box: Box) -> None:
         self.session = str(uuid.uuid4())
-        self.launch(box, PLAIN_PROMPT.format(dev=shlex.join(self.task.dev), hours=self.hours))
+        prompt = PLAIN_PROMPT.format(dev=shlex.join(self.task.dev), hours=self.hours)
+        self.launch(box, f'{prompt}\n\n{self.arm.instruction}' if self.arm.instruction else prompt)
 
     def ended(self, box: Box) -> str | None:
         """Never on its own: a session that ended is resumed."""
@@ -255,7 +275,7 @@ def prepare(box: Box, task: Task) -> str:
         f' && if [ -d {data} ]; then cp -r {data}/. {REPO}/; fi'
         f' && cd {REPO} && git init -q && git add -A'
         f' && GIT_AUTHOR_DATE={BASE_DATE} GIT_COMMITTER_DATE={BASE_DATE} git commit -qm base'
-        ' && uv sync -q && git rev-parse HEAD',
+        ' && if [ -f pyproject.toml ]; then uv sync -q; fi && git rev-parse HEAD',
         timeout=900,
     ).strip()
 
@@ -279,16 +299,25 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
     match arm:
         case PiloopArm():
             run: Piloop | Plain = Piloop(task, arm, settings, hours)
-            env = exported(settings, name)
+            env = exported(settings, name) | arm.env
         case PlainArm():
             run = Plain(task, arm, settings, hours)
-            env = {}
+            env = dict(arm.env)
     r = arm.resources
     with tracer.start_as_current_span('evals.run', attributes={'evals.run': name, 'budget_usd': budget}) as span:
         with tracer.start_as_current_span('evals.sandbox'):
             img = image([task], arm)
+            gpu = f'{task.gpu}:{r.gpus}' if task.gpu else None
             box = Box.create(
-                settings, img, cpu=r.cpu, memory_mb=r.memory_mb, hours=hours + 1, network=True, env=env, run=name
+                settings,
+                img,
+                cpu=r.cpu,
+                memory_mb=r.memory_mb,
+                hours=hours + 1,
+                network=True,
+                gpu=gpu,
+                env=env,
+                run=name,
             )
         span.set_attribute('modal.sandbox', box.sandbox.object_id)
         (out / 'sandbox').write_text(box.sandbox.object_id)

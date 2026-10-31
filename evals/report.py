@@ -15,8 +15,8 @@ from plotly.subplots import make_subplots
 
 from evals.model import Point, Result
 
-COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100']
-"""Categorical slots 1-4: an arm keeps its slot by its order in the sorted arm names."""
+COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948']
+"""Categorical slots 1-8, in the palette's fixed order: an arm keeps its slot by its order in the sorted arm names."""
 STEPS = 200
 NOTE_WIDTH = 150
 """The characters of a line of a note under a page's title."""
@@ -102,6 +102,20 @@ def rate(r: Result) -> float | None:
     return r.funnel.kept / r.funnel.submissions if r.funnel.submissions else None
 
 
+def rate_of(r: Result) -> float | None:
+    """Dev evaluations plus submissions per hour."""
+    return r.loop.dev_per_hour + r.loop.submissions_per_hour if r.loop else None
+
+
+def gain_per_experiment(r: Result) -> float | None:
+    """The final head's sealed score over a hundred experiments: how much each experiment moved the run."""
+    if r.loop is None or r.final.sealed is None:
+        return None
+    hours = r.spend[-1].hours if r.spend else 0.0
+    experiments = (rate_of(r) or 0.0) * hours
+    return 100 * r.final.sealed / experiments if experiments else None
+
+
 DIAGNOSTICS: list[Row] = [
     ('$ to first keep', lambda r: r.first_keep.usd if r.first_keep else None, 2, statistics.median),
     ('hours to first keep', lambda r: r.first_keep.hours if r.first_keep else None, 2, statistics.median),
@@ -121,6 +135,22 @@ DIAGNOSTICS: list[Row] = [
     ('human interventions', lambda r: r.interventions, 0, statistics.median),
     ('lead token share', lambda r: r.lead_token_share, 3, statistics.median),
     ('daemon restarts', lambda r: r.restarts, 0, statistics.median),
+    ('experiments per hour (dev evals + submissions)', lambda r: rate_of(r), 1, statistics.median),
+    ('sealed gain per 100 experiments', lambda r: gain_per_experiment(r), 3, statistics.median),
+    ('dev evals per hour', lambda r: r.loop.dev_per_hour if r.loop else None, 1, statistics.median),
+    ('dev eval p50, s', lambda r: r.loop.dev_p50_s if r.loop else None, 1, statistics.median),
+    ('dev eval p90, s', lambda r: r.loop.dev_p90_s if r.loop else None, 1, statistics.median),
+    ('dev eval drift (last third / first third)', lambda r: r.loop.drift if r.loop else None, 2, statistics.median),
+    ('submissions per hour', lambda r: r.loop.submissions_per_hour if r.loop else None, 1, statistics.median),
+    ('$ per experiment', lambda r: r.loop.usd_per_experiment if r.loop else None, 3, statistics.median),
+    ('submitted to verdict p50, s', lambda r: r.loop.verdict_p50_s if r.loop else None, 0, statistics.median),
+    (
+        'submitted to visible measurement p50, s',
+        lambda r: r.loop.visible_p50_s if r.loop else None,
+        0,
+        statistics.median,
+    ),
+    ('visible to sealed measurement p50, s', lambda r: r.loop.sealed_p50_s if r.loop else None, 0, statistics.median),
 ]
 """Each a metric of one run, shown as the median (range) over an arm's repeats."""
 
@@ -145,13 +175,14 @@ def figure(task: str, by_arm: dict[str, list[Result]], notes: list[str]) -> go.F
     fig = make_subplots(
         rows=4,
         cols=2,
-        specs=[[{'type': 'xy'}, {'type': 'xy'}], [{'type': 'xy', 'colspan': 2}, None], [full, None], [full, None]],
-        row_heights=[0.28, 0.2, 0.22, 0.3],
+        specs=[[{'type': 'xy'}, {'type': 'xy'}], [{'type': 'xy'}, {'type': 'xy'}], [full, None], [full, None]],
+        row_heights=[0.24, 0.2, 0.17, 0.39],
         vertical_spacing=0.06,
         subplot_titles=[
             'sealed score against USD spent',
             'sealed score against hours',
-            'sealed score over the sequence of heads: one line per repeat',
+            'sealed score over the sequence of heads, per repeat',
+            'final sealed score against experiments per hour, per repeat',
             'headline',
             'diagnostics',
         ],
@@ -168,12 +199,20 @@ def figure(task: str, by_arm: dict[str, list[Result]], notes: list[str]) -> go.F
             heads = [p.sealed if p.sealed is not None else 0.0 for p in r.curve]
             fig.add_scatter(x=list(range(len(heads))), y=heads, name=arm, legendgroup=arm, showlegend=False,
                             line_color=color, line_width=1, line_shape='hv', row=2, col=1)  # fmt: skip
+    for color, (arm, rs) in zip(COLORS, by_arm.items(), strict=False):
+        rate = [rate_of(r) for r in rs]
+        points = [(x, r.final.sealed or 0.0) for x, r in zip(rate, rs, strict=True) if x is not None]
+        if points:
+            xs, ys = zip(*points, strict=True)
+            fig.add_scatter(x=list(xs), y=list(ys), mode='markers', name=arm, legendgroup=arm, showlegend=False,
+                            marker={'color': color, 'size': 10}, row=2, col=2)  # fmt: skip
     if bar is not None:
         for col in (1, 2):
             fig.add_hline(y=bar, line_dash='dash', line_width=1, annotation_text='plain bar', row=1, col=col)
     fig.add_trace(table(headline(bar), by_arm), row=3, col=1)
     fig.add_trace(table(DIAGNOSTICS, by_arm), row=4, col=1)
     fig.update_xaxes(title_text='head number (0 = the starting repo)', row=2, col=1)
+    fig.update_xaxes(title_text='dev evaluations plus submissions per hour', row=2, col=2)
     fig.update_yaxes(title_text='sealed score (0 = start, 1 = reference)', row=1, col=1)
     fig.update_xaxes(title_text='USD, list price', row=1, col=1)
     fig.update_xaxes(title_text='hours', row=1, col=2)
@@ -181,7 +220,7 @@ def figure(task: str, by_arm: dict[str, list[Result]], notes: list[str]) -> go.F
     lines = ''.join(f'<br><sup>{line}</sup>' for line in wrapped)
     title = f'{task}: median over repeats, band from lowest to highest{lines}'
     top = 80 + 26 * len(wrapped)
-    fig.update_layout(title=title, height=2000 + top, margin={'t': top + 40}, hovermode='x')
+    fig.update_layout(title=title, height=2500 + top, margin={'t': top + 40}, hovermode='x')
     return fig
 
 

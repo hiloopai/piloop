@@ -9,9 +9,10 @@ import sqlite3
 import subprocess
 import tempfile
 from bisect import bisect_right
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from evals.loop import loop
 from evals.model import Funnel, Point, Result, Sample
 from evals.score import Score
 
@@ -115,6 +116,7 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
     base = meta['base']
     if meta['piloop'] is None:
         heads, commits = plain_heads(export / 'repo.bundle', base, started)
+        made: list[datetime] | None = [started + timedelta(hours=h) for _, h in heads]
         sessions = int((export / 'sessions').read_text())
         funnel = Funnel(ideas=None, runs=sessions, submissions=commits, kept=len(heads))
         escalations, people, lead = 0, 0, None
@@ -122,6 +124,7 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         with sqlite3.connect(export / 'piloop.db') as db:
             heads = piloop_heads(db, base, started)
             funnel, escalations, people, lead = piloop_counts(db, base)
+        made = None
     curve = []
     for rev, hours in [(base, 0.0), *heads]:
         usd = at(spend, hours)
@@ -145,4 +148,5 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         interventions=people,
         lead_token_share=lead,
         restarts=restarts(export) if meta.get('supervised') else None,
+        loop=loop(run / 'export', made, spend[-1].hours if spend else 0.0, spend[-1].usd if spend else 0.0),
     )

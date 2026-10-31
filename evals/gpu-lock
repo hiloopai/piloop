@@ -1,0 +1,16 @@
+#!/bin/sh
+# Run a command on a GPU that no other command of this sandbox holds: CUDA_VISIBLE_DEVICES names it, and a lock on
+# /tmp/gpu<n>.lock keeps it until the command exits. Waits while every GPU is held.
+n=$(nvidia-smi -L | wc -l)
+while true; do
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    if mkdir "/tmp/gpu$i.lock" 2>/dev/null; then
+      trap 'rmdir "/tmp/gpu'"$i"'.lock"' EXIT INT TERM
+      CUDA_VISIBLE_DEVICES=$i "$@"
+      exit $?
+    fi
+    i=$((i + 1))
+  done
+  sleep 1
+done

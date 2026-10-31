@@ -1,0 +1,34 @@
+name = "t5-lpaq"
+metric = "bytes"
+direction = "lower"
+dev = ["uv", "run", "python", "evaluate.py"]
+dev_base = 2132780                        # lpaq1, measured on Modal: compressed size plus 10,416 xz bytes of source
+dev_ref = 1617046                         # 0.757 × the compressed size: cmix's ratio to lpaq1 on enwik8 (14.95 MB vs 19.76 MB)
+setup = ["apt-get update && apt-get install -y g++ unzip"]
+data = [
+    "curl -fsSL --retry 3 -o enwik8.zip https://mattmahoney.net/dc/enwik8.zip",
+    "echo '547994d9980ebed1288380d652999f38a14fe291a6247c157c3d33d4932534bc  enwik8.zip' | sha256sum -c -",
+    "mkdir -p data && python3 -c \"import zipfile; z = zipfile.ZipFile('enwik8.zip'); open('data/dev.bin', 'wb').write(z.open('enwik8').read(10**7))\"",
+    "rm enwik8.zip",
+    "curl -fsSL --retry 3 -o lpaq1.zip https://mattmahoney.net/dc/lpaq1.zip",
+    "echo 'e4b54c3e03d3217c87d12c0ee20c4e756cd9bafd893583c4e326b043d57e3b47  lpaq1.zip' | sha256sum -c -",
+    "unzip -q lpaq1.zip lpaq1.cpp && rm lpaq1.zip",
+]
+
+[piloop]
+name = "t5-lpaq"
+evaluate = ["uv", "run", "python", "evaluate.py"]
+evaluate_timeout = 900
+link = ["data", ".venv"]
+
+[[piloop.metrics]]
+name = "bytes"
+direction = "lower"
+role = "primary"
+
+[[piloop.metrics]]
+name = "seconds"
+direction = "lower"
+role = "guardrail"
+margin = 120
+floor = 120

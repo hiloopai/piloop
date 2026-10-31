@@ -65,7 +65,7 @@ def score_one(
     with tracer.start_as_current_span('evals.score.tree', context=parent, attributes={'revision': rev}) as span:
         cpu, memory = settings.score_cpu, settings.score_memory_mb
         img = image([task], None)
-        box = Box.create(settings, img, cpu=cpu, memory_mb=memory, hours=1, network=False, task=task.name)
+        box = Box.create(settings, img, cpu=cpu, memory_mb=memory, hours=1, network=False, gpu=task.gpu, task=task.name)
         try:
             for name, data in (('tree.tgz', tree), ('base.tgz', base), ('sealed.tgz', sealed)):
                 box.write(f'{WORK}/{name}', data)

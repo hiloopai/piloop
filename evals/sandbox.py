@@ -36,6 +36,10 @@ def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
         .run_commands(f'uv python install {PYTHON}')
     )
     for task in tasks:
+        if task.setup:
+            img = img.run_commands(*task.setup)
+        if (TASKS / task.name / 'build').is_dir():
+            img = img.add_local_dir(TASKS / task.name / 'build', f'{OPT}/build/{task.name}', copy=True)
         if task.data:
             here = f'{OPT}/data/{task.name}'
             img = img.run_commands(f'mkdir -p {here}', *(f'cd {here} && {line}' for line in task.data))
@@ -44,6 +48,7 @@ def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
         img = img.env({'PILOOP_HOME': PILOOP_HOME})
     img = img.add_local_dir(TASKS, f'{OPT}/tasks')
     img = img.add_local_file(ROOT / 'campaign_sealed.py', f'{OPT}/campaign_sealed.py')
+    img = img.add_local_file(ROOT / 'gpu-lock', f'{OPT}/gpu-lock')
     return img.add_local_file(ROOT / 'meter.py', f'{OPT}/meter.py').add_local_file(
         ROOT / 'scorer.py', f'{OPT}/scorer.py'
     )
@@ -65,6 +70,7 @@ class Box:
         memory_mb: int,
         hours: float,
         network: bool,
+        gpu: str | None = None,
         env: dict[str, str] | None = None,
         **tags: str,
     ) -> Box:
@@ -83,6 +89,7 @@ class Box:
             secrets=secrets,
             cpu=cpu,
             memory=memory_mb,
+            gpu=gpu,
             timeout=int(hours * 3600),
             block_network=not network,
             workdir=WORK,

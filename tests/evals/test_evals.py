@@ -46,7 +46,7 @@ def module(path: Path) -> ModuleType:
 
 def test_tasks_and_arms_load():
     tasks = [Task.load(p.name) for p in sorted(TASKS.iterdir())]
-    assert [t.name for t in tasks] == ['t1-enwik8', 't2-circles']
+    assert [t.name for t in tasks] == [p.name for p in sorted(TASKS.iterdir())]
     assert all(t.normalised(t.dev_base) == 0 and t.normalised(t.dev_ref) == 1 for t in tasks)
     arms = {p.stem: load_arm(p.stem) for p in ARMS.glob('*.toml')}
     assert {type(a) for a in arms.values()} == {PiloopArm, PlainArm}
@@ -190,9 +190,11 @@ def test_a_sealed_split_arm_gets_dev_and_its_own_sealed_command():
     v0 = load_arm('piloop-v0')
     assert isinstance(v0, PiloopArm) and v0.split == 'sealed'
     config = piloop_config(Task.load('t1-enwik8'), v0, Settings(gateway='https://gw.example'), 4)
-    assert get(config, 'evaluator', 'dev') == ['uv', 'run', 'python', 'evaluate.py']
+    nice = ['nice', '-n', '10']
+    assert get(config, 'evaluator', 'dev') == [*nice, 'uv', 'run', 'python', 'evaluate.py']
+    assert get(config, 'evaluate') == [*nice, 'uv', 'run', 'python', 'evaluate.py']
     sealed = get(config, 'evaluator', 'sealed')
-    assert isinstance(sealed, list) and sealed[1] == '/opt/evals/campaign_sealed.py'
+    assert isinstance(sealed, list) and sealed[:5] == [*nice, 'python3', '/opt/evals/campaign_sealed.py']
     assert get(config, 'evaluator', 'scoring') == 'submit'
 
 

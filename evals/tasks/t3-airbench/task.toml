@@ -1,0 +1,37 @@
+name = "t3-airbench"
+metric = "seconds"
+direction = "lower"
+dev = ["/opt/evals/gpu-lock", "python3", "evaluate.py", "--fast"]
+dev_base = 8.149                         # the starting code on an L4: mean of 20 seeds (sd 0.147 s)
+dev_ref = 6.927                          # 15% faster: the size of the last two published record steps
+gpu = "L4"
+setup = [
+    "apt-get update && apt-get install -y build-essential",
+    "uv venv --python 3.12 /opt/evals/venv/t3-airbench",
+    "uv pip install --python /opt/evals/venv/t3-airbench/bin/python torch==2.4.1 torchvision==0.19.1 numpy==1.26.4 --index-url https://download.pytorch.org/whl/cu121 --extra-index-url https://pypi.org/simple",
+]
+data = [
+    "curl -fsSL -o airbench94_muon.py https://raw.githubusercontent.com/KellerJordan/cifar10-airbench/4c1b6d1e3889b037efadcfd5c0ea65b246592362/airbench94_muon.py",
+    "echo '704e29251a5207d8aed8a35adf13f772ff386b90a712aaddc2a28854385b536e  airbench94_muon.py' | sha256sum -c -",
+    "curl -fsSL -o AIRBENCH_LICENSE https://raw.githubusercontent.com/KellerJordan/cifar10-airbench/4c1b6d1e3889b037efadcfd5c0ea65b246592362/LICENSE",
+    "curl -fsSL --retry 3 -o /tmp/cifar.tgz https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz",
+    "echo 'c58f30108f718f92721af3b95e74349a  /tmp/cifar.tgz' | md5sum -c -",
+    "mkdir -p data && /opt/evals/venv/t3-airbench/bin/python -c \"import pickle, tarfile, numpy as np, torch; t = tarfile.open('/tmp/cifar.tgz'); b = [pickle.load(t.extractfile(f'cifar-10-batches-py/data_batch_{i}'), encoding='bytes') for i in range(1, 6)]; x = np.concatenate([d[b'data'] for d in b]).reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1); y = np.concatenate([d[b'labels'] for d in b]); p = np.random.RandomState(0).permutation(50000); [torch.save({'images': torch.tensor(np.ascontiguousarray(x[i])), 'labels': torch.tensor(y[i]).long()}, f'data/{n}.pt') for n, i in (('train', p[:40000]), ('val', p[40000:45000]))]\"",
+    "rm /tmp/cifar.tgz",
+]
+
+[piloop]
+name = "t3-airbench"
+evaluate = ["/opt/evals/gpu-lock", "python3", "evaluate.py"]
+evaluate_timeout = 1800
+link = ["data"]
+
+[[piloop.metrics]]
+name = "seconds"
+direction = "lower"
+role = "primary"
+
+[[piloop.metrics]]
+name = "accuracy"
+direction = "higher"
+role = "watch"

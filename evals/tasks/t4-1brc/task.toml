@@ -1,0 +1,31 @@
+name = "t4-1brc"
+metric = "cpu_seconds"
+direction = "lower"
+dev = ["uv", "run", "python", "evaluate.py", "--quick"]
+dev_base = 0.82                          # the starting program, full file, median over 3 containers (0.65–0.84)
+dev_ref = 0.41                           # half its CPU time
+setup = [
+    "apt-get update && apt-get install -y gcc libc6-dev",
+    "curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.99.1",
+    "ln -sf /root/.cargo/bin/cargo /root/.cargo/bin/rustc /root/.cargo/bin/rustup /usr/local/bin/",
+]
+data = [
+    "mkdir -p data && python3 /opt/evals/build/t4-1brc/gen.py 50000000 413 0 20261031 data/measurements.txt data/expected.txt",
+    "python3 /opt/evals/build/t4-1brc/gen.py 10000000 413 0 20261101 data/quick.txt data/quick-expected.txt",
+]
+
+[piloop]
+name = "t4-1brc"
+evaluate = ["uv", "run", "python", "evaluate.py"]
+evaluate_timeout = 900
+link = ["data", ".venv"]
+
+[[piloop.metrics]]
+name = "cpu_seconds"
+direction = "lower"
+role = "primary"
+
+[[piloop.metrics]]
+name = "wall_seconds"
+direction = "lower"
+role = "watch"

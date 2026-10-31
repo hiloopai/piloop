@@ -1,0 +1,47 @@
+# piloop-v0-lean plus one instruction to its workers: keep the dev loop fast and cheap. `piloop` names the commit of
+# main under test.
+kind = "piloop"
+name = "piloop-v0-efficient"
+piloop = "piloop[modal] @ git+https://github.com/hiloopai/piloop@187600116174236e096c676ed569e368ba708904"
+agents = [
+    { harness = "codex", model = "gpt-6.1-sol" },
+    # { harness = "claude", model = "claude-opus-5-5" },  # back in once the model gateway serves Claude
+]
+split = "sealed"
+instruction = """Your dev loop is your speed limit. Keep each dev eval as fast and cheap as it can be while it still tells ideas apart: screen on the cheapest signal that ranks them, cache what doesn't change, and slow the loop only when the gain is worth it. Note each eval's time."""
+resources = { cpu = 8, memory_mb = 16384, gpus = 2 }   # gpus: on a GPU task, two, so dev runs don't queue behind the daemon's evaluations
+
+[overlay.evaluator]
+scoring = "submit"
+submissions = 3
+noise_runs = 3
+
+[overlay.plugins.verdict_rule]
+provider = "noise"
+m = 2
+
+[overlay.plugins.role.implementer]
+max_concurrent = 4
+timeout = 3600                           # one hour per run, a fresh session per idea
+
+# The lean lead: it runs only on news (escalations and messages) and failed runs. Workers propose their own ideas.
+[overlay.plugins.role.orchestrator]
+harnesses = ["codex"]
+triggers = ["news", "run_failed"]
+max_ideas = 4
+
+[overlay.plugins.role.research]
+triggers = []
+
+[overlay.plugins.role.watchdog]
+triggers = []
+
+[overlay.plugins.fact_source]
+use = ["campaign", "optimization", "models", "spend"]
+
+[overlay.plugins.fact_source.spend]
+facts = ["models_usd"]
+
+[overlay.plugins.stop_rule]
+plateau = 12                             # three rounds of four runs without a keep
+hold_at = { spend = 60 }                 # the pilot's budget; the driver also stops every arm there
