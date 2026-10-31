@@ -2,7 +2,7 @@
 # own. `piloop` names the commit of main under test.
 kind = "piloop"
 name = "piloop-v0"
-piloop = "piloop[modal] @ git+https://github.com/hiloopai/piloop@acbaacf3d29711cb7ebdc769028c9da6609e991a"
+piloop = "piloop[modal] @ git+https://github.com/hiloopai/piloop@73821bded1731e94348109079aaf25347ea96a3c"
 agents = [
     { harness = "codex", model = "gpt-6.1-sol" },
     # { harness = "claude", model = "claude-opus-5-5" },  # back in once the model gateway serves Claude

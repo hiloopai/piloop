@@ -66,12 +66,15 @@ def pilot(
     hours: float,
     concurrency: int,
     ceiling: float,
+    first: int = 1,
     settings: Settings,
 ) -> None:
-    """Run each arm its number of repeats on each task, ``concurrency`` at a time, under ``ceiling`` in all."""
+    """Run each arm its number of repeats on each task, ``concurrency`` at a time, under ``ceiling`` in all.
+
+    The repeats are numbered from ``first``, so that more repeats of an arm go beside those that ran.
+    """
     turns = [
-        [(task, arm, repeat) for task in tasks for arm, n in arms if repeat <= n]
-        for repeat in range(1, max(n for _, n in arms) + 1)
+        [(task, arm, first + i) for task in tasks for arm, n in arms if i < n] for i in range(max(n for _, n in arms))
     ]
     order = list(itertools.chain.from_iterable(turns))
     done = threading.Event()

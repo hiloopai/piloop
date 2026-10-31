@@ -52,6 +52,7 @@ def pilot(
     hours: float = 4,
     concurrency: int = 10,
     ceiling: float = 1000,
+    first: int = 1,
 ) -> None:
     """Run many arms on many tasks from this one process, under one $ ceiling for all of them.
 
@@ -62,6 +63,7 @@ def pilot(
         hours: The cap of each run on wall-clock time.
         concurrency: How many runs go at once.
         ceiling: The cap on the spend of all runs together: at it, every run still going stops.
+        first: The number of the first repeat of each arm.
     """
     settings = Settings()
     plan = [(load_arm(name), int(n)) for name, _, n in (a.partition('=') for a in arms)]
@@ -73,6 +75,7 @@ def pilot(
             hours=hours,
             concurrency=concurrency,
             ceiling=ceiling,
+            first=first,
             settings=settings,
         )
 
