@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.merge import Held, check_migrations
+from scripts.merge import Held, check_migrations, check_remote
 
 VERSIONS = 'piloop/db/migrations/versions'
 PLUGIN = 'piloop/plugins/archive/local/migrations'
@@ -63,3 +63,24 @@ def test_two_heads_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
                 f'{VERSIONS}/0003_b.py': ('0003', '0001'),
             },
         )
+
+
+@pytest.mark.parametrize(
+    'url',
+    ['git@github.com:owner/dev.git', 'https://github.com/owner/dev', 'ssh://git@github.com/Owner/dev.git'],
+)
+def test_a_remote_of_the_repository_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(['git', 'init', '-q'], check=True)
+    subprocess.run(['git', 'remote', 'add', 'dev', url], check=True)
+    check_remote('dev', 'owner/dev')
+
+
+def test_a_remote_of_another_repository_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(['git', 'init', '-q'], check=True)
+    subprocess.run(['git', 'remote', 'add', 'origin', 'git@github.com:owner/public.git'], check=True)
+    with pytest.raises(
+        Held, match='the remote origin is git@github.com:owner/public.git, not the repository owner/dev'
+    ):
+        check_remote('origin', 'owner/dev')

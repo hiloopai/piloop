@@ -1,7 +1,7 @@
 """Merge approved pull requests, each as one squash commit, once a full CI run of its head is green.
 
-    uv run -m scripts.merge --messages DIR 590 591
-    uv run -m scripts.merge --messages DIR --train 577 578 579
+    uv run -m scripts.merge --repo OWNER/NAME --remote REMOTE --messages DIR 590 591
+    uv run -m scripts.merge --repo OWNER/NAME --remote REMOTE --messages DIR --train 577 578 579
 
 Each pull request merges in the order given. One that fails, conflicts or is held is reported and skipped, and the rest
 of the batch goes on. ``--train`` lands a stack, bottom first, in one push of one squash commit per pull request, from
@@ -9,8 +9,8 @@ the green run of its top; the lower pull requests are closed with the commit tha
 
 ``DIR`` holds the squash messages: ``titles.txt`` has a ``N|title`` line per pull request and ``N.md`` its body.
 ``names.txt``, if any, lists words that no squash message may contain, one per line. ``acked-comments.txt`` lists the
-ids of review comments by ``--reviewer`` that were answered elsewhere. ``gh`` picks the repository, as ``GH_REPO`` or
-the checkout says.
+ids of review comments by ``--reviewer`` that were answered elsewhere. ``REMOTE`` must be the git remote of
+``OWNER/NAME``: the script refuses to start otherwise, so a train never pushes to another repository's main.
 """
 
 import argparse
@@ -33,6 +33,9 @@ DO_NOT_MERGE = 'do-not-merge'
 """The label of a pull request that waits for a review, such as one that deletes tests."""
 RUN_START = 60
 """Seconds to wait for the CI run that ``gh pr ready`` starts to show up."""
+GITHUB_URL = re.compile(
+    r'(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)(?P<repo>[^/]+/[^/]+?)(?:\.git)?/?'
+)
 DECLARATION = re.compile(r'^[^:]+:(?P<path>[^:]+):(?P<name>down_revision|revision)\b[^=]*=(?P<value>.*)$')
 
 
@@ -219,6 +222,17 @@ def gh(*args: str) -> str:
     return run('gh', *args)
 
 
+def check_remote(remote: str, repo: str) -> None:
+    """Hold unless the remote's push URL is the GitHub repository ``OWNER/NAME`` that ``gh`` merges in.
+
+    A train pushes to the remote's main: a remote of another repository would publish there.
+    """
+    url = run('git', 'remote', 'get-url', '--push', remote)
+    match = GITHUB_URL.fullmatch(url)
+    if match is None or match['repo'].lower() != repo.lower():
+        raise Held(f'the remote {remote} is {url}, not the repository {repo}')
+
+
 def check_migrations(tree: str) -> None:
     """Each migrations directory of a tree declares each revision id once and has one head; holds if not."""
     found = subprocess.run(
@@ -248,8 +262,8 @@ def parse() -> argparse.Namespace:
     parser.add_argument(
         'numbers', type=int, nargs='+', help='the pull requests, in merge order (a train: bottom first)'
     )
-    parser.add_argument('--repo', help='OWNER/NAME on GitHub (default: the one that gh picks)')
-    parser.add_argument('--remote', default='origin', help='the git remote of the repository (default: origin)')
+    parser.add_argument('--repo', required=True, help='OWNER/NAME on GitHub')
+    parser.add_argument('--remote', required=True, help="the git remote of the repository that gh picks, such as 'dev'")
     parser.add_argument('--messages', type=Path, required=True, help='the directory of the squash messages')
     parser.add_argument('--reviewer', help='a GitHub login whose unanswered review comments hold a merge')
     parser.add_argument('--train', action='store_true', help='land the pull requests as one stack')
@@ -258,9 +272,14 @@ def parse() -> argparse.Namespace:
 
 if __name__ == '__main__':
     args = parse()
-    if args.repo:
-        os.environ['GH_REPO'] = args.repo
-    default_branch = gh('repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name')
+    # Every gh command below works in this repository. `gh repo view` reads the checkout instead: it is given the name.
+    os.environ['GH_REPO'] = args.repo
+    repository = json.loads(gh('repo', 'view', args.repo, '--json', 'nameWithOwner,defaultBranchRef'))
+    try:
+        check_remote(args.remote, repository['nameWithOwner'])
+    except Held as reason:
+        sys.exit(f'HOLD: {reason}')
+    default_branch = repository['defaultBranchRef']['name']
     merger = Merger(args.remote, default_branch, args.messages, args.reviewer)
     if args.train:
         try:
