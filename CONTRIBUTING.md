@@ -113,7 +113,7 @@ CI then runs it only in a job that does not block, as `make quarantine` does. It
 
 Other targets: `make format`, `make lint`, `make typecheck`, `make test` (no coverage), `make testcov`, `make docs`,
 `make docs-check` and `make e2e` (see below). CI runs the pre-commit hooks, the tests with coverage on Linux, split over
-four runners (`--shard I/N`), and `install.sh` with the enwik8 example. In `hiloopai/piloop`, not in a fork, CI also
+eight runners (`--shard I/N`), and `install.sh` with the enwik8 example. In `hiloopai/piloop`, not in a fork, CI also
 runs `make test` on macOS.
 
 ## The end-to-end tests

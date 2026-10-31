@@ -102,16 +102,16 @@ jobs:
           PATH="/tmp/bin:$PATH" piloop install-skills
           test -f ~/.agents/skills/piloop-operate/SKILL.md
 
-  # The suite is CPU-bound on a runner's two vCPUs, so it is split over four runners by a hash of each test's id
+  # The suite is CPU-bound on a runner's two vCPUs, so it is split over eight runners by a hash of each test's id
   # (tests/shard.py). Each part runs four workers, as the tests also wait on subprocesses. `coverage` adds up their data.
   test:
-    name: test, part ${{ matrix.shard }} of 4
+    name: test, part ${{ matrix.shard }} of 8
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -122,7 +122,7 @@ jobs:
           enable-cache: true
           cache-suffix: test
       - run: uv sync
-      - run: uv run pytest -n 4 --shard ${{ matrix.shard }}/4 --durations=10 --cov --cov-report= --cov-fail-under=0
+      - run: uv run pytest -n 4 --shard ${{ matrix.shard }}/8 --durations=10 --cov --cov-report= --cov-fail-under=0
       - uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.shard }}
