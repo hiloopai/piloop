@@ -13,7 +13,7 @@ from sqlalchemy import Boolean, ColumnElement, func, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import System
-from piloop.campaign.launches import choose_harness, full_harnesses, remove_checkouts
+from piloop.campaign.launches import choose_harness, full_harnesses, remove_checkouts, resumed_on
 from piloop.db.events import emit, latest
 from piloop.db.models import LIVE, AgentSession, Campaign, Event, EventModel, ReadBy, count
 from piloop.ids import AgentSessionId, RoleName, TargetKind, TargetRef
@@ -237,7 +237,8 @@ class OptimizationPlanner:
         for name, role in cfg.roles.doing_runs().items():
             for _ in range(free_slots(s, campaign, {name: role}, runs_left)):
                 total_runs = count(s, campaign_runs(campaign.id).where(done_by(name)))
-                harness = choose_harness(cfg, name, full_harnesses(s, campaign, cfg), total_runs)
+                resumes = resumed_on(s, campaign.id, name, role, cfg.role_harnesses(name))
+                harness = choose_harness(cfg, name, full_harnesses(s, campaign, cfg), total_runs, resumes)
                 if harness is None:
                     break
                 model = cfg.role_models(name)[harness]

@@ -593,6 +593,38 @@ def test_runs_start_on_the_harnesses_of_the_rotation_in_turn(
         )
 
 
+def test_a_run_of_a_resuming_role_starts_on_the_harness_of_the_roles_last_saved_session(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """With ``continuity = "resume"``, the next run goes to the harness whose session it continues, not the next turn."""
+    set_config(
+        db,
+        campaign,
+        plugins={
+            'harness': {'use': ['script', 'pi'], 'script': {'model': 'm'}, 'pi': {'model': 'p'}},
+            'role': {'implementer': {'max_concurrent': 1, 'continuity': 'resume'}},
+        },
+    )
+    with db.session() as s:
+        s.add(
+            AgentSession(
+                kind=IMPLEMENTER,
+                campaign_id=campaign.id,
+                harness='pi',
+                state=AgentSessionState.EXITED,
+                session_file=home_cas(db).put(b'{}'),
+            )
+        )
+        s.commit()
+    scheduler = make_scheduler(db, runtime, tmp_path)
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        campaigns_of(scheduler)._planner(p).queue(s, p, left(s, p, p.config))
+        s.commit()
+    with db.session() as s:
+        assert [r.harness for r in s.scalars(select(Run))] == ['pi'], 'the turn would have been script'
+
+
 def test_a_harness_at_its_cap_passes_its_turn(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:

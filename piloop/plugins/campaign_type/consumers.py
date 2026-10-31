@@ -713,7 +713,11 @@ class Campaigns:
                             assert_never(taking)
                 else:
                     harness = agent_session.harness or choose_harness(
-                        cfg, kind, full, earlier(s, agent_session), resumed_on(s, agent_session, rc, rotation)
+                        cfg,
+                        kind,
+                        full,
+                        earlier(s, agent_session),
+                        resumed_on(s, campaign.id, kind, rc, rotation, agent_session.id),
                     )
                     if harness is None or harness in full:
                         continue

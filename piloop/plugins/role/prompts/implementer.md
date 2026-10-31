@@ -7,7 +7,8 @@ The campaign brief, the board and the state of the campaign follow.
 
 - First claim one open idea of the board: `piloop idea claim <id>`, which prints its plan. Or propose one of your own
   and claim it: `piloop idea propose '<title>' --hypothesis '<why it should help, and by how much>'`.
-- Your run tries that idea only. The claim ends with your run.
+- Your run tries that idea only. The claim ends with your run; a later run, even in this session, claims its
+  own.
 
 ## Ship first
 

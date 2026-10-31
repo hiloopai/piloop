@@ -35,7 +35,7 @@ from piloop.agents.results import (
     Ran,
     WorkUnsaved,
 )
-from piloop.agents.roles import briefing, compose_brief, read_brief, role
+from piloop.agents.roles import briefing, compose_brief, compose_resumed, read_brief, render_sections, role
 from piloop.campaign.campaigns import (
     WORKSPACE,
     Sources,
@@ -131,9 +131,10 @@ from piloop.plugins.executor.contract import (
     JobKey,
 )
 from piloop.plugins.network.contract import NETWORKS, Network, NetworkHost
+from piloop.plugins.role.contract import Continuity
 from piloop.plugins.runtime.contract import ExitStatus, RuntimeFactory, make_runtime
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets, SecretsProvider
-from piloop.plugins.section.contract import Rendering, markdown
+from piloop.plugins.section.contract import Rendering
 from piloop.plugins.stop_rule.contract import Stop
 from piloop.plugins.vcs.contract import Pin, Repository, Transfer, Version
 from piloop.settings import AgentSettings, EvaluationSettings, StorageSettings
@@ -429,6 +430,7 @@ class RunController:
                     )
                     return
                 base = s.get_one(Candidate, run.base_candidate_id)
+                resumed: Cid | None = None
                 if run.brief_cid is None:
                     agent = Agent(role=run.role, session=agent_session_id)
                     brief = briefing(
@@ -440,12 +442,17 @@ class RunController:
                     )
                     workspace = workspace_dir(self._home, campaign.id)
                     rendering = Rendering(s, utcnow(), campaign, workspace, self.cas, brief=brief)
-                    composed = compose_brief(
-                        role(cfg, run.role, Path(campaign.path)),
-                        campaign,
-                        markdown(cfg.sections_of(RoleName(run.role)), rendering),
-                    )
+                    sections = render_sections(cfg.sections_of(RoleName(run.role)), rendering)
+                    composed = compose_brief(role(cfg, run.role, Path(campaign.path)), campaign, sections.whole)
                     run.brief_cid = self.cas.put(composed.encode())
+                    table = cfg.role(run.role)
+                    match table.continuity:
+                        case Continuity.RESUME:
+                            resumed = self.cas.put(compose_resumed(table, agent, sections.resumed).encode())
+                        case Continuity.FRESH:
+                            pass
+                        case _:
+                            assert_never(table.continuity)
                 brief = run.brief_cid
                 run.status = RunStatus.RUNNING
                 # A relaunch keeps the start time, so comments since then are sent to the new implementer again.
@@ -458,9 +465,11 @@ class RunController:
                     System.DAEMON,
                 )
                 s.commit()
-        self._finish(run_id, agent_session_id, brief, span)
+        self._finish(run_id, agent_session_id, brief, span, resumed)
 
-    def _finish(self, run_id: RunId, agent_session_id: AgentSessionId, brief: Cid | None, span: Span) -> None:
+    def _finish(
+        self, run_id: RunId, agent_session_id: AgentSessionId, brief: Cid | None, span: Span, resumed: Cid | None = None
+    ) -> None:
         """Run the agent, then record the outcome, score the commits and settle the idea.
 
         With a ``brief``, a new agent starts in a new worktree. With None, the daemon re-attaches to the agent that is
@@ -487,6 +496,7 @@ class RunController:
                     artifact=self.sources.agent(self._campaign(campaign_id), base_revision),
                     timeout=timeout,
                     capture=TargetRef(RUN, run_id),
+                    resumed_brief=resumed,
                 )
             # a daemon stop owns the rows, also when it came just after the report applied
             stopping = self.launcher.cancelled.is_set()

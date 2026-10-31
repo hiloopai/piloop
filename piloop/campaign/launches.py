@@ -4,19 +4,20 @@ from collections import Counter
 from collections.abc import Collection
 from contextlib import closing
 from pathlib import Path
+from typing import assert_never
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, true
 from sqlalchemy.orm import Session
 
 from piloop.agents.refill import usage_of
 from piloop.campaign.campaigns import vcs_of
 from piloop.config import CampaignConfig
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, utcnow
-from piloop.ids import RoleName
+from piloop.ids import AgentSessionId, CampaignId, RoleName
 from piloop.otel import Tracer
 from piloop.plugins.harness.contract import Usage
 from piloop.plugins.harness_choice.contract import HARNESS_CHOICES, HarnessCase, chosen
-from piloop.plugins.role.contract import Continuity, RoleConfig, SweepRole
+from piloop.plugins.role.contract import Continuity, RoleConfig
 from piloop.plugins.vcs.contract import NotARepository
 
 
@@ -56,27 +57,38 @@ def earlier(s: Session, agent_session: AgentSession) -> int:
     )
 
 
-def resumed_on(s: Session, w: AgentSession, table: RoleConfig, harnesses: Collection[str]) -> str | None:
-    """The harness on which the sweep ``w`` can resume its role's last saved session, or None.
+def resumed_on(
+    s: Session,
+    campaign_id: CampaignId,
+    kind: str,
+    table: RoleConfig,
+    harnesses: Collection[str],
+    before: AgentSessionId | None = None,
+) -> str | None:
+    """The harness on which the next agent of the role ``kind`` can resume its role's last saved session, or None.
 
-    Only a role that resumes its sessions has one, and only while ``harnesses`` still has it.
+    Only a role that resumes its sessions has one, and only while ``harnesses`` still has it. ``before``: the agent's
+    own row, when it has one.
     """
-    match table:
-        case SweepRole(continuity=Continuity.RESUME):
+    match table.continuity:
+        case Continuity.RESUME:
+            earlier = AgentSession.id < before if before is not None else true()
             return s.scalar(
                 select(AgentSession.harness)
                 .where(
-                    AgentSession.campaign_id == w.campaign_id,
-                    AgentSession.kind == w.kind,
-                    AgentSession.id < w.id,
+                    AgentSession.campaign_id == campaign_id,
+                    AgentSession.kind == kind,
+                    earlier,
                     AgentSession.session_file.is_not(None),
                     AgentSession.harness.in_(harnesses),
                 )
                 .order_by(AgentSession.id.desc())
                 .limit(1)
             )
-        case _:
+        case Continuity.FRESH:
             return None
+        case _:
+            assert_never(table.continuity)
 
 
 def remove_checkouts(agent_dir: Path, campaign: Campaign, tracer: Tracer) -> None:

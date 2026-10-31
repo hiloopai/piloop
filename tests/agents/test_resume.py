@@ -22,6 +22,8 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
+from piloop.plugins.campaign_type.kit.runs.tables import working_on
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.contract import RepoId, Resume
 from piloop.plugins.executor.kit import jobs
@@ -44,6 +46,7 @@ from tests.conftest import (
     wait_until,
     workers_of,
 )
+from tests.daemon.test_run_controller import WORKED, controller as run_controller, execute, make_run
 from tests.test_lease import agent_job
 from tests.usage.test_usage import SESSIONS
 
@@ -469,3 +472,35 @@ def test_a_worker_that_cannot_restore_says_why(
             assert (kept, same) == (broken, start)
             assert isinstance(failed, jobs.Unrestored) and why in failed.reason
     assert len(events(spans, jobs.SESSION_UNRESTORED)) == 3
+
+
+def test_an_implementer_of_a_resuming_role_continues_the_last_runs_session_in_its_own_new_run(
+    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path, home: Path
+) -> None:
+    """``continuity = "resume"`` on a role that does runs: each run's agent continues the session of the last run's.
+
+    It gets the role's resume message and only the run's context and sections: the prompt is in the session already.
+    """
+    use_harness(db, campaign, harness(tmp_path), **HARNESS)
+    with db.session() as s:
+        row = s.get_one(Campaign, campaign.id)
+        row.config = reconfigured(row.config, plugins={'role': {IMPLEMENTER: {'continuity': Continuity.RESUME.value}}})
+        s.commit()
+    first = make_run(db, campaign, title='first')
+    execute(run_controller(db, runtime, tmp_path, agents=WORKED), db, first)
+    assert '# Implementer' in (tmp_path / 'brief--session-id.md').read_text(), (
+        'the first run starts from its whole brief'
+    )
+    second = make_run(db, campaign, title='second')
+    execute(run_controller(db, runtime, tmp_path, agents=WORKED), db, second)
+    with db.session() as s:
+        one, two = (s.scalars(select(AgentSession).where(working_on(r))).one() for r in (first, second))
+        resumes, two_id = started(db, two.id).resumes, two.id
+        assert (resumes, two.session_id, not_resumed(db, two.id)) == (one.id, one.session_id, [])
+    brief = (tmp_path / 'brief--resume.md').read_text()
+    assert brief.startswith(f'You continue this session as a new agent, implementer#{two_id}.')
+    assert '- Your cwd is your checkout' in brief and '# Implementer' not in brief
+
+
+def test_an_implementer_role_starts_each_run_in_a_fresh_session_by_default(campaign: Campaign) -> None:
+    assert campaign.config.role(IMPLEMENTER).continuity is Continuity.FRESH

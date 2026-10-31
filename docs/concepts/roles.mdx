@@ -165,7 +165,9 @@ lines = ["- You are {agent}, the {role} for {campaign}.", "- Why you started: {r
 ```
 
 Each agent starts with the role's `first_message`, which names its brief. An agent that resumes the role's last
-session starts with `resume_message`.
+session starts with `resume_message`. Any role can resume, with `continuity = "resume"`: for the implementer, each run's
+agent continues the last run's session in its own new checkout, and claims its own idea. With `max_concurrent = 1`,
+that is one worker that keeps its session for the whole campaign.
 
 <Sections />
 

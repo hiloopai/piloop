@@ -66,7 +66,7 @@ lets their agents run on a worker elsewhere."""
 
 
 class Continuity(StrEnum):
-    """How the agents of a sweeping role follow each other (``continuity``)."""
+    """How the agents of a role follow each other (``continuity``)."""
 
     FRESH = 'fresh'
     """Each agent starts a new harness session from its whole brief."""
@@ -144,6 +144,11 @@ class RoleConfig(Parameters):
     the guides first, in their order (``Section.SHOWN_IN``, ``Section.ORDER``)."""
     first_message: str = FIRST_MESSAGE
     """The first message of each agent of this role. ``{brief}`` is the path of its brief."""
+    continuity: Continuity = Continuity.FRESH
+    """``fresh``: each agent starts a new harness session. ``resume``: each agent continues the session of the role's
+    last agent, written back from the CAS, so it remembers what the agents before it did. The harness needs
+    ``resume``, and a provider that restores its session files (``Harness.restore``): every built-in one does. In a
+    role that does runs, each run's agent continues the last run's session, and claims its own idea."""
     resume_message: str = RESUME_MESSAGE
     """What starts the brief of an agent that resumes the session of the role's last agent. ``{agent}`` is its
     signature."""
@@ -249,10 +254,6 @@ class SweepRole(RoleConfig):
     max_ideas: int = Field(default=1, ge=0)
     """The maximum number of new ideas one sweep may insert, as its brief states it. ``low_water`` requests enough
     sweeps to fill the backlog at this many ideas each. 0 turns ``low_water`` off for the role."""
-    continuity: Continuity = Continuity.FRESH
-    """``fresh``: each agent starts a new harness session. ``resume``: each agent continues the session of the role's
-    last agent, written back from the CAS, so it remembers what the agents before it did. The harness needs
-    ``resume``, and a provider that restores its session files (``Harness.restore``): every built-in one does."""
     incident_prompt: str | None = None
     """A file that follows ``prompt`` in the brief of an incident sweep, a sweep that got incidents from a
     trigger that investigates, such as ``run_failed``: a path relative to the repo root, or an absolute path. When unset, the role's own (the watchdog's
