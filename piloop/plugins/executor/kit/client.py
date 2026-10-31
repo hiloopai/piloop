@@ -157,7 +157,10 @@ class Local:
         self._leases.lost(lease, self._worker, reason)
 
     def messages(self, after: int, wait: float) -> Sequence[Work | PromptMessage | Revoke | Extend | Drain]:
-        return self._leases.messages(self._worker, after, wait)
+        try:
+            return self._leases.messages(self._worker, after, wait)
+        except UnknownWorker as e:
+            raise Dismissed(str(e)) from e
 
     def queued(self, message: int, error: str | None) -> None:
         self._leases.queued(self._worker, message, error)

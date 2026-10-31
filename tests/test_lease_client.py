@@ -17,6 +17,7 @@ from covalence import Cid
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import SecretStr, ValidationError
 from pytest_mock import MockerFixture
+from sqlalchemy import delete, event
 
 from piloop.actor import Agent, System
 from piloop.api.contract import MAX_POLL_SECONDS, Access
@@ -375,6 +376,34 @@ def test_a_worker_whose_row_is_gone_is_dismissed_at_its_next_call(connect: Conne
         w1.heartbeat({}, HOST)
     with pytest.raises(Dismissed, match=gone):
         w1.acquire(uuid4().hex, HOST)
+    with pytest.raises(Dismissed, match=gone):
+        w1.messages(0, 0)
+
+
+def test_a_worker_whose_row_a_drain_deletes_while_its_messages_are_read_is_dismissed(
+    connect: Connect, db: Database
+) -> None:
+    """The drain deletes the row between the read of the worker's row and the store of its cursor: the worker is told
+    that it is gone, never a 500 of a stale row."""
+    w1 = connect('w1')
+    w1.register(INFO)
+
+    loads: list[str] = []
+
+    def drained(row: LeaseWorker, _: object) -> None:
+        if not loads:
+            with db.session() as s:  # another transaction: the idle drain's
+                s.execute(delete(LeaseWorker).where(LeaseWorker.id == row.id))
+                s.commit()
+        loads.append(row.id)
+
+    event.listen(LeaseWorker, 'load', drained)
+    try:
+        with pytest.raises(Dismissed, match='worker w1 is not registered'):
+            w1.messages(7, 0)
+    finally:
+        event.remove(LeaseWorker, 'load', drained)
+    assert loads == ['w1'], 'the row was read once, then the drain deleted it'
 
 
 def test_a_report_on_a_lease_that_never_was_is_stale(connect: Connect) -> None:

@@ -30,7 +30,7 @@ from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.contract import Capacity, RepoId, Source
 from piloop.plugins.executor.kit import scaling
 from piloop.plugins.executor.kit.capacity import Pool
-from piloop.plugins.executor.kit.client import Local
+from piloop.plugins.executor.kit.client import Dismissed, Local
 from piloop.plugins.executor.kit.leases import Drain, Grant, Leases, WorkerDrained
 from piloop.plugins.executor.kit.scaling import InstanceEnded, InstanceRegistered, Scaler
 from piloop.plugins.executor.kit.tables import (
@@ -262,7 +262,8 @@ def test_an_idle_worker_past_min_is_drained_then_stopped_and_its_credential_revo
     assert Tokens(db).verify(first_secret) is None
     with db.session() as session:
         assert session.get(LeaseWorker, drained.name) is None, 'an ended instance leaves no worker to list'
-    assert Local(s.leases, drained.name).messages(0, 0) == [], 'a long-poll that it left open ends'
+    with pytest.raises(Dismissed, match='is not registered'):  # a long-poll that it left open ends, and says why
+        Local(s.leases, drained.name).messages(0, 0)
 
 
 def test_max_0_drains_a_busy_worker_which_stops_once_its_job_reported(

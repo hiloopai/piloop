@@ -477,10 +477,14 @@ def cancel(s: Session, lease: Lease, reason: str) -> None:
 def _registered(s: Session, worker: str) -> LeaseWorker:
     """The row of ``worker``, which ``register`` wrote. Raises ``UnknownWorker`` when it is gone."""
     if (row := s.get(LeaseWorker, worker)) is None:
-        raise UnknownWorker(
-            f'worker {worker} is not registered: its instance ended, or it never registered; start it again'
-        )
+        raise _gone(worker)
     return row
+
+
+def _gone(worker: str) -> UnknownWorker:
+    return UnknownWorker(
+        f'worker {worker} is not registered: its instance ended, or it never registered; start it again'
+    )
 
 
 def _target(cas: Cas, lease: Lease) -> TargetRef:
@@ -970,16 +974,19 @@ class Leases:
 
         A long-poll, after the GitHub Actions runner: it returns at once when a message waits, and reads again on each
         wake (``Database.wait_until``). A prompt whose comment has its outcome is left out: the worker answered it.
-        A worker whose row went (``scaling`` ended its instance) gets none.
+
+        Raises:
+            UnknownWorker: the worker's row is gone (``scaling`` ended its instance, or drained it), also while it
+                waited.
         """
         found: list[Work | PromptMessage | Revoke | Extend | Drain] = []
 
         def read(s: Session) -> bool:
-            row = s.get(LeaseWorker, worker)
-            if row is None:  # its instance ended while it waited: its credential is revoked, so its next call fails
-                return True
-            if row.cursor != after:
-                row.cursor = after
+            if _registered(s, worker).cursor != after:
+                # a statement, not a change of the loaded row: a drain may delete the row after the read
+                moved = update(LeaseWorker).where(LeaseWorker.id == worker).values(cursor=after)
+                if s.scalar(moved.returning(LeaseWorker.id)) is None:
+                    raise _gone(worker)
                 s.commit()
             page = feed.after(s, after, topics(worker), limit=PAGE, where=[_unanswered()])
             found[:] = [_message(e) for e in s.scalars(select(Event).where(Event.id.in_(page.ids)).order_by(Event.id))]
