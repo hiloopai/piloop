@@ -3,17 +3,28 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from sqlalchemy import select, update
+from sqlalchemy import create_engine, exc, select, update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from piloop.daemon.main import ACTOR
 from piloop.db.models import Campaign
-from piloop.db.session import WRITE_SPAN, Database, MeasuredConnection, WriteSpans, write_transaction
+from piloop.db.session import (
+    POOL_CONNECTIONS,
+    POOL_WAIT_SPAN,
+    WRITE_SPAN,
+    Database,
+    DatabaseClosed,
+    MeasuredConnection,
+    Patient,
+    WriteSpans,
+    write_transaction,
+)
 from piloop.otel import Tracer
 from piloop.settings import TracingSettings
 
@@ -137,3 +148,95 @@ def test_only_a_slow_write_records_a_span_and_a_read_never_does(
     measured.close()
 
     assert len(writes(spans)) == recorded
+
+
+def test_a_session_waits_out_a_stall_that_holds_every_connection_and_records_each_wait(
+    db: Database, tracer: Tracer, spans: InMemorySpanExporter
+) -> None:
+    """A stalled disk holds every connection that a thread took. A session that needs one waits until one comes back,
+    however long, instead of failing the work it does: each round of the pool's timeout is a span."""
+    assert tracer.measures is not None
+    patient = Database(
+        str(db.engine.url),
+        actor=ACTOR,
+        writes=WriteSpans(tracer.measures, TracingSettings().slow_write),
+        pool_round=timedelta(seconds=0.05),
+    )
+    stalled, holding = threading.Event(), threading.Semaphore(0)
+
+    def hold() -> None:
+        with patient.session() as s:
+            s.execute(select(1))
+            holding.release()
+            stalled.wait()
+
+    holders = [threading.Thread(target=hold) for _ in range(POOL_CONNECTIONS)]
+    for t in holders:
+        t.start()
+    for _ in holders:
+        assert holding.acquire(timeout=10)
+    answered: list[int] = []
+
+    def read() -> None:
+        with patient.session() as s:
+            answered.append(s.scalar(select(1)) or 0)
+
+    reader = threading.Thread(target=read)
+    reader.start()
+    time.sleep(0.3)  # several rounds of the pool's timeout
+    assert answered == [], 'it waits while every connection is held'
+    stalled.set()
+    reader.join(10)
+    for t in holders:
+        t.join(10)
+    patient.close()
+    assert answered == [1], 'it got a connection once the stall ended, and its work went on'
+    waits = [s for s in spans.get_finished_spans() if s.name == POOL_WAIT_SPAN]
+    assert len(waits) >= 2 and {(s.attributes or {})['checked_out'] for s in waits} == {POOL_CONNECTIONS}
+
+
+def test_a_checkout_that_waits_gives_up_once_its_database_closes(db: Database) -> None:
+    patient = Database(str(db.engine.url), actor=ACTOR, pool_round=timedelta(seconds=0.05))
+    stalled, holding = threading.Event(), threading.Semaphore(0)
+
+    def hold() -> None:
+        with patient.session() as s:
+            s.execute(select(1))
+            holding.release()
+            stalled.wait()
+
+    holders = [threading.Thread(target=hold) for _ in range(POOL_CONNECTIONS)]
+    for t in holders:
+        t.start()
+    for _ in holders:
+        assert holding.acquire(timeout=10)
+    met: list[BaseException] = []
+
+    def read() -> None:
+        try:
+            with patient.session() as s:
+                s.execute(select(1))
+        except DatabaseClosed as e:
+            met.append(e)
+
+    reader = threading.Thread(target=read)
+    reader.start()
+    time.sleep(0.2)  # rounds that it waits, which this database records nowhere
+    closing = threading.Thread(target=patient.close)
+    closing.start()
+    reader.join(10)
+    assert [str(e) for e in met] == ['the database is closed'], 'the waiter gives up: the daemon stops'
+    stalled.set()
+    for t in (*holders, closing):
+        t.join(10)
+
+
+def test_a_patient_pool_of_no_database_waits_one_round_as_a_plain_pool(tmp_path: Path) -> None:
+    engine = create_engine(
+        f'sqlite:///{tmp_path / "plain.db"}', poolclass=Patient, pool_size=1, max_overflow=0, pool_timeout=0.01
+    )
+    held = engine.raw_connection()
+    with pytest.raises(exc.TimeoutError):
+        engine.raw_connection()
+    held.close()
+    engine.dispose()

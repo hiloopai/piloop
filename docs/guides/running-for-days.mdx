@@ -79,7 +79,8 @@ WantedBy=default.target
 ## Logs
 
 The daemon writes one line for each span to `~/.piloop/serve.log`. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to send the spans
-to an OpenTelemetry collector too. The `events` table is the easiest record to query:
+to an OpenTelemetry collector too. A `piloop.db.pool_wait` span says that a thread waited 30 seconds for a database
+connection, with how many were in use: the disk stalled, and the daemon waits it out. No run fails of it. The `events` table is the easiest record to query:
 
 ```bash
 piloop sql "SELECT at, actor, kind, payload FROM events ORDER BY id DESC LIMIT 20"

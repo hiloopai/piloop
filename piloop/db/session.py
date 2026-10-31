@@ -37,11 +37,11 @@ from typing import TYPE_CHECKING, NewType, Self
 from alembic import command
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
-from sqlalchemy import Connection, Engine, create_engine, event, make_url
+from sqlalchemy import Connection, Engine, create_engine, event, exc, make_url
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import ExceptionContext
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import ConnectionPoolEntry, NullPool, PoolProxiedConnection
+from sqlalchemy.pool import ConnectionPoolEntry, NullPool, PoolProxiedConnection, QueuePool
 
 from piloop.actor import Actor, Agent
 from piloop.db.models import TARGET_KINDS, KnownCommentKind, KnownKind, Migration, utcnow
@@ -122,6 +122,12 @@ def _pragmas(conn: sqlite3.Connection) -> None:
 
 
 WRITE_SPAN = 'piloop.db.write'
+POOL_WAIT_SPAN = 'piloop.db.pool_wait'
+POOL_SIZE, POOL_OVERFLOW = 5, 10
+"""The pool's connections, SQLAlchemy's defaults: ``POOL_SIZE`` kept open, and up to ``POOL_OVERFLOW`` more."""
+POOL_CONNECTIONS = POOL_SIZE + POOL_OVERFLOW
+POOL_ROUND = timedelta(seconds=30)
+"""How long one round of a checkout waits for a connection to come back (``Patient``), SQLAlchemy's timeout."""
 _WRITE = re.compile(r'\s*(INSERT|UPDATE|DELETE|REPLACE|BEGIN\s+IMMEDIATE)\b', re.IGNORECASE)
 
 
@@ -199,7 +205,31 @@ class _MeasuredCursor(sqlite3.Cursor):
         return self._con.run(sql, partial(super().executemany, sql, seq_of_parameters))
 
 
-def make_engine(url: str, actor: Actor, writes: WriteSpans | None = None) -> Engine:
+class Patient(QueuePool):
+    """A pool whose checkout waits out a stall: when every connection is held, it waits again after each round.
+
+    On a stalled disk every thread that touches SQLite holds its connection until the disk answers, and a daemon has
+    more such threads than ``POOL_CONNECTIONS``. A checkout that gave up after a round would fail the run, the
+    evaluation or the daemon thread that asked, for a fault of the machine. So it waits, as long as the stall lasts,
+    and each round is a ``POOL_WAIT_SPAN`` of its ``owner``, with how many connections are out: a leak shows as rounds
+    that never end. It gives up once its ``owner`` closes.
+    """
+
+    owner: Database | None = None
+    """The database that records the rounds and closes. None: one round, as a plain pool (``dispose`` makes one)."""
+
+    def _do_get(self) -> ConnectionPoolEntry:
+        start = time.time_ns()
+        while True:
+            try:
+                return super()._do_get()
+            except exc.TimeoutError:
+                if (owner := self.owner) is None:
+                    raise
+                owner.waited(start, self.checkedout())
+
+
+def make_engine(url: str, actor: Actor, writes: WriteSpans | None = None, pool_round: timedelta = POOL_ROUND) -> Engine:
     """An engine whose connections apply the SQLite pragmas and record ``actor`` in ``updated_by``.
 
     With ``writes``, each connection records its slow write transactions (``MeasuredConnection``).
@@ -228,7 +258,14 @@ def make_engine(url: str, actor: Actor, writes: WriteSpans | None = None) -> Eng
     connect_args: dict[str, object] = {'check_same_thread': False}
     if writes is not None:
         connect_args['factory'] = partial(MeasuredConnection, writes=writes)
-    engine = create_engine(url, connect_args=connect_args)
+    engine = create_engine(
+        url,
+        connect_args=connect_args,
+        poolclass=Patient,
+        pool_size=POOL_SIZE,
+        max_overflow=POOL_OVERFLOW,
+        pool_timeout=pool_round.total_seconds(),
+    )
     event.listen(engine, 'connect', on_connect)
     event.listen(engine, 'close', on_close)
     event.listen(engine, 'handle_error', on_error)
@@ -702,11 +739,19 @@ class Database:
         url: The SQLAlchemy URL of the database.
         actor: The value that every UPDATE through this database records in ``updated_by``.
         writes: Where each slow write transaction records how long it waited for the write lock and held it
-            (``MeasuredConnection``). None records nothing.
+            (``MeasuredConnection``), and each round that a checkout waited for a connection (``Patient``). None
+            records nothing.
+        pool_round: How long one round of a checkout waits for a connection (``Patient``).
     """
 
-    def __init__(self, url: str, *, actor: Actor, writes: WriteSpans | None = None) -> None:
-        self.engine = make_engine(url, actor, writes)
+    def __init__(
+        self, url: str, *, actor: Actor, writes: WriteSpans | None = None, pool_round: timedelta = POOL_ROUND
+    ) -> None:
+        self.engine = make_engine(url, actor, writes, pool_round)
+        pool = self.engine.pool
+        assert isinstance(pool, Patient)  # make_engine's
+        pool.owner = self
+        self._measures = None if writes is None else writes.measures
         self.actor = actor
         self._sessions = sessionmaker(self.engine, expire_on_commit=False)
         self._committed = threading.Condition()
@@ -761,6 +806,17 @@ class Database:
                     yield s
             finally:
                 sign(driver, self.actor)
+
+    def waited(self, start_ns: int, checked_out: int) -> None:
+        """Record a round that a checkout waited for a connection since ``start_ns`` (``Patient``).
+
+        Raises:
+            DatabaseClosed: ``close`` came first: the waiter gives up.
+        """
+        if self._closed:
+            raise DatabaseClosed('the database is closed')
+        if self._measures is not None:
+            self._measures.record(POOL_WAIT_SPAN, start_ns, time.time_ns(), checked_out=checked_out)
 
     def _count_checkout(self, change: int) -> None:
         with self._committed:
