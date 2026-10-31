@@ -2,8 +2,9 @@
 
     uv run pytest -m e2e tests/e2e/test_agent_slots.py -rA [--e2e-harness claude] [--e2e-model <model>]
 
-Each campaign takes four implementers (``max_concurrent``), and the pool ``serve`` takes two agents. Two small ideas
-each: six runs, at most two at a time. About 8 minutes and 0.4 USD.
+Each campaign takes four implementers (``max_concurrent``) but two runs (``[stop] max_runs``), and the pool ``serve``
+takes two agents. The campaigns start paused, with two small ideas each on the board; once they resume, each run's
+worker claims an idea or proposes its own: six runs, at most two at a time. About 8 minutes and 0.4 USD.
 """
 
 import shutil
@@ -28,30 +29,30 @@ CONFIG = {
             'research': {'triggers': []},
             'watchdog': {'triggers': []},
         },
-        'stop_rule': {'max_runs': 5, 'max_hours': 1, 'max_tokens': 20_000_000},
+        'stop_rule': {'max_runs': 2, 'max_hours': 1, 'max_tokens': 20_000_000},
     },
 }
 OTHERS = ('enwik8-b', 'enwik8-c')
 """The two campaigns that join the first one's home."""
 LEVELS = (1, 9)
 """One idea for each zlib level, in each campaign."""
+PAUSED = 'e2e: the ideas of all three campaigns go in first'
 
 
 @pytest.fixture(scope='module')
 def host(make_campaign: MakeCampaign) -> Iterator[Smoke]:
-    """The first campaign, its daemon with two agent slots, and two more campaigns in its home."""
+    """The first campaign, its daemon with two agent slots, and two more campaigns in its home: all three paused."""
     first = make_campaign(
         config=CONFIG,
         home_config={'plugins': {'executor': {'provider': 'workers', 'pools': {'serve': {'agents': AGENTS}}}}},
+        paused=PAUSED,
     )
-    first.piloop('pause', first.name, '--reason', 'e2e: the ideas of all three campaigns go in first')
-    toml = tomllib.loads((first.repo / 'piloop.toml').read_text())
+    toml = tomllib.loads((first.repo / 'piloop.toml').read_text())  # its evaluate command waits on the same hold
     for name in OTHERS:
         repo = first.dir / name
         shutil.copytree(TEMPLATES / 'enwik8', repo, ignore=shutil.ignore_patterns('data', '.venv', '__pycache__'))
         (repo / 'piloop.toml').write_text(tomli_w.dumps(merged(toml, {'name': name})))
-        first.piloop('init', str(repo), '--example', 'enwik8')
-        first.piloop('pause', name, '--reason', 'e2e: the ideas of all three campaigns go in first')
+        first.init_paused(repo, 'enwik8', PAUSED)
     first.start_readers()
     yield first
 
@@ -69,10 +70,11 @@ def test_the_ideas_wait_while_the_campaigns_are_paused(host: Smoke) -> None:
                 name,
                 f'Compress at zlib level {level}',
                 '--plan',
-                f'In compressor.py, set the zlib level to {level}. Run `uv run python evaluate.py` once, then commit.'
-                ' Change nothing else.',
+                f'In compressor.py, set the zlib level to {level}. Run `uv run python evaluate.py` once, commit,'
+                ' run `piloop submit`, then end your run with `piloop run end submitted`. Change nothing else.',
             )
     assert host.sql('SELECT id FROM runs') == []
+    assert {r['status'] for r in host.sql('SELECT status FROM ideas')} == {'open'}
 
 
 @needs(test_the_ideas_wait_while_the_campaigns_are_paused)
@@ -86,6 +88,8 @@ def test_six_runs_go_two_at_a_time_across_the_campaigns(host: Smoke) -> None:
         return not OPEN.intersection(statuses)
 
     wait_until(settled, timeout=900)
+    claims = host.sql('SELECT idea_id FROM runs')
+    assert None not in [r['idea_id'] for r in claims], 'each worker claimed an idea, or proposed its own'
     host.join_readers()
     agents = [a for _, _, a in host.queue_samples]
     assert agents, f'no sample; reader errors {host.errors[-3:]}'

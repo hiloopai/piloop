@@ -26,7 +26,7 @@ from piloop.plugins.harness.contract import cleared_env
 from piloop.plugins.network.https import TOKEN_ENV
 from piloop.settings import UNDER_TEST_ENV
 from tests.conftest import wait_until
-from tests.e2e.campaign import CHEAPEST_MODEL, ROOT, TEMPLATES, WORKER_LOG, Elsewhere, Smoke, Toml, merged
+from tests.e2e.campaign import CHEAPEST_MODEL, ROOT, TEMPLATES, WORKER_LOG, Elsewhere, Smoke, Toml, held, merged
 from tests.fixtures.netfault import Proxy
 from tests.isolation import CALLER_ENV
 
@@ -109,6 +109,8 @@ class MakeCampaign(Protocol):
         home_config: Toml | None = None,
         harness: str | None = None,
         model: str | None = None,
+        paused: str | None = None,
+        brief: str | None = None,
     ) -> Smoke: ...
 
 
@@ -153,7 +155,9 @@ def make_campaign(request: pytest.FixtureRequest, piloop_install: Install, e2e_m
     ``piloop install-skills`` into temporary skills directories, and ``piloop init <repo> --example <template>``, which
     keeps that ``piloop.toml``, fetches the example's data and starts the daemon. ``harness`` and
     ``model`` default to ``--e2e-harness`` and ``--e2e-model``; every role of the campaign uses that harness and model.
-    In distributed mode, the daemon listens, and a worker elsewhere runs every job (``elsewhere``).
+    In distributed mode, the daemon listens, and a worker elsewhere runs every job (``elsewhere``). With ``paused``, the
+    campaign is paused with that reason before it starts a run (``Smoke.init_paused``), so a test seeds its board first.
+    ``brief`` is a paragraph that goes at the end of the campaign's ``brief.md``, as a lead steers its workers.
     """
     made: list[tuple[Smoke, str, float]] = []
     module = f'{request.module.__name__.rpartition(".")[2]}[{e2e_mode}]'
@@ -165,6 +169,8 @@ def make_campaign(request: pytest.FixtureRequest, piloop_install: Install, e2e_m
         home_config: Toml | None = None,
         harness: str | None = None,
         model: str | None = None,
+        paused: str | None = None,
+        brief: str | None = None,
     ) -> Smoke:
         harness = harness or request.config.getoption('e2e_harness')
         model = model or request.config.getoption('e2e_model') or CHEAPEST_MODEL.get(harness)
@@ -184,6 +190,11 @@ def make_campaign(request: pytest.FixtureRequest, piloop_install: Install, e2e_m
                 },
             },
         )
+        if paused is not None:
+            toml = held(toml, directory / 'hold')
+        if brief is not None:
+            with (repo / 'brief.md').open('a') as f:
+                f.write(f'\n{brief}\n')
         (repo / 'piloop.toml').write_text(tomli_w.dumps(toml))
         home.mkdir()
         if e2e_mode is Mode.DISTRIBUTED:
@@ -201,7 +212,10 @@ def make_campaign(request: pytest.FixtureRequest, piloop_install: Install, e2e_m
             # before init, which waits for the baseline: only the worker elsewhere evaluates
             live_campaign.piloop('serve', '--detach', '--listen', '127.0.0.1:0')
             live_campaign.elsewhere = elsewhere(live_campaign, piloop_install, directory / 'worker')
-        live_campaign.piloop('init', str(repo), '--example', template)  # starts the daemon, unless it runs
+        if paused is None:
+            live_campaign.piloop('init', str(repo), '--example', template)  # starts the daemon, unless it runs
+        else:
+            live_campaign.init_paused(repo, template, paused)
         return live_campaign
 
     try:

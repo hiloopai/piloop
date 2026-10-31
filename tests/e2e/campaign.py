@@ -5,6 +5,7 @@ import re
 import sqlite3
 import subprocess
 import threading
+import tomllib
 from collections.abc import Callable, Mapping
 from contextlib import closing
 from dataclasses import dataclass, field
@@ -18,6 +19,7 @@ from piloop.api.views import Batch, CampaignState, DaemonState, Envelope, Status
 from piloop.plugins.runtime.contract import TAG_ENV
 from piloop.plugins.runtime.kit.tags import kill_tagged, tagged
 from piloop.plugins.runtime.subprocess import STDOUT
+from tests.conftest import wait_until
 from tests.fixtures.netfault import Proxy
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -43,6 +45,20 @@ class CommandFailed(Exception):
 def needs(*tests: FunctionType) -> pytest.MarkDecorator:
     """Skip the test unless each of ``tests``, earlier in the module, passed: it reads the state that they leave."""
     return pytest.mark.needs(*(test.__name__ for test in tests))
+
+
+CLAIM_THE_BOARD = (
+    'This campaign tests piloop itself. Claim an open idea of the board, never one of your own, and follow its plan'
+    ' exactly.'
+)
+"""A ``brief`` for ``make_campaign``: a worker that proposed its own idea would leave the test's idea unclaimed."""
+
+
+def held(toml: Toml, hold: Path) -> dict[str, object]:
+    """``toml`` with its evaluate command waiting while ``hold`` exists, for ``Smoke.init_paused``."""
+    evaluate = toml['evaluate']
+    assert isinstance(evaluate, list), evaluate
+    return {**toml, 'evaluate': ['sh', '-c', f'while [ -f {hold} ]; do sleep 0.2; done; exec "$0" "$@"', *evaluate]}
 
 
 def merged(base: Toml, over: Toml) -> dict[str, object]:
@@ -129,6 +145,41 @@ class Smoke:
                 f'`piloop {" ".join(args)}` exited {proc.returncode}: {(proc.stderr or proc.stdout)[-800:]}'
             )
         return proc.stdout
+
+    @property
+    def hold(self) -> Path:
+        """While this file exists, the evaluate command of a campaign that ``held`` wrote waits."""
+        return self.dir / 'hold'
+
+    def init_paused(self, repo: Path, template: str, reason: str) -> None:
+        """``piloop init`` of ``repo``, whose ``piloop.toml`` is ``held``: the campaign is paused before it starts a run.
+
+        A campaign starts a fresh run on each free slot once its baseline is measured, before a pause after ``init``
+        can come. So the baseline waits on ``hold``, the pause comes once the campaign is registered, and then the
+        daemon measures the baseline, which a pause does not hold. ``init`` exits on the pause.
+        """
+        name = tomllib.loads((repo / 'piloop.toml').read_text())['name']
+        self.hold.touch()
+        argv = ['piloop', 'init', str(repo), '--example', template]
+        init = subprocess.Popen(argv, env=self.env, cwd=self.dir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            wait_until(lambda: self.registered(name), f'campaign {name} registered', timeout=600)
+            self.piloop('pause', name, '--reason', reason)
+        finally:
+            self.hold.unlink(missing_ok=True)
+            init.wait(timeout=600)
+        baseline = (
+            'SELECT m.id FROM measurements m JOIN candidates c ON c.id = m.candidate_id'
+            ' JOIN campaigns p ON p.id = c.campaign_id WHERE p.name = ? AND c.run_id IS NULL'
+        )
+        wait_until(lambda: self.sql(baseline, name), f'the baseline of {name} measured', timeout=900)
+
+    def registered(self, name: str) -> bool:
+        """The campaign ``name`` is in the database, which the daemon may not have made yet."""
+        try:
+            return bool(self.sql('SELECT id FROM campaigns WHERE name = ?', name))
+        except sqlite3.OperationalError:  # no database, or no table yet
+            return False
 
     def sql(self, statement: str, *params: object) -> list[sqlite3.Row]:
         """Read the campaign's database directly, read-only."""

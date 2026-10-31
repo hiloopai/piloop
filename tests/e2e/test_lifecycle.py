@@ -1,10 +1,12 @@
-"""The life of one small campaign, with real agents, on the enwik8 example: pause, cancel, judge, stop.
+"""The life of one small campaign, with real agents, on the enwik8 example: claim, submit, judge, cancel, stop.
 
     make e2e
     uv run pytest -m e2e tests/e2e/test_lifecycle.py -rA [--e2e-harness claude] [--e2e-model <model>]
 
-Three ideas run with two implementers. The slow one is cancelled, lzma is judged, and the campaign stops while bz2 runs.
-About 3 minutes and 0.45 USD in each mode (``tests/e2e/conftest.py``).
+The campaign starts paused, and two ideas go on its board. Once it resumes, its two workers claim them. The slow one is
+cancelled. The lzma worker checks its change with the dev command, submits it, reads its verdict, which the noise of the
+baseline decides, and ends its run. The lead drops the slow idea and adds bz2, which the next worker claims, and the
+campaign stops while it runs. About 4 minutes and 0.45 USD in each mode (``tests/e2e/conftest.py``).
 
 The tests are the steps of this one campaign. They run in the order of this file, and read the state that earlier
 tests leave on the ``Campaign``. ``@needs(...)`` names those earlier tests: when one of them did not pass, the test is
@@ -12,6 +14,7 @@ skipped with that reason. So ``-k`` on a test that needs others skips it: select
 """
 
 import json
+import re
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -23,7 +26,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import JUDGED
 from piloop.plugins.runtime.contract import TAG_ENV
 from piloop.plugins.runtime.kit.tags import tagged
 from tests.conftest import wait_until
-from tests.e2e.campaign import OPEN, Smoke, needs
+from tests.e2e.campaign import CLAIM_THE_BOARD, OPEN, Smoke, needs
 from tests.e2e.conftest import MakeCampaign
 
 pytestmark = pytest.mark.e2e
@@ -32,8 +35,11 @@ PENDING = f'verdict IS NULL AND origin IN ({", ".join(repr(str(o)) for o in sort
 
 MAX_EVALUATIONS = 1
 """One evaluation slot, so that the evaluation queue has something to order."""
+DEV = ['uv', 'run', 'python', 'evaluate.py']
+"""The dev command that the workers run in their checkouts: the evaluate command itself, on this small example."""
 CONFIG = {
     'evaluate_timeout': 300,
+    'evaluator': {'dev': DEV},
     'plugins': {
         'role': {
             'implementer': {'max_concurrent': 2, 'timeout': 600},
@@ -43,8 +49,11 @@ CONFIG = {
         'stop_rule': {'max_runs': 5, 'max_hours': 1, 'max_tokens': 20_000_000},
     },
 }
-"""Over the template's ``piloop.toml``: two implementers, no sweeps (the tests add the ideas), and stop conditions only as a
-backstop (the tests stop the campaign)."""
+"""Over the template's ``piloop.toml``: a dev command, two implementers, no sweeps (the tests add the ideas), and stop
+conditions only as a backstop (the tests stop the campaign). It scores submissions, by the noise of its baseline: the
+defaults."""
+NOISE_RUNS = 3
+"""``[evaluator] noise_runs``, by default: the baseline's evaluations that give the noise."""
 CANCEL_AFTER = 40
 """Seconds that the slow run works before it is cancelled."""
 EXIT_GRACE = 10
@@ -54,6 +63,8 @@ REQUIRED_EVENTS = (
     'agent_session.started',
     'run.started',
     'run.cancel_requested',
+    'run.submitted',
+    'run.end_requested',
     'measurement.recorded',
     'candidate.judged',
     'campaign.stop_requested',
@@ -72,32 +83,39 @@ class IdeaSpec:
     priority: int
 
 
+SUBMIT = ' Commit, run `piloop submit`, and end your run with `piloop run end submitted`.'
+"""How each plan ends: one submission, then the run's end."""
 IDEAS = (
     IdeaSpec(
         'slow',
         'Write an order-2 context-mixing compressor with arithmetic coding',
         'Implement an order-2 context model with an adaptive binary arithmetic coder in compressor.py with numpy.'
-        ' Measure with `uv run python evaluate.py`, then commit.',
+        ' Check it with `uv run python evaluate.py`.' + SUBMIT,
         0,
     ),
     IdeaSpec(
         'lzma',
         'Replace zlib with lzma at preset 1',
         'In compressor.py, compress with lzma.compress(data, preset=1) and decompress with lzma.decompress.'
-        ' Run `uv run python evaluate.py`, then commit. Change nothing else.',
+        ' Check it once with `uv run python evaluate.py`.' + SUBMIT + ' Change nothing else.',
         1,
     ),
     IdeaSpec(
         'bz2',
         'Replace zlib with bz2 at its best level',
         'In compressor.py, compress with bz2.compress(data, level) and decompress with bz2.decompress. Try the levels'
-        ' 1, 5 and 9, each measured with `uv run python evaluate.py`, then commit the best one. Change nothing else.',
+        ' 1, 5 and 9, each checked with `uv run python evaluate.py`, and keep the best one.'
+        + SUBMIT
+        + ' Change nothing else.',
         2,
     ),
 )
-"""The slow idea runs first and is cancelled; lzma should be a keep; bz2 runs while the campaign stops.
+"""Two workers claim slow and lzma; slow is cancelled; lzma should be a keep; bz2 goes on the board after the cancel,
+and runs while the campaign stops.
 
 lzma uses preset 1 (about 1 s) to keep the scenario short."""
+FIRST = IDEAS[:2]
+"""The ideas on the board when the campaign resumes: one for each worker."""
 
 
 @pytest.fixture(scope='module')
@@ -109,6 +127,8 @@ def live_campaign(make_campaign: MakeCampaign) -> Iterator[Smoke]:
                 'executor': {'provider': 'workers', 'pools': {'serve': {'slots': {'evaluation': MAX_EVALUATIONS}}}}
             }
         },
+        paused='e2e: the ideas go on the board first',
+        brief=CLAIM_THE_BOARD,
     )
     live_campaign.start_readers()
     yield live_campaign
@@ -141,72 +161,100 @@ def test_status_json(live_campaign: Smoke) -> None:
 
 
 def test_pause_holds_launches(live_campaign: Smoke) -> None:
-    """``piloop pause``, then the ideas: none of them is launched while the campaign is paused."""
-    live_campaign.piloop('pause', live_campaign.name, '--reason', 'e2e: hold launches while the ideas are added')
-    for idea in IDEAS:
+    """The campaign starts paused, and the ideas go on its board: no worker starts, and none of them is claimed."""
+    assert live_campaign.campaign_state().paused == 'launches'
+    for idea in FIRST:
         live_campaign.add_idea(idea.key, idea.title, idea.plan, idea.priority)
     time.sleep(10)  # a fixed window: nothing must launch during five ticks of the daemon
     assert [dict(r) for r in live_campaign.sql('SELECT id, status FROM runs')] == []
     assert live_campaign.sql("SELECT id FROM agent_sessions WHERE kind = 'implementer'") == []
-    assert live_campaign.campaign_state().paused == 'launches'
+    assert {idea_status(live_campaign, i.key) for i in FIRST} == {'open'}
 
 
 @needs(test_pause_holds_launches)
-def test_resume_launches_the_two_most_urgent(live_campaign: Smoke) -> None:
+def test_resume_and_the_two_workers_claim_the_two_ideas(live_campaign: Smoke) -> None:
+    """Once it resumes, a fresh run starts on each free slot, and each worker claims one idea of the board."""
     live_campaign.piloop('resume', live_campaign.name)
 
-    def running() -> list[sqlite3.Row] | None:
-        rows = live_campaign.sql("SELECT id, idea_id FROM runs WHERE status = 'running'")
+    def claimed() -> list[sqlite3.Row] | None:
+        rows = live_campaign.sql("SELECT id, idea_id FROM runs WHERE status = 'running' AND idea_id IS NOT NULL")
         return rows if len(rows) >= 2 else None
 
-    wait_until(running, timeout=180)
-    both = running()
+    wait_until(claimed, 'two workers that claimed an idea', timeout=300)
+    both = claimed()
     assert both is not None
-    assert {r['idea_id'] for r in both} == {live_campaign.ideas['slow'], live_campaign.ideas['lzma']}, (
-        live_campaign.ideas
-    )
-    print(f'runs {[r["id"] for r in both]} running')
+    assert {r['idea_id'] for r in both} == {live_campaign.ideas[i.key] for i in FIRST}, live_campaign.ideas
+    assert {idea_status(live_campaign, i.key) for i in FIRST} == {'claimed'}
+    print(f'runs {[r["id"] for r in both]} claimed ideas {[r["idea_id"] for r in both]}')
 
 
-@needs(test_resume_launches_the_two_most_urgent)
+@needs(test_resume_and_the_two_workers_claim_the_two_ideas)
 def test_run_cancel(live_campaign: Smoke) -> None:
-    """``piloop run cancel`` on the slow run: it closes as failed, its idea parks, its processes end."""
+    """``piloop run cancel`` on the slow run: it closes as failed, its idea is open again, its processes end. The lead
+    drops that idea and adds bz2, while the campaign is paused, so the slot that the cancel freed takes bz2."""
     time.sleep(CANCEL_AFTER)  # let the slow run work, so the cancel ends an agent in the middle of its work
     run = live_campaign.run_of('slow')
     assert run is not None and run['status'] == 'running', f'the slow run after {CANCEL_AFTER}s: {run and dict(run)}'
     tokens = live_campaign.process_tags(run['id'])
+    live_campaign.piloop('pause', live_campaign.name, '--reason', 'e2e: the board changes after the cancel')
     live_campaign.piloop('run', 'cancel', str(run['id']))
     wait_until(lambda: live_campaign.run_in('slow', OPEN, within=False), timeout=120)
     closed = live_campaign.run_of('slow')
     assert closed is not None
     assert closed['status'] == 'failed', dict(closed)
-
-    def idea_status() -> str:
-        return live_campaign.sql('SELECT status FROM ideas WHERE id = ?', live_campaign.ideas['slow'])[0]['status']
-
     # The daemon closes the run, then settles its idea in a later write.
-    wait_until(lambda: idea_status() != 'scheduled', timeout=60)
-    assert idea_status() == 'parked'
+    wait_until(lambda: idea_status(live_campaign, 'slow') != 'claimed', timeout=60)
+    assert idea_status(live_campaign, 'slow') == 'open'
     assert [p for t in tokens for p in tagged(f'{TAG_ENV}={t}')] == []
-    print(f'run {run["id"]} failed ({closed["error"]}), idea parked, no process left')
+    live_campaign.piloop(
+        'idea',
+        'status',
+        str(live_campaign.ideas['slow']),
+        'dropped',
+        '--reason',
+        'e2e: the lead takes it off the board',
+    )
+    bz2 = IDEAS[2]
+    live_campaign.add_idea(bz2.key, bz2.title, bz2.plan, bz2.priority)
+    live_campaign.piloop('resume', live_campaign.name)
+    print(f'run {run["id"]} failed ({closed["error"]}), its idea open again, then dropped; no process left')
 
 
-@needs(test_resume_launches_the_two_most_urgent)
-def test_a_run_finishes_and_the_next_starts(live_campaign: Smoke) -> None:
-    """The lzma run finishes on its own, and the bz2 run starts in the slot that the cancel freed."""
+@needs(test_resume_and_the_two_workers_claim_the_two_ideas)
+def test_a_worker_submits_its_verdict_is_the_noise_s_and_it_ends_its_run(live_campaign: Smoke) -> None:
+    """The lzma worker submits once and ends its run. Its submission is judged against the head, by the noise of the
+    baseline's evaluations, and it keeps. Then a worker claims bz2 in the slot that the cancel freed."""
     wait_until(lambda: live_campaign.run_in('lzma', OPEN, within=False), timeout=900)
     done = live_campaign.run_of('lzma')
     assert done is not None
-    assert done['status'] == 'succeeded', f'run {done["id"]} {done["status"]}: {done["error"]}'
-    wait_until(lambda: live_campaign.run_in('bz2', {'running'}), timeout=300)
-    bz2 = live_campaign.run_of('bz2')
-    assert bz2 is not None
-    print(f'run {done["id"]} succeeded; run {bz2["id"]} running')
+    assert (done['status'], done['end']) == ('succeeded', 'finished'), f'run {done["id"]}: {done["error"]}'
+    submitted = live_campaign.sql(
+        "SELECT json_extract(payload, '$.candidate') AS candidate FROM events"
+        " WHERE kind = 'run.submitted' AND target_kind = 'run' AND target_id = ?",
+        done['id'],
+    )
+    assert submitted, f'run {done["id"]} submitted nothing'
+    candidate = submitted[-1]['candidate']
+    wait_until(lambda: verdict(live_campaign, candidate)['verdict'] is not None, timeout=300)
+    judged = verdict(live_campaign, candidate)
+    assert judged['verdict'] == 'keep', dict(judged)
+    assert re.search(r'; noise \S+ over \d+ evaluations\)', judged['verdict_reason']), judged['verdict_reason']
+    baseline = live_campaign.sql(
+        'SELECT count(*) AS n FROM measurements m JOIN candidates c ON c.id = m.candidate_id WHERE c.run_id IS NULL'
+    )
+    assert baseline[0]['n'] >= NOISE_RUNS, 'the noise comes from the baseline evaluated noise_runs times'
+    ended = live_campaign.sql(
+        "SELECT json_extract(payload, '$.how') AS how FROM events WHERE kind = 'run.end_requested' AND target_id = ?",
+        done['id'],
+    )
+    assert [e['how'] for e in ended] == ['submitted']
+    wait_until(lambda: live_campaign.run_in('bz2', {'running'}), 'a worker that claimed bz2', timeout=300)
+    print(f'run {done["id"]}: candidate#{candidate} {judged["verdict"]}: {judged["verdict_reason"]}')
 
 
-@needs(test_a_run_finishes_and_the_next_starts)
+@needs(test_a_worker_submits_its_verdict_is_the_noise_s_and_it_ends_its_run)
 def test_commits_are_judged(live_campaign: Smoke) -> None:
-    """Every commit of the lzma run is a candidate with a verdict."""
+    """Every commit of the lzma run is a candidate: a submission with its verdict, any other one skipped."""
     run = live_campaign.run_of('lzma')
     assert run is not None
 
@@ -219,7 +267,7 @@ def test_commits_are_judged(live_campaign: Smoke) -> None:
     wait_until(verdicts, timeout=300)
     rows = verdicts()
     assert rows is not None
-    print('; '.join(f'candidate#{r["id"]} {r["verdict"]}: {r["verdict_reason"]}' for r in rows))
+    print('; '.join(f'candidate#{r["id"]} {r["origin"]} {r["verdict"]}: {r["verdict_reason"]}' for r in rows))
 
 
 @needs(test_commits_are_judged)
@@ -243,9 +291,9 @@ def test_candidate_remeasure_keeps_the_head(live_campaign: Smoke) -> None:
     print(f'candidate#{candidate}: {rows[0]["metrics"]} then {rows[-1]["metrics"]}, still keep')
 
 
-@needs(test_resume_launches_the_two_most_urgent)
+@needs(test_resume_and_the_two_workers_claim_the_two_ideas)
 def test_graceful_stop(live_campaign: Smoke) -> None:
-    """A graceful stop of the campaign while the bz2 implementer runs: it winds down, its commits are scored, nothing stays open."""
+    """A graceful stop of the campaign while the bz2 implementer runs: it winds down, nothing stays open."""
     bz2 = live_campaign.run_of('bz2')
     at_stop = f'run {bz2["id"]} was {bz2["status"]}' if bz2 else 'no bz2 run'
     live_campaign.stop_campaign('e2e: graceful stop')
@@ -263,23 +311,23 @@ def test_graceful_stop(live_campaign: Smoke) -> None:
     campaign = live_campaign.campaign_row()
     assert campaign['status'] == 'stopped', dict(campaign)
     scored = live_campaign.sql(
-        'SELECT c.id, c.verdict FROM candidates c JOIN runs r ON r.id = c.run_id WHERE r.idea_id = ?',
+        'SELECT c.id, c.origin, c.verdict FROM candidates c JOIN runs r ON r.id = c.run_id WHERE r.idea_id = ?',
         live_campaign.ideas['bz2'],
     )
     run = live_campaign.run_of('bz2')
-    commits = ', '.join(f'candidate#{c["id"]} {c["verdict"]}' for c in scored) or 'no commit'
+    commits = ', '.join(f'candidate#{c["id"]} {c["origin"]} {c["verdict"]}' for c in scored) or 'no commit'
     print(f'{at_stop}; it ended {run and run["status"]}; {commits}; {campaign["stopped_reason"]!r}')
 
 
 @needs(test_graceful_stop)
 def test_verdict_override_and_measurement_add(live_campaign: Smoke) -> None:
-    """``piloop candidate verdict`` overrides the bz2 verdict, and ``piloop measurement add`` records a measurement."""
+    """``piloop candidate verdict`` overrides the newest judged verdict, and ``piloop measurement add`` records a
+    measurement."""
     rows = live_campaign.sql(
-        'SELECT c.id, m.metrics FROM candidates c JOIN runs r ON r.id = c.run_id'
-        ' JOIN measurements m ON m.candidate_id = c.id WHERE r.idea_id = ? ORDER BY c.id DESC LIMIT 1',
-        live_campaign.ideas['bz2'],
+        'SELECT c.id, m.metrics FROM candidates c JOIN measurements m ON m.candidate_id = c.id'
+        ' WHERE c.run_id IS NOT NULL ORDER BY c.id DESC LIMIT 1'
     )
-    assert rows, 'the bz2 run has no measured candidate'
+    assert rows, 'no run has a measured candidate'
     candidate, metrics = rows[0]['id'], json.loads(rows[0]['metrics'])
     live_campaign.piloop('candidate', 'verdict', str(candidate), 'discard', '--reason', 'e2e: override')
     report = live_campaign.dir / 'measurement.json'
@@ -290,6 +338,14 @@ def test_verdict_override_and_measurement_add(live_campaign: Smoke) -> None:
     count = live_campaign.sql('SELECT count(*) AS n FROM measurements WHERE candidate_id = ?', candidate)[0]['n']
     assert count >= 2
     print(f'candidate#{candidate} discard by human, {count} measurements; {said}')
+
+
+def idea_status(live_campaign: Smoke, key: str) -> str:
+    return live_campaign.sql('SELECT status FROM ideas WHERE id = ?', live_campaign.ideas[key])[0]['status']
+
+
+def verdict(live_campaign: Smoke, candidate: int) -> sqlite3.Row:
+    return live_campaign.sql('SELECT verdict, verdict_reason FROM candidates WHERE id = ?', candidate)[0]
 
 
 @needs(test_graceful_stop)
