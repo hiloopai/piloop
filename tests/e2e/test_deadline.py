@@ -39,7 +39,7 @@ PLAN = (
     'This idea tests the time limit, not the compressor. Do twenty steps in this one turn. Each step is one Bash tool'
     ' call of its own: `python3 -c "import time; time.sleep(30)" && echo "step n" >> workspace/steps.txt`. Never put'
     ' two steps in one command, and never run a step in the background. Change and commit nothing until a [piloop]'
-    ' message tells you to wrap up. Then set the zlib level in compressor.py to 9, commit, run `piloop submit`, and'
+    ' message tells you to wrap up. Then set the zlib level in compressor.py to 6, commit, run `piloop submit`, and'
     ' end your run with `piloop run end submitted`.'
 )
 
