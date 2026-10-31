@@ -69,11 +69,16 @@ def idea_claim(idea_id: IdeaArg, /) -> None:
     """Claim an open idea for your run: you work on it until your run ends, and no other run takes it.
 
     Only a worker claims, once per run. An idea that an `after` link holds waits until its prerequisites are done.
-    With several tracks, it prints what the idea's track asks of your run.
+    It prints the idea's hypothesis and its plan, which the board does not show, and, with several tracks, what the
+    idea's track asks of your run.
     """
     with BacklogClient.connect(daemon_http()) as client:
         claimed = client.claim(idea_id)
     common.console.print(f'idea#{claimed.idea.id} {claimed.idea.status}: {claimed.idea.title}', markup=False)
+    if claimed.hypothesis != claimed.idea.title:
+        common.console.print(f'Hypothesis: {claimed.hypothesis}', markup=False, highlight=False)
+    if claimed.plan is not None:
+        common.console.print(f'Plan: {claimed.plan}', markup=False, highlight=False)
     if claimed.track is not None:
         common.console.print(claimed.track, markup=False, highlight=False)
 

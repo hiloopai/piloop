@@ -5641,6 +5641,21 @@
           "idea": {
             "$ref": "#/components/schemas/IdeaView"
           },
+          "hypothesis": {
+            "type": "string",
+            "title": "Hypothesis"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          },
           "track": {
             "anyOf": [
               {
@@ -5658,10 +5673,12 @@
         "required": [
           "cursor",
           "idea",
+          "hypothesis",
+          "plan",
           "track"
         ],
         "title": "Claimed",
-        "description": "An idea that the caller's run claimed."
+        "description": "An idea that the caller's run claimed, with what the board does not show: the worker works on these."
       },
       "Clone": {
         "properties": {

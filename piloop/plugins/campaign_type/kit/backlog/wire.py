@@ -130,8 +130,10 @@ class IdeaAnswer(View):
 
 
 class Claimed(IdeaAnswer):
-    """An idea that the caller's run claimed."""
+    """An idea that the caller's run claimed, with what the board does not show: the worker works on these."""
 
+    hypothesis: str
+    plan: str | None
     track: str | None
     """What the idea's track asks of the run: its keep rule and its addendum. Null when the campaign has one track."""
 

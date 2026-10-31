@@ -195,7 +195,7 @@ def test_a_worker_claims_or_proposes_an_idea_and_ends_its_run_through_the_api_si
 ) -> None:
     """``piloop idea claim``, ``piloop idea propose`` and ``piloop run end`` act for the caller's run, signed by it."""
     run_cli(['init', str(campaign_path)])
-    run_cli(['idea', 'add', 'demo', 'try a cache'])
+    run_cli(['idea', 'add', 'demo', 'try a cache', '--hypothesis', 'decoding repeats', '--plan', 'memoize decode()'])
     db = Database(common.settings.database_url, actor=System.DAEMON)
     with db.session() as s:
         for _ in range(2):
@@ -213,7 +213,12 @@ def test_a_worker_claims_or_proposes_an_idea_and_ends_its_run_through_the_api_si
 
     as_('implementer#1', 'idea', 'claim', '1')
     as_('implementer#2', 'idea', 'propose', 'halve the window', '--hypothesis', 'fewer misses')
-    assert out().splitlines() == ['idea#1 claimed: try a cache', 'idea#2 claimed: halve the window']
+    assert out().splitlines() == [
+        'idea#1 claimed: try a cache',
+        'Hypothesis: decoding repeats',
+        'Plan: memoize decode()',
+        'idea#2 claimed: halve the window',
+    ], 'a worker that claims an idea gets what the board does not show: its hypothesis and its plan'
     with pytest.raises(SystemExit, match='run#1 claimed idea#1 already: a run tries one idea'):
         as_('implementer#1', 'idea', 'claim', '2')
     with db.session() as s:

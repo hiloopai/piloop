@@ -177,7 +177,9 @@ def set_track(s: Writing, me: Acting, idea: AddressedIdea, body: TrackBody) -> T
 def _claimed(s: Session, idea: Idea) -> Claimed:
     s.commit()
     with db_feed.snapshot(s) as cursor:
-        return Claimed(cursor=cursor, idea=idea_view(idea), track=track_brief(idea))
+        return Claimed(
+            cursor=cursor, idea=idea_view(idea), hypothesis=idea.hypothesis, plan=idea.plan, track=track_brief(idea)
+        )
 
 
 def _idea_answer(s: Session, idea: Idea) -> IdeaAnswer:
