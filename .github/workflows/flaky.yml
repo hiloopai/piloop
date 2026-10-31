@@ -1,0 +1,90 @@
+# A test that failed and then passed on a rerun in CI (the `flaky-*` artifacts of a run) is quarantined: a `flaky` and
+# `critical` issue, and a pull request that marks the test and adds the issue to tests/quarantine.toml. A token of a
+# workflow starts no workflow on a push, so this one starts CI on the pull request's branch.
+name: Flaky tests
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+env:
+  UV_FROZEN: "1"
+  UV_PYTHON_PREFERENCE: only-managed
+
+jobs:
+  quarantine:
+    # The quarantine issues live in the private repository.
+    if: github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: flaky-*
+          path: flaky
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - id: found
+        run: |
+          shopt -s nullglob
+          files=(flaky/*/flaky.txt)
+          [ ${#files[@]} -eq 0 ] || echo found=true >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: steps.found.outputs.found
+        with:
+          ref: main
+          path: repo
+      - uses: astral-sh/setup-uv@v7
+        if: steps.found.outputs.found
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-suffix: test
+      - uses: actions/cache/restore@v6
+        if: steps.found.outputs.found
+        with:
+          path: repo/test-map.json.gz
+          key: test-map-${{ github.sha }}
+          restore-keys: test-map-
+          # The map says which files a quarantined test alone covers; the nightly run builds the first one.
+          fail-on-cache-miss: true
+      - if: steps.found.outputs.found
+        working-directory: repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          uv sync
+          git config user.name piloop-ci && git config user.email ci@piloop
+          sort -u ../flaky/*/flaky.txt | while read -r test; do
+            name="${test##*::}" && name="${name%%[*}"
+            if ! grep -q "def $name(" "${test%%::*}" 2>/dev/null; then
+              echo "$test: not on main, so the pull request that adds it is what makes it flaky"; continue
+            fi
+            if [ -n "$(gh issue list --label flaky --state open --search "$name in:body" --json number --jq '.[]')" ]; then
+              echo "$test: an open flaky issue names it already"; continue
+            fi
+            title="test: $name failed, then passed on a rerun (flaky)"
+            uv run -m scripts.test_health issue "$test" --run "$RUN_URL" --branch "$BRANCH" ../flaky/*/flaky-junit.xml > body.md
+            issue=$(gh issue create --title "$title" --label flaky --label critical --body-file body.md | grep -o '[0-9]*$')
+            git switch -q -c "quarantine-$issue" origin/main
+            uv run -m scripts.test_health quarantine "$test" --issue "$issue" --title "$title" --map test-map.json.gz
+            uv run ruff format tests && uv run ruff check --fix tests
+            git commit -qam "test: quarantine $name until #$issue is fixed"
+            git push -q origin "quarantine-$issue"
+            printf '%s\n' "**What:** quarantines \`$test\`, which failed and then passed on a rerun." \
+              "**Why:** a flaky test fails runs that have nothing to do with it. Its fix is tracked in #$issue." \
+              "**Impact:** tests only. It still runs in the non-blocking quarantine job." > pr.md
+            gh pr create --head "quarantine-$issue" --title "test: quarantine $name until its flake is fixed" --body-file pr.md
+            gh workflow run ci.yml --ref "quarantine-$issue"
+            git switch -q main
+          done

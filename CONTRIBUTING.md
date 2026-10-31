@@ -107,9 +107,14 @@ Keep the suite fast:
 - To test a timeout of the code, give it a fake clock that a sleep advances, rather than a short real timeout: that
   one is slow alone and flaky under load.
 
-A test that fails without a code cause is quarantined at once: open an issue labelled `flaky` and `critical`, add it to
-`tests/quarantine.toml` with the files that only its tests cover, and mark the test `@pytest.mark.quarantine(issue=N)`.
-CI then runs it only in a job that does not block, as `make quarantine` does. Its fix removes the marks and the issue.
+A test that fails without a code cause is quarantined at once. CI reruns a failed test once, and one that then passes
+is flaky: the job passes, and the `Flaky tests` workflow opens an issue labelled `flaky` and `critical` and a pull
+request that marks the test `@pytest.mark.quarantine(issue=N)` and adds the issue to `tests/quarantine.toml` with the
+files that only the test covers (`uv run -m scripts.test_health quarantine`). CI then runs it only in a job that does
+not block, as `make quarantine` does. Its fix removes the marks and the issue.
+
+Each week, the `Test health` workflow reads main's test times and opens a pull request, labelled `do-not-merge` until
+reviewed, that deletes the slowest tests that cover no line that another test does not.
 
 Other targets: `make format`, `make lint`, `make typecheck`, `make test` (no coverage), `make testcov`, `make docs`,
 `make docs-check` and `make e2e` (see below). CI runs the pre-commit hooks, the tests with coverage on Linux, split over

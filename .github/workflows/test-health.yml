@@ -1,0 +1,69 @@
+# Weekly, from the JUnit files of main's nightly CI runs of the last two weeks and the test map: each test's time and
+# outcome, and a pull request that deletes the slow tests that cover no line alone, with the evidence. It is labelled
+# do-not-merge: a person reviews a deletion of tests.
+name: Test health
+
+on:
+  schedule:
+    - cron: '41 5 * * 1'
+  workflow_dispatch: {}
+
+permissions: {}
+
+env:
+  UV_FROZEN: "1"
+  UV_PYTHON_PREFERENCE: only-managed
+  SLOW_SECONDS: "10"
+  # Coverage is weak evidence (a subprocess's lines are invisible to it): a person reviews a few deletions a week.
+  MOST_DELETIONS: "3"
+  HISTORY_DAYS: "14"
+
+jobs:
+  report:
+    if: github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+          enable-cache: true
+          cache-suffix: test
+      - run: uv sync
+      - uses: actions/cache/restore@v6
+        with:
+          path: test-map.json.gz
+          key: test-map-${{ github.sha }}
+          restore-keys: test-map-
+          fail-on-cache-miss: true
+      - name: main's JUnit files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          since=$(date -u -d "-$HISTORY_DAYS days" +%F)
+          gh run list -w CI -b main --status success --created ">=$since" -L 200 --json databaseId,event \
+            --jq '.[] | select(.event == "schedule" or .event == "workflow_dispatch") | .databaseId' |
+            while read -r run; do gh run download "$run" -p 'junit-*' -D "junit/$run" || echo "run $run has no JUnit files"; done
+      - id: report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv run -m scripts.test_health report --junit junit --map test-map.json.gz --slow "$SLOW_SECONDS" --most "$MOST_DELETIONS" > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          git diff --quiet -- tests && exit 0
+          uv run ruff format tests && uv run ruff check --fix tests
+          branch="test-health-$(date -u +%F)"
+          git config user.name piloop-ci && git config user.email ci@piloop
+          git switch -q -c "$branch"
+          git commit -qam "test: delete the slow tests that cover no line alone"
+          git push -q origin "$branch"
+          { printf '%s\n' "**What:** deletes the tests below marked \`delete\`: each takes ${SLOW_SECONDS} s or more, and every line it covers another test covers too." \
+              "**Why:** they cost CI time and catch nothing that the rest of the suite does not, as far as line coverage shows. Coverage is no proof, and code that a test runs in a subprocess is invisible to it: review each before it merges." \
+              "**Impact:** tests only." ""; cat report.md; } > pr.md
+          gh pr create --head "$branch" --label do-not-merge --title "test: delete the slow tests that cover no line alone" --body-file pr.md
+          gh workflow run ci.yml --ref "$branch"

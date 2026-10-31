@@ -162,15 +162,39 @@ jobs:
       # Test contexts need coverage's ctrace core; the other runs keep the faster default.
       - env:
           MAP: ${{ needs.select.outputs.mode == 'map' && '--cov-context=test' || '' }}
+          SHARD: ${{ matrix.shard }}/8
         run: |
           [ -z "$MAP" ] || export COVERAGE_CORE=ctrace
-          uv run pytest -n 4 --shard ${{ matrix.shard }}/8 --durations=10 --cov --cov-report= --cov-fail-under=0 $MAP
+          set -- -n 4 --shard "$SHARD" --cov --cov-report= --cov-fail-under=0 $MAP
+          uv run pytest --durations=10 --junitxml=junit/part.xml "$@" && exit 0
+          # A test that fails and then passes on a rerun is flaky: the job passes, and the Flaky tests workflow
+          # quarantines it. A test that fails twice fails the job.
+          jq -r 'keys[]' .pytest_cache/v/cache/lastfailed > flaky.txt
+          [ -s flaky.txt ] || exit 1
+          cp junit/part.xml flaky-junit.xml
+          uv run pytest --last-failed --last-failed-no-failures none --cov-append "$@"
+          echo "::warning::flaky, passed on a rerun: $(paste -sd ' ' flaky.txt)"
       - uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.shard }}
           path: .coverage/.coverage
           include-hidden-files: true
           retention-days: 1
+      # Each test's time and outcome on main's nightly runs, read by the Test health workflow.
+      - uses: actions/upload-artifact@v7
+        if: needs.select.outputs.mode == 'map'
+        with:
+          name: junit-${{ matrix.shard }}
+          path: junit/part.xml
+          retention-days: 30
+      - uses: actions/upload-artifact@v7
+        if: hashFiles('flaky.txt') != ''
+        with:
+          name: flaky-${{ matrix.shard }}
+          path: |
+            flaky.txt
+            flaky-junit.xml
+          retention-days: 7
 
   # The merge script requires this job: it passes on the whole suite at 100% coverage, or on a docs-only change.
   coverage:
