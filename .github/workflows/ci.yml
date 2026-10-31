@@ -103,7 +103,8 @@ jobs:
           test -f ~/.agents/skills/piloop-operate/SKILL.md
 
   # Which tests run. A pull request with another stacked on it runs none: the top of the stack runs them for the whole
-  # stack. A pull request into the default branch that changes only docs runs none. Anything else runs the whole suite.
+  # stack. A pull request into the default branch that changes only docs runs none. Anything else runs the whole suite;
+  # the nightly and manual runs also record which test covers which line, for the test map (scripts/test_map.py).
   select:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -123,7 +124,9 @@ jobs:
           DOCS: '^(docs/|[^/]+\.md$|(.+/)?README\.md$|LICENSE$)'
         run: |
           mode=full
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+          if [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            mode=map
+          elif [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             if [ -n "$(gh pr list -R "$GITHUB_REPOSITORY" --base "$HEAD_REF" --state open --json number --jq '.[]')" ]; then
               mode=stacked
             elif [ "$BASE_REF" = "$DEFAULT_BRANCH" ] && files=$(gh pr diff "$NUMBER" -R "$GITHUB_REPOSITORY" --name-only) &&
@@ -139,7 +142,7 @@ jobs:
   test:
     name: test, part ${{ matrix.shard }} of 8
     needs: select
-    if: needs.select.outputs.mode == 'full'
+    if: needs.select.outputs.mode == 'full' || needs.select.outputs.mode == 'map'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -156,7 +159,12 @@ jobs:
           enable-cache: true
           cache-suffix: test
       - run: uv sync
-      - run: uv run pytest -n 4 --shard ${{ matrix.shard }}/8 --durations=10 --cov --cov-report= --cov-fail-under=0
+      # Test contexts need coverage's ctrace core; the other runs keep the faster default.
+      - env:
+          MAP: ${{ needs.select.outputs.mode == 'map' && '--cov-context=test' || '' }}
+        run: |
+          [ -z "$MAP" ] || export COVERAGE_CORE=ctrace
+          uv run pytest -n 4 --shard ${{ matrix.shard }}/8 --durations=10 --cov --cov-report= --cov-fail-under=0 $MAP
       - uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.shard }}
@@ -173,26 +181,39 @@ jobs:
       - if: needs.select.outputs.mode == 'docs'
         run: echo "docs only, no tests to measure"
       - uses: actions/checkout@v7
-        if: needs.select.outputs.mode == 'full'
+        if: needs.select.outputs.mode != 'docs'
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@v7
-        if: needs.select.outputs.mode == 'full'
+        if: needs.select.outputs.mode != 'docs'
         with:
           python-version: "3.14"
           enable-cache: true
           cache-suffix: test
-      - if: needs.select.outputs.mode == 'full'
+      - if: needs.select.outputs.mode != 'docs'
         run: uv sync
       - uses: actions/download-artifact@v8
-        if: needs.select.outputs.mode == 'full'
+        if: needs.select.outputs.mode != 'docs'
         with:
           pattern: coverage-*
           path: parts
-      - if: needs.select.outputs.mode == 'full'
+      - if: needs.select.outputs.mode != 'docs'
         run: uv run coverage combine parts/*/.coverage
-      - if: needs.select.outputs.mode == 'full'
+      - if: needs.select.outputs.mode != 'docs'
         run: uv run coverage report
+      - if: needs.select.outputs.mode == 'map'
+        run: uv run -m scripts.test_map build .coverage/.coverage --map test-map.json.gz
+      - uses: actions/cache/save@v6
+        if: needs.select.outputs.mode == 'map' && github.ref == 'refs/heads/main'
+        with:
+          path: test-map.json.gz
+          key: test-map-${{ github.run_id }}
+      - uses: actions/upload-artifact@v7
+        if: needs.select.outputs.mode == 'map'
+        with:
+          name: test-map
+          path: test-map.json.gz
+          retention-days: 7
 
   # macOS minutes are scarce in the private mirror: there it runs nightly, on demand and on release PRs only.
   macos:
@@ -217,7 +238,7 @@ jobs:
   quarantine:
     name: quarantined tests (non-blocking)
     needs: select
-    if: needs.select.outputs.mode == 'full'
+    if: needs.select.outputs.mode == 'full' || needs.select.outputs.mode == 'map'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     continue-on-error: true
