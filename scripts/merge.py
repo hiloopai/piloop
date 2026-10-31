@@ -261,7 +261,8 @@ def check_remote(remote: str, repo: str) -> None:
 def check_migrations(tree: str) -> None:
     """Each migrations directory of a tree declares each revision id once and has one head; holds if not."""
     found = subprocess.run(
-        ['git', 'grep', '-E', '^(down_)?revision\\b', tree, '--', 'piloop/**/migrations/**.py'],
+        # no \b: git on macOS matches with the system's ERE, which lacks it; DECLARATION parses each line exactly
+        ['git', 'grep', '-E', '^(down_)?revision', tree, '--', 'piloop/**/migrations/**.py'],
         capture_output=True,
         text=True,
     ).stdout

@@ -203,7 +203,8 @@ def test_at_the_end_of_a_run_its_versions_that_it_did_not_submit_are_skipped_and
 def queue_of(tmp_path: Path, *scores: int) -> list[str]:
     """An evaluate command that reports the next score of ``scores`` on each run, as a noisy timing would."""
     (tmp_path / 'scores').write_text(''.join(f'{v}\n' for v in scores))
-    take = f'v=$(head -1 {tmp_path}/scores); sed -i 1d {tmp_path}/scores'
+    # POSIX, not GNU: BSD sed takes the argument of -i as a backup suffix
+    take = f'v=$(head -1 {tmp_path}/scores); tail -n +2 {tmp_path}/scores > {tmp_path}/rest; mv {tmp_path}/rest {tmp_path}/scores'
     return ['sh', '-c', f'{take}; {reports(score="$v", size="1")}']
 
 
@@ -484,7 +485,8 @@ def test_the_noise_counts_only_the_baselines_successful_evaluations_and_an_unkno
         ]
 
 
-SEALED_CRASHES_ON_THE_HEAD = ['sh', '-c', f'[ "$(wc -l < solve.txt)" = 1 ] && exit 9; {reports(score="1", size="1")}']
+SEALED_CRASHES_ON_THE_HEAD = ['sh', '-c', f'[ "$(wc -l < solve.txt)" -eq 1 ] && exit 9; {reports(score="1", size="1")}']
+"""A sealed command that crashes on the head's one line. A number test: BSD wc pads its count with spaces."""
 """A sealed split that crashes on the head's tree, one line, every time."""
 
 
