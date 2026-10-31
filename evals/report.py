@@ -6,6 +6,7 @@ lowest to the highest repeat.
 """
 
 import statistics
+import textwrap
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from evals.model import Point, Result
 COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100']
 """Categorical slots 1-4: an arm keeps its slot by its order in the sorted arm names."""
 STEPS = 200
+NOTE_WIDTH = 150
+"""The characters of a line of a note under a page's title."""
 Axis = Callable[[Point], float]
 Summary = Callable[[list[float]], float]
 
@@ -143,7 +146,7 @@ def figure(task: str, by_arm: dict[str, list[Result]], notes: list[str]) -> go.F
         rows=4,
         cols=2,
         specs=[[{'type': 'xy'}, {'type': 'xy'}], [{'type': 'xy', 'colspan': 2}, None], [full, None], [full, None]],
-        row_heights=[0.3, 0.22, 0.18, 0.3],
+        row_heights=[0.28, 0.2, 0.22, 0.3],
         vertical_spacing=0.06,
         subplot_titles=[
             'sealed score against USD spent',
@@ -174,9 +177,11 @@ def figure(task: str, by_arm: dict[str, list[Result]], notes: list[str]) -> go.F
     fig.update_yaxes(title_text='sealed score (0 = start, 1 = reference)', row=1, col=1)
     fig.update_xaxes(title_text='USD, list price', row=1, col=1)
     fig.update_xaxes(title_text='hours', row=1, col=2)
-    lines = ''.join(f'<br><sup>{line}</sup>' for line in [NOTE, *notes])
+    wrapped = [part for line in [NOTE, *notes] for part in textwrap.wrap(line, NOTE_WIDTH)]
+    lines = ''.join(f'<br><sup>{line}</sup>' for line in wrapped)
     title = f'{task}: median over repeats, band from lowest to highest{lines}'
-    fig.update_layout(title=title, height=2000, hovermode='x')
+    top = 80 + 26 * len(wrapped)
+    fig.update_layout(title=title, height=2000 + top, margin={'t': top + 40}, hovermode='x')
     return fig
 
 
