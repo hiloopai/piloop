@@ -10,10 +10,12 @@ permissions:
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
-    # A called workflow gets at most what its caller grants; ci.yml's quarantine job reads issues.
+    # A called workflow gets at most what its caller grants (tests/test_workflows.py): ci.yml's quarantine job reads
+    # issues, and its select job reads pull requests.
     permissions:
       contents: read
       issues: read
+      pull-requests: read
 
   release:
     needs: ci
