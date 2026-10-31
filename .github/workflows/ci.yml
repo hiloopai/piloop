@@ -103,7 +103,8 @@ jobs:
           test -f ~/.agents/skills/piloop-operate/SKILL.md
 
   # Which tests run. A pull request with another stacked on it runs none: the top of the stack runs them for the whole
-  # stack. A pull request into the default branch that changes only docs runs none. Anything else runs the whole suite;
+  # stack. So does one labelled `train`: the merge script's train has replayed it onto the merged pull request below,
+  # with the trees that the top's run tested. A pull request into the default branch that changes only docs runs none. Anything else runs the whole suite;
   # the nightly and manual runs also record which test covers which line, for the test map (scripts/test_map.py).
   select:
     runs-on: ubuntu-latest
@@ -121,13 +122,14 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           BASE_REF: ${{ github.base_ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TRAIN: ${{ contains(github.event.pull_request.labels.*.name, 'train') }}
           DOCS: '^(docs/|[^/]+\.md$|(.+/)?README\.md$|LICENSE$)'
         run: |
           mode=full
           if [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             mode=map
           elif [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            if [ -n "$(gh pr list -R "$GITHUB_REPOSITORY" --base "$HEAD_REF" --state open --json number --jq '.[]')" ]; then
+            if [ "$TRAIN" = true ] || [ -n "$(gh pr list -R "$GITHUB_REPOSITORY" --base "$HEAD_REF" --state open --json number --jq '.[]')" ]; then
               mode=stacked
             elif [ "$BASE_REF" = "$DEFAULT_BRANCH" ] && files=$(gh pr diff "$NUMBER" -R "$GITHUB_REPOSITORY" --name-only) &&
               ! grep -qvE "$DOCS" <<< "$files"; then

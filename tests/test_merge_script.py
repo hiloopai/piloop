@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.merge import Held, check_commits, check_migrations, check_remote, check_stack
+from scripts.merge import Held, check_commits, check_migrations, check_remote, check_stack, replay
 
 VERSIONS = 'piloop/db/migrations/versions'
 PLUGIN = 'piloop/plugins/archive/local/migrations'
@@ -91,7 +91,7 @@ def commit(message: str) -> str:
     return subprocess.run(['git', 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True).stdout.strip()
 
 
-def test_a_stack_whose_lower_heads_are_in_the_top_s_head_passes_and_one_left_behind_is_refused(
+def test_a_stack_on_its_base_s_tip_whose_lower_heads_are_in_the_top_s_head_passes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -101,11 +101,13 @@ def test_a_stack_whose_lower_heads_are_in_the_top_s_head_passes_and_one_left_beh
     base = commit('chore: base')
     lower = commit('feat: lower')
     top = commit('feat: top')
-    check_stack([(1, lower), (2, top)])
+    check_stack(base, [(1, lower), (2, top)])
     subprocess.run(['git', 'reset', '-q', '--hard', base], check=True)
     pushed_again = commit('feat: lower, pushed again after the top was built')
     with pytest.raises(Held, match=rf'#1 at {pushed_again[:8]} is not in the head of #2: rebase the stack on it'):
-        check_stack([(1, pushed_again), (2, top)])
+        check_stack(base, [(1, pushed_again), (2, top)])
+    with pytest.raises(Held, match=rf'#1 at {lower[:8]} is not on the tip of its base: rebase the stack on it'):
+        check_stack(pushed_again, [(1, lower), (2, top)])
 
 
 def test_each_commit_that_lands_has_a_conventional_subject_and_no_listed_word() -> None:
@@ -114,3 +116,34 @@ def test_each_commit_that_lands_has_a_conventional_subject_and_no_listed_word() 
         check_commits(['feat: x\n', 'wip\n'], [])
     with pytest.raises(Held, match='has a word of names.txt'):
         check_commits(['fix: as Someone asked\n'], ['someone'])
+
+
+def test_the_commits_above_a_rebase_merged_one_are_replayed_on_its_copy_with_their_trees_authors_and_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(['git', 'init', '-q'], check=True)
+    for config in (['user.name', 'ci'], ['user.email', 'ci@localhost']):
+        subprocess.run(['git', 'config', *config], check=True)
+    base = commit('chore: base')
+    (tmp_path / 'a.txt').write_text('a\n')
+    subprocess.run(['git', 'add', 'a.txt'], check=True)
+    lower = commit('feat: lower')
+    (tmp_path / 'a.txt').write_text('a\nb\n')
+    subprocess.run(['git', 'add', 'a.txt'], check=True)
+    subprocess.run(
+        ['git', 'commit', '-q', '--author', 'Someone <someone@localhost>', '-m', 'feat: upper\n\nbody'], check=True
+    )
+    upper = subprocess.run(['git', 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True).stdout.strip()
+
+    def git(*args: str) -> str:
+        return subprocess.run(['git', *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    merged = git('commit-tree', f'{lower}^{{tree}}', '-p', base, '-m', 'feat: lower')
+    replayed = replay(lower, upper, merged)
+    assert replayed != upper
+    assert git('rev-parse', f'{replayed}^{{tree}}') == git('rev-parse', f'{upper}^{{tree}}')
+    assert git('rev-parse', f'{replayed}^') == merged
+    assert git('log', '-1', '--format=%an <%ae>%n%B', replayed) == git('log', '-1', '--format=%an <%ae>%n%B', upper)
+    with pytest.raises(Held, match='the base moved under the train'):
+        replay(lower, upper, base)
