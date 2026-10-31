@@ -469,7 +469,8 @@ The `PR title` check fails on a title that is not a Conventional Commit, or whos
 types are also in `cliff.toml`: change both together.
 
 Maintainers merge with `uv run -m scripts.merge` (`--help`): it waits for a full CI run of each head, then squashes it
-with its title as the subject. `--train` lands a stack in one push, one squash commit per pull request.
+with its title as the subject. `--train` lands a stack from the green run of its top: it rebase-merges each pull request,
+bottom first, so each commit lands as it is and needs a Conventional Commit subject.
 
 ## Release
 

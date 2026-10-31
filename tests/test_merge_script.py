@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.merge import Held, check_migrations, check_remote
+from scripts.merge import Held, check_commits, check_migrations, check_remote, check_stack
 
 VERSIONS = 'piloop/db/migrations/versions'
 PLUGIN = 'piloop/plugins/archive/local/migrations'
@@ -84,3 +84,33 @@ def test_a_remote_of_another_repository_is_refused(tmp_path: Path, monkeypatch: 
         Held, match='the remote origin is git@github.com:owner/public.git, not the repository owner/dev'
     ):
         check_remote('origin', 'owner/dev')
+
+
+def commit(message: str) -> str:
+    subprocess.run(['git', 'commit', '-q', '--allow-empty', '-m', message], check=True)
+    return subprocess.run(['git', 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def test_a_stack_whose_lower_heads_are_in_the_top_s_head_passes_and_one_left_behind_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(['git', 'init', '-q'], check=True)
+    for config in (['user.name', 'ci'], ['user.email', 'ci@localhost']):
+        subprocess.run(['git', 'config', *config], check=True)
+    base = commit('chore: base')
+    lower = commit('feat: lower')
+    top = commit('feat: top')
+    check_stack([(1, lower), (2, top)])
+    subprocess.run(['git', 'reset', '-q', '--hard', base], check=True)
+    pushed_again = commit('feat: lower, pushed again after the top was built')
+    with pytest.raises(Held, match=rf'#1 at {pushed_again[:8]} is not in the head of #2: rebase the stack on it'):
+        check_stack([(1, pushed_again), (2, top)])
+
+
+def test_each_commit_that_lands_has_a_conventional_subject_and_no_listed_word() -> None:
+    check_commits(['feat(watch): a filter\n\nbody\n', 'fix!: x\n'], ['someone'])
+    with pytest.raises(Held, match="the commit subject 'wip' is not a Conventional Commit"):
+        check_commits(['feat: x\n', 'wip\n'], [])
+    with pytest.raises(Held, match='has a word of names.txt'):
+        check_commits(['fix: as Someone asked\n'], ['someone'])

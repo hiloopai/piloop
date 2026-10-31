@@ -4,8 +4,13 @@
     uv run -m scripts.merge --repo OWNER/NAME --remote REMOTE --messages DIR --train 577 578 579
 
 Each pull request merges in the order given. One that fails, conflicts or is held is reported and skipped, and the rest
-of the batch goes on. ``--train`` lands a stack, bottom first, in one push of one squash commit per pull request, from
-the green run of its top; the lower pull requests are closed with the commit that landed them.
+of the batch goes on.
+
+``--train`` lands a stack, bottom first, from the green run of its top: only the top runs CI. It checks that the head of
+each lower pull request is an ancestor of the top's head, so the top's run tested every lower tree as part of its own.
+Then, in order, it points each pull request at the stack's base, marks a lower one's head with the top's green checks
+as commit statuses (which satisfy a ruleset that requires those checks), and rebase-merges it on GitHub. Each commit
+lands as it is, so each subject must be a Conventional Commit; the squash messages are not used.
 
 ``DIR`` holds the squash messages: ``titles.txt`` has a ``N|title`` line per pull request and ``N.md`` its body.
 ``names.txt``, if any, lists words that no squash message may contain, one per line. ``acked-comments.txt`` lists the
@@ -22,7 +27,7 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 
 FULL_SUITE = 'coverage'
@@ -31,8 +36,10 @@ GATE = 'check'
 """The CI job that is green when every other job of the run is."""
 DO_NOT_MERGE = 'do-not-merge'
 """The label of a pull request that waits for a review, such as one that deletes tests."""
-RUN_START = 60
-"""Seconds to wait for the CI run that ``gh pr ready`` starts to show up."""
+MERGEABLE = 60
+"""Seconds to wait for GitHub to compute whether a pull request whose base just changed can merge."""
+CONVENTIONAL = re.compile(r'(feat|fix|perf|revert|refactor|docs|test|ci|build|style|chore)(\([^)]+\))?!?: \S')
+"""The subject of a commit that lands as it is: a type of CONTRIBUTING.md's table, as the PR title check allows."""
 GITHUB_URL = re.compile(
     r'(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)(?P<repo>[^/]+/[^/]+?)(?:\.git)?/?'
 )
@@ -51,7 +58,6 @@ class PullRequest:
     head: str
     head_ref: str
     base_ref: str
-    draft: bool
 
 
 @dataclass(frozen=True)
@@ -68,43 +74,31 @@ class Merger:
         return run('git', 'rev-parse', f'{self.remote}/{self.branch}')
 
     def pull(self, number: int) -> PullRequest:
-        fields = 'state,headRefOid,headRefName,baseRefName,isDraft,labels'
+        fields = 'state,headRefOid,headRefName,baseRefName,labels'
         data = json.loads(gh('pr', 'view', str(number), '--json', fields))
         if data['state'] != 'OPEN':
             raise Held(f'is {data["state"].lower()}')
         if any(label['name'] == DO_NOT_MERGE for label in data['labels']):
             raise Held(f'is labelled {DO_NOT_MERGE}')
-        return PullRequest(number, data['headRefOid'], data['headRefName'], data['baseRefName'], data['isDraft'])
+        return PullRequest(number, data['headRefOid'], data['headRefName'], data['baseRefName'])
 
-    def conclusions(self, sha: str) -> dict[str, str]:
-        """The latest conclusion of each check of a commit, by name; an unfinished one is ``pending``."""
+    def checks(self, sha: str) -> dict[str, tuple[str, str]]:
+        """The latest conclusion of each check of a commit and its page, by name; an unfinished one is ``pending``."""
         runs = json.loads(gh('api', '--paginate', '--slurp', f'repos/{{owner}}/{{repo}}/commits/{sha}/check-runs'))
         latest = sorted((r for page in runs for r in page['check_runs']), key=lambda r: r['id'])
-        return {r['name']: r['conclusion'] or 'pending' for r in latest}
+        return {r['name']: (r['conclusion'] or 'pending', r['html_url']) for r in latest}
 
-    def start_full_suite(self, pr: PullRequest) -> str | None:
-        """A draft runs the tests that its diff affects; marked ready, it runs the whole suite. The time it starts."""
-        if not pr.draft or self.conclusions(pr.head).get(FULL_SUITE) == 'success':
-            return None
-        since = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
-        gh('pr', 'ready', str(pr.number))
-        return since
-
-    def watch(self, pr: PullRequest, since: str | None) -> None:
-        """Wait for the CI runs of the head, and for the one started ``since``; hold unless its full suite is green."""
-        deadline = time.monotonic() + RUN_START
-        while True:
-            runs = json.loads(gh('run', 'list', '--commit', pr.head, '--json', 'databaseId,status,createdAt'))
-            if since is None or any(r['createdAt'] >= since for r in runs) or time.monotonic() > deadline:
-                break
-            time.sleep(5)
+    def watch(self, pr: PullRequest) -> dict[str, str]:
+        """Wait for the CI runs of the head; hold unless its gate and its full suite are green. Their pages, by name."""
+        runs = json.loads(gh('run', 'list', '--commit', pr.head, '--json', 'databaseId,status'))
         for entry in runs:
             if entry['status'] != 'completed':
                 subprocess.run(['gh', 'run', 'watch', str(entry['databaseId'])], capture_output=True)
-        found = self.conclusions(pr.head)
+        found = self.checks(pr.head)
         for job in (GATE, FULL_SUITE):
-            if found.get(job) != 'success':
-                raise Held(f'{job} is {found.get(job, "missing")} at {pr.head[:8]}')
+            if found.get(job, ('missing', ''))[0] != 'success':
+                raise Held(f'{job} is {found.get(job, ("missing", ""))[0]} at {pr.head[:8]}')
+        return {job: found[job][1] for job in (GATE, FULL_SUITE)}
 
     def message(self, number: int) -> tuple[str, str]:
         titles = (self.messages / 'titles.txt').read_text().splitlines()
@@ -112,12 +106,12 @@ class Merger:
         body = self.messages / f'{number}.md'
         if title is None or not body.is_file():
             raise Held(f'no title in titles.txt or no {body.name}')
-        names = self.messages / 'names.txt'
-        words = [w for w in names.read_text().split() if w] if names.is_file() else []
-        text = f'{title}\n{body.read_text()}'
-        if words and re.search(rf'\b({"|".join(map(re.escape, words))})\b', text, re.IGNORECASE):
-            raise Held('its squash message has a word of names.txt')
+        check_words(f'{title}\n{body.read_text()}', self.words())
         return f'{title} (#{number})', body.read_text()
+
+    def words(self) -> list[str]:
+        names = self.messages / 'names.txt'
+        return [w for w in names.read_text().split() if w] if names.is_file() else []
 
     def unanswered(self, number: int) -> None:
         if self.reviewer is None:
@@ -134,17 +128,17 @@ class Merger:
         if open_ids:
             raise Held(f'unanswered review comments {" ".join(open_ids)}')
 
-    def merged_tree(self, main: str, head: str) -> str:
-        result = subprocess.run(['git', 'merge-tree', '--write-tree', main, head], capture_output=True, text=True)
+    def merged_tree(self, base: str, head: str) -> str:
+        result = subprocess.run(['git', 'merge-tree', '--write-tree', base, head], capture_output=True, text=True)
         if result.returncode:
-            raise Held(f'conflicts with main at {head[:8]}')
+            raise Held(f'conflicts with {base} at {head[:8]}')
         return result.stdout.split()[0]
 
-    def merge(self, number: int, since: str | None) -> str:
+    def merge(self, number: int) -> str:
         pr = self.pull(number)
         self.unanswered(number)
         subject, body = self.message(number)
-        self.watch(pr, since)
+        self.watch(pr)
         check_migrations(self.merged_tree(self.main(), pr.head))
         merged = subprocess.run(
             ['gh', 'pr', 'merge', str(number), '--squash', '--match-head-commit', pr.head]
@@ -159,57 +153,62 @@ class Merger:
     def batch(self, numbers: list[int]) -> list[int]:
         """Merge each in order; the ones held are returned."""
         held: list[int] = []
-        started: dict[int, str | None] = {}
         for number in numbers:
             try:
-                started[number] = self.start_full_suite(self.pull(number))
-            except Held as reason:
-                print(f'{number} HOLD: {reason}')
-                held.append(number)
-        for number, since in started.items():
-            try:
-                print(f'MERGED {number} {self.merge(number, since)}')
+                print(f'MERGED {number} {self.merge(number)}')
             except Held as reason:
                 print(f'{number} HOLD: {reason}')
                 held.append(number)
         return held
 
-    def train(self, numbers: list[int]) -> str:
-        """Land a stack, bottom first, as one squash commit per pull request, in one push; the commit is returned."""
+    def train(self, numbers: list[int]) -> None:
+        """Land a stack, bottom first, by rebase-merging each pull request on GitHub, from the green run of its top."""
         prs = [self.pull(n) for n in numbers]
-        main = self.main()
-        for below, above in zip(prs, prs[1:], strict=False):
+        for below, above in pairwise(prs):
             if above.base_ref != below.head_ref:
                 raise Held(f'#{above.number} is based on {above.base_ref}, not on #{below.number}')
-        for below, above in zip([main, *(pr.head for pr in prs)], (pr.head for pr in prs), strict=False):
-            if subprocess.run(['git', 'merge-base', '--is-ancestor', below, above]).returncode:
-                raise Held(f'the stack is not on the tip of main at {above[:8]}: rebase it')
-        messages = []
+        top, base = prs[-1], f'{self.remote}/{prs[0].base_ref}'
+        run('git', 'fetch', '-q', self.remote)
+        check_stack([(pr.number, pr.head) for pr in prs])
         for pr in prs:
             self.unanswered(pr.number)
-            messages.append(self.message(pr.number))
-        top = prs[-1]
-        self.watch(top, self.start_full_suite(top))
-        check_migrations(run('git', 'rev-parse', f'{top.head}^{{tree}}'))
-        squashed: list[str] = []
-        for pr, (subject, body) in zip(prs, messages, strict=True):
-            tree = run('git', 'rev-parse', f'{pr.head}^{{tree}}')
-            squashed.append(run('git', 'commit-tree', tree, '-p', (squashed or [main])[-1], '-m', subject, '-m', body))
-        parent = squashed[-1]
-        pushed = subprocess.run(
-            ['git', 'push', '-q', self.remote, f'{parent}:refs/heads/{self.branch}'], capture_output=True
-        )
-        if pushed.returncode:
-            raise Held(f'main moved before the push: {pushed.stderr.decode().strip()}')
-        for pr, landed in zip(prs, squashed, strict=True):
+        check_commits(run('git', 'log', '--format=%B%x00', f'{base}..{top.head}').split('\0')[:-1], self.words())
+        pages = self.watch(top)
+        check_migrations(self.merged_tree(base, top.head))
+        for pr in prs:
+            if pr is not prs[0]:
+                gh('pr', 'edit', str(pr.number), '--base', prs[0].base_ref)
+            if pr is not top:
+                self.vouch(pr, top, pages)
+            self.rebase_merge(pr)
+            print(f'MERGED {pr.number}')
+
+    def vouch(self, pr: PullRequest, top: PullRequest, pages: dict[str, str]) -> None:
+        """Mark a lower pull request's head with the top's green checks, as commit statuses that link to them."""
+        for job, page in pages.items():
             gh(
-                'pr',
-                'close',
-                str(pr.number),
-                '--comment',
-                f'Landed on main as {landed}, in the train of #{top.number}.',
+                'api',
+                '-X',
+                'POST',
+                f'repos/{{owner}}/{{repo}}/statuses/{pr.head}',
+                *('-f', 'state=success', '-f', f'context={job}', '-f', f'target_url={page}'),
+                *('-f', f'description=green in the head of #{top.number}, {top.head[:8]}, which holds this one'),
             )
-        return parent
+
+    def rebase_merge(self, pr: PullRequest) -> None:
+        """Rebase-merge a pull request at its head; GitHub may take a while to see that one whose base changed can."""
+        deadline = time.monotonic() + MERGEABLE
+        while True:
+            merged = subprocess.run(
+                ['gh', 'pr', 'merge', str(pr.number), '--rebase', '--match-head-commit', pr.head],
+                capture_output=True,
+                text=True,
+            )
+            if merged.returncode == 0:
+                return
+            if time.monotonic() > deadline:
+                raise Held(f'#{pr.number} merge refused: {merged.stderr.strip()}')
+            time.sleep(5)
 
 
 def run(*args: str) -> str:
@@ -222,10 +221,36 @@ def gh(*args: str) -> str:
     return run('gh', *args)
 
 
+def check_stack(heads: list[tuple[int, str]]) -> None:
+    """Hold unless the head of each lower pull request of a stack is an ancestor of the top's head.
+
+    Only then did the top's green run test each lower tree as part of its own, and may a lower one carry its checks.
+    """
+    top_number, top_head = heads[-1]
+    for number, head in heads[:-1]:
+        if subprocess.run(['git', 'merge-base', '--is-ancestor', head, top_head]).returncode:
+            raise Held(f'#{number} at {head[:8]} is not in the head of #{top_number}: rebase the stack on it')
+
+
+def check_commits(messages: list[str], words: list[str]) -> None:
+    """Hold unless each commit message, which lands as it is, has a Conventional Commit subject and no listed word."""
+    for message in messages:
+        subject = message.strip().splitlines()[0] if message.strip() else ''
+        if not CONVENTIONAL.match(subject):
+            raise Held(f'the commit subject {subject!r} is not a Conventional Commit')
+        check_words(message, words)
+
+
+def check_words(text: str, words: list[str]) -> None:
+    """Hold if a text has a word of ``names.txt``."""
+    if words and re.search(rf'\b({"|".join(map(re.escape, words))})\b', text, re.IGNORECASE):
+        raise Held('a message that lands has a word of names.txt')
+
+
 def check_remote(remote: str, repo: str) -> None:
     """Hold unless the remote's push URL is the GitHub repository ``OWNER/NAME`` that ``gh`` merges in.
 
-    A train pushes to the remote's main: a remote of another repository would publish there.
+    The trees that a merge checks come from the remote: a remote of another repository would check the wrong trees.
     """
     url = run('git', 'remote', 'get-url', '--push', remote)
     match = GITHUB_URL.fullmatch(url)
@@ -283,7 +308,7 @@ if __name__ == '__main__':
     merger = Merger(args.remote, default_branch, args.messages, args.reviewer)
     if args.train:
         try:
-            print(f'LANDED {" ".join(map(str, args.numbers))} {merger.train(args.numbers)}')
+            merger.train(args.numbers)
         except Held as reason:
             sys.exit(f'train HOLD: {reason}')
     elif held := merger.batch(args.numbers):
