@@ -321,6 +321,21 @@ def test_each_role_that_does_runs_fills_its_own_slots_with_fresh_runs_that_claim
     sched.stop(timeout=5)
 
 
+def test_a_worker_on_an_empty_board_is_told_to_propose_its_own_idea_and_nothing_in_its_brief_forbids_it(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """With no open idea, a worker proposes one and claims it: its brief says how, and no line of it says that the
+    worker files no ideas, which made workers on an empty board escalate instead."""
+    configure(db, campaign, HARNESS_APPEND)
+    sched = scheduler(db, recording(runtime, []), tmp_path)
+    assert run_all(sched) == [1]
+    sched.wait(SETTLE)
+    sched.stop(timeout=5)
+    brief = (tmp_path / 'runs' / '1' / 'brief.md').read_text()
+    assert "`piloop idea propose '<title>'" in brief
+    assert not re.search(r'files? no ideas?\b(?! for others)', brief, re.IGNORECASE), brief
+
+
 def test_a_queued_run_of_a_role_that_piloop_toml_no_longer_has_fails_and_its_claim_ends(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:

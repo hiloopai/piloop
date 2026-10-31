@@ -80,7 +80,10 @@ def role(cfg: CampaignConfig, kind: RoleName, repo: Path) -> Role:
 
 
 def filed(table: RoleConfig) -> Files:
-    """What the agents of a role may file with ``piloop idea``: a sweep's ``files``. A role that does runs files nothing."""
+    """What the agents of a role may file with ``piloop idea``: a sweep's ``files``.
+
+    A role that does runs files nothing for others: its agent proposes only its own run's idea (``ImplementerRole.IDEAS``).
+    """
     match table:
         case SweepRole(files=files):
             return files

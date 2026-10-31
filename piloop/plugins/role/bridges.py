@@ -26,9 +26,9 @@ RUN_ROLE_KEYS = ('files', 'plan_words')
 """The keys of a role that does runs that set how its agents filed ideas."""
 
 
-@deprecated.bridge('0.7.0', 'a role that does runs files no ideas: delete run_role_ideas and RUN_ROLE_KEYS')
+@deprecated.bridge('0.7.0', 'a role that does runs files no ideas for others: delete run_role_ideas and RUN_ROLE_KEYS')
 def run_role_ideas(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``files`` and ``plan_words`` of a role that does runs are removed: its agents file no ideas and no seeds.
+    """``files`` and ``plan_words`` of a role that does runs are removed: its agents file no seeds, and no ideas for others.
 
     piloop drops them. An implementer's hunch goes in a note, which research reads.
     """
@@ -45,7 +45,7 @@ def run_role_ideas(toml: Path, raw: dict[str, object], removed_in: Version) -> N
             deprecated.warn(
                 toml,
                 f'plugins.role.{name}.{key}',
-                f'{key} of a role that does runs is removed, as its agents file no ideas; delete it',
+                f'{key} of a role that does runs is removed, as its agents file no ideas for others; delete it',
                 removed_in=removed_in,
                 nth=deprecated.nth(toml, f'plugins.role.{name}', key),
             )

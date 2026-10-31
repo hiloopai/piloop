@@ -199,9 +199,14 @@ class ImplementerRole(RoleConfig):
     max_concurrent: int = Field(default=4, ge=1)
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
     scored after its implementer ended does not count."""
-    writes: list[str] = ['versions', 'comments(note) on your idea or your run']
-    """What an implementer may write, as its brief states it. It files no ideas: its hunches go in its
-    notes, which research reads."""
+    writes: list[str] = [
+        'versions',
+        'comments(note) on your idea or your run',
+        "your run's own idea (`piloop idea propose`)",
+    ]
+    """What an implementer may write, as its brief states it. It proposes the idea of its own run, and files none for
+    others: a hunch for another run goes in a note, which research reads."""
+    IDEAS: ClassVar[str] = '- A hunch for another run goes in a note, with pointers (ids, paths, the number).'
     SURFACE: ClassVar[Surface] = Surface.RUN
 
 

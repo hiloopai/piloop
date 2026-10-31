@@ -160,7 +160,7 @@ warning, until 0.7.0, and do nothing. What they wrote stays in the database.
 |---|---|
 | The scout role. Its `techniques` table stays readable. | `[plugins.role.scout]` |
 | The `leaking_funnel` trigger: `low_yield` finds the runs that reach no measurement. | `"leaking_funnel"` in a role's `triggers`, `[plugins.trigger.leaking_funnel]` |
-| Ideas and seeds that implementers file. An implementer's hunch goes in its finding, which research reads. | `files` and `plan_words` of a role that does runs |
+| Ideas and seeds that implementers file for other runs. An implementer proposes only its own run's idea; a hunch for another run goes in a note, which research reads. | `files` and `plan_words` of a role that does runs |
 | Seeds. An idea is open on the board from the start, and research adds ideas, not seeds. | `"seed"` in a role's `triggers`, `[plugins.trigger.seed]`, `files = "seeds"` (now `"nothing"`), `[plugins.section.pack] seeds` |
 | Ideas that wait for a review, and the escalation of the slots that wait for them. | `idle_alert` of a role that does runs |
 | The rules that gave ideas to runs: an implementer claims its idea now. | `takes`, `explore_every` and `recovery_requeues` of a role that does runs |

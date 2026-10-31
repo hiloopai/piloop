@@ -563,7 +563,7 @@ scored and judged when it ends. A new role of this kind takes the implementer's 
 |---|---|---|---|
 | `timeout` | number | `1800` | The number of seconds one implementer may run before it is stopped. Its brief states it. A quarter of it before, at most `wrap_up_lead`, the daemon tells the implementer to wrap up. |
 | `max_concurrent` | integer | `4` | The maximum number of implementers that run at the same time, on all workers together. A run that is being scored after its implementer ended does not count. |
-| `writes` | list\[string\] | `["versions", "comments(note) on your idea or your run"]` | What an implementer may write, as its brief states it. It files no ideas: its hunches go in its notes, which research reads. |
+| `writes` | list\[string\] | `["versions", "comments(note) on your idea or your run", "your run's own idea (`piloop idea propose`)"]` | What an implementer may write, as its brief states it. It proposes the idea of its own run, and files none for others: a hunch for another run goes in a note, which research reads. |
 | `runs` | boolean | `true` | The agents of this role do runs. A table without `runs = true` is a sweeping role. |
 | `wrap_up_lead` | duration | `"PT10M"` | How long before its `timeout` the daemon tells an implementer to wrap up, at most a quarter of the timeout. |
 | `end_grace` | duration | `"PT1M"` | How long after an implementer ended its run (`piloop run end`) the daemon ends it, and every process that it left: its last tool call returns first. |
@@ -890,7 +890,7 @@ These keys still work. Each one shows a `PiloopDeprecationWarning` that names th
 - The `leaking_funnel` trigger is removed: `low_yield` does its work. piloop drops it from each role's `triggers`, and drops each `[plugins.trigger.<name>]` of it.
 - `[plugins.section.pack] seeds` is removed: there are no seeds, so the research pack lists none.
 - `takes`, `explore_every` and `recovery_requeues` are removed: the scheduler assigns no idea. Each run starts from the head, and its worker claims an idea. piloop drops the keys.
-- `files` and `plan_words` of a role that does runs are removed: its agents file no ideas and no seeds. piloop drops them. An implementer's hunch goes in a note, which research reads.
+- `files` and `plan_words` of a role that does runs are removed: its agents file no seeds, and no ideas for others. piloop drops them. An implementer's hunch goes in a note, which research reads.
 - `[plugins.role.scout]` is removed with the scout role: piloop drops the table, and no scout starts.
 - `files = "seeds"` is `files = "nothing"`: there are no seeds. An idea is open on the board from the start.
 - The `seed` trigger is removed: an idea is open on the board from the start, so there is no seed to develop. piloop drops it from each role's `triggers`, and drops each `[plugins.trigger.<name>]` of it.

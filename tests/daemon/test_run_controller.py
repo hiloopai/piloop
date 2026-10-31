@@ -1006,7 +1006,7 @@ def test_brief_carries_history_and_comments(
     assert '`piloop schema long_jobs`' in brief, 'how to wait for a long job is a guide away'
     assert 'kills every process that you started' in brief, 'nothing outlives the harness'
     assert '`piloop run end submitted`' in brief and '`piloop run end gave_up' in brief, 'how its run ends'
-    assert '- A hunch worth a run of its own goes in a note' in brief and 'idea seed demo' not in brief
+    assert '- A hunch for another run goes in a note' in brief and 'idea seed demo' not in brief
 
 
 def test_the_comments_on_an_idea_are_capped_by_their_section(
