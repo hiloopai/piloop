@@ -468,6 +468,9 @@ version.
 The `PR title` check fails on a title that is not a Conventional Commit, or whose type is not in the table. The
 types are also in `cliff.toml`: change both together.
 
+Maintainers merge with `uv run -m scripts.merge` (`--help`): it waits for a full CI run of each head, then squashes it
+with its title as the subject. `--train` lands a stack in one push, one squash commit per pull request.
+
 ## Release
 
 Maintainers only.
