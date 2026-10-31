@@ -117,6 +117,7 @@ DIAGNOSTICS: list[Row] = [
     ('escalations', lambda r: r.escalations, 0, statistics.median),
     ('human interventions', lambda r: r.interventions, 0, statistics.median),
     ('lead token share', lambda r: r.lead_token_share, 3, statistics.median),
+    ('daemon restarts', lambda r: r.restarts, 0, statistics.median),
 ]
 """Each a metric of one run, shown as the median (range) over an arm's repeats."""
 
@@ -129,7 +130,7 @@ def table(rows: list[Row], by_arm: dict[str, list[Result]]) -> go.Table:
     return go.Table(header={'values': header}, cells={'values': cells})
 
 
-def figure(task: str, by_arm: dict[str, list[Result]]) -> go.Figure:
+def figure(task: str, by_arm: dict[str, list[Result]], notes: list[str]) -> go.Figure:
     """The page of one task: the $ and hours curves against the plain bar, then the headline and the diagnostics."""
     runs = [r for rs in by_arm.values() for r in rs]
     ends: list[tuple[int, Axis, float]] = [
@@ -161,13 +162,14 @@ def figure(task: str, by_arm: dict[str, list[Result]]) -> go.Figure:
     fig.update_yaxes(title_text='sealed score (0 = start, 1 = reference)', row=1, col=1)
     fig.update_xaxes(title_text='USD, list price', row=1, col=1)
     fig.update_xaxes(title_text='hours', row=1, col=2)
-    title = f'{task}: median over repeats, band from lowest to highest<br><sup>{NOTE}</sup>'
+    lines = ''.join(f'<br><sup>{line}</sup>' for line in [NOTE, *notes])
+    title = f'{task}: median over repeats, band from lowest to highest{lines}'
     fig.update_layout(title=title, height=1500, hovermode='x')
     return fig
 
 
-def write(results: list[Result], out: Path) -> list[Path]:
-    """Write ``<out>/<task>.html`` for each task. The pages."""
+def write(results: list[Result], out: Path, notes: dict[str, list[str]] | None = None) -> list[Path]:
+    """Write ``<out>/<task>.html`` for each task, with the ``notes`` of each task under its title. The pages."""
     out.mkdir(parents=True, exist_ok=True)
     pages = []
     for task in sorted({r.task for r in results}):
@@ -176,6 +178,6 @@ def write(results: list[Result], out: Path) -> list[Path]:
             raise ValueError(f'{task} has {len(arms)} arms: a page draws at most {len(COLORS)}; split them')
         by_arm = {arm: [r for r in results if r.task == task and r.arm == arm] for arm in arms}
         path = out / f'{task}.html'
-        figure(task, by_arm).write_html(path, include_plotlyjs='cdn')
+        figure(task, by_arm, (notes or {}).get(task, [])).write_html(path, include_plotlyjs='cdn')
         pages.append(path)
     return pages

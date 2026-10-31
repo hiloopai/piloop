@@ -36,6 +36,12 @@ SEALED = f'{PILOOP_HOME}/sealed'
 OUT = f'{WORK}/out'
 SESSIONS = {'claude': '/root/.claude/projects', 'codex': '/root/.codex/sessions'}
 VENDORS = {'claude': 'anthropic', 'codex': 'openai'}
+SUPERVISE = (
+    f'while true; do piloop serve >> {OUT}/serve.out 2>&1; code=$?; [ $code -eq 0 ] && break;'
+    f' echo "$(date -u +%FT%TZ) exit $code" >> {OUT}/restarts; sleep 5; done'
+)
+"""Run the daemon in the foreground and start it again after an exit other than 0: one line per restart in
+``restarts``. ``piloop stop`` ends it with 0, and the loop with it."""
 HALT = 'halt'
 """A file in a run's directory that stops it at the next sample, with its text as the reason."""
 BASE_DATE = '2026-01-01T00:00:00Z'
@@ -143,12 +149,13 @@ class Piloop:
             box.run(f'mkdir -p {SEALED} && tar xzf {WORK}/campaign.tgz -C {SEALED} && rm {WORK}/campaign.tgz')
         config = piloop_config(self.task, self.arm, self.settings, self.hours)
         box.write(f'{REPO}/piloop.toml', tomli_w.dumps(config).encode())
+        box.run(f'cd {REPO} && echo piloop.toml >> .git/info/exclude')
+        box.start(SUPERVISE)
         box.run(
-            f'cd {REPO} && echo piloop.toml >> .git/info/exclude && piloop serve --detach'
-            ' && printf %s "$GATEWAY_TOKEN" | piloop secret set GATEWAY_TOKEN'
-            f' && piloop init . > {OUT}/init.log 2>&1',
-            timeout=1800,
+            f'for i in $(seq {self.settings.daemon_start_seconds:.0f}); do'
+            ' printf %s "$GATEWAY_TOKEN" | piloop secret set GATEWAY_TOKEN 2>/dev/null && exit 0; sleep 1; done; exit 1'
         )
+        box.run(f'cd {REPO} && piloop init . > {OUT}/init.log 2>&1', timeout=1800)
         self.version = box.run('piloop --version').strip()
         trace.get_current_span().set_attribute('piloop.version', self.version)
 
@@ -316,6 +323,7 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
         'budget_usd': budget,
         'max_hours': hours,
         'stopped': stopped,
+        'supervised': isinstance(run, Piloop),
     }
     (out / 'run.json').write_text(json.dumps(meta, indent=2))
     archive(out, settings)

@@ -166,6 +166,9 @@ class Result(Frozen):
     interventions: int
     lead_token_share: float | None
     """The orchestrator's share of the tokens. None: a plain arm."""
+    restarts: int | None = None
+    """How many times the daemon's supervisor started it again after it died. None: a plain arm, or a run whose daemon
+    had no supervisor."""
 
     @property
     def first_keep(self) -> Point | None:
@@ -212,6 +215,8 @@ class Settings(BaseSettings):
     """The CPU cores of each scoring sandbox: the dev and sealed evaluators run one after the other."""
     score_memory_mb: int = 4096
     codex_thread_seconds: float = 120
+    daemon_start_seconds: float = 60
+    """How long a piloop daemon gets to answer after its supervisor starts it."""
     otlp_endpoint: str | None = Field(default=None, validation_alias='OTEL_EXPORTER_OTLP_ENDPOINT')
     """The OTLP/HTTP collector of the driver's spans and the piloop arms' daemons. Unset: spans go to the console."""
     otlp_headers: SecretStr | None = Field(default=None, validation_alias='OTEL_EXPORTER_OTLP_HEADERS')

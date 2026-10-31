@@ -89,6 +89,12 @@ def piloop_counts(db: sqlite3.Connection, base: str) -> tuple[Funnel, int, int, 
     return funnel, escalations, people, (lead / total if total else None)
 
 
+def restarts(export: Path) -> int:
+    """The restarts of a supervised daemon: one line each in ``restarts``."""
+    found = export / 'restarts'
+    return len(found.read_text().splitlines()) if found.exists() else 0
+
+
 def heads_of(run: Path) -> list[tuple[str, float]]:
     """The heads of a run after its base, with their hours."""
     meta = json.loads((run / 'run.json').read_text())
@@ -138,4 +144,5 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         escalations=escalations,
         interventions=people,
         lead_token_share=lead,
+        restarts=restarts(export) if meta.get('supervised') else None,
     )
