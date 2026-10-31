@@ -140,12 +140,18 @@ def figure(task: str, by_arm: dict[str, list[Result]], notes: list[str]) -> go.F
     bar = plain_bar(by_arm)
     full = {'type': 'table', 'colspan': 2}
     fig = make_subplots(
-        rows=3,
+        rows=4,
         cols=2,
-        specs=[[{'type': 'xy'}, {'type': 'xy'}], [full, None], [full, None]],
-        row_heights=[0.44, 0.2, 0.36],
-        vertical_spacing=0.07,
-        subplot_titles=['sealed score against USD spent', 'sealed score against hours', 'headline', 'diagnostics'],
+        specs=[[{'type': 'xy'}, {'type': 'xy'}], [{'type': 'xy', 'colspan': 2}, None], [full, None], [full, None]],
+        row_heights=[0.3, 0.22, 0.18, 0.3],
+        vertical_spacing=0.06,
+        subplot_titles=[
+            'sealed score against USD spent',
+            'sealed score against hours',
+            'sealed score over the sequence of heads: one line per repeat',
+            'headline',
+            'diagnostics',
+        ],
     )
     for color, (arm, rs) in zip(COLORS, by_arm.items(), strict=False):
         for col, axis, end in ends:
@@ -154,17 +160,23 @@ def figure(task: str, by_arm: dict[str, list[Result]], notes: list[str]) -> go.F
             fig.add_scatter(**hull, fillcolor=color, hoverinfo='skip', showlegend=False, row=1, col=col)
             fig.add_scatter(x=xs, y=median, name=arm, legendgroup=arm, showlegend=col == 1, line_color=color,
                             line_shape='hv', line_width=2, row=1, col=col)  # fmt: skip
+    for color, (arm, rs) in zip(COLORS, by_arm.items(), strict=False):
+        for r in rs:
+            heads = [p.sealed if p.sealed is not None else 0.0 for p in r.curve]
+            fig.add_scatter(x=list(range(len(heads))), y=heads, name=arm, legendgroup=arm, showlegend=False,
+                            line_color=color, line_width=1, line_shape='hv', row=2, col=1)  # fmt: skip
     if bar is not None:
         for col in (1, 2):
             fig.add_hline(y=bar, line_dash='dash', line_width=1, annotation_text='plain bar', row=1, col=col)
-    fig.add_trace(table(headline(bar), by_arm), row=2, col=1)
-    fig.add_trace(table(DIAGNOSTICS, by_arm), row=3, col=1)
+    fig.add_trace(table(headline(bar), by_arm), row=3, col=1)
+    fig.add_trace(table(DIAGNOSTICS, by_arm), row=4, col=1)
+    fig.update_xaxes(title_text='head number (0 = the starting repo)', row=2, col=1)
     fig.update_yaxes(title_text='sealed score (0 = start, 1 = reference)', row=1, col=1)
     fig.update_xaxes(title_text='USD, list price', row=1, col=1)
     fig.update_xaxes(title_text='hours', row=1, col=2)
     lines = ''.join(f'<br><sup>{line}</sup>' for line in [NOTE, *notes])
     title = f'{task}: median over repeats, band from lowest to highest{lines}'
-    fig.update_layout(title=title, height=1500, hovermode='x')
+    fig.update_layout(title=title, height=2000, hovermode='x')
     return fig
 
 
