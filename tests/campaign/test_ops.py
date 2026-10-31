@@ -334,7 +334,8 @@ def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_i
         s.commit()
         assert [r.id for r in done.cancelled] == [queued, running]
         for run_id in (queued, running):
-            assert [k for k, _, _ in kinds(me, RUN, run_id)] == ['run.cancel_requested', 'run.head_replaced']
+            on_run = select(Event.kind).where(Event.target_kind == RUN, Event.target_id == run_id).order_by(Event.id)
+            assert list(s.scalars(on_run)) == ['run.cancel_requested', 'run.head_replaced']
             [(event, cancel)] = in_order(s, CancelRequested, Event.target_id == run_id)
             assert (event.actor, cancel.ending) == (ACTOR.signature, Ending.WRAP_UP)
         run = s.get_one(Run, running)
@@ -384,12 +385,12 @@ def test_a_hand_keep_builds_on_the_head_by_git_where_the_parent_links_miss_it(me
     trunk = run_candidate(me, campaign, Outcome.KEEP, commit=trunk_sha)
     merge_sha = commit_on(campaign, trunk_sha, {}, merge=side_sha)
     merged = run_candidate(me, campaign, Outcome.DISCARD, parent=side, commit=merge_sha)
+    lost = run_candidate(me, campaign, Outcome.DISCARD)
     with me.session() as s:
         verdicts_ops.set_verdict(s, merged, Outcome.KEEP, reason='its commit merges the head', actor=ACTOR)
         s.commit()
         now = head(s, s.get_one(Campaign, 1))
         assert now is not None and now.id == merged, f'a trunk keep newer than candidate#{trunk}'
-        lost = run_candidate(me, campaign, Outcome.DISCARD)
         with pytest.raises(
             ops.Refused, match=f'the vcs cannot tell if candidate#{lost} builds on the head candidate#{merged}'
         ):

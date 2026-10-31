@@ -147,6 +147,7 @@ def make_run(
     provenance: str | None = None,
     track: str = 'score',
 ) -> RunId:
+    base = baseline(db, campaign.id).id  # before the session: one thread never holds two connections
     with db.session() as s:
         idea = Idea(
             track=track,
@@ -164,7 +165,7 @@ def make_run(
             campaign_id=idea.campaign_id,
             idea_id=idea.id,
             attempt=1,
-            base_candidate_id=baseline(db, campaign.id).id,
+            base_candidate_id=base,
             harness='script',
             model='test-model',
         )
@@ -583,12 +584,12 @@ def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_its_idea_i
     )
     with db.session() as s:
         recovered = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
-        assert s.get_one(Idea, claimed_id(run_row(db, run_id))).status is IdeaStatus.OPEN
+        assert s.get_one(Idea, claimed_id(s.get_one(Run, run_id))).status is IdeaStatus.OPEN
         assert [c.body for c in s.scalars(select(Comment).where(Comment.target_kind == IDEA))] == [
             f'open: run#{run_id} gave the idea back; it ended failed: {NOT_ENDED}'
         ], 'the note says why, and nothing is requeued'
         trunk = head(s, s.get_one(Campaign, campaign.id))
-        assert trunk is not None and trunk.id == baseline(db, campaign.id).id, 'the head did not move'
+        assert trunk is not None and trunk.id == 1, 'the head did not move: the baseline is candidate#1'
         recovered_sha = recovered.revision
     repo = Repo(campaign.path)
     assert 'data' not in repo.git.show('--stat', '--format=', recovered_sha), 'linked paths are never committed'
@@ -618,7 +619,7 @@ def test_dirt_after_a_commit_is_recovered_on_its_own_and_the_commit_is_scored_as
     [e] = [c for c in candidates_measured(db, run_id)]
     assert e.metrics['score'] == 2.0
     with db.session() as s:
-        assert s.get_one(Idea, claimed_id(run_row(db, run_id))).status is IdeaStatus.DONE
+        assert s.get_one(Idea, claimed_id(s.get_one(Run, run_id))).status is IdeaStatus.DONE
 
 
 HARNESS_LEAVES_DIRT_WHILE_A_JOB_WRITES_THE_WORKSPACE = (
@@ -738,12 +739,11 @@ def test_a_crash_from_a_fault_of_the_host_is_measured_again_on_request_and_judge
         request_remeasure(s, s.get_one(Candidate, crashed.id), System.ORCHESTRATOR)
         s.commit()
     ex.remeasure(crashed.id)
+    base = baseline(db, campaign.id).id
     with db.session() as s:
         c = s.get_one(Candidate, crashed.id)
         assert (c.verdict, len(c.measurements)) == (Outcome.CRASH, 2), 'the fault is still there: a crash again'
-        assert len(s.get_one(Candidate, baseline(db, campaign.id).id).measurements) == 2, (
-            'its first run crashed, so its bar never ran'
-        )
+        assert len(s.get_one(Candidate, base).measurements) == 2, 'its first run crashed, so its bar never ran'
     fault.unlink()
     write_script(
         Path(campaign.path).parent / 'harness.sh',
@@ -1343,7 +1343,7 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
     with db.session() as s:
         relaunched = in_order(s, RunRelaunched)
         assert [p.launches for _, p in relaunched] == [1, 2]
-        idea = s.get_one(Idea, claimed_id(run_row(db, run_id)))
+        idea = s.get_one(Idea, claimed_id(s.get_one(Run, run_id)))
         assert idea.status is IdeaStatus.OPEN, 'no agent of its run started to work: the claim ends with the run'
         assert [c.body for c in s.scalars(select(Comment).where(Comment.target_id == idea.id))] == [
             f'open: run#{run_id} gave the idea back; it ended not_started'
@@ -1499,13 +1499,12 @@ def test_a_relaunched_implementer_signs_as_itself_and_its_run_end_without_a_comm
     execute(ex, db, run_id)
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
+    brief = brief_of(db, run.id)
     with db.session() as s:
         dead, replacement = s.scalars(select(AgentSession.id).where(working_on(run_id)).order_by(AgentSession.id)).all()
         [author] = s.scalars(select(Comment.author).where(Comment.body == 'no effect')).all()
         assert author == f'implementer#{replacement}'
-        assert f'implementer#{dead}' not in brief_of(db, run.id) and f'You are implementer#{replacement},' in brief_of(
-            db, run.id
-        )
+        assert f'implementer#{dead}' not in brief and f'You are implementer#{replacement},' in brief
         assert s.get_one(Idea, idea_id).status is IdeaStatus.OPEN
 
 
@@ -2006,9 +2005,9 @@ def test_a_config_change_during_a_run_scores_it_under_the_new_evaluator(
         new_evaluator = proj.evaluator_id
     gate.release.set()
     thread.join(30)
+    [added] = candidates(db, run_id)
     with db.session() as s:
         assert s.get_one(Campaign, campaign.id).evaluator_id == new_evaluator
-        [added] = candidates(db, run_id)
         assert [m.evaluator_id for m in s.get_one(Candidate, added.id).measurements] == [new_evaluator]
         assert added.metrics['score'] == 4.0, 'measured under the doubled evaluator'
 
@@ -2079,6 +2078,7 @@ def test_a_config_change_while_a_commit_is_measured_judges_it_and_its_bar_under_
 
     monkeypatch.setattr(ex, '_measure', init_during(ex._measure))
     execute(ex, db, run_id)
+    base = baseline(db, campaign.id).id
     with db.session() as s:
         new = s.get_one(Campaign, campaign.id).evaluator_id
         first, second = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
@@ -2086,7 +2086,7 @@ def test_a_config_change_while_a_commit_is_measured_judges_it_and_its_bar_under_
         def under_new(c: CandidateId) -> list[float]:
             return [m.metrics['score'] for m in s.get_one(Candidate, c).measurements if m.evaluator_id == new]
 
-        assert [under_new(c) for c in (baseline(db, campaign.id).id, first.id, second.id)] == [[2.0], [4.0], [6.0]], (
+        assert [under_new(c) for c in (base, first.id, second.id)] == [[2.0], [4.0], [6.0]], (
             'the bar and both commits are measured under the evaluator that judges them'
         )
         judged = [(e.target_id, j.score) for e, j in in_order(s, CandidateJudged)]
@@ -2136,12 +2136,13 @@ def test_per_unit_results_decide_the_verdict_and_live_outside_the_database(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     units_dir = tmp_path / 'units'
+    base = baseline(db, campaign.id).id
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
         cfg = load_campaign_config(Path(campaign.path), evaluate=SPLIT_UNITS)
         proj.config = cfg
         bar = Measurement(
-            candidate_id=baseline(db, campaign.id).id,
+            candidate_id=base,
             evaluator_id=current_evaluator(s, proj, cfg).id,
             metrics={'score': 1.0, 'size': 5.0},
         )
@@ -2457,10 +2458,10 @@ def test_a_run_pinned_to_a_non_keep_is_judged_against_its_nearest_keep_on_every_
         'against candidate#1: score 3 vs 1 (+2; aggregate: no per-unit results)',
         lead,
     ), "the lead's 9 is no bar: the head's 1 is"
+    brief = brief_of(db, run_id)
     with db.session() as s:
         trunk = head(s, s.get_one(Campaign, campaign.id))
         assert trunk is not None and trunk.parent_id == lead, 'a trunk run: its keep is the new head'
-        brief = brief_of(db, run_id)
     assert f'- candidate#{lead} is not your bar: your versions are judged against candidate#1 (' in brief
 
 
@@ -2523,7 +2524,7 @@ def test_a_keep_that_lost_the_race_to_the_head_is_merged_onto_it_and_judged_ther
         ], 'every merge commit is pinned'
         tree = set(repo.git.ls_tree('--name-only', final.revision).splitlines())
         assert {'notes.txt', 'docs.txt', 'solve.txt'} <= tree, "the head's changes and the run's, together"
-        assert s.get_one(Idea, claimed_id(run_row(db, run_id))).status is IdeaStatus.DONE
+        assert s.get_one(Idea, claimed_id(s.get_one(Run, run_id))).status is IdeaStatus.DONE
 
 
 def test_with_a_noisy_metric_a_run_pairs_its_commit_with_its_bar_and_a_merge_with_the_head_it_merged_onto(
@@ -3017,7 +3018,7 @@ def test_recovered_work_whose_tree_is_already_a_candidate_keeps_that_candidate_s
     run_id = make_run(db, campaign, title='leaves the same line')
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
-        idea = s.get_one(Idea, claimed_id(run_row(db, run_id)))
+        idea = s.get_one(Idea, claimed_id(s.get_one(Run, run_id)))
         assert idea.status is IdeaStatus.OPEN
         assert s.get_one(Candidate, known.id).verdict is Outcome.KEEP, 'a known tree keeps its verdict'
 

@@ -42,6 +42,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.contract import AgentFinished, Report
+from piloop.plugins.executor.kit.client import Local
 from piloop.plugins.executor.kit.leases import NOT_TAKEN, SERVE, Leases, StaleReport, Timing
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.runtime.kit import tags
@@ -322,6 +323,7 @@ def test_a_partitioned_worker_stops_its_job_before_its_lease_expires_and_its_rep
     """A partition past the toleration: the worker hears nothing back, so it stops its job before the lease expires,
     and keeps its report. Once it is heard again, the fence refuses the report: a job never runs twice. The agent
     would run for ten minutes: only the worker's own stop ends it."""
+    mocker.patch.object(Local, 'partitionable', True)  # a worker elsewhere's: only its calls cross a network
     write_toml(Path(campaign.path), COMMIT_THEN_HOLD.format(hold=hold), implementer_timeout=600)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)

@@ -117,6 +117,7 @@ from tests.conftest import (
     campaigns_of,
     details,
     disk,
+    elsewhere,
     escalation_sql,
     events,
     factory,
@@ -2793,7 +2794,7 @@ def test_a_wind_down_that_read_the_implementer_before_its_report_closed_the_row_
     end = Agents._end
 
     def reported_first(agents: Agents, s: Session, agent_session: AgentSession, reason: str, how: RunEnd) -> None:
-        with db.session() as other:
+        with elsewhere(db) as second, second.session() as other:  # the worker's report, from its own process
             row = other.get_one(AgentSession, agent_session.id)
             row.state, row.ended_at = closed, utcnow()
             other.commit()

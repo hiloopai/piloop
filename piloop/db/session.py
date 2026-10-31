@@ -26,8 +26,10 @@ import re
 import sqlite3
 import threading
 import time
+import traceback
 from collections.abc import Callable, Generator, Iterable, Mapping
 from contextlib import closing, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import partial
@@ -59,6 +61,7 @@ from piloop.db.triggers.changelog import COMMENT_KINDS
 from piloop.otel import Measures
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.host import BUILT_IN
+from piloop.settings import UNDER_TEST_ENV
 from piloop.version import Version, installed
 
 if TYPE_CHECKING:
@@ -123,6 +126,11 @@ def _pragmas(conn: sqlite3.Connection) -> None:
 
 WRITE_SPAN = 'piloop.db.write'
 POOL_WAIT_SPAN = 'piloop.db.pool_wait'
+NESTED_SPAN = 'piloop.db.nested_checkout'
+HOLDER: ContextVar[object | None] = ContextVar('piloop_db_holder', default=None)
+"""Who holds the connections that the pool hands out now: a request that a server serves sets its own, else the
+thread holds them. A request's session can wait at a ``yield`` while its thread serves another request, so the thread
+is not its holder."""
 POOL_SIZE, POOL_OVERFLOW = 5, 10
 """The pool's connections, SQLAlchemy's defaults: ``POOL_SIZE`` kept open, and up to ``POOL_OVERFLOW`` more."""
 POOL_CONNECTIONS = POOL_SIZE + POOL_OVERFLOW
@@ -212,13 +220,17 @@ class Patient(QueuePool):
     more such threads than ``POOL_CONNECTIONS``. A checkout that gave up after a round would fail the run, the
     evaluation or the daemon thread that asked, for a fault of the machine. So it waits, as long as the stall lasts,
     and each round is a ``POOL_WAIT_SPAN`` of its ``owner``, with how many connections are out: a leak shows as rounds
-    that never end. It gives up once its ``owner`` closes.
+    that never end. It gives up once its ``owner`` closes. A holder that asks for a second connection never waits for
+    it (``Database.nested``): it would wait for good once every other connection waits for one that it holds.
     """
 
     owner: Database | None = None
     """The database that records the rounds and closes. None: one round, as a plain pool (``dispose`` makes one)."""
 
     def _do_get(self) -> ConnectionPoolEntry:
+        if (owner := self.owner) is not None and owner.holds_one():
+            owner.nested(full=self.checkedout() >= self.size() + self._max_overflow)  # raises, or records it
+            return super()._do_get()  # a free connection: no wait
         start = time.time_ns()
         while True:
             try:
@@ -728,8 +740,23 @@ def _newest_event(conn: PoolProxiedConnection) -> int:
     return (row[0] if row else None) or 0
 
 
+def _holder() -> object:
+    """The caller's ``HOLDER``: its request's, else its thread.
+
+    The thread itself, not its id: a new thread can reuse the id of one that ended.
+    """
+    return HOLDER.get() or threading.current_thread()
+
+
 class DatabaseClosed(RuntimeError):
     """A session asked of a ``Database`` after its ``close``: the caller outlived the daemon's database."""
+
+
+class NestedCheckout(RuntimeError):
+    """A request or a thread that holds a connection asked for a second one (``Database.nested``).
+
+    Read what the second one reads before the first session, or after it.
+    """
 
 
 class Database:
@@ -742,10 +769,22 @@ class Database:
             (``MeasuredConnection``), and each round that a checkout waited for a connection (``Patient``). None
             records nothing.
         pool_round: How long one round of a checkout waits for a connection (``Patient``).
+        strict: Whether a thread that asks for a second connection gets ``NestedCheckout`` (``nested``). Else it is a
+            ``NESTED_SPAN``. None: in tests (``PILOOP_UNDER_TEST``). The daemon raises with ``debug``.
+
+    One holder, a request or a thread (``HOLDER``), never holds two connections. One that holds one, with the write
+    lock say, and waits for a second while every other connection waits for that lock, holds the daemon still for
+    good: the pool never gives up (``Patient``).
     """
 
     def __init__(
-        self, url: str, *, actor: Actor, writes: WriteSpans | None = None, pool_round: timedelta = POOL_ROUND
+        self,
+        url: str,
+        *,
+        actor: Actor,
+        writes: WriteSpans | None = None,
+        pool_round: timedelta = POOL_ROUND,
+        strict: bool | None = None,
     ) -> None:
         self.engine = make_engine(url, actor, writes, pool_round)
         pool = self.engine.pool
@@ -766,10 +805,11 @@ class Database:
         self._changed: set[asyncio.Future[None]] = set()
         """The futures of ``changed``'s waiters, each on its own event loop: the next commit resolves them."""
         event.listen(self._sessions, 'after_commit', self._on_commit)
-        self._checked_out = 0
-        """How many connections the pool has handed out now: ``close`` lets them come back before it closes them."""
-        event.listen(self.engine, 'checkout', lambda *_: self._count_checkout(1))
-        event.listen(self.engine, 'checkin', lambda *_: self._count_checkout(-1))
+        self._holders: dict[int, object] = {}
+        """Who holds each connection that the pool handed out (``HOLDER``), by the connection's pool entry."""
+        self._strict = UNDER_TEST_ENV in os.environ if strict is None else strict
+        event.listen(self.engine, 'checkout', self._out)
+        event.listen(self.engine, 'checkin', self._in)
         event.listen(self.engine, 'do_connect', self._refuse_once_closed)
 
     def _on_commit(self, session: Session) -> None:
@@ -818,10 +858,46 @@ class Database:
         if self._measures is not None:
             self._measures.record(POOL_WAIT_SPAN, start_ns, time.time_ns(), checked_out=checked_out)
 
-    def _count_checkout(self, change: int) -> None:
+    @property
+    def _checked_out(self) -> int:
+        """How many connections the pool has handed out now: ``close`` lets them come back before it closes them."""
+        return len(self._holders)
+
+    def _out(self, _driver: object, entry: ConnectionPoolEntry, _proxy: object) -> None:
         with self._committed:
-            self._checked_out += change
+            self._holders[id(entry)] = _holder()
             self._committed.notify_all()
+
+    def _in(self, _driver: object, entry: ConnectionPoolEntry) -> None:
+        with self._committed:
+            self._holders.pop(id(entry), None)
+            self._committed.notify_all()
+
+    def holds_one(self) -> bool:
+        """Whether the caller, its request or else its thread (``HOLDER``), holds a connection already."""
+        me = _holder()
+        with self._committed:
+            return me in self._holders.values()
+
+    def nested(self, *, full: bool) -> None:
+        """A thread that holds a connection asks for a second one (``Patient``). Refuse it, or record it.
+
+        In tests, and in a daemon with ``debug``, it is refused. Else it is a ``NESTED_SPAN``, and the second connection
+        comes only when one is free: a ``full`` pool refuses it, as a wait would hold the first one for good.
+
+        Raises:
+            NestedCheckout: strict, or the pool is ``full``.
+        """
+        where = ' <- '.join(
+            f'{Path(f.filename).parent.name}/{Path(f.filename).name}:{f.lineno}'
+            for f in reversed(traceback.extract_stack()[:-2])
+            if f.filename.startswith('/') and '/sqlalchemy/' not in f.filename and not f.filename.endswith('session.py')
+        )[:500]
+        if self._measures is not None and not self._strict:
+            now = time.time_ns()
+            self._measures.record(NESTED_SPAN, now, now, where=where, full=full)
+        if self._strict or full:
+            raise NestedCheckout(f'a second connection for one thread, at {where}')
 
     def _refuse_once_closed(self, *_: object) -> None:
         """Open no connection after ``close``: a session made before it would leave one that nothing closes."""
@@ -842,7 +918,7 @@ class Database:
         """Start the doorbell, once: the first waiter of the process starts it. The caller holds ``_committed``.
 
         The doorbell takes its connection itself, without the lock: a connection that comes back to the pool takes the
-        lock (``_count_checkout``), so a waiter that waited for one under it could wait for the pool's whole timeout.
+        lock (``_in``), so a waiter that waited for one under it could wait for the pool's whole timeout.
         It counts as a read until it has it, so a ``close`` meanwhile waits for it. One that gets none wakes the waiters,
         whose next pass starts it again.
         """

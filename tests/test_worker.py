@@ -813,6 +813,7 @@ def test_a_worker_whose_heartbeat_hangs_stops_its_job_when_its_self_stop_passes(
 ) -> None:
     """A partition that drops packets holds a call until its own timeout, which can be longer than the lease has
     left. The worker stops its job on time all the same, on its own clock, not once the call gives up."""
+    mocker.patch.object(Local, 'partitionable', True)  # a worker elsewhere's: only its calls cross a network
     (tmp_path / 'hold').touch()
     set_config(db, campaign, evaluate=held_evaluate(tmp_path))
     ex = serving(RunController(db, tracer, tmp_path, factory(runtime), executor=timed(FAST)))
@@ -843,6 +844,35 @@ def test_a_worker_whose_heartbeat_hangs_stops_its_job_when_its_self_stop_passes(
         ex.stop(5)  # it waits to run again, a fault of the machine: the stop ends the wait
         measuring.join(30)
     assert not measuring.is_alive()
+
+
+def test_the_daemon_s_own_worker_keeps_its_job_when_its_heartbeat_hangs_past_its_self_stop(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """Its control plane is its own process, which no partition cuts off: a heartbeat that hangs is a stall of the
+    daemon itself, which would stop its own leases' clock too. So its job goes on, and ends as it would have."""
+    (tmp_path / 'hold').touch()
+    set_config(db, campaign, evaluate=held_evaluate(tmp_path))
+    ex = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=timed(FAST)))
+    measuring = threading.Thread(target=ex.remeasure, args=(baseline(db, campaign.id).id,))
+    measuring.start()
+    wait_until(lambda: lease_states(db) == [LeaseState.RUNNING])
+    worker = workers_of(ex).worker
+    healed = threading.Event()
+    heartbeat = worker.client.heartbeat
+
+    def stalled(sessions: dict[int, HarnessSession], host: HostSample) -> dict[int, Answer]:
+        healed.wait()  # the daemon's database answers nothing for a while
+        return heartbeat(sessions, host)
+
+    mocker.patch.object(worker.client, 'heartbeat', side_effect=stalled)
+    stops = mocker.spy(worker, '_stop_jobs')
+    time.sleep(1.5 * worker.timing.self_stop)
+    assert stops.call_count == 0, 'it is not silent: nothing stands between it and its control plane'
+    healed.set()
+    (tmp_path / 'hold').unlink()
+    measuring.join(30)
+    assert not measuring.is_alive() and infra_errors(db) == 0, 'its evaluation ended as it would have, and measured'
 
 
 def test_a_worker_that_cannot_register_at_its_start_registers_on_its_next_turn(

@@ -334,6 +334,12 @@ class Campaigns:
         self._collect()
         self._soonest = Soonest()
         launching: list[Launching] = []
+        # before the pass's session, which the launches make hold the write lock: the executor reads in a session of
+        # its own, and one thread never holds two connections (``Database``). A job submitted before the executor's
+        # count counts twice for one pass, never in neither.
+        unsubmitted = len(self._controller.launcher.unsubmitted)
+        capacity = self._controller.executor.capacity().agents
+        free = None if capacity is None else capacity - unsubmitted
         with self._db.session() as s:
             for campaign in s.scalars(select(Campaign).where(NOT_RETIRED)).all():
                 try:
@@ -371,7 +377,7 @@ class Campaigns:
                     launching.append(Launching(campaign, cfg, None))
                 elif awake:
                     launching.append(Launching(campaign, cfg, awake))
-            launched = self._launch(s, launching, turn.now)
+            launched = self._launch(s, launching, turn.now, free)
             s.commit()
         unsubmitted = self._controller.launcher.unsubmitted
         for agent_session_id, run_id in launched:
@@ -582,9 +588,9 @@ class Campaigns:
         )
 
     def _launch(
-        self, s: Session, launching: Sequence[Launching], now: datetime
+        self, s: Session, launching: Sequence[Launching], now: datetime, free: int | None
     ) -> list[tuple[AgentSessionId, RunId | None]]:
-        """Take the requested agents of ``launching`` while the executor has a free agent slot (``_take``).
+        """Take the requested agents of ``launching`` while the executor has ``free`` agent slots (``_take``).
 
         The home's launch policy picks the campaign that each slot goes to. Without a bound on the slots, the campaign
         it picks takes all it can. A row whose campaign was retired since the pass read it is closed instead
@@ -593,11 +599,6 @@ class Campaigns:
         Raises:
             ContractBroken: The policy picked a campaign that waits for no slot.
         """
-        # before the executor's count: a job submitted in between then counts twice, for one pass, never in neither
-        unsubmitted = len(self._controller.launcher.unsubmitted)
-        free = self._controller.executor.capacity().agents
-        if free is not None:
-            free -= unsubmitted
         rows = s.execute(
             select(Campaign.id, Campaign.name).join(AgentSession).where(AgentSession.state.in_(LIVE))
         ).all()

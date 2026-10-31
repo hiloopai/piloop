@@ -305,21 +305,24 @@ class RunController:
         """Wait until the evaluation leaves the queue, and return True; False once the daemon stops.
 
         While it waits for a slot, and one is free, it submits the next ones (``dispatch``): a lost evaluation waits
-        again, and nothing else may end to free a slot for it.
+        again, and nothing else may end to free a slot for it. It reads the free slots after its session: the executor
+        reads in a session of its own, and one thread never holds two connections (``Database``).
         """
-
-        def done_or_dispatchable(s: Session) -> bool:
-            evaluation = s.get(Evaluation, evaluation_id)
-            if evaluation is None or evaluation.started_at is not None:
-                return evaluation is None
-            return (free := self.executor.capacity().free(EVALUATION)) is None or free > 0
-
-        while self._db.wait_until(done_or_dispatchable, give_up=self.launcher.cancelled.is_set):
+        while not self.launcher.cancelled.is_set():
             with self._db.session() as s:
-                if s.get(Evaluation, evaluation_id) is None:
+                if (evaluation := s.get(Evaluation, evaluation_id)) is None:
                     return True
-            self.dispatch()
+                waiting = evaluation.started_at is None
+            if waiting and ((free := self.executor.capacity().free(EVALUATION)) is None or free > 0):
+                self.dispatch()
+            elif not self._next_wake():
+                break
         return False
+
+    def _next_wake(self) -> bool:
+        """Wait for the database's next wake, a commit say: True, or False once the daemon stops."""
+        woken = iter((False,))  # the first read is now: it waits for the one after
+        return self._db.wait_until(lambda _: next(woken, True), give_up=self.launcher.cancelled.is_set)
 
     def dispatch(self) -> None:
         """Submit the next evaluations of the queue while the executor has free slots, in the queue's order.

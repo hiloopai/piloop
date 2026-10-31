@@ -268,7 +268,8 @@ class Worker:
             target=self._listen, args=(registration.cursor, held), name=f'messages-{self.id}', daemon=True
         )
         self._listener.start()
-        threading.Thread(target=self._guard_silence, name=f'silence-{self.id}', daemon=True).start()
+        if self.client.partitionable:
+            threading.Thread(target=self._guard_silence, name=f'silence-{self.id}', daemon=True).start()
         return True
 
     def _guard_silence(self) -> None:

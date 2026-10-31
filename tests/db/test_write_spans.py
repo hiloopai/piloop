@@ -15,12 +15,14 @@ from sqlalchemy.orm import Session
 from piloop.daemon.main import ACTOR
 from piloop.db.models import Campaign
 from piloop.db.session import (
+    NESTED_SPAN,
     POOL_CONNECTIONS,
     POOL_WAIT_SPAN,
     WRITE_SPAN,
     Database,
     DatabaseClosed,
     MeasuredConnection,
+    NestedCheckout,
     Patient,
     WriteSpans,
     write_transaction,
@@ -240,3 +242,95 @@ def test_a_patient_pool_of_no_database_waits_one_round_as_a_plain_pool(tmp_path:
         engine.raw_connection()
     held.close()
     engine.dispose()
+
+
+def test_a_second_connection_on_one_thread_is_refused_at_once_even_with_the_write_lock_held_and_the_pool_full(
+    db: Database,
+) -> None:
+    """A thread that holds the write lock and waits for a second connection while every other one waits for that lock
+    holds the daemon still for good: the patient pool never gives up. So one thread never holds two connections, and
+    asking for a second fails at once, in tests, wherever the code asks."""
+    patient = Database(str(db.engine.url), actor=ACTOR, pool_round=timedelta(seconds=0.05))
+    stalled, holding = threading.Event(), threading.Semaphore(0)
+
+    def hold() -> None:
+        with patient.session() as s:
+            s.execute(select(1))
+            holding.release()
+            stalled.wait()
+
+    holders = [threading.Thread(target=hold) for _ in range(POOL_CONNECTIONS - 1)]
+    for t in holders:
+        t.start()
+    for _ in holders:
+        assert holding.acquire(timeout=10)
+    met: list[BaseException] = []
+
+    def nest() -> None:
+        with patient.session() as writing:
+            write_transaction(writing)  # the write lock, on the pool's last connection
+            try:
+                with patient.session() as second:
+                    second.execute(select(1))
+            except NestedCheckout as e:
+                met.append(e)
+
+    nesting = threading.Thread(target=nest, daemon=True)
+    nesting.start()
+    nesting.join(2)
+    stalled.set()
+    for t in holders:
+        t.join(10)
+    alive = nesting.is_alive()
+    patient.close()
+    assert not alive, 'it waited for a second connection: on 736173d6 it waits for good'
+    assert len(met) == 1 and 'db/test_write_spans.py:' in str(met[0]), 'it names where it asked'
+
+
+def test_a_second_connection_on_one_thread_is_an_error_span_outside_tests(
+    db: Database, tracer: Tracer, spans: InMemorySpanExporter
+) -> None:
+    assert tracer.measures is not None
+    lenient = Database(
+        str(db.engine.url), actor=ACTOR, writes=WriteSpans(tracer.measures, TracingSettings().slow_write), strict=False
+    )
+    with lenient.session() as first:
+        first.execute(select(1))
+        with lenient.session() as second:
+            assert second.scalar(select(1)) == 1
+    lenient.close()
+    [nested] = [s for s in spans.get_finished_spans() if s.name == NESTED_SPAN]
+    assert 'db/test_write_spans.py:' in str((nested.attributes or {})['where'])
+
+
+def test_outside_tests_a_second_connection_is_refused_when_none_is_free(
+    db: Database, tracer: Tracer, spans: InMemorySpanExporter
+) -> None:
+    """A wait would hold the first connection for good: the pool refuses at once, with the span."""
+    assert tracer.measures is not None
+    lenient = Database(
+        str(db.engine.url), actor=ACTOR, writes=WriteSpans(tracer.measures, TracingSettings().slow_write), strict=False
+    )
+    stalled, holding = threading.Event(), threading.Semaphore(0)
+
+    def hold() -> None:
+        with lenient.session() as s:
+            s.execute(select(1))
+            holding.release()
+            stalled.wait()
+
+    holders = [threading.Thread(target=hold) for _ in range(POOL_CONNECTIONS - 1)]
+    for t in holders:
+        t.start()
+    for _ in holders:
+        assert holding.acquire(timeout=10)
+    with lenient.session() as first:
+        first.execute(select(1))
+        with pytest.raises(NestedCheckout), lenient.session() as second:
+            second.execute(select(1))
+    stalled.set()
+    for t in holders:
+        t.join(10)
+    lenient.close()
+    [nested] = [s for s in spans.get_finished_spans() if s.name == NESTED_SPAN]
+    assert (nested.attributes or {})['full'] is True

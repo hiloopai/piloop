@@ -29,7 +29,7 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.settings import DaemonSettings
-from tests.conftest import WATCHDOG
+from tests.conftest import WATCHDOG, elsewhere
 from tests.reports.test_history import idea
 from tests.reports.test_overview import render
 
@@ -89,6 +89,7 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
         everything = inbox.items(s)
         assert len(everything) == 12, 'unfiltered, the comment three levels deep is in it too'
         assert [p.name if p else None for _, p in everything][-3:] == ['other', 'demo', None]
+        s.commit()  # its connection goes back: ``render`` reads in a session of its own
         lines = [render(db, p).split('## Recent events\n\n')[1].split('\n\n')[0] for p in (campaign, other)]
         recent = [re.sub(r' \d+[smhd] ago', '', line).splitlines() for line in lines]
         assert recent == snapshot(
@@ -498,7 +499,7 @@ def test_an_item_that_lands_while_news_reads_is_news_now_or_after_its_cursor(
     ) -> list[tuple[Comment, Campaign | None]]:
         found = waiting_for(s, party, campaign_id=campaign_id)
         if not found:
-            with db.session() as other:
+            with elsewhere(db) as second, second.session() as other:
                 other.add(
                     Comment(
                         target=TargetRef(TargetKind.CAMPAIGN, campaign.id),

@@ -5,6 +5,7 @@ import threading
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from git import Repo
@@ -44,6 +45,9 @@ from tests.conftest import (
 from tests.daemon.test_run_controller import execute, make_run, set_config
 from tests.daemon.test_scheduler import add_ideas, make_scheduler
 
+if TYPE_CHECKING:
+    pass
+
 HARNESS_OWN_LINE = '#!/bin/sh\nbasename "$(dirname "$PWD")" >> solve.txt\ngit commit -qam "own line"\n'
 """Each run appends its own id (``runs/<id>/worktree``), so each run makes a tree of its own."""
 SCORE = reports(score='$(wc -l < solve.txt)', size='$(wc -c < solve.txt)')
@@ -59,10 +63,10 @@ def held_runs(db: Database, campaign: Campaign, tmp_path: Path, then: str = SCOR
     """``held_evaluate`` as a new evaluator that has measured the baseline: the runs' bar, which the scheduler measures
     before any run starts. So each evaluation that the test holds is a run's own."""
     set_config(db, campaign, evaluate=held_evaluate(tmp_path, then))
+    bar = baseline(db, campaign.id).id
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
         evaluator = current_evaluator(s, proj, proj.config).id
-        bar = baseline(db, campaign.id).id
         s.add(Measurement(candidate_id=bar, evaluator_id=evaluator, metrics={'score': 1.0, 'size': 5.0}))
         s.commit()
 
@@ -202,10 +206,10 @@ def skipped(db: Database, candidate_id: CandidateId) -> tuple[list[Measurement],
 
 
 def test_a_cancel_holds_when_the_daemon_restarts_before_it_sees_it(db: Database, campaign: Campaign) -> None:
+    base = baseline(db, campaign.id).id
     with db.session() as s:
         evaluator = s.get_one(Campaign, campaign.id).evaluator_id
         assert evaluator is not None
-        base = baseline(db, campaign.id).id
         other = Candidate(campaign_id=campaign.id, tree_sha='t', revision='c')
         s.add(other)
         s.flush()
@@ -308,6 +312,7 @@ def test_a_busy_campaign_never_holds_back_another_campaign(db: Database, campaig
 
 
 def test_a_campaign_takes_its_head_before_its_older_requests(db: Database, campaign: Campaign) -> None:
+    base = baseline(db, campaign.id).id
     with db.session() as s:
         evaluator = s.get_one(Campaign, campaign.id).evaluator_id
         assert evaluator is not None
@@ -315,17 +320,17 @@ def test_a_campaign_takes_its_head_before_its_older_requests(db: Database, campa
         s.add(other)
         s.flush()
         older = queue.request(s, other.id, evaluator)[0]
-        trunk, created = queue.request(s, baseline(db, campaign.id).id, evaluator)
+        trunk, created = queue.request(s, base, evaluator)
         assert created and queue.request(s, trunk.candidate_id, evaluator) == (trunk, False), 'one row per tree'
         assert [e.id for e in queue.waiting(s)] == [trunk.id, older.id]
 
 
 def test_an_evaluation_id_is_never_reused(db: Database, campaign: Campaign) -> None:
     """A request that waits for an evaluation by id never mistakes a later one for it."""
+    base = baseline(db, campaign.id).id
     with db.session() as s:
         evaluator = s.get_one(Campaign, campaign.id).evaluator_id
         assert evaluator is not None
-        base = baseline(db, campaign.id).id
         gone = queue.request(s, base, evaluator)[0].id
         s.commit()
         s.execute(delete(Evaluation))
@@ -481,10 +486,11 @@ def test_a_requested_remeasure_is_listed_as_waiting_before_the_daemon_queues_it(
     db: Database, campaign: Campaign
 ) -> None:
     """The daemon queues one remeasure per campaign at a time, so the others would be invisible while they wait."""
+    first = baseline(db, campaign.id).id
     with db.session() as s:
         evaluator = s.get_one(Campaign, campaign.id).evaluator_id
         assert evaluator is not None
-        base = s.get_one(Candidate, baseline(db, campaign.id).id)
+        base = s.get_one(Candidate, first)
         assert queue.requested(s) == []
         request_remeasure(s, base, System.HUMAN)
         s.commit()

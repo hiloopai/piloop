@@ -497,6 +497,17 @@ def pinned(repo: Repo, prefix: str) -> list[str]:
     return [sha for _, sha in sorted(refs, key=lambda ref: int(ref[0].removeprefix(prefix)))]
 
 
+@contextmanager
+def elsewhere(db: Database) -> Generator[Database]:
+    """A second ``Database`` on the file of ``db``, as another process opens it: its own pool, so a session of it
+    beside one of ``db`` is no second connection of one holder (``piloop.db.session.HOLDER``)."""
+    other = Database(str(db.engine.url), actor=db.actor)
+    try:
+        yield other
+    finally:
+        other.close()
+
+
 def baseline(db: Database, campaign_id: CampaignId) -> Candidate:
     with db.session() as s:
         return s.scalars(

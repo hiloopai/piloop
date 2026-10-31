@@ -555,7 +555,9 @@ def test_capacity_counts_a_lease_that_a_worker_takes_while_it_reads_once(
     def acquire_before_the_queued_count(conn: object, cursor: object, statement: str, *_: object) -> None:
         if statement.startswith('SELECT leases.kind') and 'leases.state = ?' in statement and not acquiring:
             acquiring.append(True)  # its own reads come through here too
-            acquired.append(Local(leases, 'w1').acquire(uuid4().hex, HOST))
+            taking = threading.Thread(target=lambda: acquired.append(Local(leases, 'w1').acquire(uuid4().hex, HOST)))
+            taking.start()  # another worker's thread: this one holds the read's connection
+            taking.join(10)
 
     acquiring: list[bool] = []
     acquired: list[object] = []

@@ -114,6 +114,7 @@ class Daemon:
             cfg.database_url,
             actor=ACTOR,
             writes=None if measures is None else WriteSpans(measures, cfg.tracing.slow_write),
+            strict=cfg.debug or None,
         )
         self._cfg = cfg
         self._argv = serve_argv(listen)

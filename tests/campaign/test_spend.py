@@ -115,13 +115,14 @@ def test_compute_is_each_worker_s_time_split_among_the_jobs_that_it_held_then_at
     Each worker is in the pool of its instance, which outlives it, else of its row.
     """
     now, them = utcnow(), other(db, tmp_path)
+    base = baseline(db, campaign.id).id
     with db.session() as s:
         mine, theirs, live = agent(s, campaign), agent(s, them), agent(s, campaign)
         hold(s, 'agents-1', (0, 100), now, agent=mine)
         hold(s, 'agents-1', (50, 150), now, agent=theirs)  # half of 50..100 is ours, 100..150 is theirs
         hold(s, 'agents-1', (200, None), now, agent=live)  # idle 150..200, then ours until now: 800 s
         hold(s, None, (0, None), now, agent=mine)  # queued: no worker held it
-        hold(s, 'laptop', (0, 10), now, candidate=baseline(db, campaign.id).id)
+        hold(s, 'laptop', (0, 10), now, candidate=base)
         s.add(WorkerInstance(name='agents-1', pool='agents'))
         s.add(LeaseWorker(id='laptop', pool='evals', version='0', seen_at=now))
         s.commit()

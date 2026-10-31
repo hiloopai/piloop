@@ -166,8 +166,16 @@ def handlers(request: Request) -> Handlers:
 Api = Annotated[Handlers, Depends(handlers)]
 
 
-def session(api: Api) -> Generator[Session]:
-    """One session of the daemon's database for the request."""
+reader = authorized(Access.READ)
+"""The access of every route: one callable, so that FastAPI runs it once per request for each dependency on it."""
+
+
+def session(api: Api, _: Annotated[Caller, Depends(reader)]) -> Generator[Session]:
+    """One session of the daemon's database for the request.
+
+    It comes after the caller's check, which reads in a session of its own: a request holds one connection at a time
+    (``piloop.db.session.HOLDER``).
+    """
     with api.db.session() as s:
         yield s
 
@@ -184,7 +192,16 @@ def campaigns_selected(s: Reading, query: Annotated[Selection, Query()]) -> list
 
 
 def campaign_narrowed(s: Reading, query: Annotated[Located, Query()]) -> CampaignId | None:
-    """The campaign that the query narrows to, or None for every campaign. Refuses one that the home does not have."""
+    """The campaign that the query narrows to, or None for every campaign. Refuses one that the home does not have.
+
+    It reads in the request's session, which a long-poll must not hold while it waits: a long-poll narrows in its first
+    read instead (``narrowed_in``).
+    """
+    return narrowed_in(s, query)
+
+
+def narrowed_in(s: Session, query: Located) -> CampaignId | None:
+    """``campaign_narrowed``, in ``s``."""
     if query.campaign is None:
         return None
     try:
@@ -195,9 +212,6 @@ def campaign_narrowed(s: Reading, query: Annotated[Located, Query()]) -> Campaig
 
 Selected = Annotated[list[Campaign], Depends(campaigns_selected)]
 Narrowed = Annotated[CampaignId | None, Depends(campaign_narrowed)]
-
-reader = authorized(Access.READ)
-"""The access of every route: one callable, so that FastAPI runs it once per request for each dependency on it."""
 
 
 def acting(request: Request, caller: Annotated[Caller, Depends(reader)]) -> Actor:
@@ -220,8 +234,12 @@ admin_access = authorized(Access.ADMIN)
 """The access of every route that reads or changes the home's own settings."""
 
 
-def writing(api: Api, me: Acting) -> Generator[Session]:
-    """One session of the daemon's database for the request, whose writes sign as the caller's actor."""
+def writing(api: Api, me: Acting, _: Annotated[Caller, Depends(actor_access)]) -> Generator[Session]:
+    """One session of the daemon's database for the request, whose writes sign as the caller's actor.
+
+    It comes after the write access's check, which reads in a session of its own: a request holds one connection at a
+    time (``piloop.db.session.HOLDER``).
+    """
     with api.db.acting(me) as s:
         yield s
 
@@ -324,7 +342,7 @@ def inbox(s: Reading, me: Acting, campaign: Narrowed, query: Annotated[InboxQuer
 
 
 @router.get('/events', operation_id='events')
-async def events(request: Request, api: Api, campaign: Narrowed, query: Annotated[EventsQuery, Query()]) -> Batch:
+async def events(request: Request, api: Api, query: Annotated[EventsQuery, Query()]) -> Batch:
     """The events after a cursor. With wait, it answers once an event matches, or at the end of the wait with none.
 
     Each read runs in the thread pool, in a session of its own. Between two reads the route awaits the database's
@@ -332,6 +350,7 @@ async def events(request: Request, api: Api, campaign: Narrowed, query: Annotate
     left out.
     """
     deadline, seen = time.monotonic() + query.wait, 0
+    campaign = await run_in_threadpool(_narrowed, api.db, query)
     batch = await run_in_threadpool(_events, api.db, query, campaign, query.after)
     while not (batch.events or batch.more) and (left := deadline - time.monotonic()) > 0:
         if (woke := await changed(request, api.db.changed, seen, left)) is None:
@@ -342,11 +361,10 @@ async def events(request: Request, api: Api, campaign: Narrowed, query: Annotate
 
 
 @router.get('/inbox/news', operation_id='news')
-async def news(
-    request: Request, api: Api, me: Acting, campaign: Narrowed, query: Annotated[NewsQuery, Query()]
-) -> News:
+async def news(request: Request, api: Api, me: Acting, query: Annotated[NewsQuery, Query()]) -> News:
     """What needs the orchestrator after a cursor, but what the caller itself wrote. With wait, a long-poll."""
     deadline, seen = time.monotonic() + query.wait, 0
+    campaign = await run_in_threadpool(_narrowed, api.db, query)
     found = await run_in_threadpool(_news, api.db, campaign, me, query.after)
     while not found.items and (left := deadline - time.monotonic()) > 0:
         if (woke := await changed(request, api.db.changed, seen, left)) is None:
@@ -417,7 +435,7 @@ def _registered(api: Handlers, s: Session, me: Actor, body: Registration) -> tup
         case Checkout():
             return register(s, FilePath(body.path), me, body.name)
         case Clone(clone=remote):
-            vcs, credential = VCS.selected(api.cfg.providers), _credential(api, remote.credential)
+            vcs, credential = VCS.selected(api.cfg.providers), _credential(api, s, remote.credential)
             return register_clone(s, api.cfg.home, vcs, FromUrl(remote.url, credential), me, body.name)
         case Fork():
             if (source := referenced(s, body.fork)) is None:
@@ -427,15 +445,18 @@ def _registered(api: Handlers, s: Session, me: Actor, body: Registration) -> tup
             assert_never(body)
 
 
-def _credential(api: Handlers, credential: Credential | None) -> SecretStr | None:
-    """The value that ``credential`` gives: its token, or the home's secret that it names. Refuses an unknown secret."""
+def _credential(api: Handlers, s: Session, credential: Credential | None) -> SecretStr | None:
+    """The value that ``credential`` gives: its token, or the home's secret that it names, read in the request's ``s``.
+
+    Refuses an unknown secret.
+    """
     match credential:
         case None:
             return None
         case TokenCredential(token=token):
             return token
         case SecretCredential(secret=name):
-            if (value := secrets.HomeSecrets(api.db, _secrets(api)).get(name)) is None:
+            if (value := _secrets(api).get(s, None, {name}).get(name)) is None:
                 raise Refusal(
                     HTTPStatus.CONFLICT, Problem.REFUSED, f'the home has no secret {name}: see `piloop secret list`'
                 )
@@ -458,7 +479,7 @@ def sync_campaign(
     match cloned(api.cfg.home, campaign), None if body is None else body.credential:
         case True, credential:
             with closing(updating_vcs(campaign).open(FilePath(campaign.path))) as repo:
-                repo.update(_credential(api, credential))
+                repo.update(_credential(api, s, credential))
         case False, None:
             pass
         case _:
@@ -603,11 +624,14 @@ def list_secrets(api: Api, s: Reading) -> SecretList:
     )
 
 
-def secret_owner(s: Reading, caller: Annotated[Caller, Depends(actor_access)], campaign: Narrowed) -> secrets.Owner:
+def secret_owner(
+    s: Writing, caller: Annotated[Caller, Depends(actor_access)], query: Annotated[Located, Query()]
+) -> secrets.Owner:
     """Whose secret a write changes: the campaign named, with ``act``, else the home's, with ``admin``.
 
-    A launched agent's token writes the secrets of its own campaign only.
+    A launched agent's token writes the secrets of its own campaign only. It reads in the write's own session.
     """
+    campaign = narrowed_in(s, query)
     match caller.identity, campaign:
         case Agent(session=session) as agent, owner if (
             owner is None or owner != s.get_one(AgentSession, session).campaign_id
@@ -776,6 +800,12 @@ def reply(s: Writing, me: Acting, comment: Commented, body: ReplyBody) -> Replie
 def _campaign_answer(s: Session, campaign: Campaign, me: Actor) -> CampaignAnswer:
     with db_feed.snapshot(s) as cursor:
         return CampaignAnswer(cursor=cursor, campaign=feed.status_view(s, [campaign], me)[0])
+
+
+def _narrowed(db: Database, query: Located) -> CampaignId | None:
+    """The campaign of a long-poll's query, in a session of its own: the wait after it holds no connection."""
+    with db.session() as s:
+        return narrowed_in(s, query)
 
 
 def _news(db: Database, campaign: CampaignId | None, me: Actor, after: int | None) -> News:

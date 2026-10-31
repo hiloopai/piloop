@@ -7,7 +7,7 @@ does not change.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
@@ -81,6 +81,10 @@ class LeaseClient(Protocol):
     ``MissingBlobs`` when the CAS lacks what the report names: then the worker loses the job.
     """
 
+    partitionable: ClassVar[bool]
+    """Whether a network lies between the worker and its control plane, which can cut it off. Only then does the
+    worker stop its jobs once its heartbeat goes unanswered (``Worker._guard_silence``)."""
+
     def register(self, info: WorkerInfo) -> Registration:
         """Start a worker's session: record it, and return its timing and its live leases."""
         ...
@@ -122,7 +126,13 @@ class LeaseClient(Protocol):
 
 
 class Local:
-    """``LeaseClient`` on ``Leases`` in this process, as one worker: ``worker`` is its name."""
+    """``LeaseClient`` on ``Leases`` in this process, as one worker: ``worker`` is its name.
+
+    No partition cuts it off from its control plane, its own process. A heartbeat that hangs is a stall of the daemon,
+    which stops the clock of its leases too: its jobs go on.
+    """
+
+    partitionable: ClassVar[bool] = False
 
     def __init__(self, leases: Leases, worker: str) -> None:
         self._leases = leases

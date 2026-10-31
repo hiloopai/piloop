@@ -28,7 +28,7 @@ from functools import partial
 from http import HTTPStatus
 from importlib.metadata import version
 from time import monotonic
-from typing import Annotated
+from typing import Annotated, ClassVar
 
 import httpx2 as httpx
 from covalence import Cid
@@ -328,6 +328,8 @@ class Remote:
     tries once: what it could not send stays in the worker's spool. The first try without an answer says so at once
     (``worker.unreachable``), and then every ``UNREACHABLE_EVERY`` until an answer comes.
     """
+
+    partitionable: ClassVar[bool] = True
 
     def __init__(self, http: httpx.Client, stop: threading.Event, tracer: Tracer) -> None:
         self._http = http

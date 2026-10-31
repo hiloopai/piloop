@@ -404,12 +404,13 @@ def test_no_session_is_resumed_after_a_resume_that_failed_or_on_a_harness_that_c
     use_harness(db, campaign, harness(tmp_path), **HARNESS)
     resuming(db, campaign)
     first = wake(db, runtime, tmp_path, campaign)
+    asked, others = request(db, campaign), request(db, campaign, harness='other')
     with db.session() as s:
         cfg = s.get_one(Campaign, campaign.id).config
-        later = s.get_one(AgentSession, request(db, campaign))
+        later = s.get_one(AgentSession, asked)
         found = resumable(s, later, cfg, Path('w'))
         assert not isinstance(found, SessionNotResumed) and found.agent_session == first
-        other = s.get_one(AgentSession, request(db, campaign, harness='other'))
+        other = s.get_one(AgentSession, others)
         assert resumable(s, other, cfg, Path('w')) == SessionNotResumed(
             reason=Unresumed.NO_SESSION, detail='no earlier watchdog left a session on other'
         )
@@ -495,8 +496,8 @@ def test_an_implementer_of_a_resuming_role_continues_the_last_runs_session_in_it
     execute(run_controller(db, runtime, tmp_path, agents=WORKED), db, second)
     with db.session() as s:
         one, two = (s.scalars(select(AgentSession).where(working_on(r))).one() for r in (first, second))
-        resumes, two_id = started(db, two.id).resumes, two.id
-        assert (resumes, two.session_id, not_resumed(db, two.id)) == (one.id, one.session_id, [])
+    resumes, two_id = started(db, two.id).resumes, two.id
+    assert (resumes, two.session_id, not_resumed(db, two.id)) == (one.id, one.session_id, [])
     brief = (tmp_path / 'brief--resume.md').read_text()
     assert brief.startswith(f'You continue this session as a new agent, implementer#{two_id}.')
     assert '- Your cwd is your checkout' in brief and '# Implementer' not in brief

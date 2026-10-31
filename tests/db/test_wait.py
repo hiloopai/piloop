@@ -279,7 +279,17 @@ def test_a_waiter_that_starts_the_doorbell_when_the_pool_is_empty_blocks_no_conn
     long-polls then held its threads, and a heartbeat waited as long."""
     pool = db.engine.pool
     assert isinstance(pool, QueuePool)
-    held = [db.engine.raw_connection() for _ in range(pool.size() + pool._max_overflow)]  # every connection is out
+    held: list[PoolProxiedConnection] = []
+
+    def take() -> None:  # one connection for each thread: a thread never holds two
+        held.append(db.engine.raw_connection())
+
+    takers = [threading.Thread(target=take) for _ in range(pool.size() + pool._max_overflow)]
+    for t in takers:
+        t.start()
+    for t in takers:
+        t.join(5)
+    assert len(held) == pool.size() + pool._max_overflow  # every connection is out
     asked, connect = threading.Event(), db.engine.raw_connection
 
     def doorbell_connects() -> PoolProxiedConnection:

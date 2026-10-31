@@ -221,11 +221,12 @@ def test_the_noise_of_the_baseline_decides_and_a_gain_within_it_is_measured_once
         plugins=NOISE,
     )
     ex = controller(db, runtime, tmp_path)
-    ex.remeasure(baseline(db, campaign.id).id)
+    base = baseline(db, campaign.id).id
+    ex.remeasure(base)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         evaluator = current_evaluator(s, p, p.config).id
-        assert noise(s.get_one(Candidate, baseline(db, campaign.id).id), evaluator, 'score') == 2.0
+        assert noise(s.get_one(Candidate, base), evaluator, 'score') == 2.0
     candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
     ex.judge_submission(candidate)
     assert verdict(db, candidate) == (

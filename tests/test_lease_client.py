@@ -52,7 +52,7 @@ from piloop.plugins.network.https import Https, HttpsNetwork
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets, set_secret
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.plugins.vcs.contract import MAX_HAVE
-from tests.conftest import WATCHDOG, Dial, disk, home_cas, wait_until
+from tests.conftest import WATCHDOG, Dial, disk, elsewhere, home_cas, wait_until
 from tests.fixtures.netfault import CutResponse, Proxy
 from tests.test_lease import (
     DONE,
@@ -392,7 +392,7 @@ def test_a_worker_whose_row_a_drain_deletes_while_its_messages_are_read_is_dismi
 
     def drained(row: LeaseWorker, _: object) -> None:
         if not loads:
-            with db.session() as s:  # another transaction: the idle drain's
+            with elsewhere(db) as second, second.session() as s:  # another transaction: the idle drain's
                 s.execute(delete(LeaseWorker).where(LeaseWorker.id == row.id))
                 s.commit()
         loads.append(row.id)

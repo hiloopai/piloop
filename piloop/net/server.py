@@ -25,10 +25,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from sqlalchemy.exc import OperationalError
+from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.protocols.http.h11_impl import H11Protocol
 
 from piloop.api.client import SOCKET_ACTOR_HEADER
 from piloop.api.contract import GRANTS, Access, Problem
+from piloop.db.session import HOLDER
 from piloop.db.sql import BUSY_TIMEOUT_MS, busy
 from piloop.net import Changed, InvalidBody, Refusal, Route
 from piloop.net.acting import OWNER
@@ -98,6 +100,20 @@ def _peer(request: Request) -> Peer:
     )
 
 
+class _HoldsItsConnections:
+    """Each request holds its own database connections (``HOLDER``), whichever threads run its parts."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        token = HOLDER.set(object())
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            HOLDER.reset(token)
+
+
 class App(FastAPI):
     """FastAPI that knows who may call it, with the event that its ``Server`` sets when it shuts down.
 
@@ -114,6 +130,7 @@ class App(FastAPI):
         """Set at the start of the shutdown: each long-poll that waits answers at once, as at the end of its wait."""
         self._mounted: dict[tuple[str, str], str] = {}
         """The name of the route of each method and path that ``mount_router`` included."""
+        self.add_middleware(_HoldsItsConnections)
 
         @self.exception_handler(Refusal)
         def refused(request: Request, e: Refusal) -> Response:

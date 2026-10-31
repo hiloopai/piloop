@@ -28,6 +28,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.reports import feed
+from tests.conftest import elsewhere
 
 RAW = (
     'INSERT INTO events (actor, target_kind, target_id, payload)'
@@ -57,7 +58,7 @@ def newest(db: Database) -> int:
 
 
 def test_a_read_transaction_sees_one_state_and_refuses_unflushed_changes(db: Database, campaign: Campaign) -> None:
-    with db.session() as s, db.session() as other:
+    with elsewhere(db) as second, db.session() as s, second.session() as other:
         with db_feed.snapshot(s) as cursor:
             emit(other, IdeaCreated(), TargetRef(IDEA, 1), System.DAEMON)
             other.commit()
@@ -300,7 +301,7 @@ def escalation(campaign_id: CampaignId, body: str) -> Comment:
 
 
 def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Campaign) -> None:
-    with db.session() as s, db.session() as other:
+    with elsewhere(db) as second, db.session() as s, second.session() as other:
         idea = make_idea(campaign.id, 'queued')
         dropped = make_idea(campaign.id, 'a hunch', status=IdeaStatus.DROPPED)
         s.add_all([idea, dropped])
