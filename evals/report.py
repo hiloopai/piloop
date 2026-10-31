@@ -59,6 +59,8 @@ ROWS: list[tuple[str, Callable[[Result], float | None], int]] = [
     ('$ to first keep', lambda r: r.first_keep.usd if r.first_keep else None, 2),
     ('hours to first keep', lambda r: r.first_keep.hours if r.first_keep else None, 2),
     ('$ spent', lambda r: r.spend[-1].usd if r.spend else None, 2),
+    ('$ per keep', lambda r: r.spend[-1].usd / r.funnel.kept if r.spend and r.funnel.kept else None, 2),
+    ('keeps per run', lambda r: r.funnel.kept / r.funnel.runs if r.funnel.runs else None, 2),
     ('ideas', lambda r: r.funnel.ideas, 0),
     ('runs', lambda r: r.funnel.runs, 0),
     ('submissions', lambda r: r.funnel.submissions, 0),
