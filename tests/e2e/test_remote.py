@@ -462,19 +462,24 @@ def test_implementers_run_on_the_servers_workers(server: Server) -> None:
 
 @needs(test_implementers_run_on_the_servers_workers)
 def test_candidates_are_measured_and_judged(server: Server) -> None:
-    """Each run submits a version, asks to end as submitted, and ends; its idea is done; a submission is judged."""
+    """Each run submits a version and ends. A run that asks to end as submitted settles its idea as done; one that gives
+    up, every submission discarded by a head that another run moved, opens its idea again. A submission is judged."""
     for run, claim in server.runs.items():
         submitted = server.seen(kind_on('run.submitted', 'run', run), f'run#{run} submits', RUNS_WAIT)
-        ending = server.seen(kind_on('run.end_requested', 'run', run), f'run#{run} asks to end', RUNS_WAIT)
-        assert payload(ending)['how'] == 'submitted', payload(ending)
+        ending = payload(server.seen(kind_on('run.end_requested', 'run', run), f'run#{run} asks to end', RUNS_WAIT))
+        settles = {'submitted': 'done', 'gave_up': 'open'}
+        assert ending['how'] in settles, ending
         ended = server.seen(kind_on('run.finished', 'run', run), f'run#{run} finished', RUNS_WAIT)
         server.seen(
-            lambda e, i=claim.idea: e.kind == 'idea.status' and e.subject.id == i and payload(e)['new'] == 'done',
-            f'idea#{claim.idea} done',
+            lambda e, i=claim.idea, s=settles[str(ending['how'])]: (
+                e.kind == 'idea.status' and e.subject.id == i and payload(e)['new'] == s
+            ),
+            f'idea#{claim.idea} {settles[str(ending["how"])]}',
             600,
         )
         print(
-            f'run#{run}: submitted candidate#{payload(submitted)["candidate"]}, {payload(ended)}; idea#{claim.idea} done'
+            f'run#{run}: submitted candidate#{payload(submitted)["candidate"]}, ended {ending["how"]},'
+            f' {payload(ended)}; idea#{claim.idea} {settles[str(ending["how"])]}'
         )
 
     def from_runs(e: Envelope) -> bool:
