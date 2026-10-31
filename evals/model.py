@@ -247,6 +247,9 @@ class Settings(BaseSettings):
     """The list price of a sandbox's CPU core."""
     memory_usd_per_gib_hour: float = 0.0242
     poll_seconds: float = 60
+    sample_attempts: int = 5
+    """How many times the driver tries to read a run's spend before it gives the run up: Modal's link to a sandbox
+    drops now and then."""
     """How often the driver reads a run's spend."""
     stop_grace_minutes: float = 15
     """How long a stopped campaign gets to score what its agents committed."""

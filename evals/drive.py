@@ -378,7 +378,15 @@ def watch(
 
         def record() -> Sample:
             with tracer.start_as_current_span('evals.spend') as span:
-                now = sample(box, arm, settings, (time.monotonic() - started) / 3600)
+                for attempt in range(settings.sample_attempts):
+                    try:
+                        now = sample(box, arm, settings, (time.monotonic() - started) / 3600)
+                        break
+                    except ConnectionError as e:  # Modal's link to the sandbox drops now and then: try again
+                        span.add_event('evals.sample_retry', {'attempt': attempt, 'error': str(e)})
+                        if attempt + 1 == settings.sample_attempts or box.sandbox.poll() is not None:
+                            raise
+                        time.sleep(settings.poll_seconds / 4)
                 span.set_attributes({'usd': round(now.usd, 3), 'hours': round(now.hours, 3)})
             f.write(now.model_dump_json() + '\n')
             f.flush()
