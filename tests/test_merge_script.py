@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import merge
 from scripts.merge import Held, check_commits, check_migrations, check_remote, check_stack, replay
 
 VERSIONS = 'piloop/db/migrations/versions'
@@ -147,3 +148,64 @@ def test_the_commits_above_a_rebase_merged_one_are_replayed_on_its_copy_with_the
     assert git('log', '-1', '--format=%an <%ae>%n%B', replayed) == git('log', '-1', '--format=%an <%ae>%n%B', upper)
     with pytest.raises(Held, match='the base moved under the train'):
         replay(lower, upper, base)
+
+
+@pytest.fixture
+def calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, ...]]:
+    """The gh commands that the script runs, recorded instead of run."""
+    recorded: list[tuple[str, ...]] = []
+
+    def gh(*args: str) -> str:
+        recorded.append(args)
+        return ''
+
+    monkeypatch.setattr(merge, 'gh', gh)
+    return recorded
+
+
+LABEL = [
+    (
+        'label',
+        'create',
+        'train',
+        '--force',
+        '--description',
+        "landed by the merge script's train: CI tests only its top",
+    )
+]
+ON = [('pr', 'edit', '1', '--add-label', 'train'), ('pr', 'edit', '2', '--add-label', 'train')]
+OFF = [('pr', 'edit', '1', '--remove-label', 'train'), ('pr', 'edit', '2', '--remove-label', 'train')]
+
+
+def test_a_train_that_lands_takes_its_label_off_again(calls: list[tuple[str, ...]]) -> None:
+    with merge.labelled([1, 2]):
+        assert calls == LABEL + ON
+    assert calls == LABEL + ON + OFF
+
+
+def test_a_train_that_stops_partway_takes_its_label_off_the_pull_requests_that_it_did_not_merge(
+    calls: list[tuple[str, ...]],
+) -> None:
+    with pytest.raises(Held, match='#2 merge refused'), merge.labelled([1, 2]):
+        raise Held('#2 merge refused: not mergeable')
+    assert calls == LABEL + ON + OFF
+
+
+def test_a_batch_marks_a_draft_ready_before_it_merges_it(
+    calls: list[tuple[str, ...]], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    pr = merge.PullRequest(7, 'c0ffee', 'feat/x', 'main', draft=True)
+    merger = merge.Merger('dev', 'main', tmp_path, None)
+    (tmp_path / 'titles.txt').write_text('7|feat: x\n')
+    (tmp_path / '7.md').write_text('Body.\n')
+    for name, value in [('pull', lambda number: pr), ('watch', lambda pr: {}), ('main', lambda: 'main')]:
+        monkeypatch.setattr(merge.Merger, name, staticmethod(value))
+    monkeypatch.setattr(merge.Merger, 'merged_tree', lambda self, base, head: 'tree')
+    monkeypatch.setattr(merge, 'check_migrations', lambda tree: None)
+    ran: list[list[str]] = []
+    monkeypatch.setattr(
+        merge.subprocess, 'run', lambda args, **_: ran.append(args) or subprocess.CompletedProcess(args, 0)
+    )
+    merger.merge(7)
+    assert calls[0] == ('pr', 'ready', '7')
+    assert ran[0][:4] == ['gh', 'pr', 'merge', '7']

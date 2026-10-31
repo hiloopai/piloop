@@ -3,18 +3,18 @@
     uv run -m scripts.merge --repo OWNER/NAME --remote REMOTE --messages DIR 590 591
     uv run -m scripts.merge --repo OWNER/NAME --remote REMOTE --messages DIR --train 577 578 579
 
-Each pull request merges in the order given. One that fails, conflicts or is held is reported and skipped, and the rest
-of the batch goes on.
+Each pull request merges in the order given, a draft marked ready first. One that fails, conflicts or is held is
+reported and skipped, and the rest of the batch goes on.
 
 ``--train`` lands a stack, bottom first, from the green run of its top: only the top runs CI. The stack must sit on the
 tip of its base, and the head of each lower pull request must be an ancestor of the top's head, so the top's run tested
-every lower tree as part of its own. It labels each pull request ``train`` and marks drafts ready. Then, in order, it points each pull request at the stack's
-base and waits until GitHub can merge it, marks its head with the top's green checks as commit statuses (which satisfy
-a ruleset that requires those checks), and rebase-merges it. A rebase-merge gives commits new hashes, so the commits of
-each pull request above are first replayed onto the merged ones, with the same trees, and pushed to its branch; CI
-runs no tests on a labelled pull request. After each merge the base's tree must be that pull request's head's
-tree, or the train stops: the base moved under it. Each commit lands as it is, so each subject
-must be a Conventional Commit; the squash messages are not used.
+every lower tree as part of its own. It labels each pull request ``train``, for as long as it lands them, and marks
+drafts ready. Then, in order, it points each pull request at the stack's base and waits until GitHub can merge it, marks
+its head with the top's green checks as commit statuses (which satisfy a ruleset that requires those checks), and
+rebase-merges it. A rebase-merge gives commits new hashes, so the commits of each pull request above are first replayed
+onto the merged ones, with the same trees, and pushed to its branch; CI runs no tests on a labelled pull request. After
+each merge the base's tree must be that pull request's head's tree, or the train stops: the base moved under it. Each
+commit lands as it is, so each subject must be a Conventional Commit; the squash messages are not used.
 
 ``DIR`` holds the squash messages: ``titles.txt`` has a ``N|title`` line per pull request and ``N.md`` its body.
 ``names.txt``, if any, lists words that no squash message may contain, one per line. ``acked-comments.txt`` lists the
@@ -30,6 +30,8 @@ import subprocess
 import sys
 import time
 from collections import Counter
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
@@ -147,6 +149,8 @@ class Merger:
         subject, body = self.message(number)
         self.watch(pr)
         check_migrations(self.merged_tree(self.main(), pr.head))
+        if pr.draft:
+            gh('pr', 'ready', str(number))
         merged = subprocess.run(
             ['gh', 'pr', 'merge', str(number), '--squash', '--match-head-commit', pr.head]
             + ['--subject', subject, '--body', body],
@@ -182,18 +186,15 @@ class Merger:
         check_commits(run('git', 'log', '--format=%B%x00', f'{base}..{top.head}').split('\0')[:-1], self.words())
         pages = self.watch(top)
         check_migrations(self.merged_tree(base, top.head))
-        gh(
-            'label',
-            'create',
-            TRAIN,
-            '--force',
-            '--description',
-            "landed by the merge script's train: CI tests only its top",
-        )
-        for pr in prs:
-            gh('pr', 'edit', str(pr.number), '--add-label', TRAIN)
-            if pr.draft:
-                gh('pr', 'ready', str(pr.number))
+        with labelled([pr.number for pr in prs]):
+            for pr in prs:
+                if pr.draft:
+                    gh('pr', 'ready', str(pr.number))
+            self.land(prs, base, pages)
+
+    def land(self, prs: list[PullRequest], base: str, pages: dict[str, str]) -> None:
+        """Merge a checked stack, bottom first, each from its head replayed onto the merged one below."""
+        top = prs[-1]
         for below, pr in zip([None, *prs], prs, strict=False):
             head = pr.head
             if below is not None:
@@ -249,6 +250,29 @@ def run(*args: str) -> str:
 def gh(*args: str) -> str:
     """The output of a ``gh`` command, in the repository that ``gh`` picks."""
     return run('gh', *args)
+
+
+@contextmanager
+def labelled(numbers: list[int]) -> Generator[None]:
+    """Label pull requests ``train`` while a train lands them, and take the label off again however the train ends.
+
+    CI tests no labelled pull request, so a label left on would show a green CI that tested nothing.
+    """
+    gh(
+        'label',
+        'create',
+        TRAIN,
+        '--force',
+        '--description',
+        "landed by the merge script's train: CI tests only its top",
+    )
+    for number in numbers:
+        gh('pr', 'edit', str(number), '--add-label', TRAIN)
+    try:
+        yield
+    finally:
+        for number in numbers:
+            gh('pr', 'edit', str(number), '--remove-label', TRAIN)
 
 
 def replay(below: str, head: str, onto: str) -> str:
