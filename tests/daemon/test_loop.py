@@ -163,7 +163,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'candidate.rejudge_failed': [],
             'candidate.rejudge_requested': ['campaigns', 'yield_alarm'],
             'candidate.remeasure_requested': ['campaigns', 'yield_alarm'],
-            'candidate.verdict': ['campaigns', 'yield_alarm'],
+            'candidate.verdict': ['follow_head', 'campaigns', 'yield_alarm'],
             'comment.acked_at': [],
             'comment.body': ['campaigns', 'yield_alarm'],
             'comment.decision': ['notify', 'prompts', 'campaigns', 'yield_alarm'],

@@ -84,6 +84,11 @@ The claim ends with the run:
 
 An implementer that never started to work claimed nothing: its run is queued again, up to two times.
 
+A run builds on the head that it started from. With `follow_head = "message"` in `[plugins.role.implementer]`, each
+running implementer hears when another run's version becomes the head: one message that names its revision, to merge.
+A worktree of the campaign's repo has the commit at once. An implementer on a [worker elsewhere](/guides/workers) gets
+the message, but its checkout lacks the commit.
+
 ## Talk to a running implementer
 
 A `message` comment on a running run, or on its idea, reaches the implementer within seconds. It gets the first line,

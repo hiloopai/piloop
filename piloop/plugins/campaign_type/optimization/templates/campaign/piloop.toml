@@ -72,6 +72,7 @@ max_concurrent = 4                        # the most runs at the same time, on a
 # wrap_up_lead = 600                      # seconds before its timeout that an implementer is told to wrap up
 # end_grace = 60                          # seconds after `piloop run end` before an implementer is ended
 # startup_relaunches = 2                  # new implementers for a run whose implementer failed to start
+# follow_head = "off"                     # "message": a running implementer hears when another run's version is the head
 
 [plugins.role.watchdog]                   # a watchdog investigates anomalies and reviews progress every `interval` seconds
 # harnesses = ["pi", "claude", "codex"]   # if not set: [plugins.harness] use

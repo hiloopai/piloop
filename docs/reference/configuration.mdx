@@ -569,6 +569,7 @@ scored and judged when it ends. A new role of this kind takes the implementer's 
 | `wrap_up_lead` | duration | `"PT10M"` | How long before its `timeout` the daemon tells an implementer to wrap up, at most a quarter of the timeout. |
 | `end_grace` | duration | `"PT1M"` | How long after an implementer ended its run (`piloop run end`) the daemon ends it, and every process that it left: its last tool call returns first. |
 | `startup_relaunches` | integer | `2` | How many times a run is queued again with a new implementer after its implementer failed to start. Then the run fails. A failure at startup is a fault of the host or the harness, not an attempt at an idea. |
+| `follow_head` | `off` \| `message` | `"off"` | `message`: when another run's version becomes the head, each running worker of this role gets one message that names its revision, to merge into its own line. A worktree of the repo of record has the commit at once. A worker on another machine gets the message too, but its checkout lacks the commit. `off`: a worker builds on the head that it started from. |
 
 ## SweepRole
 

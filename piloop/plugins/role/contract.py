@@ -179,6 +179,15 @@ class RoleConfig(Parameters):
         return list(dict.fromkeys([*self.GUIDES, *defaults(self.SURFACE)]))
 
 
+class FollowHead(StrEnum):
+    """What a role that does runs does for its running workers when another run's version becomes the head."""
+
+    OFF = 'off'
+    """Nothing: a worker builds on the head that it started from."""
+    MESSAGE = 'message'
+    """Each other running worker gets one message that names the new head's revision, to merge."""
+
+
 class ImplementerRole(RoleConfig):
     """``[plugins.role.implementer]``, and every ``[plugins.role.<name>]`` table with ``runs = true``: a role that does runs.
 
@@ -211,6 +220,11 @@ class ImplementerRole(RoleConfig):
     ]
     """What an implementer may write, as its brief states it. It proposes the idea of its own run, and files none for
     others: a hunch for another run goes in a note, which research reads."""
+    follow_head: FollowHead = FollowHead.OFF
+    """``message``: when another run's version becomes the head, each running worker of this role gets one message that
+    names its revision, to merge into its own line. A worktree of the repo of record has the commit at once. A worker on
+    another machine gets the message too, but its checkout lacks the commit. ``off``: a worker builds on the head that
+    it started from."""
     IDEAS: ClassVar[str] = '- A hunch for another run goes in a note, with pointers (ids, paths, the number).'
     SURFACE: ClassVar[Surface] = Surface.RUN
 
