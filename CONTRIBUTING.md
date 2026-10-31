@@ -116,6 +116,9 @@ Other targets: `make format`, `make lint`, `make typecheck`, `make test` (no cov
 eight runners (`--shard I/N`), and `install.sh` with the enwik8 example. In `hiloopai/piloop`, not in a fork, CI also
 runs `make test` on macOS.
 
+A pull request that changes only docs runs no tests. In a stack of pull requests, only the top one runs them, for the
+whole stack.
+
 ## The end-to-end tests
 
 The tests use fake harnesses. The tests in `tests/e2e/` run small real campaigns with real agents, on the bundled

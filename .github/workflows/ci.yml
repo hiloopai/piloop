@@ -102,10 +102,44 @@ jobs:
           PATH="/tmp/bin:$PATH" piloop install-skills
           test -f ~/.agents/skills/piloop-operate/SKILL.md
 
+  # Which tests run. A pull request with another stacked on it runs none: the top of the stack runs them for the whole
+  # stack. A pull request into the default branch that changes only docs runs none. Anything else runs the whole suite.
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      mode: ${{ steps.select.outputs.mode }}
+    steps:
+      - id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DOCS: '^(docs/|[^/]+\.md$|(.+/)?README\.md$|LICENSE$)'
+        run: |
+          mode=full
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            if [ -n "$(gh pr list -R "$GITHUB_REPOSITORY" --base "$HEAD_REF" --state open --json number --jq '.[]')" ]; then
+              mode=stacked
+            elif [ "$BASE_REF" = "$DEFAULT_BRANCH" ] && files=$(gh pr diff "$NUMBER" -R "$GITHUB_REPOSITORY" --name-only) &&
+              ! grep -qvE "$DOCS" <<< "$files"; then
+              mode=docs
+            fi
+          fi
+          echo "::notice::tests: $mode"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
   # The suite is CPU-bound on a runner's two vCPUs, so it is split over eight runners by a hash of each test's id
   # (tests/shard.py). Each part runs four workers, as the tests also wait on subprocesses. `coverage` adds up their data.
   test:
     name: test, part ${{ matrix.shard }} of 8
+    needs: select
+    if: needs.select.outputs.mode == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -130,25 +164,35 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
+  # The merge script requires this job: it passes on the whole suite at 100% coverage, or on a docs-only change.
   coverage:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [select, test]
+    if: ${{ !cancelled() && (needs.test.result == 'success' || needs.select.outputs.mode == 'docs') }}
     steps:
+      - if: needs.select.outputs.mode == 'docs'
+        run: echo "docs only, no tests to measure"
       - uses: actions/checkout@v7
+        if: needs.select.outputs.mode == 'full'
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@v7
+        if: needs.select.outputs.mode == 'full'
         with:
           python-version: "3.14"
           enable-cache: true
           cache-suffix: test
-      - run: uv sync
+      - if: needs.select.outputs.mode == 'full'
+        run: uv sync
       - uses: actions/download-artifact@v8
+        if: needs.select.outputs.mode == 'full'
         with:
           pattern: coverage-*
           path: parts
-      - run: uv run coverage combine parts/*/.coverage
-      - run: uv run coverage report
+      - if: needs.select.outputs.mode == 'full'
+        run: uv run coverage combine parts/*/.coverage
+      - if: needs.select.outputs.mode == 'full'
+        run: uv run coverage report
 
   # macOS minutes are scarce in the private mirror: there it runs nightly, on demand and on release PRs only.
   macos:
@@ -172,6 +216,8 @@ jobs:
   # run of passes.
   quarantine:
     name: quarantined tests (non-blocking)
+    needs: select
+    if: needs.select.outputs.mode == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     continue-on-error: true
@@ -202,10 +248,10 @@ jobs:
 
   check:
     if: always()
-    needs: [lint, test, coverage, macos]
+    needs: [lint, select, test, coverage, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: re-actors/alls-green@release/v1
         with:
-          allowed-skips: macos
+          allowed-skips: test, coverage, macos
           jobs: ${{ toJSON(needs) }}
