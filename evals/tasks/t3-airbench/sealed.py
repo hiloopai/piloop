@@ -5,7 +5,8 @@ starting code. ``<sealed>/meta.json`` names the split: ``train``, a list of file
 an absolute path, such as the task's dev data in the image, which no version can change; ``seeds``; the accuracy
 ``floor``; and the ``base`` and ``ref`` ratios that score 0 and 1. The base runs first, then the change, both through
 the GPU lock where the machine has one: timings differ by a few percent from one GPU to the next, so only a ratio
-taken on one GPU is comparable. Writes ``{"score", "status", "detail", "raw"}`` to ``<out>``, ``raw`` being the ratio.
+taken on one GPU is comparable. Writes ``{"score", "status", "detail", "raw"}`` to ``<out>``, ``raw`` being the ratio; ``status`` is ``ok``, ``crash``
+or ``infra_error``.
 """
 
 import json
@@ -35,6 +36,10 @@ def seconds(tree: Path, evaluate: Path, meta: dict, sealed: Path) -> tuple[dict 
     return json.loads(done.stdout.strip().splitlines()[-1])['metrics'], ''
 
 
+OOM = 'out of memory'
+"""In the reason of a failed run: the GPU ran out of memory, which says nothing of the change."""
+
+
 def main(tree: Path, base: Path, sealed: Path) -> dict[str, object]:
     """Score ``tree`` against ``base`` on the split of ``sealed``."""
     meta = json.loads((sealed / 'meta.json').read_text())
@@ -46,10 +51,13 @@ def main(tree: Path, base: Path, sealed: Path) -> dict[str, object]:
                 shutil.copy(f, start / f.name)
         reference, why = seconds(start, tree / 'evaluate.py', meta, sealed)
         if reference is None:
-            return {'score': None, 'status': 'crash', 'detail': f'the starting code failed: {why}', 'raw': None}
+            return {'score': None, 'status': 'infra_error', 'detail': f'the starting code failed: {why}', 'raw': None}
         mine, why = seconds(tree, tree / 'evaluate.py', meta, sealed)
     if mine is None:
-        return {'score': None, 'status': 'crash', 'detail': why, 'raw': None}
+        status = (
+            'infra_error' if OOM in why else 'crash'
+        )  # a GPU out of memory is the machine's fault, not the change's
+        return {'score': None, 'status': status, 'detail': why, 'raw': None}
     raw = mine['seconds'] / reference['seconds']
     score = (raw - meta['base']) / (meta['ref'] - meta['base'])
     detail = f'{mine["seconds"]:.3f} s against {reference["seconds"]:.3f} s, accuracy {mine["accuracy"]:.4f}'

@@ -148,6 +148,7 @@ def serve(path: str) -> None:
                     models[key] = (module, module.build())
             module, model = models[key]
             reply: dict[str, object] = {'metrics': timed(module, model, split, [request['seed']])}
+            torch.cuda.empty_cache()  # hand the GPU's free memory back: the next evaluation on it may be cold
         except BaseException:
             conn.sendall((json.dumps({'error': traceback.format_exc()[-3000:]}) + '\n').encode())
             conn.close()
@@ -226,6 +227,10 @@ def main() -> int:
         return report(cold(Path.cwd(), split, args.seeds), args.floor)
     except Exception as e:  # the reason of a failed run, on stderr: piloop records a crash
         print(f'{type(e).__name__}: {e}', file=sys.stderr)
+        if 'out of memory' in str(e) and (result := os.environ.get('PILOOP_RESULT_FILE')):
+            with open(result, 'a') as f:  # the GPU's fault, not the change's: piloop measures it again later
+                f.write(json.dumps({'status': 'infra_error', 'feedback': 'CUDA out of memory'}) + '\n')
+            return 0
         return 1
 
 

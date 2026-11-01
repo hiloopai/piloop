@@ -30,8 +30,9 @@ def main(task: Path, sealed: Path, direction: str) -> dict[str, object]:
         if done.returncode != 0:
             return {'status': 'infra_error', 'feedback': done.stderr.strip()[-500:]}
         verdict = json.loads(out.read_text())
-    if verdict['status'] != 'ok':
-        return {'status': 'crash', 'feedback': str(verdict['detail'])[-500:]}
+    if verdict['status'] != 'ok':  # a task's scorer may tell the machine's fault from the change's
+        status = 'infra_error' if verdict['status'] == 'infra_error' else 'crash'
+        return {'status': status, 'feedback': str(verdict['detail'])[-500:]}
     raw = verdict.get('raw')
     if isinstance(raw, int | float):
         return {'status': 'ok', 'score': raw, 'direction': direction}
