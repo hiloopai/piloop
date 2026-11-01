@@ -10,7 +10,7 @@ from git import Repo
 from pytest_mock import MockerFixture
 from sqlalchemy import select
 
-from piloop.actor import Agent
+from piloop.actor import Agent, System
 from piloop.campaign.ops import Refused
 from piloop.daemon.main import Daemon
 from piloop.db.events import in_order
@@ -21,7 +21,13 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.jobs import InfraFailed
-from piloop.plugins.campaign_type.kit.evaluation.measure import Split, current_evaluator, noise, sealed_evaluator
+from piloop.plugins.campaign_type.kit.evaluation.measure import (
+    Split,
+    current_evaluator,
+    noise,
+    request_remeasure,
+    sealed_evaluator,
+)
 from piloop.plugins.campaign_type.kit.evaluation.submissions import SubmitRefused, submit, waiting
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import UNSUBMITTED, Measuring, RunController, close_run
@@ -410,6 +416,30 @@ def test_a_sealed_score_that_a_stop_ends_leaves_the_submission_waiting(
     assert verdict(db, candidate) == (None, None)
 
 
+def test_a_remeasure_that_a_stop_ends_before_the_sealed_split_scores_it_keeps_its_verdict(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No keep on the visible split alone: the verdict stays as it was until someone asks again."""
+    set_config(db, campaign, evaluator={**SUBMIT, 'sealed': SEALED_CRASHES}, plugins=NOISE)
+    ex = controller(db, runtime, tmp_path)
+    candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
+    ex.judge_submission(candidate)
+    before = verdict(db, candidate)
+    with db.session() as s:
+        request_remeasure(s, s.get_one(Candidate, candidate), System.HUMAN, repeats=1)
+        s.commit()
+
+    def sealed_stops[**P](fn: Callable[P, Measuring]) -> Callable[P, Measuring]:
+        def measured(*args: P.args, **kwargs: P.kwargs) -> Measuring:
+            return Measuring.STOPPED if kwargs.get('split') is Split.SEALED else fn(*args, **kwargs)
+
+        return measured
+
+    monkeypatch.setattr(ex, '_measure', sealed_stops(ex._measure))
+    ex.remeasure(candidate)
+    assert verdict(db, candidate) == before
+
+
 def scoring(db: Database, run_id: RunId) -> bool:
     with db.session() as s:
         return s.get_one(Run, run_id).scoring
@@ -551,6 +581,98 @@ def test_a_sealed_result_that_piloop_refuses_is_no_verdict_and_escalates_once_un
 def failures(db: Database) -> list[InfraFailed]:
     with db.session() as s:
         return [e for _, e in in_order(s, InfraFailed)]
+
+
+SEALED_CRASHES = ['sh', '-c', 'echo out of memory >&2; exit 3']
+"""A sealed command that crashes on every version, as one whose GPU runs out of memory does."""
+
+
+@pytest.mark.parametrize(
+    ('then', 'kept'),
+    [(SEALED_AGREES, True), (SEALED_CRASHES + ['again'], False), (None, True)],
+    ids=['a-new-command-scores-it', 'a-new-command-crashes-too', 'the-same-command-scores-it-now'],
+)
+def test_a_remeasure_keeps_a_version_only_once_the_sealed_split_scores_it_and_the_gain_holds(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, then: list[str], kept: bool
+) -> None:
+    """A remeasure judges again through the same gate as the first verdict: a would-be keep is scored on the sealed
+    split first, and keeps only when it holds there. With a new sealed command neither side has a score of it yet; with
+    the same one, whose crash passed, the candidate is scored on it again."""
+    oom = tmp_path / 'oom'
+    oom.touch()
+    flaky = ['sh', '-c', f'[ -f {oom} ] && exit 3; ' + reports(score='$(wc -l < solve.txt)', size='1')]
+    set_config(db, campaign, evaluator={**SUBMIT, 'sealed': flaky if then is None else SEALED_CRASHES}, plugins=NOISE)
+    ex = controller(db, runtime, tmp_path)
+    candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
+    ex.judge_submission(candidate)
+    assert verdict(db, candidate)[0] is Outcome.DISCARD, 'the sealed split did not score it'
+    if then is None:
+        oom.unlink()
+    else:
+        set_config(db, campaign, evaluator={**SUBMIT, 'sealed': then}, plugins=NOISE)
+    with db.session() as s:
+        request_remeasure(s, s.get_one(Candidate, candidate), System.HUMAN, repeats=1)
+        s.commit()
+    ex.remeasure(candidate)
+    found, reason = verdict(db, candidate)
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        hidden = sealed_evaluator(s, p, p.config)
+        assert hidden is not None
+        sealed = [m.error for m in s.scalars(select(Measurement).where(Measurement.evaluator_id == hidden.id))]
+        trunk = head(s, p)
+        assert trunk is not None
+    assert sealed, 'the remeasure scored it on the sealed split'
+    if kept:
+        assert (found, trunk.id) == (Outcome.KEEP, candidate) and reason is not None
+        assert reason.endswith('it holds on the sealed split'), reason
+    else:
+        assert found is not Outcome.KEEP and trunk.id != candidate, reason
+
+
+def test_a_sealed_split_that_reports_an_infra_error_gives_no_verdict_and_scores_it_once_it_answers(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """An evaluator that says its fault is the machine's (``infra_error``), a GPU out of memory say, is believed on the
+    sealed split too: the submission waits, and is scored there once the split answers. A ``crash`` is the
+    candidate's: only the evaluator can tell the two apart."""
+    oom = tmp_path / 'oom'
+    oom.touch()
+    infra = '{"status": "infra_error", "feedback": "CUDA out of memory"}'
+    flaky = [
+        'sh',
+        '-c',
+        f'if [ -f {oom} ]; then printf "%s\\n" \'{infra}\' >> "$PILOOP_RESULT_FILE"; exit 0; fi; '
+        + reports(score='$(wc -l < solve.txt)', size='1'),
+    ]
+    set_config(db, campaign, evaluator={**SUBMIT, 'sealed': flaky}, plugins=NOISE)
+    ex = queued_executor(db, runtime, tmp_path, 1)
+    candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
+    judging = threading.Thread(target=ex.judge_submission, args=(candidate,))
+    judging.start()
+    wait_until(lambda: len(failures(db)) >= 1, 'the sealed evaluation failed for the machine, and waits to run again')
+    assert verdict(db, candidate) == (None, None), 'no verdict, and no discard'
+    oom.unlink()
+    judging.join(30)
+    found, reason = verdict(db, candidate)
+    assert found is Outcome.KEEP and reason is not None and reason.endswith('it holds on the sealed split'), reason
+
+
+def test_a_keep_holds_on_the_sealed_split_whatever_the_verdict_rule(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The sealed split is the daemon's gate, not a rule's: a rule of a plugin that reads no sealed score keeps no
+    version that the sealed split refuses."""
+    set_config(
+        db, campaign, evaluator={**SUBMIT, 'sealed': SEALED}, plugins={'verdict_rule': {'provider': 'bootstrap'}}
+    )
+    ex = controller(db, runtime, tmp_path)
+    candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\nb\n'))
+    ex.judge_submission(candidate)
+    found, reason = verdict(db, candidate)
+    assert found is Outcome.DISCARD and reason is not None and reason.endswith('does not hold on the sealed split'), (
+        reason
+    )
 
 
 def ending(db: Database, run_id: RunId, how: RunEnding, reason: str | None = None) -> None:

@@ -404,10 +404,31 @@ def judge(
     against an ``own`` that the head has moved past is rebased onto the head instead (``rebase``).
 
     The campaign's verdict rule gives the verdict (``decide``): ``[plugins.verdict_rule]``, else ``noise``. It reads
-    the candidate's parent and the ``evidence`` too.
+    the candidate's parent and the ``evidence`` too. A keep of a campaign with a sealed split stands only where it
+    holds there (``sealed_gate``), whatever the rule.
     """
-    judged = verdict_rule(cfg).decide(case_of(candidate, own, evaluator_id, cfg, track, units_dir, evidence))
-    return judged.verdict, judged.reason
+    case = case_of(candidate, own, evaluator_id, cfg, track, units_dir, evidence)
+    judged = verdict_rule(cfg).decide(case)
+    if judged.verdict is not Outcome.KEEP or cfg.evaluator.sealed is None:
+        return judged.verdict, judged.reason
+    return sealed_gate(judged.reason, evidence.sealed, cfg.all_tracks[0].primary, case.bar.name)
+
+
+def sealed_gate(reason: str, sealed: Sealed | None, primary: Metric, bar: str) -> tuple[Outcome, str]:
+    """The verdict on a would-be keep of a campaign with a sealed split (``[evaluator] sealed``), and its reason.
+
+    It keeps only when the split scored both sides, and the candidate beats ``bar`` there on the first track's
+    ``primary``. A candidate that the split did not score is ``discard``, and also one with no sealed score at all,
+    which a judgement that skipped the split would leave. A ``bar`` that it did not score is ``interesting``: a fault
+    of the split is never a pass.
+    """
+    if sealed is None or sealed.candidate is None:
+        return Outcome.DISCARD, f'{reason}; the sealed split did not score it'
+    if sealed.bar is None:
+        return Outcome.INTERESTING, f'{reason}; the sealed split did not score {bar}'
+    if primary.direction.gain(sealed.candidate, sealed.bar) <= 0:
+        return Outcome.DISCARD, f'{reason}; the gain does not hold on the sealed split'
+    return Outcome.KEEP, f'{reason}; it holds on the sealed split'
 
 
 @dataclass(frozen=True)

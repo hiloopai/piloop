@@ -25,7 +25,7 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import Units
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, RungName, TrackName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.verdicts import judge
-from piloop.plugins.campaign_type.kit.verdicts.judge import criterion
+from piloop.plugins.campaign_type.kit.verdicts.judge import criterion, sealed_gate
 from piloop.plugins.campaign_type.kit.verdicts.verdict import (
     PENDING,
     CandidateNoted,
@@ -44,6 +44,7 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
     VERDICT_RULES,
     Case,
     Judgement,
+    Sealed,
     Side,
     Stopped,
     VerdictRule,
@@ -637,3 +638,22 @@ def test_the_daemon_judges_what_has_no_verdict_or_its_own_changeable_one_but_nev
         judgeable(of(Origin.RUN, Outcome.DISCARD, 'human')),
         judgeable(of(Origin.REFERENCE, None, None)),
     ] == [True, True, True, False, False, False], "a keep stays, and so does anyone else's verdict"
+
+
+def test_a_keep_of_a_campaign_with_a_sealed_split_stands_only_where_it_holds_there() -> None:
+    bytes_ = Metric(name='bytes', direction='lower', role=MetricRole.PRIMARY)
+    reason = 'against candidate#4: bytes 900 vs 1000'
+    assert sealed_gate(reason, Sealed(950, 1000), bytes_, 'candidate#4') == (
+        Outcome.KEEP,
+        f'{reason}; it holds on the sealed split',
+    )
+    assert sealed_gate(reason, Sealed(1000, 1000), bytes_, 'candidate#4')[0] is Outcome.DISCARD
+    assert sealed_gate(reason, Sealed(None, 1000), bytes_, 'candidate#4') == (
+        Outcome.DISCARD,
+        f'{reason}; the sealed split did not score it',
+    )
+    assert sealed_gate(reason, None, bytes_, 'candidate#4')[0] is Outcome.DISCARD, 'a judgement that skipped the split'
+    assert sealed_gate(reason, Sealed(950, None), bytes_, 'candidate#4') == (
+        Outcome.INTERESTING,
+        f'{reason}; the sealed split did not score candidate#4',
+    ), 'a split that did not score the head is no pass'

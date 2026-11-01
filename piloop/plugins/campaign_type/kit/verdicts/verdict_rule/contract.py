@@ -133,7 +133,8 @@ class Case:
     ``noise_runs`` below 2. None while it is unknown: fewer than two of them succeeded."""
     sealed: Sealed | None = None
     """The sealed split's scores. None without a sealed split, and until the rule would keep the candidate: piloop then
-    scores the split and asks the rule again."""
+    scores the split and asks the rule again. Whatever the rule says, a keep stands only where it holds on the split
+    (``judge.sealed_gate``)."""
 
 
 @dataclass(frozen=True)

@@ -51,9 +51,10 @@ The rule, `noise`, in order:
 2. A guardrail past its `floor`: `discard`.
 3. The bar has no score under the current evaluator: `keep`.
 4. The gain over the bar is at most `m·σ/√n`: `discard`.
-5. The gain does not hold on the [sealed split](#the-sealed-split): `discard`.
-6. A guardrail worse than the bar by more than its `margin`, or than its `fraction` of the bar's value: `interesting`.
-7. Otherwise: `keep`.
+5. A guardrail worse than the bar by more than its `margin`, or than its `fraction` of the bar's value: `interesting`.
+6. Otherwise: `keep`.
+
+Whatever the rule, a keep of a campaign with a [sealed split](#the-sealed-split) stands only when it holds there.
 
 ## Submissions
 
@@ -94,7 +95,9 @@ has `σ = 0`: any gain keeps. When the baseline's evaluations crash, `σ` is unk
 
 `[evaluator] sealed` is a second command that scores a version on data that no implementer can read: keep its data
 and its scorer in the home or on the evaluator's machines, outside the repo. piloop runs it only on a submission that
-would become the new head, and on that head once. The submission is kept only when it beats the head there too.
+would become the new head, and on that head once. The submission is kept only when it beats the head there too,
+whatever the verdict rule. A remeasure goes through the same gate: a version that would keep is scored on the sealed
+split again, and keeps only when it holds there.
 
 ```toml
 [evaluator]
@@ -105,7 +108,9 @@ A result of the sealed command that piloop refuses, such as a `direction` that i
 a fault of the setup, not of the submission: no implementer can change that command. The submission gets no verdict
 and waits, its sealed evaluation runs again after `[evaluation] infra_retry`, and piloop escalates once. Fix the
 command and run `piloop campaign sync`: the waiting submissions are then scored with the new one. A sealed command
-that fails on a submission, such as an exit 1, is the submission's fault: it is not kept.
+that fails on a submission, such as an exit 1, is the submission's fault: it is not kept. A fault of the machine, a
+GPU out of memory say, is the command's to report: `{"status": "infra_error"}` gives no verdict, and the evaluation
+runs again later.
 
 The daemon never judges three kinds of candidate:
 

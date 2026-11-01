@@ -249,6 +249,29 @@ def test_a_stop_ends_the_waiting_evaluations_and_records_nothing(
     )
 
 
+def test_an_evaluation_that_waits_for_a_slot_gives_up_when_the_database_closes(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """A closed database answers every wait at once: the wait ends, it never spins on it."""
+    executor = Workers.model_validate({'pools': {'serve': {'slots': {'evaluation': 1}}}})
+    ex = RunController(db, Tracer(None), tmp_path, factory(runtime), executor=executor)  # no worker: no free slot
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        evaluator = s.get_one(Campaign, campaign.id).evaluator_id
+        assert evaluator is not None
+        evaluation, _ = queue.request(s, base, evaluator)
+        s.commit()
+        evaluation_id = evaluation.id
+    waking = mocker.spy(ex, '_next_wake')
+    waited: list[bool] = []
+    waiter = in_thread(lambda: waited.append(ex._wait(evaluation_id)))
+    # the doorbell's first read wakes the first wait once; the second lasts until the close
+    wait_until(lambda: waking.call_count == 2, 'the wait for a slot')
+    db.close()
+    waiter.join(SETTLE)
+    assert waited == [False], 'it gave up'
+
+
 def add_campaign(db: Database, name: str, trees: int) -> list[CandidateId]:
     """A second campaign with ``trees`` candidates, none kept."""
     with db.session() as s:

@@ -2,9 +2,9 @@
 
 The noise is ``σ``, the standard deviation of the baseline's score over its first evaluations (``[evaluator]
 noise_runs``). A candidate keeps when its gain over the bar is above ``m·σ/√n``, with ``n`` its evaluations. A positive
-gain within ``m·σ`` on one evaluation asks for one more (``samples``). With a sealed split (``[evaluator] sealed``),
-the gain must hold there too. Guardrails, when a campaign has them, may regress by at most their tolerance and never
-pass their floor. The rule imports only the standard library, pydantic and its contract, as a rule from a plugin does.
+gain within ``m·σ`` on one evaluation asks for one more (``samples``). Guardrails, when a campaign has them, may regress
+by at most their tolerance and never pass their floor. A sealed split is the daemon's gate after the rule, not the
+rule's (``piloop.plugins.campaign_type.kit.verdicts.judge.sealed_gate``). The rule imports only the standard library, pydantic and its contract, as a rule from a plugin does.
 """
 
 import math
@@ -59,10 +59,8 @@ class Noise(VerdictRule):
         3. A bar with no score is ``keep``.
         4. A gain while the noise is unknown (``Case.noise``) is ``interesting``: nothing keeps on a guess.
         5. A gain at or below ``m·σ/√n`` is ``discard``.
-        6. A sealed score that does not beat the bar's sealed score is ``discard``. A bar that the split did not score
-           is ``interesting``: a fault of the split is never a pass.
-        7. A guardrail that regressed beyond its tolerance is ``interesting``.
-        8. Anything else is ``keep``.
+        6. A guardrail that regressed beyond its tolerance is ``interesting``.
+        7. Anything else is ``keep``.
         """
         primary, mine, theirs = case.primary, case.candidate.means, case.bar.means
         match primary.name in mine, case.candidate.stopped:
@@ -95,14 +93,6 @@ class Noise(VerdictRule):
         )
         if gain <= threshold:
             return Judgement(Outcome.DISCARD, reason)
-        if (sealed := case.sealed) is not None:
-            if sealed.candidate is None:
-                return Judgement(Outcome.DISCARD, f'{reason}; the sealed split did not score it')
-            if sealed.bar is None:
-                return Judgement(Outcome.INTERESTING, f'{reason}; the sealed split did not score {case.bar.name}')
-            if primary.direction.gain(sealed.candidate, sealed.bar) <= 0:
-                return Judgement(Outcome.DISCARD, f'{reason}; the gain does not hold on the sealed split')
-            reason += '; it holds on the sealed split'
         beyond = [
             f'{m.name} {number(mine[m.name])} vs {number(theirs[m.name])} beyond its {m.limit()}'
             for m in case.guardrails

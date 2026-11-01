@@ -884,7 +884,8 @@ class RunController:
 
         It is judged as its run would have judged it (``_judge``): against the bar of its parent, a keep moves the head
         only while that bar is the head, and else it is rebased onto the head (``_follow``). A crash that crashes again
-        stays a crash.
+        stays a crash. It goes through the same gate first (``_gather``): a would-be keep is scored on the sealed split
+        again, and keeps only where it holds there. A stop meanwhile leaves its verdict as it was.
         """
         with self._db.session() as s:
             candidate = s.get_one(Candidate, candidate_id)
@@ -898,6 +899,9 @@ class RunController:
             s.commit()
             bar_id, revision = bar_of(s, candidate.parent).id, candidate.revision
         with self._tracer.span('piloop.candidate', run=scope.run_id, revision=revision, candidate=candidate_id) as span:
+            if (halted := self._gather(scope, candidate_id, bar_id, log_dir, fresh=True)) is not None:
+                span.set(status=halted)
+                return
             notes = list(repo.version(revision).notes)
             judged = self._judge(scope, candidate_id, bar_id, span, judge_now=True, unmeasured=None, notes=notes)
         if judged.merged is not None:
@@ -1168,14 +1172,17 @@ class RunController:
         primary = scope.cfg.all_tracks[0].primary
         return Evidence(found, Sealed(score(candidate, hidden.id, primary), score(bar, hidden.id, primary)))
 
-    def _gather(self, scope: Scope, candidate_id: CandidateId, bar_id: CandidateId, eval_dir: Path) -> Halted | None:
+    def _gather(
+        self, scope: Scope, candidate_id: CandidateId, bar_id: CandidateId, eval_dir: Path, *, fresh: bool = False
+    ) -> Halted | None:
         """Measure what the verdict rule needs before it judges ``candidate_id`` against ``bar_id``. None when done.
 
         First the measurements that it asks for (``VerdictRule.samples``), once. Then, for a would-be keep of a
         campaign with a sealed split, the split's score of the candidate and of the bar that it would replace: the bar
-        is scored there once, and once more when that crashed, a fault of the split, not of the candidate.
+        is scored there once, and once more when that crashed, a fault of the split, not of the candidate. With
+        ``fresh``, a remeasure's, the candidate is scored on the split again, once, even when it was before.
         """
-        rule, resampled, resealed = verdict_rule(scope.cfg), False, False
+        rule, resampled, resealed, refreshed = verdict_rule(scope.cfg), False, False, not fresh
         while True:
             with self._db.session() as s:
                 candidate, bar = s.get_one(Candidate, candidate_id), s.get_one(Candidate, bar_id)
@@ -1191,6 +1198,8 @@ class RunController:
                 ]
                 if evidence.sealed is not None and evidence.sealed.bar is None and not resealed:
                     sealing, resealed = [bar], True
+                if hidden is not None and not refreshed and candidate not in sealing:
+                    sealing = [candidate, *sealing]
                 revisions = {c.id: c.revision for c in (candidate, bar)}
             if more > 0:
                 resampled = True
@@ -1211,6 +1220,7 @@ class RunController:
                 continue
             if not sealing or hidden is None or rule.decide(replace(case, sealed=None)).verdict is not Outcome.KEEP:
                 return None
+            refreshed = True
             for c in sealing:
                 ended = self._measure(
                     scope.run_id,

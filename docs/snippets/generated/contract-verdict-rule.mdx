@@ -13,7 +13,7 @@
 | `Case.bar: Side` | What the candidate must beat: its run's bar (https://piloop.autoresearch.inc/concepts/verdict#the-words). |
 | `Case.parent: Side \| None` | The candidate's parent, which the candidate changed. None for a candidate without one. |
 | `Case.noise: float \| None` | The standard deviation of the primary over the baseline's measurements (`[evaluator] noise_runs`): 0 with `noise_runs` below 2. None while it is unknown: fewer than two of them succeeded. |
-| `Case.sealed: Sealed \| None` | The sealed split's scores. None without a sealed split, and until the rule would keep the candidate: piloop then scores the split and asks the rule again. |
+| `Case.sealed: Sealed \| None` | The sealed split's scores. None without a sealed split, and until the rule would keep the candidate: piloop then scores the split and asks the rule again. Whatever the rule says, a keep stands only where it holds on the split (`judge.sealed_gate`). |
 | `Criterion.name: str` | The metric's name, as the evaluate command reports it. |
 | `Criterion.direction: Direction` | Whether a larger or a smaller value is better. |
 | `Criterion.margin: float \| None` | The largest regression from the bar that a guardrail may show, in the metric's units. None on a primary. |

@@ -1,4 +1,4 @@
-"""The ``noise`` verdict rule: a gain must exceed ``m`` standard deviations of the baseline, and hold on the sealed split."""
+"""The ``noise`` verdict rule: a gain must exceed ``m`` standard deviations of the baseline."""
 
 from inline_snapshot import snapshot
 
@@ -85,21 +85,6 @@ def test_a_candidate_without_a_score_or_a_bar_without_one() -> None:
         Outcome.KEEP, 'candidate#4 has no score under the current evaluator'
     )
     assert rule.samples(case(2000, None)) == 1
-
-
-def test_a_keep_must_hold_on_the_sealed_split() -> None:
-    rule = Noise()
-    assert rule.decide(case(900, sealed=Sealed(950, 1000))).reason.endswith('; it holds on the sealed split')
-    assert rule.decide(case(900, sealed=Sealed(1000, 1000))).verdict is Outcome.DISCARD
-    assert rule.decide(case(900, sealed=Sealed(None, 1000))) == snapshot(
-        Judgement(
-            Outcome.DISCARD,
-            'against candidate#4: bytes 900 vs 1000 (+100; noise 20 over 1 evaluations); the sealed split did not score it',
-        )
-    )
-    assert rule.decide(case(900, sealed=Sealed(950, None))).verdict is Outcome.INTERESTING, (
-        'a split that did not score the head is no pass'
-    )
 
 
 def test_guardrails_still_hold_when_a_campaign_has_them() -> None:
