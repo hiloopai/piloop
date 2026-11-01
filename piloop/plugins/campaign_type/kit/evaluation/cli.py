@@ -131,8 +131,8 @@ def submit(
     """Score a commit of your run now, and wait for its verdict.
 
     piloop runs the campaign's evaluate command on the commit, and judges it against the head. It prints the verdict
-    and the score, such as `keep 0.8312`: `keep` makes it the head, `discard` does not, `crash` failed to run. Each run
-    has a few submissions (`[evaluator] submissions`).
+    and the score, such as `keep 0.8312`: `keep` makes it the head, `discard` does not, `crash` failed to run. A campaign
+    can cap the submissions of a run (`[evaluator] submissions`).
     """
     if revision is None:
         from piloop.plugins.vcs.contract import VCS  # here: only this command reads a checkout; the others load no vcs

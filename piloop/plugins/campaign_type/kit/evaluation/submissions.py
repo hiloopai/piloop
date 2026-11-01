@@ -69,7 +69,7 @@ def refuse(s: Session, run: Run) -> None:
 
     Raises:
         SubmitRefused: the campaign scores its runs after they end, the run is not running or has claimed no idea, or
-            it used its submissions.
+            it used the submissions that the campaign caps it to.
     """
     campaign = run.campaign
     cfg = campaign.config.evaluator
@@ -79,7 +79,7 @@ def refuse(s: Session, run: Run) -> None:
         raise SubmitRefused(f'run#{run.id} is {run.status}, not running')
     if run.idea_id is None:  # judged on no track, its version could move the head for no idea
         raise SubmitRefused(f'run#{run.id} has claimed no idea: `piloop idea claim` or `piloop idea propose` first')
-    if len(submitted(s, run.id)) >= cfg.submissions:
+    if cfg.submissions is not None and len(submitted(s, run.id)) >= cfg.submissions:
         raise SubmitRefused(f'run#{run.id} used its {cfg.submissions} submissions')
 
 

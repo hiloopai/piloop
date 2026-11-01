@@ -153,6 +153,13 @@ def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaig
 - `piloop submit` scores the version that your checkout is at, on the full evaluation, and waits for its verdict and score: `keep` makes it the head, `discard` does not beat the head, `crash` did not run.
 - Submit each version that beats your best so far: your run has 2 submissions. Only submitted versions are scored and kept.\
 """)
+    set_config(db, campaign, evaluator={'scoring': 'submit'})
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        text = markdown(sections('measure'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
+    assert '- Submit each version that beats your best so far. Only submitted versions are scored and kept.' in text, (
+        'no cap, and no count'
+    )
 
 
 def test_the_funnel_shows_how_far_the_attempts_got_and_where_the_others_ended(db: Database, campaign: Campaign) -> None:

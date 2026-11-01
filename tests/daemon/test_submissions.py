@@ -134,9 +134,18 @@ def test_a_submission_that_beats_the_head_becomes_it_and_one_that_beats_only_its
         assert s.get_one(Candidate, worse).parent_id == better, 'a submission builds on the last one'
 
 
+def test_a_run_submits_without_a_cap_unless_the_campaign_sets_one(
+    db: Database, campaign: Campaign, ex: RunController, tmp_path: Path
+) -> None:
+    run_id, checkout = running(db, campaign), worktree(campaign, tmp_path)
+    made = [submitted(db, campaign, run_id, commit(checkout, f'base\n{n}\n')) for n in range(5)]
+    assert len(set(made)) == 5, 'no cap by default'
+
+
 def test_a_run_submits_at_most_its_cap_and_never_a_known_tree(
     db: Database, campaign: Campaign, ex: RunController, tmp_path: Path
 ) -> None:
+    set_config(db, campaign, evaluator={**SUBMIT, 'submissions': 3}, plugins=NOISE)
     run_id, checkout = running(db, campaign), worktree(campaign, tmp_path)
     first = submitted(db, campaign, run_id, commit(checkout, 'base\na\n'))
     ex.judge_submission(first)

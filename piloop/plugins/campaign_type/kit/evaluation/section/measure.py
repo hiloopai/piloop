@@ -33,8 +33,9 @@ class Measure(Section):
             case Scoring.SUBMIT:
                 lines += [
                     SUBMIT,
-                    f'- Submit each version that beats your best so far: your run has {cfg.submissions} submissions.'
-                    ' Only submitted versions are scored and kept.',
+                    '- Submit each version that beats your best so far'
+                    + ('' if cfg.submissions is None else f': your run has {cfg.submissions} submissions')
+                    + '. Only submitted versions are scored and kept.',
                 ]
             case Scoring.RUN_END:
                 lines.append(prompted(RUN_END.read_text().strip(), VCS.selected(r.campaign.config.plugins)))

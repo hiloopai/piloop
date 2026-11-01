@@ -65,8 +65,8 @@ it against the head, and prints the verdict and the score:
 keep 2720458
 ```
 
-- A run has `[evaluator] submissions` of them, 3 by default. A commit that is not submitted is never scored: at the
-  end of the run it is `skipped`.
+- A run submits as many as it likes, unless `[evaluator] submissions` caps it. A commit that is not submitted is never
+  scored: at the end of the run it is `skipped`.
 - A submission that beats only its parent is recorded, nothing more. The `candidate.judged` event has the gain over
   the parent (`parent_delta`) and over the head (`best_delta`).
 - The implementer gets the verdict and the score, never the reason, the feedback or a per-unit result.

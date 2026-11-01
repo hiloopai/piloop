@@ -45,8 +45,8 @@ class EvaluatorConfig(BaseModel):
     scoring: Scoring = Scoring.SUBMIT
     """Which versions of a run piloop scores: ``submit``, those that the implementer submits; ``run_end``, every one,
     after the run ends."""
-    submissions: int = Field(default=3, ge=1)
-    """How many versions one run may submit (``piloop submit``)."""
+    submissions: int | None = Field(default=None, ge=1)
+    """Optional. The most versions that one run may submit (``piloop submit``). Not set: no cap."""
     noise_runs: int = Field(default=3, ge=1)
     """How many times piloop evaluates the baseline under each evaluator. The standard deviation of its score is the
     noise that a gain must exceed (``[plugins.verdict_rule]``). 1: no noise, any gain counts."""

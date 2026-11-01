@@ -118,7 +118,7 @@ Experimental: campaigns with more than one track.
 | `dev` | list\[string\] \| null | `null` | Optional. A fast command (argv) that checks a change, which an implementer runs in its own checkout as often as it likes. Each implementer's brief names it. piloop never runs it and records nothing of it. Example: `["uv", "run", "python", "evaluate.py", "--quick"]`. |
 | `sealed` | list\[string\] \| null | `null` | Optional. The command (argv) that scores a version on the sealed split, as `evaluate` does: its score is the primary. piloop runs it only on a version that would become the new head, and on the head, and keeps the version only if it beats the head there too. Keep its data and its scorer out of the repo, in the home or on the evaluator's machines, so that no implementer reads them. Example: `["python3", "/srv/sealed/score.py"]`. |
 | `scoring` | `submit` \| `run_end` | `"submit"` | Which versions of a run piloop scores: `submit`, those that the implementer submits; `run_end`, every one, after the run ends. |
-| `submissions` | integer | `3` | How many versions one run may submit (`piloop submit`). |
+| `submissions` | integer \| null | `null` | Optional. The most versions that one run may submit (`piloop submit`). Not set: no cap. |
 | `noise_runs` | integer | `3` | How many times piloop evaluates the baseline under each evaluator. The standard deviation of its score is the noise that a gain must exceed (`[plugins.verdict_rule]`). 1: no noise, any gain counts. |
 
 ## Rung
