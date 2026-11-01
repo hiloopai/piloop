@@ -80,6 +80,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
 )
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
+from piloop.plugins.campaign_type.kit.runs.section.long_jobs import LongJobs
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, working_on
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     CandidateJudged,
@@ -1003,8 +1004,10 @@ def test_brief_carries_history_and_comments(
         in brief
     ), 'the role timeout of 120s'
     assert '`piloop escalate idea#<your idea> --priority 1`' in brief, 'a request is an escalation, never a note'
-    assert '`piloop schema long_jobs`' in brief, 'how to wait for a long job is a guide away'
-    assert 'kills every process that you started' in brief, 'nothing outlives the harness'
+    assert re.search(r'`"\$PILOOP_BIN" schema <guide>` prints another guide: .*\blong_jobs\b', brief), (
+        'how to wait for a long job is a guide away'
+    )
+    assert 'kills every process that you started' in LongJobs.TEXT.read_text(), 'nothing outlives the harness'
     assert '`piloop run end submitted`' in brief and '`piloop run end gave_up' in brief, 'how its run ends'
     assert '- A hunch for another run goes in a note' in brief and 'idea seed demo' not in brief
 

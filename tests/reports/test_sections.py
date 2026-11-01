@@ -135,7 +135,11 @@ def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaig
         assert markdown(sections('measure'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s))) == snapshot("""\
 ## Measure a change
 
-- After your run ends, piloop scores each of its versions on its own, and judges it. Nothing is scored while you work: do not wait for a score.\
+- After your run ends, piloop scores each of its versions on its own, and judges it. Nothing is scored while you work:
+  do not wait for a score.
+- End the message of a commit that scores worse but opens a direction with the trailer `Piloop-Note: <why>`, and its
+  candidate is `interesting`, not a failure. Mark a commit that cannot run at all with `Piloop-Eval: skip`, never one
+  that you want to keep from a score.\
 """)
     dev = ['uv', 'run', 'evaluate.py', '--n', '50 rows']
     set_config(db, campaign, evaluator={'dev': dev, 'scoring': 'submit', 'submissions': 2})
@@ -145,9 +149,9 @@ def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaig
     assert text == snapshot("""\
 ## Measure a change
 
-- `uv run evaluate.py --n '50 rows'` checks a change fast. Run it in your checkout as often as you like: piloop never runs it or records it.
+- `uv run evaluate.py --n '50 rows'` checks a change fast, in your checkout: piloop never runs it or records it.
 - `piloop submit` scores the version that your checkout is at, on the full evaluation, and waits for its verdict and score: `keep` makes it the head, `discard` does not beat the head, `crash` did not run.
-- Your run has 2 submissions. A version that you do not submit is never scored.\
+- Submit each version that beats your best so far: your run has 2 submissions. Only submitted versions are scored and kept.\
 """)
 
 

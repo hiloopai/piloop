@@ -924,8 +924,9 @@ class RunController:
             case Scoring.RUN_END:
                 deprecated.until(
                     '0.7.0',
-                    "0.5's scoring: delete Scoring.RUN_END, _score_each and the trailers that only it reads, and a"
-                    ' revision that sets scoring = "submit" where 0078 pinned run_end',
+                    "0.5's scoring: delete Scoring.RUN_END, _score_each, the trailers that only it reads, the Measure"
+                    " section's run_end.md and the vcs part that names them (Part.MARK), and a revision that sets"
+                    ' scoring = "submit" where 0078 pinned run_end',
                 )
                 return self._score_each(run_id, campaign_id, repo, versions, log_dir)
             case never:
@@ -1600,10 +1601,9 @@ class RunController:
         lines += [
             f"- Your idea's directory in the shared workspace: `./{WORKSPACE}/idea<your idea>/` (in no version)."
             f" `piloop restore {campaign.name} <idea id>` writes back a done idea's files.",
-            '- Leave a note on your idea when you are done, piped into the SQL tool: INSERT INTO comments'
+            '- Your note on your idea, piped into the SQL tool: INSERT INTO comments'
             f" (target_kind, target_id, author, kind, body) VALUES ('idea', <your idea>, '{author}', 'note', '...')."
-            ' Then end your run: `piloop run end submitted` when your work is done, or'
-            " `piloop run end gave_up --reason '…'`. Nothing else ends it before your deadline.",
+            " A run without a result ends with `piloop run end gave_up --reason '…'`.",
             '- Ask for what you cannot do or decide yourself with an escalation, never a note:'
             ' `piloop escalate idea#<your idea> --priority 1`, its form as JSON on stdin (`--guide` shows it).',
             '- The history below is what was tried in this campaign: do not repeat it; combine or go elsewhere.',

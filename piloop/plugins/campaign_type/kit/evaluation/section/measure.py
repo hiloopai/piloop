@@ -1,15 +1,19 @@
 import shlex
+from importlib.resources import files
 from typing import assert_never
 
 from piloop.api.views import Rendered, Text
 from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
 from piloop.plugins.section.contract import Rendering, Section, Surface
+from piloop.plugins.vcs.contract import VCS, prompted
 
 SUBMIT = (
     '- `piloop submit` scores the version that your checkout is at, on the full evaluation, and waits for its verdict'
     ' and score: `keep` makes it the head, `discard` does not beat the head, `crash` did not run.'
 )
 """The line that names ``piloop submit``: on a worker elsewhere, the relay lets an agent run it."""
+RUN_END = files(__package__) / 'prompts' / 'run_end.md'
+"""0.5's scoring: every version is scored after the run, and a version can ask to be noted or skipped."""
 
 
 class Measure(Section):
@@ -23,20 +27,17 @@ class Measure(Section):
         lines = []
         if cfg.dev is not None:
             lines.append(
-                f'- `{shlex.join(cfg.dev)}` checks a change fast. Run it in your checkout as often as you like: piloop'
-                ' never runs it or records it.'
+                f'- `{shlex.join(cfg.dev)}` checks a change fast, in your checkout: piloop never runs it or records it.'
             )
         match cfg.scoring:
             case Scoring.SUBMIT:
                 lines += [
                     SUBMIT,
-                    f'- Your run has {cfg.submissions} submissions. A version that you do not submit is never scored.',
+                    f'- Submit each version that beats your best so far: your run has {cfg.submissions} submissions.'
+                    ' Only submitted versions are scored and kept.',
                 ]
             case Scoring.RUN_END:
-                lines.append(
-                    '- After your run ends, piloop scores each of its versions on its own, and judges it. Nothing is'
-                    ' scored while you work: do not wait for a score.'
-                )
+                lines.append(prompted(RUN_END.read_text().strip(), VCS.selected(r.campaign.config.plugins)))
             case never:
                 assert_never(never)
         return Rendered(title='Measure a change', blocks=(Text(text='\n'.join(lines)),))

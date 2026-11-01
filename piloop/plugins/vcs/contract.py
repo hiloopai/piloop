@@ -120,6 +120,8 @@ class Part(StrEnum):
     """The implementer's section on how to save its work, and what of it is scored."""
     VERSIONS = 'versions'
     """How saved versions become candidates."""
+    MARK = 'mark'
+    """How a version that piloop scores after the run asks to be noted as a lead, or not to be measured."""
     SKIP = 'skip'
     """How a version asks not to be measured, and what happens to unsaved work."""
     OLD_FILES = 'old_files'

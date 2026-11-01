@@ -12,7 +12,6 @@ The primary metric (`score`), its direction and the baseline. What "done" means.
 
 - The files you may edit, and the files you must not (the evaluate command, data preparation, this brief).
 - How to run the code and its tests. `uv run python evaluate.py` gives the score in about <minutes>.
-- Save a scored version early, even when you expect a loss. The evaluator is the check: build no harness of your own.
 
 ## Hard rules
 
