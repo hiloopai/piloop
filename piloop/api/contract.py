@@ -176,6 +176,9 @@ class Problem(StrEnum):
     """A retire refused a campaign whose stop is not over. The detail names its open agents: retire it again later."""
     FORBIDDEN = 'forbidden'
     """The caller may not act as the actor that it asks for (``piloop.net.acting``). The detail says why."""
+    BETWEEN_TURNS = 'between_turns'
+    """A message to a running agent whose harness reads messages only between turns (``Harness.steers_mid_turn``): its
+    turn can last its whole session, so the message would wait unread. Nothing was written."""
     BUSY = 'busy'
     """Another connection held the database's write lock for the whole busy timeout: send it again after Retry-After."""
 

@@ -115,6 +115,14 @@ def harness_of(s: Session, agent_session: AgentSession) -> Harness | None:
         return None
 
 
+def steers_mid_turn(s: Session, agent_session: AgentSession) -> bool:
+    """Whether a running agent gets its messages within its turn, as its harness says (``Harness.steers_mid_turn``).
+
+    An agent whose harness ``piloop.toml`` no longer names gets them as its runtime can.
+    """
+    return (harness := harness_of(s, agent_session)) is None or harness.steers_mid_turn
+
+
 def files_of(cfg: CampaignConfig, actor: Actor) -> Files | None:
     """Return what ``actor`` may file with ``piloop idea``, by the role in its signature (``watchdog#4``).
 

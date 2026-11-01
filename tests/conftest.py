@@ -189,6 +189,7 @@ provider = "bootstrap"
 model = "test-model"
 executable = "{script}"
 headless = ["{{prompt}}"]
+steers_mid_turn = true
 """
 
 WATCHDOG = RoleName('watchdog')

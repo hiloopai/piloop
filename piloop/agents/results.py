@@ -210,6 +210,11 @@ UNREAD = 'the agent ended before it read it'
 """The error of the ``comment.undelivered`` of a prompt that still waited in the agent's queue when it ended."""
 
 
+BETWEEN_TURNS = 'this harness reads messages only between turns'
+"""Why a running agent gets no message: its harness takes none in its turn (``Harness.steers_mid_turn``), and the turn
+of an agent can last its whole session."""
+
+
 def queue_prompt(s: Session, agent_session_id: AgentSessionId, text: str, author: str) -> CommentId | None:
     """Write ``text`` as a message to a running agent, which the daemon delivers (``Executor.prompt``). The caller commits.
 
@@ -754,6 +759,11 @@ def session_finished(s: Session, w: AgentSession) -> None:
     """Emit ``AgentSessionFinished`` for the row that just closed. The caller commits."""
     event = AgentSessionFinished(role=w.kind, reason=w.reason, state=w.state, error=w.error)
     emit(s, event, TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
+
+
+def undelivered(s: Session, agent_session_id: AgentSessionId, comment: CommentId, error: str) -> None:
+    """Record that the agent will not get ``comment``, and why, unless the comment has its outcome already."""
+    _record(s, agent_session_id, PromptOutcome(kind='comment.undelivered', comment=comment, error=error))
 
 
 def _record(s: Session, agent_session_id: AgentSessionId, outcome: PromptOutcome) -> None:

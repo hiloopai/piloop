@@ -68,7 +68,8 @@ Use these commands, not SQL. Each one validates, takes `--reason '<why, with ids
 - A `message` on the idea, or on its *running* run, is queued for that implementer at once. It gets only the first
   line (up to 200 characters) and a query for the full text, so put the instruction in the first line.
 - `comment.queued` on the implementer says that the message waits for it, and `comment.delivered` that it read it. It
-  reads only between two tool calls. `comment.undelivered` says why it never did.
+  reads only between two tool calls. `comment.undelivered` says why it never did: `this harness reads messages only
+  between turns` for an implementer whose harness, such as Codex or pi, takes no message in its turn.
 - `piloop prompt <agent-session> '<text>'` writes a message to the agent itself, which it gets in full. It says whether
   the message is queued.
 - A message on the campaign is for you, not for an implementer. To change the work of a running implementer, write a

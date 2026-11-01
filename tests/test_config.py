@@ -102,7 +102,12 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
     assert CampaignConfig.model_validate(cfg.model_dump(mode='json')) == cfg, 'round-trips through the campaign row'
     dumped = cfg.model_dump(mode='json')['plugins']
     assert dumped['role']['orchestrator'] == {}, 'a role without a table is stored by its name alone'
-    assert dumped['harness']['script'] == {'model': 'test-model', 'executable': ANY, 'headless': ['{prompt}']}
+    assert dumped['harness']['script'] == {
+        'model': 'test-model',
+        'executable': ANY,
+        'headless': ['{prompt}'],
+        'steers_mid_turn': True,
+    }
     defaults = CampaignConfig(
         name='bare',
         metrics=[Metric(name='a', direction=Direction.HIGHER, role=MetricRole.PRIMARY)],

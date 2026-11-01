@@ -610,8 +610,10 @@ agent's runtime, and the command waits up to 20 seconds to say whether it is que
 queued comment#31 for agent_session#4: it reads it at its next turn
 ```
 
-An agent reads a message only between two tool calls. `comment.delivered` on the agent records the read, and
-`comment.undelivered` an agent that ended first.
+An agent reads a message only between two tool calls, and only when its harness hands it messages within its turn
+(`steers_mid_turn`, Claude Code's hook). An agent of any other harness, Codex or pi, reads them only between turns,
+and its turn can last its whole session: the command refuses it with `this harness reads messages only between turns`.
+`comment.delivered` on the agent records the read, and `comment.undelivered` an agent that ended first.
 
 When the [runtime](/concepts/roles#runtimes) of the agent cannot take it, the command says why. The agent session ids are in
 `piloop status`.

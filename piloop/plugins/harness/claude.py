@@ -159,6 +159,7 @@ class Claude(Harness):
     """
 
     executable: str = 'claude'
+    steers_mid_turn: bool = True
     headless: list[str] = argv('--session-id')
     resume: list[str] = argv('--resume')
     home: str = '{env:CLAUDE_CONFIG_DIR:~/.claude}'

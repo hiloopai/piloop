@@ -32,6 +32,7 @@ from piloop.plugins.campaign_type.kit.runs.wire import ExtendBody
 from piloop.settings import Settings
 from tests.campaign.test_stop import add_run
 from tests.conftest import EveryClient, serving_api
+from tests.daemon.test_run_controller import set_config
 from tests.net.test_api import outcome
 
 
@@ -74,6 +75,26 @@ def test_a_prompt_waits_for_what_came_of_its_note_and_refuses_an_agent_that_does
         assert unknown.value.error == Problem.UNKNOWN_AGENT
     with db.session() as s:
         assert s.get_one(Comment, 1).author == 'orchestrator'
+
+
+def test_a_prompt_to_a_running_agent_whose_harness_reads_messages_only_between_turns_is_refused(
+    db: Database, campaign: Campaign, cfg: Settings
+) -> None:
+    set_config(db, campaign, plugins={'harness': {'script': {'steers_mid_turn': False}}})
+    with db.session() as s:
+        s.add(AgentSession(kind='research', campaign_id=campaign.id, harness='script', state=AgentSessionState.RUNNING))
+        s.commit()
+    with (
+        serving_api(cfg),
+        EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client,
+        pytest.raises(
+            Refused, match=r'^agent_session#1 runs script: this harness reads messages only between turns$'
+        ) as refused,
+    ):
+        client.prompt(AgentSessionId(1), PromptBody(text='end your run now'))
+    assert refused.value.error == Problem.BETWEEN_TURNS
+    with db.session() as s:
+        assert s.scalars(select(Comment)).all() == [], 'no message waits for a turn that may never end'
 
 
 def test_a_cancel_asks_the_daemon_to_end_an_open_run_or_a_live_agent_and_refuses_a_closed_one(

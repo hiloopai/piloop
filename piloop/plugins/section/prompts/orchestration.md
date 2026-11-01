@@ -33,8 +33,9 @@ Each command takes `--reason '<why>'`, signs the change with your actor and reco
   board for the runs that read it later. The daemon prompts the implementer with one line:
   `[piloop] message on idea#12 by human: <first line> — full text: SELECT body FROM comments WHERE id=<n>`.
 - The daemon then records `comment.queued` on the implementer, and `comment.delivered` once the implementer read it.
-  An implementer reads it only between two tool calls. When the prompt cannot reach the implementer, or the
-  implementer ends before it read it, the daemon records `comment.undelivered` with the error.
+  An implementer reads it only between two tool calls. When the prompt cannot reach the implementer (its harness
+  reads messages only between turns, as Codex and pi do), or the implementer ends before it read it, the daemon
+  records `comment.undelivered` with the error.
 - Nothing is sent twice, and a daemon restart loses nothing: those events are the record.
 - So put the instruction in the first line of the body, and the reasons below it.
 - Only messages are pushed. An escalation or a decision holds no run: a run ends when its implementer ends it, or at

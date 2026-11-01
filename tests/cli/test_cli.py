@@ -1329,11 +1329,16 @@ def test_prompt_is_a_message_to_the_agent_and_says_whether_it_arrived(
             'no answer',
         )
         s.add(AgentSession(kind='research', campaign_id=1, state=AgentSessionState.EXITED))
+        s.get_one(AgentSession, 1).harness = 'codex'
         s.commit()
     with pytest.raises(SystemExit, match='^agent_session#2 is not running$'):
         run_cli(['prompt', '2', 'x'])
     with pytest.raises(SystemExit, match='^no agent_session#3$'):
         run_cli(['prompt', '3', 'x'])
+    with pytest.raises(
+        SystemExit, match='^agent_session#1 runs codex: this harness reads messages only between turns$'
+    ):
+        run_cli(['prompt', '1', 'end your run now'])
 
 
 @pytest.mark.usefixtures('api')

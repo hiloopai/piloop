@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from piloop import proc
 from piloop.actor import Agent, System
 from piloop.agents.results import (
+    BETWEEN_TURNS,
     AgentEnded,
     AgentSessionFinished,
     CampaignResults,
@@ -2091,6 +2092,23 @@ def test_an_implementers_own_messages_are_not_echoed_back(
     assert [p.text.split(' — ')[0] for _, p in executor.prompts] == [
         '[piloop] message on idea#1 by implementer#2: a sibling implementer is not the author'
     ]
+
+
+def test_a_message_to_an_agent_whose_harness_reads_messages_only_between_turns_is_undelivered_at_once(
+    db: Database, campaign: Campaign, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """Its harness takes a message only when a turn ends, and a worker's turn can last its whole run: never queue it."""
+    set_config(db, campaign, plugins={'harness': {'script': {'steers_mid_turn': False}}})
+    idea = running_agent_session(db, campaign, 'one long turn')
+    scheduler = make_scheduler(db, PromptingRuntime(), tmp_path)
+    executor = prompted(db, scheduler, mocker)
+    sent = comment(db, 'message', 'idea', idea, 'end run#1 normally now')
+    run_all(scheduler)
+    run_all(scheduler)
+    assert executor.prompts == [] and settled(db, 'comment.queued') == []
+    assert settled(db, 'comment.undelivered') == [
+        (1, PromptOutcome(kind='comment.undelivered', comment=sent, error=BETWEEN_TURNS))
+    ], 'once, at once'
 
 
 def test_a_message_that_cannot_be_delivered_is_settled_as_undelivered_and_never_fails_the_tick(
