@@ -246,6 +246,12 @@ class Settings(BaseSettings):
     cpu_usd_per_core_hour: float = 0.1419
     """The list price of a sandbox's CPU core."""
     memory_usd_per_gib_hour: float = 0.0242
+    report_css: str = ''
+    """A stylesheet that the report's pages link. Unset: the browser's own."""
+    report_plot_js: list[str] = ['https://cdn.plot.ly/plotly-2.35.2.min.js']
+    """The scripts that the report's pages load to draw charts."""
+    report_plot_fn: str = 'Plotly.newPlot'
+    """The function that draws a chart, called as ``Plotly.newPlot`` is: element id, traces, layout."""
     poll_seconds: float = 60
     sample_attempts: int = 5
     """How many times the driver tries to read a run's spend before it gives the run up: Modal's link to a sandbox

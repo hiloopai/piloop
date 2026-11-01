@@ -93,7 +93,7 @@ def report(*, out: Path = Path('evals/site'), note: list[str] | None = None) -> 
     notes: dict[str, list[str]] = {}
     for task, _, text in (n.partition('=') for n in note or []):
         notes.setdefault(task, []).append(text)
-    for page in write(results, out, notes):
+    for page in write(results, out, settings, notes):
         Console().print(page)
 
 

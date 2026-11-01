@@ -167,7 +167,7 @@ def test_plain_result_and_report(tmp_path: Path):
     other = r.model_copy(
         update={'arm': 'plain-claude', 'curve': [Point(revision='b', hours=0, usd=0, dev=0, sealed=None)]}
     )
-    [page] = write([r, other], tmp_path / 'site')
+    [page] = write([r, other], tmp_path / 'site', Settings())
     text = page.read_text()
     assert page.name == 't2-circles.html' and 'plain-claude' in text and 'plotly' in text
     assert isinstance(Result.model_validate_json(r.model_dump_json()), Result)

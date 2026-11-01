@@ -1,25 +1,21 @@
-"""One static HTML page per task, drawn by plotly: the any-time curves of each arm with their spread, and a table.
+"""One static HTML page per task, drawn with plotly in the browser: the any-time curves of each arm with their spread, and a table.
 
 A curve is the sealed score of the head a run would hand in at each $ (or hour): a step function from the base at 0.
 A head whose sealed score failed counts as 0 there. Each arm draws its median over repeats, and the band from the
 lowest to the highest repeat.
 """
 
+import html
+import json
 import statistics
-import textwrap
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-
-from evals.model import Point, Result
+from evals.model import Point, Result, Settings
 
 COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948']
 """Categorical slots 1-8, in the palette's fixed order: an arm keeps its slot by its order in the sorted arm names."""
 STEPS = 200
-NOTE_WIDTH = 150
-"""The characters of a line of a note under a page's title."""
 Axis = Callable[[Point], float]
 Summary = Callable[[list[float]], float]
 
@@ -56,10 +52,7 @@ def auc(r: Result) -> float:
 
 
 Row = tuple[str, Callable[[Result], float | None], int, Summary]
-NOTE = (
-    'Both tasks start from easy baselines (zlib; a square grid of equal circles), so most ideas keep:'
-    ' keep counts and rates are diagnostics, not results.'
-)
+NOTE = 'Keep counts and keep rates are diagnostics: they depend on how hard the task is.'
 
 
 def plain_bar(by_arm: dict[str, list[Result]]) -> float | None:
@@ -155,77 +148,122 @@ DIAGNOSTICS: list[Row] = [
 """Each a metric of one run, shown as the median (range) over an arm's repeats."""
 
 
-def table(rows: list[Row], by_arm: dict[str, list[Result]]) -> go.Table:
-    """The rows over the arms."""
-    cells = [[name for name, *_ in rows]]
-    cells += [[fmt(map(get, rs), digits, summary) for _, get, digits, summary in rows] for rs in by_arm.values()]
-    header = ['', *(f'{arm} (n={len(rs)})' for arm, rs in by_arm.items())]
-    return go.Table(header={'values': header}, cells={'values': cells})
+Chart = tuple[str, list[dict[str, object]], dict[str, object]]
+"""A chart: its title, its traces and its layout, as ``Plotly.newPlot`` takes them. A trace's ``meta`` is its arm's
+series number, which the page turns into the arm's colour."""
+
+PAINT = """
+const css = getComputedStyle(document.documentElement);
+const FALLBACK = %s;
+function paint(data) {
+  for (const t of data) {
+    const c = css.getPropertyValue('--series-' + (t.meta + 1)).trim() || FALLBACK[t.meta %% FALLBACK.length];
+    t.line = Object.assign({}, t.line, {color: c});
+    if (t.fill) t.fillcolor = c;
+    if (t.mode === 'markers') t.marker = Object.assign({}, t.marker, {color: c});
+  }
+  return data;
+}
+for (const [id, data, layout] of CHARTS) %s(id, paint(data), layout);
+"""
+"""Draws the charts with the page's plot function, each arm in its series colour: the stylesheet's ``--series-<n>``
+when it defines them, else ``COLORS``."""
 
 
-def figure(task: str, by_arm: dict[str, list[Result]], notes: list[str]) -> go.Figure:
-    """The page of one task: the $ and hours curves against the plain bar, then the headline and the diagnostics."""
+def charts(by_arm: dict[str, list[Result]], bar: float | None) -> list[Chart]:
+    """The $ and hours curves with their bands, the heads of each repeat, and the outcome against the loop's rate."""
     runs = [r for rs in by_arm.values() for r in rs]
-    ends: list[tuple[int, Axis, float]] = [
-        (1, lambda p: p.usd, max(r.budget_usd for r in runs)),
-        (2, lambda p: p.hours, max(r.max_hours for r in runs)),
-    ]
-    bar = plain_bar(by_arm)
-    full = {'type': 'table', 'colspan': 2}
-    fig = make_subplots(
-        rows=4,
-        cols=2,
-        specs=[[{'type': 'xy'}, {'type': 'xy'}], [{'type': 'xy'}, {'type': 'xy'}], [full, None], [full, None]],
-        row_heights=[0.24, 0.2, 0.17, 0.39],
-        vertical_spacing=0.06,
-        subplot_titles=[
-            'sealed score against USD spent',
-            'sealed score against hours',
-            'sealed score over the sequence of heads, per repeat',
-            'final sealed score against experiments per hour, per repeat',
-            'headline',
-            'diagnostics',
-        ],
-    )
-    for color, (arm, rs) in zip(COLORS, by_arm.items(), strict=False):
-        for col, axis, end in ends:
+    out: list[Chart] = []
+    for title, axis, end, label in (
+        ('Sealed score against USD spent', lambda p: p.usd, max(r.budget_usd for r in runs), 'USD, list price'),
+        ('Sealed score against hours', lambda p: p.hours, max(r.max_hours for r in runs), 'hours'),
+    ):
+        data: list[dict[str, object]] = []
+        for k, (arm, rs) in enumerate(by_arm.items()):
             xs, low, median, high = band(rs, axis, end)
-            hull = dict(x=xs + xs[::-1], y=high + low[::-1], fill='toself', line_width=0, opacity=0.18)
-            fig.add_scatter(**hull, fillcolor=color, hoverinfo='skip', showlegend=False, row=1, col=col)
-            fig.add_scatter(x=xs, y=median, name=arm, legendgroup=arm, showlegend=col == 1, line_color=color,
-                            line_shape='hv', line_width=2, row=1, col=col)  # fmt: skip
-    for color, (arm, rs) in zip(COLORS, by_arm.items(), strict=False):
-        for r in rs:
-            heads = [p.sealed if p.sealed is not None else 0.0 for p in r.curve]
-            fig.add_scatter(x=list(range(len(heads))), y=heads, name=arm, legendgroup=arm, showlegend=False,
-                            line_color=color, line_width=1, line_shape='hv', row=2, col=1)  # fmt: skip
-    for color, (arm, rs) in zip(COLORS, by_arm.items(), strict=False):
-        rate = [rate_of(r) for r in rs]
-        points = [(x, r.final.sealed or 0.0) for x, r in zip(rate, rs, strict=True) if x is not None]
-        if points:
-            xs, ys = zip(*points, strict=True)
-            fig.add_scatter(x=list(xs), y=list(ys), mode='markers', name=arm, legendgroup=arm, showlegend=False,
-                            marker={'color': color, 'size': 10}, row=2, col=2)  # fmt: skip
-    if bar is not None:
-        for col in (1, 2):
-            fig.add_hline(y=bar, line_dash='dash', line_width=1, annotation_text='plain bar', row=1, col=col)
-    fig.add_trace(table(headline(bar), by_arm), row=3, col=1)
-    fig.add_trace(table(DIAGNOSTICS, by_arm), row=4, col=1)
-    fig.update_xaxes(title_text='head number (0 = the starting repo)', row=2, col=1)
-    fig.update_xaxes(title_text='dev evaluations plus submissions per hour', row=2, col=2)
-    fig.update_yaxes(title_text='sealed score (0 = start, 1 = reference)', row=1, col=1)
-    fig.update_xaxes(title_text='USD, list price', row=1, col=1)
-    fig.update_xaxes(title_text='hours', row=1, col=2)
-    wrapped = [part for line in [NOTE, *notes] for part in textwrap.wrap(line, NOTE_WIDTH)]
-    lines = ''.join(f'<br><sup>{line}</sup>' for line in wrapped)
-    title = f'{task}: median over repeats, band from lowest to highest{lines}'
-    top = 80 + 26 * len(wrapped)
-    fig.update_layout(title=title, height=2500 + top, margin={'t': top + 40}, hovermode='x')
-    return fig
+            data.append({'x': xs + xs[::-1], 'y': high + low[::-1], 'fill': 'toself', 'opacity': 0.18, 'meta': k,
+                         'line': {'width': 0}, 'hoverinfo': 'skip', 'showlegend': False, 'legendgroup': arm})  # fmt: skip
+            data.append({'x': xs, 'y': median, 'name': arm, 'meta': k, 'legendgroup': arm,
+                         'line': {'shape': 'hv', 'width': 2}})  # fmt: skip
+        shapes = [] if bar is None else [{'type': 'line', 'xref': 'paper', 'x0': 0, 'x1': 1, 'y0': bar, 'y1': bar,
+                                          'line': {'dash': 'dash', 'width': 1}}]  # fmt: skip
+        layout: dict[str, object] = {
+            'xaxis': {'title': {'text': label}},
+            'yaxis': {'title': {'text': 'sealed score'}},
+            'shapes': shapes,
+        }
+        out.append((title, data, layout))
+    heads: list[dict[str, object]] = [
+        {'x': list(range(len(r.curve))), 'y': [p.sealed if p.sealed is not None else 0.0 for p in r.curve],
+         'name': arm, 'meta': k, 'legendgroup': arm, 'showlegend': i == 0, 'line': {'shape': 'hv', 'width': 1}}
+        for k, (arm, rs) in enumerate(by_arm.items()) for i, r in enumerate(rs)
+    ]  # fmt: skip
+    head_axis: dict[str, object] = {'xaxis': {'title': {'text': 'head (0 = start)'}}}
+    out.append(("Sealed score over each repeat's heads", heads, head_axis))
+    points: list[dict[str, object]] = []
+    for k, (arm, rs) in enumerate(by_arm.items()):
+        pairs = [(x, r.final.sealed or 0.0) for r in rs if (x := rate_of(r)) is not None]
+        if pairs:
+            points.append({'x': [x for x, _ in pairs], 'y': [y for _, y in pairs], 'mode': 'markers', 'name': arm,
+                           'meta': k, 'marker': {'size': 10}})  # fmt: skip
+    rate_axis: dict[str, object] = {'xaxis': {'title': {'text': 'dev evaluations plus submissions per hour'}}}
+    out.append(('Final sealed score against experiments per hour', points, rate_axis))
+    return out
 
 
-def write(results: list[Result], out: Path, notes: dict[str, list[str]] | None = None) -> list[Path]:
-    """Write ``<out>/<task>.html`` for each task, with the ``notes`` of each task under its title. The pages."""
+def table(rows: list[Row], by_arm: dict[str, list[Result]]) -> str:
+    """The rows over the arms, as an HTML table."""
+    head = ''.join(f'<th>{html.escape(arm)} (n={len(rs)})</th>' for arm, rs in by_arm.items())
+    body = ''.join(
+        f'<tr><td>{html.escape(name)}</td>'
+        + ''.join(f'<td class="num">{fmt(map(get, rs), digits, summary)}</td>' for rs in by_arm.values())
+        + '</tr>'
+        for name, get, digits, summary in rows
+    )
+    return f'<table><thead><tr><th></th>{head}</tr></thead><tbody>{body}</tbody></table>'
+
+
+def stats(by_arm: dict[str, list[Result]], bar: float | None) -> str:
+    """One stat per arm: the median sealed score of its final heads, and its $ to the plain bar."""
+    cards = []
+    for arm, rs in by_arm.items():
+        value = fmt((r.final.sealed for r in rs), 3).split(' ')[0]
+        hits = [h for r in rs if bar is not None and (h := reached(r, bar)) is not None]
+        delta = f'${statistics.median(h.usd for h in hits):.2f} to the plain bar' if hits else 'never at the plain bar'
+        cards.append(
+            f'<div class="stat"><div class="label">{html.escape(arm)}</div><div class="value">{value}</div>'
+            f'<div class="delta">{len(hits)}/{len(rs)} reached; {delta}</div></div>'
+        )
+    return f'<div class="grid">{"".join(cards)}</div>'
+
+
+def page(task: str, by_arm: dict[str, list[Result]], notes: list[str], settings: Settings) -> str:
+    """The page of one task."""
+    bar = plain_bar(by_arm)
+    drawn = charts(by_arm, bar)
+    divs = ''.join(
+        f'<div class="card"><h3>{html.escape(t)}</h3><div id="c{i}"></div></div>' for i, (t, _, _) in enumerate(drawn)
+    )
+    data = json.dumps([[f'c{i}', d, layout] for i, (_, d, layout) in enumerate(drawn)])
+    scripts = ''.join(f'<script src="{html.escape(src)}"></script>' for src in settings.report_plot_js)
+    css = f'<link rel="stylesheet" href="{html.escape(settings.report_css)}">' if settings.report_css else ''
+    callouts = ''.join(f'<div class="callout">{html.escape(n)}</div>' for n in [NOTE, *notes])
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(task)}</title>{css}{scripts}</head>
+<body class="wide"><h1>{html.escape(task)}</h1>
+<p class="muted">The sealed score of the version each run would hand in: 0 is the starting repo, 1 the reference.
+Lines are the median over repeats, bands the lowest to highest repeat; spend is list price, models plus compute.</p>
+{callouts}<h2>Headline</h2>{stats(by_arm, bar)}{table(headline(bar), by_arm)}{divs}
+<h2>Diagnostics</h2>{table(DIAGNOSTICS, by_arm)}
+<script>const CHARTS = {data};{PAINT % (json.dumps(COLORS), settings.report_plot_fn)}</script></body></html>
+"""
+
+
+def write(
+    results: list[Result], out: Path, settings: Settings, notes: dict[str, list[str]] | None = None
+) -> list[Path]:
+    """Write ``<out>/<task>.html`` for each task, with the ``notes`` of each task, and an ``index.html``. The pages."""
     out.mkdir(parents=True, exist_ok=True)
     pages = []
     for task in sorted({r.task for r in results}):
@@ -234,6 +272,12 @@ def write(results: list[Result], out: Path, notes: dict[str, list[str]] | None =
             raise ValueError(f'{task} has {len(arms)} arms: a page draws at most {len(COLORS)}; split them')
         by_arm = {arm: [r for r in results if r.task == task and r.arm == arm] for arm in arms}
         path = out / f'{task}.html'
-        figure(task, by_arm, (notes or {}).get(task, [])).write_html(path, include_plotlyjs='cdn')
+        path.write_text(page(task, by_arm, (notes or {}).get(task, []), settings))
         pages.append(path)
+    css = f'<link rel="stylesheet" href="{html.escape(settings.report_css)}">' if settings.report_css else ''
+    links = ''.join(f'<li><a href="{p.name}">{html.escape(p.stem)}</a></li>' for p in pages)
+    (out / 'index.html').write_text(
+        f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>evals</title>{css}</head>'
+        f'<body><h1>Eval results</h1><ul>{links}</ul></body></html>\n'
+    )
     return pages
