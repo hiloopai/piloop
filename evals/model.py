@@ -197,6 +197,15 @@ class Loop(Frozen):
     """The share of the session's tokens in the responses that asked for them."""
 
 
+class SelfTest(Frozen):
+    """The task's dev evaluator on the starting repo, run in the run's sandbox before the agents start."""
+
+    cpu: str
+    """The vendor, family and model of the sandbox's CPU, such as ``AuthenticAMD 25/17``."""
+    values: list[float]
+    """The dev metric of each run."""
+
+
 class Result(Frozen):
     """One run of an arm on a task: ``results/<task>/<arm>-<repeat>.json``."""
 
@@ -228,10 +237,15 @@ class Result(Frozen):
     """Messages that a worker's harness could not take mid-turn: refused, never queued."""
     loop: Loop | None = None
     """The run's feedback loop. None: a result written before it was measured."""
-    built_on: dict[str, int] = {}
-    """Keeps that contain the head of another run that they took over, by ``head role>keep role`` (``evals.team``)."""
-    replaced: dict[str, int] = {}
-    """Keeps that took over another run's head without containing it, by ``head role>keep role``."""
+    selftest: SelfTest | None = None
+    """How much the dev evaluator varies on the run's machine. None: a run from before the self-test."""
+    keeps: dict[str, int] = {}
+    """The keeps of each role that does runs (``evals.team``)."""
+    keeps_in_final: dict[str, int] = {}
+    """The keeps of each role that the final head contains: the gains that stacked."""
+    races: int | None = None
+    """Submissions that beat the version they started from, but not the head that another run's keep had moved on to
+    by the time they were judged. None: a plain run."""
     notes_written: dict[str, int] = {}
     """The notes that the workers of each role wrote."""
     notes_read: dict[str, int] = {}
@@ -285,12 +299,13 @@ class Settings(BaseSettings):
     drops now and then."""
     """How often the driver reads a run's spend."""
     stop_grace_minutes: float = 15
+    selftest_runs: int = 5
+    """How many times a run evaluates its starting repo before the agents start (``SelfTest``)."""
     """How long a stopped campaign gets to score what its agents committed."""
     score_timeout_minutes: float = 30
     score_cpu: float = 2
     """The CPU cores of each scoring sandbox: the dev and sealed evaluators run one after the other."""
     score_memory_mb: int = 4096
-    codex_thread_seconds: float = 120
     codex_reasoning_summary: str = 'detailed'
     """How much of its reasoning each Codex agent summarises into its session file (``model_reasoning_summary``)."""
     evaluation_nice: int = 10

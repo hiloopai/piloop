@@ -89,6 +89,8 @@ def headline(bar: float | None, marks: Iterable[float] = ()) -> list[Row]:
         ('mean sealed score over $0–budget', auc, 3, statistics.median),
         ('dev − sealed gap, final head', lambda r: r.gap, 3, statistics.median),
         ('$ spent', lambda r: r.spend[-1].usd if r.spend else None, 2, statistics.median),
+        ('model $', lambda r: r.spend[-1].models_usd if r.spend else None, 2, statistics.median),
+        ('compute $', lambda r: r.spend[-1].compute_usd if r.spend else None, 2, statistics.median),
         ('hours run', lambda r: r.spend[-1].hours if r.spend else None, 2, statistics.median),
     ]
     if bar is None:
@@ -104,6 +106,12 @@ def headline(bar: float | None, marks: Iterable[float] = ()) -> list[Row]:
         ('$ to the plain bar', lambda r: p.usd if (p := reached(r, bar)) else None, 2, statistics.median),
         ('hours to the plain bar', lambda r: p.hours if (p := reached(r, bar)) else None, 2, statistics.median),
     ]
+
+
+def spread(values: list[float]) -> float | None:
+    """The standard deviation of ``values`` over their mean. None: fewer than two, or a mean of 0."""
+    mean = statistics.fmean(values) if values else 0.0
+    return statistics.stdev(values) / abs(mean) if len(values) > 1 and mean else None
 
 
 def rate(r: Result) -> float | None:
@@ -144,6 +152,18 @@ DIAGNOSTICS: list[Row] = [
     ('human interventions', lambda r: r.interventions, 0, statistics.median),
     ('lead token share', lambda r: r.lead_token_share, 3, statistics.median),
     ('daemon restarts', lambda r: r.restarts, 0, statistics.median),
+    (
+        "self-test: the base's dev metric, mean",
+        lambda r: statistics.fmean(r.selftest.values) if r.selftest else None,
+        4,
+        statistics.median,
+    ),
+    (
+        'self-test: its spread (sd / mean)',
+        lambda r: spread(r.selftest.values) if r.selftest else None,
+        4,
+        statistics.median,
+    ),
     (
         'protocol calls (claim, submit, run end, notes)',
         lambda r: r.loop.protocol_calls if r.loop else None,
@@ -190,24 +210,38 @@ def count_of(key: str, counts: Callable[[Result], dict[str, int]]) -> Callable[[
     return lambda r: None if r.piloop is None else counts(r).get(key, 0)
 
 
+def share_in_final(r: Result) -> float | None:
+    """The share of a piloop run's keeps that its final head contains. None: a plain run, or no keeps."""
+    kept = sum(r.keeps.values())
+    return None if r.piloop is None or not kept else sum(r.keeps_in_final.values()) / kept
+
+
+def race_rate(r: Result) -> float | None:
+    """The share of a piloop run's submissions lost to a race."""
+    return None if r.races is None or not r.funnel.submissions else r.races / r.funnel.submissions
+
+
 def team(by_arm: dict[str, list[Result]]) -> list[Row]:
-    """How the workers built on each other: in total, then for each pair of different roles that shows up."""
+    """How the workers built on each other: in total, then for each role, and each pair of roles, that shows up."""
     rows: list[Row] = [
-        ("keeps that built on another run's head", total(lambda r: r.built_on), 0, statistics.median),
-        ("keeps that replaced another run's head", total(lambda r: r.replaced), 0, statistics.median),
+        ('keeps in the final head', total(lambda r: r.keeps_in_final), 0, statistics.median),
+        ('share of keeps in the final head', share_in_final, 2, statistics.median),
+        ('race rate (beat its start, not the moved head)', race_rate, 2, statistics.median),
         ('notes written', total(lambda r: r.notes_written), 0, statistics.median),
         ('notes read by a worker of another run', total(lambda r: r.notes_read), 0, statistics.median),
     ]
     runs = [r for rs in by_arm.values() for r in rs]
-    for label, counts in (
-        ('keeps by {b} built on a head by {a}', lambda r: r.built_on),
-        ('keeps by {b} that replaced a head by {a}', lambda r: r.replaced),
-        ('notes by {a} read by {b}', lambda r: r.notes_read),
-    ):
-        for key in sorted({k for r in runs for k in counts(r)}):
-            a, _, b = key.partition('>')
-            if a != b:
-                rows.append((label.format(a=a, b=b), count_of(key, counts), 0, statistics.median))
+    roles = sorted({k for r in runs for k in r.keeps})
+    if len(roles) > 1:
+        for role in roles:
+            rows.append((f'keeps by {role}', count_of(role, lambda r: r.keeps), 0, statistics.median))
+            rows.append(
+                (f'keeps by {role} in the final head', count_of(role, lambda r: r.keeps_in_final), 0, statistics.median)
+            )
+    for key in sorted({k for r in runs for k in r.notes_read}):
+        a, _, b = key.partition('>')
+        if a != b:
+            rows.append((f'notes by {a} read by {b}', count_of(key, lambda r: r.notes_read), 0, statistics.median))
     return rows
 
 

@@ -17,6 +17,10 @@ WORK = '/work'
 PATH = '/root/.local/bin:/usr/local/bin:/usr/bin:/bin'
 PILOOP_HOME = '/root/.piloop-evals'
 """A fresh home in the sandbox, so a piloop there never meets the default one."""
+WRAP = f'{OPT}/wrap'
+"""Where ``wrap/sitecustomize.py`` goes, on ``PYTHONPATH``: it logs each run of a task's evaluator."""
+EVALUATIONS = 'evaluations.jsonl'
+"""The log of ``wrap/sitecustomize.py`` in a run's export: each run of the task's evaluator."""
 
 
 def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
@@ -32,7 +36,15 @@ def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
             'git config --global init.defaultBranch main',
         )
         .pip_install(*DEPS)
-        .env({'PATH': PATH, 'IS_SANDBOX': '1', 'UV_PYTHON': PYTHON, 'UV_PYTHON_PREFERENCE': 'only-managed'})
+        .env(
+            {
+                'PATH': PATH,
+                'IS_SANDBOX': '1',
+                'UV_PYTHON': PYTHON,
+                'UV_PYTHON_PREFERENCE': 'only-managed',
+                'PYTHONPATH': WRAP,
+            }
+        )
         .run_commands(f'uv python install {PYTHON}')
     )
     for task in tasks:
@@ -49,6 +61,7 @@ def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
     img = img.add_local_dir(TASKS, f'{OPT}/tasks')
     img = img.add_local_file(ROOT / 'campaign_sealed.py', f'{OPT}/campaign_sealed.py')
     img = img.add_local_file(ROOT / 'gpu-lock', f'{OPT}/gpu-lock')
+    img = img.add_local_dir(ROOT / 'wrap', WRAP)
     return img.add_local_file(ROOT / 'meter.py', f'{OPT}/meter.py').add_local_file(
         ROOT / 'scorer.py', f'{OPT}/scorer.py'
     )

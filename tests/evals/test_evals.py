@@ -4,6 +4,7 @@ import random
 import shutil
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 from collections import Counter
@@ -15,7 +16,8 @@ import pytest
 from pydantic import JsonValue, SecretStr
 
 from evals import meter
-from evals.drive import HALT, piloop_config, price
+from evals.drive import HALT, Plain, piloop_config, price
+from evals.loop import evaluations
 from evals.metrics import at, result
 from evals.model import (
     ARMS,
@@ -36,7 +38,7 @@ from evals.model import (
 from evals.pilot import guard, spent
 from evals.report import plain_bar, write
 from evals.score import Score, Scoring
-from evals.team import notes, stacking
+from evals.team import final_keeps, notes, races
 from evals.telemetry import exported
 
 
@@ -260,7 +262,7 @@ def test_charters_are_each_roles_addendum_on_their_task():
         piloop_config(Task.load('t2-circles'), arm, Settings(), 4)
 
 
-def test_team_counts_keeps_over_another_runs_head_and_notes_read_across(tmp_path: Path):
+def test_team_counts_keeps_in_the_final_head_races_and_notes_read_across(tmp_path: Path):
     repo = tmp_path / 'repo'
     repo.mkdir()
     git(repo, 'init', '-q', '-b', 'main')
@@ -282,7 +284,7 @@ def test_team_counts_keeps_over_another_runs_head_and_notes_read_across(tmp_path
         """
         create table runs (id integer, role text);
         create table candidates (id integer, revision text, run_id integer, verdict text, updated_at text);
-        create table events (target_kind text, target_id integer, kind text, at text);
+        create table events (target_kind text, target_id integer, kind text, at text, payload text);
         create table agent_sessions (id integer, kind text, subject_kind text, subject_id integer, session_id text);
         create table comments (author text, body text, kind text);
         insert into runs values (1, 'implementer'), (2, 'implementer_b'), (3, 'implementer');
@@ -293,7 +295,12 @@ def test_team_counts_keeps_over_another_runs_head_and_notes_read_across(tmp_path
     )
     for i, (rev, run) in enumerate(zip(revs, (None, 1, 2, 3), strict=True)):
         db.execute("insert into candidates values (?, ?, ?, 'keep', ?)", (i, rev, run, f'2026-01-01 00:0{i}'))
-    assert stacking(db, bundle) == ({'implementer>implementer_b': 1}, {'implementer_b>implementer': 1})
+    assert final_keeps(db, bundle) == ({'implementer': 2, 'implementer_b': 1}, {'implementer': 1, 'implementer_b': 0})
+    for i, (verdict, parent, best) in enumerate((('discard', 5, -1), ('discard', -2, -3), ('keep', 4, 4)), start=10):
+        db.execute("insert into candidates values (?, 'x', 1, ?, '2026-01-02')", (i, verdict))
+        judged = json.dumps({'parent_delta': parent, 'best_delta': best})
+        db.execute("insert into events values ('candidate', ?, 'candidate.judged', '2026-01-02', ?)", (i, judged))
+    assert races(db) == 1
     sessions = tmp_path / 'export' / '.claude' / 'projects' / 'p'
     sessions.mkdir(parents=True)
     read = {
@@ -335,3 +342,22 @@ def test_t5_holdout_fails_a_round_trip_over_its_cpu_rule(tmp_path: Path):
     assert sealed.main(tmp_path, tmp_path, tmp_path)['status'] == 'over_limit'
     (tmp_path / 'holdout.bin').write_text('119')
     assert sealed.main(tmp_path, tmp_path, tmp_path)['score'] == pytest.approx(0.5)
+
+
+def test_the_wrapper_logs_each_evaluation_and_who_ran_it(tmp_path: Path):
+    log = tmp_path / 'evaluations.jsonl'
+    (tmp_path / 'evaluate.py').write_text('print(1)\n')
+    env = {'PATH': '/usr/bin:/bin', 'PYTHONPATH': str(ROOT / 'wrap'), 'EVALS_EVAL_LOG': str(log)}
+    for extra, args in (({}, []), ({'PILOOP_RESULT_FILE': 'r'}, []), ({}, ['--serve', 'x'])):
+        subprocess.run([sys.executable, 'evaluate.py', *args], cwd=tmp_path, env=env | extra, check=True)
+    lines = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [(line['argv'], line['piloop']) for line in lines] == [([], False), ([], True)]
+    assert len(evaluations(log)) == 1
+
+
+def test_the_plain_arm_resumes_its_session_in_the_sandbox_without_waiting():
+    arm = load_arm('plain-claude')
+    assert isinstance(arm, PlainArm)
+    plain = Plain(Task.load('t5-lpaq'), arm, Settings(), 4)
+    script = plain.script('go')
+    assert '--session-id $session' in script and 'while true' in script and '--resume $session' in script

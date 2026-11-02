@@ -13,9 +13,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from evals.loop import loop
-from evals.model import Funnel, Point, Result, Sample
+from evals.model import Funnel, Point, Result, Sample, SelfTest
 from evals.score import Score
-from evals.team import notes, stacking
+from evals.team import final_keeps, notes, races
 
 LEADS = ('orchestrator', 'lead')
 """The roles whose tokens are the lead's share."""
@@ -129,13 +129,14 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         funnel = Funnel(ideas=None, runs=sessions, submissions=commits, kept=len(heads))
         sent = delivered = refused = None
         escalations, people, lead = 0, 0, None
-        built, replaced, written, read = {}, {}, {}, {}
+        kept, held, written, read, raced = {}, {}, {}, {}, None
     else:
         with sqlite3.connect(export / 'piloop.db') as db:
             heads = piloop_heads(db, base, started)
             funnel, escalations, people, lead = piloop_counts(db, base)
             sent, delivered, refused = messages(db)
-            built, replaced = stacking(db, export / 'repo.bundle')
+            kept, held = final_keeps(db, export / 'repo.bundle')
+            raced = races(db)
             written, read = notes(db, run / 'export')
         made = None
     curve = []
@@ -164,8 +165,10 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         messages_sent=sent,
         messages_delivered=delivered,
         messages_refused=refused,
-        built_on=built,
-        replaced=replaced,
+        selftest=SelfTest.model_validate_json(test.read_text()) if (test := run / 'selftest.json').exists() else None,
+        keeps=kept,
+        keeps_in_final=held,
+        races=raced,
         notes_written=written,
         notes_read=read,
         loop=loop(run / 'export', made, spend[-1].hours if spend else 0.0, spend[-1].usd if spend else 0.0),

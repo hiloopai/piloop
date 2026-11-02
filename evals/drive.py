@@ -10,7 +10,6 @@ import json
 import shlex
 import tarfile
 import time
-import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from io import BytesIO
@@ -22,8 +21,8 @@ import tomli_w
 from opentelemetry import trace
 from pydantic import JsonValue
 
-from evals.model import PiloopArm, PlainArm, Sample, Settings, Task
-from evals.sandbox import OPT, PILOOP_HOME, WORK, Box, image
+from evals.model import PiloopArm, PlainArm, Sample, SelfTest, Settings, Task
+from evals.sandbox import EVALUATIONS, OPT, PILOOP_HOME, WORK, Box, image
 from evals.score import sealed_data
 from evals.telemetry import exported, tracer
 from piloop.plugins.harness.codex import toml
@@ -214,18 +213,19 @@ class Piloop:
 
 @dataclass
 class Plain:
-    """One agent session, resumed with ``CONTINUE_PROMPT`` each time it ends before the run does."""
+    """One agent session, resumed with ``CONTINUE_PROMPT`` each time it ends before the run does.
+
+    The resumes run in a loop inside the sandbox, so a session that ends is resumed at once, not at the next sample.
+    """
 
     task: Task
     arm: PlainArm
     settings: Settings
     hours: float
-    session: str = ''
-    sessions: int = 0
     proc: modal.container_process.ContainerProcess[str] | None = field(default=None, repr=False)
 
-    def argv(self, prompt: str) -> list[str]:
-        """The headless argv of the first session, or of a resume of it."""
+    def command(self, prompt: str, session: str | None) -> str:
+        """The shell command of the first session (``session`` None), or of a resume of ``session``, a shell word."""
         agent = self.arm.agent
         match agent.harness:
             case 'codex':
@@ -233,52 +233,48 @@ class Plain:
                 flags += ['--model', agent.model, '-c', f'model_reasoning_effort="{self.arm.effort}"']
                 for key, value in codex_gateway(self.settings).items():
                     flags += ['-c', f'{key}={toml(value)}']
-                head = ['codex', 'exec', 'resume', *flags, self.session] if self.sessions else ['codex', 'exec', *flags]
-                return [*head, prompt]
-            case 'claude':
-                session = ['--resume', self.session] if self.sessions else ['--session-id', self.session]
-                flags = ['--model', agent.model, '--effort', self.arm.effort, '--dangerously-skip-permissions']
-                return ['claude', '-p', '--output-format', 'stream-json', '--verbose', *session, *flags, prompt]
-
-    def launch(self, box: Box, prompt: str) -> None:
-        match self.arm.agent.harness:
+                head = shlex.join(['codex', 'exec', *(['resume'] if session else []), *flags])
+                return f'{head} {session or ""} {shlex.quote(prompt)}'
             case 'claude':
                 env = f'ANTHROPIC_BASE_URL={shlex.quote(self.settings.gateway)} ANTHROPIC_AUTH_TOKEN="$GATEWAY_TOKEN"'
-            case 'codex':
-                env = ''  # its gateway is in its flags
-        log = f'{OUT}/session-{self.sessions + 1}.jsonl'
-        self.proc = box.start(f'cd {REPO} && {env} {shlex.join(self.argv(prompt))} < /dev/null > {log} 2>&1')
-        if self.arm.agent.harness == 'codex' and not self.sessions:
-            self.session = self.thread(box, log)
-        self.sessions += 1
+                flags = ['--model', agent.model, '--effort', self.arm.effort, '--dangerously-skip-permissions']
+                head = shlex.join(['claude', '-p', '--output-format', 'stream-json', '--verbose', *flags])
+                return f'{env} {head} {"--resume " + session if session else "--session-id $session"} {shlex.quote(prompt)}'
 
-    def thread(self, box: Box, log: str) -> str:
-        """Codex's thread id, from the line of its output that names it."""
-        deadline = time.monotonic() + self.settings.codex_thread_seconds
-        while time.monotonic() < deadline:
-            first = box.run(f'grep -m 1 thread_id {log} 2>/dev/null || true')
-            if first:
-                return json.loads(first)['thread_id']
-            time.sleep(1)
-        raise RuntimeError(f'codex printed no thread id: {box.run(f"tail -c 2000 {log}")}')
+    def script(self, prompt: str) -> str:
+        """The first session, then a resume of it each time it ends, until the driver stops the sandbox.
+
+        A resume that fails at once is retried after a second, so that a broken session does not spin.
+        """
+        first = f'{OUT}/session-1.jsonl'
+        match self.arm.agent.harness:
+            case 'codex':
+                name = f'session=$(grep -m 1 -o \'"thread_id": *"[^"]*\' {first} | cut -d \'"\' -f 4)'
+            case 'claude':
+                name = 'true'
+        return (
+            f'cd {REPO} && session=$(cat /proc/sys/kernel/random/uuid)'
+            f' && {self.command(prompt, None)} < /dev/null > {first} 2>&1; {name};'
+            ' [ -n "$session" ] || { echo "the first session named no session id" >&2; exit 1; };'
+            ' n=1; while true; do n=$((n + 1));'
+            f' {self.command(CONTINUE_PROMPT, "$session")} < /dev/null > {OUT}/session-$n.jsonl 2>&1; sleep 1; done'
+        )
 
     def start(self, box: Box) -> None:
-        self.session = str(uuid.uuid4())
         prompt = PLAIN_PROMPT.format(dev=shlex.join(self.task.dev), hours=self.hours)
-        self.launch(box, f'{prompt}\n\n{self.arm.instruction}' if self.arm.instruction else prompt)
+        self.proc = box.start(self.script(f'{prompt}\n\n{self.arm.instruction}' if self.arm.instruction else prompt))
 
     def ended(self, box: Box) -> str | None:
-        """Never on its own: a session that ended is resumed."""
+        """Only when the loop of sessions failed: a session that ends is resumed inside it."""
         if self.proc is not None and self.proc.poll() is not None:
-            with tracer.start_as_current_span('evals.resume', attributes={'session': self.sessions + 1}):
-                self.launch(box, CONTINUE_PROMPT)
+            return f'the sessions ended: {self.proc.stderr.read()[-500:]}'
         return None
 
     def stop(self, box: Box, reason: str) -> None:
-        box.run('pkill -f "[c]odex exec|[c]laude -p" || true')
+        box.run('pkill -f "[w]hile true; do n=" || true; pkill -f "[c]odex exec|[c]laude -p" || true')
 
     def export(self, box: Box) -> None:
-        box.run(f'echo {self.sessions} > {OUT}/sessions')
+        box.run(f'ls {OUT}/session-*.jsonl | wc -l > {OUT}/sessions')
 
 
 def prepare(box: Box, task: Task) -> str:
@@ -292,6 +288,24 @@ def prepare(box: Box, task: Task) -> str:
         ' && if [ -f pyproject.toml ]; then uv sync -q; fi && git rev-parse HEAD',
         timeout=900,
     ).strip()
+
+
+def selftest(box: Box, task: Task, settings: Settings) -> SelfTest:
+    """Evaluate the starting repo ``selftest_runs`` times with the task's dev command, and read the CPU.
+
+    It runs before the agents start, and outside the evaluations log. A base that fails raises: no run starts on a
+    broken evaluator.
+    """
+    cpu = box.run(f'python3 -c "import sys; sys.path.insert(0, {OPT!r}); import scorer; print(scorer.cpu())"').strip()
+    timeout = task.piloop.get('evaluate_timeout')
+    values = []
+    for _ in range(settings.selftest_runs):
+        out = box.run(
+            f'cd {REPO} && env -u EVALS_EVAL_LOG {shlex.join(task.dev)}',
+            timeout=float(timeout) if isinstance(timeout, int | float) else None,
+        )
+        values.append(float(json.loads(out.strip().splitlines()[-1])['metrics'][task.metric]))
+    return SelfTest(cpu=cpu, values=values)
 
 
 def sample(box: Box, arm: PiloopArm | PlainArm, settings: Settings, hours: float) -> Sample:
@@ -317,6 +331,7 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
         case PlainArm():
             run = Plain(task, arm, settings, hours)
             env = dict(arm.env)
+    env['EVALS_EVAL_LOG'] = f'{OUT}/{EVALUATIONS}'
     r = arm.resources
     with tracer.start_as_current_span('evals.run', attributes={'evals.run': name, 'budget_usd': budget}) as span:
         with tracer.start_as_current_span('evals.sandbox'):
@@ -339,6 +354,8 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
         try:
             with tracer.start_as_current_span('evals.prepare'):
                 base = prepare(box, task)
+            with tracer.start_as_current_span('evals.selftest'):
+                (out / 'selftest.json').write_text(selftest(box, task, settings).model_dump_json())
             with tracer.start_as_current_span('evals.start'):
                 run.start(box)
             started_at, started = datetime.now(UTC), time.monotonic()

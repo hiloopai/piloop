@@ -39,8 +39,13 @@ the CPU type of its sandboxes, the agents' and the scorers'.
 
 `result.json` holds, per run: the sealed and dev score of each head against $ and hours, $ and hours to the first
 keep, the funnel (ideas, runs, submissions, kept), escalations, comments by people, the lead's share of the tokens,
-and the gap between the dev and sealed score of the final head. The report draws each arm's median curve over
-repeats with the band from its lowest to its highest repeat, with plotly, as static pages.
+and the gap between the dev and sealed score of the final head. Spend is split into models and compute. Before the agents
+start, the driver evaluates the starting repo 5 times with the dev command and records the CPU (`selftest`): how much
+the evaluator varies on that machine. Dev evaluations are counted where they run: `wrap/sitecustomize.py`, on the
+sandbox's `PYTHONPATH`, logs each run of `evaluate.py`, however it was started. A piloop arm also records each role's
+keeps, those of them that the final head contains, and its races: submissions that beat the version they started
+from but not the head that another run had moved on to. The report draws each arm's median curve over repeats with
+the band from its lowest to its highest repeat, with plotly, as static pages.
 
 ## Telemetry
 

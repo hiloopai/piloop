@@ -1,71 +1,27 @@
 """The feedback loop of a run: how long its dev evaluations take, how often it experiments, and what each costs.
 
-Dev evaluations come from the agents' Codex session files: a shell command that runs the task's evaluator, from the
-model's call to the output that reports its exit. A command still running when its call returns is followed through
-the later polls of its process. Submissions come from piloop's database: when each was submitted, measured on the
-visible split, measured on the sealed split, and judged. A plain session's submissions are its commits on ``main``.
+Dev evaluations come from the log that ``wrap/sitecustomize.py`` writes in the run's sandbox: each run of the task's
+evaluator that piloop did not start, by hand or from an agent's own script. Submissions come from piloop's database:
+when each was submitted, measured on the visible split, measured on the sealed split, and judged. A plain session's
+submissions are its commits on ``main``.
 """
 
 import json
 import re
 import sqlite3
 import statistics
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from evals.model import Loop
-
-DEV = re.compile(r'python3?\s+(-u\s+)?evaluate\.py|from evaluate import|gpu-lock[^"\n]*evaluate')
-READ = re.compile(r'^\s*(cat|sed|head|tail|less|rg|grep|wc|git (show|diff|log))\b')
-SESSION = re.compile(r'"session_id"\s*:\s*(\d+)')
-POLL = re.compile(r'session_id\s*:\s*(\d+)')
-EXITED = re.compile(r'"exit_code"\s*:')
+from evals.sandbox import EVALUATIONS
 
 
 def when(stamp: str) -> datetime:
     """A UTC time from a session file or SQLite."""
     t = datetime.fromisoformat(stamp.replace('Z', '+00:00'))
     return t if t.tzinfo else t.replace(tzinfo=UTC)
-
-
-def commands(text: str) -> Iterator[str]:
-    """The shell commands of a Codex tool call: each ``cmd`` of its script."""
-    for m in re.finditer(r'cmd\s*:\s*("(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')', text):
-        yield m.group(1)[1:-1].replace('\\n', '\n')
-
-
-def dev_evals(root: Path) -> list[tuple[datetime, float]]:
-    """Each dev evaluation of the session files under ``root``: when it started, and how many seconds it took."""
-    found = []
-    for path in sorted(root.rglob('*.jsonl')):
-        calls: dict[str, tuple[datetime, bool, str]] = {}
-        running: dict[str, datetime] = {}
-        for line in path.open(encoding='utf-8', errors='replace'):
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            payload = rec.get('payload') or {}
-            kind = payload.get('type')
-            if kind == 'custom_tool_call':
-                text = str(payload.get('input') or '')
-                dev = any(DEV.search(c) and not READ.match(c) for c in commands(text))
-                calls[str(payload.get('call_id'))] = (when(rec['timestamp']), dev, text)
-            elif kind == 'custom_tool_call_output' and str(payload.get('call_id')) in calls:
-                start, dev, text = calls.pop(str(payload.get('call_id')))
-                out, end = str(payload.get('output') or ''), when(rec['timestamp'])
-                for polled in POLL.findall(text):
-                    if polled in running and EXITED.search(out):
-                        found.append((running[polled], (end - running.pop(polled)).total_seconds()))
-                if dev:
-                    started = SESSION.search(out)  # a command of the call still runs: the evaluation, most likely
-                    if started:
-                        running[started.group(1)] = start
-                    else:
-                        found.append((start, (end - start).total_seconds()))
-    return sorted(found)
 
 
 PROTOCOL = re.compile(r'(\bpiloop\b|PILOOP_BIN)\S*\s+(idea|submit|run|escalate|sql|message|note|candidate)\b')
@@ -119,11 +75,6 @@ def claude_calls(root: Path) -> list[Call]:
     return found
 
 
-def is_dev(command: str) -> bool:
-    """Whether a shell command runs the task's evaluator, rather than reading it."""
-    return bool(DEV.search(command)) and not READ.match(command)
-
-
 def quantile(xs: list[float], q: float) -> float | None:
     """The ``q`` quantile of ``xs``, or None."""
     if not xs:
@@ -159,10 +110,22 @@ def submissions(db: Path) -> tuple[list[datetime], list[float], list[float], lis
     return sorted(submitted.values()), verdict, visible, sealed
 
 
+def evaluations(log: Path) -> list[tuple[datetime, float]]:
+    """When each dev evaluation of ``log`` started, and how many seconds it took: the runs that piloop did not start."""
+    if not log.exists():
+        return []
+    found = []
+    for line in log.read_text().splitlines():
+        rec = json.loads(line)
+        if not rec['piloop']:
+            found.append((datetime.fromtimestamp(rec['at'], UTC), float(rec['seconds'])))
+    return sorted(found)
+
+
 def loop(export: Path, plain_commits: list[datetime] | None, hours: float, usd: float) -> Loop:
     """The loop of a run, from its export. ``plain_commits``: a plain session's commits on ``main``."""
     calls = claude_calls(export)
-    evals = sorted(dev_evals(export) + [(c.start, c.seconds) for c in calls if c.command and is_dev(c.command)])
+    evals = evaluations(export / 'out' / EVALUATIONS)
     protocol = [c for c in calls if PROTOCOL.search(c.command)]
     all_tokens = sum(c.tokens for c in calls)
     if plain_commits is None:
