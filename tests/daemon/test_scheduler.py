@@ -71,7 +71,6 @@ from piloop.plugins.campaign_type.contract import CAMPAIGNS, Take
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
 from piloop.plugins.campaign_type.kit.backlog.ideas import claimable
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference
@@ -82,10 +81,10 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measu
 from piloop.plugins.campaign_type.kit.runs.controller import RunController, close_run, wrap_up_lead
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_run
+from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.campaign_type.kit.runs.stop import release, runs
 from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session, run_of
 from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
-from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.campaign_type.kit.verdicts.judge import due, head
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner, RunQueued
 from piloop.plugins.executor.contract import AGENT, AgentKey, Capacity, Prompt
@@ -109,7 +108,6 @@ from tests.conftest import (
     HARNESS_APPEND,
     HARNESS_SLEEPS,
     HARNESS_TWO_COMMITS,
-    RESEARCH,
     SETTLE,
     WATCHDOG,
     Gate,
@@ -802,21 +800,6 @@ def test_an_after_link_holds_an_idea_until_its_prerequisite_is_done_or_dropped_a
         assert s.scalars(select(Comment)).all() == [], 'and nothing is escalated'
 
 
-def test_low_water_counts_held_ideas_as_backlog(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A held idea is on the board: research adds no idea for its slot."""
-    set_config(db, campaign, plugins={'role': {'research': {'max_ideas': 1, 'max_concurrent': 1, 'timeout': 20}}})
-    (gate,) = add_ideas(db, campaign, 'gate', status=IdeaStatus.CLAIMED)
-    add_ideas(db, campaign, *(f'behind the gate {n}' for n in range(3)), after=(gate,))
-    scheduler = make_scheduler(db, runtime, tmp_path)
-    assert run_all(scheduler) == [1], 'the free slot: a fresh run, which finds no idea to claim'
-    scheduler.stop(timeout=1)
-    with db.session() as s:
-        assert [w.kind for w in s.scalars(select(AgentSession))] == [IMPLEMENTER], 'no research sweep'
-        assert s.get_one(Run, 1).idea_id is None
-
-
 def test_reap(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -857,7 +840,7 @@ def test_reap(
         s.commit()
         s.add(
             AgentSession(
-                kind='research',
+                kind='watchdog',
                 campaign_id=campaign.id,
                 harness='pi',
                 model='m',
@@ -2200,7 +2183,7 @@ def test_implementers_of_a_stopped_campaign_are_told_to_wrap_up_then_ended_after
     with db.session() as s:
         s.add(
             AgentSession(
-                kind=RESEARCH,
+                kind=WATCHDOG,
                 campaign_id=campaign.id,
                 runtime='subprocess',
                 handle={'agent': 'research-2', 'pid': 4243},
@@ -2316,7 +2299,7 @@ def test_a_cancelled_run_is_told_to_wrap_up_and_ended_after_the_grace(
     running_agent_session(db, campaign, 'useful')
     with db.session() as s:
         sweep = AgentSession(
-            kind=RESEARCH,
+            kind=WATCHDOG,
             campaign_id=campaign.id,
             runtime='subprocess',
             handle={'agent': 'research-3', 'pid': 4243},
@@ -2362,7 +2345,7 @@ def test_an_agent_of_no_campaign_winds_down_on_the_home_s_grace(
 ) -> None:
     with db.session() as s:
         orphan = AgentSession(
-            kind=RESEARCH,
+            kind=WATCHDOG,
             runtime='subprocess',
             handle={'agent': 'research-1', 'pid': 4243},
             state=AgentSessionState.RUNNING,
@@ -2490,13 +2473,13 @@ def test_a_cancelled_request_never_launches_and_a_cancelled_sweep_is_ended(
             kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), harness='script', model='m'
         )
         sweep = AgentSession(
-            kind=RESEARCH,
+            kind=WATCHDOG,
             campaign_id=campaign.id,
             runtime='subprocess',
             handle={'agent': 'research-2', 'pid': 4243},
             state=AgentSessionState.RUNNING,
         )
-        requested = AgentSession(kind=RESEARCH, campaign_id=campaign.id, reason='low_water')
+        requested = AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='low_water')
         s.add_all([queued, sweep, requested])
         s.flush()
         request_cancel(s, queued, System.HUMAN, ending=Ending.WRAP_UP)
@@ -2564,8 +2547,8 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
     the deaths age out of the window.
     """
     died_at_startup(db, campaign, IMPLEMENTER, minutes_ago=11)
-    for kind in (WATCHDOG, RESEARCH):
-        died_at_startup(db, campaign, kind)
+    for _ in range(2):
+        died_at_startup(db, campaign, WATCHDOG)
     wanted = request_watchdog(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
     assert wanted in run_all(scheduler), 'two recent deaths: launches go on'
@@ -2578,7 +2561,7 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
     assert (escalation.target_kind, escalation.author, escalation.priority) == (TargetKind.CAMPAIGN, 'daemon', 1)
     assert details(escalation) == IsStr(
         regex=r'Launches paused: 4 agents died at startup in the last 10 minutes\. Load average [\d.]+ / [\d.]+ / [\d.]+'
-        rf' on \d+ CPUs when launches paused\..*\n- agent_session#\d+ \(research on script\): .*\n- agent_session#{died[0]} \(watchdog on script\):'
+        rf' on \d+ CPUs when launches paused\..*\n- agent_session#\d+ \(watchdog on script\): .*\n- agent_session#{died[0]} \(watchdog on script\):'
         rf' FileNotFoundError: watchdog-{died[0]}: no such harness\n'
         rf'- agent_session#{died[1]} .*',
         regex_flags=re.DOTALL,
@@ -2590,13 +2573,13 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
         s.commit()
     assert run_all(scheduler) == [] and len(pause_escalations(db)) == 1, 'acknowledged means seen: not posted again'
 
-    latest = died_at_startup(db, campaign, RESEARCH)
+    latest = died_at_startup(db, campaign, WATCHDOG)
     assert run_all(scheduler) == []
     [extended] = pause_escalations(db)
     assert extended.id == escalation.id and extended.acked_at is not None, 'the same pause: updated in place'
     assert details(extended).startswith(
         'Launches paused: 5 agents'
-    ) and f'- agent_session#{latest} (research' in details(extended)
+    ) and f'- agent_session#{latest} (watchdog' in details(extended)
 
     with db.session() as s:
         for event in s.scalars(select(Event).where(has(StartupAnomaly))):
@@ -2617,14 +2600,13 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
 def test_the_triggers_that_read_no_time_ask_for_no_pass_of_their_own(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """Only ``cron`` and the rest of ``low_water`` compare a time: the others wait for the campaign's next event."""
+    """Only ``cron`` compares a time: the others wait for the campaign's next event."""
     scheduler = make_scheduler(db, runtime, tmp_path)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         cfg = CampaignConfig.model_validate(p.config)
-        on = campaigns_of(scheduler)._pass(s, p, cfg, RESEARCH, role_of(cfg, ResearchRole), utcnow(), left(s, p, cfg))
+        on = campaigns_of(scheduler)._pass(s, p, cfg, WATCHDOG, role_of(cfg, WatchdogRole), utcnow())
         for trigger in (
-            StalledTrigger(),
             RunFailed(),
             DeadAtStartup(),
             StoppedTrigger(),

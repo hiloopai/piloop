@@ -57,9 +57,8 @@ def required_reason(reason: str) -> str:
 def pause(s: Session, campaign_id: CampaignId, *, evals: bool, reason: str) -> Campaign:
     """Pause the campaign: nothing launches, and with ``evals`` the daemon starts no measurement either.
 
-    No run is queued, no role is requested and no requested row launches, so research files no ideas. A sweep that
-    runs already files its ideas as ``proposed`` (``backlog.ops.review_first``). Running work goes on and its commits are scored.
-    Nothing is escalated. Without ``evals``, the daemon still measures what a new evaluator or a request needs, so the
+    No run is queued, no role is requested and no requested row launches. Running work goes on and its commits are
+    scored. Nothing is escalated. Without ``evals``, the daemon still measures what a new evaluator or a request needs, so the
     pause can end on a measured head. A pause is state in the database, so the daemon holds wherever the caller is.
 
     Raises:

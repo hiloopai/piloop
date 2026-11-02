@@ -79,7 +79,7 @@ class CampaignAgents(BaseModel):
 class Roles:
     """The campaign's roles: one instance of ``ROLES`` for each, by its name (``[plugins.role.<name>]``).
 
-    Every role is a provider: piloop's (implementer, watchdog, research, orchestrator) and those that packages add, each with
+    Every role is a provider: piloop's (implementer, watchdog, orchestrator) and those that packages add, each with
     its table over its defaults, then the roles that the file defines. A table with a new name defines a new role: a
     role that does runs (``ImplementerRole``) with ``runs = true``, else a sweeping role (``SweepRole``).
     """
@@ -105,6 +105,10 @@ class Roles:
 
 
 # config as class arguments: a model_config attribute would clash with BaseSettings' in load_campaign_config's loader
+RESEARCH_TRIGGERS = frozenset({'low_water', 'stalled'})
+"""The triggers that started research, removed with it."""
+
+
 class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docstrings=True):
     """Everything piloop needs to know about a campaign repo."""
 
@@ -132,12 +136,56 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     environments. Each job gets them as they are when it is made."""
     context: list[str] = []
     """Repo-relative files or globs (for example ``docs/error-analysis-*.md``) that hold the campaign's analysis:
-    error analyses, comparisons with a reference, evaluation reports. The research pack lists each one with its
-    outline, newest first, so that every sweep that reads the pack reads them before it proposes work."""
+    error analyses, comparisons with a reference, evaluation reports. The research pack (``piloop history``) lists
+    each one with its outline, newest first."""
     agents: CampaignAgents = CampaignAgents()
     """``[agents]``: how long the campaign's agents get to wrap up, and its brief's budget."""
     plugins: Annotated[Plugins, PluginTables(Scope.CAMPAIGN)] = Field(default={}, validate_default=True)
     """``[plugins]``: the campaign's plugins, a table for each capability (``PluginTables``)."""
+
+    @model_validator(mode='before')
+    @classmethod
+    @deprecated.until('0.7.0', 'research is removed in 0.6: delete CampaignConfig._research and RESEARCH_TRIGGERS')
+    def _research(cls, data: object) -> object:
+        """Drop the research role, and its ``low_water`` and ``stalled`` triggers, with a warning for each.
+
+        A ``piloop.toml`` and a campaign's stored copy of it (``campaigns.config``) both go this validation.
+        """
+        plugins = data.get('plugins') if isinstance(data, dict) else None
+        if not isinstance(data, dict) or not isinstance(plugins, dict):
+            return data
+        roles = dict(r) if isinstance(r := plugins.get('role'), dict) else {}
+        triggers = dict(t) if isinstance(t := plugins.get('trigger'), dict) else {}
+        if roles.pop('research', None) is not None:
+            deprecated.dropped(
+                'the research role is removed; delete [plugins.role.research]: workers propose their own ideas',
+                removed_in='0.7.0',
+            )
+        provider = {n: t.get('provider', n) if isinstance(t, dict) else n for n, t in triggers.items()}
+        gone = {n: p for n, p in provider.items() if p in RESEARCH_TRIGGERS}
+        for name, was in gone.items():
+            del triggers[name]
+            deprecated.dropped(
+                f'the {was} trigger is removed with the research role: delete [plugins.trigger.{name}]',
+                removed_in='0.7.0',
+            )
+        gone |= {n: n for n in RESEARCH_TRIGGERS if n not in provider}
+        for role, table in roles.items():
+            listed = table.get('triggers') if isinstance(table, dict) else None
+            if not isinstance(table, dict) or not isinstance(listed, list):
+                continue
+            for name in (n for n in listed if isinstance(n, str) and n in gone):
+                deprecated.dropped(
+                    f'the {gone[name]} trigger is removed with the research role: delete {name} from'
+                    f' [plugins.role.{role}] triggers',
+                    removed_in='0.7.0',
+                )
+            roles[role] = {**table, 'triggers': [n for n in listed if not (isinstance(n, str) and n in gone)]}
+        kept = {**plugins, **({'role': roles} if isinstance(plugins.get('role'), dict) else {})}
+        return {
+            **data,
+            'plugins': {**kept, **({'trigger': triggers} if isinstance(plugins.get('trigger'), dict) else {})},
+        }
 
     @model_validator(mode='after')
     def _check(self) -> Self:

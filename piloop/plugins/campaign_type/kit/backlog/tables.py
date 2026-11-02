@@ -71,7 +71,7 @@ class Idea(Tracked, Base):
     priority: Mapped[int] = mapped_column(default=2, server_default=text('2'))
     """0 (urgent) to 4 (someday). The board lists the lowest number first."""
     created_by: Mapped[str]
-    """Who proposed it: ``human``, ``orchestrator``, or the agent's signature (``research#12``, ``implementer#40``,
+    """Who proposed it: ``human``, ``orchestrator``, or the agent's signature (``watchdog#12``, ``implementer#40``,
     ``watchdog#7``). The part before ``#`` is the idea's source in the count of keeps by source."""
     provenance: Mapped[str | None]
     """The finding that led to the idea, with ids or a URL. For example ``note comment#81: timeouts lose the last

@@ -27,7 +27,7 @@ from piloop.plugins.executor.contract import AgentJob, RepoId, Source
 from piloop.plugins.host import PluginError, Scope
 from piloop.plugins.vcs.git import Git
 from piloop.version import Version
-from tests.conftest import AGENT_TIMEOUT, HARNESS_APPEND, write_toml
+from tests.conftest import HARNESS_APPEND, write_toml
 from tests.daemon.test_roles import installed
 from tests.test_lease import BRIEF, START
 
@@ -84,13 +84,10 @@ def test_a_dotted_key_warns_at_its_table_header_or_at_the_line_that_sets_its_las
 
 
 def deprecated_config(campaign_path: Path, tables: str) -> Path:
-    """Write the test campaign's piloop.toml with ``tables`` in place of its research table."""
+    """Write the test campaign's piloop.toml with ``tables`` after it."""
     write_toml(campaign_path, HARNESS_APPEND)
     toml = campaign_path / 'piloop.toml'
-    text = toml.read_text().replace(
-        f'[plugins.role.research]\ntimeout = {AGENT_TIMEOUT}\nmax_ideas = 0\nmax_concurrent = 1\n', ''
-    )
-    toml.write_text(text + tables)
+    toml.write_text(toml.read_text() + tables)
     return toml
 
 
@@ -564,11 +561,11 @@ def test_a_package_s_bridge_runs_on_its_file_after_the_bridges_it_reads(
     order = deprecated.bridges(Scope.CAMPAIGN)
     assert order.index(shade) > order.index(deprecated.campaign_finding_grace)
     assert shade not in deprecated.bridges(Scope.HOME), 'config.toml has no roles'
-    raw: dict[str, object] = {'plugins': {'role': {'research': {'shade': 2}}}}
+    raw: dict[str, object] = {'plugins': {'role': {'watchdog': {'shade': 2}}}}
     toml = tmp_path / 'piloop.toml'
-    toml.write_text('[plugins.role.research]\nshade = 2\n')
+    toml.write_text('[plugins.role.watchdog]\nshade = 2\n')
     deprecated.apply(toml, raw, deprecated.bridges(Scope.CAMPAIGN))
-    assert deprecated.table_at(raw, 'plugins', 'role', 'research') == {'tint': 2}
+    assert deprecated.table_at(raw, 'plugins', 'role', 'watchdog') == {'tint': 2}
     installed(monkeypatch, [EntryPoint(n, f'{__name__}:{n}', deprecated.BRIDGES.group) for n in ('shade', 'early')])
     order = deprecated.bridges(Scope.CAMPAIGN)
     assert order.index(early) < order.index(shade), 'a bridge can name one that runs after it'

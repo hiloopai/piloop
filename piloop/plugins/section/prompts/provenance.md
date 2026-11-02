@@ -1,6 +1,6 @@
 - Every table except `events` has `updated_at` and `updated_by`.
 - Triggers set both on every UPDATE. `updated_by` is set to whoever holds the connection (`human`, `orchestrator`,
-  `daemon`, `research#12` …), so a value you write there is overwritten.
+  `daemon`, `watchdog#12` …), so a value you write there is overwritten.
 - Never set them by hand. Read them to see who changed a row and when. `updated_by IS NULL` means the row is unchanged
   since its insert.
 - The same triggers keep a change log in `events`, signed by the same actor. Each payload has its `kind`, and these have

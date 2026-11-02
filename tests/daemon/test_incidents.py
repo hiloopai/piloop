@@ -12,7 +12,7 @@ from piloop.config import load_campaign_config
 from piloop.db.events import AnomalyReported
 from piloop.db.models import AgentSessionState, Campaign, CampaignStatus, Event, Pause
 from piloop.db.session import Database
-from piloop.ids import TargetKind, TargetRef
+from piloop.ids import RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.consumers import RolePass
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -26,7 +26,7 @@ from piloop.plugins.section.contract import SECTIONS, Rendering, markdown
 from piloop.plugins.section.reported import REPORTED_SHOWN
 from piloop.plugins.trigger.contract import Fire
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
-from tests.conftest import RESEARCH, WATCHDOG, cas_of
+from tests.conftest import WATCHDOG, cas_of
 from tests.reports.test_overview import NOW, agent, at, candidate, idea, live_campaign, run
 
 
@@ -43,10 +43,7 @@ def fired(s: Session, campaign: Campaign, trigger: RunFailed | DeadAtStartup) ->
         role=WATCHDOG,
         last=None,
         quiet=None,
-        max_concurrent=1,
         interval=0,
-        backlog=unread,
-        without_keep=unread,
     )
     return trigger.fire(p)
 
@@ -100,12 +97,12 @@ def test_an_incident_wakes_an_agent_once(db: Database, campaign: Campaign) -> No
 def test_an_agent_dead_at_startup_is_an_incident_unless_its_role_investigates(db: Database, campaign: Campaign) -> None:
     """A watchdog that died at startup would request a watchdog that could die the same way, and so on.
 
-    The startup breaker pauses the launches instead. Research does not investigate, so its death is an incident.
+    The startup breaker pauses the launches instead. The orchestrator does not investigate, so its death is an incident.
     """
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         agent(s, p, WATCHDOG, 0, 5)  # a short life, without the launcher's event: no incident
-        for kind in (WATCHDOG, RESEARCH):
+        for kind in (WATCHDOG, RoleName('orchestrator')):
             dead = agent(s, p, kind, 0, 35, state=AgentSessionState.KILLED)
             payload = StartupAnomaly(role=kind, harness='script', subject=None, seconds=35.0, error='prompt_lost')
             s.add(Event(actor='daemon', target=TargetRef(TargetKind.AGENT_SESSION, dead.id), payload=payload))
@@ -133,18 +130,20 @@ def test_the_incidents_given_to_agents_are_listed_newest_first(db: Database, cam
     assert (len(lines), lines[-1]) == (REPORTED_SHOWN + 1, '- … and 1 older incidents.')
 
 
-def test_the_idle_queue_counts_from_the_last_run_and_names_pending_research(db: Database, campaign: Campaign) -> None:
+def test_the_idle_queue_counts_from_the_last_run_and_names_the_pending_sweeps_that_file_ideas(
+    db: Database, campaign: Campaign
+) -> None:
     live_campaign(db, campaign)
     with db.session() as s:
         s.get_one(Run, 3).status, s.get_one(Run, 3).end = RunStatus.SUCCEEDED, RunEnd.FINISHED
         s.get_one(Run, 3).finished_at = at(70)
         s.get_one(Idea, 4).status = IdeaStatus.DROPPED  # free once its prerequisite was dropped: the board is empty
-        agent(s, s.get_one(Campaign, campaign.id), RESEARCH, 100, 0, state=AgentSessionState.REQUESTED)
+        agent(s, s.get_one(Campaign, campaign.id), WATCHDOG, 100, 0, state=AgentSessionState.REQUESTED)
         s.commit()
         assert shown(s, campaign, 'idle_queue') == snapshot("""\
 ## Idle queue
 
-- 1 free implementer slots and no runnable idea since 50m ago; research#5 requested\
+- 1 free implementer slots and no runnable idea since 50m ago; no defining sweep pending\
 """)
 
 

@@ -654,8 +654,9 @@ def test_refs_finds_each_name_of_an_instance_and_where_it_is() -> None:
         ('runtime', 'subprocess', ('by', 'pi', 0)),
         ('runtime', 'subprocess', ('inner', 'runtime')),
     ]
-    roles = refs(CampaignConfig.model_validate(BASE_CONFIG))
-    assert ('harness', 'claude', ('plugins', 'role', 'research', 'model')) in [
+    plugins = {'harness': {'pi': {'model': 'm'}}, 'role': {'watchdog': {'model': {'pi': 'w'}}}}
+    roles = refs(CampaignConfig.model_validate({**BASE_CONFIG, 'plugins': plugins}))
+    assert ('harness', 'pi', ('plugins', 'role', 'watchdog', 'model')) in [
         (r.capability.name, r.name, r.at) for r in roles
     ], 'the instances of [plugins] too'
 

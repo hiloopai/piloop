@@ -5,13 +5,12 @@ PILOOP_ACTOR=orchestrator piloop pause <name> --reason '<what the pause waits fo
 PILOOP_ACTOR=orchestrator piloop resume <name>
 ```
 
-- Nothing launches: no run, no sweep, no requested agent. Research files no ideas. Running work finishes and is
-  scored.
+- Nothing launches: no run, no sweep, no requested agent. Running work finishes and is scored.
 - A pause raises no escalation. `piloop status` shows it with the reason.
 - No agent launches, the incident watchdog included: an anomaly of the running work waits in `piloop status` until the
   resume. Watch the running work yourself during a long pause. Paused time does not count toward `max_hours`.
 - Never pause with a `hold_at` fact that you set by hand, nor with a gate idea and `after` links: a hold stops every
-  measurement, and research files ideas without the link.
+  measurement, and an idea filed meanwhile has no link.
 - Pausing a campaign is a scope decision for the human: record it (see "Every decision you take for the human").
 - A campaign stops only by its stop rule or by the human's `piloop campaign stop`: yours is refused. To ask for a stop,
   escalate it with your evidence. Never `UPDATE campaigns SET status`: that gets no closing review.

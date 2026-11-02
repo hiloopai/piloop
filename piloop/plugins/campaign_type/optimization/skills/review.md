@@ -70,7 +70,7 @@ The subagents:
    below.
 3. **Orchestrator.** Its session: decisions it took for the human, briefs, status reports compared with the database,
    spend.
-4. **Research and watchdog.** For each idea: where it came from and what it produced. Sweeps that produced nothing. What the watchdog
+4. **Ideas and the watchdog.** For each idea: where it came from and what it produced. Sweeps that produced nothing. What the watchdog
    caught and missed.
 5. **Evaluation design.** Is the scoring panel held out? How much does a single unit move the score? Could an agent
    read the labels?
@@ -206,7 +206,7 @@ Run all of them on every kept candidate. Cheating and honest overfitting both sh
   - Join its units against everything that any candidate trained on or was tuned against.
   - Report the trained and the untrained slices separately.
 - **Report against measurement.**
-  - Compare every number that an implementer, the research agent, the watchdog or the orchestrator reported with the
+  - Compare every number that an implementer, the watchdog or the orchestrator reported with the
     `measurements` row it names.
   - Query again before you repeat any of them.
 - **Side channels.**
@@ -237,12 +237,12 @@ Make one table, measured where possible:
   - runs open after their implementer exited,
   - double evaluation (implementer and daemon),
   - runs after the stop,
-  - research sweeps that produced nothing,
+  - sweeps that produced nothing,
   - killed agents, and agents that never started,
   - polling loops,
   - agents blocked on credentials.
 
-Judge spend against value. Research tokens that produced the kept ideas are not waste. Deriving the schema again in
+Judge spend against value. Tokens that produced the kept ideas are not waste. Deriving the schema again in
 every sweep is.
 
 ## Attribution

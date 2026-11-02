@@ -280,8 +280,8 @@ def thread(s: Session, root: Comment) -> list[tuple[Comment, Relation]]:
     """Return the comments linked to the root of a thread, with how: its replies, then those it cites or that cite it.
 
     Each part is oldest first. A citation is ``comment#<id>`` in the body, for example ``Re: comment#12`` in a
-    decision. Other comments on the same target are not part of the thread. A campaign collects every research
-    note, and the answer would be lost among them.
+    decision. Other comments on the same target are not part of the thread. A campaign collects every note on
+    the board, and the answer would be lost among them.
     """
     ref = f'comment#{root.id}'
     reply = Comment.target == TargetRef(TargetKind.COMMENT, root.id)

@@ -45,9 +45,6 @@ use = ["script"]
 timeout = 30
 max_concurrent = 2
 
-[plugins.role.research]
-max_ideas = 0
-
 [[metrics]]
 name = "accuracy"
 direction = "higher"

@@ -8,10 +8,9 @@ campaign's harness choice the harness of each agent. Anyone can insert a request
 the same second phase.
 """
 
-import itertools
 import os
 from collections import Counter
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import datetime
@@ -35,16 +34,13 @@ from piloop.campaign.campaigns import WORKSPACE, CampaignAdded, workspace_dir
 from piloop.campaign.launches import choose_harness, close, earlier, full_harnesses, remove_checkouts, resumed_on
 from piloop.campaign.stop import (
     CampaignClosed,
-    CancelRequested,
     StopRequested,
-    agent_cancel,
     answer_done,
     asked,
     check as check_stop,
     escalated,
     held as held_now,
     hours_due,
-    left as left_now,
     requested,
     review_skipped,
     timeout as agent_timeout,
@@ -86,7 +82,6 @@ from piloop.db.triggers.changelog import (
 )
 from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CAMPAIGNS, CannotLaunch, Planner, Take
-from piloop.plugins.campaign_type.kit.backlog.ideas import added_by
 from piloop.plugins.campaign_type.kit.candidates.references import CandidateImported
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded, RemeasureRequested, score
 from piloop.plugins.campaign_type.kit.evaluation.submissions import Submitted
@@ -96,7 +91,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
     RunFinished,
 )
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
-from piloop.plugins.campaign_type.kit.runs.stop import runs_without_keep, settled
+from piloop.plugins.campaign_type.kit.runs.stop import settled
 from piloop.plugins.campaign_type.kit.runs.tables import run_of
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     CandidateJudged,
@@ -109,14 +104,13 @@ from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.executor.consumers import LIMITS
 from piloop.plugins.executor.contract import AgentKey, LeftJob
 from piloop.plugins.fact_source.contract import FACT_SOURCES
-from piloop.plugins.fact_source.facts import Facts
 from piloop.plugins.host import ContractBroken
 from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchCase, LaunchPolicy, Share
 from piloop.plugins.role.contract import PUSHED, Continuity, ImplementerRole, SweepRole
 from piloop.plugins.runtime.contract import handle_for, runtime_for
 from piloop.plugins.section.contract import Rendering
 from piloop.plugins.stop_rule.contract import GO, STOP_RULES, Go, Hold, Stop, WhileHeld
-from piloop.plugins.trigger.contract import TRIGGERS, Backlog, Fire, Quiet, Steer
+from piloop.plugins.trigger.contract import TRIGGERS, Fire, Quiet, Steer
 from piloop.plugins.trigger.kit.incidents import assigned
 
 AGENT_SESSIONS = 'agent_sessions'
@@ -370,9 +364,7 @@ class Campaigns:
                 awake = awake_roles(cfg, phase)
                 if phase is not None and awake:
                     for name in awake:
-                        self._request(
-                            s, campaign, cfg, name, cfg.roles.sweeping()[name], turn.now, Facts(), quiet=phase
-                        )
+                        self._request(s, campaign, cfg, name, cfg.roles.sweeping()[name], turn.now, quiet=phase)
                 if launches(campaign, cfg, held):
                     launching.append(Launching(campaign, cfg, None))
                 elif awake:
@@ -420,9 +412,8 @@ class Campaigns:
         if isinstance(answer, Go):
             self._planner(campaign).queue(s, campaign, answer.left)
             s.flush()
-            left = left_now(s, campaign, cfg)  # the runs just queued use up what the rule left
             for name, role in cfg.roles.sweeping().items():
-                self._request(s, campaign, cfg, name, role, now, left)
+                self._request(s, campaign, cfg, name, role, now)
             return
         reason = answer.reason
         campaign.status, campaign.stopped_reason = CampaignStatus.STOPPED, reason
@@ -448,7 +439,7 @@ class Campaigns:
             result = closer.closing(s, campaign)
             self._tracer.event('campaign.closing', campaign=campaign.name, provider=provider, result=result)
         for name, role in sweeping.items():
-            self._request(s, campaign, cfg, name, role, now, Facts(), stopping=True)
+            self._request(s, campaign, cfg, name, role, now, stopping=True)
         s.flush()  # the status change's event first: the close comes after the stop
         emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)
 
@@ -469,7 +460,6 @@ class Campaigns:
         name: RoleName,
         role: SweepRole,
         now: datetime,
-        left: Facts,
         *,
         stopping: bool = False,
         quiet: Quiet | None = None,
@@ -492,7 +482,7 @@ class Campaigns:
             .limit(1)
         ).first()
         waits = latest is not None and latest.state is AgentSessionState.REQUESTED
-        p = self._pass(s, campaign, cfg, name, role, now, left, quiet)
+        p = self._pass(s, campaign, cfg, name, role, now, quiet)
         fires: list[Fire] = []
         steers: list[Steer] = []
         triggers = cfg.triggers_of(name)
@@ -564,10 +554,9 @@ class Campaigns:
         name: RoleName,
         role: SweepRole,
         now: datetime,
-        left: Facts,
         quiet: Quiet | None = None,
     ) -> RolePass:
-        """Return what the triggers of role ``name`` read in this pass, with what the stop rule ``left``."""
+        """Return what the triggers of role ``name`` read in this pass."""
         last = s.scalars(
             select(AgentSession)
             .where(AgentSession.campaign_id == campaign.id, AgentSession.kind == name)
@@ -581,10 +570,7 @@ class Campaigns:
             role=name,
             last=last,
             quiet=quiet,
-            max_concurrent=role.max_concurrent,
             interval=role.interval,
-            backlog=partial(self._planner(campaign).backlog, s, campaign, name, left),
-            without_keep=partial(runs_without_keep, s, campaign),
         )
 
     def _launch(
@@ -812,7 +798,7 @@ class Campaigns:
                 .where(Comment.kind == PUSHED)
                 .order_by(Comment.id)
             ).all()
-            role_pass = self._pass(s, campaign, cfg, agent_session.kind, table, now, left_now(s, campaign, cfg))
+            role_pass = self._pass(s, campaign, cfg, agent_session.kind, table, now)
             sweep = SweepPass(**vars(role_pass), agent_session=agent_session)
             workspace = workspace_dir(self._home, campaign.id)
             lines = [
@@ -880,10 +866,7 @@ class RolePass:
     role: RoleName
     last: AgentSession | None
     quiet: Quiet | None
-    max_concurrent: int
     interval: float
-    backlog: Callable[[int], Backlog]
-    without_keep: Callable[[datetime | None], int]
 
     def mine(self) -> Select[AgentSession]:
         """The role's rows in the campaign."""
@@ -891,25 +874,6 @@ class RolePass:
 
     def live(self) -> int:
         return count(self.s, self.mine().where(AgentSession.state.in_(LIVE)))
-
-    def killed_streak(self) -> int:
-        states = self.s.scalars(self.mine().with_only_columns(AgentSession.state).order_by(AgentSession.id.desc()))
-        return len(list(itertools.takewhile(lambda state: state is AgentSessionState.KILLED, states)))
-
-    def cancel(self, agent_session: AgentSession, /) -> CancelRequested | None:
-        cancel = agent_cancel(self.s, agent_session)
-        return cancel[1] if cancel is not None else None
-
-    def empty_sweeps(self, states: tuple[AgentSessionState, ...]) -> list[AgentSession]:
-        """See ``Pass.empty_sweeps``.
-
-        The new-results back-off of ``low_water`` skips killed sweeps. A killed sweep stopped early, so its empty
-        result says nothing about what was left to propose. The idle rest counts killed sweeps. Otherwise, a harness
-        that dies every time would be launched again on every pass.
-        """
-        signed = added_by(self.s, self.campaign.id)
-        ended = self.s.scalars(self.mine().where(AgentSession.state.in_(states)).order_by(AgentSession.id.desc()))
-        return list(itertools.takewhile(lambda agent_session: f'{self.role}#{agent_session.id}' not in signed, ended))
 
     def routine(self) -> AgentSession | None:
         given = exists().where(

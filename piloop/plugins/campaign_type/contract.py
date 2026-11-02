@@ -20,12 +20,11 @@ if TYPE_CHECKING:  # piloop.config imports the capabilities, and the database im
     from sqlalchemy.orm import Session
 
     from piloop.db.models import AgentSession, Campaign
-    from piloop.ids import AgentSessionId, Revision, RoleName, TargetRef
+    from piloop.ids import AgentSessionId, Revision, TargetRef
     from piloop.otel import Tracer
     from piloop.plugins.campaign_type.kit.runs.controller import RunController
     from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
     from piloop.plugins.fact_source.facts import Facts
-    from piloop.plugins.trigger.contract import Backlog
 
 
 CAMPAIGNS: Final = 'campaigns'
@@ -98,10 +97,6 @@ class Planner(Protocol):
 
         The daemon stops, or a previous one left the work (``reaped``). The agents of ``sparing`` go on.
         """
-        ...
-
-    def backlog(self, s: Session, campaign: Campaign, name: RoleName, left: Facts, buffer: int) -> Backlog:
-        """The campaign's backlog as the sweeping role ``name`` fills it (``Pass.backlog``)."""
         ...
 
     def steered_by(self, s: Session, agent_session: AgentSession) -> Steering | None:

@@ -62,7 +62,7 @@ from piloop.plugins.vcs.contract import Transfer
 from piloop.plugins.vcs.git import Git
 from piloop.store.tree import Manifest, Merged, Staged, put_tree
 from tests.agents.test_launcher import MINTED_HARNESS, agent_session, launch, request, use_harness
-from tests.conftest import HARNESS_PROMPT_TO_FILE, RESEARCH, WATCHDOG, ScriptRuntime, baseline, disk
+from tests.conftest import HARNESS_PROMPT_TO_FILE, WATCHDOG, ScriptRuntime, baseline, disk
 from tests.test_lease import BRIEF, START
 
 RESEARCH_SESSION = '0c5b9f9e-3a43-4c39-9a51-6f0cfa1a3b0e'
@@ -364,8 +364,8 @@ def test_an_implementer_with_a_minted_session_id_is_identified_at_launch_with_th
     campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     use_harness(db, campaign, HARNESS_PROMPT_TO_FILE, **MINTED_HARNESS)
-    research = request(db, campaign, RESEARCH, harness='claude', session_id=RESEARCH_SESSION)
-    implementer, run, idea = implementer_of(db, campaign, f'research#{research}')
+    research = request(db, campaign, WATCHDOG, harness='claude', session_id=RESEARCH_SESSION)
+    implementer, run, idea = implementer_of(db, campaign, f'watchdog#{research}')
     launch(db, runtime, tmp_path, implementer)
     w = agent_session(db, implementer)
     assert identified(db, implementer) == [
@@ -379,7 +379,7 @@ def test_an_implementer_with_a_minted_session_id_is_identified_at_launch_with_th
             'subject': f'run#{run}',
             'groups': [f'idea#{idea}'],
             'parent': {
-                'actor': f'research#{research}',
+                'actor': f'watchdog#{research}',
                 'harness': 'claude',
                 'executable': 'claude',
                 'session_id': RESEARCH_SESSION,
@@ -393,7 +393,7 @@ def test_a_reported_session_id_is_identified_once_whatever_repeats_it(
 ) -> None:
     """Heartbeats and the final report repeat the id: only an id that is new to the row emits the event."""
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
-    research = request(db, campaign, RESEARCH, harness='script', state=AgentSessionState.STARTING)
+    research = request(db, campaign, WATCHDOG, harness='script', state=AgentSessionState.STARTING)
     key = AgentKey(research)
     results.started(key, {}, None)
     assert identified(db, research) == []
@@ -408,7 +408,7 @@ def test_a_reported_session_id_is_identified_once_whatever_repeats_it(
         'session_id': 'first',
         'harness': 'script',
         'executable': str(Path(campaign.path).parent / 'harness.sh'),
-        'role': 'research',
+        'role': 'watchdog',
         'model': None,
         'campaign': 'demo',
         'subject': None,
@@ -433,8 +433,8 @@ def test_an_id_that_only_the_final_report_carries_is_identified(
         ('human', None),
         ('orchestrator', None),
         (
-            'research#{research}',
-            {'actor': 'research#{research}', 'harness': 'claude', 'executable': 'claude', 'session_id': None},
+            'watchdog#{research}',
+            {'actor': 'watchdog#{research}', 'harness': 'claude', 'executable': 'claude', 'session_id': None},
         ),
         ('research#9999', {'actor': 'research#9999', 'harness': None, 'executable': None, 'session_id': None}),
     ],
@@ -447,7 +447,7 @@ def test_the_proposer_is_an_agent_only(
     created_by: str,
     proposed_by: dict[str, object] | None,
 ) -> None:
-    research = request(db, campaign, RESEARCH, harness='claude')
+    research = request(db, campaign, WATCHDOG, harness='claude')
     implementer, _, _ = implementer_of(
         db, campaign, created_by.format(research=research), harness='script', state=AgentSessionState.RUNNING
     )
@@ -537,7 +537,7 @@ def test_two_agents_that_change_one_workspace_file_keep_the_first_ones_and_the_s
         place=live.relative_to(tmp_path).as_posix(), manifest=put_tree(cas, live, ['NOTES.md']).manifest.put(cas)
     )
     with db.session() as s:
-        agents = [AgentSession(kind=RESEARCH, campaign_id=campaign.id, state=AgentSessionState.RUNNING) for _ in '1234']
+        agents = [AgentSession(kind=WATCHDOG, campaign_id=campaign.id, state=AgentSessionState.RUNNING) for _ in '1234']
         s.add_all(agents)
         s.commit()
         first, second, third, fourth = (a.id for a in agents)
@@ -560,11 +560,11 @@ def test_two_agents_that_change_one_workspace_file_keep_the_first_ones_and_the_s
     finish(third, {'research': (lost := cas.put(b'a file where a directory stands'))})
     finish(fourth, {'NOTES.md': None})
     assert (live / 'NOTES.md').read_text() == 'notes\nfirst\n', 'its removal waited on a NOTES.md that changed since'
-    assert (live / f'NOTES.md.research-{second}').read_text() == 'notes\nsecond\n'
+    assert (live / f'NOTES.md.watchdog-{second}').read_text() == 'notes\nsecond\n'
     assert sorted(p.name for p in (live / 'research').iterdir()) == ['a.csv', 'b.csv']
     with db.session() as s:
         assert [(e.target_id, p) for e, p in in_order(s, WorkspaceConflict)] == [
-            (second, WorkspaceConflict(beside={'NOTES.md': f'NOTES.md.research-{second}'})),
+            (second, WorkspaceConflict(beside={'NOTES.md': f'NOTES.md.watchdog-{second}'})),
             (third, WorkspaceConflict(blocked={'research': lost})),
             (fourth, WorkspaceConflict(kept=['NOTES.md'])),
         ]
@@ -583,7 +583,7 @@ def test_a_workspace_merge_holds_no_write_lock(
         place=live.relative_to(tmp_path).as_posix(), manifest=put_tree(cas, live, []).manifest.put(cas)
     )
     with db.session() as s:
-        agent = AgentSession(kind=RESEARCH, campaign_id=campaign.id, state=AgentSessionState.RUNNING)
+        agent = AgentSession(kind=WATCHDOG, campaign_id=campaign.id, state=AgentSessionState.RUNNING)
         s.add(agent)
         s.commit()
         agent_session_id = agent.id

@@ -1,4 +1,4 @@
-"""Tests for the research pack: the context that a research sweep or a progress review reads in its brief."""
+"""Tests for the research pack: the campaign's history that ``piloop history`` prints and a new sweep reads."""
 
 import os
 from pathlib import Path
@@ -193,7 +193,7 @@ def test_where_an_idea_comes_from_and_which_roles_file_ideas(campaign_path: Path
     assert [files_of(cfg, ACTORS.validate_python(a)) for a in actors] == [
         Files.NOTHING,
         Files.NOTHING,
-        Files.IDEAS,
+        Files.NOTHING,
         None,
         None,
-    ]
+    ], 'an agent of a role that piloop.toml no longer has, such as research, files nothing'

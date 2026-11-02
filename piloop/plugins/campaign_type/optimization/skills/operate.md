@@ -14,7 +14,7 @@
 `piloop history [<name>]` prints the research pack: metrics, analysis artifacts, every idea, the kept lineage, the starting points, the agents' notes and digests.
 
 Give in every digest the head against the baseline (per track when there are several), and the "Ideas by source" line
-of `piloop status <name>`: it shows whether research earns its sweeps.
+of `piloop status <name>`: it shows which source of ideas earns its runs.
 
 ## Ideas
 
@@ -28,7 +28,7 @@ PILOOP_ACTOR=orchestrator piloop idea add <name> '<title>' --hypothesis '…' --
 - `--after` links it to other ideas, in the same write as the idea. Never add an `open` idea and then insert its
   `after` link: a worker can claim it in between.
 - Priority is 0 (urgent) to 4 (someday).
-- Your ideas carry context that research does not have: the digests, the loss analysis, the human's direction.
+- Your ideas carry context that the workers do not have: the digests, the loss analysis, the human's direction.
   Write them down as ideas as soon as you see them. Use `--from` to say where they came from.
 - An idea is a direction in at most 150 words: what to try and why. Never how many variants to run, a limit on a run,
   or what not to try: the worker decides how.
@@ -41,14 +41,14 @@ A link that the human pastes (a post, a repo, a paper) is an idea signed `human`
 PILOOP_ACTOR=human piloop idea add <name> '<its mechanism, one line>' --from '<link>; targets <the measured loss>'
 ```
 
-### Point research at the evidence
+### Point the agents at the evidence
 
 When you or an implementer write an analysis of where the head loses (against the reference, per slice):
 
 1. Add its path to the top-level `context` of `piloop.toml`.
 2. Run `piloop init .`.
 
-The research pack of every sweep then lists it under the analysis artifacts, newest first, before the history.
+`piloop history` then lists it under the analysis artifacts, newest first, before the history.
 
 ### Change an idea
 
@@ -117,10 +117,6 @@ piloop candidate note <c> '<why>' --follow-up '<hunch>'
 - It is not a keep and not a bar.
 - Implementers note a lead with a `Piloop-Note:` commit trailer, without follow-ups.
 
-### Refill the backlog
+### An empty board
 
-- Run `piloop launch <name> research`.
-- While the backlog is short, a sweep adds up to `max_ideas` ideas.
-- It leaves a `note` on the campaign.
-- Research sweeps also run by themselves while the backlog is below its target. They wait longer after sweeps that
-  define nothing.
+- Nothing waits for one: each worker proposes its own idea when the board has none for it.

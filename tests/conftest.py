@@ -164,11 +164,6 @@ harnesses = ["script"]
 model = {{ script = "watchdog-model" }}
 timeout = {sweep_timeout}
 
-[plugins.role.research]
-timeout = {sweep_timeout}
-max_ideas = 0
-max_concurrent = 1
-
 [[metrics]]
 name = "score"
 direction = "higher"
@@ -193,8 +188,7 @@ steers_mid_turn = true
 """
 
 WATCHDOG = RoleName('watchdog')
-RESEARCH = RoleName('research')
-"""The names of piloop's sweeping roles. Core names none of its roles but the implementer."""
+"""The name of piloop's sweeping role. Core names none of its roles but the implementer."""
 
 
 def spent(total: int, turns: int = 1) -> Usage:

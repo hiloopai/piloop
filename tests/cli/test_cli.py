@@ -79,7 +79,6 @@ from piloop.store.chunks import Chunked
 from piloop.version import direct_url, installed
 from piloop.watch.app import Watch
 from tests.conftest import (
-    RESEARCH,
     WATCHDOG,
     at_head,
     disk,
@@ -245,10 +244,9 @@ def test_a_worker_claims_or_proposes_an_idea_and_ends_its_run_through_the_api_si
 
 
 @pytest.mark.usefixtures('api')
-def test_research_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file_none(
+def test_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file_none(
     campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    research_files(campaign_path, 1)
     run_cli(['init', str(campaign_path)])
 
     def as_(actor: str, *argv: str) -> None:
@@ -259,7 +257,7 @@ def test_research_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file
         run_cli(list(argv))
 
     out()
-    as_('research#7', 'idea', 'add', 'demo', 'longer lines', '--from', 'l.md')
+    as_('orchestrator#7', 'idea', 'add', 'demo', 'longer lines', '--from', 'l.md', '--plan', 'one line more')
     as_('orchestrator', 'idea', 'add', 'demo', 'from the digest')
     as_('human', 'idea', 'add', 'demo', 'just try it')
     assert out().splitlines() == [
@@ -271,26 +269,20 @@ def test_research_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file
         with pytest.raises(SystemExit, match=f'{actor} files no ideas for others: a worker tries one of its own'):
             as_(actor, 'idea', 'add', 'demo', 'just do it')
     protocol = ' '.join(['step'] * 151)
-    with pytest.raises(SystemExit, match=r'the plan has 151 words, and a plan of a research has at most 150'):
-        as_('research#7', 'idea', 'add', 'demo', 'a protocol', '--plan', protocol)
+    with pytest.raises(SystemExit, match=r'the plan has 151 words, and a plan of a orchestrator has at most 150'):
+        as_('orchestrator#7', 'idea', 'add', 'demo', 'a protocol', '--plan', protocol)
 
     db = Database(common.settings.database_url, actor=System.HUMAN)
     with db.session() as s:
         rows = [(i.created_by, i.provenance) for i in s.scalars(select(Idea))]
-        assert rows == [('research#7', 'l.md'), ('orchestrator', None), ('human', None)]
+        assert rows == [('orchestrator#7', 'l.md'), ('orchestrator', None), ('human', None)]
         assert [e.actor for e in s.scalars(select(Event).where(Event.kind == 'idea.created'))] == [
-            'research#7',
+            'orchestrator#7',
             'orchestrator',
             'human',
         ]
-        assert added_by(s, CampaignId(1)) == {'research#7', 'orchestrator', 'human'}
+        assert added_by(s, CampaignId(1)) == {'orchestrator#7', 'orchestrator', 'human'}
     db.close()
-
-
-def research_files(campaign_path: Path, most: int) -> None:
-    """Set ``[plugins.role.research] max_ideas`` in the campaign's ``piloop.toml`` (the test file sets 0)."""
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text(re.sub(r'max_ideas = \d+', f'max_ideas = {most}', toml.read_text()))
 
 
 @pytest.mark.usefixtures('api')
@@ -1328,7 +1320,7 @@ def test_prompt_is_a_message_to_the_agent_and_says_whether_it_arrived(
             'human',
             'no answer',
         )
-        s.add(AgentSession(kind='research', campaign_id=1, state=AgentSessionState.EXITED))
+        s.add(AgentSession(kind='watchdog', campaign_id=1, state=AgentSessionState.EXITED))
         s.get_one(AgentSession, 1).harness = 'codex'
         s.commit()
     with pytest.raises(SystemExit, match='^agent_session#2 is not running$'):
@@ -1369,7 +1361,7 @@ def test_campaign_stop_and_cancels_are_requests_that_the_daemon_acts_on(campaign
                 AgentSession(
                     kind='implementer', campaign_id=1, subject=TargetRef(RUN, 1), state=AgentSessionState.EXITED
                 ),
-                AgentSession(kind='research', campaign_id=1, state=AgentSessionState.RUNNING),
+                AgentSession(kind='watchdog', campaign_id=1, state=AgentSessionState.RUNNING),
             ]
         )
         s.commit()
@@ -1531,10 +1523,10 @@ def test_campaign_sync_takes_a_token_from_stdin_or_a_secret_s_name_but_not_both(
 def test_launch_requests_an_implementer(campaign_path: Path, out) -> None:
     run_cli(['init', str(campaign_path)])
     out()
-    run_cli(['launch', 'demo', 'research'])
+    run_cli(['launch', 'demo', 'orchestrator'])
     run_cli(['launch', str(campaign_path), 'watchdog', '--harness', 'pi', '--model', 'opus', '--reason', 'eyeball it'])
     assert out().splitlines() == [
-        'agent_session#1 research requested for demo: requested from the CLI',
+        'agent_session#1 orchestrator requested for demo: requested from the CLI',
         'agent_session#2 watchdog requested for demo: eyeball it',
     ]
     db = Database(common.settings.database_url, actor=common.settings.actor)
@@ -1545,16 +1537,14 @@ def test_launch_requests_an_implementer(campaign_path: Path, out) -> None:
         ]
     db.close()
     assert rows == [
-        (RESEARCH, AgentSessionState.REQUESTED, None, None, 'requested from the CLI'),
+        ('orchestrator', AgentSessionState.REQUESTED, None, None, 'requested from the CLI'),
         (WATCHDOG, AgentSessionState.REQUESTED, 'pi', 'opus', 'eyeball it'),
     ]
     run_cli(['status', 'demo'])
-    assert '- Agents live: none; requested: research#1, watchdog#2' in out(), (
+    assert '- Agents live: none; requested: orchestrator#1, watchdog#2' in out(), (
         'a request is not an agent until the daemon launches it'
     )
-    with pytest.raises(
-        SystemExit, match="demo has no sweeping role 'janitor'; it has orchestrator, research, watchdog.$"
-    ):
+    with pytest.raises(SystemExit, match="demo has no sweeping role 'janitor'; it has orchestrator, watchdog.$"):
         run_cli(['launch', 'demo', 'janitor'])
     with pytest.raises(SystemExit, match='The daemon launches implementers by itself, one for each queued run'):
         run_cli(['launch', 'demo', 'implementer'])

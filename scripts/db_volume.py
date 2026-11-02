@@ -227,10 +227,10 @@ def _agent_sessions(con: sqlite3.Connection, v: Volume, rng: random.Random) -> N
     for w in range(1, v.agent_sessions + 1):
         p = _campaign_of(w, v)
         if w <= 2 * v.campaigns:  # a few live agents per campaign, on the headless runtime so status reads a file
-            kind, run = ('implementer', w) if w % 2 else ('research', None)
+            kind, run = ('implementer', w) if w % 2 else ('watchdog', None)
             rows.append((w, kind, p, run, 'pi', 'm', 'subprocess', '{}', 'running', None))
             continue
-        kind = rng.choice(['implementer'] * 80 + ['watchdog'] * 10 + ['research'] * 10)
+        kind = rng.choice(['implementer'] * 80 + ['watchdog'] * 20)
         run = rng.randint(1, v.runs) if kind == 'implementer' else None
         state = rng.choice(['exited'] * 90 + ['killed'] * 10)
         rows.append((w, kind, p, run, 'pi', 'm', 'subprocess', '{}', state, f'2026-01-{1 + w % 28:02d} 12:00:00'))

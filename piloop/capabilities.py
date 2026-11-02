@@ -54,14 +54,11 @@ from piloop.plugins.cas.gcs import Gcs
 from piloop.plugins.cas.http import Http
 
 from piloop.plugins.trigger.contract import TRIGGERS, Trigger, TriggerName, Pass, Fire, Steer, Quiet
-from piloop.plugins.trigger.contract import Backlog
 from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
 from piloop.plugins.campaign_type.optimization.trigger.low_yield import LowYield
 from piloop.plugins.trigger.cron import CronTrigger
-from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
 from piloop.plugins.trigger.sql import SqlTrigger
-from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.trigger.stopped import StoppedTrigger
 from piloop.plugins.trigger.news import NewsTrigger
 
@@ -110,7 +107,6 @@ from piloop.plugins.section.orchestration import Orchestration
 from piloop.plugins.role.contract import ROLES, ImplementerRole, SweepRole
 from piloop.plugins.role.contract import Files, Continuity
 from piloop.plugins.role.contract import RoleConfig, Sweep
-from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.role.orchestrator import OrchestratorRole
 

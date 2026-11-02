@@ -97,7 +97,7 @@ def _refs(ids: Iterable[int]) -> str:
 
 
 def source(created_by: str) -> str:
-    """Return where an idea came from: its signature without the agent id (``research#12`` → ``research``)."""
+    """Return where an idea came from: its signature without the agent id (``watchdog#12`` → ``watchdog``)."""
     return created_by.partition('#')[0]
 
 

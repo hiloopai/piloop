@@ -24,8 +24,5 @@ effort = "medium"
 [overlay.plugins.role.orchestrator]
 triggers = []
 
-[overlay.plugins.role.research]
-triggers = []
-
 [overlay.plugins.role.watchdog]
 triggers = []

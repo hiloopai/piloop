@@ -126,12 +126,13 @@ def steers_mid_turn(s: Session, agent_session: AgentSession) -> bool:
 def files_of(cfg: CampaignConfig, actor: Actor) -> Files | None:
     """Return what ``actor`` may file with ``piloop idea``, by the role in its signature (``watchdog#4``).
 
-    None for an actor that is not a role, such as ``orchestrator`` or ``human``: it may file anything.
+    None for an actor that is not a role, such as ``orchestrator`` or ``human``: it may file anything. An agent of a
+    role that ``piloop.toml`` no longer has files nothing.
     """
     if (agent := actor.launched) is None:
         return None
     table = cfg.roles.all().get(agent.role)
-    return None if table is None else filed(table)
+    return Files.NOTHING if table is None else filed(table)
 
 
 def read_brief(cas: Cas, brief: Cid) -> str:

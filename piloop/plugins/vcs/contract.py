@@ -128,10 +128,6 @@ class Part(StrEnum):
     """How to read an older file without copying the tree."""
     SHOW = 'show'
     """How to read a candidate of another campaign, at ``<path>``."""
-    READ = 'read'
-    """How the research agent reads a candidate against its base."""
-    PORT = 'port'
-    """How to read a candidate's change against its parent, to port it."""
     CODE = 'code'
     """The tool line on how to read a candidate's code."""
 

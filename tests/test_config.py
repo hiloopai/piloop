@@ -14,14 +14,11 @@ from piloop.agents.roles import filed
 from piloop.config import CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.ids import RoleName
-from piloop.plugins.campaign_type.kit.backlog.role.research import ResearchRole
-from piloop.plugins.campaign_type.kit.backlog.trigger.low_water import LowWaterTrigger
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole, TrackConfig
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
-from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.campaign_type.kit.verdicts.judge import criterion
 from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.executor.contract import EXECUTORS
@@ -40,7 +37,7 @@ from piloop.plugins.stop_rule.limits import Limits
 from piloop.plugins.trigger.news import NewsTrigger
 from piloop.plugins.trigger.sql import SqlTrigger
 from piloop.settings import Settings
-from tests.conftest import AGENT_TIMEOUT, RESEARCH, WATCHDOG, role_of
+from tests.conftest import AGENT_TIMEOUT, WATCHDOG, role_of
 
 
 def test_load_precedence(campaign_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,13 +91,11 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
     assert cfg.roles.all() == {
         IMPLEMENTER: ImplementerRole(timeout=AGENT_TIMEOUT, max_concurrent=1),
         RoleName('orchestrator'): OrchestratorRole(),
-        RESEARCH: ResearchRole(timeout=AGENT_TIMEOUT, max_ideas=0, max_concurrent=1),
         WATCHDOG: WatchdogRole(harnesses=['script'], model={'script': 'watchdog-model'}, timeout=AGENT_TIMEOUT),
     }, 'every role, in the order of its entry point, with its table over its defaults'
-    assert cfg.role(RESEARCH) is role_of(cfg, ResearchRole)
-    assert cfg.role_harnesses(RESEARCH) == ['script'], 'unset: the campaign rotation'
+    assert cfg.role(WATCHDOG) is role_of(cfg, WatchdogRole)
+    assert cfg.role_harnesses(RoleName('orchestrator')) == ['script'], 'unset: the campaign rotation'
     assert cfg.role_models(WATCHDOG) == {'script': 'watchdog-model'}, "role map over each harness's model"
-    assert cfg.role_models(RESEARCH) == {'script': 'test-model', 'claude': 'claude-opus-5-5', 'codex': 'gpt-6.1-sol'}
     assert CampaignConfig.model_validate(cfg.model_dump(mode='json')) == cfg, 'round-trips through the campaign row'
     dumped = cfg.model_dump(mode='json')['plugins']
     assert dumped['role']['orchestrator'] == {}, 'a role without a table is stored by its name alone'
@@ -118,19 +113,19 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
     )
     assert defaults.context == [], 'no analysis artifacts unless the campaign names them'
     implementer, watchdog = role_of(defaults, ImplementerRole), role_of(defaults, WatchdogRole)
-    research = role_of(defaults, ResearchRole)
     assert (implementer.timeout, implementer.max_concurrent) == (1800, 1), 'one worker: more finish sooner, not cheaper'
     assert (watchdog.harnesses, watchdog.model) == (None, None), 'the campaign rotation and models'
     assert (watchdog.timeout, watchdog.interval) == (600, 1800)
-    assert (research.timeout, research.max_ideas) == (900, 3), 'a sweep defines a ranked few ideas'
-    assert research.triggers == ['low_water', 'stalled']
-    assert defaults.triggers_of(RESEARCH) == [LowWaterTrigger(buffer=2), StalledTrigger()]
-    assert research.max_concurrent == 1, 'concurrent sweeps duplicate each other and race on seeds'
+    assert list(defaults.roles.all()) == [IMPLEMENTER, 'orchestrator', WATCHDOG], 'no research'
 
 
 LEAD_OF_0_5 = (
-    'the orchestrator wakes only on news and run_failed now, not on low_water or cron: delete them from'
-    ' [plugins.role.orchestrator] triggers'
+    'the orchestrator wakes only on news and run_failed now, not on cron: delete them from [plugins.role.orchestrator]'
+    ' triggers'
+)
+LOW_WATER_OF_0_6 = (
+    'the low_water trigger is removed with the research role: delete low_water from [plugins.role.orchestrator]'
+    ' triggers'
 )
 ROUTINE_OF_0_5 = 'nothing routine wakes the orchestrator now, so routine_every is removed'
 
@@ -150,7 +145,7 @@ def test_an_orchestrator_of_0_5_that_plans_on_a_timer_loads_from_its_file_withou
     toml.write_text(toml.read_text() + tables)
     with pytest.warns(PiloopDeprecationWarning) as warned:
         cfg = load_campaign_config(campaign_path)
-    assert dropped(warned) == [ROUTINE_OF_0_5, LEAD_OF_0_5]
+    assert dropped(warned) == [ROUTINE_OF_0_5, LOW_WATER_OF_0_6, LEAD_OF_0_5]
     assert role_of(cfg, OrchestratorRole).triggers == ['news', 'run_failed']
     assert cfg.triggers_of(RoleName('orchestrator')) == [NewsTrigger(quiet_seconds=5), RunFailed()]
 
@@ -164,7 +159,7 @@ def test_a_campaign_that_0_5_stored_with_an_orchestrator_that_plans_on_a_timer_l
     stored['plugins']['trigger'] = {'news': {'quiet_seconds': 5, 'routine_every': 900}}
     with pytest.warns(PiloopDeprecationWarning) as warned:
         cfg = CampaignConfig.model_validate(stored)
-    assert dropped(warned) == [ROUTINE_OF_0_5, LEAD_OF_0_5]
+    assert dropped(warned) == [ROUTINE_OF_0_5, LOW_WATER_OF_0_6, LEAD_OF_0_5]
     assert cfg.triggers_of(RoleName('orchestrator')) == [NewsTrigger(quiet_seconds=5), RunFailed()]
 
 
@@ -187,21 +182,21 @@ def test_validators(campaign_path: Path) -> None:
     with pytest.raises(ValueError, match='relative path'):
         load_campaign_config(campaign_path, link=['/etc'])
     with pytest.raises(ValueError, match='relative path'):
-        load_campaign_config(campaign_path, plugins={'role': {'research': {'addendum': '../elsewhere.md'}}})
+        load_campaign_config(campaign_path, plugins={'role': {'watchdog': {'addendum': '../elsewhere.md'}}})
     with pytest.raises(ValueError, match='at least one metric'):
         load_campaign_config(campaign_path, metrics=[{'name': 'a', 'direction': 'higher'}])
     with pytest.raises(ValueError, match='plugins.role.janitor'):
         load_campaign_config(campaign_path, plugins={'role': {'janitor': {}}})
     with pytest.raises(ValueError, match='plugins.role.implementer.max_ideas'):
         load_campaign_config(campaign_path, plugins={'role': {'implementer': {'max_ideas': 3}}})
-    with pytest.raises(ValueError, match='plugins.role.research.min_ready'):
-        load_campaign_config(campaign_path, plugins={'role': {'research': {'min_ready': 3}}})
-    with pytest.raises(ValueError, match=re.escape("plugins.role.research.harnesses[0] = 'nope': no [plugins.harness")):
-        load_campaign_config(campaign_path, plugins={'role': {'research': {'harnesses': ['nope']}}})
-    with pytest.raises(ValueError, match=re.escape("plugins.role.research.model = 'nope': no [plugins.harness.nope]")):
-        load_campaign_config(campaign_path, plugins={'role': {'research': {'model': {'nope': 'm'}}}})
-    with pytest.raises(ValueError, match=re.escape("plugins.role.research: no model for the harnesses ['pi']")):
-        load_campaign_config(campaign_path, plugins={'role': {'research': {'harnesses': ['pi']}}})
+    with pytest.raises(ValueError, match='plugins.role.watchdog.min_ready'):
+        load_campaign_config(campaign_path, plugins={'role': {'watchdog': {'min_ready': 3}}})
+    with pytest.raises(ValueError, match=re.escape("plugins.role.watchdog.harnesses[0] = 'nope': no [plugins.harness")):
+        load_campaign_config(campaign_path, plugins={'role': {'watchdog': {'harnesses': ['nope']}}})
+    with pytest.raises(ValueError, match=re.escape("plugins.role.watchdog.model = 'nope': no [plugins.harness.nope]")):
+        load_campaign_config(campaign_path, plugins={'role': {'watchdog': {'model': {'nope': 'm'}}}})
+    with pytest.raises(ValueError, match=re.escape("plugins.role.watchdog: no model for the harnesses ['pi']")):
+        load_campaign_config(campaign_path, plugins={'role': {'watchdog': {'harnesses': ['pi']}}})
     with pytest.raises(ValueError, match='plugins.harness.claude.max_concurrent'):
         load_campaign_config(campaign_path, plugins={'harness': {'claude': {'max_concurrent': 0}}})
 
@@ -556,8 +551,8 @@ def test_a_table_with_a_new_name_defines_a_role_that_needs_a_prompt_file_and_tri
     good = {'prompt': 'reviewer.md', 'triggers': ['new_idea'], 'runtime': 'subprocess'}
     new_idea: dict[str, object] = {'new_idea': {'provider': 'sql', 'when': when}}
     cfg = load_campaign_config(campaign_path, plugins={'role': {'reviewer': good}, 'trigger': new_idea})
-    assert list(cfg.roles.all()) == ['implementer', 'orchestrator', 'research', 'watchdog', 'reviewer']
-    assert list(cfg.roles.sweeping()) == ['orchestrator', 'research', 'watchdog', 'reviewer'], (
+    assert list(cfg.roles.all()) == ['implementer', 'orchestrator', 'watchdog', 'reviewer']
+    assert list(cfg.roles.sweeping()) == ['orchestrator', 'watchdog', 'reviewer'], (
         'the implementer does runs, not sweeps'
     )
     assert cfg.role_runtime(RoleName('reviewer')) == 'subprocess'
@@ -587,14 +582,9 @@ def test_a_table_with_a_new_name_defines_a_role_that_needs_a_prompt_file_and_tri
         reviewer(triggers=['timer']), {'timer': {'provider': 'cron', 'every': 3}}
     )
     assert '[plugins.trigger.new_idea] is configured, and nothing uses it: add it to a list that names it' in fails(
-        reviewer(triggers=['stalled'])
+        reviewer(triggers=['cron'])
     )
-    filler = load_campaign_config(
-        campaign_path,
-        plugins={'role': reviewer(triggers=['low_water'], files='ideas'), 'trigger': {'low_water': {'buffer': 1}}},
-    )
-    assert cfg.roles.sweeping()[RoleName('reviewer')].max_ideas == 1, 'any sweeping role can fill the backlog'
-    assert filler.triggers_of('reviewer') == [LowWaterTrigger(buffer=1)]
+    assert cfg.roles.sweeping()[RoleName('reviewer')].max_ideas == 1, 'any sweeping role can file ideas'
     for query, error in {
         'DELETE FROM ideas': 'not authorized',
         'SELECT nope FROM ideas': 'no such column: nope',
@@ -611,9 +601,9 @@ def test_a_table_with_a_new_name_defines_a_role_that_needs_a_prompt_file_and_tri
 def test_a_table_with_runs_defines_a_role_that_does_runs_with_the_implementer_defaults(campaign_path: Path) -> None:
     quick = {'runs': True, 'timeout': 60, 'max_concurrent': 1}
     cfg = load_campaign_config(campaign_path, plugins={'role': {'quick': quick}})
-    assert list(cfg.roles.all()) == ['implementer', 'orchestrator', 'research', 'watchdog', 'quick']
+    assert list(cfg.roles.all()) == ['implementer', 'orchestrator', 'watchdog', 'quick']
     assert list(cfg.roles.doing_runs()) == ['quick', 'implementer'], 'the roles of the file fill their slots first'
-    assert list(cfg.roles.sweeping()) == ['orchestrator', 'research', 'watchdog']
+    assert list(cfg.roles.sweeping()) == ['orchestrator', 'watchdog']
     role = cfg.roles.doing_runs()[RoleName('quick')]
     assert (role.prompt, role.PROMPT, filed(role), role.timeout) == (None, ImplementerRole.PROMPT, Files.NOTHING, 60)
     assert cfg.run_slots == 1 + cfg.roles.doing_runs()[IMPLEMENTER].max_concurrent
@@ -705,20 +695,22 @@ def test_an_instance_with_a_table_of_its_own_that_no_name_puts_in_use_is_refused
         load_campaign_config(campaign_path, plugins={'section': {'short': lessons}})
     used = load_campaign_config(
         campaign_path,
-        plugins={'section': {'short': lessons}, 'role': {'research': {'sections': ['context', 'short', 'goal']}}},
+        plugins={'section': {'short': lessons}, 'role': {'orchestrator': {'sections': ['context', 'short', 'goal']}}},
     )
-    assert [type(s).__name__ for s in used.sections_of(RESEARCH)] == ['Context', 'Lessons', 'Goal'], 'a role names it'
+    assert [type(s).__name__ for s in used.sections_of(RoleName('orchestrator'))] == ['Context', 'Lessons', 'Goal'], (
+        'a role names it'
+    )
     watchdogs = [s for s in used.sections_of(WATCHDOG) if isinstance(s, Lessons)]
     assert watchdogs == [Lessons()], "the watchdog's own lessons are the built-in one"
     with pytest.raises(
         ConfigError, match=re.escape('[plugins.harness.codex] is configured, and nothing uses it: add it')
     ):
         load_campaign_config(campaign_path, plugins={'harness': {'codex': {'model': 'x'}}})
-    keyed = {'harness': {'codex': {'model': 'x'}}, 'role': {'research': {'model': {'codex': 'y'}}}}
+    keyed = {'harness': {'codex': {'model': 'x'}}, 'role': {'orchestrator': {'model': {'codex': 'y'}}}}
     with pytest.raises(ConfigError, match=re.escape('add it to [plugins.harness] use')):
         load_campaign_config(campaign_path, plugins=keyed)  # a key of a role's model puts no harness in use
-    rotated = {'harness': {'codex': {'model': 'x'}}, 'role': {'research': {'harnesses': ['codex']}}}
-    assert load_campaign_config(campaign_path, plugins=rotated).role_harnesses(RESEARCH) == ['codex']
+    rotated = {'harness': {'codex': {'model': 'x'}}, 'role': {'orchestrator': {'harnesses': ['codex']}}}
+    assert load_campaign_config(campaign_path, plugins=rotated).role_harnesses(RoleName('orchestrator')) == ['codex']
     assert load_campaign_config(campaign_path, plugins={'section': {'goal': {}}}).status_sections()[1] == Goal(), (
         'an empty table changes nothing, and configures nothing'
     )
@@ -816,14 +808,53 @@ def test_a_scout_table_of_0_5_loads_without_a_scout_and_warns(campaign_path: Pat
     assert 'scout' not in cfg.roles.all()
 
 
+def test_a_research_table_of_0_6_loads_without_research_and_warns_once(campaign_path: Path) -> None:
+    toml = campaign_path / 'piloop.toml'
+    toml.write_text(toml.read_text() + '\n[plugins.role.research]\nmax_ideas = 3\n')
+    with pytest.warns(
+        PiloopDeprecationWarning, match=r'the research role is removed; delete \[plugins.role.research\]'
+    ) as warned:
+        cfg = load_campaign_config(campaign_path)
+    assert len(warned) == 1 and 'research' not in cfg.roles.all()
+
+
+def test_the_low_water_and_stalled_triggers_of_0_6_load_without_them_and_warn(campaign_path: Path) -> None:
+    toml = campaign_path / 'piloop.toml'
+    watchdog = 'triggers = ["run_failed", "stalled", "wet"]'
+    text = toml.read_text().replace('[plugins.role.watchdog]\n', f'[plugins.role.watchdog]\n{watchdog}\n')
+    toml.write_text(f'{text}\n[plugins.trigger.wet]\nprovider = "low_water"\nbuffer = 1\n')
+    with pytest.warns(PiloopDeprecationWarning, match='trigger is removed with the research role') as warned:
+        cfg = load_campaign_config(campaign_path)
+    assert sorted(str(w.message).split(':')[0] for w in warned) == [
+        'the low_water trigger is removed with the research role',
+        'the low_water trigger is removed with the research role',
+        'the stalled trigger is removed with the research role',
+    ], 'the wet table, its name in the list, and stalled in the list'
+    assert [type(t).__name__ for t in cfg.triggers_of(WATCHDOG)] == ['RunFailed']
+
+
+def test_a_campaign_that_0_6_stored_with_research_loads_without_it_and_warns(campaign_path: Path) -> None:
+    """The stored copy of ``piloop.toml`` (``campaigns.config``) goes the same validation as the file: no migration."""
+    stored = load_campaign_config(campaign_path).model_dump(mode='json')
+    stored['plugins']['role']['research'] = {'triggers': ['low_water', 'stalled'], 'max_ideas': 3}
+    stored['plugins']['role']['watchdog']['triggers'] = ['run_failed', 'stalled']
+    stored['plugins']['trigger'] = {'low_water': {'buffer': 2}}
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        cfg = CampaignConfig.model_validate(stored)
+    assert sorted(str(w.message).split(':')[0].split(';')[0] for w in warned) == [
+        'the low_water trigger is removed with the research role',
+        'the research role is removed',
+        'the stalled trigger is removed with the research role',
+    ]
+    assert 'research' not in cfg.roles.all() and cfg.triggers_of(WATCHDOG) == [RunFailed()]
+
+
 def test_the_leaking_funnel_of_0_5_loads_without_the_trigger_and_warns(campaign_path: Path) -> None:
     toml = campaign_path / 'piloop.toml'
     watchdog = 'triggers = ["run_failed", "leaking_funnel", "leaks"]'
     text = (
-        toml.read_text()
-        .replace('[plugins.role.watchdog]\n', f'[plugins.role.watchdog]\n{watchdog}\n')
-        .replace('[plugins.role.research]\n', '[plugins.role.research]\ntriggers = ["stalled"]\n')
-    )
+        toml.read_text().replace('[plugins.role.watchdog]\n', f'[plugins.role.watchdog]\n{watchdog}\n')
+    ) + '\n[plugins.role.orchestrator]\ntriggers = ["news"]\n'
     tables = '[plugins.trigger.leaks]\nprovider = "leaking_funnel"\n\n[plugins.trigger.leaking_funnel]\nwindow = 3\n'
     toml.write_text(f'{text}\n{tables}')
     lines = toml.read_text().splitlines()
@@ -835,7 +866,7 @@ def test_the_leaking_funnel_of_0_5_loads_without_the_trigger_and_warns(campaign_
         lines.index('[plugins.trigger.leaking_funnel]') + 1,
     ], 'the line of each'
     assert [type(t).__name__ for t in cfg.triggers_of(WATCHDOG)] == ['RunFailed']
-    assert [type(t).__name__ for t in cfg.triggers_of(RESEARCH)] == ['StalledTrigger'], 'its list is left as it is'
+    assert [type(t).__name__ for t in cfg.triggers_of('orchestrator')] == ['NewsTrigger'], 'its list is left as it is'
 
 
 def test_the_keys_that_assigned_ideas_of_0_5_load_without_them_and_warn(campaign_path: Path) -> None:
@@ -869,14 +900,14 @@ def test_a_track_share_of_0_5_loads_without_it_and_warns(campaign_path: Path) ->
 
 def test_the_seed_trigger_of_0_5_loads_without_the_trigger_and_warns(campaign_path: Path) -> None:
     toml = campaign_path / 'piloop.toml'
-    research = 'triggers = ["low_water", "seed", "stalled"]'
-    text = toml.read_text().replace('[plugins.role.research]\n', f'[plugins.role.research]\n{research}\n')
+    watchdog = 'triggers = ["run_failed", "seed"]'
+    text = toml.read_text().replace('[plugins.role.watchdog]\n', f'[plugins.role.watchdog]\n{watchdog}\n')
     toml.write_text(f'{text}\n[plugins.trigger.seed]\n')
     lines = toml.read_text().splitlines()
     with pytest.warns(PiloopDeprecationWarning, match='the seed trigger is removed') as warned:
         cfg = load_campaign_config(campaign_path)
-    assert sorted(w.lineno for w in warned) == [lines.index(research) + 1, lines.index('[plugins.trigger.seed]') + 1]
-    assert [type(t).__name__ for t in cfg.triggers_of(RESEARCH)] == ['LowWaterTrigger', 'StalledTrigger']
+    assert sorted(w.lineno for w in warned) == [lines.index(watchdog) + 1, lines.index('[plugins.trigger.seed]') + 1]
+    assert [type(t).__name__ for t in cfg.triggers_of(WATCHDOG)] == ['RunFailed']
 
 
 def test_the_seeds_and_reviews_of_0_5_load_without_their_keys_and_warn(campaign_path: Path) -> None:
@@ -907,7 +938,7 @@ def test_files_and_plan_words_of_a_role_that_does_runs_of_0_5_load_without_them_
     text = (
         toml.read_text()
         .replace('[plugins.role.implementer]\n', '[plugins.role.implementer]\nfiles = "ideas"\n')
-        .replace('[plugins.role.research]\n', '[plugins.role.research]\nplan_words = 90\n')
+        .replace('[plugins.role.watchdog]\n', '[plugins.role.watchdog]\nplan_words = 90\n')
     )
     toml.write_text(text + '\n[plugins.role.quick]\nruns = true\nplan_words = 80\n')
     lines = toml.read_text().splitlines()
@@ -918,4 +949,4 @@ def test_files_and_plan_words_of_a_role_that_does_runs_of_0_5_load_without_them_
         lines.index('plan_words = 80') + 1,
     ], 'the line of each'
     assert [filed(r) for r in cfg.roles.doing_runs().values()] == [Files.NOTHING, Files.NOTHING]
-    assert role_of(cfg, ResearchRole).plan_words == 90, "a sweep's stays"
+    assert role_of(cfg, WatchdogRole).plan_words == 90, "a sweep's stays"

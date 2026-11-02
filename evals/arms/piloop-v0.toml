@@ -30,9 +30,6 @@ harnesses = ["codex"]
 triggers = ["news", "run_failed"]
 max_ideas = 4
 
-[overlay.plugins.role.research]
-triggers = []
-
 [overlay.plugins.role.watchdog]
 triggers = []
 

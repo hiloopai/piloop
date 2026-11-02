@@ -58,7 +58,7 @@ from piloop.watch.app import (
 )
 from piloop.watch.panels import Api, Part, read_frame, sparkline, touched
 from tests.campaign.test_inbox import news_lines
-from tests.conftest import RESEARCH, WATCHDOG, has_lines, reconfigured, register, serving_api, spent, store_config
+from tests.conftest import WATCHDOG, has_lines, reconfigured, register, serving_api, spent, store_config
 from tests.reports.test_history import idea
 
 
@@ -258,7 +258,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
                     started_at=ago(minutes=3),
                 ),
                 AgentSession(
-                    kind=RESEARCH,
+                    kind=WATCHDOG,
                     campaign_id=p.id,
                     harness='claude',
                     model='opus',

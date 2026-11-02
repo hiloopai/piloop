@@ -46,15 +46,15 @@ def test_a_requested_agent_emits_its_request_from_piloop_sql_and_no_other_insert
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
         sql.run(
             con,
-            f"INSERT INTO agent_sessions (kind, campaign_id, state, reason) VALUES ('research', {campaign.id},"
+            f"INSERT INTO agent_sessions (kind, campaign_id, state, reason) VALUES ('watchdog', {campaign.id},"
             " 'requested', 'by hand')",
         )
         sql.run(
-            con, f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('research', {campaign.id}, 'exited')"
+            con, f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('watchdog', {campaign.id}, 'exited')"
         )
     [(actor, target, event)] = emitted(db, start)
     assert actor == 'human' and target.kind == TargetKind.AGENT_SESSION
-    assert event == AgentSessionRequested(role=RoleName('research'), campaign=CampaignId(campaign.id), reason='by hand')
+    assert event == AgentSessionRequested(role=RoleName('watchdog'), campaign=CampaignId(campaign.id), reason='by hand')
 
 
 def test_a_new_idea_emits_its_creation_signed_by_who_created_it(db: Database, campaign: Campaign) -> None:

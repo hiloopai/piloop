@@ -251,7 +251,6 @@ def test_each_role_has_guides_of_its_own_that_extend_a_shared_list() -> None:
         {
             'implementer': ['database'],
             'orchestrator': ['database', 'concepts', 'judging', 'comments', 'priorities', 'links', 'research_commands'],
-            'research': ['database', 'concepts', 'judging', 'comments', 'search', 'past_campaigns', 'links'],
             'watchdog': ['database', 'concepts', 'judging', 'comments', 'priorities', 'search', 'past_campaigns'],
         }
     )
@@ -265,7 +264,6 @@ def test_a_packages_guide_shows_in_every_role_of_its_surface_after_the_roles_own
     sweeps = {name: p.model().shown() for name, p in ROLES.providers().items() if p.model.SURFACE is Surface.SWEEP}
     assert {name: 'units' in shown for name, shown in sweeps.items()} == {
         'orchestrator': False,
-        'research': True,
         'watchdog': True,
     }, 'the orchestrator lists its sections'
     assert all(shown.index('units') < shown.index('context') for shown in sweeps.values() if 'units' in shown), (

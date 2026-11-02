@@ -45,7 +45,7 @@ Each command takes `--reason '<why>'`, signs the change with your actor and reco
 
 ### Ask for an agent
 
-- `INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('research', <p>, 'requested')`. The daemon starts it at once.
+- `INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('watchdog', <p>, 'requested')`. The daemon starts it at once.
 - Kinds: the sweeping roles of `piloop.toml`. A role that does runs needs a run, so leave its agents to the
   scheduler.
 - Optional: `harness` and `model` pin the choice. `reason` says why.

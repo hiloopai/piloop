@@ -30,7 +30,7 @@ RUN_ROLE_KEYS = ('files', 'plan_words')
 def run_role_ideas(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """``files`` and ``plan_words`` of a role that does runs are removed: its agents file no seeds, and no ideas for others.
 
-    piloop drops them. An implementer's hunch goes in a note, which research reads.
+    piloop drops them. An implementer's hunch goes in a note on the board.
     """
     from piloop.plugins.role.contract import ROLES, ImplementerRole  # here: a bridges module imports no provider
 

@@ -18,9 +18,7 @@ from piloop.db.events import emit, latest
 from piloop.db.models import LIVE, AgentSession, Campaign, Event, EventModel, ReadBy, count
 from piloop.ids import AgentSessionId, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, TypeHost
-from piloop.plugins.campaign_type.kit.backlog.ideas import claimable, held
-from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.evaluation import submissions
 from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, handed_off
@@ -32,7 +30,6 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import due, head, head_unme
 from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.facts import Facts
 from piloop.plugins.role.contract import ImplementerRole
-from piloop.plugins.trigger.contract import Backlog
 
 NO_RUN_ERROR = 'an implementer needs a run; the scheduler requests them for free slots'
 
@@ -192,34 +189,6 @@ class OptimizationPlanner:
             return
         self._tracer.event('candidate.remeasure', campaign=campaign.name, candidate=todo[0].id, left=len(todo))
         self._scoring[key] = self._host.submit(partial(self._controller.remeasure, todo[0].id))
-
-    def backlog(self, s: Session, campaign: Campaign, name: RoleName, left: Facts, buffer: int) -> Backlog:
-        """Return the campaign's backlog as role ``name`` fills it: ``buffer`` beyond the run slots, its own sweeps.
-
-        It is never more than the runs that the stop rule ``left``.
-        """
-        cfg = campaign.config
-        target = cfg.run_slots + buffer
-        if (runs_left := left.get(facts.RUNS)) is not None:
-            target = min(target, runs_left)
-        sweeps = count(
-            s,
-            select(AgentSession).where(
-                AgentSession.campaign_id == campaign.id,
-                AgentSession.kind == name,
-                AgentSession.state.in_(LIVE),
-            ),
-        )
-        mine = select(Idea).where(Idea.campaign_id == campaign.id)
-        return Backlog(
-            runnable=count(s, mine.where(claimable())),
-            waiting=count(s, mine.where((Idea.status == IdeaStatus.OPEN) & held())),
-            target=target,
-            free=free_slots(s, campaign, cfg.roles.doing_runs(), left.get(facts.RUNS)),
-            sweeps=sweeps,
-            per_sweep=cfg.roles.sweeping()[name].max_ideas,
-            on_hold=head_unmeasured(s, campaign),
-        )
 
     def queue(self, s: Session, campaign: Campaign, left: Facts) -> None:
         """Start a fresh run, and request its worker, for each free slot within the runs ``left``.

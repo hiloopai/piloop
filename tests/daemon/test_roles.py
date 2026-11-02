@@ -23,7 +23,7 @@ from piloop.config import ConfigError, load_campaign_config
 from piloop.daemon.main import Daemon
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CampaignStatus, CommentKind, Ending, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
@@ -40,7 +40,6 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERD
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.escalation.contract import DECISION
 from piloop.plugins.executor.workers import Workers
-from piloop.plugins.harness.contract import HARNESSES
 from piloop.plugins.host import Capability, PluginError, compose
 from piloop.plugins.lineage.contract import LINEAGE
 from piloop.plugins.role.contract import ROLES
@@ -51,7 +50,6 @@ from piloop.settings import Settings
 from tests.conftest import (
     END_RUN,
     HARNESS_APPEND,
-    RESEARCH,
     SETTLE,
     WATCHDOG,
     ScriptRuntime,
@@ -218,33 +216,21 @@ def test_a_role_adds_its_incident_prompt_to_an_incident_sweep_and_its_routine_pr
 def test_a_role_that_defines_ideas_is_told_how_many_its_sweep_may_add(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """``low_water`` counts on ``max_ideas`` from each sweep of the role, so the brief of the sweep states it."""
+    """The brief of a sweep of a role that files ideas states the most that it may add."""
     (Path(campaign.path) / 'ideator.md').write_text('# Ideate\n')
-    ideator: dict[str, object] = {
-        'prompt': 'ideator.md',
-        'triggers': ['ideator_low_water'],
-        'files': 'ideas',
-        'max_ideas': 2,
-    }
-    configure(
-        db,
-        campaign,
-        '#!/bin/sh\ntrue\n',
-        ideator=ideator,
-        research={'triggers': []},
-        watchdog={'triggers': []},
-        trigger={'ideator_low_water': {'provider': 'low_water', 'buffer': 1}},
-    )
+    ideator: dict[str, object] = {'prompt': 'ideator.md', 'triggers': [], 'files': 'ideas', 'max_ideas': 2}
+    configure(db, campaign, '#!/bin/sh\ntrue\n', ideator=ideator, watchdog={'triggers': []})
+    with db.session() as s:
+        s.add(AgentSession(kind='ideator', campaign_id=campaign.id, reason='by hand'))
+        s.commit()
     sched = scheduler(db, recording(runtime, []), tmp_path)
-    assert run_all(sched) == [1], 'no runnable idea: the backlog is short'
+    assert run_all(sched) == [1]
     sched.wait(SETTLE)
     sched.stop(timeout=5)
     brief = (tmp_path / 'agent_sessions' / '1' / 'brief.md').read_text()
     assert (
         '- New ideas of your own in this sweep: at most 2 (`max_ideas`), each with a plan of at most 150 words' in brief
     )
-    [(_, _, reason)] = agent_sessions(db, 'ideator')
-    assert reason is not None and reason.startswith('1 free implementer slots without a runnable idea')
 
 
 HARNESS_SIGNS = '#!/bin/sh\necho "$PILOOP_ACTOR" >> solve.txt\ngit commit -qam "sign"\n' + END_RUN
@@ -362,27 +348,16 @@ def test_a_queued_run_of_a_role_that_piloop_toml_no_longer_has_fails_and_its_cla
 def test_a_built_in_role_takes_other_triggers(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """The watchdog without its ``anomaly`` trigger ignores a failure; its timer still fires at its ``interval``."""
-    configure(
-        db,
-        campaign,
-        '#!/bin/sh\ntrue\n',
-        watchdog={'triggers': ['cron'], 'interval': 30},
-        research={'triggers': ['reviewed']},
-        trigger=REVIEWED,
-    )
+    """The watchdog with a ``sql`` trigger in place of its own ignores a failure, and wakes on a new decision."""
+    configure(db, campaign, '#!/bin/sh\ntrue\n', watchdog={'triggers': ['reviewed']}, trigger=REVIEWED)
     sched = scheduler(db, recording(runtime, []), tmp_path)
     fail_a_run(db, campaign, 'broken')
-    assert run_all(sched) == [], 'no anomaly trigger, and the timer is not due'
-    with db.session() as s:
-        s.get_one(Campaign, campaign.id).created_at = utcnow().replace(year=2000)
-        s.commit()
+    assert run_all(sched) == [], 'no anomaly trigger, and no decision yet'
     decide(db, campaign, 'look again')
-    assert run_all(sched) == [1, 2]
+    assert run_all(sched) == [1]
     sched.wait(SETTLE)
     sched.stop(timeout=5)
-    assert agent_sessions(db, RESEARCH) == [(1, AgentSessionState.EXITED, f'sql: {REVIEW}')]
-    assert agent_sessions(db, WATCHDOG) == [(2, AgentSessionState.EXITED, 'timer: 30s')], 'the roles in their order'
+    assert agent_sessions(db, WATCHDOG) == [(1, AgentSessionState.EXITED, f'sql: {REVIEW}')]
     assert reported_events(db) == [], 'the watchdog got no anomaly'
 
 
@@ -621,7 +596,7 @@ def test_a_package_role_takes_its_defaults_and_a_roles_value_that_is_not_a_table
             EntryPoint('auditor', f'{PLUGIN}:NOT_A_ROLE', ROLE_GROUP),
             'is not a subclass of piloop.plugins.role.contract.RoleConfig',
         ),
-        (EntryPoint('research', f'{PLUGIN}:Auditor', ROLE_GROUP), "'research' is a role already, from piloop "),
+        (EntryPoint('watchdog', f'{PLUGIN}:Auditor', ROLE_GROUP), "'watchdog' is a role already, from piloop "),
         (
             EntryPoint('typed', f'{PLUGIN}:NOT_A_RUNTIME', RUNTIME_GROUP),
             'is not a subclass of piloop.plugins.runtime.contract.RuntimeConfig',
@@ -707,7 +682,6 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
     store = f'CAS provider sqlite, from piloop-sqlite-cas 0.1.0 ([plugins.cas] provider, in {config})'
     stored = f'in the config of demo that the last `piloop init` stored from {toml}'
     nice = 'runtime nice, from piloop-nice 0.1.0'
-    research_model = f'[plugins.role.research] model, {stored}'
     selected = lines[lines.index('selected:') + 1 :]
     by_list = ('  demo: section ', '  demo: trigger ', '  demo: fact source ')
     assert (
@@ -719,10 +693,6 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
     )
     assert [line for line in selected if not line.startswith(by_list)] == [
         f'  {store}',
-        *(
-            f'  demo: harness provider {h}, from {HARNESSES.sources()[h].release} ({research_model})'
-            for h in ('claude', 'codex')
-        ),
         f'  demo: lineage provider optimization, from {LINEAGE.sources()["optimization"].release} ([plugins.lineage]'
         f' use, {stored})',
         f'  demo: {nice} ([plugins.runtime] use, {stored})',
@@ -758,6 +728,6 @@ def test_a_runtime_that_is_not_registered_fails_with_the_registered_ones(campaig
     ):
         load_campaign_config(campaign_path, plugins={'runtime': {'use': 'tmux'}})
     with pytest.raises(
-        ConfigError, match=re.escape("plugins.role.research.runtime = 'tmux': no [plugins.runtime.tmux]")
+        ConfigError, match=re.escape("plugins.role.watchdog.runtime = 'tmux': no [plugins.runtime.tmux]")
     ):
-        load_campaign_config(campaign_path, plugins={'role': {'research': {'runtime': 'tmux'}}})
+        load_campaign_config(campaign_path, plugins={'role': {'watchdog': {'runtime': 'tmux'}}})

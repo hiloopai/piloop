@@ -52,7 +52,6 @@ RELAYED: frozenset[Verb] = frozenset(
         ('idea', 'add'),
         ('idea', 'claim'),
         ('idea', 'propose'),
-        ('idea', 'status'),
         ('run', 'end'),
         ('candidate', 'import'),
         ('restore',),
@@ -79,7 +78,7 @@ FIRST_MESSAGE = 'Your brief is in {brief}. Read all of it, in parts if a read co
 """An agent's first message, on its argv, by default.
 
 It names the brief's file instead of holding the brief. The message is one argument, and Linux limits one argument to
-128 KiB (``MAX_ARG_STRLEN``). A research brief with a long history is longer than that.
+128 KiB (``MAX_ARG_STRLEN``). A brief with a long history is longer than that.
 """
 RESUME_MESSAGE = (
     'You continue this session as a new agent, {agent}. Your earlier briefs and work are above.'
@@ -132,7 +131,7 @@ class RoleConfig(Parameters):
     slot is free."""
     addendum: str | None = None
     """A repo-relative file that is appended to ``brief.md`` in the briefs of this role only. Use it for instructions
-    that only this role needs, for example how the research agent searches."""
+    that only this role needs, for example how the watchdog reads a loss table."""
     mcp: list[McpServerName] = []
     """The MCP servers that the agents of this role get, by the name of their ``[plugins.mcp_server.<name>]`` table.
     Every harness in the role's rotation must be able to take them in the invocation of the role's runtime."""
@@ -220,7 +219,7 @@ class ImplementerRole(RoleConfig):
         "your run's own idea (`piloop idea propose`)",
     ]
     """What an implementer may write, as its brief states it. It proposes the idea of its own run, and files none for
-    others: a hunch for another run goes in a note, which research reads."""
+    others: a hunch for another run goes in a note on the board."""
     follow_head: FollowHead = FollowHead.OFF
     """``message``: when another run's version becomes the head, each running worker of this role gets one message that
     names its revision, to merge into its own line. A worktree of the repo of record has the commit at once. A worker on
@@ -240,7 +239,7 @@ class Sweep(Pass, Protocol):
 
 
 class SweepRole(RoleConfig):
-    """``[plugins.role.<name>]`` of a sweeping role: the watchdog, research, or a new role that you define.
+    """``[plugins.role.<name>]`` of a sweeping role: the watchdog, the orchestrator, or a new role that you define.
 
     A sweep is an agent without a run. Its triggers request it, and nothing is scored when it ends. A table with a new
     name defines a new role, and needs ``prompt`` and ``triggers``.
@@ -267,8 +266,7 @@ class SweepRole(RoleConfig):
     """The most words in the plan of an idea that an agent of this role adds or develops: steps that one run can
     follow, not a protocol. A longer plan is refused."""
     max_ideas: int = Field(default=1, ge=0)
-    """The maximum number of new ideas one sweep may insert, as its brief states it. ``low_water`` requests enough
-    sweeps to fill the backlog at this many ideas each. 0 turns ``low_water`` off for the role."""
+    """The maximum number of new ideas one sweep of a role that files ideas may insert, as its brief states it."""
     incident_prompt: str | None = None
     """A file that follows ``prompt`` in the brief of an incident sweep, a sweep that got incidents from a
     trigger that investigates, such as ``run_failed``: a path relative to the repo root, or an absolute path. When unset, the role's own (the watchdog's
@@ -281,8 +279,8 @@ class SweepRole(RoleConfig):
     def context(self, sweep: Sweep) -> list[str]:
         """The lines that the role adds to its agent's context, after the daemon's own and before the sections.
 
-        By default, a role that defines ideas (``files = "ideas"``) is told its ``max_ideas``, which ``low_water``
-        counts on, and its ``plan_words``. Any other role adds nothing.
+        By default, a role that defines ideas (``files = "ideas"``) is told its ``max_ideas`` and its ``plan_words``.
+        Any other role adds nothing.
         """
         if self.files is Files.IDEAS:
             return [

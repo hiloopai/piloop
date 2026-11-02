@@ -250,7 +250,7 @@ def test_an_agent_requested_while_a_retire_checks_either_stops_the_retire_or_nev
         """The daemon's pass commits a request on its own connection, between the retire's check and its change."""
         with closing(sqlite3.connect(path, timeout=0.2, isolation_level=None)) as con:
             try:
-                con.execute("INSERT INTO agent_sessions (kind, campaign_id) VALUES ('research', ?)", (campaign.id,))
+                con.execute("INSERT INTO agent_sessions (kind, campaign_id) VALUES ('watchdog', ?)", (campaign.id,))
                 landed.append(True)
             except sqlite3.OperationalError as e:
                 assert 'database is locked' in str(e), e

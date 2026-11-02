@@ -103,6 +103,12 @@ def test_status_of_a_campaign_with_no_candidate_says_there_is_no_baseline_yet(db
 - No baseline yet.
 
 """)
+    floorless = {**TRACKS, 'metrics': [TRACKS['metrics'][0], {**TRACKS['metrics'][1], 'floor': None}]}
+    with db.session() as s:
+        loose = Campaign(name='loose', path='/loose', config=reconfigured(campaign.config, **floorless))
+        s.add(loose)
+        s.commit()
+    assert '- size: no baseline yet; 0 trunk keeps; 0 running; 0 open ideas.' in render(db, loose), 'no floor to show'
 
 
 def test_history_and_pack_show_each_track(db: Database, campaign: Campaign) -> None:

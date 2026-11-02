@@ -64,8 +64,7 @@ Topics to cover:
 - **Budget and concurrency.** Wall-clock time per run. Compute (GPUs, cores). The total budget of the campaign (runs,
   hours or dollars). How many implementers the machine can run at the same time.
 - **Prior art and beliefs.** What the human tried, what they believe works, what result would surprise them.
-- **Harnesses and models.** Which ones are installed and logged in (from step 1). Which ones run implementers and which run
-  research.
+- **Harnesses and models.** Which ones are installed and logged in (from step 1), and which ones run implementers.
 - **Escalation policy.** What the human wants to be asked about (a new dependency, data changes, a cost above X), and
   what implementers decide alone.
 
@@ -123,11 +122,11 @@ Map each answer to its keys:
     idea of the track.
   - piloop refuses a `target` in `[plugins.stop_rule]` when there are several tracks.
 - **Measurement → `evaluate`, `evaluate_timeout`.**
-- **Budget → `[plugins.role.implementer]` `timeout` and `max_concurrent`, and `[plugins.role.research]`.**
+- **Budget → `[plugins.role.implementer]` `timeout` and `max_concurrent`.**
 - **Compute on other machines (a GPU box) → a pool in `config.toml`, and `piloop worker` there:**
   https://piloop.autoresearch.inc/guides/workers.
 - **Prior art → `context`** (a top-level key). List the error analyses and evaluation reports of the repo (where the
-  current system loses to a reference). Every sweep that reads the research pack starts from them.
+  current system loses to a reference). `piloop history` lists them first.
 - **Harnesses → `[plugins.harness] use`, and `model` in each `[plugins.harness.<name>]`.** Remove the harnesses that the human does
   not have.
 - **`link`:** gitignored data or virtualenvs that the evaluate command needs inside a worktree.
@@ -186,10 +185,8 @@ Tell the human the baseline value in one line. A surprising value means that the
 
 ## 5. Start the backlog
 
-Do one of these:
-
-- Add two or three ideas with the human: `piloop idea add <name> '<title>' --hypothesis '…' --priority 1`.
-- Ask for a research sweep: `piloop launch <name> research`.
+The workers propose their own ideas, so the board may start empty. To start from the human's: add two or three with
+them, `piloop idea add <name> '<title>' --hypothesis '…' --priority 1`.
 
 ## 6. Choose the orchestrator
 

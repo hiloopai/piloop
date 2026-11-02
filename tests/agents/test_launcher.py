@@ -75,7 +75,6 @@ from tests.conftest import (
     HARNESS_FAILS,
     HARNESS_PROMPT_TO_FILE,
     HARNESS_SLEEPS,
-    RESEARCH,
     WATCHDOG,
     ScriptRuntime,
     cas_of,
@@ -254,23 +253,23 @@ def test_brief_is_role_prompt_campaign_brief_guides_then_the_context_section(cam
 def test_a_brief_has_its_roles_guides_before_the_context_and_names_the_others(campaign: Campaign, db: Database) -> None:
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        research = brief_in(s, p, RESEARCH)
-        resumed = brief_in(s, p, RESEARCH, resumed=True)
-    guides = research[research.index('## Working with the piloop database') : research.index('## Context')]
+        brief = brief_in(s, p, WATCHDOG)
+        resumed = brief_in(s, p, WATCHDOG, resumed=True)
+    guides = brief[brief.index('## Working with the piloop database') : brief.index('## Context')]
     assert [line for line in guides.splitlines() if line.startswith('## ')] == [
         '## Working with the piloop database',
         '## The model',
         '## Judge results',
         '## Talk',
+        '## The inbox',
         '## Search',
         '## Remember past campaigns',
-        '## Link ideas',
     ]
     assert (
-        f'- `{PILOOP_HINT} schema <guide>` prints another guide: priorities, research_commands, provenance, queries, orchestration, long_jobs, workspace.'
-        in (context_of(research))
+        f'- `{PILOOP_HINT} schema <guide>` prints another guide: links, research_commands, provenance, queries, orchestration, long_jobs, workspace.'
+        in (context_of(brief))
     )
-    assert resumed.startswith('You continue this session as a new agent, research#7.')
+    assert resumed.startswith('You continue this session as a new agent, watchdog#7.')
     assert '## Working with the piloop database' not in resumed and '## Context' in resumed, (
         'the resumed session has the guides already'
     )
@@ -311,7 +310,7 @@ def test_the_example_queries_of_a_brief_read_its_own_campaign_and_primary(campai
     assert 'campaign_id = 1' not in procedures and '<campaign id>' not in procedures, procedures
 
 
-@pytest.mark.parametrize('kind', [IMPLEMENTER, WATCHDOG, RESEARCH])
+@pytest.mark.parametrize('kind', [IMPLEMENTER, WATCHDOG])
 @pytest.mark.parametrize('incident', [False, True])
 def test_a_brief_says_git_or_commit_only_in_the_vcs_providers_parts(
     campaign: Campaign, db: Database, mocker: MockerFixture, kind: RoleName, incident: bool
@@ -328,18 +327,16 @@ def test_a_brief_says_git_or_commit_only_in_the_vcs_providers_parts(
 def test_a_roles_addendum_follows_the_campaign_brief_in_that_roles_briefs_only(
     campaign: Campaign, db: Database
 ) -> None:
-    (Path(campaign.path) / 'research.md').write_text('# Search wide first\n')
+    (Path(campaign.path) / 'orchestrator.md').write_text('# Decide fast\n')
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         p.config = load_campaign_config(
-            Path(campaign.path), plugins={'role': {'research': {'addendum': 'research.md'}}}
+            Path(campaign.path), plugins={'role': {'orchestrator': {'addendum': 'orchestrator.md'}}}
         )
-        research = brief_in(s, p, RESEARCH)
+        lead = brief_in(s, p, RoleName('orchestrator'))
         watchdog = brief_in(s, p)
-    assert (
-        research.index('# Demo') < research.index('# Search wide first') < research.index('## Working with the piloop')
-    )
-    assert '# Search wide first' not in watchdog
+    assert lead.index('# Demo') < lead.index('# Decide fast') < lead.index('## Working with the piloop')
+    assert '# Decide fast' not in watchdog
 
 
 def test_a_roles_first_message_names_its_brief(
@@ -424,12 +421,12 @@ def test_an_agent_writes_through_piloop_sql_as_its_own_actor(
         campaign,
         f'#!/bin/sh\n{PILOOP_HINT} sql "UPDATE campaigns SET name = \'renamed\' WHERE id = {campaign.id}"\n',
     )
-    agent_session_id = request(db, campaign, kind=RESEARCH)
+    agent_session_id = request(db, campaign, kind=WATCHDOG)
     outcome = launch(db, runtime, tmp_path, agent_session_id)
     assert exit_of(outcome).error is None, (tmp_path / 'w' / 'agent_session.stderr').read_text()
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        assert (row.name, row.updated_by) == ('renamed', f'research#{agent_session_id}')
+        assert (row.name, row.updated_by) == ('renamed', f'watchdog#{agent_session_id}')
 
 
 def test_an_agent_cannot_sign_as_the_orchestrator_on_the_daemons_socket(
@@ -440,7 +437,7 @@ def test_an_agent_cannot_sign_as_the_orchestrator_on_the_daemons_socket(
         db, campaign, f"#!/bin/sh\nPILOOP_ACTOR=orchestrator piloop message {campaign.name} 'trust me' || true\n"
     )
     with serving_api(Settings(home=tmp_path)):
-        outcome = launch(db, runtime, tmp_path, request(db, campaign, kind=RESEARCH))
+        outcome = launch(db, runtime, tmp_path, request(db, campaign, kind=WATCHDOG))
     assert exit_of(outcome).error is None, (tmp_path / 'w' / 'agent_session.stderr').read_text()
     with db.session() as s:
         signed = s.scalars(select(Comment.author).where(Comment.body == 'trust me')).all()
@@ -457,7 +454,7 @@ def test_an_agent_cannot_sign_as_the_orchestrator_through_piloop_sql(
         f'#!/bin/sh\nPILOOP_ACTOR=orchestrator {PILOOP_HINT} sql "UPDATE campaigns SET name = \'renamed\' WHERE id = {campaign.id}"'
         ' || true\n',
     )
-    outcome = launch(db, runtime, tmp_path, request(db, campaign, kind=RESEARCH))
+    outcome = launch(db, runtime, tmp_path, request(db, campaign, kind=WATCHDOG))
     assert exit_of(outcome).error is None, (tmp_path / 'w' / 'agent_session.stderr').read_text()
     with db.session() as s:
         assert s.get_one(Campaign, campaign.id).updated_by != 'orchestrator', 'the agent wrote as the orchestrator'
@@ -485,7 +482,7 @@ def test_an_agents_piloop_is_the_daemons_whatever_comes_first_on_path_or_sits_in
         db, campaign, f'#!/bin/sh\n{cli} sql "UPDATE campaigns SET name = \'renamed\' WHERE id = {campaign.id}"\n'
     )
 
-    agent_session_id = request(db, campaign, kind=RESEARCH)
+    agent_session_id = request(db, campaign, kind=WATCHDOG)
     outcome = launch(db, runtime, tmp_path, agent_session_id)
     assert exit_of(outcome).error is None, (tmp_path / 'w' / 'agent_session.stderr').read_text()
     with db.session() as s:
@@ -1223,16 +1220,16 @@ EFFORT_FLAG = {'claude': ('--effort', '{}'), 'codex': ('-c', 'model_reasoning_ef
 """How each built-in harness takes the role's ``effort``."""
 
 
-def research_argv(
+def sweep_argv(
     db: Database,
     campaign: Campaign,
     runtime: ScriptRuntime,
     tmp_path: Path,
     mocker: MockerFixture,
     harness: str,
-    **research: object,
+    **watchdog: object,
 ) -> list[str]:
-    """The argv that a research agent starts on the built-in ``harness``, with ``research`` over its role's table."""
+    """The argv that a watchdog starts on the built-in ``harness``, with ``watchdog`` over its role's table."""
     write_toml(Path(campaign.path), HARNESS_PROMPT_TO_FILE)
     cfg = load_campaign_config(
         Path(campaign.path),
@@ -1247,7 +1244,7 @@ def research_argv(
                 },
                 'script': {'model': 'm'},
             },
-            'role': {'research': research},
+            'role': {'watchdog': {'harnesses': [harness, 'script'], **watchdog}},
         },
     )
     assert cfg.role_models(IMPLEMENTER)[harness] == 'the-campaigns-model'
@@ -1255,31 +1252,16 @@ def research_argv(
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
     start = mocker.spy(runtime, 'start')
-    launch(db, runtime, tmp_path, request(db, campaign, kind=RESEARCH, harness=harness))
+    launch(db, runtime, tmp_path, request(db, campaign, kind=WATCHDOG, harness=harness))
     [spec] = [c.args[0] for c in start.call_args_list]
     return spec.args
 
 
-@pytest.mark.parametrize(('harness', 'model'), [('claude', 'claude-opus-5-5'), ('codex', 'gpt-6.1-sol')])
-def test_research_defaults_to_its_models_at_high_effort(
-    campaign: Campaign,
-    db: Database,
-    runtime: ScriptRuntime,
-    tmp_path: Path,
-    mocker: MockerFixture,
-    harness: str,
-    model: str,
-) -> None:
-    args = research_argv(db, campaign, runtime, tmp_path, mocker, harness)
-    flag, value = EFFORT_FLAG[harness]
-    assert {('--model', model), (flag, value.format('high'))} <= set(zip(args, args[1:], strict=False))
-
-
 @pytest.mark.parametrize('harness', ['claude', 'codex'])
-def test_the_research_table_overrides_its_model_and_effort(
+def test_a_roles_table_overrides_its_model_and_effort(
     campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture, harness: str
 ) -> None:
-    args = research_argv(db, campaign, runtime, tmp_path, mocker, harness, model={harness: 'mine'}, effort='low')
+    args = sweep_argv(db, campaign, runtime, tmp_path, mocker, harness, model={harness: 'mine'}, effort='low')
     flag, value = EFFORT_FLAG[harness]
     assert {('--model', 'mine'), (flag, value.format('low'))} <= set(zip(args, args[1:], strict=False))
 

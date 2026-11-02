@@ -6,7 +6,6 @@ from piloop.actor import Agent, System
 from piloop.campaign.stop import (
     CancelRequested,
     StopRequested,
-    agent_cancel,
     answer_done,
     request_cancel,
     request_stop,
@@ -86,7 +85,6 @@ def test_a_cancel_is_answered_once_none_of_its_agents_is_requested_starting_or_r
         assert pending(s, CancelRequested) == [], 'the daemon ended one, and the other ended on its own'
         found = run_cancel(s, run_id)
         assert found is not None, 'an answered cancel is still the fact'
-        assert agent_cancel(s, s.get_one(AgentSession, agent.id)) == found, "an implementer's is its run's"
 
 
 @pytest.mark.parametrize('ending', list(Ending))

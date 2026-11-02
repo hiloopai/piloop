@@ -68,7 +68,7 @@ class ArchivePolicy:
     upkeep_every: timedelta = timedelta(hours=1)
     """How often the archiver prunes by age and by disk pressure, and evicts (with a remote), before the next job."""
     live: frozenset[str] = frozenset({'NOTES.md', 'research'})
-    """Top-level workspace entries never archived: the small knowledge files that agents and research sweeps read
+    """Top-level workspace entries never archived: the small knowledge files that agents read
     (``NOTES.md``, the loss tables in ``research/``) stay where they are; only bulk data goes to the CAS."""
 
 

@@ -31,6 +31,7 @@ BY_REVISION = {
 
 
 @pytest.mark.parametrize('revision', sorted(BY_REVISION))
+@pytest.mark.filterwarnings('ignore::piloop.deprecated.PiloopDeprecationWarning')  # a key that a validator drops
 def test_each_stored_config_of_a_real_home_migrates_and_validates(tmp_path: Path, revision: str) -> None:
     path = tmp_path / 'piloop.db'
     command.upgrade(alembic(path), revision)

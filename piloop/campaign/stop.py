@@ -32,7 +32,7 @@ from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
 from piloop.ids import CampaignStatus, Ending, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId
-from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of, working_on
+from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, working_on
 from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.fact_source.facts import HOURS, Fact, Facts, FactValue
 from piloop.plugins.stop_rule.contract import STOP_RULES, Escalate, Go, Hold, Stop, StopCase, WhileHeld
@@ -154,13 +154,6 @@ def run_cancel(s: Session, run_id: RunId) -> tuple[Event, CancelRequested] | Non
     agents = select(AgentSession.id).where(working_on(run_id))
     on_agent = (Event.target_kind == TargetKind.AGENT_SESSION) & Event.target_id.in_(agents)
     return latest(s, CancelRequested, (Event.target == TargetRef(RUN, run_id)) | on_agent)
-
-
-def agent_cancel(s: Session, agent_session: AgentSession) -> tuple[Event, CancelRequested] | None:
-    """Return the latest cancel of an agent, or None: its run's (``run_cancel``) for an implementer, its own for a sweep."""
-    if (run := run_of(agent_session)) is not None:
-        return run_cancel(s, run)
-    return latest(s, CancelRequested, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session.id))
 
 
 ACTING = (AgentSessionState.REQUESTED, AgentSessionState.STARTING, AgentSessionState.RUNNING)

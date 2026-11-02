@@ -93,7 +93,7 @@ orchestrator itself: do not loop. Write to it with `piloop message <name> '<text
 
 ## Status
 
-`piloop status [<name>]` shows the same overview that watchdog and research sweeps get in their brief.
+`piloop status [<name>]` shows the same overview that watchdog sweeps get in their brief.
 Without a name, it uses the campaign in the current directory, else the only active campaign, else every campaign.
 
 `piloop watch` shows the same as `piloop status`, live, in the human's terminal.

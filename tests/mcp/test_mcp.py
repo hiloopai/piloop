@@ -24,7 +24,7 @@ from piloop.plugins.host import ContractBroken
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer, env_names
 from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.mcp_server.stdio import StdioServer
-from tests.conftest import RESEARCH, write_script
+from tests.conftest import WATCHDOG, write_script
 
 EXA = HttpServer(url='https://mcp.exa.ai/mcp', headers_env={'x-api-key': 'EXA_API_KEY'})
 FIRECRAWL = HttpServer(url='https://mcp.firecrawl.dev/v2/mcp', bearer_token_env='FIRECRAWL_API_KEY')
@@ -328,9 +328,9 @@ def config(**extra: object) -> dict[str, object]:
 
 def test_a_role_lists_servers_by_table_and_gets_exactly_those() -> None:
     cfg = CampaignConfig.model_validate(
-        config(plugins={'harness': MODELS, 'mcp_server': SERVERS, 'role': {'research': {'mcp': ['xai', 'exa']}}})
+        config(plugins={'harness': MODELS, 'mcp_server': SERVERS, 'role': {'watchdog': {'mcp': ['xai', 'exa']}}})
     )
-    assert cfg.role_servers(RESEARCH) == {'xai': XAI, 'exa': EXA}
+    assert cfg.role_servers(WATCHDOG) == {'xai': XAI, 'exa': EXA}
     assert cfg.role_servers(IMPLEMENTER) == {}, 'a role lists none by default'
     with pytest.raises(
         ValidationError, match=re.escape("plugins.role.implementer.mcp[1] = 'nope': no [plugins.mcp_server.nope]")

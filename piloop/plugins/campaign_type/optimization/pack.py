@@ -1,4 +1,4 @@
-"""The research pack: the context that the daemon gives each research sweep.
+"""The research pack: the campaign's history that ``piloop history`` prints, and that a sweep of a new role reads.
 
 Ideas written with broad context produce more keeps. The daemon builds this pack from the database and the campaign
 repo when a sweep that proposes work starts. ``piloop history`` prints it too. It contains:

@@ -150,8 +150,6 @@ run_failed = "piloop.plugins.campaign_type.kit.runs.trigger.run_failed:RunFailed
 dead_at_startup = "piloop.plugins.trigger.dead_at_startup:DeadAtStartup"
 low_yield = "piloop.plugins.campaign_type.optimization.trigger.low_yield:LowYield"
 cron = "piloop.plugins.trigger.cron:CronTrigger"
-low_water = "piloop.plugins.campaign_type.kit.backlog.trigger.low_water:LowWaterTrigger"
-stalled = "piloop.plugins.campaign_type.kit.runs.trigger.stalled:StalledTrigger"
 stopped = "piloop.plugins.trigger.stopped:StoppedTrigger"
 sql = "piloop.plugins.trigger.sql:SqlTrigger"
 news = "piloop.plugins.trigger.news:NewsTrigger"
@@ -321,7 +319,6 @@ review = "piloop.plugins.campaign_type.optimization.skills:REVIEW"
 [project.entry-points."piloop.roles"]
 implementer = "piloop.plugins.role.implementer:ImplementerRole"
 watchdog = "piloop.plugins.campaign_type.kit.runs.role.watchdog:WatchdogRole"
-research = "piloop.plugins.campaign_type.kit.backlog.role.research:ResearchRole"
 orchestrator = "piloop.plugins.role.orchestrator:OrchestratorRole"
 
 [tool.hatch.build.targets.wheel]

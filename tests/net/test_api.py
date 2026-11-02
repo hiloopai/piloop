@@ -174,7 +174,7 @@ def test_a_long_poll_answers_its_moved_cursor_at_once_when_the_server_closes(
     db: Database, campaign: Campaign, cfg: Settings, poll: str
 ) -> None:
     with db.session() as s:
-        s.add(AgentSession(kind='research', campaign_id=1, state=AgentSessionState.RUNNING))
+        s.add(AgentSession(kind='watchdog', campaign_id=1, state=AgentSessionState.RUNNING))
         s.commit()
     with serving_api(cfg) as [server], Client.on(cfg.socket_file, System.HUMAN) as client:
         threading.Timer(0.3, server.close).start()

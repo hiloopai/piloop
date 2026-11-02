@@ -170,7 +170,7 @@ def test_a_command_that_is_not_relayed_is_refused_with_what_is(
 ) -> None:
     done = runner(agent_job(db, campaign, tmp_path), Call(argv=['campaign', 'stop', 'demo'], token=TOKEN))
     assert done.exit_code == 2 and done.stderr.startswith('piloop campaign stop: an agent on another machine runs only')
-    assert 'idea status' in done.stderr
+    assert 'idea claim' in done.stderr
 
 
 def test_a_relayed_call_that_runs_too_long_is_stopped(

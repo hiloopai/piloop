@@ -25,8 +25,8 @@ def pause(
 ) -> None:
     """Pause a campaign: nothing new launches, and nothing is escalated. `piloop resume` ends the pause.
 
-    The daemon queues no run, requests no role and launches no requested row, so research files no ideas. A sweep that
-    runs already files its ideas as proposed. Running work goes on, and its commits are scored. The daemon still
+    The daemon queues no run, requests no role and launches no requested row. Running work goes on, and its commits
+    are scored. The daemon still
     measures again what a new evaluator or `piloop candidate remeasure` needs, so the pause can end on a measured head.
     `--evals` holds those measurements too. The pause is in the database: it holds wherever you run the command.
     """

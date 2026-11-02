@@ -48,7 +48,6 @@ from piloop.plugins.campaign_type.kit.runs.controller import NOT_ENDED, SKIPPED_
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import runs, runs_without_keep
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.fact_source.contract import FactReadError
 from piloop.plugins.fact_source.facts import (
@@ -87,7 +86,6 @@ from tests.conftest import (
     HARNESS_APPEND,
     HARNESS_NOOP,
     HARNESS_WORSE,
-    RESEARCH,
     SETTLE,
     WATCHDOG,
     ScriptRuntime,
@@ -422,7 +420,7 @@ def test_max_tokens_sums_the_usage_of_every_ended_agent_of_the_campaign(db: Data
         s.add_all(
             [
                 AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, usage=spent(60_000, 9), **ended),
-                AgentSession(kind=RESEARCH, campaign_id=campaign.id, usage=spent(30_000, 2), **ended),
+                AgentSession(kind=WATCHDOG, campaign_id=campaign.id, usage=spent(30_000, 2), **ended),
                 AgentSession(kind=WATCHDOG, campaign_id=campaign.id, usage=None, **ended),
                 AgentSession(kind=IMPLEMENTER, campaign_id=other.id, usage=spent(50_000, 1), **ended),
             ]
@@ -529,31 +527,6 @@ def test_reactivating_a_stopped_campaign_starts_a_fresh_plateau_window(db: Datab
     assert reason(db, campaign) == 'plateau: 2 runs without a keep'
 
 
-def test_the_stall_mark_is_every_else_two_rounds_of_the_implementer_slots() -> None:
-    bare = {
-        'name': 'bare',
-        'metrics': [{'name': 'a', 'direction': 'higher', 'role': 'primary'}],
-        'evaluate': ['true'],
-    }
-    pi = {'pi': {'model': 'm'}}
-    plateau = CampaignConfig.model_validate({**bare, 'plugins': {'harness': pi, 'stop_rule': {'plateau': 15}}})
-    assert StalledTrigger(every=8).mark(plateau) == (8, 'every = 8 of the stalled trigger')
-    assert StalledTrigger().mark(plateau) == (2, 'two rounds of [plugins.role.implementer] max_concurrent = 1'), (
-        'the stop rule does not set the mark'
-    )
-    agent_sessions = CampaignConfig.model_validate(
-        {**bare, 'plugins': {'harness': pi, 'role': {'implementer': {'max_concurrent': 3}}}}
-    )
-    assert StalledTrigger().mark(agent_sessions) == (6, 'two rounds of [plugins.role.implementer] max_concurrent = 3')
-    quick = {'implementer': {'max_concurrent': 3}, 'quick': {'runs': True, 'max_concurrent': 2}}
-    assert StalledTrigger().mark(
-        CampaignConfig.model_validate({**bare, 'plugins': {'harness': pi, 'role': quick}})
-    ) == (
-        10,
-        'two rounds of [plugins.role.quick] max_concurrent + [plugins.role.implementer] max_concurrent = 5',
-    )
-
-
 def test_runs_that_the_daemon_stopped_count_toward_no_budget(db: Database, campaign: Campaign) -> None:
     configure(db, campaign, plateau=1, max_runs=2)
     for end in (RunEnd.DAEMON_STOPPED, RunEnd.STALE, RunEnd.CAMPAIGN_STOPPED):
@@ -597,7 +570,7 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
                 kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), harness='script', model='m'
             )
         )
-        s.add(AgentSession(kind=RESEARCH, campaign_id=campaign.id, reason='low_water before the stop'))
+        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='requested before the stop'))
         s.commit()
     sched = make_scheduler(db, runtime, tmp_path)
 
@@ -606,7 +579,7 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
     with db.session() as s:
         assert [(w.kind, w.state, w.error, w.ended_at is not None) for w in s.scalars(select(AgentSession))] == [
             (IMPLEMENTER, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
-            (RESEARCH, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
+            (WATCHDOG, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
             (WATCHDOG, AgentSessionState.EXITED, None, True),
         ]
         run = s.get_one(Run, 2)
@@ -614,7 +587,7 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
         assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
         [(event, finished)] = in_order(s, RunFinished)
         assert (event.target_id, finished) == (2, RunFinished(end=RunEnd.CAMPAIGN_STOPPED, error=None))
-        s.add(AgentSession(kind=RESEARCH, campaign_id=campaign.id, reason='by hand, after the stop'))
+        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='by hand, after the stop'))
         s.commit()
     assert run_all(sched) == [4], 'a request made after the stop is explicit and launches'
     sched.wait(SETTLE)
@@ -862,7 +835,7 @@ def test_a_stopped_campaign_gets_one_closing_watchdog_and_no_trigger_requests(
             (w.kind, w.reason)
             for w in s.scalars(select(AgentSession).where(AgentSession.id > 1).order_by(AgentSession.id))
         ] == [(WATCHDOG, 'campaign stopped: max_runs: 1 runs')], (
-            'requested exactly once, and no implementer or research request follows'
+            'requested exactly once, and no implementer or watchdog request follows'
         )
         assert s.scalars(select(Run)).all() and s.get_one(Idea, 2).status is IdeaStatus.OPEN, 'idea b never ran'
         [(event, change)] = in_order(s, CampaignStatusChanged)
@@ -883,7 +856,7 @@ def test_a_stopped_campaign_gets_one_closing_watchdog_and_no_trigger_requests(
     )
 
     with db.session() as s:
-        s.add(AgentSession(kind=RESEARCH, campaign_id=campaign.id, reason='by hand'))
+        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='by hand'))
         s.commit()
     assert run_all(sched) == [3], 'a hand-inserted request is explicit and launches'
     sched.wait(SETTLE)

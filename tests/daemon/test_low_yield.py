@@ -66,10 +66,7 @@ def fired(db: Database, campaign: Campaign, trigger: LowYield) -> Fire | None:
             role=WATCHDOG,
             last=None,
             quiet=None,
-            max_concurrent=1,
             interval=0,
-            backlog=unread,
-            without_keep=unread,
         )
         found = trigger.fire(p)
         if found is not None:  # the scheduler gives the incident to the watchdog's row

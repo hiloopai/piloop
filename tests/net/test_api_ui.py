@@ -59,7 +59,7 @@ def test_the_reads_of_a_ui_answer_agents_their_output_ideas_and_comments(
         idea(s, p, 'a hunch', IdeaStatus.DROPPED)
         s.add(
             AgentSession(
-                kind='research',
+                kind='watchdog',
                 campaign_id=p.id,
                 harness='claude',
                 model='opus',

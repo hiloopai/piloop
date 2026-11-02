@@ -113,7 +113,7 @@ def inbox_list(
     all_: Annotated[bool, cyclopts.Parameter(name='--all', help='Show acknowledged items too.')] = False,
     json_: JsonFlag = False,
 ) -> None:
-    """List the unacknowledged inbox items, most urgent first, then the seeds that wait for research.
+    """List the unacknowledged inbox items, most urgent first.
 
     Priority 0 is urgent and 4 is someday. Without a campaign, it lists the items of every campaign. With --json, it
     prints them read at one cursor: follow them with `piloop events --after <cursor>`.

@@ -22,60 +22,7 @@ from piloop.plugins.host import Capability, Many, Parameters, Scope
 if TYPE_CHECKING:  # piloop.db.models types campaigns.config with the triggers: only the annotations name the rows
     from sqlalchemy.orm import Session
 
-    from piloop.db.models import AgentSession, AgentSessionState, Campaign, EventModel
-
-
-@dataclass(frozen=True)
-class Backlog:
-    """The input to ``low_water``: the board's open ideas, the target, and what the sweeps in flight will add."""
-
-    runnable: int
-    """The ideas that a worker can claim now: ``open`` and not held."""
-    waiting: int
-    """The open ideas that an ``after`` link holds: the board has them, so a sweep need not add more."""
-    target: int
-    """One idea per run slot plus the ``buffer`` of ``low_water``, but never more than the runs that the stop rule
-    leaves (``Go.left``)."""
-    free: int
-    """The runs that the campaign can start now."""
-    sweeps: int
-    """The role's sweeps in flight."""
-    per_sweep: int
-    """The ideas that one sweep may insert: the role's ``max_ideas``."""
-    on_hold: bool = False
-    """The queue holds the unpinned ideas until the head has a score from the current evaluator
-    (``ledger.head_unmeasured``)."""
-
-    @property
-    def pending(self) -> int:
-        """The ideas that the sweeps in flight can still insert."""
-        return self.sweeps * self.per_sweep
-
-    @property
-    def short(self) -> int:
-        """The ideas missing from the target after the sweeps in flight insert theirs, negative for a surplus.
-
-        A held idea is not missing.
-        """
-        return self.target - self.runnable - self.waiting - self.pending
-
-    @property
-    def idle(self) -> int:
-        """The free implementer slots that no runnable idea and no sweep in flight will fill."""
-        return self.free - self.runnable - self.pending
-
-    def held(self) -> str:
-        """Describe the backlog without the sweeps.
-
-        For example: ``1 of 3 runnable ideas, 2 more held by after links``.
-        """
-        waits = f', {self.waiting} more held by after links' if self.waiting else ''
-        return f'{self.runnable} of {self.target} runnable ideas{waits}'
-
-    def __str__(self) -> str:
-        coming = f', {self.pending} more from {self.sweeps} sweeps in flight' if self.sweeps else ''
-        backlog = f'{self.held()}{coming}'
-        return f'{self.idle} free implementer slots without a runnable idea; {backlog}' if self.idle > 0 else backlog
+    from piloop.db.models import AgentSession, Campaign, EventModel
 
 
 class Quiet(StrEnum):
@@ -127,43 +74,12 @@ class Pass(Protocol):
         ...
 
     @property
-    def max_concurrent(self) -> int:
-        """The role's ``max_concurrent``."""
-        ...
-
-    @property
     def interval(self) -> float:
         """The role's ``interval``: seconds between two routine sweeps of the ``cron`` trigger. 0 turns it off."""
         ...
 
-    def backlog(self, buffer: int, /) -> Backlog:
-        """The campaign's backlog of ideas, with ``buffer`` ideas beyond one per run slot, as the role's sweeps fill it."""
-        ...
-
-    def without_keep(self, before: datetime | None, /) -> int:
-        """The finished attempts since the latest keep, or since the campaign was last set active again: ``plateau``'s count.
-
-        With ``before``, only the runs that finished by then count.
-        """
-        ...
-
     def live(self) -> int:
         """The number of the role's rows that are starting or running."""
-        ...
-
-    def killed_streak(self) -> int:
-        """The number of the role's latest rows, newest first, that were killed in a row."""
-        ...
-
-    def cancel(self, agent_session: AgentSession, /) -> EventModel | None:
-        """The latest request to cancel the row (``piloop agent cancel``), or None. A cancelled row ends killed."""
-        ...
-
-    def empty_sweeps(self, states: tuple[AgentSessionState, ...]) -> list[AgentSession]:
-        """The role's latest rows in ``states``, newest first, until one that added an idea.
-
-        A row added an idea if it inserted one (``piloop.plugins.campaign_type.kit.backlog.ideas.added_by``).
-        """
         ...
 
     def routine(self) -> AgentSession | None:

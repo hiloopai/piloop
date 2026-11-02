@@ -207,7 +207,7 @@ def test_an_agent_whose_role_files_nothing_adds_no_idea_and_the_others_add_open_
     with me.session() as s:
         with pytest.raises(ops.Refused, match='implementer#6 files no ideas'):
             backlog_ops.add_idea(s, CampaignId(1), 'mine', actor=Agent(role='implementer', session=6))
-        for actor in (ACTOR, System.HUMAN, Agent(role='research', session=4)):
+        for actor in (ACTOR, System.HUMAN, Agent(role='orchestrator', session=4)):
             idea = backlog_ops.add_idea(s, CampaignId(1), f'by {actor}', actor=actor)
             assert (idea.status, idea.created_by) == (IdeaStatus.OPEN, actor.signature)
 

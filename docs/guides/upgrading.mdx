@@ -160,10 +160,11 @@ warning, until 0.7.0, and do nothing. What they wrote stays in the database.
 |---|---|
 | The scout role. Its `techniques` table stays readable. | `[plugins.role.scout]` |
 | The `leaking_funnel` trigger: `low_yield` finds the runs that reach no measurement. | `"leaking_funnel"` in a role's `triggers`, `[plugins.trigger.leaking_funnel]` |
-| Ideas and seeds that implementers file for other runs. An implementer proposes only its own run's idea; a hunch for another run goes in a note, which research reads. | `files` and `plan_words` of a role that does runs |
-| Seeds. An idea is open on the board from the start, and research adds ideas, not seeds. | `"seed"` in a role's `triggers`, `[plugins.trigger.seed]`, `files = "seeds"` (now `"nothing"`), `[plugins.section.pack] seeds` |
+| Ideas and seeds that implementers file for other runs. An implementer proposes only its own run's idea; a hunch for another run goes in a note on the board. | `files` and `plan_words` of a role that does runs |
+| Seeds. An idea is open on the board from the start. | `"seed"` in a role's `triggers`, `[plugins.trigger.seed]`, `files = "seeds"` (now `"nothing"`), `[plugins.section.pack] seeds` |
 | Ideas that wait for a review, and the escalation of the slots that wait for them. | `idle_alert` of a role that does runs |
 | The rules that gave ideas to runs: an implementer claims its idea now. | `takes`, `explore_every` and `recovery_requeues` of a role that does runs |
+| The research role, and the `low_water` and `stalled` triggers that started it. Each worker proposes its own idea when the board has none for it, and the notes on the board are the workers' forum. Its sessions stay readable. | `[plugins.role.research]`, `"low_water"` and `"stalled"` in a role's `triggers`, `[plugins.trigger.low_water]`, `[plugins.trigger.stalled]` |
 
 ### The board
 
@@ -346,7 +347,7 @@ its body: answer it with `piloop inbox reply`, since it has no choices.
 A brief's context is the `context` section. A role's `sections` list puts it where it names it:
 
 ```toml
-[plugins.role.research]
+[plugins.role.watchdog]
 sections = ["database", "search", "context", "goal", "queue", "pack"]
 ```
 
@@ -617,13 +618,8 @@ stops the campaign. piloop starts runs and cuts timeouts within it. `StopRule.li
 and `check_config` refuses a campaign that the rule cannot serve. `limits` and a rule that subclasses it need no
 change.
 
-The stall mark is `every` of the `stalled` trigger. When it is not set, it is two rounds of the run slots, also with
-`plateau` set, which made it half of `plateau` before. To keep that mark, set it:
-
-```toml
-[plugins.trigger.stalled]
-every = 15
-```
+The stall mark became `every` of the `stalled` trigger, two rounds of the run slots when unset. 0.6.0 removes that
+trigger with the research role.
 
 ### A reopened campaign's limits
 

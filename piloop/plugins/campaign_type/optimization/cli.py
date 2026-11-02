@@ -194,7 +194,7 @@ def candidate_verdict(
 
 
 def history(ref: CampaignRef | None = None, /) -> None:
-    """Print the research pack: what a research sweep reads before it proposes ideas.
+    """Print the research pack: the campaign's metrics, analysis, ideas, kept lineage and notes.
 
     It shows the metrics, the analysis artifacts, the latest ideas with their outcomes, the kept lineage, the latest
     notes and the digests, as many as `[plugins.section.pack]` says. Without a

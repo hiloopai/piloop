@@ -199,8 +199,7 @@ See [Running for days](/guides/running-for-days#under-a-service-manager).
 piloop pause REF --reason TEXT [--evals]
 ```
 
-Pauses one campaign. The daemon queues no run, requests no role and launches no requested agent, so research files no
-ideas. Running work goes on, and its commits are scored. Nothing is escalated. The daemon still measures what a new evaluator or
+Pauses one campaign. The daemon queues no run, requests no role and launches no requested agent. Running work goes on, and its commits are scored. Nothing is escalated. The daemon still measures what a new evaluator or
 `piloop candidate remeasure` needs, so the pause can end on a measured head. `--evals` holds those measurements too.
 The pause is a state of the campaign in the database (`campaigns.paused`), not a file, so it holds wherever you run the
 command. `piloop status` shows it with the reason. The paused time does not count toward `max_hours`, and no limit of
@@ -434,8 +433,8 @@ piloop status [REF] [--status active|stopped|retired] [--json]
 
 Prints the daemon's state, then for each campaign the sections of its `[status] sections`: by default the head, the
 goal, the tracks, the trajectory, the open runs, the queue, the running agents with their last line, the recent
-candidates, the incidents that agents got, the inbox and the recent events. The watchdog and research agents get the
-same sections in their brief.
+candidates, the incidents that agents got, the inbox and the recent events. The watchdog gets the same sections in its
+brief.
 
 Without `REF`, it lists the active and stopped campaigns. `--status` lists the campaigns of that status instead, and
 repeats. `--json` prints one JSON document instead: the daemon's pid and the main facts of each campaign, read at one cursor of
@@ -470,7 +469,7 @@ multiplexer that misreads it. See [Watching a campaign](/guides/watch).
 piloop history [REF]
 ```
 
-Prints the research pack: the metrics, the analysis files, the latest 60 ideas with their outcomes, the kept lineage, the agents' notes and the digests. A research sweep reads it before it proposes ideas.
+Prints the research pack: the metrics, the analysis files, the latest 60 ideas with their outcomes, the kept lineage, the agents' notes and the digests.
 
 ### piloop inbox
 
@@ -582,7 +581,7 @@ ids. Without `--campaign`, it uses the campaign of the current directory, else t
 piloop launch REF ROLE [--harness NAME] [--model MODEL] [--reason TEXT]
 ```
 
-Asks the daemon for one more agent of `ROLE`, a sweeping role: `watchdog`, `research` or a
+Asks the daemon for one more agent of `ROLE`, a sweeping role: `watchdog`, `orchestrator` or a
 [role that you defined](/concepts/roles#define-a-role). The daemon starts it at once, within the role's
 `max_concurrent`.
 Only the daemon starts implementers, because an implementer needs a run.

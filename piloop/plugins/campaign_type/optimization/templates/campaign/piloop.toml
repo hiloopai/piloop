@@ -93,31 +93,9 @@ interval = 1800                           # seconds between two progress reviews
 # continuity = "fresh"                   # or "resume": each sweep continues the last sweep's harness session
 # incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies; default: watchdog_incident.md
 # routine_prompt = "briefs/review.md"     # follows the prompt in every other sweep; default: watchdog_progress.md
-max_ideas = 1                             # new ideas per sweep for a low_water trigger; the watchdog files none
+max_ideas = 1                             # new ideas per sweep of a role that files ideas; the watchdog files none
 timeout = 600
 max_concurrent = 1
-
-[plugins.role.research]                   # research keeps one runnable idea per run slot, plus the `buffer` of low_water
-# harnesses = ["pi", "claude", "codex"]   # if not set: [plugins.harness] use
-# model = { claude = "claude-opus-5-5", codex = "gpt-6.1-sol" }  # over the harnesses' model; a table replaces it
-# effort = "high"                         # how hard its agents think, as the harness names it
-# addendum = "briefs/research.md"         # a file appended to brief.md in this role's briefs only
-# mcp = ["exa"]                           # the [plugins.mcp_server.<name>] servers that this role's agents get; none by default
-# prompt = "briefs/my-research.md"        # a file that replaces the built-in start of this role's brief
-# runtime = "subprocess"                  # if not set: [plugins.runtime] use
-# writes = ["ideas via idea add"]         # what the brief says the role may write; default: what piloop expects of it
-# files = "ideas"                         # what its agents may file with `piloop idea`: nothing or ideas
-# plan_words = 150                        # the most words in the plan of an idea that its agents file
-runs = false                              # a sweeping role
-triggers = ["low_water", "stalled"]       # a short backlog (see [plugins.trigger.low_water] below), a stall
-# interval = 0                            # seconds between two sweeps of a cron trigger, if you add one
-# sections = ["context", "lessons", …]  # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
-# continuity = "fresh"                   # or "resume": each sweep continues the last sweep's harness session
-# incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies, if you add that trigger
-# routine_prompt = "briefs/routine.md"    # follows the prompt in every other sweep; none by default
-max_ideas = 3                             # new ideas per sweep; 0 turns low_water off for research
-timeout = 900
-max_concurrent = 1                        # sweeps at the same time; more than one duplicate each other's work
 
 [plugins.role.orchestrator]               # piloop launches the campaign's orchestrator when news arrives for it
 # harnesses = ["claude"]                  # if not set: [plugins.harness] use; it keeps the harness of its last session
@@ -138,7 +116,7 @@ triggers = []                             # off: you run your own; ["news", "run
 # resume_message = "You continue … {agent}. …"  # what starts the brief of an agent that resumes the session
 # incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies, if you add that trigger
 # routine_prompt = "briefs/routine.md"    # follows the prompt in every other sweep; none by default
-# max_ideas = 1                           # new ideas per sweep for a low_water trigger, if you add one
+# max_ideas = 1                           # new ideas of your own per wake, as a direction each
 timeout = 900
 max_concurrent = 1                        # at most 1: two orchestrators would answer the same news twice
 
@@ -164,13 +142,10 @@ noise_runs = 3                            # evaluations of each bar; the stdev o
 # brief_words = 400                       # init and doctor warn when brief.md is longer
 
 # [plugins.trigger.new_keep]             # a trigger with parameters, which a role names in its triggers
-# provider = "sql"                        # a new name needs its provider; a built-in name, such as low_water, is that one
+# provider = "sql"                        # a new name needs its provider; a built-in name, such as cron, is that one
 # when = "SELECT 1 FROM candidates WHERE campaign_id = :campaign AND verdict = 'keep' AND created_at > :since"
 
-# [plugins.trigger.low_water]             # a built-in trigger's table changes its parameters for every role that names it
-# buffer = 2                              # open ideas to keep beyond one per run slot
-
-# [plugins.trigger.cron]
+# [plugins.trigger.cron]                  # a built-in trigger's table changes its parameters for every role that names it
 # max_interval = 14400                    # seconds after which a routine sweep starts also when nothing is new
 
 # [plugins.section]                       # what `piloop status`, the API and a UI show

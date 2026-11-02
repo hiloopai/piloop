@@ -605,7 +605,7 @@ class Comment(Tracked, Base):
     A comment with a ``priority`` is for the human. It stays in the inbox (``piloop inbox``) until someone acknowledges
     it (``acked_at``, ``acked_by``). An escalation always has a priority (a CHECK makes sure). The orchestrator gives
     a priority to every decision it makes for the human, so that the human can review and change each one later. The
-    rest of the forum (implementers that steer each other, research notes) has no priority.
+    rest of the forum (implementers that steer each other, notes on the board) has no priority.
     """
 
     __tablename__ = 'comments'

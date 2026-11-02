@@ -29,7 +29,6 @@ from tests.conftest import (
     END_RUN,
     HARNESS_APPEND,
     HARNESS_NOOP,
-    RESEARCH,
     SETTLE,
     WATCHDOG,
     WRITE_PID,
@@ -460,7 +459,7 @@ def test_shutdown_fails_open_runs(tmp_path: Path, capsys: pytest.CaptureFixture[
             )
         )
         s.flush()  # the run first: the unit of work orders unrelated mappers by name
-        s.add(AgentSession(kind=RESEARCH, campaign_id=1, reason='by hand'))
+        s.add(AgentSession(kind=WATCHDOG, campaign_id=1, reason='by hand'))
         s.commit()
     daemon.shutdown(timeout=1)
     after = Database(daemon.db.engine.url.render_as_string(hide_password=False), actor=System.HUMAN)

@@ -33,14 +33,12 @@ LEAVES: dict[str, frozenset[str] | None] = {
     'plugins/campaign_type/*/migrations/*.py': None,
     'actor.py': frozenset({'orchestrator'}),
     'daemon/api.py': frozenset({'news'}),
-    'plugins/campaign_type/kit/backlog/role/research.py': frozenset({'claude', 'codex', 'low_water', 'stalled'}),
     'plugins/campaign_type/kit/runs/role/watchdog.py': frozenset(
         {'run_failed', 'dead_at_startup', 'low_yield', 'cron', 'stopped'}
     ),
     'deprecated.py': None,
     'plugins/role/contract.py': frozenset({'sql', 'orchestrator'}),
     'plugins/role/orchestrator.py': frozenset({'sql', 'news', 'run_failed'}),
-    'plugins/archive/local/archiver.py': frozenset({'research'}),
     'plugins/runtime/docker.py': frozenset({'docker'}),
 }
 """The files that may name entries, and which ones (None: any). The reasons:
@@ -51,7 +49,6 @@ LEAVES: dict[str, frozenset[str] | None] = {
   ``measurements.stopped``, which share a name with a trigger.
 - ``actor.py``: the outside orchestrator, ``orchestrator``, one party with the agents of the role.
 - ``daemon/api.py``: ``news``, the operation id of the route that ``piloop inbox wait`` reads.
-- the backlog component's ``role/research.py``: the default ``model`` of research.
 - ``plugins/role/`` and each component's ``role/``: the default ``triggers`` of the built-in roles, and the only ones
   that the orchestrator takes, named by kind as in ``piloop.toml``: a class would load its provider, and with it the
   database, when the config models load.
@@ -59,7 +56,6 @@ LEAVES: dict[str, frozenset[str] | None] = {
 - the backlog's ``cli.py``, ``plugins/role/contract.py`` and ``plugins/role/orchestrator.py``: the commands ``piloop
   idea seed`` and ``piloop sql``, and ``orchestrator`` among the names that a new role may not take: the outside
   orchestrator signs with it.
-- ``plugins/archive/local/archiver.py``: ``research/`` is a folder of the shared workspace, not the role.
 - ``plugins/runtime/docker.py``: ``docker``, the Docker CLI that the runtime runs, not the runtime's name.
 """
 

@@ -9,7 +9,7 @@ import Runtimes from '/snippets/generated/runtimes.mdx';
 import Harnesses from '/snippets/generated/harnesses.mdx';
 
 Each role has a table in `piloop.toml`. This one runs two implementers at a time on two harnesses, for at most 30
-minutes each, and one research agent at a time:
+minutes each, and a progress review every hour:
 
 ```toml
 [plugins.harness.claude]
@@ -23,8 +23,8 @@ harnesses = ["claude", "codex"]
 max_concurrent = 2
 timeout = 1800
 
-[plugins.role.research]
-max_concurrent = 1
+[plugins.role.watchdog]
+interval = 3600
 ```
 
 One implementer at a time is the default. More of them spend more to finish sooner, and are no better per dollar:
@@ -34,25 +34,24 @@ when the time matters more than the spend.
 Run `piloop init` after you change it. To ask for one more agent of a role:
 
 ```bash
-piloop launch enwik8 research --reason "second opinion on idea#2"
+piloop launch enwik8 watchdog --reason "second opinion on idea#2"
 ```
 
 ```text
-agent_session#4 research requested for enwik8: second opinion on idea#2
+agent_session#4 watchdog requested for enwik8: second opinion on idea#2
 ```
 
 Each agent is an **agent session**, with an id, a log and the tokens that it used. It signs its writes
-`<role>#<id>`, such as `research#4`. The [configuration reference](/reference/configuration#roleconfig) lists every
+`<role>#<id>`, such as `watchdog#4`. The [configuration reference](/reference/configuration#roleconfig) lists every
 key of a role.
 
 ## The built-in roles
 
 | Role | What it does | When it starts |
 |---|---|---|
-| **implementer** | Claims one idea, implements it, commits, and leaves a `note` on it. Its commits are scored. | A free slot. |
-| **research** | Adds ideas where the head loses the most. | A short backlog, or a stall. |
+| **implementer** | Claims an idea from the board, or proposes its own, implements it, submits, and leaves a `note` on it. Its submissions are scored. | A free slot. |
 | **watchdog** | Investigates failures and reviews progress. Writes comments, never code. | A failed run, an agent dead at its start, every `interval` seconds when something is new, and once at the stop, for the closing report. |
-| **orchestrator** | Answers messages and escalations, steers the work, and records its decisions. Each one resumes the session of the one before. | News for it, with the `news` trigger. Off until you set it: by default, you run your own [orchestrator](/concepts/orchestrator). |
+| **orchestrator** | Answers messages and escalations, decides what the workers cannot, and records its decisions. Each one resumes the session of the one before. | An escalation or a person's message (`news`), a failed run (`run_failed`). Off until you set it: by default, you run your own [orchestrator](/concepts/orchestrator). |
 
 The implementer **does runs**: each run claims one idea from the board. The others are **sweeps**: their triggers start them,
 and nothing that they commit is scored.
@@ -69,7 +68,7 @@ interval = 3600
 ```
 
 A role names its triggers. A trigger with parameters has a table, `[plugins.trigger.<name>]`: a built-in name, such as
-`low_water`, changes that trigger for every role that names it, and a new name needs its `provider`. An empty list
+`cron`, changes that trigger for every role that names it, and a new name needs its `provider`. An empty list
 turns a role's triggers off. These are built in:
 
 <Triggers />
@@ -144,7 +143,7 @@ each shows every section that declares it. `[plugins.section] use` lists those o
 [plugins.section]
 use = ["headline", "trajectory", "runs"]
 
-[plugins.role.research]
+[plugins.role.watchdog]
 sections = ["database", "search", "context", "research_lessons", "goal", "queue", "pack"]
 
 [plugins.section.research_lessons]
