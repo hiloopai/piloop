@@ -79,8 +79,10 @@ keep 2720458
 The same version can score differently from one evaluation to the next. piloop measures how much, then keeps only a
 gain bigger than that.
 
-- **`σ`, the noise:** the standard deviation of the baseline's score over its first `[evaluator] noise_runs`
-  successful evaluations, 3 by default, under each evaluator.
+- **`σ`, the noise:** the standard deviation of the bar's score over its `[evaluator] noise_runs` successful
+  evaluations, 3 by default, under each evaluator. Each new head and each bar runs that many times: its noise is the
+  noise of what a candidate is compared against now, so a head much faster than the baseline, and less noisy, still
+  lets a clear gain keep. A keep costs `noise_runs` minus the evaluations it had when judged, once.
 - **The threshold:** a candidate's mean gain over the bar must exceed `m·σ/√n`. `n` is how many times the candidate
   was evaluated, and `m` is 2 by default (`[plugins.verdict_rule] m`). A mean of `n` evaluations is `√n` times less
   noisy than one, so the threshold drops as the evidence grows.
@@ -88,8 +90,9 @@ gain bigger than that.
   then has to beat `m·σ/√2`.
 
 With `σ = 2` and `m = 2`, one evaluation needs a gain above 4; two need a mean gain above 2.83. A deterministic score
-has `σ = 0`: any gain keeps. When the baseline's evaluations crash, `σ` is unknown: a gain is `interesting`, never a
-`keep`, and piloop escalates once.
+has `σ = 0`: when the baseline's evaluations agree, the evaluator is deterministic, no other bar runs again, and any
+gain keeps. When the bar's evaluations crash, `σ` is unknown: a gain is `interesting`, never a `keep`, and piloop
+escalates once.
 
 ## The sealed split
 

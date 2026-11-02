@@ -68,7 +68,7 @@ def test_without_noise_any_gain_keeps_and_an_unknown_noise_keeps_nothing() -> No
     assert Noise(m=0).decide(case(999)).verdict is Outcome.KEEP, 'm = 0 keeps any gain'
     assert Noise().decide(case(999, noise=None)) == Judgement(
         Outcome.INTERESTING,
-        'against candidate#4: bytes 999 vs 1000 (+1); the noise of the baseline is unknown, so it keeps nothing',
+        'against candidate#4: bytes 999 vs 1000 (+1); the noise of the bar is unknown, so it keeps nothing',
     )
     assert Noise().decide(case(1001, noise=None)).verdict is Outcome.DISCARD
     assert Noise().samples(case(990, noise=None)) == 1, 'no re-run on a guess'

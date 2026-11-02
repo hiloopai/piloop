@@ -119,7 +119,7 @@ Experimental: campaigns with more than one track.
 | `sealed` | list\[string\] \| null | `null` | Optional. The command (argv) that scores a version on the sealed split, as `evaluate` does: its score is the primary. piloop runs it only on a version that would become the new head, and on the head, and keeps the version only if it beats the head there too. Keep its data and its scorer out of the repo, in the home or on the evaluator's machines, so that no implementer reads them. Example: `["python3", "/srv/sealed/score.py"]`. |
 | `scoring` | `submit` \| `run_end` | `"submit"` | Which versions of a run piloop scores: `submit`, those that the implementer submits; `run_end`, every one, after the run ends. |
 | `submissions` | integer \| null | `null` | Optional. The most versions that one run may submit (`piloop submit`). Not set: no cap. |
-| `noise_runs` | integer | `3` | How many times piloop evaluates the baseline under each evaluator. The standard deviation of its score is the noise that a gain must exceed (`[plugins.verdict_rule]`). 1: no noise, any gain counts. |
+| `noise_runs` | integer | `3` | How many times piloop evaluates each bar, the baseline and each new head, under each evaluator. The standard deviation of its score is the noise that a gain over it must exceed (`[plugins.verdict_rule]`). When the baseline's evaluations agree, the evaluator is deterministic: no other bar runs again, and the noise is 0. 1: no noise, any gain counts. |
 
 ## Rung
 
@@ -502,7 +502,7 @@ With `provider = "noise"`:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `m` | number | `2` | How many standard deviations of the baseline's score a gain must exceed, over the square root of the candidate's evaluations. 0 keeps any gain. |
+| `m` | number | `2` | How many standard deviations of the bar's score a gain must exceed, over the square root of the candidate's evaluations. 0 keeps any gain. |
 
 ## Harness
 

@@ -129,7 +129,7 @@ class Case:
     parent: Side | None = None
     """The candidate's parent, which the candidate changed. None for a candidate without one."""
     noise: float | None = None
-    """The standard deviation of the primary over the baseline's measurements (``[evaluator] noise_runs``): 0 with
+    """The standard deviation of the primary over the bar's own measurements (``[evaluator] noise_runs``): 0 with
     ``noise_runs`` below 2. None while it is unknown: fewer than two of them succeeded."""
     sealed: Sealed | None = None
     """The sealed split's scores. None without a sealed split, and until the rule would keep the candidate: piloop then

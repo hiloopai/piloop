@@ -214,15 +214,13 @@ def score(candidate: Candidate, evaluator_id: EvaluatorId | None, primary: Metri
     return metrics(candidate, evaluator_id).get(primary.name)
 
 
-def noise(baseline: Candidate, evaluator_id: EvaluatorId | None, name: str) -> float | None:
-    """Return the standard deviation of metric ``name`` over the baseline's ``full`` measurements under ``evaluator_id``.
+def noise(bar: Candidate, evaluator_id: EvaluatorId | None, name: str) -> float | None:
+    """Return the standard deviation of metric ``name`` over the bar's ``full`` measurements under ``evaluator_id``.
 
     It is the noise that a gain must exceed. None with fewer than two values.
     """
     found = [
-        m.metrics[name]
-        for m in baseline.measurements
-        if m.evaluator_id == evaluator_id and full(m) and name in m.metrics
+        m.metrics[name] for m in bar.measurements if m.evaluator_id == evaluator_id and full(m) and name in m.metrics
     ]
     return stdev(found) if len(found) >= 2 else None
 

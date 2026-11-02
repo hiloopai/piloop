@@ -1,7 +1,6 @@
 """``noise``: the default verdict rule. It keeps a candidate whose primary beats the bar by more than the noise.
 
-The noise is ``σ``, the standard deviation of the baseline's score over its first evaluations (``[evaluator]
-noise_runs``). A candidate keeps when its gain over the bar is above ``m·σ/√n``, with ``n`` its evaluations. A positive
+The noise is ``σ``, the standard deviation of the bar's score over its own evaluations (``[evaluator] noise_runs``). A candidate keeps when its gain over the bar is above ``m·σ/√n``, with ``n`` its evaluations. A positive
 gain within ``m·σ`` on one evaluation asks for one more (``samples``). Guardrails, when a campaign has them, may regress
 by at most their tolerance and never pass their floor. A sealed split is the daemon's gate after the rule, not the
 rule's (``piloop.plugins.campaign_type.kit.verdicts.judge.sealed_gate``). The rule imports only the standard library, pydantic and its contract, as a rule from a plugin does.
@@ -22,10 +21,10 @@ from piloop.plugins.metric import number
 
 
 class Noise(VerdictRule):
-    """``noise``: the primary must beat the bar by more than ``m`` standard deviations of the baseline's score."""
+    """``noise``: the primary must beat the bar by more than ``m`` standard deviations of the bar's score."""
 
     m: float = Field(default=2, ge=0)
-    """How many standard deviations of the baseline's score a gain must exceed, over the square root of the
+    """How many standard deviations of the bar's score a gain must exceed, over the square root of the
     candidate's evaluations. 0 keeps any gain."""
 
     def threshold(self, case: Case, noise: float) -> float:
@@ -84,7 +83,7 @@ class Noise(VerdictRule):
             return Judgement(
                 Outcome.DISCARD if gain <= 0 else Outcome.INTERESTING,
                 f'against {case.bar.name}: {primary.name} {number(mine[primary.name])} vs {number(theirs[primary.name])}'
-                f' ({number(gain, signed=True)}); the noise of the baseline is unknown, so it keeps nothing',
+                f' ({number(gain, signed=True)}); the noise of the bar is unknown, so it keeps nothing',
             )
         threshold = self.threshold(case, case.noise)
         reason = (

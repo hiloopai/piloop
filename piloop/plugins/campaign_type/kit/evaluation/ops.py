@@ -57,28 +57,28 @@ def hold_on_cancelled_baseline(s: Session, candidate: Candidate, actor: Actor) -
     pause(s, campaign.id, evals=True, reason=why)
 
 
-def noise_unknown(s: Session, campaign: Campaign, baseline: Candidate, metric: str) -> None:
-    """Escalate, once, that the baseline's evaluations give no noise of ``metric``: too few succeeded.
+def noise_unknown(s: Session, campaign: Campaign, bar: Candidate, metric: str) -> None:
+    """Escalate, once, that the evaluations of ``bar`` give no noise of ``metric``: too few succeeded.
 
-    Until someone measures the baseline again, the ``noise`` verdict rule keeps nothing. The caller commits.
+    Until someone measures the bar again, the ``noise`` verdict rule keeps nothing against it. The caller commits.
     """
     runs = campaign.config.evaluator.noise_runs
     asked = EscalationView(
         headline=f'The noise of {metric} is unknown, so no candidate of {campaign.name} can be kept. What now?',
         why=(
-            f'Fewer than 2 of the evaluations of the baseline candidate#{baseline.id} succeeded, out of the'
+            f'Fewer than 2 of the evaluations of candidate#{bar.id}, the bar, succeeded, out of the'
             f' {runs} of [evaluator] noise_runs.'
         ),
         choices=(
             Choice(
                 id='A',
-                label=f'Fix the evaluator, then `piloop candidate remeasure {baseline.id}`.',
+                label=f'Fix the evaluator, then `piloop candidate remeasure {bar.id}`.',
                 result='Its new evaluations give the noise, and the keeps go on.',
             ),
             Choice(id='B', label='Set [evaluator] noise_runs = 1.', result='There is no noise: any gain keeps.'),
         ),
         recommended='A',
-        details=f'campaign {campaign.name}, baseline candidate#{baseline.id}, metric {metric}',
+        details=f'campaign {campaign.name}, bar candidate#{bar.id}, metric {metric}',
     )
     escalations.escalate_once(s, TargetRef(TargetKind.CAMPAIGN, campaign.id), asked, priority=1)
 

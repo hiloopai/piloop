@@ -250,6 +250,58 @@ def test_the_noise_of_the_baseline_decides_and_a_gain_within_it_is_measured_once
     )
 
 
+def test_the_noise_is_the_bars_own_so_a_head_far_from_a_noisy_baseline_still_keeps_a_clear_gain(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The baseline scores 100, 75 and 104: one slow run, σ ≈ 15.7. A keep at 157 becomes the bar, and is run again
+    until it has ``noise_runs`` evaluations: 157, 157, 156, σ ≈ 0.58. So 168, +11 over it, keeps: within the
+    baseline's noise, it was discarded, and so was every gain left once the head had outrun that noise."""
+    set_config(
+        db,
+        campaign,
+        evaluate=queue_of(tmp_path, 100, 75, 104, 157, 157, 156, 168),
+        evaluator={**SUBMIT, 'noise_runs': 3},
+        plugins=NOISE,
+    )
+    ex = controller(db, runtime, tmp_path)
+    ex.remeasure(baseline(db, campaign.id).id)
+    run_id, checkout = running(db, campaign), worktree(campaign, tmp_path)
+    head = submitted(db, campaign, run_id, commit(checkout, 'base\na\n'))
+    ex.judge_submission(head)
+    assert verdict(db, head) == (
+        Outcome.KEEP,
+        'against candidate#1: score 157 vs 93 (+64; noise 31.43 over 1 evaluations)',
+    )
+    faster = submitted(db, campaign, run_id, commit(checkout, 'base\na\nb\n'))
+    ex.judge_submission(faster)
+    assert verdict(db, faster) == (
+        Outcome.KEEP,
+        f'against candidate#{head}: score 168 vs 156.7 (+11.33; noise 1.155 over 1 evaluations)',
+    )
+    with db.session() as s:
+        assert len(s.get_one(Candidate, head).measurements) == 3, 'the bar ran noise_runs times, once it was the bar'
+
+
+def test_a_deterministic_evaluator_runs_no_bar_again_and_its_noise_is_0(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The baseline's evaluations agree: the evaluator gives one score per version, so a new head is not run again."""
+    set_config(db, campaign, evaluator={**SUBMIT, 'noise_runs': 3}, plugins=NOISE)
+    ex = controller(db, runtime, tmp_path)
+    ex.remeasure(baseline(db, campaign.id).id)
+    run_id, checkout = running(db, campaign), worktree(campaign, tmp_path)
+    head = submitted(db, campaign, run_id, commit(checkout, 'base\na\n'))
+    ex.judge_submission(head)
+    better = submitted(db, campaign, run_id, commit(checkout, 'base\na\nb\n'))
+    ex.judge_submission(better)
+    assert verdict(db, better) == (
+        Outcome.KEEP,
+        f'against candidate#{head}: score 3 vs 2 (+1; noise 0 over 1 evaluations)',
+    )
+    with db.session() as s:
+        assert [len(s.get_one(Candidate, c).measurements) for c in (1, head, better)] == [3, 1, 1]
+
+
 SEALED = ['sh', '-c', reports(score='$(( 10 - $(wc -l < solve.txt) ))', size='1')]
 """A sealed split that disagrees: each line costs a point there."""
 
@@ -502,18 +554,18 @@ def test_the_noise_counts_only_the_baselines_successful_evaluations_and_an_unkno
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         evaluator = current_evaluator(s, p, p.config).id
-        assert short_of_noise(s.get_one(Candidate, base.id), evaluator, p) == 3, 'none under the new evaluator'
+        assert short_of_noise(s, s.get_one(Candidate, base.id), evaluator, p) == 3, 'none under the new evaluator'
     ex.remeasure(base.id)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         first = s.get_one(Candidate, base.id)
         assert [m.error is None for m in first.measurements if m.evaluator_id == evaluator] == [True, False]
-        assert short_of_noise(first, evaluator, p) == 2, 'a crash is no sample'
+        assert short_of_noise(s, first, evaluator, p) == 2, 'a crash is no sample'
         for _ in range(2):
             s.add(Measurement(candidate_id=base.id, evaluator_id=evaluator, error='crashed'))
         s.flush()
         s.expire(first)
-        assert short_of_noise(first, evaluator, p) == 0, 'as many crashes as noise_runs: no more asks'
+        assert short_of_noise(s, first, evaluator, p) == 0, 'as many crashes as noise_runs: no more asks'
         s.commit()
     candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
     ex.judge_submission(candidate)

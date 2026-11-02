@@ -29,7 +29,7 @@ candidate that this one must beat. The rule returns a `Judgement`: `keep`, `inte
 a reason. piloop stores the verdict and the reason on the candidate.
 
 The default rule is `noise`. It keeps a candidate whose mean gain on the primary over the bar exceeds `m·σ/√n`: `σ` is
-the noise of the baseline's score and `n` the candidate's evaluations ([the noise](/concepts/verdict#the-noise)).
+the noise of the bar's score over its own evaluations and `n` the candidate's evaluations ([the noise](/concepts/verdict#the-noise)).
 `bootstrap` keeps one whose primary beats the bar with confidence. In both, no guardrail may get too much worse. Whatever
 the rule, piloop keeps a version of a campaign with a sealed split only when it holds there: a rule never checks that
 split itself.

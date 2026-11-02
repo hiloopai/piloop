@@ -762,7 +762,9 @@ class RunController:
             )
             bar = bar_of(s, parent).id if (asked is not None or paired) and parent is not None else None
             repeats = (
-                asked.repeats if asked is not None else paired or short_of_noise(candidate, evaluator_id, campaign) or 1
+                asked.repeats
+                if asked is not None
+                else paired or short_of_noise(s, candidate, evaluator_id, campaign) or 1
             )
             campaign_id, revision = campaign.id, candidate.revision
             vcs, campaign_path = vcs_of(campaign), Path(campaign.path)
@@ -1086,8 +1088,9 @@ class RunController:
         """Measure a run's candidate and its ``bar``, then return the scope to judge the candidate in.
 
         Returns how it halted instead when the daemon stopped, or someone cancelled the candidate's evaluation. Each is
-        measured once under the scope's evaluator unless that evaluator
-        measured it already (``measured``), and the scope is read again after each measurement. So when ``piloop init``
+        measured once under the scope's evaluator unless that evaluator measured it already (``measured``), and the bar
+        until it has ``noise_runs`` measurements, whose spread is the noise (``short_of_noise``). The scope is read again
+        after each measurement. So when ``piloop init``
         registers an evaluator meanwhile, both are measured under the new one: a candidate is never judged under an old
         evaluator, nor against a bar that its evaluator has not measured. The bar is measured as the scheduler measures
         the bars of open runs (``remeasure``, ``judge.due``), and a run joins that evaluation when the scheduler queued
@@ -1100,7 +1103,15 @@ class RunController:
                 s.commit()
                 both = (s.get_one(Candidate, bar), s.get_one(Candidate, candidate_id))
                 ev = scope.evaluator_id
-                todo = [c.id for c in both if (c.id, ev) not in tried and not measured(c, ev)]
+                todo = [
+                    c.id
+                    for c in both
+                    if (c.id, ev) not in tried
+                    and (
+                        not measured(c, ev)
+                        or (c.id == bar and short_of_noise(s, c, ev, s.get_one(Campaign, c.campaign_id)))
+                    )
+                ]
                 revision = both[1].revision
             match todo:
                 case []:
@@ -1151,9 +1162,12 @@ class RunController:
     def _evidence(self, s: Session, scope: Scope, candidate: Candidate, bar: Candidate) -> Evidence:
         """What the verdict on ``candidate`` against ``bar`` reads beyond them.
 
-        That is the noise of each track's primary over the baseline, and the sealed split's scores once both sides
-        have one (``_gather``). With ``noise_runs`` below 2 the noise is 0: any gain counts. A noise that the baseline's
-        evaluations cannot give, because too few succeeded, is left out, and escalated once (``noise_unknown``).
+        That is the noise of each track's primary over the bar's own measurements, and the sealed split's scores once
+        both sides have one (``_gather``). The noise is the bar's, not the baseline's: it is what the candidate is
+        compared against now, and a head far faster than the baseline is far less noisy. With ``noise_runs`` below 2,
+        or a baseline whose evaluations agree (a deterministic evaluator), the noise is 0: any gain counts. A noise
+        that the bar's evaluations cannot give, because too few succeeded, is left out, and escalated once
+        (``noise_unknown``).
         """
         campaign = s.get_one(Campaign, scope.campaign_id)
         first = baseline(s, campaign)
@@ -1161,12 +1175,12 @@ class RunController:
         found: dict[str, float] = {}
         for t in scope.cfg.all_tracks:
             name = t.primary.name
-            if runs < 2 or first is None:
+            if runs < 2 or (first is not None and noise(first, scope.evaluator_id, name) == 0):
                 found[name] = 0.0
-            elif (sigma := noise(first, scope.evaluator_id, name)) is not None:
+            elif (sigma := noise(bar, scope.evaluator_id, name)) is not None:
                 found[name] = sigma
             else:
-                noise_unknown(s, campaign, first, name)
+                noise_unknown(s, campaign, bar, name)
         hidden = sealed_evaluator(s, campaign, scope.cfg)
         if hidden is None or not all(measured(c, hidden.id) for c in (candidate, bar)):
             return Evidence(found)

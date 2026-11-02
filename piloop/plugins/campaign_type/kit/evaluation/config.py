@@ -48,8 +48,10 @@ class EvaluatorConfig(BaseModel):
     submissions: int | None = Field(default=None, ge=1)
     """Optional. The most versions that one run may submit (``piloop submit``). Not set: no cap."""
     noise_runs: int = Field(default=3, ge=1)
-    """How many times piloop evaluates the baseline under each evaluator. The standard deviation of its score is the
-    noise that a gain must exceed (``[plugins.verdict_rule]``). 1: no noise, any gain counts."""
+    """How many times piloop evaluates each bar, the baseline and each new head, under each evaluator. The standard
+    deviation of its score is the noise that a gain over it must exceed (``[plugins.verdict_rule]``). When the
+    baseline's evaluations agree, the evaluator is deterministic: no other bar runs again, and the noise is 0. 1: no
+    noise, any gain counts."""
 
 
 class MetricRole(StrEnum):

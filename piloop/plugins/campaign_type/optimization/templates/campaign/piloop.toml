@@ -157,7 +157,7 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # sealed = ["python3", "/srv/sealed/score.py"]  # scores a would-be keep on data outside the repo; it must win there too
 scoring = "submit"                        # submit: what an implementer submits (piloop submit) · run_end: every commit, after the run
 # submissions = 20                        # the most versions that one run may submit; no cap if not set
-noise_runs = 3                            # evaluations of the baseline; the stdev of its score is the noise a gain must exceed
+noise_runs = 3                            # evaluations of each bar; the stdev of its score is the noise a gain must exceed
 
 # [agents]                                # the agents' wrap-up and the brief's budget; if not set: the home's [agents]
 # wrap_up_grace = 600                     # seconds to save their work after a stop or a cancel with --wrap-up

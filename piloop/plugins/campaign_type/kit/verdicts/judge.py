@@ -37,6 +37,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     means,
     measured,
     metrics,
+    noise,
     pairs,
     ratios,
     requested,
@@ -192,9 +193,9 @@ def fallback_track(cfg: CampaignConfig, name: TrackName | None) -> Track:
 def due(s: Session, campaign: Campaign) -> list[Candidate]:
     """Return what the daemon measures with the current evaluator, most urgent first, each once.
 
-    1. The head: a run starts from it and is judged against it, so the queue waits for it (``head_unmeasured``). The
-       baseline, until it has ``[evaluator] noise_runs`` measurements (``short_of_noise``).
-    2. The bar of each open run (``bar_of`` its base), oldest run first: the run is judged against it.
+    1. The head: a run starts from it and is judged against it, so the queue waits for it (``head_unmeasured``).
+    2. The bar of each open run (``bar_of`` its base), oldest run first: the run is judged against it. The head and
+       each bar until it has ``[evaluator] noise_runs`` measurements (``short_of_noise``): their spread is the noise.
     3. Each candidate that someone asked to measure again (``requested``), oldest request first, and each that waits
        for a verdict that no run gives (``unjudged``).
     4. Each reference that no evaluator measured: a new import.
@@ -212,12 +213,11 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     asked = [c for c, _ in requested(s, campaign)]
     active = campaign.status is CampaignStatus.ACTIVE
     evaluator_id = campaign.evaluator_id
-    noisy = [c for c in [baseline(s, campaign)] if c is not None and short_of_noise(c, evaluator_id, campaign)]
-    found = (
-        [head(s, campaign), *noisy, *(bar_of(s, run.base) for run in s.scalars(open_runs.order_by(Run.id)))]
-        if active
-        else []
+    bars = (
+        [head(s, campaign), *(bar_of(s, run.base) for run in s.scalars(open_runs.order_by(Run.id)))] if active else []
     )
+    noisy = [c for c in bars if c is not None and short_of_noise(s, c, evaluator_id, campaign)]
+    found = list(bars)
     found += asked + [c for c in s.scalars(waiting.order_by(Candidate.id)) if unjudged(c)]
     if active:
         found += s.scalars(new_references.order_by(Candidate.id))
@@ -226,19 +226,34 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     ]
 
 
-def short_of_noise(candidate: Candidate, evaluator_id: EvaluatorId | None, campaign: Campaign) -> int:
-    """How many more measurements the baseline needs under ``evaluator_id``, for the noise of its score.
+def short_of_noise(s: Session, candidate: Candidate, evaluator_id: EvaluatorId | None, campaign: Campaign) -> int:
+    """How many more measurements a keep needs under ``evaluator_id`` for the noise of its score, as a bar.
 
-    0 for any other candidate, and with ``noise_runs`` below 2: one measurement has no noise. Only a successful
-    measurement counts. Once ``noise_runs`` of them crashed it asks for no more: ``noise_unknown`` escalates.
+    Only a keep is a bar (the baseline is one while it is kept): 0 for any other candidate, and with ``noise_runs``
+    below 2, where one measurement has no noise. The baseline's evaluations come first: when they agree, the evaluator
+    is ``deterministic``, and no other bar runs again. Only a successful measurement counts. Once ``noise_runs`` of them
+    crashed it asks for no more: ``noise_unknown`` escalates.
     """
     runs = campaign.config.evaluator.noise_runs
-    if candidate.origin is not Origin.BASELINE or runs < 2:
+    if candidate.verdict is not Outcome.KEEP or runs < 2:
+        return 0
+    if candidate.origin is not Origin.BASELINE and deterministic(s, campaign, evaluator_id):
         return 0
     mine = [m for m in candidate.measurements if m.evaluator_id == evaluator_id]
     if sum(m.error is not None for m in mine) >= runs:
         return 0
     return max(runs - sum(full(m) for m in mine), 0)
+
+
+def deterministic(s: Session, campaign: Campaign, evaluator_id: EvaluatorId | None) -> bool:
+    """Whether the baseline's evaluations under ``evaluator_id`` agree on each track's primary: a noise of 0.
+
+    Such an evaluator gives one score per version, so every bar's noise is 0, and none is run again to show it.
+    """
+    first = baseline(s, campaign)
+    return first is not None and all(
+        noise(first, evaluator_id, t.primary.name) == 0 for t in campaign.config.all_tracks
+    )
 
 
 def head_unmeasured(s: Session, campaign: Campaign) -> bool:
@@ -347,7 +362,7 @@ class Evidence:
     """What a verdict reads beyond the two candidates: the noise of each track's primary, and the sealed split's."""
 
     noise: dict[str, float] = field(default_factory=dict)
-    """The standard deviation of each primary over the baseline's measurements (``noise``), by metric."""
+    """The standard deviation of each primary over the bar's measurements (``noise``), by metric."""
     sealed: Sealed | None = None
     """The sealed split's scores of the first track's primary, once piloop scored them."""
 
