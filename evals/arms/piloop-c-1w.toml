@@ -1,0 +1,30 @@
+# piloop on Claude Code: one worker, a fresh session per run, no lead, research or watchdog. `piloop` names the commit
+# of main under test.
+kind = "piloop"
+name = "piloop-c-1w"
+piloop = "piloop[modal] @ git+https://github.com/hiloopai/piloop@9d37c66ea52d4461a7c45a54e0e21a32eaaff128"
+agents = [{ harness = "claude", model = "claude-opus-5-5" }]
+split = "sealed"
+resources = { cpu = 8, memory_mb = 16384, gpus = 2 }
+
+[overlay.evaluator]
+scoring = "submit"
+noise_runs = 3
+
+[overlay.plugins.verdict_rule]
+provider = "noise"
+m = 2
+
+[overlay.plugins.role.implementer]
+max_concurrent = 1
+timeout = 3600
+effort = "medium"
+
+[overlay.plugins.role.orchestrator]
+triggers = []
+
+[overlay.plugins.role.research]
+triggers = []
+
+[overlay.plugins.role.watchdog]
+triggers = []

@@ -96,6 +96,13 @@ def restarts(export: Path) -> int:
     return len(found.read_text().splitlines()) if found.exists() else 0
 
 
+def messages(db: sqlite3.Connection) -> tuple[int, int, int]:
+    """Messages written to workers, delivered to them, and not delivered: refused or never sent."""
+    count = dict(db.execute("select kind, count(*) from events where kind like 'comment.%' group by kind").fetchall())
+    undelivered = count.get('comment.undelivered', 0) + count.get('comment.unsent', 0)
+    return count.get('comment.message', 0), count.get('comment.delivered', 0), undelivered
+
+
 def heads_of(run: Path) -> list[tuple[str, float]]:
     """The heads of a run after its base, with their hours."""
     meta = json.loads((run / 'run.json').read_text())
@@ -119,11 +126,13 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         made: list[datetime] | None = [started + timedelta(hours=h) for _, h in heads]
         sessions = int((export / 'sessions').read_text())
         funnel = Funnel(ideas=None, runs=sessions, submissions=commits, kept=len(heads))
+        sent = delivered = refused = None
         escalations, people, lead = 0, 0, None
     else:
         with sqlite3.connect(export / 'piloop.db') as db:
             heads = piloop_heads(db, base, started)
             funnel, escalations, people, lead = piloop_counts(db, base)
+            sent, delivered, refused = messages(db)
         made = None
     curve = []
     for rev, hours in [(base, 0.0), *heads]:
@@ -148,5 +157,8 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         interventions=people,
         lead_token_share=lead,
         restarts=restarts(export) if meta.get('supervised') else None,
+        messages_sent=sent,
+        messages_delivered=delivered,
+        messages_refused=refused,
         loop=loop(run / 'export', made, spend[-1].hours if spend else 0.0, spend[-1].usd if spend else 0.0),
     )

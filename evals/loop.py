@@ -11,6 +11,7 @@ import re
 import sqlite3
 import statistics
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -67,6 +68,62 @@ def dev_evals(root: Path) -> list[tuple[datetime, float]]:
     return sorted(found)
 
 
+PROTOCOL = re.compile(r'(\bpiloop\b|PILOOP_BIN)\S*\s+(idea|submit|run|escalate|sql|message|note|candidate)\b')
+"""A shell command that speaks piloop's protocol: claims, proposals, submissions, run ends, notes, the database."""
+
+
+@dataclass(frozen=True)
+class Call:
+    """One shell command of a Claude Code session.
+
+    When it started, how long it took, and its share of the tokens of the response that asked for it.
+    """
+
+    start: datetime
+    seconds: float
+    command: str
+    tokens: float
+
+
+def claude_calls(root: Path) -> list[Call]:
+    """The shell commands of the Claude Code session files under ``root``, paired with their results."""
+    found = []
+    for path in sorted(root.rglob('*.jsonl')):
+        pending: dict[str, tuple[datetime, str, float]] = {}
+        seen: set[str] = set()
+        for line in path.open(encoding='utf-8', errors='replace'):
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            raw = rec.get('message')
+            message: dict[str, object] = raw if isinstance(raw, dict) else {}
+            listed = message.get('content')
+            content: list[object] = listed if isinstance(listed, list) else []
+            if rec.get('type') == 'assistant':
+                used = message.get('usage')
+                usage: dict[str, object] = used if isinstance(used, dict) else {}
+                key = str(message.get('id'))
+                tokens = 0.0 if key in seen else float(sum(v for v in usage.values() if isinstance(v, int)))
+                seen.add(key)
+                uses = [c for c in content if isinstance(c, dict) and c.get('type') == 'tool_use']
+                for c in uses:
+                    command = str((c.get('input') or {}).get('command') or '')
+                    pending[str(c.get('id'))] = (when(rec['timestamp']), command, tokens / len(uses))
+            elif rec.get('type') == 'user':
+                for c in content:
+                    if isinstance(c, dict) and c.get('type') == 'tool_result' and str(c.get('tool_use_id')) in pending:
+                        start, command, tokens = pending.pop(str(c.get('tool_use_id')))
+                        seconds = (when(rec['timestamp']) - start).total_seconds()
+                        found.append(Call(start, seconds, command, tokens))
+    return found
+
+
+def is_dev(command: str) -> bool:
+    """Whether a shell command runs the task's evaluator, rather than reading it."""
+    return bool(DEV.search(command)) and not READ.match(command)
+
+
 def quantile(xs: list[float], q: float) -> float | None:
     """The ``q`` quantile of ``xs``, or None."""
     if not xs:
@@ -104,7 +161,10 @@ def submissions(db: Path) -> tuple[list[datetime], list[float], list[float], lis
 
 def loop(export: Path, plain_commits: list[datetime] | None, hours: float, usd: float) -> Loop:
     """The loop of a run, from its export. ``plain_commits``: a plain session's commits on ``main``."""
-    evals = dev_evals(export)
+    calls = claude_calls(export)
+    evals = sorted(dev_evals(export) + [(c.start, c.seconds) for c in calls if c.command and is_dev(c.command)])
+    protocol = [c for c in calls if PROTOCOL.search(c.command)]
+    all_tokens = sum(c.tokens for c in calls)
     if plain_commits is None:
         made, verdict, visible, sealed = submissions(export / 'out' / 'piloop.db')
     else:
@@ -125,4 +185,7 @@ def loop(export: Path, plain_commits: list[datetime] | None, hours: float, usd: 
         visible_p50_s=quantile(visible, 0.5),
         sealed_p50_s=quantile(sealed, 0.5),
         drift=drift,
+        protocol_calls=len(protocol) if calls else None,
+        protocol_seconds=sum(c.seconds for c in protocol) if calls else None,
+        protocol_token_share=sum(c.tokens for c in protocol) / all_tokens if all_tokens else None,
     )

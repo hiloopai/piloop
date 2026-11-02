@@ -181,6 +181,12 @@ class Loop(Frozen):
     """Measured on the visible split to measured on the sealed split."""
     drift: float | None
     """The median dev evaluation of the last third of the run over that of the first third: above 1, the loop slowed."""
+    protocol_calls: int | None = None
+    """Shell commands that speak piloop's protocol (claim, propose, submit, run end, notes). None: not read."""
+    protocol_seconds: float | None = None
+    """Their wall time, waits for verdicts included."""
+    protocol_token_share: float | None = None
+    """The share of the session's tokens in the responses that asked for them."""
 
 
 class Result(Frozen):
@@ -207,6 +213,11 @@ class Result(Frozen):
     restarts: int | None = None
     """How many times the daemon's supervisor started it again after it died. None: a plain arm, or a run whose daemon
     had no supervisor."""
+    messages_sent: int | None = None
+    """Messages that piloop's daemon wrote to running workers, such as a moved head. None: a plain arm."""
+    messages_delivered: int | None = None
+    messages_refused: int | None = None
+    """Messages that a worker's harness could not take mid-turn: refused, never queued."""
     loop: Loop | None = None
     """The run's feedback loop. None: a result written before it was measured."""
 
