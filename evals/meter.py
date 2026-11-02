@@ -15,6 +15,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 FIELDS = ('input', 'output', 'cache_read', 'cache_write', 'turns')
+SYNTHETIC = '<synthetic>'
+"""The model of a message that Claude Code writes itself, such as an API error: no model ran, no tokens were spent."""
 Tokens = dict[str, int]
 
 
@@ -47,7 +49,7 @@ def claude(root: Path) -> dict[str, Tokens]:
             if rec.get('type') != 'assistant' or not isinstance(message, dict):
                 continue
             usage = message.get('usage')
-            if not isinstance(usage, dict) or message.get('id') in seen:
+            if not isinstance(usage, dict) or message.get('id') in seen or message.get('model') == SYNTHETIC:
                 continue
             seen.add(message.get('id'))
             tokens = {
