@@ -31,7 +31,7 @@ from evals.model import (
     load_arm,
 )
 from evals.pilot import guard, spent
-from evals.report import write
+from evals.report import plain_bar, write
 from evals.score import Score
 from evals.telemetry import exported
 
@@ -170,6 +170,9 @@ def test_plain_result_and_report(tmp_path: Path):
     [page] = write([r, other], tmp_path / 'site', Settings())
     text = page.read_text()
     assert page.name == 't2-circles.html' and 'plain-claude' in text and 'plotly' in text
+    by_arm = {'plain-codex': [r], 'plain-claude': [other]}
+    assert plain_bar(by_arm) == pytest.approx(2 / 4)
+    assert plain_bar(by_arm, frozenset({'plain-codex'})) == 0
     assert isinstance(Result.model_validate_json(r.model_dump_json()), Result)
 
 

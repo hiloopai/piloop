@@ -81,19 +81,22 @@ def pilot(
 
 
 @app.command
-def report(*, out: Path = Path('evals/site'), note: list[str] | None = None) -> None:
+def report(
+    *, out: Path = Path('evals/site'), note: list[str] | None = None, reference: list[str] | None = None
+) -> None:
     """Write one HTML page per task from every ``result.json`` under the results directory.
 
     Args:
         out: Where the pages go.
         note: ``<task>=<text>``: a line under the title of the task's page, such as a run that infrastructure hit.
+        reference: An arm drawn dotted that never sets the plain bar, such as one from an earlier round.
     """
     settings = Settings()
     results = [Result.model_validate_json(p.read_text()) for p in sorted(settings.results.glob('*/*/result.json'))]
     notes: dict[str, list[str]] = {}
     for task, _, text in (n.partition('=') for n in note or []):
         notes.setdefault(task, []).append(text)
-    for page in write(results, out, settings, notes):
+    for page in write(results, out, settings, notes, frozenset(reference or [])):
         Console().print(page)
 
 

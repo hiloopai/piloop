@@ -55,9 +55,16 @@ Row = tuple[str, Callable[[Result], float | None], int, Summary]
 NOTE = 'Keep counts and keep rates are diagnostics: they depend on how hard the task is.'
 
 
-def plain_bar(by_arm: dict[str, list[Result]]) -> float | None:
-    """The bar of the plain sessions: the best plain arm's median sealed score of its final head. None: no plain arm."""
-    medians = [statistics.median(r.final.sealed or 0.0 for r in rs) for rs in by_arm.values() if rs[0].piloop is None]
+def plain_bar(by_arm: dict[str, list[Result]], references: frozenset[str] = frozenset()) -> float | None:
+    """The bar of the plain sessions: the best plain arm's median sealed score of its final head. None: no plain arm.
+
+    A reference arm, such as one from an earlier round on another model, is drawn but never sets the bar.
+    """
+    medians = [
+        statistics.median(r.final.sealed or 0.0 for r in rs)
+        for arm, rs in by_arm.items()
+        if rs[0].piloop is None and arm not in references
+    ]
     return max(medians, default=None)
 
 
@@ -186,8 +193,11 @@ for (const [id, data, layout] of CHARTS) %s(id, paint(data), layout);
 when it defines them, else ``COLORS``."""
 
 
-def charts(by_arm: dict[str, list[Result]], bar: float | None) -> list[Chart]:
-    """The $ and hours curves with their bands, the heads of each repeat, and the outcome against the loop's rate."""
+def charts(by_arm: dict[str, list[Result]], bar: float | None, references: frozenset[str] = frozenset()) -> list[Chart]:
+    """The $ and hours curves with their bands, the heads of each repeat, and the outcome against the loop's rate.
+
+    A reference arm's curves are dotted.
+    """
     runs = [r for rs in by_arm.values() for r in rs]
     out: list[Chart] = []
     for title, axis, end, label in (
@@ -200,7 +210,7 @@ def charts(by_arm: dict[str, list[Result]], bar: float | None) -> list[Chart]:
             data.append({'x': xs + xs[::-1], 'y': high + low[::-1], 'fill': 'toself', 'opacity': 0.18, 'meta': k,
                          'line': {'width': 0}, 'hoverinfo': 'skip', 'showlegend': False, 'legendgroup': arm})  # fmt: skip
             data.append({'x': xs, 'y': median, 'name': arm, 'meta': k, 'legendgroup': arm,
-                         'line': {'shape': 'hv', 'width': 2}})  # fmt: skip
+                         'line': {'shape': 'hv', 'width': 2, 'dash': 'dot' if arm in references else 'solid'}})  # fmt: skip
         shapes = [] if bar is None else [{'type': 'line', 'xref': 'paper', 'x0': 0, 'x1': 1, 'y0': bar, 'y1': bar,
                                           'line': {'dash': 'dash', 'width': 1}}]  # fmt: skip
         layout: dict[str, object] = {
@@ -253,10 +263,16 @@ def stats(by_arm: dict[str, list[Result]], bar: float | None) -> str:
     return f'<div class="grid">{"".join(cards)}</div>'
 
 
-def page(task: str, by_arm: dict[str, list[Result]], notes: list[str], settings: Settings) -> str:
-    """The page of one task."""
-    bar = plain_bar(by_arm)
-    drawn = charts(by_arm, bar)
+def page(
+    task: str,
+    by_arm: dict[str, list[Result]],
+    notes: list[str],
+    settings: Settings,
+    references: frozenset[str] = frozenset(),
+) -> str:
+    """The page of one task. The ``references`` arms are drawn dotted and never set the plain bar."""
+    bar = plain_bar(by_arm, references)
+    drawn = charts(by_arm, bar, references)
     divs = ''.join(
         f'<div class="card"><h3>{html.escape(t)}</h3><div id="c{i}"></div></div>' for i, (t, _, _) in enumerate(drawn)
     )
@@ -277,9 +293,16 @@ Lines are the median over repeats, bands the lowest to highest repeat; spend is 
 
 
 def write(
-    results: list[Result], out: Path, settings: Settings, notes: dict[str, list[str]] | None = None
+    results: list[Result],
+    out: Path,
+    settings: Settings,
+    notes: dict[str, list[str]] | None = None,
+    references: frozenset[str] = frozenset(),
 ) -> list[Path]:
-    """Write ``<out>/<task>.html`` for each task, with the ``notes`` of each task, and an ``index.html``. The pages."""
+    """Write ``<out>/<task>.html`` for each task, with the ``notes`` of each task, and an ``index.html``. The pages.
+
+    The ``references`` arms are drawn dotted and never set the plain bar.
+    """
     out.mkdir(parents=True, exist_ok=True)
     pages = []
     for task in sorted({r.task for r in results}):
@@ -288,7 +311,7 @@ def write(
             raise ValueError(f'{task} has {len(arms)} arms: a page draws at most {len(COLORS)}; split them')
         by_arm = {arm: [r for r in results if r.task == task and r.arm == arm] for arm in arms}
         path = out / f'{task}.html'
-        path.write_text(page(task, by_arm, (notes or {}).get(task, []), settings))
+        path.write_text(page(task, by_arm, (notes or {}).get(task, []), settings, references))
         pages.append(path)
     css = f'<link rel="stylesheet" href="{html.escape(settings.report_css)}">' if settings.report_css else ''
     links = ''.join(f'<li><a href="{p.name}">{html.escape(p.stem)}</a></li>' for p in pages)
