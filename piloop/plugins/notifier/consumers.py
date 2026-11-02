@@ -17,7 +17,7 @@ from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
 from piloop import deprecated
-from piloop.actor import ACTORS, Person, System
+from piloop.actor import ACTORS, Person, System, by_a_person
 from piloop.campaign import escalations
 from piloop.campaign.campaigns import CampaignAdded
 from piloop.campaign.inbox import ack, campaign_of, items, root_of
@@ -487,7 +487,7 @@ def due(s: Session, route: Route, now: datetime) -> Due:
     for comment, campaign in items(s):
         if (
             (campaign.id if campaign is not None else None) != route.owner
-            or _by_a_person(comment.author)
+            or by_a_person(comment.author)
             or comment.id in threaded
             or comment.priority is None
             or comment.priority > notifier.max_priority
@@ -592,15 +592,6 @@ def _sent(s: Session, name: str, comments: list[int]) -> dict[int, datetime]:
         .group_by(Event.target_id)
     )
     return {target: at for target, at in s.execute(query)}
-
-
-def _by_a_person(signature: str) -> bool:
-    """Whether a person wrote it: the human at the terminal, or one whom the network named. They need no notice."""
-    try:
-        actor = ACTORS.validate_python(signature)
-    except ValidationError:  # a signature that an older piloop wrote: no person's
-        return False
-    return isinstance(actor, Person) or actor is System.HUMAN
 
 
 def _notice(

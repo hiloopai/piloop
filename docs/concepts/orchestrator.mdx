@@ -24,21 +24,23 @@ runs without one. Run one orchestrator for each campaign: two would answer an es
 
 ## Let piloop launch it
 
-With the `news` trigger on `[plugins.role.orchestrator]`, the daemon launches the orchestrator when news arrives, and nobody
-needs to keep a session open:
+It is off by default. With the `news` and `run_failed` triggers on `[plugins.role.orchestrator]`, the daemon launches
+it when something needs a decision, and nobody needs to keep a session open:
 
 ```toml
 [plugins.role.orchestrator]
-triggers = ["news"]
+triggers = ["news", "run_failed"]
 ```
 
-- A message, an escalation or the stop launches it within `quiet_seconds` (30). Other news, such as a verdict, launches
-  it at most once in `routine_every` seconds (900).
+- An escalation, or what a person writes to it, launches it within `quiet_seconds` (30); `run_failed`, a failed run.
+  Nothing else does: no timer, no short board, no verdict, no stop. The rest of the news comes with the next wake.
+- It decides what the workers cannot, and leaves the work to them: it never plans a run, caps one, or stops the
+  campaign. Only a stop rule or a person stops a campaign.
 - While an orchestrator works, new news goes to it as a note, at once. Claude Code reads it after its current tool
   call. Codex and pi read it when their turn ends.
 - `piloop agent cancel` on an orchestrator drops the news it was launched for: no other one starts for it. News that
   arrives after the cancel launches the next one.
-- While the campaign is paused or held, only a message or an escalation launches it.
+- It launches also while the campaign is paused or held.
 - Each orchestrator resumes the session of the one before, so it remembers what it decided. When it cannot, it starts
   from its whole brief, and `agent_session.not_resumed` says why.
 - Its writes sign as `orchestrator#<id>`. The inbox treats every orchestrator, launched or not, as one: none waits for

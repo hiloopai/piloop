@@ -30,6 +30,8 @@ PILOOP_ACTOR=orchestrator piloop idea add <name> '<title>' --hypothesis '…' --
 - Priority is 0 (urgent) to 4 (someday).
 - Your ideas carry context that research does not have: the digests, the loss analysis, the human's direction.
   Write them down as ideas as soon as you see them. Use `--from` to say where they came from.
+- An idea is a direction in at most 150 words: what to try and why. Never how many variants to run, a limit on a run,
+  or what not to try: the worker decides how.
 
 ### Add the human's link
 

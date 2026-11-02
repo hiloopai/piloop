@@ -8,8 +8,8 @@ import Sections from '/snippets/generated/sections.mdx';
 import Runtimes from '/snippets/generated/runtimes.mdx';
 import Harnesses from '/snippets/generated/harnesses.mdx';
 
-Each role has a table in `piloop.toml`. This one runs up to four implementers on two harnesses, for at most 30 minutes
-each, and one research agent at a time:
+Each role has a table in `piloop.toml`. This one runs two implementers at a time on two harnesses, for at most 30
+minutes each, and one research agent at a time:
 
 ```toml
 [plugins.harness.claude]
@@ -20,12 +20,16 @@ model = "gpt-6.1-sol"
 
 [plugins.role.implementer]
 harnesses = ["claude", "codex"]
-max_concurrent = 4
+max_concurrent = 2
 timeout = 1800
 
 [plugins.role.research]
 max_concurrent = 1
 ```
+
+One implementer at a time is the default. More of them spend more to finish sooner, and are no better per dollar:
+they race for the head, and a run often builds on a head that another run has moved past. Raise `max_concurrent`
+when the time matters more than the spend.
 
 Run `piloop init` after you change it. To ask for one more agent of a role:
 

@@ -23,15 +23,12 @@ m = 2
 max_concurrent = 4
 timeout = 3600                           # one hour per run, a fresh session per idea
 
-# The lead: seeds and refills the board, triages escalations, steers running workers, prunes. No timer: workers
-# propose their own ideas, so the lead refills only a slot that has nothing to claim (buffer 0).
+# The lead: triages escalations and failed runs, and decides what the workers cannot. It wakes only for a decision:
+# workers propose their own ideas.
 [overlay.plugins.role.orchestrator]
 harnesses = ["codex"]
-triggers = ["news", "low_water", "stalled", "run_failed"]
+triggers = ["news", "run_failed"]
 max_ideas = 4
-
-[overlay.plugins.trigger.low_water]
-buffer = 0
 
 [overlay.plugins.role.research]
 triggers = []

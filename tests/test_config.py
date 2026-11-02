@@ -20,6 +20,7 @@ from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRol
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
+from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.campaign_type.kit.runs.trigger.stalled import StalledTrigger
 from piloop.plugins.campaign_type.kit.verdicts.judge import criterion
 from piloop.plugins.campaign_type.optimization.section.pack import Pack
@@ -36,6 +37,7 @@ from piloop.plugins.section.goal import Goal
 from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule
 from piloop.plugins.stop_rule.limits import Limits
+from piloop.plugins.trigger.news import NewsTrigger
 from piloop.plugins.trigger.sql import SqlTrigger
 from piloop.settings import Settings
 from tests.conftest import AGENT_TIMEOUT, RESEARCH, WATCHDOG, role_of
@@ -117,13 +119,53 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
     assert defaults.context == [], 'no analysis artifacts unless the campaign names them'
     implementer, watchdog = role_of(defaults, ImplementerRole), role_of(defaults, WatchdogRole)
     research = role_of(defaults, ResearchRole)
-    assert (implementer.timeout, implementer.max_concurrent) == (1800, 4)
+    assert (implementer.timeout, implementer.max_concurrent) == (1800, 1), 'one worker: more finish sooner, not cheaper'
     assert (watchdog.harnesses, watchdog.model) == (None, None), 'the campaign rotation and models'
     assert (watchdog.timeout, watchdog.interval) == (600, 1800)
     assert (research.timeout, research.max_ideas) == (900, 3), 'a sweep defines a ranked few ideas'
     assert research.triggers == ['low_water', 'stalled']
     assert defaults.triggers_of(RESEARCH) == [LowWaterTrigger(buffer=2), StalledTrigger()]
     assert research.max_concurrent == 1, 'concurrent sweeps duplicate each other and race on seeds'
+
+
+LEAD_OF_0_5 = (
+    'the orchestrator wakes only on news and run_failed now, not on low_water or cron: delete them from'
+    ' [plugins.role.orchestrator] triggers'
+)
+ROUTINE_OF_0_5 = 'nothing routine wakes the orchestrator now, so routine_every is removed'
+
+
+def dropped(warned: pytest.WarningsRecorder) -> list[str]:
+    return sorted(str(w.message).partition(';')[0] for w in warned)
+
+
+def test_an_orchestrator_of_0_5_that_plans_on_a_timer_loads_from_its_file_without_it_and_warns(
+    campaign_path: Path,
+) -> None:
+    toml = campaign_path / 'piloop.toml'
+    lead = 'triggers = ["news", "low_water", "cron", "run_failed"]'
+    tables = (
+        f'\n[plugins.role.orchestrator]\n{lead}\n\n[plugins.trigger.news]\nquiet_seconds = 5\nroutine_every = 900\n'
+    )
+    toml.write_text(toml.read_text() + tables)
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        cfg = load_campaign_config(campaign_path)
+    assert dropped(warned) == [ROUTINE_OF_0_5, LEAD_OF_0_5]
+    assert role_of(cfg, OrchestratorRole).triggers == ['news', 'run_failed']
+    assert cfg.triggers_of(RoleName('orchestrator')) == [NewsTrigger(quiet_seconds=5), RunFailed()]
+
+
+def test_a_campaign_that_0_5_stored_with_an_orchestrator_that_plans_on_a_timer_loads_without_it_and_warns(
+    campaign_path: Path,
+) -> None:
+    """The stored copy of ``piloop.toml`` (``campaigns.config``) goes the same validation as the file: no migration."""
+    stored = load_campaign_config(campaign_path).model_dump(mode='json')
+    stored['plugins']['role']['orchestrator'] = {'triggers': ['news', 'low_water', 'cron', 'run_failed']}
+    stored['plugins']['trigger'] = {'news': {'quiet_seconds': 5, 'routine_every': 900}}
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        cfg = CampaignConfig.model_validate(stored)
+    assert dropped(warned) == [ROUTINE_OF_0_5, LEAD_OF_0_5]
+    assert cfg.triggers_of(RoleName('orchestrator')) == [NewsTrigger(quiet_seconds=5), RunFailed()]
 
 
 def test_missing_file(tmp_path: Path) -> None:

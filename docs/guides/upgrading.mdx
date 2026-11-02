@@ -285,6 +285,23 @@ A keep of a 0.5 branch run, which never moved the head, is `interesting` after t
 `piloop eval cancel` records no measurement. A run's candidate is `skipped`, not a `crash`. A baseline that never
 measured pauses its campaign's measurements until you resume it.
 
+### One implementer by default
+
+`[plugins.role.implementer] max_concurrent` defaults to 1. More implementers finish sooner at more cost, and are no
+better per dollar. A `piloop.toml` that sets it keeps its value.
+
+### The orchestrator wakes only for a decision
+
+`[plugins.role.orchestrator] triggers` takes only `news` and `run_failed`. Another trigger, such as `low_water` or
+`cron`, is dropped with a warning until 0.7.0, and so is `[plugins.trigger.news] routine_every`, in `piloop.toml` and in
+a campaign's stored copy alike. `news` wakes it only for an escalation or what a person writes; the rest
+of the news comes with the next wake.
+
+### Only a stop rule or a person stops a campaign
+
+`piloop campaign stop` by an agent, or with `PILOOP_ACTOR=orchestrator`, is refused: the agent escalates a stop
+instead.
+
 ## Upgrading to 0.5.0
 
 ### Upgrade from 0.4

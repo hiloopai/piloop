@@ -13,9 +13,8 @@ PILOOP_ACTOR=orchestrator piloop resume <name>
 - Never pause with a `hold_at` fact that you set by hand, nor with a gate idea and `after` links: a hold stops every
   measurement, and research files ideas without the link.
 - Pausing a campaign is a scope decision for the human: record it (see "Every decision you take for the human").
-- A campaign: `piloop campaign stop <name> --reason '<why>'`. The daemon stops it as a limit of the stop rule does: it
-  drops queued work, winds the agents down, then launches the closing review. `--kill` ends the agents at once. Never
-  `UPDATE campaigns SET status`: that gets no closing review.
+- A campaign stops only by its stop rule or by the human's `piloop campaign stop`: yours is refused. To ask for a stop,
+  escalate it with your evidence. Never `UPDATE campaigns SET status`: that gets no closing review.
 - An agent that became redundant: `piloop agent cancel <agent-session> --wrap-up`. The agent is told to save its work
   and stop, and ended 10 minutes later, with every process it started. Without `--wrap-up`, it is ended at once.
 - Never `pkill` an agent: the cancel ends what it left running, in any session.

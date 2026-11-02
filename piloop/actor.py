@@ -189,6 +189,15 @@ type SignedAgent = Annotated[Agent, BeforeValidator(_fields), PlainSerializer(_s
 ACTORS: TypeAdapter[Actor] = TypeAdapter(Actor)
 
 
+def by_a_person(signature: str) -> bool:
+    """Whether a person signs ``signature``: the human at the terminal, or one whom the network named."""
+    try:
+        actor = ACTORS.validate_python(signature)
+    except ValidationError:  # a signature that an older piloop wrote: no person's
+        return False
+    return isinstance(actor, Person) or actor is System.HUMAN
+
+
 def party_of(signature: str) -> str:
     """The party of the actor that signs ``signature`` (``Agent.party``).
 

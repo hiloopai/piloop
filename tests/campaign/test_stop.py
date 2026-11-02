@@ -538,7 +538,7 @@ def test_the_stall_mark_is_every_else_two_rounds_of_the_implementer_slots() -> N
     pi = {'pi': {'model': 'm'}}
     plateau = CampaignConfig.model_validate({**bare, 'plugins': {'harness': pi, 'stop_rule': {'plateau': 15}}})
     assert StalledTrigger(every=8).mark(plateau) == (8, 'every = 8 of the stalled trigger')
-    assert StalledTrigger().mark(plateau) == (8, 'two rounds of [plugins.role.implementer] max_concurrent = 4'), (
+    assert StalledTrigger().mark(plateau) == (2, 'two rounds of [plugins.role.implementer] max_concurrent = 1'), (
         'the stop rule does not set the mark'
     )
     agent_sessions = CampaignConfig.model_validate(

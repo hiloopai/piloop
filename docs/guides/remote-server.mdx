@@ -116,11 +116,12 @@ model gateway, see [Model access](/guides/secrets#model-access).
 
 ## Run the orchestrator on the server
 
-Let piloop launch the [orchestrator](/concepts/orchestrator#let-piloop-launch-it) on news, in `piloop.toml`:
+Let piloop launch the [orchestrator](/concepts/orchestrator#let-piloop-launch-it) for what needs a decision, in
+`piloop.toml`:
 
 ```toml
 [plugins.role.orchestrator]
-triggers = ["news"]
+triggers = ["news", "run_failed"]
 ```
 
 Then talk to it from your laptop:

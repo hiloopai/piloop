@@ -28,7 +28,7 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.plugins.campaign_type.optimization.section.research_commands import ResearchCommands
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.plugins.role.orchestrator import OrchestratorRole
-from piloop.plugins.trigger.news import NewsTaken, Urgency, urgency
+from piloop.plugins.trigger.news import NewsTaken, wakes
 from tests.agents.test_resume import HARNESS, SESSION
 from tests.cli.test_skills import CAMPAIGN_TYPES, COMMAND
 from tests.conftest import SETTLE, ScriptRuntime, run_all, wait_until, write_toml
@@ -64,7 +64,7 @@ def harness(tmp_path: Path, turn: str = '') -> str:
 
 @pytest.fixture
 def on(db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The orchestrator role on, woken at once by urgent news and at most hourly by the rest."""
+    """The orchestrator role on, woken at once by an escalation or what a person writes."""
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     turn_on(db, campaign, harness(tmp_path))
 
@@ -73,7 +73,7 @@ def turn_on(db: Database, campaign: Campaign, body: str) -> None:
     write_toml(Path(campaign.path), body)
     path = Path(campaign.path)
     script = {**load_campaign_config(path).harness['script'].model_dump(mode='json', exclude_unset=True), **HARNESS}
-    news = {'news': {'quiet_seconds': 0, 'routine_every': 3600}}
+    news = {'news': {'quiet_seconds': 0}}
     plugins = {'role': {'orchestrator': {'triggers': ['news']}}, 'trigger': news, 'harness': {'script': script}}
     with db.session() as s:
         cfg = load_campaign_config(path, plugins=plugins)
@@ -247,28 +247,28 @@ def test_news_that_comes_while_a_wake_is_requested_goes_on_that_wake_and_its_bri
     assert wake(db, runtime, tmp_path) == []
 
 
-def test_routine_news_waits_for_its_interval_and_only_urgent_news_wakes_a_paused_campaign(
+def test_only_an_escalation_or_what_a_person_writes_wakes_it_also_while_the_campaign_is_paused(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, on: None
 ) -> None:
-    def judged() -> None:
-        with db.session() as s:
-            verdict = CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='score +1')
-            emit(s, verdict, TargetRef(CANDIDATE, 1), System.DAEMON)
-            s.commit()
-
-    judged()
-    [first] = wake(db, runtime, tmp_path)
-    assert 'candidate#1 keep: score +1' in brief(tmp_path, first), 'the first routine news wakes it'
-    judged()
-    assert wake(db, runtime, tmp_path) == [], 'the next routine news waits for routine_every'
+    """A verdict, an anomaly, the stop or an agent's note waits in the inbox: the lead neither plans nor reviews."""
+    with db.session() as s:
+        emit(
+            s,
+            CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='score +1'),
+            TargetRef(CANDIDATE, 1),
+            System.DAEMON,
+        )
+        s.add(Comment(target=TargetRef(TargetKind.CAMPAIGN, campaign.id), author='watchdog#9', kind=DECISION, priority=2,
+                      body='a progress review'))  # fmt: skip
+        s.commit()
+    assert wake(db, runtime, tmp_path) == [], 'nothing that needs a decision'
     with db.session() as s:
         ops.pause(s, campaign.id, evals=False, reason='a person reads the results')
         s.commit()
-    assert wake(db, runtime, tmp_path) == []
     message(db, campaign, 'resume it when the head is measured')
     [paused] = wake(db, runtime, tmp_path)
     assert 'resume it when the head is measured' in brief(tmp_path, paused)
-    assert [state for _, state, _ in agent_sessions(db, ORCHESTRATOR)] == [AgentSessionState.EXITED] * 2
+    assert 'candidate#1 keep: score +1' in brief(tmp_path, paused), 'what waited comes with it'
 
 
 def test_a_failed_orchestrator_leaves_its_news_to_the_next_and_off_is_the_default(
@@ -361,25 +361,26 @@ def test_one_launched_by_hand_gets_no_notes_and_a_live_one_that_ends_before_it_r
     with db.session() as s:
         ops.stop(s, campaign.id, System.HUMAN, reason='done', ending=Ending.WRAP_UP)
         s.commit()
-    woken = wake(db, runtime, tmp_path) + wake(db, runtime, tmp_path)
-    assert any('campaign demo stopped' in brief(tmp_path, a) for a in woken), 'the stop wakes it to report'
+    assert wake(db, runtime, tmp_path) + wake(db, runtime, tmp_path) == [], 'the stop is no decision for it'
 
 
-def test_messages_escalations_and_the_stop_are_urgent_and_the_rest_is_routine() -> None:
-    def comment(kind: str) -> CommentNews:
+def test_an_escalation_and_what_a_person_writes_wake_it_and_nothing_else_does() -> None:
+    def comment(kind: str, author: str = 'watchdog#3') -> CommentNews:
         view = CommentView(
-            id=CommentId(1), kind=kind, target='campaign#1', in_reply_to=None, author='human', created='now',
+            id=CommentId(1), kind=kind, target='campaign#1', in_reply_to=None, author=author, created='now',
             priority=1, acked_at=None, acked_by=None, body='b',
         )  # fmt: skip
         return CommentNews(comment=view, campaign_name='demo')
 
-    assert [urgency(comment(k)) for k in ('message', 'escalation', 'note')] == [
-        Urgency.NOW,
-        Urgency.NOW,
-        Urgency.ROUTINE,
+    assert [wakes(comment(k)) for k in ('escalation', 'message', 'note', 'decision')] == [True, False, False, False]
+    assert [wakes(comment('note', author)) for author in ('human', 'human:ana', 'orchestrator', 'run#4')] == [
+        True,
+        True,
+        False,
+        False,
     ]
-    assert urgency(StoppedNews(campaign_name='demo', reason='done')) is Urgency.NOW
-    assert urgency(VerdictNews(candidate=1, verdict='keep', reason='r')) is Urgency.ROUTINE
+    assert not wakes(StoppedNews(campaign_name='demo', reason='done'))
+    assert not wakes(VerdictNews(candidate=1, verdict='keep', reason='r'))
 
 
 def test_the_orchestrator_prompt_names_no_command_of_a_campaign_type_and_the_types_guide_teaches_them() -> None:

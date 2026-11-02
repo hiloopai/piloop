@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from piloop.actor import Actor
+from piloop.actor import Actor, by_a_person
 from piloop.campaign.stop import CampaignReopened, acted, check, request_stop, unclosed
 from piloop.db.events import emit
 from piloop.db.models import ENDED, AgentSession, Base, Campaign, Comment, Pause
@@ -91,11 +91,14 @@ def resume(s: Session, campaign_id: CampaignId) -> Pause:
 def stop(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str, ending: Ending) -> Campaign:
     """Ask the daemon to stop the campaign at once (``request_stop``), as when a ``[stop]`` condition holds.
 
+    Only a person stops a campaign by hand; a stop rule stops it itself. An agent asks for a stop with an escalation.
     On a stopped campaign, an ending ``now`` ends the implementers that still wind down.
 
     Raises:
-        Refused: the campaign is stopped already, and the ending is not ``now``.
+        Refused: ``actor`` is no person, or the campaign is stopped already and the ending is not ``now``.
     """
+    if not by_a_person(actor.signature):
+        raise Refused(f'{actor} may not stop a campaign: only a person or a stop rule does; escalate to ask for a stop')
     campaign = existing(s, Campaign, campaign_id, 'campaign')
     if campaign.status is CampaignStatus.STOPPED and ending is not Ending.NOW:
         raise Refused(

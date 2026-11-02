@@ -380,6 +380,16 @@ def warn(toml: Path, key: str, message: str, *, removed_in: Version, nth: int = 
     warnings.warn_explicit(text, PiloopDeprecationWarning, str(toml), lineno, registry=_shown)
 
 
+def dropped(message: str, *, removed_in: str) -> None:
+    """Warn, once in the process, that a validator of the config took out a key that is gone: a file's or a stored one.
+
+    A validator of the config calls it, so a file and a campaign's stored config go one path. Mark the validator with
+    ``until``.
+    """
+    text = f'{message}; removed in piloop {Version.parse(removed_in)}'
+    warnings.warn_explicit(text, PiloopDeprecationWarning, 'piloop config', 0, registry=_shown)
+
+
 def nth(toml: Path, table: str, key: str) -> int:
     """How many lines of ``toml`` set ``key`` before the header of ``table``: ``warn``'s ``nth`` for ``table.key``."""
     lines = toml.read_text().splitlines()

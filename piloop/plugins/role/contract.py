@@ -210,9 +210,10 @@ class ImplementerRole(RoleConfig):
     startup_relaunches: int = Field(default=2, ge=0)
     """How many times a run is queued again with a new implementer after its implementer failed to start. Then the run
     fails. A failure at startup is a fault of the host or the harness, not an attempt at an idea."""
-    max_concurrent: int = Field(default=4, ge=1)
+    max_concurrent: int = Field(default=1, ge=1)
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
-    scored after its implementer ended does not count."""
+    scored after its implementer ended does not count. More of them spend more to finish sooner, not more per dollar:
+    they race for the head, and a run often builds on a head that another one moved."""
     writes: list[str] = [
         'versions',
         'comments(note) on your idea or your run',

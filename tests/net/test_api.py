@@ -20,8 +20,9 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from pytest_mock import MockerFixture
 from rich.console import Console
+from sqlalchemy import select
 
-from piloop.actor import System
+from piloop.actor import Agent, Person, System
 from piloop.agents.results import PromptOutcome
 from piloop.api import client as client_module
 from piloop.api.client import Client, NoDaemon, Refused
@@ -43,21 +44,24 @@ from piloop.api.contract import (
     StopBody,
 )
 from piloop.api.views import CampaignState, Pending, Status, thread_lines
+from piloop.campaign import ops
+from piloop.campaign.stop import StopRequested
 from piloop.cli import common, main as cli
 from piloop.daemon.api import ROUTERS, Handlers, daemon_state, openapi, with_api
 from piloop.db import session, sql
-from piloop.db.events import emit
+from piloop.db.events import emit, has
 from piloop.db.models import (
     EVENT,
     AgentSession,
     AgentSessionState,
     Campaign,
     Comment,
+    Event,
     EventModel,
     UnknownEvent,
 )
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CommentId, Ending, RoleName, TargetKind, TargetRef
 from piloop.net import tokens
 from piloop.net.server import OPENAPI, Server, app, local_listener
 from piloop.net.tokens import Tokens
@@ -374,6 +378,29 @@ def test_a_write_answers_its_cursor_and_refuses_what_its_operation_refuses(
         assert no_candidate.value.error == Problem.UNKNOWN_CANDIDATE
         [result] = client.ack(AckBody(ids=(CommentId(9),))).results
         assert result.line() == 'comment#9 is not in the inbox'
+
+
+def test_only_a_person_or_a_stop_rule_stops_a_campaign(db: Database, campaign: Campaign, cfg: Settings) -> None:
+    lead = Agent(role=RoleName('orchestrator'), session=AgentSessionId(4))
+    with db.session() as s, pytest.raises(ops.Refused, match=r'^orchestrator#4 may not stop a campaign: only a person'):
+        ops.stop(s, campaign.id, lead, reason='the gains have flattened', ending=Ending.WRAP_UP)
+    with serving_api(cfg):
+        with EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client, pytest.raises(Refused) as refused:
+            client.stop('demo', StopBody(reason='the gains have flattened'))
+        assert (str(refused.value), refused.value.error) == (
+            'orchestrator may not stop a campaign: only a person or a stop rule does; escalate to ask for a stop',
+            Problem.REFUSED,
+        )
+        assert stops(db) == [], 'nothing asked'
+        with EveryClient.on(cfg.socket_file, Person(name='ana')) as client:
+            client.stop('demo', StopBody(reason='done'))
+    assert stops(db) == ['human:ana']
+
+
+def stops(db: Database) -> list[str]:
+    """Who asked to stop a campaign, in order."""
+    with db.session() as s:
+        return [e.actor for e in s.scalars(select(Event).where(has(StopRequested)).order_by(Event.id))]
 
 
 def first(client: Client, after: int, *kinds: str) -> EventModel:
