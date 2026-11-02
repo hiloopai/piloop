@@ -91,7 +91,7 @@ from piloop.plugins.executor.contract import AGENT, AgentKey, Capacity, Prompt
 from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.leases import SERVE
 from piloop.plugins.executor.workers import Workers
-from piloop.plugins.fact_source.facts import Facts
+from piloop.plugins.fact_source.facts import HOURS, Facts
 from piloop.plugins.host import Plugins
 from piloop.plugins.launch_policy.fewest_live import FewestLive
 from piloop.plugins.role.consumers import Agents
@@ -2701,6 +2701,30 @@ def test_an_extension_reaches_the_executor_once_for_each_total_and_an_implemente
     assert fake.prompts[-1][1].text.startswith(
         f'[piloop] Your time is almost up (your timeout of {timeout + 7200:g}s, with its extensions)'
     ), 'told again at the new deadline'
+    scheduler.stop(timeout=5)
+
+
+@pytest.mark.parametrize(('left', 'starts'), [(timedelta(minutes=3), False), (timedelta(minutes=30), True)])
+def test_no_run_starts_whose_session_the_stop_would_end_before_its_wrap_up(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, left: timedelta, starts: bool
+) -> None:
+    """A session shorter than its wrap-up lead (10 minutes) is told to wrap up as it starts: such a run never starts."""
+    set_config(db, campaign, plugins={'role': {'implementer': {'timeout': 3600}}, 'stop_rule': {'max_hours': 1}})
+    running_agent_session(db, campaign, 'first')  # the first run: max_hours counts from it
+    with db.session() as s:
+        first = s.get_one(Run, 1)
+        first.started_at = utcnow() - (timedelta(hours=1) - left)
+        close_run(s, first, RunEnd.FINISHED, None)
+        s.get_one(AgentSession, 1).state = AgentSessionState.EXITED
+        s.commit()
+    scheduler = make_scheduler(db, runtime, tmp_path)
+    with db.session() as s:
+        campaigns_of(scheduler)._planner(s.get_one(Campaign, campaign.id)).queue(
+            s, s.get_one(Campaign, campaign.id), Facts({HOURS.name: left.total_seconds() / 3600})
+        )
+        s.commit()
+        queued = s.scalars(select(Run).where(Run.status == RunStatus.QUEUED)).all()
+    assert bool(queued) is starts
     scheduler.stop(timeout=5)
 
 

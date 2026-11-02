@@ -11,6 +11,7 @@ import sys
 import threading
 from collections.abc import Callable
 from contextlib import closing
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import DEFAULT
@@ -40,7 +41,7 @@ from piloop.campaign.campaigns import sync
 from piloop.cli.plugins import selections
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.events import has, in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import OriginChanged
 from piloop.ids import CampaignId, CampaignStatus, Ending, Revision, TargetRef
@@ -76,11 +77,13 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
     RunController,
     RunFacts,
     RunRelaunched,
+    close_run,
     run_outcome,
 )
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
 from piloop.plugins.campaign_type.kit.runs.section.long_jobs import LongJobs
+from piloop.plugins.campaign_type.kit.runs.stop import runs_without_keep
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, working_on
 from piloop.plugins.campaign_type.kit.verdicts.judge import (
     CandidateJudged,
@@ -672,6 +675,27 @@ def test_timeout(db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_p
     with db.session() as s:
         [agent_session] = s.scalars(select(AgentSession)).all()
         assert agent_session.state is AgentSessionState.KILLED
+
+
+def test_a_run_whose_session_the_stop_cut_short_ends_as_cut_by_the_stop_and_is_no_attempt(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """Its session ends at the ``max_hours`` stop, before its role timeout: the stop ended it, not its idea's attempt."""
+    write_toml(Path(campaign.path), HARNESS_SLEEPS, implementer_timeout=3600)
+    set_config(db, campaign, plugins={'stop_rule': {'max_hours': 1}})
+    first = make_run(db, campaign)
+    with db.session() as s:
+        run = s.get_one(Run, first)
+        run.started_at = utcnow() - timedelta(seconds=3600 - 3)  # max_hours counts from it: 3 s left
+        close_run(s, run, RunEnd.FINISHED, None)
+        s.commit()
+    run_id = make_run(db, campaign, title='late')
+    execute(controller(db, runtime, tmp_path), db, run_id)
+    run = run_row(db, run_id)
+    assert (run.end, run.error) == (RunEnd.CAMPAIGN_STOPPED, None)
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        assert runs_without_keep(s, p) == 1, 'the first run only: the cut one is no attempt'
 
 
 def test_a_role_timeout_that_init_raises_applies_to_the_next_run(
@@ -1630,6 +1654,9 @@ GAVE_UP = RunEndRequested(how=RunEnding.GAVE_UP, reason='the window does not fit
         pytest.param(RunFacts(ending=GAVE_UP), (RunEnd.GAVE_UP, GAVE_UP.reason), id='gave-up'),
         pytest.param(RunFacts(cancelled=True), (RunEnd.CANCELLED, None), id='cancel'),
         pytest.param(RunFacts(ended=True), (RunEnd.CAMPAIGN_STOPPED, None), id='stop'),
+        pytest.param(
+            RunFacts(timed_out=True, stop_cut=True, error=TIMEOUT), (RunEnd.CAMPAIGN_STOPPED, None), id='stop-cut'
+        ),
         pytest.param(RunFacts(timed_out=True, error=TIMEOUT), (RunEnd.TIMED_OUT, TIMEOUT), id='timeout'),
         pytest.param(RunFacts(error='implementer exit 1'), (RunEnd.FAILED, 'implementer exit 1'), id='error'),
         pytest.param(RunFacts(unsaved='refused'), (RunEnd.FAILED, f'{UNSAVED}: refused'), id='unsaved'),

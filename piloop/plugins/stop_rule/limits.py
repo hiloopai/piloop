@@ -68,7 +68,8 @@ class Limits(StopRule):
     finished run that does not count frees its place, and piloop starts another run in it."""
     max_hours: float | None = Field(default=None, gt=0)
     """Stop after this many hours of wall-clock time since the first run of the campaign started. The time that the
-    campaign was paused (``piloop pause``) does not count. An agent's timeout ends at the stop too."""
+    campaign was paused (``piloop pause``) does not count. An agent's timeout ends at the stop too: no run starts within
+    its role's ``wrap_up_lead`` of the stop, and a run that the stop cuts short ends ``campaign_stopped``, no attempt."""
     max_tokens: int | None = Field(default=None, ge=1)
     """Stop when all the agents of the campaign together spent this many tokens (the ``total`` of
     ``agent_sessions.usage``), summed over the agents that ended."""

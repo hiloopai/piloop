@@ -483,7 +483,9 @@ class RunController:
             campaign = run.campaign
             cfg = campaign.config
             base_revision = s.get_one(Candidate, run.base_candidate_id).revision
-            timeout = seconds(agent_timeout(s, campaign, cfg, cfg.role(run.role).timeout, utcnow()))
+            role_timeout = cfg.role(run.role).timeout
+            timeout = seconds(agent_timeout(s, campaign, cfg, role_timeout, utcnow()))
+            stop_cut = timeout < role_timeout  # only the stop shortens a session: a timeout then is the stop's
             harness, model, campaign_id = run.harness, run.model, campaign.id
             name, vcs, campaign_path = campaign.name, vcs_of(campaign), Path(campaign.path)
         log_dir = self._runs_dir / str(run_id)
@@ -524,7 +526,17 @@ class RunController:
                         self._close(span, run_id, end, None)
                         self._settle(run_id, end, None)
                 case Ran():
-                    self._ran(span, run_id, campaign_id, agent_session_id, repo, base_revision, ended, log_dir)
+                    self._ran(
+                        span,
+                        run_id,
+                        campaign_id,
+                        agent_session_id,
+                        repo,
+                        base_revision,
+                        ended,
+                        log_dir,
+                        stop_cut=stop_cut,
+                    )
                 case _:
                     assert_never(ended)
 
@@ -587,8 +599,13 @@ class RunController:
         base_revision: Revision,
         ended: Ran,
         log_dir: Path,
+        *,
+        stop_cut: bool = False,
     ) -> None:
-        """Close the run of an agent that worked (``run_outcome``), score its versions and settle its idea."""
+        """Close the run of an agent that worked (``run_outcome``), score its versions and settle its idea.
+
+        ``stop_cut``: the campaign's stop cut its session shorter than its role timeout.
+        """
         outcome = ended.process
         versions = self._received(run_id, repo, base_revision, ended.work)
         ending = self._ending(run_id)
@@ -606,6 +623,7 @@ class RunController:
             ended=stop_ended is not None,
             cancelled=cancelled,
             timed_out=outcome.status is ExitStatus.TIMED_OUT,
+            stop_cut=stop_cut,
             error=outcome.error,
             unsaved=unsaved[1].error if unsaved is not None else None,
             scoring=scoring,
@@ -1716,7 +1734,9 @@ class RunFacts:
     cancelled: bool = False
     """Someone cancelled the run (``run_cancel``)."""
     timed_out: bool = False
-    """The implementer ran into its role's timeout."""
+    """The implementer ran into its timeout."""
+    stop_cut: bool = False
+    """The campaign's stop cut its session shorter than its role timeout: a timeout then is the stop, not the run's."""
     error: str | None = None
     """How the implementer's process failed, a timeout included."""
     unsaved: str | None = None
@@ -1740,6 +1760,9 @@ def run_outcome(facts: RunFacts) -> tuple[RunEnd, str | None]:
             return RunEnd.CANCELLED, None
         # A stop ended it, whatever the kill left in the outcome.
         case RunFacts(ended=True):
+            return RunEnd.CAMPAIGN_STOPPED, None
+        # It ran into the campaign's stop, which cut its session short: no attempt at its idea.
+        case RunFacts(timed_out=True, stop_cut=True):
             return RunEnd.CAMPAIGN_STOPPED, None
         # It ran into its role's timeout.
         case RunFacts(timed_out=True, error=error):

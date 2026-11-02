@@ -21,7 +21,7 @@ from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, 
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.evaluation import submissions
-from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, handed_off
+from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, handed_off, wrap_up_lead
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
 from piloop.plugins.campaign_type.kit.runs.stop import release
@@ -196,14 +196,17 @@ class OptimizationPlanner:
         A run starts from the head, with no idea: its worker claims one from the board, or proposes one and claims it.
         Each role that does runs fills its own slots (``max_concurrent``), in the order of ``Roles.doing_runs``, on the
         next harness of its rotation that is not at its cap. Nothing starts while the campaign has no head, or while a
-        new evaluator has not measured the head (``remeasure`` measures it first).
+        new evaluator has not measured the head (``remeasure`` measures it first). Nor does a run whose session the
+        stop rule's ``hours`` would end within its wrap-up lead: its worker would be told to wrap up as it starts.
         """
         trunk = head(s, campaign)
         if trunk is None or head_unmeasured(s, campaign):
             return
         cfg = campaign.config
-        runs_left = left.get(facts.RUNS)
+        runs_left, hours_left = left.get(facts.RUNS), left.get(facts.HOURS)
         for name, role in cfg.roles.doing_runs().items():
+            if hours_left is not None and hours_left * 3600 <= wrap_up_lead(role.timeout, role.wrap_up_lead):
+                continue
             for _ in range(free_slots(s, campaign, {name: role}, runs_left)):
                 total_runs = count(s, campaign_runs(campaign.id).where(done_by(name)))
                 resumes = resumed_on(s, campaign.id, name, role, cfg.role_harnesses(name))
