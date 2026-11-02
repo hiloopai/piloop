@@ -35,7 +35,7 @@ def data(sealed: Path) -> tuple[Path, bytes]:
         gen = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(gen)
         partial = sealed / 'expected.partial'
-        gen.generate(meta['rows'], meta['stations'], bool(meta['long']), meta['seed'], measurements, partial)
+        gen.generate(meta['rows'], meta['stations'], gen.NAMES[meta['long']], meta['seed'], measurements, partial)
         partial.replace(expected)
     out = expected.read_bytes()
     if hashlib.sha256(out).hexdigest() != meta['expected_sha256']:

@@ -3,7 +3,8 @@
 Usage: ``python scorer.py <task dir> <data dir> <work dir>``, where the work dir holds ``tree.tgz``, ``base.tgz`` and
 ``sealed.tgz``. The tree gets the task's own ``evaluate.py`` and dev data (``data/``) over its own. It writes one JSON object to
 ``<work dir>/score.json``:
-``{"dev": {"metrics": ...} | null, "dev_error": str, "sealed": <what sealed.py printed>}``.
+``{"dev": {"metrics": ...} | null, "dev_error": str, "sealed": <what sealed.py printed>, "cpu": str}``, ``cpu`` the
+vendor, family and model of the sandbox's CPU, such as ``AuthenticAMD 25/17``.
 """
 
 import json
@@ -12,6 +13,15 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
+
+
+def cpu() -> str:
+    """The vendor, family and model of this machine's CPU: Modal's sandboxes report no model name."""
+    fields: dict[str, str] = {}
+    for line in Path('/proc/cpuinfo').read_text().splitlines():
+        key, _, value = line.partition(':')
+        fields.setdefault(key.strip(), value.strip())
+    return f'{fields.get("vendor_id", "?")} {fields.get("cpu family", "?")}/{fields.get("model", "?")}'
 
 
 def main(task: Path, data: Path, work: Path) -> dict[str, object]:
@@ -39,6 +49,7 @@ def main(task: Path, data: Path, work: Path) -> dict[str, object]:
         'dev': json.loads(lines[-1]) if dev.returncode == 0 and lines else None,
         'dev_error': dev.stderr[-1000:],
         'sealed': verdict,
+        'cpu': cpu(),
     }
 
 

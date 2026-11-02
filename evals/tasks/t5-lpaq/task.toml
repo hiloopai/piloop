@@ -4,6 +4,7 @@ direction = "lower"
 dev = ["uv", "run", "python", "evaluate.py"]
 dev_base = 2132780                        # lpaq1, measured on Modal: compressed size plus 10,416 xz bytes of source
 dev_ref = 1617046                         # 0.757 × the compressed size: cmix's ratio to lpaq1 on enwik8 (14.95 MB vs 19.76 MB)
+cloud = "gcp"                             # one CPU type, AMD Zen 4, for the agents and the scorers: the 120 s rule is CPU time
 setup = ["apt-get update && apt-get install -y g++ unzip"]
 data = [
     "curl -fsSL --retry 3 -o enwik8.zip https://mattmahoney.net/dc/enwik8.zip",

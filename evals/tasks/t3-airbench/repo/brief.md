@@ -12,7 +12,8 @@ A100 it reaches 94.01% on the test set in about 2.6 s.
   training images and labels it is given. It returns logits for the test images, whose labels it never sees.
 - Use only the Python packages that `evaluate.py` runs with (torch, torchvision, numpy).
 - The final version is also trained on all 50,000 training images and scored on CIFAR-10's test set, where its mean
-  accuracy over 5 seeds must stay at or above 94.0%.
+  accuracy over 10 seeds must stay at or above 93.77%, 0.25 points below the starting code's 94.02%. An accuracy
+  drop on the held-out part here costs about 2.2 times as much on the test set.
 
 ## Measure
 
@@ -24,4 +25,6 @@ Each GPU of this machine runs one evaluation at a time: always go through `/opt/
 - `/opt/evals/gpu-lock python3 evaluate.py`: 5 seeds from a cold start, about 70 s once the compile cache is warm.
 
 Both print `seconds`, the mean time of `run`, which is the metric to improve (lower is better), and `accuracy` on a
-held-out part of the training set. A version whose mean accuracy falls below the floor in `evaluate.py` fails.
+held-out part of the training set. The 5-seed evaluation fails a version whose mean accuracy is below 93.14%, 0.11
+points under the starting code's 93.25%, so that it holds on the test set; the starting code itself misses it in
+about 1 of 14 evaluations. The fast loop only warns below it.

@@ -330,6 +330,7 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
                 hours=hours + 1,
                 network=True,
                 gpu=gpu,
+                cloud=task.cloud,
                 env=env,
                 run=name,
             )

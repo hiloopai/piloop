@@ -1,10 +1,12 @@
 import importlib.util
 import json
+import random
 import shutil
 import sqlite3
 import subprocess
 import threading
 import time
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
@@ -33,7 +35,7 @@ from evals.model import (
 )
 from evals.pilot import guard, spent
 from evals.report import plain_bar, write
-from evals.score import Score
+from evals.score import Score, Scoring
 from evals.team import notes, stacking
 from evals.telemetry import exported
 
@@ -303,3 +305,33 @@ def test_team_counts_keeps_over_another_runs_head_and_notes_read_across(tmp_path
     (sessions / 's2.jsonl').write_text(json.dumps(read) + '\n')
     assert notes(db, tmp_path / 'export') == ({'implementer': 1, 'implementer_b': 1}, {'implementer>implementer_b': 1})
     db.close()
+
+
+def test_a_score_is_the_mean_of_its_scorings_and_keeps_each_cpu():
+    amd = Scoring(dev=1.0, sealed=0.8, detail='ok', cpu='AuthenticAMD 25/17')
+    intel = Scoring(dev=0.8, sealed=0.4, detail='ok', cpu='GenuineIntel 6/106')
+    both = Score.of([amd, intel])
+    assert (both.dev, both.sealed) == (pytest.approx(0.9), pytest.approx(0.6))
+    assert 'AuthenticAMD 25/17' in both.detail and 'GenuineIntel 6/106' in both.detail
+    assert Score.of([amd, intel.model_copy(update={'sealed': None})]).sealed is None
+
+
+def test_t4_mixed_names_share_long_starts_and_ends():
+    gen = module(TASKS / 't4-1brc' / 'build' / 'gen.py')
+    names = gen.names(random.Random(1), 300, 'mixed')
+    assert len(names) == 300 and all(0 < len(n) <= 100 for n in names)
+    assert sum(n.isascii() for n in names) >= 100
+    shared = Counter((n[:32], n[-16:]) for n in names if len(n) > 48)
+    assert shared.most_common(1)[0][1] >= 5
+
+
+def test_t5_holdout_fails_a_round_trip_over_its_cpu_rule(tmp_path: Path):
+    sealed = module(TASKS / 't5-lpaq' / 'sealed.py')
+    (tmp_path / 'evaluate.py').write_text(
+        'def score(path, tree):\n    return {"bytes": 90, "seconds": float(path.read_text())}\n'
+    )
+    (tmp_path / 'meta.json').write_text(json.dumps({'base': 100, 'ref': 80}))
+    (tmp_path / 'holdout.bin').write_text('121')
+    assert sealed.main(tmp_path, tmp_path, tmp_path)['status'] == 'over_limit'
+    (tmp_path / 'holdout.bin').write_text('119')
+    assert sealed.main(tmp_path, tmp_path, tmp_path)['score'] == pytest.approx(0.5)

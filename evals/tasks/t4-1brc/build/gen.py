@@ -4,7 +4,8 @@ Each line is ``<station>;<temperature>``: a station of the set, drawn uniformly,
 normal distribution truncated to ±45.0, in tenths. The expected output is one ``name=min/mean/max`` line per station,
 sorted by the bytes of the name, the mean rounded half up to a tenth. The same parameters give the same bytes.
 
-Usage: ``python3 gen.py <rows> <stations> <long names: 0 or 1> <seed> <measurements file> <expected file>``.
+Usage: ``python3 gen.py <rows> <stations> <names> <seed> <measurements file> <expected file>``, ``<names>`` one of
+``NAMES`` by its index: 0 short, 1 long, 2 mixed.
 """
 
 import random
@@ -17,18 +18,32 @@ SPREAD = 450
 """Offsets go from -45.0 to 45.0; means from -30.0 to 40.0, so no temperature reaches ±99.9."""
 SYLLABLES = ['ka', 'lo', 'ma', 'ri', 'sun', 'te', 'vo', 'ba', 'nel', 'dor', 'shi', 'an', 'qu', 'ze', 'por', 'el']
 LETTERS = 'aäåbcçdeéèfghiíjklmnñoöøpqrsßtuüvwxyzабвгдежзийклмнопрстуфхцчшщэюяαβγδεζηθλμξπστφχψωあいうえおかきくけこ'
+NAMES = ('short', 'long', 'mixed')
+"""The station names of a file: short ASCII ones; long UTF-8 ones of up to 100 bytes; or a third of each, and a third
+that share a long start and end and differ only in the middle, in ``GROUPS`` groups."""
+GROUPS = 8
 
 
-def names(rng: random.Random, n: int, long: bool) -> list[bytes]:
-    """``n`` distinct station names: short ASCII ones, or long UTF-8 ones of up to 100 bytes."""
+def utf8(rng: random.Random, chars: int, most: int) -> str:
+    """``chars`` random letters, cut to at most ``most`` bytes of UTF-8."""
+    return ''.join(rng.choice(LETTERS) for _ in range(chars)).encode()[:most].decode(errors='ignore')
+
+
+def names(rng: random.Random, n: int, kind: str) -> list[bytes]:
+    """``n`` distinct station names of ``kind`` (``NAMES``)."""
     found: dict[bytes, None] = {}
+    groups = [(utf8(rng, 30, 40), utf8(rng, 15, 20)) for _ in range(GROUPS)] if kind == 'mixed' else []
     while len(found) < n:
-        if long:
+        pick = kind if kind != 'mixed' else ('short', 'long', 'shared')[len(found) % 3]
+        if pick == 'long':
             text = ''.join(rng.choice(LETTERS) for _ in range(rng.randint(3, 40))).capitalize()
             name = text.encode()[:100].decode(errors='ignore').encode()
+        elif pick == 'shared':
+            start, end = rng.choice(groups)
+            name = f'{start}{utf8(rng, rng.randint(1, 8), 32)}{end}'.capitalize().encode()
         else:
             name = ''.join(rng.choice(SYLLABLES) for _ in range(rng.randint(2, 5))).capitalize().encode()
-        if name and b';' not in name and b'\n' not in name:
+        if name and len(name) <= 100 and b';' not in name and b'\n' not in name:
             found[name] = None
     return list(found)
 
@@ -38,10 +53,10 @@ def tenths(t: int) -> str:
     return f'{"-" if t < 0 else ""}{abs(t) // 10}.{abs(t) % 10}'
 
 
-def generate(rows: int, stations: int, long: bool, seed: int, measurements: Path, expected: Path) -> None:
-    """Write the file and its expected output."""
+def generate(rows: int, stations: int, kind: str, seed: int, measurements: Path, expected: Path) -> None:
+    """Write the file and its expected output, with station names of ``kind`` (``NAMES``)."""
     rng = random.Random(seed)
-    station_names = names(rng, stations, long)
+    station_names = names(rng, stations, kind)
     means = [rng.randint(-300, 400) for _ in station_names]
     prefix = [name + b';' for name in station_names]
     lowest = min(means) - SPREAD
@@ -67,5 +82,5 @@ def generate(rows: int, stations: int, long: bool, seed: int, measurements: Path
 
 
 if __name__ == '__main__':
-    rows, stations, long, seed = (int(a) for a in sys.argv[1:5])
-    generate(rows, stations, bool(long), seed, Path(sys.argv[5]), Path(sys.argv[6]))
+    rows, stations, kind, seed = (int(a) for a in sys.argv[1:5])
+    generate(rows, stations, NAMES[kind], seed, Path(sys.argv[5]), Path(sys.argv[6]))

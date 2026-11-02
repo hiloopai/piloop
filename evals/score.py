@@ -6,6 +6,7 @@ an arm's.
 
 import io
 import json
+import statistics
 import subprocess
 import tarfile
 import tempfile
@@ -21,12 +22,42 @@ from evals.sandbox import OPT, WORK, Box, image
 from evals.telemetry import tracer
 
 
-class Score(Frozen):
-    """One version's scores, normalised: 0 at the starting repo, 1 at the reference."""
+class Scoring(Frozen):
+    """One sandbox's scores of one version, normalised: 0 at the starting repo, 1 at the reference."""
 
     dev: float | None
     sealed: float | None
     detail: str
+    cpu: str
+    """The vendor, family and model of the sandbox's CPU, such as ``AuthenticAMD 25/17``."""
+
+
+class Score(Frozen):
+    """One version's scores: the means over its scorings (``Task.score_repeats``), each of which is kept."""
+
+    dev: float | None
+    """The mean dev score. None: a scoring failed."""
+    sealed: float | None
+    """The mean sealed score. None: a scoring failed."""
+    detail: str
+    scorings: list[Scoring] = []
+    """Each sandbox's scores, with its CPU. Empty in a score written before they were kept."""
+
+    @classmethod
+    def of(cls, scorings: list[Scoring]) -> Score:
+        """The means of ``scorings``, None when any of them failed; and the details of each."""
+
+        def mean(values: list[float | None]) -> float | None:
+            known = [v for v in values if v is not None]
+            return statistics.fmean(known) if known and len(known) == len(values) else None
+
+        detail = '; '.join(dict.fromkeys(f'{s.cpu}: {s.detail}' for s in scorings))
+        return cls(
+            dev=mean([s.dev for s in scorings]),
+            sealed=mean([s.sealed for s in scorings]),
+            detail=detail if len(scorings) == 1 else f'mean of {len(scorings)}: {detail}',
+            scorings=scorings,
+        )
 
 
 def archives(bundle: Path, revisions: list[str]) -> dict[str, bytes]:
@@ -60,12 +91,22 @@ def sealed_data(name: str, settings: Settings) -> bytes:
 
 def score_one(
     task: Task, rev: str, base: bytes, tree: bytes, sealed: bytes, settings: Settings, parent: Context
-) -> Score:
+) -> Scoring:
     """Score one tree in a sandbox of its own, in a span under ``parent``."""
     with tracer.start_as_current_span('evals.score.tree', context=parent, attributes={'revision': rev}) as span:
         cpu, memory = settings.score_cpu, settings.score_memory_mb
         img = image([task], None)
-        box = Box.create(settings, img, cpu=cpu, memory_mb=memory, hours=1, network=False, gpu=task.gpu, task=task.name)
+        box = Box.create(
+            settings,
+            img,
+            cpu=cpu,
+            memory_mb=memory,
+            hours=1,
+            network=False,
+            gpu=task.gpu,
+            cloud=task.cloud,
+            task=task.name,
+        )
         try:
             for name, data in (('tree.tgz', tree), ('base.tgz', base), ('sealed.tgz', sealed)):
                 box.write(f'{WORK}/{name}', data)
@@ -77,22 +118,28 @@ def score_one(
         dev, verdict = out['dev'], out['sealed']
         detail = f'sealed: {verdict["status"]} {verdict["detail"]}'
         if dev is None:
-            found = Score(dev=None, sealed=verdict['score'], detail=f'dev: {out["dev_error"].strip()[-300:]}; {detail}')
-        else:
-            found = Score(dev=task.normalised(dev['metrics'][task.metric]), sealed=verdict['score'], detail=detail)
+            detail = f'dev: {out["dev_error"].strip()[-300:]}; {detail}'
+        normalised = None if dev is None else task.normalised(dev['metrics'][task.metric])
+        found = Scoring(dev=normalised, sealed=verdict['score'], detail=detail, cpu=out['cpu'])
         span.set_attributes({k: v for k, v in found.model_dump().items() if v is not None})
         return found
 
 
 def score(task: Task, bundle: Path, base: str, revisions: list[str], settings: Settings) -> dict[str, Score]:
-    """Score ``revisions`` of ``bundle`` against ``base``, ``score_concurrency`` sandboxes at a time."""
+    """Score ``revisions`` of ``bundle`` against ``base``, ``score_concurrency`` sandboxes at a time.
+
+    Each version gets ``task.score_repeats`` sandboxes.
+    """
     with tracer.start_as_current_span('evals.score', attributes={'task': task.name, 'revisions': len(revisions)}):
         trees = archives(bundle, [base, *revisions])
         sealed = sealed_data(task.name, settings)
         parent = context.get_current()
         with ThreadPoolExecutor(settings.score_concurrency) as pool:
             futures = {
-                rev: pool.submit(score_one, task, rev, trees[base], trees[rev], sealed, settings, parent)
+                rev: [
+                    pool.submit(score_one, task, rev, trees[base], trees[rev], sealed, settings, parent)
+                    for _ in range(task.score_repeats)
+                ]
                 for rev in trees
             }
-            return {rev: f.result() for rev, f in futures.items()}
+            return {rev: Score.of([f.result() for f in fs]) for rev, fs in futures.items()}

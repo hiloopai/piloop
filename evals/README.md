@@ -31,7 +31,9 @@ price, plus the sandbox's CPU and memory. The export (git bundle, piloop's datab
 
 Scoring runs the base and every head of a run in sandboxes without network: the task's own `evaluate.py` over the
 head's tree gives the dev score, and `sealed.py` the sealed one, with the data from `EVALS_SEALED_URI/<task>/`.
-Heads are a piloop arm's keeps and a plain arm's commits on `main`.
+Heads are a piloop arm's keeps and a plain arm's commits on `main`. A task that times its runs scores each version in
+`score_repeats` sandboxes and takes the means; `scores.json` keeps each scoring with its CPU. A task's `cloud` pins
+the CPU type of its sandboxes, the agents' and the scorers'.
 
 ## Metrics
 

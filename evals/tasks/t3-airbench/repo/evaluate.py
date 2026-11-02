@@ -3,7 +3,7 @@
 Each seed is one timed call of ``solution.run(model, seed)``: it trains on ``cifar10/train.pt`` and returns logits for
 the images of ``cifar10/test.pt``, whose labels it never sees. ``seconds`` is the mean wall time of those calls, the
 GPU synchronised; ``solution.build``, which compiles and warms the model, is not timed. ``accuracy`` is the mean over
-seeds. Below the floor, the run fails.
+seeds. Below the floor, the run fails; the fast loop has no floor and only warns.
 
 - ``python evaluate.py``: the slow dev loop, 5 seeds from a cold start, training on ``data/train.pt`` and testing on
   ``data/val.pt``.
@@ -35,11 +35,11 @@ from types import ModuleType
 ROOT = Path(__file__).resolve().parent
 VENV = Path('/opt/evals/venv/t3-airbench/bin/python')
 SEEDS = 5
-FLOOR = 0.9301
-"""The accuracy below which a version fails, over 5 seeds: the starting code's mean on ``data/val.pt``, 0.9325, less 3
-standard errors of a 5-seed mean (one seed's standard deviation is 0.0017)."""
-FAST_FLOOR = 0.9273
-"""The same for one seed: the mean less 3 standard deviations."""
+FLOOR = 0.9314
+"""The accuracy below which a version fails, over 5 seeds: the starting code's mean on ``data/val.pt``, 0.9325, less
+0.11 points. The test set loses about 2.2 times the accuracy that ``val.pt`` loses, and its floor is 0.25 points below
+the starting code there, so 0.25 / 2.2. The starting code itself falls below it in about 7% of 5-seed evaluations (one
+seed's standard deviation is 0.0017)."""
 SERVE_WAIT = 600
 """Seconds that the fast loop waits for its warm process to start, then for one evaluation."""
 
@@ -193,11 +193,16 @@ def fast() -> dict[str, float]:
     return answer['metrics']
 
 
-def report(metrics: dict[str, float], floor: float) -> int:
-    """Print the metrics as one JSON line; exit 1 below the accuracy floor."""
-    if metrics['accuracy'] < floor:
+def report(metrics: dict[str, float], floor: float | None) -> int:
+    """Print the metrics as one JSON line; exit 1 below the accuracy ``floor``.
+
+    With no ``floor``, a run below ``FLOOR`` only warns.
+    """
+    if floor is not None and metrics['accuracy'] < floor:
         print(f'accuracy {metrics["accuracy"]:.4f} is below {floor:.4f}', file=sys.stderr)
         return 1
+    if floor is None and metrics['accuracy'] < FLOOR:
+        print(f'accuracy {metrics["accuracy"]:.4f}: the 5-seed evaluation fails below {FLOOR:.4f}', file=sys.stderr)
     line = json.dumps({'metrics': metrics})
     if result := os.environ.get('PILOOP_RESULT_FILE'):
         with open(result, 'a') as f:
@@ -222,7 +227,7 @@ def main() -> int:
         return 0
     try:
         if args.fast and os.environ.get('EVALS_DEV_LOOP') != 'slow':  # a slow-loop arm turns the warm process off
-            return report(fast(), FAST_FLOOR if args.floor == FLOOR else args.floor)
+            return report(fast(), None)
         split = Split(args.train or [ROOT / 'data' / 'train.pt'], args.test or ROOT / 'data' / 'val.pt')
         return report(cold(Path.cwd(), split, args.seeds), args.floor)
     except Exception as e:  # the reason of a failed run, on stderr: piloop records a crash

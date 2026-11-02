@@ -7,12 +7,15 @@ line each, sorted by the bytes of the name. Make it use less CPU time.
 
 - The output must be exactly the expected output: temperatures to one decimal, the mean rounded half up.
 - A station name is 1 to 100 bytes of UTF-8 without `;` or a newline; a temperature is -99.9 to 99.9 with one
-  decimal. A file can hold up to 10,000 distinct stations.
+  decimal. A file can hold up to 10,000 distinct stations. The files here have 10,000: a third short ASCII names, a
+  third long UTF-8 names, and a third long names that share their start and end and differ only in the middle.
 - Rust standard library only: no crates. Keep `Cargo.toml`'s profile, or change it if that helps.
 - CPU time counts every thread, so more threads do not help: the program is single-threaded on purpose.
 - Do not edit `evaluate.py` or `data/`.
 - The final version is also scored on a file you have not seen, with other station names, as its CPU time against
-  the starting program's on the same machine. A program tuned to these 413 names gains nothing there.
+  the starting program's. Both are timed in turn on another machine, normally of this one's CPU type (AMD Zen 4); a
+  scoring can land on another AMD or an Intel CPU, and each records its CPU. A program tuned to the names here gains
+  nothing there.
 
 ## Measure
 

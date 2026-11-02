@@ -2,13 +2,17 @@
 
 Run as ``python sealed.py <tree> <base> <sealed> <out>``, in a sandbox without network, with ``<tree>/evaluate.py`` the
 task's own. ``<sealed>`` holds ``holdout.bin``, and ``meta.json`` with ``base`` and ``ref``, the bytes that score 0 and
-1. Writes one JSON object to ``<out>``, ``{"score", "status", "detail", "raw"}``.
+1. Writes one JSON object to ``<out>``, ``{"score", "status", "detail", "raw"}``. A round trip over ``SECONDS`` of CPU
+breaks the brief's rule, and scores nothing (``over_limit``).
 """
 
 import importlib.util
 import json
 import sys
 from pathlib import Path
+
+SECONDS = 120
+"""The most CPU seconds of compression plus decompression: the brief's rule, the dev evaluator's guardrail floor."""
 
 
 def main(tree: Path, base: Path, sealed: Path) -> dict[str, object]:
@@ -23,8 +27,11 @@ def main(tree: Path, base: Path, sealed: Path) -> dict[str, object]:
     except RuntimeError as e:
         return {'score': None, 'status': 'crash', 'detail': str(e)[-2000:], 'raw': None}
     raw = metrics['bytes']
+    detail = f'{raw} bytes, {metrics["seconds"]} s'
+    if metrics['seconds'] > SECONDS:
+        return {'score': None, 'status': 'over_limit', 'detail': f'{detail}: over {SECONDS} s of CPU', 'raw': None}
     score = (raw - meta['base']) / (meta['ref'] - meta['base']) if 'ref' in meta else None
-    return {'score': score, 'status': 'ok', 'detail': f'{raw} bytes, {metrics["seconds"]} s', 'raw': raw}
+    return {'score': score, 'status': 'ok', 'detail': detail, 'raw': raw}
 
 
 if __name__ == '__main__':

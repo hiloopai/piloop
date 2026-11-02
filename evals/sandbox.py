@@ -71,6 +71,7 @@ class Box:
         hours: float,
         network: bool,
         gpu: str | None = None,
+        cloud: str | None = None,
         env: dict[str, str] | None = None,
         **tags: str,
     ) -> Box:
@@ -90,6 +91,7 @@ class Box:
             cpu=cpu,
             memory=memory_mb,
             gpu=gpu,
+            cloud=cloud,
             timeout=int(hours * 3600),
             block_network=not network,
             workdir=WORK,

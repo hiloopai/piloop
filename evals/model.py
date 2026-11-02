@@ -37,6 +37,11 @@ class Task(Frozen):
     the packages its scorer imports."""
     gpu: str | None = None
     """The Modal GPU type of every sandbox that runs the task, such as ``L4``. None: CPU only."""
+    cloud: str | None = None
+    """The Modal cloud of every sandbox that runs the task, which pins its CPU type for a task scored on timing:
+    ``gcp`` gave AMD Zen 4 (family 25, model 17) in 26 of 26 sandboxes, ``aws`` Intel Ice Lake. None: any."""
+    score_repeats: int = Field(default=1, ge=1)
+    """How many sandboxes score each version: its scores are their means. More than 1 for a scorer that times."""
     data: list[str] = []
     """Shell lines that write the dev data into the current directory when the image is built. It is copied into the
     repo, and git ignores it."""
