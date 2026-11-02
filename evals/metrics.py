@@ -15,6 +15,7 @@ from pathlib import Path
 from evals.loop import loop
 from evals.model import Funnel, Point, Result, Sample
 from evals.score import Score
+from evals.team import notes, stacking
 
 LEADS = ('orchestrator', 'lead')
 """The roles whose tokens are the lead's share."""
@@ -78,7 +79,7 @@ def piloop_counts(db: sqlite3.Connection, base: str) -> tuple[Funnel, int, int, 
 
     funnel = Funnel(
         ideas=one('select count(*) from ideas'),
-        runs=one("select count(*) from runs where role = 'implementer'"),
+        runs=one('select count(*) from runs'),
         submissions=one('select count(*) from candidates where verdict is not null and revision != ?', base),
         kept=one("select count(*) from candidates where verdict = 'keep' and revision != ?", base),
     )
@@ -128,11 +129,14 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         funnel = Funnel(ideas=None, runs=sessions, submissions=commits, kept=len(heads))
         sent = delivered = refused = None
         escalations, people, lead = 0, 0, None
+        built, replaced, written, read = {}, {}, {}, {}
     else:
         with sqlite3.connect(export / 'piloop.db') as db:
             heads = piloop_heads(db, base, started)
             funnel, escalations, people, lead = piloop_counts(db, base)
             sent, delivered, refused = messages(db)
+            built, replaced = stacking(db, export / 'repo.bundle')
+            written, read = notes(db, run / 'export')
         made = None
     curve = []
     for rev, hours in [(base, 0.0), *heads]:
@@ -160,5 +164,9 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         messages_sent=sent,
         messages_delivered=delivered,
         messages_refused=refused,
+        built_on=built,
+        replaced=replaced,
+        notes_written=written,
+        notes_read=read,
         loop=loop(run / 'export', made, spend[-1].hours if spend else 0.0, spend[-1].usd if spend else 0.0),
     )

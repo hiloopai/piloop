@@ -73,9 +73,18 @@ def reached(r: Result, bar: float) -> Point | None:
     return next((p for p in r.curve if p.sealed is not None and p.sealed >= bar), None)
 
 
-def headline(bar: float | None) -> list[Row]:
-    """The rows that compare the arms: the holdout score, and the $ and hours to the plain sessions' bar."""
+def at_usd(usd: float) -> Callable[[Result], float | None]:
+    """The sealed score of a run's head at ``usd`` spent: its final head when it stopped before."""
+    return lambda r: step(r.curve, usd, lambda p: p.usd)
+
+
+def headline(bar: float | None, marks: Iterable[float] = ()) -> list[Row]:
+    """The rows that compare the arms: the sealed score at each of the ``marks`` in $, at the end, and to the bar.
+
+    The bar rows give the $ and hours to the plain sessions' bar.
+    """
     rows: list[Row] = [
+        *((f'sealed score at ${usd:g}', at_usd(usd), 3, statistics.median) for usd in marks),
         ('sealed score, final head', lambda r: r.final.sealed, 3, statistics.median),
         ('mean sealed score over $0–budget', auc, 3, statistics.median),
         ('dev − sealed gap, final head', lambda r: r.gap, 3, statistics.median),
@@ -169,6 +178,37 @@ DIAGNOSTICS: list[Row] = [
     ('visible to sealed measurement p50, s', lambda r: r.loop.sealed_p50_s if r.loop else None, 0, statistics.median),
 ]
 """Each a metric of one run, shown as the median (range) over an arm's repeats."""
+
+
+def total(counts: Callable[[Result], dict[str, int]]) -> Callable[[Result], float | None]:
+    """The sum of a piloop run's ``counts``. None: a plain run."""
+    return lambda r: None if r.piloop is None else sum(counts(r).values())
+
+
+def count_of(key: str, counts: Callable[[Result], dict[str, int]]) -> Callable[[Result], float | None]:
+    """A piloop run's ``counts`` at ``key``, 0 when missing. None: a plain run."""
+    return lambda r: None if r.piloop is None else counts(r).get(key, 0)
+
+
+def team(by_arm: dict[str, list[Result]]) -> list[Row]:
+    """How the workers built on each other: in total, then for each pair of different roles that shows up."""
+    rows: list[Row] = [
+        ("keeps that built on another run's head", total(lambda r: r.built_on), 0, statistics.median),
+        ("keeps that replaced another run's head", total(lambda r: r.replaced), 0, statistics.median),
+        ('notes written', total(lambda r: r.notes_written), 0, statistics.median),
+        ('notes read by a worker of another run', total(lambda r: r.notes_read), 0, statistics.median),
+    ]
+    runs = [r for rs in by_arm.values() for r in rs]
+    for label, counts in (
+        ('keeps by {b} built on a head by {a}', lambda r: r.built_on),
+        ('keeps by {b} that replaced a head by {a}', lambda r: r.replaced),
+        ('notes by {a} read by {b}', lambda r: r.notes_read),
+    ):
+        for key in sorted({k for r in runs for k in counts(r)}):
+            a, _, b = key.partition('>')
+            if a != b:
+                rows.append((label.format(a=a, b=b), count_of(key, counts), 0, statistics.median))
+    return rows
 
 
 Chart = tuple[str, list[dict[str, object]], dict[str, object]]
@@ -269,8 +309,12 @@ def page(
     notes: list[str],
     settings: Settings,
     references: frozenset[str] = frozenset(),
+    marks: Iterable[float] = (),
 ) -> str:
-    """The page of one task. The ``references`` arms are drawn dotted and never set the plain bar."""
+    """The page of one task, with its headline at each of the ``marks`` in $.
+
+    The ``references`` arms are drawn dotted and never set the plain bar.
+    """
     bar = plain_bar(by_arm, references)
     drawn = charts(by_arm, bar, references)
     divs = ''.join(
@@ -286,8 +330,8 @@ def page(
 <body class="wide"><h1>{html.escape(task)}</h1>
 <p class="muted">The sealed score of the version each run would hand in: 0 is the starting repo, 1 the reference.
 Lines are the median over repeats, bands the lowest to highest repeat; spend is list price, models plus compute.</p>
-{callouts}<h2>Headline</h2>{stats(by_arm, bar)}{table(headline(bar), by_arm)}{divs}
-<h2>Diagnostics</h2>{table(DIAGNOSTICS, by_arm)}
+{callouts}<h2>Headline</h2>{stats(by_arm, bar)}{table(headline(bar, marks), by_arm)}{divs}
+<h2>Diagnostics</h2>{table([*DIAGNOSTICS, *team(by_arm)], by_arm)}
 <script>const CHARTS = {data};{PAINT % (json.dumps(COLORS), settings.report_plot_fn)}</script></body></html>
 """
 
@@ -298,6 +342,7 @@ def write(
     settings: Settings,
     notes: dict[str, list[str]] | None = None,
     references: frozenset[str] = frozenset(),
+    marks: Iterable[float] = (),
 ) -> list[Path]:
     """Write ``<out>/<task>.html`` for each task, with the ``notes`` of each task, and an ``index.html``. The pages.
 
@@ -311,7 +356,7 @@ def write(
             raise ValueError(f'{task} has {len(arms)} arms: a page draws at most {len(COLORS)}; split them')
         by_arm = {arm: [r for r in results if r.task == task and r.arm == arm] for arm in arms}
         path = out / f'{task}.html'
-        path.write_text(page(task, by_arm, (notes or {}).get(task, []), settings, references))
+        path.write_text(page(task, by_arm, (notes or {}).get(task, []), settings, references, tuple(marks)))
         pages.append(path)
     css = f'<link rel="stylesheet" href="{html.escape(settings.report_css)}">' if settings.report_css else ''
     links = ''.join(f'<li><a href="{p.name}">{html.escape(p.stem)}</a></li>' for p in pages)

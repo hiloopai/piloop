@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
@@ -33,6 +34,7 @@ from evals.model import (
 from evals.pilot import guard, spent
 from evals.report import plain_bar, write
 from evals.score import Score
+from evals.team import notes, stacking
 from evals.telemetry import exported
 
 
@@ -239,3 +241,65 @@ def test_the_guard_halts_every_unfinished_run_at_the_ceiling(tmp_path: Path):
         watcher.join()
     assert 'ceiling of $1000' in halt.read_text()
     assert not (tmp_path / 't' / 'a-1' / HALT).exists()
+
+
+def test_charters_are_each_roles_addendum_on_their_task():
+    arm = load_arm('c-charters-2')
+    assert isinstance(arm, PiloopArm)
+    config = piloop_config(Task.load('t4-1brc'), arm, Settings(), 4)
+    roles = get(config, 'plugins', 'role')
+    assert isinstance(roles, dict)
+    assert {r: v.get('addendum') for r, v in roles.items() if isinstance(v, dict) and 'addendum' in v} == {
+        'implementer': 'charter-implementer.md',
+        'implementer_b': 'charter-implementer_b.md',
+    }
+    assert all(len(text.split()) <= 60 for charter in arm.charters.values() for text in charter.values())
+    with pytest.raises(ValueError, match='not for t2-circles'):
+        piloop_config(Task.load('t2-circles'), arm, Settings(), 4)
+
+
+def test_team_counts_keeps_over_another_runs_head_and_notes_read_across(tmp_path: Path):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    git(repo, 'init', '-q', '-b', 'main')
+    revs = []
+    for name in ('base', 'a1', 'b-on-a1'):
+        (repo / 'f').write_text(name)
+        git(repo, 'add', 'f')
+        git(repo, 'commit', '-qm', name)
+        revs.append(git(repo, 'rev-parse', 'HEAD').strip())
+    git(repo, 'checkout', '-q', '-b', 'side', revs[0])
+    (repo / 'g').write_text('a2')
+    git(repo, 'add', 'g')
+    git(repo, 'commit', '-qm', 'a2 not on b')
+    revs.append(git(repo, 'rev-parse', 'HEAD').strip())
+    bundle = tmp_path / 'repo.bundle'
+    git(repo, 'bundle', 'create', str(bundle), '--all')
+    db = sqlite3.connect(':memory:')
+    db.executescript(
+        """
+        create table runs (id integer, role text);
+        create table candidates (id integer, revision text, run_id integer, verdict text, updated_at text);
+        create table events (target_kind text, target_id integer, kind text, at text);
+        create table agent_sessions (id integer, kind text, subject_kind text, subject_id integer, session_id text);
+        create table comments (author text, body text, kind text);
+        insert into runs values (1, 'implementer'), (2, 'implementer_b'), (3, 'implementer');
+        insert into agent_sessions values (10, 'implementer', 'run', 1, 's1'), (20, 'implementer_b', 'run', 2, 's2');
+        insert into comments values ('implementer#10', 'The   mixer weights saturate at 4096.', 'note'),
+            ('implementer_b#20', 'Never read by anyone.', 'note'), ('human', 'Not a worker.', 'note');
+        """
+    )
+    for i, (rev, run) in enumerate(zip(revs, (None, 1, 2, 3), strict=True)):
+        db.execute("insert into candidates values (?, ?, ?, 'keep', ?)", (i, rev, run, f'2026-01-01 00:0{i}'))
+    assert stacking(db, bundle) == ({'implementer>implementer_b': 1}, {'implementer_b>implementer': 1})
+    sessions = tmp_path / 'export' / '.claude' / 'projects' / 'p'
+    sessions.mkdir(parents=True)
+    read = {
+        'type': 'user',
+        'message': {
+            'content': [{'type': 'tool_result', 'content': 'notes: The mixer weights\n saturate at 4096. More.'}]
+        },
+    }
+    (sessions / 's2.jsonl').write_text(json.dumps(read) + '\n')
+    assert notes(db, tmp_path / 'export') == ({'implementer': 1, 'implementer_b': 1}, {'implementer>implementer_b': 1})
+    db.close()

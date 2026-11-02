@@ -91,6 +91,9 @@ class PiloopArm(Frozen):
     command as ``[evaluator] dev``, and a sealed split of its own as ``[evaluator] sealed``, kept in its home."""
     instruction: str = ''
     """A paragraph added to what each worker reads: a piloop arm's implementer brief, a plain session's prompt."""
+    charters: dict[str, dict[str, str]] = {}
+    """For each task, for each role that does runs: what its workers own, appended to that role's brief. An arm with
+    charters runs only on the tasks that it names."""
     env: dict[str, str] = {}
     """Variables of the arm's sandbox, which a task's evaluator may read: ``EVALS_DEV_LOOP = "slow"`` turns a warm
     dev loop off."""
@@ -220,6 +223,14 @@ class Result(Frozen):
     """Messages that a worker's harness could not take mid-turn: refused, never queued."""
     loop: Loop | None = None
     """The run's feedback loop. None: a result written before it was measured."""
+    built_on: dict[str, int] = {}
+    """Keeps that contain the head of another run that they took over, by ``head role>keep role`` (``evals.team``)."""
+    replaced: dict[str, int] = {}
+    """Keeps that took over another run's head without containing it, by ``head role>keep role``."""
+    notes_written: dict[str, int] = {}
+    """The notes that the workers of each role wrote."""
+    notes_read: dict[str, int] = {}
+    """The notes that a worker of another run read, by ``author role>reader role``."""
 
     @property
     def first_keep(self) -> Point | None:
