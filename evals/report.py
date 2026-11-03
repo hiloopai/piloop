@@ -11,7 +11,7 @@ import statistics
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from evals.model import Point, Result, Settings
+from evals.model import TASKS, Point, Result, Settings, Task
 
 COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948']
 """Categorical slots 1-8, in the palette's fixed order: an arm keeps its slot by its order in the sorted arm names."""
@@ -76,6 +76,37 @@ def reached(r: Result, bar: float) -> Point | None:
 def at_usd(usd: float) -> Callable[[Result], float | None]:
     """The sealed score of a run's head at ``usd`` spent: its final head when it stopped before."""
     return lambda r: step(r.curve, usd, lambda p: p.usd)
+
+
+HOURS = (0.5, 1, 2)
+"""Where a solvable task's report reads each run's sealed score, in hours."""
+
+
+def solve_rows(solve: float) -> list[Row]:
+    """The rows of a solvable task: whether a run solved it, the cost to its first solving head, the score each hour.
+
+    The cost is in hours, $ (all, and the models' share) and tokens; the scores are at each of ``HOURS``.
+    """
+
+    def to(field: Callable[[Point], float | None]) -> Callable[[Result], float | None]:
+        return lambda r: field(p) if (p := reached(r, solve)) else None
+
+    return [
+        ('solved', lambda r: float(reached(r, solve) is not None), 2, statistics.median),
+        ('hours to solve', to(lambda p: p.hours), 2, statistics.median),
+        ('$ to solve', to(lambda p: p.usd), 2, statistics.median),
+        ('model $ to solve', to(lambda p: p.models_usd), 2, statistics.median),
+        ('tokens to solve', to(lambda p: p.tokens.total if p.tokens else None), 0, statistics.median),
+        *(
+            (f'sealed score at {h:g} h', lambda r, h=h: step(r.curve, h, lambda p: p.hours), 3, statistics.median)
+            for h in HOURS
+        ),
+    ]
+
+
+def solve_of(task: str) -> float | None:
+    """The ``solve`` score of ``task``, or None for a task that is not solvable or no longer in ``tasks/``."""
+    return Task.load(task).solve if (TASKS / task / 'task.toml').exists() else None
 
 
 def headline(bar: float | None, marks: Iterable[float] = ()) -> list[Row]:
@@ -350,6 +381,8 @@ def page(
     The ``references`` arms are drawn dotted and never set the plain bar.
     """
     bar = plain_bar(by_arm, references)
+    solve = solve_of(task)
+    rows = [*solve_rows(solve), *headline(bar, marks)] if solve is not None else headline(bar, marks)
     drawn = charts(by_arm, bar, references)
     divs = ''.join(
         f'<div class="card"><h3>{html.escape(t)}</h3><div id="c{i}"></div></div>' for i, (t, _, _) in enumerate(drawn)
@@ -364,7 +397,7 @@ def page(
 <body class="wide"><h1>{html.escape(task)}</h1>
 <p class="muted">The sealed score of the version each run would hand in: 0 is the starting repo, 1 the reference.
 Lines are the median over repeats, bands the lowest to highest repeat; spend is list price, models plus compute.</p>
-{callouts}<h2>Headline</h2>{stats(by_arm, bar)}{table(headline(bar, marks), by_arm)}{divs}
+{callouts}<h2>Headline</h2>{stats(by_arm, bar)}{table(rows, by_arm)}{divs}
 <h2>Diagnostics</h2>{table([*DIAGNOSTICS, *team(by_arm)], by_arm)}
 <script>const CHARTS = {data};{PAINT % (json.dumps(COLORS), settings.report_plot_fn)}</script></body></html>
 """

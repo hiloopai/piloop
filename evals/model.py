@@ -58,6 +58,10 @@ class Task(Frozen):
     """Where its versions are scored afterwards: ``daytona``, in a sandbox of ``daytona.EVALUATOR`` on the same
     platform as the evaluators that decide its verdicts (``EVALS_PLATFORM=daytona``); ``modal``, for a task that needs a
     GPU or more memory than a Daytona sandbox has."""
+    solve: float | None = Field(default=None, gt=0)
+    """The sealed score that solves the task, such as 1 for every target proved. A task with it is solvable, and its
+    report leads with the time, $ and tokens to solve, and the score at each hour; the curve keeps partial credit.
+    None: a task scored on how far a run gets."""
     private: bool = False
     """The task has a private split: the files of ``<sealed_uri>/<task>.private/``, which the driver copies into the
     repo before its starting commit. They are in no repository and no image, and no sandbox can read sealed storage."""

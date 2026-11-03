@@ -841,3 +841,35 @@ def test_each_task_names_its_scorer_and_daytona_refuses_a_task_that_needs_a_gpu_
         with pytest.raises(ValueError, match='daytona'):
             Task.model_validate(t5 | need)
     assert Task.model_validate(t5 | {'memory_limit_mb': 8192}).scorer == 'daytona'
+
+
+def test_a_solved_task_leads_with_the_time_dollars_and_tokens_to_solve():
+    from evals.report import solve_rows
+
+    def point(hours: float, usd: float, sealed: float | None, tokens: int) -> Point:
+        return Point(
+            revision=f'r{hours}',
+            hours=hours,
+            usd=usd,
+            models_usd=usd - 1,
+            tokens=Tokens(input=tokens),
+            dev=sealed,
+            sealed=sealed,
+        )
+
+    solved = Result.model_construct(curve=[point(0, 0, 0.0, 0), point(0.4, 3, 0.5, 10), point(1.5, 9, 1.0, 40)])
+    unsolved = Result.model_construct(curve=[point(0, 0, 0.0, 0), point(0.4, 3, 0.9, 10)])
+    rows = {name: (value(solved), value(unsolved)) for name, value, _, _ in solve_rows(1.0)}
+    assert rows['solved'] == (1.0, 0.0)
+    assert rows['hours to solve'] == (1.5, None)
+    assert rows['$ to solve'] == (9, None)
+    assert rows['model $ to solve'] == (8, None)
+    assert rows['tokens to solve'] == (40, None)
+    assert rows['sealed score at 0.5 h'] == (0.5, 0.9)
+    assert rows['sealed score at 1 h'] == (0.5, 0.9)
+    assert rows['sealed score at 2 h'] == (1.0, 0.9)
+
+
+def test_only_t6_is_scored_on_solving():
+    assert Task.load('t6-optcomp').solve == 1.0
+    assert [Task.load(name).solve for name in ('t3-airbench', 't4-1brc', 't5-lpaq')] == [None, None, None]
