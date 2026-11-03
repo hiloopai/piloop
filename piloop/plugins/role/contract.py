@@ -213,20 +213,15 @@ class ImplementerRole(RoleConfig):
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
     scored after its implementer ended does not count. More of them spend more to finish sooner, not more per dollar:
     they race for the head, and a run often builds on a head that another one moved."""
-    writes: list[str] = [
-        'versions',
-        'comments(note) on your idea or your run',
-        "your run's own idea (`piloop idea propose`)",
-    ]
-    """What an implementer may write, as its brief states it. It proposes the idea of its own run, and files none for
-    others: a hunch for another run goes in a note on the board."""
     follow_head: FollowHead = FollowHead.OFF
     """``message``: when another run's version becomes the head, each running worker of this role gets one message that
     names its revision, to merge into its own line. A worktree of the repo of record has the commit at once. A worker on
     another machine gets the message too, but its checkout lacks the commit. ``off``: a worker builds on the head that
     it started from."""
-    IDEAS: ClassVar[str] = '- A hunch for another run goes in a note, with pointers (ids, paths, the number).'
+    IDEAS: ClassVar[str] = '- A hunch for another run goes in a note, with its numbers.'
     SURFACE: ClassVar[Surface] = Surface.RUN
+    GUIDES: ClassVar[tuple[str, ...]] = ()
+    """None: the context says how to run piloop and its SQL, and ``piloop schema database`` prints the rest."""
 
 
 class Sweep(Pass, Protocol):

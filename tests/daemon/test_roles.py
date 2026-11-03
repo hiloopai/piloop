@@ -166,7 +166,7 @@ def test_a_role_that_piloop_toml_defines_runs_on_its_sql_trigger_with_its_prompt
 
     brief = (tmp_path / 'agent_sessions' / '1' / 'brief.md').read_text()
     assert brief.startswith('# Review\nRead the latest decision')
-    assert '- You are reviewer#1, the reviewer for campaign#1 (demo).' in brief
+    assert "- You are reviewer#1, the reviewer for campaign#1 (demo): sign what you write as 'reviewer#1'." in brief
     assert f'- Why this agent started (context, not a scope): {reason}' in brief
     assert 'You file no ideas.' in brief and '- You may write:' not in brief, (
         'a new role files no ideas and states no writes'

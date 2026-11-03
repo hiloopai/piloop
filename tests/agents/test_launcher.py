@@ -237,12 +237,9 @@ def test_brief_is_role_prompt_campaign_brief_guides_then_the_context_section(cam
     )
     assert '# Guides' not in brief and '\n# Context' not in brief, 'every section is a ## heading'
     assert context_of(brief) == (
-        f"""- You are watchdog#7, the watchdog for campaign#1 (demo).
-- Campaign repo: {campaign.path}, on the daemon's machine. Your checkout can read every candidate's version.
-- Sign what you write as 'watchdog#7' (comments.author, ideas.created_by).
+        f"""- You are watchdog#7, the watchdog for campaign#1 (demo): sign what you write as 'watchdog#7'.
 - Why this agent started (context, not a scope): timer
-- piloop: `{PILOOP_HINT}` is this daemon's piloop. Run every `piloop` command of this brief with it.
-- SQL tool: `{PILOOP_HINT} sql -`, with the statement on stdin from a quoted heredoc (`<<'EOF'`).
+- Run every `piloop` command as `{PILOOP_HINT}`. `{PILOOP_HINT} sql -` runs one SQL statement from stdin: pipe it from a quoted heredoc (`<<'EOF'`, which expands nothing), and double each `'` in your text.
 - You may write: comments(escalation, note), lessons on the campaign once it stopped.
 - `{PILOOP_HINT} schema <guide>` prints another guide: links, research_commands, provenance, queries, orchestration, long_jobs, workspace.
 - A hunch worth a run of its own goes in a note, with pointers (ids, paths, the number). You file no ideas.

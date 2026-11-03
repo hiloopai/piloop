@@ -114,18 +114,10 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     overview += ['funnel', 'yields', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
     assert defaults(Surface.SWEEP) == ['context', 'lessons', 'incidents', *overview, 'tools', 'pack']
-    assert defaults(Surface.RUN) == ['context', 'measure', 'idea_comments', 'lessons', 'queue', 'history'], (
-        'the board too'
+    assert defaults(Surface.RUN) == ['context', 'measure', 'idea_comments', 'lessons', 'history'], (
+        'no board: a worker claims or proposes its idea with `piloop idea`'
     )
-    assert ImplementerRole().shown() == [
-        'database',
-        'context',
-        'measure',
-        'idea_comments',
-        'lessons',
-        'queue',
-        'history',
-    ], 'its guides first'
+    assert ImplementerRole().shown() == ['context', 'measure', 'idea_comments', 'lessons', 'history'], 'no guides'
 
 
 def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaign: Campaign) -> None:
@@ -249,7 +241,7 @@ def test_each_role_has_guides_of_its_own_that_extend_a_shared_list() -> None:
     shown = {name: [n for n in p.model().shown() if n in guides()] for name, p in ROLES.providers().items()}
     assert shown == snapshot(
         {
-            'implementer': ['database'],
+            'implementer': [],
             'orchestrator': ['database', 'concepts', 'judging', 'comments', 'priorities', 'links', 'research_commands'],
             'watchdog': ['database', 'concepts', 'judging', 'comments', 'priorities', 'search', 'past_campaigns'],
         }

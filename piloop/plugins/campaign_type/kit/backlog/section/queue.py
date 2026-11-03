@@ -12,7 +12,7 @@ from piloop.text import NONE, age, cell
 class Queue(Section):
     """The board: the ideas by status, what holds the held ones, and the claimable ideas by priority."""
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP, Surface.RUN})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
     ORDER = 150
 
     held: int = Field(default=5, ge=0)

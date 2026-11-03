@@ -22,12 +22,10 @@ class Context(Section):
     ORDER: ClassVar[int] = 1
 
     lines: list[str] = [
-        '- You are {agent}, the {role} for campaign#{campaign_id} ({campaign}).',
-        "- Campaign repo: {repo}, on the daemon's machine. Your checkout can read every candidate's version.",
-        "- Sign what you write as '{agent}' (comments.author, ideas.created_by).",
+        "- You are {agent}, the {role} for campaign#{campaign_id} ({campaign}): sign what you write as '{agent}'.",
         '- Why this agent started (context, not a scope): {reason}',
-        "- piloop: `{piloop}` is this daemon's piloop. Run every `piloop` command of this brief with it.",
-        "- SQL tool: `{piloop} sql -`, with the statement on stdin from a quoted heredoc (`<<'EOF'`).",
+        '- Run every `piloop` command as `{piloop}`. `{piloop} sql -` runs one SQL statement from stdin: pipe it from a'
+        " quoted heredoc (`<<'EOF'`, which expands nothing), and double each `'` in your text.",
         '- You may write: {writes}.',
         '- `{piloop} schema <guide>` prints another guide: {guides}.',
     ]

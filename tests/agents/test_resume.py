@@ -500,7 +500,7 @@ def test_an_implementer_of_a_resuming_role_continues_the_last_runs_session_in_it
     assert (resumes, two.session_id, not_resumed(db, two.id)) == (one.id, one.session_id, [])
     brief = (tmp_path / 'brief--resume.md').read_text()
     assert brief.startswith(f'You continue this session as a new agent, implementer#{two_id}.')
-    assert '- Your cwd is your checkout' in brief and '# Implementer' not in brief
+    assert '- Your session ends at `$PILOOP_DEADLINE`' in brief and '# Implementer' not in brief
 
 
 def test_an_implementer_role_starts_each_run_in_a_fresh_session_by_default(campaign: Campaign) -> None:

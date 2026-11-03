@@ -440,7 +440,7 @@ class RunController:
                         role(cfg, run.role, Path(campaign.path)),
                         campaign,
                         agent,
-                        reason='a free slot',
+                        reason='',  # a free slot: nothing that the worker acts on
                         lines=self._context(s, cfg, run, base, agent, timeout),
                     )
                     workspace = workspace_dir(self._home, campaign.id)
@@ -1607,7 +1607,7 @@ class RunController:
     def _context(
         self, s: Session, cfg: CampaignConfig, run: Run, base: Candidate, reader: Agent, timeout: float
     ) -> list[str]:
-        """Return the worker's lines of context: its worktree, its time, its base, and how it takes an idea.
+        """Return the worker's lines of context: its time, its base, its idea's directory, its note and its escalation.
 
         The board is a section of its own (``queue``).
         """
@@ -1617,11 +1617,8 @@ class RunController:
         evaluator_id = campaign.evaluator_id
         at_base = ', '.join(f'{t.primary.name}={score(base, evaluator_id, t.primary)}' for t in cfg.all_tracks)
         lines = [
-            '- Your cwd is your checkout: edit, run and save every version there. Only its versions are scored.'
-            f' The campaign repo, {campaign.path}, is read-only for you.',
-            f'- Your session ends {round(timeout / 60, 1):g} minutes after it starts, at `${DEADLINE_ENV}` (Unix time).'
-            f' The daemon tells you to wrap up {round(lead / 60, 1):g} minutes before, between two tool calls: start'
-            ' no command that can run past the deadline.',
+            f'- Your session ends at `${DEADLINE_ENV}` (Unix time), {round(timeout / 60, 1):g} minutes after it starts.'
+            f' You are told to wrap up {round(lead / 60, 1):g} minutes before: start no command that can run past it.',
             f'- Starting from candidate#{base.id}, the head: {at_base} — {base.summary}',
         ]
         if (bar := bar_of(s, base)) is not base:
@@ -1631,14 +1628,12 @@ class RunController:
                 f' ({at_bar}).'
             )
         lines += [
-            f"- Your idea's directory in the shared workspace: `./{WORKSPACE}/idea<your idea>/` (in no version)."
-            f" `piloop restore {campaign.name} <idea id>` writes back a done idea's files.",
-            '- Your note on your idea, piped into the SQL tool: INSERT INTO comments'
-            f" (target_kind, target_id, author, kind, body) VALUES ('idea', <your idea>, '{author}', 'note', '...')."
-            " A run without a result ends with `piloop run end gave_up --reason '…'`.",
-            '- Ask for what you cannot do or decide yourself with an escalation, never a note:'
-            ' `piloop escalate idea#<your idea> --priority 1`, its form as JSON on stdin (`--guide` shows it).',
-            '- The history below is what was tried in this campaign: do not repeat it; combine or go elsewhere.',
+            f"- Your idea's directory in the shared workspace: `./{WORKSPACE}/idea<your idea>/`, in no version.",
+            "- A note on your idea: INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea',"
+            f" <your idea>, '{author}', 'note', '...'). A run with nothing to submit ends with `piloop run end gave_up"
+            " --reason '…'`.",
+            '- What you cannot do or decide yourself: `piloop escalate idea#<your idea> --priority 1`, its form as JSON'
+            ' on stdin (`--guide` shows it).',
         ]
         return lines
 

@@ -18,8 +18,9 @@ from tests.daemon.test_run_controller import brief_of, controller, execute, make
 
 BUDGETS = {'watchdog': 3300, 'orchestrator': 2400}
 """Words of a sweep's whole brief."""
-IMPLEMENTER = 1200
-"""Words of an implementer's whole brief: a third of it is the run's own context."""
+IMPLEMENTER = 560
+"""Words of an implementer's whole brief. Workers act on few of piloop's lines, and a plain agent does as well on a
+prompt of under a hundred words: each line has to earn its place."""
 
 
 @pytest.mark.usefixtures('no_fresh_runs')

@@ -1005,7 +1005,6 @@ def test_brief_carries_history_and_comments(
     order = [
         '# Implementer',
         '# Demo',
-        '# Working with the piloop database',
         '# Context',
         '## Comments on this idea',
         '## History: ideas',
@@ -1023,9 +1022,8 @@ def test_brief_carries_history_and_comments(
     assert 'Tried so far' not in brief
     assert '"$PILOOP_BIN" sql' in brief and "'implementer#2', 'note'" in brief
     assert (
-        '- Your session ends 2 minutes after it starts, at `$PILOOP_DEADLINE` (Unix time). The daemon tells you to'
-        ' wrap up 0.5 minutes before, between two tool calls: start no command that can run past the deadline.\n'
-        in brief
+        '- Your session ends at `$PILOOP_DEADLINE` (Unix time), 2 minutes after it starts. You are told to wrap up'
+        ' 0.5 minutes before: start no command that can run past it.\n' in brief
     ), 'the role timeout of 120s'
     assert '`piloop escalate idea#<your idea> --priority 1`' in brief, 'a request is an escalation, never a note'
     assert re.search(r'`"\$PILOOP_BIN" schema <guide>` prints another guide: .*\blong_jobs\b', brief), (
@@ -1065,13 +1063,13 @@ def test_the_comments_on_an_idea_are_capped_by_their_section(
     assert 'first and oldest' not in brief
 
 
-def test_an_implementer_brief_names_its_checkout_as_the_place_to_work_and_the_campaign_repo_as_read_only(
+def test_an_implementer_brief_names_its_checkout_as_the_place_to_work_and_never_the_campaign_repos_path(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
     """Given only the campaign repo's path, an implementer edited and committed there: never scored, and main moved.
 
-    The brief names no path of the checkout: the worker makes it, on whichever machine runs the job. Only the vcs
-    provider's parts of it say git or commit."""
+    The brief names no path: the worker makes its checkout, on whichever machine runs the job, and a path to the
+    campaign repo is a place to edit. Only the vcs provider's parts of it say git or commit."""
 
     def marked(self: Git, part: Part) -> str:
         return f'<{part}>'
@@ -1080,10 +1078,9 @@ def test_an_implementer_brief_names_its_checkout_as_the_place_to_work_and_the_ca
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     brief = brief_of(db, run_id)
-    assert (
-        '- Your cwd is your checkout: edit, run and save every version there. Only its versions are scored.'
-        f' The campaign repo, {campaign.path}, is read-only for you.'
-    ) in brief
+    assert 'You are a piloop implementer, in <checkout> of the campaign' in brief
+    assert "- Work in your checkout and in your idea's directory in `workspace/`, never in the campaign repo" in brief
+    assert campaign.path not in brief
     assert git_words(brief) == []
 
 
@@ -1516,7 +1513,7 @@ def test_a_relaunched_implementer_signs_as_itself_and_its_run_end_without_a_comm
     run_id = make_run(db, campaign)
     idea_id = claimed_id(run_row(db, run_id))
     note = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, '$me', 'note', 'no effect')"
-    me = 'me=$(grep -o "Sign what you write as .implementer#[0-9]*" ../brief.md | grep -o "implementer#[0-9]*")'
+    me = 'me=$(grep -o "sign what you write as .implementer#[0-9]*" ../brief.md | grep -o "implementer#[0-9]*")'
     write_toml(Path(campaign.path), f'#!/bin/sh\n{me}\n{PILOOP_HINT} sql "{note}"\n{END_RUN}')
     reload_campaign(db, campaign)
     start = mocker.patch.object(runtime, 'start', wraps=runtime.start)
@@ -1558,7 +1555,7 @@ def test_a_fast_implementer_whose_tokens_are_unknown_is_no_startup_death_when_it
     run_id = make_run(db, campaign)
     idea_id = claimed_id(run_row(db, run_id))
     note = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', {idea_id}, '$me', 'note', 'no effect')"
-    me = 'me=$(grep -o "Sign what you write as .implementer#[0-9]*" ../brief.md | grep -o "implementer#[0-9]*")'
+    me = 'me=$(grep -o "sign what you write as .implementer#[0-9]*" ../brief.md | grep -o "implementer#[0-9]*")'
     bodies = {
         'commit': HARNESS_APPEND,
         'note': f'#!/bin/sh\n{me}\n{PILOOP_HINT} sql "{note}"\n',
@@ -3230,7 +3227,7 @@ def test_a_run_that_starts_near_the_campaigns_stop_is_told_it_ends_with_the_stop
     run_id = make_run(db, campaign)
     launched = mocker.spy(Launcher, 'launch')
     execute(controller(db, runtime, tmp_path), db, run_id)
-    assert '- Your session ends 0.1 minutes after it starts' in brief_of(db, run_id), (
+    assert '(Unix time), 0.1 minutes after it starts.' in brief_of(db, run_id), (
         'the role timeout of 120s, cut at the stop 7.2s away'
     )
     assert launched.call_args.kwargs['timeout'] == pytest.approx(7.2, abs=1), 'from its launch to the stop'
