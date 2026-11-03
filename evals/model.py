@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).parent
@@ -206,6 +206,10 @@ class SelfTest(Frozen):
     """The dev metric of each run."""
 
 
+REMOVED = ('built_on', 'replaced')
+"""Fields of results from earlier rounds that ``keeps``, ``keeps_in_final`` and ``races`` replaced: dropped on load."""
+
+
 class Result(Frozen):
     """One run of an arm on a task: ``results/<task>/<arm>-<repeat>.json``."""
 
@@ -239,6 +243,13 @@ class Result(Frozen):
     """The run's feedback loop. None: a result written before it was measured."""
     selftest: SelfTest | None = None
     """How much the dev evaluator varies on the run's machine. None: a run from before the self-test."""
+
+    @model_validator(mode='before')
+    @classmethod
+    def removed(cls, data: object) -> object:
+        """A result from an earlier round loads without its ``REMOVED`` fields; any other unknown key still fails."""
+        return {k: v for k, v in data.items() if k not in REMOVED} if isinstance(data, dict) else data
+
     keeps: dict[str, int] = {}
     """The keeps of each role that does runs (``evals.team``)."""
     keeps_in_final: dict[str, int] = {}

@@ -361,3 +361,14 @@ def test_the_plain_arm_resumes_its_session_in_the_sandbox_without_waiting():
     plain = Plain(Task.load('t5-lpaq'), arm, Settings(), 4)
     script = plain.script('go')
     assert '--session-id $session' in script and 'while true' in script and '--resume $session' in script
+
+
+def test_a_result_from_an_earlier_round_loads_without_its_removed_fields():
+    started = datetime(2026, 11, 1, tzinfo=UTC)
+    r = Result(task='t', arm='a', repeat=1, piloop='p', started_at=started, budget_usd=60, max_hours=4, stopped='hours',
+               spend=[], curve=[Point(revision='b', hours=0, usd=0, dev=0, sealed=0)], funnel=Funnel(ideas=1, runs=1, submissions=1, kept=0),
+               escalations=0, interventions=0, lead_token_share=None)  # fmt: skip
+    old = json.loads(r.model_dump_json()) | {'built_on': {'a>b': 1}, 'replaced': {}}
+    assert Result.model_validate(old) == r
+    with pytest.raises(ValueError, match='extra'):
+        Result.model_validate(old | {'unknown': 1})
