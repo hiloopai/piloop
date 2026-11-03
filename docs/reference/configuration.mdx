@@ -335,8 +335,8 @@ With `provider = "history"`:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `budget` | integer | `1000` | The size of the section in tokens, at about 4 characters each. The ideas that do not fit are left out, and the table's title counts them. |
-| `findings` | integer | `10` | How many of the latest agent notes on the campaign the section lists. |
+| `budget` | integer | `1000` | The size of the section in tokens, at about 4 characters each. The ideas, keeps and notes that do not fit are left out, and the titles count the ideas and the keeps. |
+| `findings` | integer | `10` | How many of the latest notes on the campaign, its ideas and its runs the section lists at most. |
 
 With `provider = "idea_comments"`:
 
@@ -372,7 +372,7 @@ With `provider = "pack"`:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `ideas` | integer | `60` | How many of the newest ideas the history lists. `piloop history` lists as many. |
-| `campaign_findings` | integer | `10` | How many of the latest agent notes on the campaign the history lists. |
+| `campaign_findings` | integer | `10` | How many of the latest agent notes on the campaign itself the history lists. |
 | `findings` | integer | `8` | How many of the implementers' latest notes the pack lists. |
 | `digests` | integer | `5` | How many of the latest digests and decisions of the orchestrator and the human the pack lists. |
 | `artifacts` | integer | `12` | How many of the newest analysis artifacts (`context`) the pack outlines. |

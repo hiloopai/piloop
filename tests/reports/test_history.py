@@ -10,6 +10,7 @@ from piloop.actor import Agent
 from piloop.config import CampaignConfig
 from piloop.db.models import AgentSession, Campaign, Comment, utcnow
 from piloop.db.session import Database
+from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import CommentKind, Revision, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
@@ -19,7 +20,13 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
-from piloop.plugins.campaign_type.optimization.history import FIRST_LINE_CHARS, comment_line, history, newest
+from piloop.plugins.campaign_type.optimization.history import (
+    FIRST_LINE_CHARS,
+    campaign_notes,
+    comment_line,
+    history,
+    newest,
+)
 from piloop.plugins.campaign_type.optimization.section.history import History
 from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.section.contract import Briefing, Rendering, markdown
@@ -102,7 +109,8 @@ def render(db: Database, campaign: Campaign) -> str:
 
 def full(s: Session, campaign: Campaign, cfg: CampaignConfig) -> str:
     """The history as the research pack shows it, with its default bounds."""
-    return history(s, campaign, cfg, ideas=newest(s, campaign, SHOWN.ideas), findings=SHOWN.campaign_findings)
+    notes = campaign_notes(s, campaign, SHOWN.campaign_findings)
+    return history(s, campaign, cfg, ideas=newest(s, campaign, SHOWN.ideas), notes=notes)
 
 
 def raw(db: Database, campaign: Campaign) -> str:
@@ -168,11 +176,11 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
         '| #1 | — | 1 | — | — | ba5e11a | — | baseline |',
         '| #2 | #1 | 3 | +2 | idea#1 (research#9) | 1100000 | 234k | more lines commit |',
         '| #6 | #5 | 4 | — | idea#4 (t) | 4410000 | — | two commits commit |',
-        '### History: agent notes on the campaign (last 10)',
-        '- comment#4 research#1: batch 1: extend appending (+1 lines)',
-        '- comment#5 watchdog#2: idle: best is #2; try longer lines',
-        '- comment#6 research#3: batch 2: nothing new worth proposing',
-        '- comment#7 reviewer#7: the cache keep holds on fresh data',
+        '### History: latest notes (newest first)',
+        '- comment#7 reviewer#7 on campaign#1: the cache keep holds on fresh data',
+        '- comment#6 research#3 on campaign#1: batch 2: nothing new worth proposing',
+        '- comment#5 watchdog#2 on campaign#1: idle: best is #2; try longer lines',
+        '- comment#4 research#1 on campaign#1: batch 1: extend appending (+1 lines)',
     )
     assert 'digest: on track' not in text, "the orchestrator's findings are in the pack's digests"
 
@@ -189,8 +197,9 @@ def test_history_is_bounded_and_counts_what_it_omits(db: Database, campaign: Cam
     assert rendered.startswith(f'### History: ideas ({SHOWN.ideas} of {SHOWN.ideas + 3}; 3 older omitted)')
     assert [r.split(' | ')[0] for r in rows[:2]] == ['| 4', '| 5'], 'the newest ideas are kept, the oldest dropped'
     assert len(rows) == SHOWN.ideas
-    findings = [line for line in rendered.splitlines() if ' research#1: finding' in line]
-    assert findings[0].endswith(' research#1: finding 2') and len(findings) == SHOWN.campaign_findings
+    findings = [line for line in rendered.splitlines() if ' research#1 on campaign#1: finding' in line]
+    assert findings[0].endswith(f' research#1 on campaign#1: finding {SHOWN.campaign_findings + 1}')
+    assert len(findings) == SHOWN.campaign_findings
 
 
 def test_history_worst_case_stays_under_the_documented_size(db: Database, campaign: Campaign) -> None:
@@ -292,3 +301,32 @@ def test_an_idea_whose_candidate_stopped_at_a_rung_says_where_and_why(db: Databa
     assert '| a cheaper screen | discard, stopped at screen: score 0.5 vs 1 (-0.5; margin 0.1) (candidate#2) |' in (
         rendered
     ), rendered
+
+
+def test_a_brief_shows_the_latest_notes_on_ideas_and_runs_and_its_ideas_within_its_budget(
+    db: Database, campaign: Campaign
+) -> None:
+    with db.session() as s:
+        first = idea(s, campaign, 'a long kept chain')
+        base = 1
+        for n in range(40):  # a lineage that alone is past the budget
+            base = scored(s, first, base, (Outcome.KEEP, {'score': 2 + n, 'size': 1}, None)).id
+        later = idea(s, campaign, 'a later idea')
+        scored(s, later, base, (Outcome.DISCARD, {'score': 1, 'size': 1}, None))
+        comment(s, IDEA, first.id, 'on the idea: the 120 s floor is tight')
+        comment(s, RUN, later.runs[0].id, 'on the run: merged the head first', author='implementer#2')
+        comment(s, IDEA, later.id, 'open: run#41 gave the idea back', author=DAEMON_ACTOR)
+        comment(s, TargetKind.CAMPAIGN, campaign.id, 'digest: on track', author='orchestrator')
+        s.commit()
+        section = History()
+        rendering = Rendering(s, utcnow(), s.get_one(Campaign, campaign.id), Path('/w'), cas_of(s))
+        text = '\n'.join(compact(line) for line in markdown([section], rendering).splitlines())
+    notes = [line for line in text.splitlines() if line.startswith('- comment#')]
+    assert notes == [
+        f'- comment#3 daemon on idea#{later.id}: open: run#41 gave the idea back',
+        f'- comment#2 implementer#2 on run#{later.runs[0].id}: on the run: merged the head first',
+        f'- comment#1 implementer#1 on idea#{first.id}: on the idea: the 120 s floor is tight',
+    ], 'the notes on ideas and runs, newest first, and the run ends that the daemon notes'
+    assert '| a later idea |' in text and '| a long kept chain |' in text, 'the ideas fit beside a long lineage'
+    assert 'of 41)' in text, 'the lineage says how many keeps it leaves out'
+    assert cost(text.split('\n', 2)[2].splitlines()) <= section.budget

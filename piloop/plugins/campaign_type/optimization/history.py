@@ -7,10 +7,10 @@ The history has four parts:
 - The kept lineage: the gain of each keep over its parent, its idea, its commit, and the tokens that the session
   that made it used. An agent can run ``git show`` on the commit.
 - The starting points: imported references whose changes a worker can take.
-- The latest agent notes on the campaign, of every role, by id and first line.
+- The latest notes, newest first, by id, author, target and first line.
 
-The caller bounds the size: it picks the ideas and the number of notes. An idea row is about 250 characters, a
-note up to about 250, and each kept candidate adds one line of about 200.
+The caller bounds the size: it picks the ideas, the notes and how many of the newest keeps the lineage shows. An idea
+row is about 250 characters, a note up to about 250, and each kept candidate adds one line of about 200.
 """
 
 import io
@@ -20,11 +20,13 @@ from rich import box
 from rich.console import Console, Group, RenderableType
 from rich.table import Table
 from rich.text import Text
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from piloop.campaign.inbox import campaign_of
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign, Comment, count
+from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import links
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -53,14 +55,60 @@ def newest(s: Session, campaign: Campaign, count: int) -> list[Idea]:
     return list(found)[::-1]
 
 
+def campaign_notes(s: Session, campaign: Campaign, count: int) -> list[Comment]:
+    """The ``count`` latest notes of agents on the campaign itself, newest first."""
+    return list(
+        s.scalars(
+            select(Comment)
+            .where(Comment.target == TargetRef(TargetKind.CAMPAIGN, campaign.id))
+            .where(Comment.kind == CommentKind.NOTE, Comment.author.like('%#%'))
+            .order_by(Comment.id.desc())
+            .limit(count)
+        )
+    )
+
+
+def latest_notes(s: Session, campaign: Campaign, count: int) -> list[Comment]:
+    """The ``count`` latest notes on the campaign, its ideas and its runs, newest first.
+
+    They are the agents' notes, which workers write on their idea or their run, and the daemon's, which say how a run
+    ended. The orchestrator's and the human's are decisions and digests, which reach the agents as messages.
+    """
+    return list(
+        s.scalars(
+            select(Comment)
+            .where(campaign_of(Comment.target_kind, Comment.target_id) == campaign.id)
+            .where(Comment.kind == CommentKind.NOTE)
+            .where(or_(Comment.author.like('%#%'), Comment.author == DAEMON_ACTOR))
+            .order_by(Comment.id.desc())
+            .limit(count)
+        )
+    )
+
+
 def history(
-    s: Session, campaign: Campaign, cfg: CampaignConfig, *, ideas: Sequence[Idea], findings: int, chosen: str = ''
+    s: Session,
+    campaign: Campaign,
+    cfg: CampaignConfig,
+    *,
+    ideas: Sequence[Idea],
+    notes: Sequence[Comment],
+    keeps: int | None = None,
+    chosen: str = '',
 ) -> str:
     """Render the history as markdown for an agent's brief, with markdown tables and no colour."""
     out = io.StringIO()
     console = Console(file=out, width=BRIEF_WIDTH, color_system=None, force_terminal=False, legacy_windows=False)
     parts = renderables(
-        s, campaign, cfg, table_box=box.MARKDOWN, heading='### ', ideas=ideas, findings=findings, chosen=chosen
+        s,
+        campaign,
+        cfg,
+        table_box=box.MARKDOWN,
+        heading='### ',
+        ideas=ideas,
+        notes=notes,
+        newest_keeps=keeps,
+        chosen=chosen,
     )
     console.print(Group(*parts))
     text = out.getvalue()
@@ -75,30 +123,24 @@ def renderables(
     table_box: box.Box,
     heading: str = '',
     ideas: Sequence[Idea],
-    findings: int,
+    notes: Sequence[Comment],
+    newest_keeps: int | None = None,
     chosen: str = '',
 ) -> list[RenderableType]:
-    """Build the table of ``ideas``, the kept lineage, the starting points and the last ``findings`` agent notes on the campaign.
+    """Build the table of ``ideas``, the kept lineage, the starting points and ``notes``.
 
     ``ideas`` are in the order to show. ``chosen`` says how they were picked, in the table's title; empty: the newest.
+    The lineage shows the ``newest_keeps`` newest keeps, and its title counts the rest; None: every keep. ``notes``
+    are in the order to show, each by its id, its author, its target and its first line.
 
-    The agent brief (``history``, with ``heading='### '``) and ``piloop history`` use the same renderables.
-
-    The notes are those on the campaign of every agent, whatever its role (an author ``<role>#<id>``), each by its id
-    and its first line. The notes of the orchestrator and the human are in the pack's digests, and the latest
-    implementer notes in the pack's own list. The ``links`` column shows what holds an idea.
+    The agent brief (``history``, with ``heading='### '``) and ``piloop history`` use the same renderables. The
+    ``links`` column shows what holds an idea.
     """
     tracks = cfg.all_tracks
     total = count(s, select(Idea).where(Idea.campaign_id == campaign.id))
     evaluator_id = campaign.evaluator_id
-    kept = s.scalars(keeps(campaign).order_by(Candidate.id)).all()
-    notes = s.scalars(
-        select(Comment)
-        .where(Comment.target == TargetRef(TargetKind.CAMPAIGN, campaign.id))
-        .where(Comment.kind == CommentKind.NOTE, Comment.author.like('%#%'))
-        .order_by(Comment.id.desc())
-        .limit(findings)
-    ).all()[::-1]
+    every = s.scalars(keeps(campaign).order_by(Candidate.id)).all()
+    kept = every if newest_keeps is None else every[len(every) - newest_keeps :]
     older = chosen or (f'; {total - len(ideas)} older omitted' if total > len(ideas) else '')
     track_column = ['track'] if cfg.multitrack else []
     on = "its track's primary" if cfg.multitrack else tracks[0].primary.name
@@ -127,8 +169,9 @@ def renderables(
             cell(i.title),
             _outcome(s, i, fallback_track(cfg, i.track).primary, evaluator_id),
         )
+    cut = f' (newest {len(kept)} of {len(every)})' if len(kept) < len(every) else ''
     lineage = titled_table(
-        f'{heading}History: kept lineage',
+        f'{heading}History: kept lineage{cut}',
         [
             'candidate',
             'parent',
@@ -156,8 +199,8 @@ def renderables(
             human(tokens) if tokens is not None else NONE,
             cell(c.summary or NONE),
         )
-    title = Text(f'{heading}History: agent notes on the campaign (last {findings})', style='bold')
-    bodies = [comment_line(c, c.author) for c in notes]
+    title = Text(f'{heading}History: latest notes (newest first)', style='bold')
+    bodies = [comment_line(c, f'{c.author} on {c.target}') for c in notes]
     starts = _starting_points(s, campaign, cfg, table_box, heading)
     return [ideas_table, Text(), lineage, Text(), *starts, title, *bodies]
 

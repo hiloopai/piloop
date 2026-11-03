@@ -5,41 +5,46 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.api.views import Rendered, Text
-from piloop.db.models import AgentSession, Campaign
+from piloop.db.models import AgentSession, Campaign, count
 from piloop.ids import AgentSessionId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.campaign_type.kit.verdicts.judge import keeps
-from piloop.plugins.campaign_type.optimization.history import history
+from piloop.plugins.campaign_type.optimization.history import history, latest_notes
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.reports.wake import cost
 
 
 class History(Section):
-    """What was tried, for the reader of a run: the kept ideas, then the newest, in a budget.
+    """What was tried, for the reader of a run, in a budget: the ideas, the newest keeps and the latest notes.
 
-    Then the kept lineage, the starting points and the latest agent notes. ``piloop history`` lists every recent idea.
+    The ideas are the kept ones, then the newest. The notes are those on the campaign, its ideas and its runs, newest
+    first. The section shows as many of each as fit, one more of each at a time. ``piloop history`` lists every recent
+    idea.
     """
 
     SHOWN_IN = frozenset({Surface.RUN})
     ORDER = 920
 
     budget: int = Field(default=1000, ge=1)
-    """The size of the section in tokens, at about 4 characters each. The ideas that do not fit are left out, and the
-    table's title counts them."""
+    """The size of the section in tokens, at about 4 characters each. The ideas, keeps and notes that do not fit are
+    left out, and the titles count the ideas and the keeps."""
     findings: int = Field(default=10, ge=0)
-    """How many of the latest agent notes on the campaign the section lists."""
+    """How many of the latest notes on the campaign, its ideas and its runs the section lists at most."""
 
     def render(self, r: Rendering) -> Rendered:
         mine = _idea_of(r.s, r.reader)
         ranked = _ranked(r.s, r.campaign, mine)
         chosen = f'; besides idea#{mine.id}, the keeps, then the newest' if mine is not None else ''
+        notes = latest_notes(r.s, r.campaign, self.findings)
+        kept = count(r.s, keeps(r.campaign))
 
-        def text(count: int) -> str:
-            shown = sorted(ranked[:count], key=attrgetter('id'))
-            return history(r.s, r.campaign, r.campaign.config, ideas=shown, findings=self.findings, chosen=chosen)
+        def text(n: int) -> str:
+            shown = sorted(ranked[:n], key=attrgetter('id'))
+            cfg = r.campaign.config
+            return history(r.s, r.campaign, cfg, ideas=shown, notes=notes[:n], keeps=min(n, kept), chosen=chosen)
 
-        low, high = 0, len(ranked)  # the most ideas that fit: text(low) fits, or low is 0
+        low, high = 0, max(len(ranked), len(notes), kept)  # the most of each that fit: text(low) fits, or low is 0
         while low < high:
             middle = (low + high + 1) // 2
             low, high = (middle, high) if cost(text(middle).splitlines()) <= self.budget else (low, middle - 1)

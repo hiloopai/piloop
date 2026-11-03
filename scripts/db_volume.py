@@ -335,7 +335,7 @@ class HotPaths:
                     cfg,
                     table_box=box.SIMPLE,
                     ideas=history.newest(s, p, PACK.ideas),
-                    findings=PACK.campaign_findings,
+                    notes=history.campaign_notes(s, p, PACK.campaign_findings),
                 )
             ),
             'inbox.news': lambda: inbox.news(s, 0, party=System.ORCHESTRATOR.party),

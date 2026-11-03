@@ -100,8 +100,8 @@ def test_the_pack_of_a_campaign(db: Database, campaign: Campaign, tmp_path: Path
         '### Research pack: shared workspace (what agents left in ./workspace/; newest first)',
         '- ./workspace/research/losses-c2.md (1 lines, modified 2026-01-01 00:05 UTC)',
         '  # Losses of candidate#2',
-        '### History: agent notes on the campaign (last 10)',
-        '- comment#4 research#4: batch 1: rejected deleting',
+        '### History: latest notes (newest first)',
+        '- comment#4 research#4 on campaign#1: batch 1: rejected deleting',
         '### Research pack: latest implementer notes (newest first)',
         '- comment#1 implementer#1 on idea#2: NEGATIVE: fewer lines lose score (+1 lines)',
         '### Research pack: orchestrator and human digests and decisions (newest first)',
@@ -159,9 +159,7 @@ def test_the_pack_is_bounded(db: Database, campaign: Campaign, tmp_path: Path) -
     assert len(outlines) == SHOWN.artifacts and all(len(line) == OUTLINE_CHARS + 2 for line in outlines)
     assert text.count(' implementer#1 on idea#') == SHOWN.findings
     assert text.count(' note by orchestrator on campaign#') == SHOWN.digests
-    pack_only = (
-        text.split('### History: ideas', 1)[0] + text.split('### History: agent notes on the campaign (last 10)', 1)[1]
-    )
+    pack_only = text.split('### History: ideas', 1)[0] + text.split('### History: latest notes (newest first)', 1)[1]
     assert len(pack_only) < 40_000, 'the module docstring promises about 40 KB on top of the history'
 
 

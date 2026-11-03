@@ -46,6 +46,7 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import head
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
 from piloop.plugins.campaign_type.optimization.history import (
     BRIEF_WIDTH,
+    campaign_notes,
     comment_line,
     newest,
     renderables as history,
@@ -74,7 +75,7 @@ class Shown(Protocol):
 
     @property
     def campaign_findings(self) -> int:
-        """The latest agent notes on the campaign, in the history."""
+        """The latest agent notes on the campaign itself, in the history."""
         ...
 
     @property
@@ -123,7 +124,15 @@ def renderables(
         _metrics(s, campaign, cfg, table_box, heading),
         Text(),
         *_artifacts(campaign, cfg, workspace, heading, shown),
-        *history(s, campaign, cfg, table_box=table_box, heading=heading, ideas=ideas, findings=shown.campaign_findings),
+        *history(
+            s,
+            campaign,
+            cfg,
+            table_box=table_box,
+            heading=heading,
+            ideas=ideas,
+            notes=campaign_notes(s, campaign, shown.campaign_findings),
+        ),
         Text(),
         *_implementer_notes(s, campaign, cfg, heading, shown.findings),
         *_digests(s, campaign, heading, shown.digests),

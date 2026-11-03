@@ -19,7 +19,7 @@ class Pack(Section):
     ideas: int = Field(default=60, ge=1)
     """How many of the newest ideas the history lists. ``piloop history`` lists as many."""
     campaign_findings: int = Field(default=10, ge=0)
-    """How many of the latest agent notes on the campaign the history lists."""
+    """How many of the latest agent notes on the campaign itself the history lists."""
     findings: int = Field(default=8, ge=0)
     """How many of the implementers' latest notes the pack lists."""
     digests: int = Field(default=5, ge=0)
