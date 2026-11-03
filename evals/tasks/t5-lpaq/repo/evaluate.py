@@ -44,6 +44,15 @@ gcp sandboxes of 2 and 8 CPU (17.40-17.66 s)."""
 REFRESH = 1200
 """Seconds after which a machine times its reference again: a long-lived box can get busier or quieter."""
 CACHE = Path(tempfile.gettempdir()) / 't5-reference'
+MEMORY = 8 << 30
+"""The codec's address space, in bytes: the brief's 8 GiB, the same on every machine."""
+
+
+def capped() -> None:
+    """Cap this process's address space at ``MEMORY``: run in the codec's child before it starts."""
+    resource.setrlimit(resource.RLIMIT_AS, (MEMORY, MEMORY))
+
+
 PREFIXES = {'26', '2e', '36', '3e', '64', '65', '67'}
 """Legacy prefixes that may come before an EVEX-encoded instruction in objdump's bytes."""
 INSTRUCTION = re.compile(r'^\s*[0-9a-f]+:\t((?:[0-9a-f]{2} )+)\s*\t\S')
@@ -104,11 +113,16 @@ def run(codec: Path, data: Path, cwd: Path) -> float:
     before = resource.getrusage(resource.RUSAGE_CHILDREN)
     for args in (['9', str(data), str(cwd / 'blob')], ['d', str(cwd / 'blob'), str(cwd / 'output')]):
         try:
-            proc = subprocess.run([str(codec), *args], capture_output=True, text=True, timeout=TIMEOUT, cwd=cwd)
+            proc = subprocess.run(
+                [str(codec), *args], capture_output=True, text=True, timeout=TIMEOUT, cwd=cwd, preexec_fn=capped
+            )
         except subprocess.TimeoutExpired as e:
             raise RuntimeError(f'codec {args[0]} took longer than {TIMEOUT} s') from e
         if proc.returncode != 0:
-            raise RuntimeError(f'codec {args[0]} failed with exit code {proc.returncode}\n{proc.stderr[-4000:]}')
+            raise RuntimeError(
+                f'codec {args[0]} failed with exit code {proc.returncode} (its memory is capped at 8 GiB)\n'
+                f'{proc.stderr[-4000:]}'
+            )
     if (cwd / 'output').read_bytes() != data.read_bytes():
         raise RuntimeError('decompress(compress(data)) is not equal to data')
     after = resource.getrusage(resource.RUSAGE_CHILDREN)

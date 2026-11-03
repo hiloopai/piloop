@@ -7,6 +7,8 @@
 
 - The codec builds from the repo's C++ files with `g++ -O2`, and keeps lpaq1's command line: `codec 9 <in> <out>`
   compresses, `codec d <in> <out>` decompresses. The round trip must return exactly the input.
+- The codec and everything you run get 8 GiB of memory: your machine has 8 GiB, and the evaluator caps the codec's
+  address space at 8 GiB.
 - The codec targets x86-64-v3: AVX2 at most. The evaluator refuses a codec with AVX-512 instructions, since a scoring
   machine may have none.
 - Decompression gets only the compressed file. It must not read the input from anywhere else.

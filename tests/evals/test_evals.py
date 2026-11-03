@@ -531,6 +531,23 @@ def test_t5_counts_the_codecs_cpu_not_its_build_and_scales_it_by_the_reference(
     assert metrics['seconds'] == pytest.approx(metrics['raw_seconds'] / 2, abs=0.01)
 
 
+def test_t5_caps_the_codecs_memory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    evaluate = module(TASKS / 't5-lpaq' / 'repo' / 'evaluate.py')
+    monkeypatch.setattr(evaluate, 'MEMORY', 512 << 20)
+    (tmp_path / 'data.bin').write_bytes(b'x' * 1000)
+    for mib, fails in ((16, False), (1024, True)):
+        codec = tmp_path / f'codec{mib}'
+        codec.write_text(
+            f'#!{sys.executable}\nimport shutil, sys\nb = bytearray({mib} << 20)\nshutil.copy(sys.argv[2], sys.argv[3])\n'
+        )
+        codec.chmod(0o755)
+        if fails:
+            with pytest.raises(RuntimeError, match='8 GiB'):
+                evaluate.run(codec, tmp_path / 'data.bin', tmp_path)
+        else:
+            assert evaluate.run(codec, tmp_path / 'data.bin', tmp_path) >= 0
+
+
 def test_t5_times_its_reference_once_per_box_until_it_is_old(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     evaluate = module(TASKS / 't5-lpaq' / 'repo' / 'evaluate.py')
     timed: list[float] = []
