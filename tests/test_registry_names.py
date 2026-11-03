@@ -26,8 +26,6 @@ LEAVES: dict[str, frozenset[str] | None] = {
     'plugins/harness/*.py': None,
     'plugins/trigger/*.py': None,
     'plugins/campaign_type/kit/*/trigger/*.py': None,
-    'db/models.py': None,
-    'plugins/campaign_type/kit/evaluation/tables.py': frozenset({'stopped'}),
     'ids.py': None,
     'db/migrations/versions/*.py': None,
     'plugins/campaign_type/*/migrations/*.py': None,
@@ -42,8 +40,6 @@ LEAVES: dict[str, frozenset[str] | None] = {
 
 - The harnesses (``plugins/harness/``), the triggers (``plugins/trigger/`` and each component's ``trigger/``) and
   ``ids.py`` (the built-in roles) define the entries. The migrations, core's and each campaign type's, are history.
-- ``db/models.py`` and the evaluation component's ``tables.py``: the states ``seed`` and ``stopped``, and
-  ``measurements.stopped``, which share a name with a trigger.
 - ``actor.py``: the outside orchestrator, ``orchestrator``, one party with the agents of the role.
 - ``daemon/api.py``: ``news``, the operation id of the route that ``piloop inbox wait`` reads.
 - ``plugins/role/`` and each component's ``role/``: the default ``triggers`` of the built-in roles, and the only ones

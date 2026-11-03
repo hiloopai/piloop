@@ -314,7 +314,7 @@ class HotPaths:
         def pass_over(p: Campaign, cfg: CampaignConfig) -> None:
             answer = escalated(s, p, cfg, check(s, p, cfg))
             if not isinstance(answer, Hold):
-                campaigns._triggers(s, p, cfg, answer, None, utcnow())
+                campaigns._triggers(s, p, cfg, answer, utcnow())
             s.flush()
             campaigns._take(s, p, cfg, utcnow())
             s.rollback()

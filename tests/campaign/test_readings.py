@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import select, update
 
 from piloop.campaign.campaigns import sync
-from piloop.campaign.stop import check, gather, review_waits
+from piloop.campaign.stop import check, gather
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.events import has, in_order
 from piloop.db.models import AgentSession, Campaign, Comment, Event, utcnow
@@ -36,7 +36,7 @@ from piloop.reports.overview import progress
 from tests.campaign.test_stop import add_run
 from tests.conftest import END_RUN, SETTLE, SWEEPER, ScriptRuntime, run_all, write_toml
 from tests.daemon.test_roles import PLUGIN, installed
-from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_sweeper, set_config, stop_campaign
+from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_sweeper, set_config
 
 COMMAND = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
 
@@ -46,12 +46,9 @@ def spending(**source: object) -> dict[str, object]:
     return {'use': ['campaign', 'optimization', 'spend'], 'spend': COMMAND | source}
 
 
-def limited(limit: float, while_held: str | None = None, **source: object) -> dict[str, object]:
-    """``spending``, and the stop rule's hold at ``limit`` of the spend, with its ``while_held``: a ``[plugins]``."""
-    rule: dict[str, object] = {'hold_at': {'spend': limit}}
-    if while_held is not None:
-        rule['while_held'] = while_held
-    return {'fact_source': spending(**source), 'stop_rule': rule}
+def limited(limit: float, **source: object) -> dict[str, object]:
+    """``spending``, and the stop rule's hold at ``limit`` of the spend: a ``[plugins]``."""
+    return {'fact_source': spending(**source), 'stop_rule': {'hold_at': {'spend': limit}}}
 
 
 def report(line: str) -> list[str]:
@@ -308,40 +305,6 @@ def test_progress_says_when_a_campaign_has_no_reading_yet(db: Database, campaign
         )
 
 
-def test_a_stopped_campaign_is_held_only_while_its_closing_review_waits(db: Database, campaign: Campaign) -> None:
-    """piloop asks the stop rule about a stopped campaign only while its review waits for the hold (``wait``)."""
-    set_config(db, campaign, plugins=limited(10, while_held='wait'))
-    with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        cfg = CampaignConfig.model_validate(p.config)
-        assert check(s, p, cfg) == Hold('spend not known')
-        p.status = CampaignStatus.STOPPED
-        assert progress(s, p, cfg, p.created_at).endswith(' · spend —/10 · no limit stops it: open-ended'), (
-            'stopped, no review waits'
-        )
-        s.add(AgentSession(kind=SWEEPER, campaign_id=p.id, reason='campaign stopped'))
-        s.flush()
-        assert progress(s, p, cfg, p.created_at).endswith(' (launches held: spend not known)'), 'its review waits'
-
-
-def test_a_closing_review_waits_only_on_a_stopped_campaign_with_wait_and_a_requested_agent(
-    db: Database, campaign: Campaign
-) -> None:
-    def waits(while_held: str | None = None) -> bool:
-        set_config(db, campaign, plugins=limited(10, while_held))
-        with db.session() as s:
-            p = s.get_one(Campaign, campaign.id)
-            return review_waits(s, p, CampaignConfig.model_validate(p.config))
-
-    assert not waits('wait'), 'active'
-    stop_campaign(db, campaign, 'max_runs: 3 runs')
-    assert not waits(), 'run by default'
-    assert not waits('wait'), 'nothing requested'
-    request_sweeper(db, campaign)
-    assert not waits('run')
-    assert waits('wait')
-
-
 def test_the_progress_line_is_what_the_stop_rule_describes(
     db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -365,3 +328,16 @@ def test_the_progress_line_is_what_the_stop_rule_describes(
         assert line('goes_on') == '—'
     finally:
         host.close()
+
+
+def test_a_stopped_campaign_is_never_held(db: Database, campaign: Campaign) -> None:
+    """piloop asks the stop rule only about an active campaign: a stopped one is not held, an agent requested or not."""
+    set_config(db, campaign, plugins=limited(10))
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        cfg = CampaignConfig.model_validate(p.config)
+        assert check(s, p, cfg) == Hold('spend not known')
+        p.status = CampaignStatus.STOPPED
+        s.add(AgentSession(kind=SWEEPER, campaign_id=p.id, reason='by hand'))
+        s.flush()
+        assert progress(s, p, cfg, p.created_at).endswith(' · spend —/10 · no limit stops it: open-ended')

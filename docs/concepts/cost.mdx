@@ -151,8 +151,7 @@ Stop rule limits: spend reached its hold_at of 1000: nothing launches until you 
 - A **hold** is not a stop. While the value is at its limit, or unknown, nothing new starts, and what runs finishes and
   is scored. An unknown value is never read as zero.
 - To resume, raise the limit and run `piloop init`.
-- `piloop campaign stop` stops a held campaign at once. `while_held` says whether its closing review runs anyway
-  (`run`, the default), is skipped (`skip`), or waits for the hold to end (`wait`).
+- `piloop campaign stop` stops a held campaign at once.
 
 A plugin can add a fact source, such as a cloud's billing API, or another stop rule: see
 [Rules and facts](/plugins/rules).

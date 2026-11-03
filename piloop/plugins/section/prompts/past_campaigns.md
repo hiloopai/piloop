@@ -23,7 +23,7 @@ ORDER BY bm25(ideas_fts) LIMIT 20;
   `<log_dir>/transcript.txt` is its screen. An archived workspace can be
   restored with `piloop restore`, once your piloop has it.
 
-Lessons: a row of `lessons` is the standing conclusion about one mechanism family, written when a campaign stops.
+Lessons: a row of `lessons` is the standing conclusion about one mechanism family. Nothing writes one when a campaign stops: the orchestrator or a person writes it.
 The newest for each (campaign, family) is the current one. What is dead or promising on this repo:
 
 ```sql

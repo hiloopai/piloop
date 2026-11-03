@@ -246,9 +246,6 @@ class SweepRole(RoleConfig):
     """When the daemon requests an agent of this role: the names of triggers (``[plugins.trigger.<name>]``), checked in
     order on each pass. A package can add triggers. An empty list means that agents start only on request
     (``piloop launch``)."""
-    interval: float = Field(default=0, ge=0)
-    """The number of seconds between two routine sweeps of the ``cron`` trigger, counted from the start of the last
-    one. A sweep that investigates an anomaly is not a routine sweep. 0 turns the timer off."""
     files: Files = Files.NOTHING
     """What the agents of this role may file with ``piloop idea``: ``nothing`` or ``ideas``. The CLI refuses the
     rest."""
@@ -257,12 +254,6 @@ class SweepRole(RoleConfig):
     follow, not a protocol. A longer plan is refused."""
     max_ideas: int = Field(default=1, ge=0)
     """The maximum number of new ideas one sweep of a role that files ideas may insert, as its brief states it."""
-    incident_prompt: str | None = None
-    """A file that follows ``prompt`` in the brief of an incident sweep, a sweep that got incidents from a
-    trigger that investigates, such as ``run_failed``: a path relative to the repo root, or an absolute path. When
-    unset, nothing."""
-    routine_prompt: str | None = None
-    """A file that follows ``prompt`` in the brief of every other sweep. When unset, nothing."""
     SURFACE: ClassVar[Surface] = Surface.SWEEP
 
     def context(self, sweep: Sweep) -> list[str]:

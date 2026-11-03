@@ -89,11 +89,8 @@ max_concurrent = 1                        # the most runs at once; more finish s
 runs = false                              # a sweeping role
 triggers = []                             # off: you run your own; ["news", "run_failed"] turns it on
 # continuity = "resume"                   # each agent resumes the last one's session; "fresh" starts each anew
-# interval = 0                            # seconds between two sweeps of a cron trigger, if you add one
 # sections = ["inbox", …]                # if not set: a lean status after the news
 # resume_message = "You continue … {agent}. …"  # what starts the brief of an agent that resumes the session
-# incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies, if you add that trigger
-# routine_prompt = "briefs/routine.md"    # follows the prompt in every other sweep; none by default
 # max_ideas = 1                           # new ideas of your own per wake, as a direction each
 timeout = 900
 max_concurrent = 1                        # at most 1: two orchestrators would answer the same news twice
@@ -120,11 +117,11 @@ noise_runs = 3                            # evaluations of each bar; the stdev o
 # brief_words = 400                       # init and doctor warn when brief.md is longer
 
 # [plugins.trigger.new_keep]             # a trigger with parameters, which a role names in its triggers
-# provider = "sql"                        # a new name needs its provider; a built-in name, such as cron, is that one
+# provider = "sql"                        # a new name needs its provider; a built-in name, such as news, is that one
 # when = "SELECT 1 FROM candidates WHERE campaign_id = :campaign AND verdict = 'keep' AND created_at > :since"
 
-# [plugins.trigger.cron]                  # a built-in trigger's table changes its parameters for every role that names it
-# max_interval = 14400                    # seconds after which a routine sweep starts also when nothing is new
+# [plugins.trigger.news]                  # a built-in trigger's table changes its parameters for every role that names it
+# quiet_seconds = 30                      # seconds after the first news before the role wakes, so one agent takes a burst
 
 # [plugins.section]                       # what `piloop status`, the API and a UI show
 # use = ["headline", "goal", …]           # if not set: the installed sections of status; see the sections
@@ -148,7 +145,6 @@ noise_runs = 3                            # evaluations of each bar; the stdev o
 # max_tokens = 50000000                   # tokens that all the agents of the campaign spent together
 # plateau = 50                            # finished runs, scored or not, since the last keep or reactivation
 # hold_at = { spend = 1000 }              # facts of the fact sources at which nothing starts; raise one, then `piloop init` again
-# while_held = "run"                      # the closing review of a stop while held: run | skip | wait (until the hold ends)
 
 # [plugins.fact_source]                   # where the facts of the stop rule and the sections come from
 # use = ["campaign", "optimization", "billing", "spend"]  # if not set: campaign (hours, tokens) and optimization (the research)

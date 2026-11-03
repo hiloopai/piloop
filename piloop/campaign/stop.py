@@ -1,7 +1,6 @@
 """Stop conditions: decide when a campaign's stop rule, or a request, ends the campaign.
 
-The scheduler checks every active campaign once per pass. The reason goes into ``campaigns.stopped_reason`` and into
-the ``stopped`` trigger. A stop or a cancel that someone asks for is an event that the daemon acts on and
+The scheduler checks every active campaign once per pass. The reason goes into ``campaigns.stopped_reason``. A stop or a cancel that someone asks for is an event that the daemon acts on and
 answers (``piloop.db.requests``).
 """
 
@@ -12,7 +11,7 @@ from typing import ClassVar, Literal, assert_never
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
-from piloop.actor import Actor, System
+from piloop.actor import Actor
 from piloop.campaign import escalations
 from piloop.config import CampaignConfig
 from piloop.db.events import emit, has, in_order, latest
@@ -35,7 +34,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, working_on
 from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.fact_source.facts import HOURS, Fact, Facts, FactValue
-from piloop.plugins.stop_rule.contract import STOP_RULES, Escalate, Go, Hold, Stop, StopCase, WhileHeld
+from piloop.plugins.stop_rule.contract import STOP_RULES, Escalate, Go, Hold, Stop, StopCase
 
 
 class StopRequested(EventModel):
@@ -92,10 +91,10 @@ def request_stop(s: Session, campaign: Campaign, actor: Actor, *, reason: str, e
 
 
 class CampaignClosed(EventModel):
-    """The daemon closed a stopped campaign: it requested the closing sweeps, the ``stopped`` triggers.
+    """The daemon closed a stopped campaign: each provider that takes part in the close did its share.
 
     It closes a campaign once the runs that the stop wound down ended and their commits are judged (``settled``), so
-    the closing review sees the final head. Stop triggers with ``while_held = "skip"`` close it at the stop, with no sweep.
+    the close sees the final head.
     """
 
     READ_BY: ClassVar[ReadBy] = ReadBy.READERS
@@ -105,8 +104,8 @@ class CampaignClosed(EventModel):
 def unclosed(s: Session, campaign: Campaign) -> bool:
     """Whether the daemon stopped ``campaign`` after it last closed it (``CampaignClosed``).
 
-    A ``stopped`` that someone set by hand (an UPDATE of ``campaigns.status``) is not the daemon's stop: it gets no
-    closing sweep.
+    A ``stopped`` that someone set by hand (an UPDATE of ``campaigns.status``) is not the daemon's stop: it is not
+    closed.
     """
     on_campaign = Event.target == TargetRef(TargetKind.CAMPAIGN, campaign.id)
     last = select(func.max(Event.id)).where(on_campaign)
@@ -217,9 +216,9 @@ def _case(s: Session, campaign: Campaign, cfg: CampaignConfig, now: datetime) ->
 def left(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Facts:
     """What the campaign's stop rule leaves of each fact now (``Go.left``).
 
-    Nothing bounds a campaign that the rule holds or stops, or that piloop does not ask it about (``asked``).
+    Nothing bounds a campaign that the rule holds or stops, or one that is not active: piloop does not ask about it.
     """
-    return left_of(check(s, campaign, cfg)) if asked(s, campaign, cfg) else Facts()
+    return left_of(check(s, campaign, cfg)) if campaign.status is CampaignStatus.ACTIVE else Facts()
 
 
 def left_of(answer: Go | Hold | Stop | Escalate) -> Facts:
@@ -292,7 +291,7 @@ def timeout(
     """Return the seconds that an agent of ``campaign`` that started at ``started_at`` may run, or the rule's ``Stop``.
 
     The seconds are its ``role_timeout``, cut where the stop rule's ``hours`` run out (``Go.left``): a run that starts
-    minutes before the stop ends with it. A stopped campaign cuts nothing, so its closing review has its whole timeout.
+    minutes before the stop ends with it. A stopped campaign cuts nothing, so an agent that a person requests has its whole timeout.
     ``Stop``: the rule stops the active campaign now. An agent that has not started never starts: its row is requested
     again, and the pass that stops the campaign closes it. One that runs is wound down by that pass.
     """
@@ -331,55 +330,12 @@ def requested(s: Session, campaign: Campaign) -> Stop | None:
     return Stop(f'stopped by {asked.actor}: {stop.reason}' if stop.reason else f'stopped by {asked.actor}')
 
 
-def review_waits(s: Session, campaign: Campaign, cfg: CampaignConfig) -> bool:
-    """Whether the stopped campaign's closing review waits for the hold to end.
-
-    That is ``while_held = "wait"``, with an agent still requested. piloop asks the stop rule about such a campaign, and
-    reads its facts, so that the hold can end.
-    """
-    if (
-        campaign.status is not CampaignStatus.STOPPED
-        or STOP_RULES.selected(cfg.plugins).while_held is not WhileHeld.WAIT
-    ):
-        return False
-    requested = select(AgentSession.id).where(
-        AgentSession.campaign_id == campaign.id, AgentSession.state == AgentSessionState.REQUESTED
-    )
-    return s.scalar(requested.limit(1)) is not None
-
-
-def review_skipped(s: Session, campaign: Campaign, held: str) -> None:
-    """Post the escalation of a closing review that ``while_held = "skip"`` dropped. The caller commits."""
-    asked = EscalationView(
-        headline='The campaign stopped without its closing review. Do you want a review?',
-        why='The campaign stopped while the stop rule held its launches. The rule skips the review then.',
-        choices=(
-            Choice(id='A', label='Start the review by hand.', result='An agent reviews the campaign and reports.'),
-            Choice(id='B', label='Do nothing.', result='The campaign stays stopped without a review.'),
-        ),
-        details=(
-            f'Closing review skipped: the campaign stopped while the stop rule held its launches ({held}), and the'
-            ' rule skips a review then (while_held = "skip").'
-        ),
-    )
-    escalations.escalate(s, TargetRef(TargetKind.CAMPAIGN, campaign.id), asked, author=System.DAEMON, priority=0)
-
-
-def asked(s: Session, campaign: Campaign, cfg: CampaignConfig) -> bool:
-    """Whether piloop asks the campaign's stop rule now.
-
-    It asks about an active campaign, and about a stopped one whose closing review waits for the hold to end
-    (``review_waits``).
-    """
-    return campaign.status is CampaignStatus.ACTIVE or review_waits(s, campaign, cfg)
-
-
 def held(s: Session, campaign: Campaign, cfg: CampaignConfig) -> str | None:
     """Return why the stop rule holds the campaign's launches and evaluations now, or None.
 
-    A campaign that piloop does not ask about (``asked``) is not held.
+    piloop asks the stop rule only about an active campaign: another one is not held.
     """
-    if not asked(s, campaign, cfg):
+    if campaign.status is not CampaignStatus.ACTIVE:
         return None
     answer = acted(check(s, campaign, cfg))
     return answer.reason if isinstance(answer, Hold) else None

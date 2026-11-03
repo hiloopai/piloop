@@ -3,9 +3,8 @@
 A trigger is a provider of ``TRIGGERS``: its fields are its parameters, from ``[plugins.trigger.<name>]``. A role names
 its triggers in ``[plugins.role.<name>] triggers``. On each
 **pass** over the campaigns, for each campaign and each sweeping role without a pending request, the scheduler calls
-``Trigger.fire`` of each trigger of the role, in the order of the list. Once a stopped campaign's last runs are judged,
-it calls only the triggers with ``ON_STOP``, and while the campaign runs, only the others. A package adds a trigger with
-an entry point in the group of ``TRIGGERS``.
+``Trigger.fire`` of each trigger of the role, in the order of the list. A package adds a trigger with an entry point in
+the group of ``TRIGGERS``.
 
 The daemon makes a pass when an event of a campaign's state arrives, or of a kind that a trigger reads
 (``WAKES_ON``), and when the time comes that a trigger asked for (``due_in``). It does not make one on a timer.
@@ -33,7 +32,7 @@ class Quiet(StrEnum):
     HELD = 'held'
     """The stop rule holds the campaign's launches, such as at a spend limit."""
     STOPPED = 'stopped'
-    """The campaign stopped, and its closing review was requested."""
+    """The campaign stopped, and the daemon closed it."""
 
 
 class Pass(Protocol):
@@ -73,17 +72,8 @@ class Pass(Protocol):
         """The quiet phase of the campaign in which this pass checks the trigger (``Trigger.WHILE``). None: it runs."""
         ...
 
-    @property
-    def interval(self) -> float:
-        """The role's ``interval``: seconds between two routine sweeps of the ``cron`` trigger. 0 turns it off."""
-        ...
-
     def live(self) -> int:
         """The number of the role's rows that are starting or running."""
-        ...
-
-    def routine(self) -> AgentSession | None:
-        """The role's latest row that got no anomaly."""
         ...
 
 
@@ -127,19 +117,13 @@ class Trigger(Parameters, ABC):
     The daemon checks a role's triggers in the order of its list.
     """
 
-    ON_STOP: ClassVar[bool] = False
-    """The daemon checks the trigger once after each stop, when the stopped campaign's last runs are judged, instead of
-    on every pass while it runs."""
     WHILE: ClassVar[frozenset[Quiet]] = frozenset()
     """The quiet phases in which the daemon still checks the trigger, and launches what it requests. A trigger that
-    names ``stopped`` is checked on every pass after the campaign's closing review was requested."""
+    names ``stopped`` is checked on every pass after the daemon closed the stopped campaign."""
     WAKES_ON: ClassVar[frozenset[type[EventModel]]] = frozenset()
     """The event models that make the daemon check the trigger, beyond those of its campaign's state: its ideas,
     runs, candidates and agents, its status and config. A trigger that reads anything else, such as the events of a
     plugin, names them here."""
-    INVESTIGATES: ClassVar[bool] = False
-    """The agent that the trigger requests gets incidents to investigate. An agent of a role with such a trigger that
-    dies at startup is then no incident: the agent that it would request could die the same way, and so on."""
 
     @abstractmethod
     def fire(self, p: Pass) -> Fire | Steer | None:

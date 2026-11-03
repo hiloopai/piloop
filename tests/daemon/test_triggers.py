@@ -10,14 +10,14 @@ import pytest
 from sqlalchemy import select
 
 from piloop.actor import System
-from piloop.config import CampaignConfig, load_campaign_config
+from piloop.config import load_campaign_config
 from piloop.daemon.main import ACTOR
 from piloop.daemon.scheduler import Scheduler
 from piloop.db import sql
 from piloop.db.events import AnomalyReported, in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, utcnow
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, CommentKind, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -29,8 +29,6 @@ from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, R
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization.planner import NO_RUN_ERROR
 from piloop.plugins.executor.workers import Workers
-from piloop.plugins.role.contract import SweepRole
-from piloop.plugins.trigger.cron import CronTrigger
 from tests.conftest import (
     HARNESS_NOOP,
     HARNESS_PROMPT_TO_FILE,
@@ -40,7 +38,6 @@ from tests.conftest import (
     campaigns_of,
     end_of,
     factory,
-    role_of,
     run_all,
     serving,
     write_toml,
@@ -199,92 +196,19 @@ def test_an_anomaly_requests_an_incident_sweep_once_and_collapses_while_one_is_p
     assert [w[1] for w in agent_sessions(db, SWEEPER)] == [AgentSessionState.EXITED] * 3
 
 
-def test_an_anomaly_takes_the_tick_and_does_not_reset_the_timer(
+def test_an_incident_sweep_brief_lists_its_incidents(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """When a timer is due and a new failure arrives in the same tick, the incident sweep starts first."""
-    configure(db, campaign, HARNESS_PROMPT_TO_FILE, sweeper={'interval': 30})
-    with db.session() as s:
-        s.get_one(Campaign, campaign.id).created_at = utcnow() - timedelta(seconds=31)
-        s.commit()
+    configure(db, campaign, HARNESS_PROMPT_TO_FILE)
     fail_a_run(db, campaign, 'broken')
     sched = scheduler(db, runtime, tmp_path)
     assert run_all(sched) == [1]
     sched.wait(SETTLE)
-    assert run_all(sched) == [2], 'the incident sweep is not a progress review: the timer is still due'
-    sched.wait(SETTLE)
-    assert agent_sessions(db, SWEEPER) == [
-        (1, AgentSessionState.EXITED, 'run_failed: run#1 failed'),
-        (2, AgentSessionState.EXITED, 'timer: 30s'),
-    ]
-    assert run_all(sched) == [], 'the timer counts from the progress review'
-
+    sched.stop(timeout=5)
     incident = (tmp_path / 'agent_sessions' / '1' / 'brief.md').read_text()
-    assert incident.index('# Sweeper') < incident.index('## This sweep: an incident') < incident.index('# Demo')
+    assert incident.index('# Sweeper') < incident.index('# Demo') < incident.index('## Incidents to investigate')
     assert '## Incidents to investigate\n\n- run#1 failed' in incident
     assert '## Goal' in incident
-    progress = (tmp_path / 'agent_sessions' / '2' / 'brief.md').read_text()
-    assert '## This sweep: a progress review' in progress and '## This sweep: an incident' not in progress
-    assert '## Incidents to investigate' not in progress
-    assert '## Goal' in progress
-    sched.stop(timeout=5)
-
-
-def test_cron_fires_once_per_interval_when_the_role_has_news(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A routine sweep with nothing new to read finds nothing: the timer waits for news, up to ``max_interval``."""
-    configure(db, campaign, sweeper={'interval': 30})
-    sched = scheduler(db, runtime, tmp_path)
-    assert run_all(sched) == [], 'the campaign was registered a moment ago'
-    with db.session() as s:
-        s.get_one(Campaign, campaign.id).created_at = utcnow() - timedelta(seconds=31)
-        s.commit()
-    assert run_all(sched) == [1], 'the first review needs no news'
-    assert agent_sessions(db, SWEEPER)[0][2] == 'timer: 30s'
-    sched.wait(SETTLE)
-    assert run_all(sched) == [], 'not due again'
-    backdate(db, AgentSessionId(1), 31)
-    assert run_all(sched) == [], 'due, but nothing is new since the last review'
-    with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        cfg = CampaignConfig.model_validate(p.config)
-        on = campaigns_of(sched)._pass(s, p, cfg, SWEEPER, role_of(cfg, SweepRole), utcnow())
-        due = CronTrigger().due_in(on)
-        assert due is not None and timedelta(hours=3, minutes=59) < due < timedelta(hours=4), (
-            'max_interval, unless news'
-        )
-
-    with db.session() as s:
-        s.add(
-            Comment(
-                target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
-                author='human',
-                kind=CommentKind.MESSAGE,
-                priority=2,
-                body='look at idea#1',
-            )
-        )
-        s.commit()
-    assert run_all(sched) == [2]
-    assert agent_sessions(db, SWEEPER)[1][2] == 'timer: 30s; news: 1 items (comment)'
-    sched.wait(SETTLE)
-    backdate(db, AgentSessionId(2), 31)
-    assert run_all(sched) == [], 'the review took that news'
-    backdate(db, AgentSessionId(2), 4 * 3600)
-    assert run_all(sched) == [3], 'after max_interval, a stuck campaign is still looked at'
-    assert agent_sessions(db, SWEEPER)[2][2] == 'timer: no news since agent_session#2'
-    sched.wait(SETTLE)
-
-    configure(db, campaign, sweeper={'interval': 30}, trigger={'cron': {'max_interval': 0}})
-    backdate(db, AgentSessionId(3), 31)
-    assert run_all(sched) == [4], 'max_interval at or below interval: the timer alone'
-    sched.wait(SETTLE)
-
-    configure(db, campaign, sweeper={'interval': 0})
-    backdate(db, AgentSessionId(4), 5 * 3600)
-    assert run_all(sched) == [], 'interval 0 turns the timer off'
-    sched.stop(timeout=5)
 
 
 def test_a_sweep_whose_launch_the_stop_rule_stops_never_starts_and_the_stop_closes_its_row(

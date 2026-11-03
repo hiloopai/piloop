@@ -2,7 +2,6 @@
 
 | Key | Meaning |
 |---|---|
-| `while_held` | What the closing review does when the campaign stops (`piloop campaign stop`) while the rule holds its launches: `run` it anyway, `skip` it, or `wait` until the hold ends. |
 | `target` | Stop when the primary metric at the head (the latest keep on the trunk) reaches this value, in its direction. Only for a campaign with one track. |
 | `max_runs` | Stop after this many runs that count, once none is queued, running or being scored. A run counts when it reached the evaluator, and also while it is queued, running or being scored, so piloop never starts more runs than this. A finished run that does not count frees its place, and piloop starts another run in it. |
 | `max_hours` | Stop after this many hours of wall-clock time since the first run of the campaign started. The time that the campaign was paused (`piloop pause`) does not count. An agent's timeout ends at the stop too: no run starts within its role's `wrap_up_lead` of the stop, and a run that the stop cuts short ends `campaign_stopped`, no attempt. |

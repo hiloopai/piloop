@@ -112,7 +112,7 @@ class Closes(Protocol):
     """A provider that a campaign chooses, and that takes part in the campaign's close (``CampaignClosed``)."""
 
     def closing(self, s: Session, campaign: Campaign) -> str:
-        """Do its share of the close of the stopped ``campaign``, before the closing sweeps are requested.
+        """Do its share of the close of the stopped ``campaign``.
 
         It only flushes, and returns what it did, for the trace. A failure that must not stop the close is in the line.
         """

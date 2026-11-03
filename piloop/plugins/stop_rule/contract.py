@@ -13,8 +13,7 @@ facts. Then it calls ``check`` with a ``StopCase``: those facts. The rule return
   hold.
 
 ``describe`` returns the rule's own view of the campaign against its limits, for ``piloop status`` and the briefs:
-piloop formats none of the facts itself. ``while_held`` says what the closing review of a stop does while the rule
-holds.
+piloop formats none of the facts itself.
 
 The rule reads nothing else: it is a pure provider. ``[plugins.stop_rule] provider`` in ``piloop.toml`` selects the
 rule, and the other keys of that table are its fields, its limits among them. Without the table, the rule is
@@ -29,7 +28,6 @@ this module and the facts it reads, and nothing else of piloop.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import StrEnum
 
 from piloop.plugins.fact_source.facts import Fact, Facts, FactValue
 from piloop.plugins.host import Capability, One, Parameters, Scope, Tier
@@ -82,7 +80,7 @@ class Stop:
     """piloop stops the campaign."""
 
     reason: str
-    """Why, for ``campaigns.stopped_reason`` and the closing review."""
+    """Why, for ``campaigns.stopped_reason``."""
 
 
 @dataclass(frozen=True)
@@ -95,23 +93,8 @@ class Escalate:
     """What piloop does with the campaign: by default it goes on."""
 
 
-class WhileHeld(StrEnum):
-    """What the closing review does when the campaign stopped while its stop rule held launches."""
-
-    RUN = 'run'
-    """The review runs, also while the hold lasts."""
-    SKIP = 'skip'
-    """No review: the stop ends at once, and the daemon posts an escalation that says so."""
-    WAIT = 'wait'
-    """The review starts when the hold ends. The daemon goes on asking the stop rule until it does."""
-
-
 class StopRule(Parameters, ABC):
     """A stop rule: its fields are its parameters. A rule has no error: it answers every case."""
-
-    while_held: WhileHeld = WhileHeld.RUN
-    """What the closing review does when the campaign stops (``piloop campaign stop``) while the rule holds its
-    launches: ``run`` it anyway, ``skip`` it, or ``wait`` until the hold ends."""
 
     @abstractmethod
     def reads(self) -> list[Fact[FactValue]]:

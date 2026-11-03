@@ -1,5 +1,4 @@
 from datetime import timedelta
-from typing import ClassVar
 
 from piloop.ids import TargetRef
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd
@@ -15,8 +14,6 @@ class RunFailed(Trigger):
 
     The row gets one ``anomaly.reported`` event for each such run, which makes it an incident sweep.
     """
-
-    INVESTIGATES: ClassVar[bool] = True
 
     def fire(self, p: Pass) -> Fire | None:
         failed = p.s.scalars(campaign_runs(p.campaign.id).where(Run.end.in_((RunEnd.FAILED, RunEnd.TIMED_OUT))))

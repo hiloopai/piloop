@@ -114,9 +114,7 @@ class StillStopping(Refused):
     def __init__(self, campaign: Campaign, agents: Sequence[AgentSessionId]) -> None:
         self.agents = tuple(agents)
         named = f'; agents {", ".join(f"#{i}" for i in agents)} are not over' if agents else ''
-        super().__init__(
-            f'{campaign.name} is still stopping{named}: try again once its closing review and runs are over'
-        )
+        super().__init__(f'{campaign.name} is still stopping{named}: try again once it is closed and its runs are over')
 
 
 def _stopped(s: Session, campaign_id: CampaignId, verb: str) -> Campaign:
@@ -127,7 +125,7 @@ def _stopped(s: Session, campaign_id: CampaignId, verb: str) -> Campaign:
 
     Raises:
         Refused: the campaign is active, or retired.
-        StillStopping: the stop is not over: the closing review has not started, a run is not scored, or an agent of
+        StillStopping: the stop is not over: the campaign is not closed, a run is not scored, or an agent of
             the campaign is open (requested, starting, running or ending).
     """
     write_transaction(s)

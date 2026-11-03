@@ -189,14 +189,16 @@ def test_a_stopped_campaign_retires_once_its_stop_is_over_and_its_name_registers
                 )
             )
             s.commit()
-        with pytest.raises(Refused, match=r'^demo is still stopping; agents #1 are not over: try again once its') as e:
+        with pytest.raises(
+            Refused, match=r'^demo is still stopping; agents #1 are not over: try again once it is'
+        ) as e:
             client.retire('demo', RetireBody(reason='done'))
         assert e.value.error == Problem.STILL_STOPPING
         with db.session() as s:
             s.execute(update(AgentSession).values(state=AgentSessionState.EXITED))
             s.commit()
         with pytest.raises(
-            Refused, match=r'^demo is still stopping: try again once its closing review and runs are over'
+            Refused, match=r'^demo is still stopping: try again once it is closed and its runs are over'
         ):
             client.retire('demo', RetireBody(reason='done'))
         with db.session() as s:

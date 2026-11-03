@@ -107,6 +107,10 @@ class Roles:
 # config as class arguments: a model_config attribute would clash with BaseSettings' in load_campaign_config's loader
 RESEARCH_TRIGGERS = frozenset({'low_water', 'stalled'})
 """The triggers that started research, removed with it."""
+SWEEP_TRIGGERS = frozenset({'cron', 'stopped', 'low_yield', 'dead_at_startup'})
+"""The triggers that only a sweep's timer, the closing review and the watchdog's incidents used."""
+SWEEP_KEYS = ('interval', 'incident_prompt', 'routine_prompt')
+"""The keys of a role that the timer and the incident and routine prompts read, removed with them."""
 
 
 class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docstrings=True):
@@ -142,6 +146,60 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     """``[agents]``: how long the campaign's agents get to wrap up, and its brief's budget."""
     plugins: Annotated[Plugins, PluginTables(Scope.CAMPAIGN)] = Field(default={}, validate_default=True)
     """``[plugins]``: the campaign's plugins, a table for each capability (``PluginTables``)."""
+
+    # Defined first, so pydantic runs it last of the 'before' validators: after the removed roles are dropped.
+    @model_validator(mode='before')
+    @classmethod
+    @deprecated.until(
+        '0.7.0', 'the sweep timer is removed in 0.6: delete _sweep_vocabulary, SWEEP_TRIGGERS, SWEEP_KEYS'
+    )
+    def _sweep_vocabulary(cls, data: object) -> object:
+        """Drop the ``SWEEP_TRIGGERS``, the ``SWEEP_KEYS`` of each role and the stop rule's ``while_held``.
+
+        Each one warns, but a trigger's table without keys: a stored config holds one for each built-in trigger.
+        """
+        plugins = data.get('plugins') if isinstance(data, dict) else None
+        if not isinstance(data, dict) or not isinstance(plugins, dict):
+            return data
+
+        def dropped(message: str) -> None:
+            deprecated.dropped(message, removed_in='0.7.0')
+
+        kept = dict(plugins)
+        provider: dict[str, object] = {}
+        if isinstance(triggers := plugins.get('trigger'), dict):
+            provider = {n: t.get('provider', n) if isinstance(t, dict) else n for n, t in triggers.items()}
+            for name, was in provider.items():
+                if was in SWEEP_TRIGGERS and triggers[name]:
+                    dropped(f'the {was} trigger is removed: delete the table [plugins.trigger.{name}]')
+            kept['trigger'] = {n: t for n, t in triggers.items() if provider[n] not in SWEEP_TRIGGERS}
+        gone = {n: p for n, p in provider.items() if p in SWEEP_TRIGGERS} | {
+            n: n for n in SWEEP_TRIGGERS if n not in provider
+        }
+        if isinstance(roles := plugins.get('role'), dict):
+            tables: dict[str, object] = {}
+            for role, table in roles.items():
+                if not isinstance(table, dict):
+                    tables[role] = table
+                    continue
+                table = dict(table)
+                if isinstance(listed := table.get('triggers'), list):
+                    for name in (n for n in listed if isinstance(n, str) and n in gone):
+                        dropped(
+                            f'the {gone[name]} trigger is removed: delete {name} from [plugins.role.{role}] triggers'
+                        )
+                    table['triggers'] = [n for n in listed if not (isinstance(n, str) and n in gone)]
+                for key in (k for k in SWEEP_KEYS if k in table):
+                    del table[key]
+                    dropped(
+                        f'the timer and the incident and routine prompts are removed: delete [plugins.role.{role}] {key}'
+                    )
+                tables[role] = table
+            kept['role'] = tables
+        if isinstance(rule := plugins.get('stop_rule'), dict) and 'while_held' in rule:
+            dropped('there is no closing review now: delete [plugins.stop_rule] while_held')
+            kept['stop_rule'] = {k: v for k, v in rule.items() if k != 'while_held'}
+        return {**data, 'plugins': kept}
 
     @model_validator(mode='before')
     @classmethod
@@ -592,14 +650,6 @@ def explain(where: object, error: ValidationError) -> str:
     return '\n'.join(lines)
 
 
-def prompt_files(role: RoleConfig) -> dict[str, str]:
-    """Return the prompt files that a role's table sets, by key: ``prompt``, and a sweep's two prompts."""
-    keys = {'prompt': role.prompt}
-    if isinstance(role, SweepRole):
-        keys |= {'incident_prompt': role.incident_prompt, 'routine_prompt': role.routine_prompt}
-    return {key: rel for key, rel in keys.items() if rel is not None}
-
-
 def merged(base: object, over: object) -> object:
     """``over`` on top of ``base``, key by key: a table merges into the table of the same key, any other value replaces."""
     match base, over:
@@ -666,10 +716,9 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
     except ValueError as e:
         raise ConfigError(f'{toml} is not a valid piloop config for {settings.home / "config.toml"}: {e}') from e
     missing = [
-        f'  plugins.role.{name}.{key} = {rel!r}: no such file. Fix: create it, or correct the path'
+        f'  plugins.role.{name}.prompt = {role.prompt!r}: no such file. Fix: create it, or correct the path'
         for name, role in cfg.roles.all().items()
-        for key, rel in prompt_files(role).items()
-        if not (campaign / rel).is_file()
+        if role.prompt is not None and not (campaign / role.prompt).is_file()
     ]
     if missing:
         raise ConfigError('\n'.join([f'{toml} is not a valid piloop config ({len(missing)} problem(s)):', *missing]))

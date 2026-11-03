@@ -111,7 +111,6 @@ def brief_in(
     kind: RoleName = SWEEPER,
     *,
     lines: tuple[str, ...] = (),
-    incident: bool = False,
     resumed: bool = False,
 ) -> str:
     """The brief of agent ``<kind>#7``, started for ``timer``, with ``lines`` as its type's context: whole, or resumed."""
@@ -121,7 +120,7 @@ def brief_in(
     sections = render_sections(campaign.config.sections_of(kind), r)
     if resumed:
         return compose_resumed(campaign.config.role(kind), agent, sections.resumed)
-    return compose_brief(role_in(campaign, kind), campaign, sections.whole, incident=incident)
+    return compose_brief(role_in(campaign, kind), campaign, sections.whole)
 
 
 def request(db: Database, campaign: Campaign, kind: RoleName = SWEEPER, **fields: object) -> AgentSessionId:
@@ -303,16 +302,15 @@ def test_the_example_queries_of_a_brief_read_its_own_campaign_and_primary(campai
 
 
 @pytest.mark.parametrize('kind', [IMPLEMENTER, SWEEPER])
-@pytest.mark.parametrize('incident', [False, True])
 def test_a_brief_says_git_or_commit_only_in_the_vcs_providers_parts(
-    campaign: Campaign, db: Database, mocker: MockerFixture, kind: RoleName, incident: bool
+    campaign: Campaign, db: Database, mocker: MockerFixture, kind: RoleName
 ) -> None:
     def marked(self: Git, part: Part) -> str:
         return f'<{part}>'
 
     mocker.patch.object(Git, 'prompt', marked)
     with db.session() as s:
-        brief = brief_in(s, s.get_one(Campaign, campaign.id), kind, incident=incident)
+        brief = brief_in(s, s.get_one(Campaign, campaign.id), kind)
     assert git_words(brief) == []
 
 

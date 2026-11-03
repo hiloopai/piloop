@@ -161,10 +161,7 @@ max_concurrent = {max_implementers}
 
 [plugins.role.sweeper]
 prompt = "{sweeper}/sweeper.md"
-incident_prompt = "{sweeper}/incident.md"
-routine_prompt = "{sweeper}/progress.md"
-triggers = ["run_failed", "dead_at_startup", "low_yield", "cron", "stopped"]
-interval = 1800
+triggers = ["run_failed"]
 writes = ["comments(escalation, note)", "lessons on the campaign once it stopped"]
 harnesses = ["script"]
 model = {{ script = "sweeper-model" }}
@@ -193,12 +190,12 @@ headless = ["{{prompt}}"]
 steers_mid_turn = true
 """
 
-SWEEPER_TRIGGERS = 'triggers = ["run_failed", "dead_at_startup", "low_yield", "cron", "stopped"]'
+SWEEPER_TRIGGERS = 'triggers = ["run_failed"]'
 """The line of ``TOML`` that lists the triggers of ``SWEEPER``: a test replaces it to set its own."""
 SWEEPER = RoleName('sweeper')
 """The tests' sweeping role, a role that ``piloop.toml`` defines: piloop has none that is on by default."""
 SWEEPER_PROMPTS = Path(__file__).parent / 'fixtures' / 'sweeper'
-"""The prompts of ``SWEEPER``: its own, its incident prompt and its routine prompt."""
+"""The directory of the prompt of ``SWEEPER``."""
 
 
 def spent(total: int, turns: int = 1) -> Usage:

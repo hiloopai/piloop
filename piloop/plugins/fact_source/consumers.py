@@ -7,7 +7,6 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from piloop.campaign.campaigns import CampaignAdded
-from piloop.campaign.stop import review_waits
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
 from piloop.db.models import NOT_RETIRED, Campaign
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged
@@ -31,8 +30,7 @@ def contribution(host: DaemonHost) -> Contribution:
 def read_due(host: DaemonHost, now: datetime) -> datetime | None:
     """Read each fact source of each campaign that is due (``FactSource.due``), and record what it read.
 
-    That is each active campaign, and each stopped one whose closing review waits for the hold to end
-    (``stop.review_waits``). Returns when the next reading is due.
+    That is each active campaign. Returns when the next reading is due.
 
     The source reads outside any transaction, because a command can take a minute. A write lock held for that long
     locks all other clients out. What ``record`` writes wakes the campaigns' pass (``FactSource.CHANGES``).
@@ -45,7 +43,7 @@ def read_due(host: DaemonHost, now: datetime) -> datetime | None:
                 cfg = campaign.config
             except ValidationError:
                 continue  # The campaigns' pass records this error for each campaign.
-            if not (campaign.status is CampaignStatus.ACTIVE or review_waits(s, campaign, cfg)):
+            if campaign.status is not CampaignStatus.ACTIVE:
                 continue
             for source in cfg.fact_sources():
                 if (at := source.due(s, campaign)) is None:

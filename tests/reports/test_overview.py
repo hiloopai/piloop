@@ -222,8 +222,6 @@ def test_the_overview_of_a_campaign(db: Database, campaign: Campaign) -> None:
         '## Funnel',
         'ideas: 4 · attempts: 2 · reached the evaluator: 1 · measured: 1 · keeps: 1',
         '| failed | 1 |',
-        '## Yield',
-        '- 1 of the last 2 runs scored, 1 kept; the others: 1 crashed.',
         '## Recent candidates (3 of 3; score)',
         '| candidate#2 | keep | 3 | 2 | run#1 | 0s | score 3 |',
         '| candidate#3 | discard | 3 | 0 | run#1 | 0s | score 3 |',

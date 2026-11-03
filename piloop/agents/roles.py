@@ -39,10 +39,6 @@ class Role:
     (``<kind>#<agent session id>``) and the source of the ideas they file."""
     prompt: Traversable
     """The file that starts the brief: in the repo, or a resource of the role's package."""
-    incident: Traversable | None
-    """The file that follows ``prompt`` in an incident sweep, one that got anomalies. None: nothing follows."""
-    routine: Traversable | None
-    """The file that follows ``prompt`` in every other sweep. None for a role that does runs, or a role without one."""
     ideas: str
     """How this role gives work to the implementers, as the context block of the brief says it.
 
@@ -71,12 +67,8 @@ def role(cfg: CampaignConfig, kind: RoleName, repo: Path) -> Role:
     table = cfg.role(kind)
     prompt = _prompt(repo, table.prompt, table.PROMPT)
     assert prompt is not None  # RoleConfig refuses a role with neither
-    incident = routine = None
-    if isinstance(table, SweepRole):
-        incident = _prompt(repo, table.incident_prompt, None)
-        routine = _prompt(repo, table.routine_prompt, None)
     ideas = table.IDEAS or IDEAS[filed(table)]
-    return Role(kind, prompt, incident, routine, ideas)
+    return Role(kind, prompt, ideas)
 
 
 def filed(table: RoleConfig) -> Files:
@@ -174,20 +166,17 @@ def render_sections(sections: Sequence[Section], r: Rendering) -> BriefSections:
     )
 
 
-def compose_brief(role: Role, campaign: Campaign, sections: str, *, incident: bool = False) -> str:
+def compose_brief(role: Role, campaign: Campaign, sections: str) -> str:
     """Compose a brief: the role prompt, the campaign brief, the role's addendum, then ``sections``.
 
-    A sweep also gets its role's incident or routine prompt after the role prompt: the incident prompt when it got
-    anomalies (``incident``). A worker gets its track's addendum when it claims its idea (``track_brief``).
+    A worker gets its track's addendum when it claims its idea (``track_brief``).
     """
     repo = Path(campaign.path)
     cfg = campaign.config
     addendum = cfg.role(role.kind).addendum
-    follows = role.incident if incident else role.routine
     vcs = VCS.selected(cfg.plugins)
     parts = [
         prompted(role.prompt.read_text().rstrip(), vcs),
-        prompted(follows.read_text().rstrip(), vcs) if follows is not None else '',
         (repo / BRIEF_FILE).read_text().rstrip(),
         (repo / addendum).read_text().rstrip() if addendum else '',
         sections,

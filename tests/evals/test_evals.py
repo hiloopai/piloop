@@ -1,4 +1,5 @@
 import importlib.util
+import itertools
 import json
 import random
 import shutil
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -40,6 +42,8 @@ from evals.report import plain_bar, write
 from evals.score import Score, Scoring
 from evals.team import final_keeps, notes, races
 from evals.telemetry import exported
+from piloop.config import CampaignConfig
+from piloop.deprecated import PiloopDeprecationWarning
 
 
 def module(path: Path) -> ModuleType:
@@ -56,6 +60,18 @@ def test_tasks_and_arms_load():
     assert all(t.normalised(t.dev_base) == 0 and t.normalised(t.dev_ref) == 1 for t in tasks)
     arms = {p.stem: load_arm(p.stem) for p in ARMS.glob('*.toml')}
     assert {type(a) for a in arms.values()} == {PiloopArm, PlainArm}
+
+
+def test_every_piloop_arm_loads_on_every_task_with_this_piloop():
+    """An arm's overlay may name keys that this piloop removed: they load with a warning, and the campaign starts."""
+    settings = Settings(gateway='https://gw.example', gateway_token=SecretStr('t'))
+    arms = [arm for p in sorted(ARMS.glob('*.toml')) if isinstance(arm := load_arm(p.stem), PiloopArm)]
+    tasks = [Task.load(p.name) for p in sorted(TASKS.iterdir())]
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', PiloopDeprecationWarning)
+        for arm, task in itertools.product(arms, tasks):
+            if not arm.charters or task.name in arm.charters:  # an arm with charters runs only on their tasks
+                CampaignConfig.model_validate(piloop_config(task, arm, settings, 4))
 
 
 def test_circles_check_is_exact():

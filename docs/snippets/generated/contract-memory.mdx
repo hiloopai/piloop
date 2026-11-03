@@ -3,4 +3,4 @@
 | Member | What it is |
 |---|---|
 | `MemoryProvider.sync(s: Session, campaign: Campaign, actor: Actor) -> Synced` | Take in the campaign's documents. `piloop init` (campaign registration) and a campaign's close call it. |
-| `MemoryProvider.closing(s: Session, campaign: Campaign) -> str` | Sync the documents before the closing review searches them (`Closes`). |
+| `MemoryProvider.closing(s: Session, campaign: Campaign) -> str` | Sync the documents of the stopped campaign, for the next campaigns to search (`Closes`). |

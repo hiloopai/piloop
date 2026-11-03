@@ -134,7 +134,7 @@ def test_daemon_end_to_end(
         brief = (home / 'agent_sessions' / '4' / 'brief.md').read_text()
         assert (
             'Why this agent started (context, not a scope): run_failed: run#2 failed' in brief
-            and '## This sweep: an incident' in brief
+            and '## Incidents to investigate' in brief
         )
         launched = run_all(daemon.scheduler)
         with daemon.db.session() as s:

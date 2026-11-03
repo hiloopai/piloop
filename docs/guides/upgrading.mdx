@@ -165,7 +165,8 @@ warning, until 0.7.0, and do nothing. What they wrote stays in the database.
 | Ideas that wait for a review, and the escalation of the slots that wait for them. | `idle_alert` of a role that does runs |
 | The rules that gave ideas to runs: an implementer claims its idea now. | `takes`, `explore_every` and `recovery_requeues` of a role that does runs |
 | The research role, and the `low_water` and `stalled` triggers that started it. Each worker proposes its own idea when the board has none for it, and the notes on the board are the workers' forum. Its sessions stay readable. | `[plugins.role.research]`, `"low_water"` and `"stalled"` in a role's `triggers`, `[plugins.trigger.low_water]`, `[plugins.trigger.stalled]` |
-| The watchdog role and its prompts. The orchestrator takes escalations and failed runs when its triggers name them, and a role of your own can still name `cron`, `stopped`, `low_yield` or `dead_at_startup`. Its sessions stay readable. | `[plugins.role.watchdog]` |
+| The watchdog role and its prompts. The orchestrator takes escalations and failed runs when its triggers name them. Its sessions stay readable. | `[plugins.role.watchdog]` |
+| A sweep's timer, its closing review at the stop, its incident and routine prompts, and the low-yield alarm: stop rules and escalations cover a stuck campaign. Nothing writes the lessons when a campaign stops now: the orchestrator or a person writes them. The `## Yield` section and its open escalations go too. | `"cron"`, `"stopped"`, `"low_yield"` and `"dead_at_startup"` in a role's `triggers`, their `[plugins.trigger.<name>]` tables, a role's `interval`, `incident_prompt` and `routine_prompt`, `[plugins.stop_rule] while_held` |
 | The `idle_queue` section: every free slot gets a fresh run, so a free slot with no open idea is not idle. | `"idle_queue"` in `[plugins.section] use` or a role's `sections`, `[plugins.section.idle_queue]` |
 
 ### The board
@@ -614,7 +615,6 @@ facts = ["billing_usd"]
 
 [plugins.stop_rule]
 hold_at = { spend = 1000 }
-while_held = "wait"
 ```
 
 The old keys still work until 0.5.0, with a warning: the old command runs in a wrapper that reports its number as
@@ -787,7 +787,7 @@ rarely submit now stops at `plateau`. `max_runs` still counts only the runs that
 ### Low yield
 
 piloop escalates a campaign whose runs reach nothing, and the watchdog has the new
-[`low_yield`](/concepts/roles#low-yield) trigger by default. If your `piloop.toml` lists the watchdog's `triggers`,
+`low_yield` trigger by default. If your `piloop.toml` lists the watchdog's `triggers`,
 add `"low_yield"` to the list.
 
 ### The daemon registers campaigns

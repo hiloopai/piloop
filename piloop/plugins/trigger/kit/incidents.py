@@ -62,6 +62,6 @@ def report(p: Pass, trigger: Trigger, new: list[Incident]) -> Fire | None:
 
 
 def assigned(s: Session, agent_session_id: AgentSessionId) -> list[str]:
-    """Return the incident lines that an agent got, in order. A routine sweep got none."""
+    """Return the incident lines that an agent got, in order. A sweep that no incident started got none."""
     rows = in_order(s, AnomalyReported, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
     return [a.line for _, a in rows]

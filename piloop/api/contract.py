@@ -202,7 +202,7 @@ class StopBody(Params):
     """How to stop a campaign."""
 
     reason: str = ''
-    """Why, for ``stopped_reason`` and the closing review."""
+    """Why, for ``stopped_reason``."""
     ending: Ending = Ending.WRAP_UP
     """How the running implementers end. ``now`` also ends those of a stopped campaign that still wind down."""
 

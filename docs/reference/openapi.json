@@ -8963,7 +8963,7 @@
           "reason": {
             "type": "string",
             "title": "Reason",
-            "description": "Why, for ``stopped_reason`` and the closing review.",
+            "description": "Why, for ``stopped_reason``.",
             "default": ""
           },
           "ending": {

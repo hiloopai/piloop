@@ -90,10 +90,10 @@ daemon never overwrites a verdict that is not its own.
   - drops the requests and queued runs pending at that moment (their ideas go back to `open`);
   - tells each running implementer to save its work and stop, and ends it 10 minutes later (`--kill`: at once); its
     versions are scored;
-  - checks the `stopped` triggers once those versions are judged: a role that names one gets one closing sweep;
+  - closes the campaign once those versions are judged: nothing reviews it, and nothing writes its lessons;
   - starts and files nothing more.
 - An orchestrator or an agent asks for a stop with an escalation: its `piloop campaign stop` is refused. Never
-  UPDATE `campaigns.status`: an UPDATE gets no closing sweep.
+  UPDATE `campaigns.status`: the daemon does not close a campaign that an UPDATE stopped.
 - `piloop run cancel <run> [--wrap-up]` and `piloop agent cancel <agent-session> [--wrap-up]` end one run or one agent,
   with every process that it started. A cancelled run's idea is dropped.
 - To continue, raise or change the conditions in `piloop.toml` and run `piloop init <path>`.

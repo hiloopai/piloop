@@ -55,11 +55,7 @@ from piloop.plugins.cas.http import Http
 
 from piloop.plugins.trigger.contract import TRIGGERS, Trigger, TriggerName, Pass, Fire, Steer, Quiet
 from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
-from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
-from piloop.plugins.campaign_type.optimization.trigger.low_yield import LowYield
-from piloop.plugins.trigger.cron import CronTrigger
 from piloop.plugins.trigger.sql import SqlTrigger
-from piloop.plugins.trigger.stopped import StoppedTrigger
 from piloop.plugins.trigger.news import NewsTrigger
 
 from piloop.plugins.section.contract import SECTIONS, Guide, Section, SectionName, Rendering, Briefing, Surface
@@ -75,7 +71,6 @@ from piloop.plugins.section.agents import Agents
 from piloop.plugins.campaign_type.kit.evaluation.section.measure import Measure
 from piloop.plugins.campaign_type.kit.evaluation.section.evaluations import Evaluations
 from piloop.plugins.campaign_type.kit.evaluation.section.funnel import RunFunnel
-from piloop.plugins.campaign_type.optimization.section.yields import Yields
 from piloop.plugins.section.cost import Cost
 from piloop.plugins.campaign_type.kit.verdicts.section.candidates import Candidates
 from piloop.plugins.campaign_type.kit.verdicts.section.same_as_parent import SameAsParent
@@ -118,7 +113,7 @@ from piloop.plugins.metric import number
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.noise import Noise
 
-from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule, StopCase, Shape, WhileHeld
+from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule, StopCase, Shape
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource, FactReadError
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.fact_source.facts import Fact, Facts, FactValue, Funnel

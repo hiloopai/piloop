@@ -9,14 +9,14 @@ from piloop import deprecated
 from piloop.version import Version
 
 LEAKING_FUNNEL = 'leaking_funnel'
-"""The removed trigger: ``low_yield`` finds the runs that reach no measurement."""
+"""The removed trigger, which found the runs that reach no measurement."""
 SEED = 'seed'
 """The removed trigger: it started research on new seeds, and an idea is never a seed now."""
 
 
 @deprecated.bridge('0.7.0', 'the leaking_funnel trigger is removed: delete leaking_funnel and LEAKING_FUNNEL')
 def leaking_funnel(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """The ``leaking_funnel`` trigger is removed: ``low_yield`` does its work.
+    """The ``leaking_funnel`` trigger is removed: stop rules and escalations cover a stuck campaign.
 
     piloop drops it from each role's ``triggers``, and drops each ``[plugins.trigger.<name>]`` of it.
     """
@@ -63,4 +63,4 @@ def _provider(name: str, table: object) -> object:
     return table.get('provider', name) if isinstance(table, dict) else name
 
 
-_REMOVED = 'the leaking_funnel trigger is removed; low_yield finds runs that reach no measurement: delete it'
+_REMOVED = 'the leaking_funnel trigger is removed; stop rules and escalations cover a stuck campaign: delete it'

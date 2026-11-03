@@ -181,38 +181,6 @@ def test_a_role_that_piloop_toml_defines_runs_on_its_sql_trigger_with_its_prompt
 
 
 @pytest.mark.usefixtures('no_fresh_runs')
-def test_a_role_adds_its_incident_prompt_to_an_incident_sweep_and_its_routine_prompt_to_any_other(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """The keys that give the sweeper its two kinds of sweep work for a role that ``piloop.toml`` defines."""
-    repo = Path(campaign.path)
-    for name, text in (('triage.md', '# Triage'), ('incident.md', '## An incident'), ('routine.md', '## A routine')):
-        (repo / name).write_text(text + '\n')
-    triage: dict[str, object] = {
-        'prompt': 'triage.md',
-        'triggers': ['run_failed'],
-        'incident_prompt': 'incident.md',
-        'routine_prompt': 'routine.md',
-    }
-    configure(db, campaign, '#!/bin/sh\ntrue\n', triage=triage, sweeper={'triggers': []})
-    sched = scheduler(db, recording(runtime, []), tmp_path)
-    fail_a_run(db, campaign, 'broken')
-    assert run_all(sched) == [1]
-    sched.wait(SETTLE)
-    with db.session() as s:
-        s.add(AgentSession(kind='triage', campaign_id=campaign.id, reason='by hand'))
-        s.commit()
-    assert run_all(sched) == [2]
-    sched.wait(SETTLE)
-    sched.stop(timeout=5)
-    incident, routine = ((tmp_path / 'agent_sessions' / str(w) / 'brief.md').read_text() for w in (1, 2))
-    assert incident.startswith('# Triage\n\n## An incident\n\n# Demo') and '## Incidents to investigate' in incident
-    assert routine.startswith('# Triage\n\n## A routine\n\n# Demo') and '## Research pack' in routine
-    with pytest.raises(ConfigError, match=r"plugins\.role\.triage\.routine_prompt = 'gone\.md': no such file"):
-        load_campaign_config(repo, plugins={'role': {'triage': triage | {'routine_prompt': 'gone.md'}}})
-
-
-@pytest.mark.usefixtures('no_fresh_runs')
 def test_a_role_that_defines_ideas_is_told_how_many_its_sweep_may_add(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -591,7 +559,7 @@ def test_a_package_role_takes_its_defaults_and_a_roles_value_that_is_not_a_table
             EntryPoint('not_a_trigger', f'{PLUGIN}:NOT_A_TRIGGER', TRIGGER_GROUP),
             'is not a subclass of piloop.plugins.trigger.contract.Trigger',
         ),
-        (EntryPoint('cron', f'{PLUGIN}:EveryPass', TRIGGER_GROUP), "'cron' is a trigger already, from piloop "),
+        (EntryPoint('news', f'{PLUGIN}:EveryPass', TRIGGER_GROUP), "'news' is a trigger already, from piloop "),
         (
             EntryPoint('auditor', f'{PLUGIN}:NOT_A_ROLE', ROLE_GROUP),
             'is not a subclass of piloop.plugins.role.contract.RoleConfig',
@@ -685,7 +653,7 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
     selected = lines[lines.index('selected:') + 1 :]
     by_list = ('  demo: section ', '  demo: trigger ', '  demo: fact source ')
     assert (
-        f'  demo: trigger cron, from {TRIGGERS.sources()["cron"].release} ([plugins.role.sweeper] triggers, {stored})'
+        f'  demo: trigger run_failed, from {TRIGGERS.sources()["run_failed"].release} ([plugins.role.sweeper] triggers, {stored})'
         in selected
     )
     assert (

@@ -96,9 +96,7 @@ from piloop.plugins.launch_policy.fewest_live import FewestLive
 from piloop.plugins.role.consumers import Agents
 from piloop.plugins.role.contract import ImplementerRole, SweepRole
 from piloop.plugins.runtime.contract import Handle
-from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
 from piloop.plugins.trigger.sql import SqlTrigger
-from piloop.plugins.trigger.stopped import StoppedTrigger
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, GitRepository, commands as git
 from piloop.settings import AgentSettings, DaemonSettings
 from tests.conftest import (
@@ -2159,7 +2157,7 @@ def candidate_rows(db: Database, run_id: RunId) -> int:
 
 
 def stop_by_hand(tmp_path: Path, campaign: Campaign) -> None:
-    """Stop the campaign as a person's UPDATE does: not the daemon's stop, so it gets no closing sweep."""
+    """Stop the campaign as a person's UPDATE does: not the daemon's stop, so the daemon does not close it."""
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
         sql.run(
             con, f"UPDATE campaigns SET status = 'stopped', stopped_reason = 'by the test' WHERE id = {campaign.id}"
@@ -2206,7 +2204,7 @@ def test_implementers_of_a_stopped_campaign_are_told_to_wrap_up_then_ended_after
                 '[piloop] The campaign stopped (max_runs: 2 runs). Save what you have now, with a summary that says where it stands. Leave a note on what you did, then stop. This session ends in 10 minutes.',
             )
         ]
-    ), 'a sweep is bounded by its timeout and the closing sweeper is one: only implementers are wound down'
+    ), 'a sweep is bounded by its timeout: only implementers are wound down'
     assert settled(db, 'agent_session.wrap_up') == [(1, WrapUp(reason='max_runs: 2 runs', comment=1))]
     assert runtime.prompts == [], 'a note that its executor delivers, never straight to the runtime'
     run_all(scheduler)
@@ -2599,7 +2597,7 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
 def test_the_triggers_that_read_no_time_ask_for_no_pass_of_their_own(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """Only ``cron`` compares a time: the others wait for the campaign's next event."""
+    """No built-in trigger compares a time: each waits for the campaign's next event."""
     scheduler = make_scheduler(db, runtime, tmp_path)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
@@ -2607,8 +2605,6 @@ def test_the_triggers_that_read_no_time_ask_for_no_pass_of_their_own(
         on = campaigns_of(scheduler)._pass(s, p, cfg, SWEEPER, role_of(cfg, SweepRole), utcnow())
         for trigger in (
             RunFailed(),
-            DeadAtStartup(),
-            StoppedTrigger(),
             SqlTrigger(when='SELECT 1'),
         ):
             assert trigger.due_in(on) is None, trigger

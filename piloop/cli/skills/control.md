@@ -13,7 +13,7 @@ PILOOP_ACTOR=orchestrator piloop resume <name>
   measurement, and an idea filed meanwhile has no link.
 - Pausing a campaign is a scope decision for the human: record it (see "Every decision you take for the human").
 - A campaign stops only by its stop rule or by the human's `piloop campaign stop`: yours is refused. To ask for a stop,
-  escalate it with your evidence. Never `UPDATE campaigns SET status`: that gets no closing review.
+  escalate it with your evidence. Never `UPDATE campaigns SET status`: the daemon does not close a campaign that an UPDATE stopped.
 - An agent that became redundant: `piloop agent cancel <agent-session> --wrap-up`. The agent is told to save its work
   and stop, and ended 10 minutes later, with every process it started. Without `--wrap-up`, it is ended at once.
 - Never `pkill` an agent: the cancel ends what it left running, in any session.

@@ -74,7 +74,6 @@ from piloop.plugins.fact_source.facts import (
 )
 from piloop.plugins.fact_source.kit.readings import FactRead, Readings
 from piloop.plugins.host import data_errors
-from piloop.plugins.memory.contract import Synced
 from piloop.plugins.memory.local import LocalMemory
 from piloop.plugins.memory.local.tables import Document
 from piloop.plugins.metric import Direction
@@ -574,13 +573,11 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
         s.commit()
     sched = make_scheduler(db, runtime, tmp_path)
 
-    assert run_all(sched) == [3], 'only the closing sweeper launches'
-    sched.wait(SETTLE)
+    assert run_all(sched) == [], 'nothing launches'
     with db.session() as s:
         assert [(w.kind, w.state, w.error, w.ended_at is not None) for w in s.scalars(select(AgentSession))] == [
             (IMPLEMENTER, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
             (SWEEPER, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
-            (SWEEPER, AgentSessionState.EXITED, None, True),
         ]
         run = s.get_one(Run, 2)
         assert (run.status, run.end, run.finished_at is not None) == (RunStatus.FAILED, RunEnd.CAMPAIGN_STOPPED, True)
@@ -589,17 +586,17 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
         assert (event.target_id, finished) == (2, RunFinished(end=RunEnd.CAMPAIGN_STOPPED, error=None))
         s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand, after the stop'))
         s.commit()
-    assert run_all(sched) == [4], 'a request made after the stop is explicit and launches'
+    assert run_all(sched) == [3], 'a request made after the stop is explicit and launches'
     sched.wait(SETTLE)
     sched.stop(timeout=5)
     with db.session() as s:
-        assert s.get_one(AgentSession, 4).state is AgentSessionState.EXITED
+        assert s.get_one(AgentSession, 3).state is AgentSessionState.EXITED
 
 
 def test_a_requested_stop_ends_the_campaign_as_a_stop_condition_does(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """An orchestrator that set ``campaigns.status`` by hand got no closing review and no drain.
+    """An orchestrator that set ``campaigns.status`` by hand got no close and no drain.
     ``piloop campaign stop`` records the request, and the daemon stops the campaign on the [stop] path."""
     configure(db, campaign)
     add_run(db, campaign)
@@ -617,15 +614,13 @@ def test_a_requested_stop_ends_the_campaign_as_a_stop_condition_does(
         request_stop(s, s.get_one(Campaign, campaign.id), System.HUMAN, reason='machine needed', ending=Ending.WRAP_UP)
         s.commit()
     sched = make_scheduler(db, runtime, tmp_path)
-    assert run_all(sched) == [2], 'only the closing sweeper launches'
-    sched.wait(SETTLE)
+    assert run_all(sched) == [], 'nothing launches'
     assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'stopped by human: machine needed')
     with db.session() as s:
         assert (s.get_one(Run, 2).end, s.get_one(Idea, idea).status) == (RunEnd.CAMPAIGN_STOPPED, IdeaStatus.OPEN)
-        assert s.get_one(AgentSession, 2).reason == 'campaign stopped: stopped by human: machine needed'
         s.get_one(Campaign, campaign.id).status = CampaignStatus.ACTIVE
         s.commit()
-    assert run_all(sched) == [3], 'reactivated: the old request stops nothing, and the queued idea runs'
+    assert run_all(sched) == [2], 'reactivated: the old request stops nothing, and the queued idea runs'
     sched.wait(SETTLE)
     sched.stop(timeout=5)
     assert campaign_state(db, campaign)[0] is CampaignStatus.ACTIVE
@@ -642,7 +637,7 @@ def test_a_requested_stop_ends_the_campaign_as_a_stop_condition_does(
         assert [answered.ask for _, answered in in_order(s, RequestAnswered)] == [first.id]
 
 
-def stop_while_held(db: Database, campaign: Campaign, hold: str, review: str | None = None) -> int:
+def stop_while_held(db: Database, campaign: Campaign, hold: str) -> int:
     """Queue a run, hold the campaign's launches (an unknown spend, or a pause), and request a stop. Return the idea.
 
     The spend command reads ``bill`` next to the campaign, which does not exist yet.
@@ -650,7 +645,7 @@ def stop_while_held(db: Database, campaign: Campaign, hold: str, review: str | N
     configure(db, campaign)
     if hold == 'spend':
         bill = str(Path(campaign.path).parent / 'bill')
-        rule = {'hold_at': {'spend': 10}} | ({'while_held': review} if review else {})
+        rule = {'hold_at': {'spend': 10}}
         set_config(
             db,
             campaign,
@@ -678,7 +673,7 @@ def due_now(db: Database, campaign: Campaign) -> None:
         s.commit()
 
 
-def closing_reviews(db: Database, campaign: Campaign) -> list[AgentSessionState]:
+def sweeps(db: Database, campaign: Campaign) -> list[AgentSessionState]:
     with db.session() as s:
         rows = s.scalars(
             select(AgentSession).where(AgentSession.campaign_id == campaign.id, AgentSession.kind == SWEEPER)
@@ -686,78 +681,41 @@ def closing_reviews(db: Database, campaign: Campaign) -> list[AgentSessionState]
         return [w.state for w in rows]
 
 
+def closes(db: Database, campaign: Campaign) -> int:
+    """How many times the daemon closed ``campaign`` (``CampaignClosed``)."""
+    with db.session() as s:
+        return len(in_order(s, CampaignClosed, Event.target == TargetRef(TargetKind.CAMPAIGN, campaign.id)))
+
+
 @pytest.mark.parametrize('hold', ['spend', 'pause'])
-def test_a_requested_stop_ends_a_held_campaign_and_by_default_its_closing_review_runs(
+def test_a_requested_stop_ends_a_held_campaign_and_closes_it(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, hold: str
 ) -> None:
     """Someone stops a campaign because it spends, so a stop works while the spend holds launches, or a pause does.
 
-    The queued run is dropped. The closing review runs: a pause ends with the stop, and the stop rule's
-    ``while_held`` is ``run`` by default.
+    The queued run is dropped, and the daemon closes the campaign: no review starts.
     """
     idea = stop_while_held(db, campaign, hold)
     sched = make_scheduler(db, runtime, tmp_path)
-    assert run_all(sched) == [1], 'only the closing review launches'
+    assert run_all(sched) == [], 'nothing launches'
     assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'stopped by human: over budget')
+    assert (sweeps(db, campaign), closes(db, campaign)) == ([], 1)
     with db.session() as s:
         assert (s.get_one(Run, 1).end, s.get_one(Idea, idea).status) == (RunEnd.CAMPAIGN_STOPPED, IdeaStatus.OPEN)
-    sched.wait(SETTLE)
-    sched.stop(timeout=5)
-
-
-def test_closing_review_skip_ends_the_stop_at_once_with_an_escalation(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    stop_while_held(db, campaign, 'spend', 'skip')
-    synced: list[str] = []
-
-    def sync(_memory: LocalMemory, _s: Session, c: Campaign, *_: object) -> Synced:
-        synced.append(c.name)
-        return Synced(added=[], unchanged=[], skipped={})
-
-    monkeypatch.setattr(LocalMemory, 'sync', sync)
-    sched = make_scheduler(db, runtime, tmp_path)
-    assert run_all(sched) == []
-    assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'stopped by human: over budget')
-    assert closing_reviews(db, campaign) == [], 'no closing review is requested'
-    assert synced == ['demo'], 'the documents are synced, as at every close'
-    with db.session() as s:
-        last = s.scalars(select(Comment).order_by(Comment.id.desc()).limit(1)).one()
-        assert (last.kind, last.priority, last.author) == (ESCALATION, 0, 'daemon')
-        assert details(last).startswith(
-            'Closing review skipped: the campaign stopped while the stop rule held its launches (spend not known)'
-        )
-        assert details(last).endswith('(while_held = "skip").')
         reads = len(in_order(s, FactRead))
     due_now(db, campaign)
     run_all(sched)
     with db.session() as s:
-        assert len(in_order(s, FactRead)) == reads, 'no review waits: the spend of a stopped campaign is not read'
+        assert len(in_order(s, FactRead)) == reads, 'the spend of a stopped campaign is not read'
     sched.stop(timeout=5)
 
 
-def test_closing_review_wait_starts_the_review_once_the_spend_hold_lifts(
+def test_the_close_waits_until_the_stopped_campaigns_runs_are_judged_and_comes_once_per_stop(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """The daemon goes on reading the spend of a stopped campaign whose closing review waits."""
-    stop_while_held(db, campaign, 'spend', 'wait')
-    sched = make_scheduler(db, runtime, tmp_path)
-    assert run_all(sched) == []
-    assert campaign_state(db, campaign)[0] is CampaignStatus.STOPPED
-    assert closing_reviews(db, campaign) == [AgentSessionState.REQUESTED], 'requested, waiting for the hold'
-    (Path(campaign.path).parent / 'bill').write_text('{"metrics": {"spend": 3}}\n')
-    due_now(db, campaign)
-    assert run_all(sched) == [1], 'a spend below the limit: the review starts'
-    sched.wait(SETTLE)
-    sched.stop(timeout=5)
+    """The wrap-up's last commits are judged first, so the close sees the final head.
 
-
-def test_the_closing_review_waits_until_the_stopped_campaigns_runs_are_judged_and_fires_once_per_stop(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """The wrap-up's last commits are judged first, so the closing review sees the final head.
-
-    The stop is on the feed, so a daemon that restarts in between still requests the review, once.
+    The stop is on the feed, so a daemon that restarts in between still closes the campaign, once.
     """
     configure(db, campaign)
     running = add_run(db, campaign, status=RunStatus.RUNNING, measured=False)
@@ -767,50 +725,35 @@ def test_the_closing_review_waits_until_the_stopped_campaigns_runs_are_judged_an
     sched = make_scheduler(db, runtime, tmp_path)
     assert run_all(sched) == []
     assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'stopped by human: done')
-    assert closing_reviews(db, campaign) == [], 'its run is still open'
+    assert closes(db, campaign) == 0, 'its run is still open'
     with db.session() as s:
         run = s.get_one(Run, running)
         run.status, run.end, run.finished_at, run.scoring = RunStatus.SUCCEEDED, RunEnd.FINISHED, utcnow(), True
         s.commit()
-    assert run_all(sched) == [], 'its commits are still judged'
+    run_all(sched)
+    assert closes(db, campaign) == 0, 'its commits are still judged'
     sched.stop(timeout=5)
     with db.session() as s:
         s.get_one(Run, running).scoring = False
         s.commit()
     restarted = make_scheduler(db, runtime, tmp_path)
-    assert run_all(restarted) == [1], 'settled: the closing review launches'
-    restarted.wait(SETTLE)
-    assert run_all(restarted) == [], 'once'
+    run_all(restarted)
+    assert closes(db, campaign) == 1, 'settled: the daemon closes it'
+    run_all(restarted)
+    assert closes(db, campaign) == 1, 'once'
     with db.session() as s:
         s.get_one(Campaign, campaign.id).status = CampaignStatus.ACTIVE
         request_stop(s, s.get_one(Campaign, campaign.id), System.HUMAN, reason='again', ending=Ending.WRAP_UP)
         s.commit()
-    assert run_all(restarted) == [2], 'stopped again: a closing review again'
-    restarted.wait(SETTLE)
+    run_all(restarted)
+    run_all(restarted)
+    assert (closes(db, campaign), sweeps(db, campaign)) == (2, []), (
+        'stopped again: closed again, and nothing reviews it'
+    )
     restarted.stop(timeout=5)
 
 
-def test_the_closing_sweep_is_each_stopped_trigger_and_none_without_one(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """``[plugins.role.sweeper] triggers = []`` drops the closing review; a ``stopped`` trigger of another role fires once."""
-    (Path(campaign.path) / 'closer.md').write_text('# Close\n')
-    closer = {'prompt': 'closer.md', 'triggers': ['stopped']}
-    configure(db, campaign, harness=HARNESS_WORSE, roles={'sweeper': {'triggers': []}, 'closer': closer}, max_runs=1)
-    add_ideas(db, campaign, 'a')
-    sched = make_scheduler(db, runtime, tmp_path)
-    assert run_all(sched) == [1]
-    sched.wait(SETTLE)
-    assert run_all(sched) == [2], 'the closer, and no sweeper'
-    sched.wait(SETTLE)
-    assert run_all(sched) == [], 'it fires once'
-    sched.stop(timeout=5)
-    with db.session() as s:
-        rows = [(w.kind, w.reason) for w in s.scalars(select(AgentSession).where(AgentSession.id > 1))]
-    assert rows == [('closer', 'campaign stopped: max_runs: 1 runs')]
-
-
-def test_a_stopped_campaign_gets_one_closing_sweeper_and_no_trigger_requests(
+def test_a_stopped_campaign_gets_no_trigger_requests(
     db: Database,
     campaign: Campaign,
     runtime: ScriptRuntime,
@@ -825,18 +768,14 @@ def test_a_stopped_campaign_gets_one_closing_sweeper_and_no_trigger_requests(
     sched.wait(SETTLE)
     assert campaign_state(db, campaign) == (CampaignStatus.ACTIVE, None)
 
-    assert run_all(sched) == [2], 'the closing sweeper launches on the tick that stops the campaign'
+    assert run_all(sched) == [], 'nothing launches on the tick that stops the campaign'
     assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'max_runs: 1 runs')
-    sched.wait(SETTLE)
-    assert run_all(sched) == []
     run_all(sched)
     with db.session() as s:
         assert [
             (w.kind, w.reason)
             for w in s.scalars(select(AgentSession).where(AgentSession.id > 1).order_by(AgentSession.id))
-        ] == [(SWEEPER, 'campaign stopped: max_runs: 1 runs')], (
-            'requested exactly once, and no implementer or sweeper request follows'
-        )
+        ] == [], 'no implementer or sweeper request follows'
         assert s.scalars(select(Run)).all() and s.get_one(Idea, 2).status is IdeaStatus.OPEN, 'idea b never ran'
         [(event, change)] = in_order(s, CampaignStatusChanged)
         assert (event.actor, event.target_id, change) == (
@@ -850,22 +789,18 @@ def test_a_stopped_campaign_gets_one_closing_sweeper_and_no_trigger_requests(
         'campaign': 'demo',
         'reason': 'max_runs: 1 runs',
     }
-    assert (
-        'Why this agent started (context, not a scope): campaign stopped: max_runs: 1 runs'
-        in (tmp_path / 'agent_sessions' / '2' / 'brief.md').read_text()
-    )
 
     with db.session() as s:
         s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand'))
         s.commit()
-    assert run_all(sched) == [3], 'a hand-inserted request is explicit and launches'
+    assert run_all(sched) == [2], 'a hand-inserted request is explicit and launches'
     sched.wait(SETTLE)
     sched.stop(timeout=5)
     with db.session() as s:
-        assert s.get_one(AgentSession, 3).state is AgentSessionState.EXITED
+        assert s.get_one(AgentSession, 2).state is AgentSessionState.EXITED
 
 
-def test_a_stop_syncs_the_memory_documents_before_the_closing_sweeper(
+def test_a_stop_syncs_the_memory_documents_when_it_closes_the_campaign(
     db: Database,
     campaign: Campaign,
     runtime: ScriptRuntime,
@@ -884,11 +819,9 @@ def test_a_stop_syncs_the_memory_documents_before_the_closing_sweeper(
     Path(campaign.path, 'docs').mkdir()
     Path(campaign.path, 'docs', 'report.md').write_text('# Closing report\n')
     sched = make_scheduler(db, runtime, tmp_path, tracer)
-    [sweeper] = run_all(sched)
-    sched.wait(SETTLE)
+    assert run_all(sched) == []
     sched.stop(timeout=5)
     with db.session() as s:
-        assert s.get_one(AgentSession, sweeper).reason == 'campaign stopped: max_runs: 1 runs'
         [document] = s.scalars(select(Document)).all()
         assert (document.path, document.title, document.created_by) == ('docs/report.md', 'Closing report', 'daemon')
     assert dict(span_named(spans, 'campaign.closing').attributes or {}) == {
@@ -898,7 +831,7 @@ def test_a_stop_syncs_the_memory_documents_before_the_closing_sweeper(
     }
 
 
-def test_a_stop_whose_document_sync_fails_still_stops_and_launches_the_closing_sweeper(
+def test_a_stop_whose_document_sync_fails_still_stops_and_closes_the_campaign(
     db: Database,
     campaign: Campaign,
     runtime: ScriptRuntime,
@@ -922,12 +855,11 @@ def test_a_stop_whose_document_sync_fails_still_stops_and_launches_the_closing_s
 
     monkeypatch.setattr(LocalMemory, 'sync', broken)
     sched = make_scheduler(db, runtime, tmp_path, tracer)
-    [sweeper] = run_all(sched)
-    sched.wait(SETTLE)
+    assert run_all(sched) == []
     sched.stop(timeout=5)
+    assert closes(db, campaign) == 1
     with db.session() as s:
         assert s.get_one(Campaign, campaign.id).status is CampaignStatus.STOPPED
-        assert s.get_one(AgentSession, sweeper).reason == 'campaign stopped: max_runs: 1 runs'
     result = dict(span_named(spans, 'campaign.closing').attributes or {})['result']
     assert isinstance(result, str) and result.startswith('documents: not synced: PermissionError: [Errno 13]')
 
@@ -959,8 +891,7 @@ def test_limits_holds_while_a_fact_is_unknown_or_at_its_hold_at_and_a_hold_comes
     """``hold_at`` holds, on any fact that a source reads. A hold releases itself: the next check that sees the value
     below it goes on.
 
-    A held campaign does not stop: a stop requests the closing review, and nothing may launch while the value is
-    unknown or at its limit.
+    A held campaign does not stop: nothing may launch while the value is unknown or at its limit.
     """
     spend = reading('spend')
     rule = Limits(max_runs=3, hold_at={'spend': 300})
@@ -1017,6 +948,8 @@ def test_the_example_stop_rule_ends_after_its_keeps_or_at_a_limit_of_limits() ->
     assert isinstance(answer := check(facts(keeps=3, hours=1, tokens=10, spend=300)), Escalate)
     assert answer.then == Hold('spend at its limit')
     assert check(facts(keeps=0, hours=1, tokens=10)) == Hold('spend not known')
+    shown = rule.describe(StopCase('score', Direction.HIGHER, facts(keeps=2, hours=1, tokens=10, spend=12)))
+    assert '2/3 keeps' in shown, 'its own limit, in the progress line of status and of the briefs'
 
 
 def test_a_rule_that_reads_a_fact_needs_a_source_of_it_and_a_source_alone_only_posts_notices(
@@ -1098,7 +1031,9 @@ def test_an_agent_may_run_its_role_timeout_cut_at_the_time_that_the_campaign_sto
         started = now - timedelta(minutes=2)
         assert 410 < seconds(agent_timeout(s, row, cfg, 1800, started)) <= 420, 'an agent that started 2 minutes ago'
         row.status = CampaignStatus.STOPPED
-        assert agent_timeout(s, row, cfg, 1800, now) == 1800, 'a stopped campaign cuts nothing: its closing review'
+        assert agent_timeout(s, row, cfg, 1800, now) == 1800, (
+            'a stopped campaign cuts nothing: an agent that a person requests'
+        )
         row.status = CampaignStatus.ACTIVE
     add_run(db, campaign, started_at=timedelta(hours=3, minutes=5))
     with db.session() as s:
@@ -1320,6 +1255,6 @@ def test_a_reopen_refuses_a_campaign_that_its_rule_would_stop_at_once_or_that_is
 
 
 def stopped_and_closed(s: Session, campaign: Campaign) -> None:
-    """Stop ``campaign`` as the daemon does, with its closing review over."""
+    """Stop ``campaign`` as the daemon does, and close it."""
     s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
     emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)

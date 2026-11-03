@@ -6,11 +6,10 @@ from typing import Never
 from inline_snapshot import snapshot
 from sqlalchemy.orm import Session
 
-from piloop.agents.results import StartupAnomaly
 from piloop.db.events import AnomalyReported
-from piloop.db.models import AgentSessionState, Campaign, Event
+from piloop.db.models import Campaign, Event
 from piloop.db.session import Database
-from piloop.ids import RoleName, TargetKind, TargetRef
+from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.consumers import RolePass
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
@@ -21,12 +20,11 @@ from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.section.contract import SECTIONS, Rendering, markdown
 from piloop.plugins.section.reported import REPORTED_SHOWN
 from piloop.plugins.trigger.contract import Fire
-from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
 from tests.conftest import SWEEPER, cas_of
 from tests.reports.test_overview import NOW, agent, candidate, idea, live_campaign, run
 
 
-def fired(s: Session, campaign: Campaign, trigger: RunFailed | DeadAtStartup) -> Fire | None:
+def fired(s: Session, campaign: Campaign, trigger: RunFailed) -> Fire | None:
     """What ``trigger`` of the sweeper fires on a pass now."""
 
     def unread(_: object) -> Never:
@@ -39,7 +37,6 @@ def fired(s: Session, campaign: Campaign, trigger: RunFailed | DeadAtStartup) ->
         role=SWEEPER,
         last=None,
         quiet=None,
-        interval=0,
     )
     return trigger.fire(p)
 
@@ -85,25 +82,6 @@ def test_an_incident_wakes_an_agent_once(db: Database, campaign: Campaign) -> No
             s.add(Event(actor='daemon', target=TargetRef(TargetKind.AGENT_SESSION, 1), payload=event))
         s.commit()
         assert fired(s, campaign, RunFailed()) is None, 'an agent of the campaign got it'
-        assert subjects(fired(s, campaign, DeadAtStartup())) == ['agent_session#2'], (
-            'another trigger, its own incidents'
-        )
-
-
-def test_an_agent_dead_at_startup_is_an_incident_unless_its_role_investigates(db: Database, campaign: Campaign) -> None:
-    """A sweeper that died at startup would request a sweeper that could die the same way, and so on.
-
-    The startup breaker pauses the launches instead. The orchestrator does not investigate, so its death is an incident.
-    """
-    with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        agent(s, p, SWEEPER, 0, 5)  # a short life, without the launcher's event: no incident
-        for kind in (SWEEPER, RoleName('orchestrator')):
-            dead = agent(s, p, kind, 0, 35, state=AgentSessionState.KILLED)
-            payload = StartupAnomaly(role=kind, harness='script', subject=None, seconds=35.0, error='prompt_lost')
-            s.add(Event(actor='daemon', target=TargetRef(TargetKind.AGENT_SESSION, dead.id), payload=payload))
-        s.commit()
-        assert subjects(fired(s, campaign, DeadAtStartup())) == ['agent_session#3']
 
 
 def test_the_incidents_given_to_agents_are_listed_newest_first(db: Database, campaign: Campaign) -> None:

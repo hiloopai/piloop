@@ -56,14 +56,13 @@ def stop(
     kill: Annotated[
         bool, cyclopts.Parameter(help='End the running implementers at once, without the wrap-up prompt.', negative='')
     ] = False,
-    reason: Annotated[str, cyclopts.Parameter(help='Why, for `stopped_reason` and the closing review.')] = '',
+    reason: Annotated[str, cyclopts.Parameter(help='Why, for `stopped_reason`.')] = '',
 ) -> None:
     """Stop a campaign. The daemon stops it at once, as when a `[stop]` condition holds.
 
-    This works also while the campaign is paused or held by its stop rule. A paused campaign gets its closing
-    review; a held one as the stop rule's `while_held` says. It drops the queued runs and the requested agents, and the
-    `stopped` triggers request the closing review. Each
-    running implementer is told to save its work and stop, and is ended 10 minutes later. What the implementers saved is scored.
+    This works also while the campaign is paused or held by its stop rule. It drops the queued runs and the requested
+    agents. Each running implementer is told to save its work and stop, and is ended 10 minutes later. What the
+    implementers saved is scored.
     With `--kill`, the implementers are ended at once, and what they committed is still scored. On a stopped campaign,
     `--kill` ends the implementers that are still winding down. The campaign's `piloop.toml` is not changed.
     """
@@ -75,7 +74,7 @@ def stop(
 
 
 def retire(ref: CampaignRef, /, *, reason: Annotated[str, cyclopts.Parameter(help='Why, with ids.')]) -> None:
-    """Retire a stopped campaign for good, once its closing review and its runs are over.
+    """Retire a stopped campaign for good, once it is closed and its runs are over.
 
     It changes no more, `piloop status` leaves it out unless `--status retired` asks for it, and a new campaign may
     take its name. Its rows, events and archived files stay, and its id still names it. The reason goes into a note on
@@ -87,7 +86,7 @@ def retire(ref: CampaignRef, /, *, reason: Annotated[str, cyclopts.Parameter(hel
 
 
 def reopen(ref: CampaignRef, /, *, reason: Annotated[str, cyclopts.Parameter(help='Why, with ids.')]) -> None:
-    """Set a stopped campaign active again, once its closing review and its runs are over.
+    """Set a stopped campaign active again, once it is closed and its runs are over.
 
     The runs, hours and tokens that its stop rule limits count again from now, so it gets each of them again. A rule
     that would stop it at once, a target that it reached say, refuses: change the rule in piloop.toml and run

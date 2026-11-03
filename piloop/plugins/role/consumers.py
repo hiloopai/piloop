@@ -266,7 +266,7 @@ class Agents:
         (``wrap_up_grace``), or at once when the stop request asked to end it ``now``. The runs then close and their
         commits are scored. An implementer that the daemon ends (``AgentEnded``) before it ended its run closes it as
         cut by the stop (``RunEnd.CAMPAIGN_STOPPED``), not as a failed attempt. Sweeps of a stopped campaign are not
-        changed, because their timeouts limit them and the closing review is one of them.
+        changed, because their timeouts limit them.
 
         A cancelled run or agent of any role (a pending ``CancelRequested``) is ended at once, or after the wrap-up prompt
         and the grace period when the cancel asked for it. Its run ends ``RunEnd.CANCELLED``. A cancelled request never

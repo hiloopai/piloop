@@ -43,5 +43,5 @@ class SqlTrigger(Trigger):
         return None if row is None else Fire(f'sql: {" ".join(self.when.split())}')
 
     def due_in(self, p: Pass) -> timedelta | None:
-        """A query can read the time, but its answer cannot say when: pair it with ``cron`` for that."""
+        """A query can read the time, but its answer cannot say when: the next event checks it again."""
         return None

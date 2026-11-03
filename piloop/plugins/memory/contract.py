@@ -45,9 +45,9 @@ class MemoryProvider(Parameters, ABC):
         """
 
     def closing(self, s: Session, campaign: Campaign) -> str:
-        """Sync the documents before the closing review searches them (``Closes``).
+        """Sync the documents of the stopped campaign, for the next campaigns to search (``Closes``).
 
-        A repo that cannot be read leaves the memory as it was, and the review still happens.
+        A repo that cannot be read leaves the memory as it was, and the close still happens.
         """
         try:
             with s.begin_nested():

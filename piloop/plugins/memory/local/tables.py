@@ -25,8 +25,7 @@ class LessonStatus(StrEnum):
 class Lesson(Base):
     """The standing conclusion about one mechanism family of a campaign, for the next campaigns.
 
-    The orchestrator, or a role that the ``stopped`` trigger starts, writes one for each family that a campaign tried. The
-    newest lesson for a (campaign, family) is the current one: a new conclusion is a new row, and rows are never
+    Nothing writes one when a campaign stops: the orchestrator or a person writes it, with SQL. The newest lesson for a (campaign, family) is the current one: a new conclusion is a new row, and rows are never
     updated. Briefs open with the current lessons of the repo (``piloop.reports.wake``).
     """
 

@@ -10,7 +10,7 @@ the same second phase.
 
 import os
 from collections import Counter
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,7 +18,7 @@ from functools import partial
 from typing import ClassVar, Literal, assert_never
 
 from pydantic import ValidationError
-from sqlalchemy import Select, delete, exists, select
+from sqlalchemy import Select, delete, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
@@ -36,19 +36,16 @@ from piloop.campaign.stop import (
     CampaignClosed,
     StopRequested,
     answer_done,
-    asked,
     check as check_stop,
     escalated,
-    held as held_now,
     hours_due,
     requested,
-    review_skipped,
     timeout as agent_timeout,
     unclosed,
 )
 from piloop.config import CampaignConfig
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
-from piloop.db.events import AnomalyReported, emit, has, in_order
+from piloop.db.events import emit, has, in_order
 from piloop.db.models import (
     LIVE,
     NOT_RETIRED,
@@ -109,7 +106,7 @@ from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchCase, L
 from piloop.plugins.role.contract import PUSHED, Continuity, ImplementerRole, SweepRole
 from piloop.plugins.runtime.contract import handle_for, runtime_for
 from piloop.plugins.section.contract import Rendering
-from piloop.plugins.stop_rule.contract import GO, STOP_RULES, Go, Hold, Stop, WhileHeld
+from piloop.plugins.stop_rule.contract import GO, Go, Hold, Stop
 from piloop.plugins.trigger.contract import TRIGGERS, Fire, Quiet, Steer
 from piloop.plugins.trigger.kit.incidents import assigned
 
@@ -318,12 +315,10 @@ class Campaigns:
         stop rule leaves or of a startup pause, or the next reading of a fact source.
 
         A stopped campaign requests nothing and is measured again only on request (``ledger.due``). The pass asks the
-        stop rule (``piloop.campaign.stop.check``) of each active campaign, and of each stopped one whose
-        closing review waits for a hold (``stop.review_waits``). A campaign that it holds gets only the first step. A
-        paused campaign (``piloop pause``) gets no triggers, does not stop at a limit of its stop rule, and launches
-        nothing, and with ``all`` it is not measured again either. A stop request stops a held or paused campaign too.
-        A stopped campaign launches its closing review, and what a human requests, whatever the pause; while the stop
-        rule holds, as its ``while_held`` says (``launches``).
+        stop rule (``piloop.campaign.stop.check``) of each active campaign. A campaign that it holds gets only the first
+        step. A paused campaign (``piloop pause``) gets no triggers, does not stop at a limit of its stop rule, and
+        launches nothing, and with ``all`` it is not measured again either. A stop request stops a held or paused
+        campaign too. A stopped campaign launches what a human requests, whatever the pause (``launches``).
         """
         self._collect()
         self._soonest = Soonest()
@@ -341,7 +336,8 @@ class Campaigns:
                 except ValidationError as e:
                     self._tracer.event('campaign.invalid_config', campaign=campaign.name, error=str(e))
                     continue
-                answer = escalated(s, campaign, cfg, check_stop(s, campaign, cfg)) if asked(s, campaign, cfg) else GO
+                active = campaign.status is CampaignStatus.ACTIVE
+                answer = escalated(s, campaign, cfg, check_stop(s, campaign, cfg)) if active else GO
                 self._soonest.add(hours_due(campaign, answer, turn.now))
                 held = answer.reason if isinstance(answer, Hold) else None
                 if held is None and campaign.paused is not Pause.ALL:
@@ -349,13 +345,12 @@ class Campaigns:
                 if campaign.status is CampaignStatus.ACTIVE:
                     # A stop request wins over a hold and a pause.
                     if (stop := requested(s, campaign)) is not None:
-                        self._triggers(s, campaign, cfg, stop, held, turn.now)
+                        self._triggers(s, campaign, cfg, stop, turn.now)
                     elif not isinstance(answer, Hold) and campaign.paused is None:
-                        self._triggers(s, campaign, cfg, answer, None, turn.now)
+                        self._triggers(s, campaign, cfg, answer, turn.now)
                 s.flush()
                 if campaign.status is CampaignStatus.STOPPED and unclosed(s, campaign) and settled(s, campaign):
-                    self._close_campaign(s, campaign, cfg, cfg.roles.sweeping(), turn.now)
-                    held = held_now(s, campaign, cfg)  # a closing review may wait for the hold
+                    self._close_campaign(s, campaign, cfg)
                 if campaign.status is CampaignStatus.RETIRED:
                     # A feed read before the pass's first write (``read_transaction``) reloads what the pass read, so
                     # a retire that committed since shows here.
@@ -365,7 +360,7 @@ class Campaigns:
                 if phase is not None and awake:
                     for name in awake:
                         self._request(s, campaign, cfg, name, cfg.roles.sweeping()[name], turn.now, quiet=phase)
-                if launches(campaign, cfg, held):
+                if launches(campaign, held):
                     launching.append(Launching(campaign, cfg, None))
                 elif awake:
                     launching.append(Launching(campaign, cfg, awake))
@@ -394,14 +389,10 @@ class Campaigns:
         """A thread of an agent or of scoring ended: the next turn forgets it and fills its slot."""
         self._host.wake(CAMPAIGNS)
 
-    def _triggers(
-        self, s: Session, campaign: Campaign, cfg: CampaignConfig, answer: Go | Stop, held: str | None, now: datetime
-    ) -> None:
+    def _triggers(self, s: Session, campaign: Campaign, cfg: CampaignConfig, answer: Go | Stop, now: datetime) -> None:
         """Stop the campaign if the answer is a stop. Otherwise queue runs and check every role's triggers.
 
-        ``held`` is why the stop rule holds launches: then only a stop request gets here. A stop rule with
-        ``while_held = "skip"`` then closes the campaign with no closing review (``CampaignClosed``) and posts an
-        escalation.
+        A held campaign gets here only for a stop request.
 
         Triggers requested everything that is pending when the campaign stops, so it is all cancelled. Requested rows
         are closed and queued runs end ``RunEnd.CAMPAIGN_STOPPED``. Their ideas go back to ``ready``. Implementers in
@@ -421,25 +412,17 @@ class Campaigns:
         self._drain(s, campaign)
         s.flush()
         answer_done(s)  # a stop with ``now`` waits for ``_wind_down`` to end the running implementers
-        if held is not None and STOP_RULES.selected(cfg.plugins).while_held is WhileHeld.SKIP:
-            review_skipped(s, campaign, held)
-            self._close_campaign(s, campaign, cfg, {}, now)
 
-    def _close_campaign(
-        self, s: Session, campaign: Campaign, cfg: CampaignConfig, sweeping: Mapping[RoleName, SweepRole], now: datetime
-    ) -> None:
-        """Close a stopped campaign: each provider that ``Closes`` does its share, then the triggers of ``sweeping`` fire.
+    def _close_campaign(self, s: Session, campaign: Campaign, cfg: CampaignConfig) -> None:
+        """Close a stopped campaign: each provider that ``Closes`` does its share.
 
-        The pass closes a campaign that the daemon stopped once it ``settled``, with every sweeping role whose triggers
-        name ``stopped``, which can then search the campaign's reports. A stop rule with
-        ``while_held = "skip"`` closes it at the stop, with none. The stop and the close are events (``unclosed``), so a daemon that
-        restarts in between still closes it, once.
+        The pass closes a campaign that the daemon stopped once it ``settled``, so a closer sees its final head. Nothing
+        reviews the campaign, and nothing writes its lessons. The stop and the close are events (``unclosed``), so a
+        daemon that restarts in between still closes it, once.
         """
         for provider, closer in closers(cfg.plugins).items():
             result = closer.closing(s, campaign)
             self._tracer.event('campaign.closing', campaign=campaign.name, provider=provider, result=result)
-        for name, role in sweeping.items():
-            self._request(s, campaign, cfg, name, role, now, stopping=True)
         s.flush()  # the status change's event first: the close comes after the stop
         emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)
 
@@ -461,14 +444,12 @@ class Campaigns:
         role: SweepRole,
         now: datetime,
         *,
-        stopping: bool = False,
         quiet: Quiet | None = None,
     ) -> None:
         """Insert requested rows when the role's triggers fire, and write the notes of those that steer.
 
-        The triggers fire in the order of the role's list (``piloop.plugins.trigger``): those with ``ON_STOP`` when the
-        campaign is ``stopping``, else the others, and in a ``quiet`` phase only those that name it
-        (``Trigger.WHILE``). While a request of the role waits, a fire requests nothing more. A fire that needs a row of
+        The triggers fire in the order of the role's list (``piloop.plugins.trigger``), and in a ``quiet`` phase only
+        those that name it (``Trigger.WHILE``). While a request of the role waits, a fire requests nothing more. A fire that needs a row of
         its own (``Fire.alone``) shares its row only with the other such fires, when one comes first, and otherwise
         waits for a later pass. The others share one batch: the largest count of rows, with every reason. The first row
         gets the events of the fires. Then each note of a trigger that steers goes on the role's open row
@@ -486,7 +467,7 @@ class Campaigns:
         fires: list[Fire] = []
         steers: list[Steer] = []
         triggers = cfg.triggers_of(name)
-        for trigger in (t for t in triggers if t.ON_STOP is stopping and (quiet is None or quiet in t.WHILE)):
+        for trigger in (t for t in triggers if quiet is None or quiet in t.WHILE):
             try:
                 fire = trigger.fire(p)
                 due = trigger.due_in(p) if fire is None else None
@@ -570,7 +551,6 @@ class Campaigns:
             role=name,
             last=last,
             quiet=quiet,
-            interval=role.interval,
         )
 
     def _launch(
@@ -767,10 +747,9 @@ class Campaigns:
 
         The brief shows the role's sections (``[plugins.role.<name>] sections``). Its ``context`` section ends with the
         sweep's lines: the checkout, the workspace, the role's own (``SweepRole.context``), then the notes on the row so
-        far, which it gets here and not again. A sweep that got anomalies is
-        an incident sweep: its sections read them (``Rendering.given``), and the brief adds the role's incident prompt.
-        Every other sweep's brief adds the role's routine prompt. Nothing that a sweep commits is scored. In a worktree at the head, the commits are removed
-        with the worktree when the agent ends.
+        far, which it gets here and not again. A sweep that got anomalies is an incident sweep: its sections read them
+        (``Rendering.given``). Nothing that a sweep commits is scored. In a worktree at the head, the commits are
+        removed with the worktree when the agent ends.
         """
         with self._db.session() as s:
             agent_session = s.get_one(AgentSession, agent_session_id)
@@ -814,7 +793,7 @@ class Campaigns:
             brief_of = briefing(role, campaign, agent, reason=agent_session.reason or 'requested', lines=lines)
             rendering = Rendering(s, now, campaign, workspace, self._controller.cas, given, brief=brief_of)
             sections = render_sections(cfg.sections_of(agent_session.kind), rendering)
-            brief = compose_brief(role, campaign, sections.whole, incident=bool(given))
+            brief = compose_brief(role, campaign, sections.whole)
             match table.continuity:
                 case Continuity.RESUME:
                     resumed = compose_resumed(table, agent, sections.resumed)
@@ -865,7 +844,6 @@ class RolePass:
     role: RoleName
     last: AgentSession | None
     quiet: Quiet | None
-    interval: float
 
     def mine(self) -> Select[AgentSession]:
         """The role's rows in the campaign."""
@@ -873,12 +851,6 @@ class RolePass:
 
     def live(self) -> int:
         return count(self.s, self.mine().where(AgentSession.state.in_(LIVE)))
-
-    def routine(self) -> AgentSession | None:
-        given = exists().where(
-            has(AnomalyReported), Event.target_kind == TargetKind.AGENT_SESSION, Event.target_id == AgentSession.id
-        )
-        return self.s.scalars(self.mine().where(~given).order_by(AgentSession.id.desc()).limit(1)).first()
 
 
 @dataclass(frozen=True)
@@ -935,7 +907,7 @@ class Launching:
 def quiet_phase(s: Session, campaign: Campaign, held: str | None) -> Quiet | None:
     """The quiet phase of ``campaign``, given why the stop rule holds it (``held``), or None while it runs.
 
-    A stopped campaign is quiet once its closing review was requested.
+    A stopped campaign is quiet once the daemon closed it.
     """
     match campaign.status:
         case CampaignStatus.STOPPED:
@@ -959,16 +931,13 @@ def awake_roles(cfg: CampaignConfig, phase: Quiet | None) -> frozenset[RoleName]
     return frozenset(name for name in cfg.roles.sweeping() if any(phase in t.WHILE for t in cfg.triggers_of(name)))
 
 
-def launches(campaign: Campaign, cfg: CampaignConfig, held: str | None) -> bool:
+def launches(campaign: Campaign, held: str | None) -> bool:
     """Whether the pass launches the campaign's requested agents, given why the stop rule holds (``held``).
 
-    An active campaign launches when nothing holds it: no hold and no pause. A stopped campaign launches its closing
-    review and what a human requests, paused or not. While the stop rule holds, it launches unless the rule's
-    ``while_held`` is ``wait``.
+    An active campaign launches when nothing holds it: no hold and no pause. A stopped campaign launches what a human
+    requests, paused or not.
     """
-    if campaign.status is CampaignStatus.ACTIVE:
-        return held is None and campaign.paused is None
-    return held is None or STOP_RULES.selected(cfg.plugins).while_held is not WhileHeld.WAIT
+    return campaign.status is not CampaignStatus.ACTIVE or (held is None and campaign.paused is None)
 
 
 def contribution(host: DaemonHost) -> Contribution:
