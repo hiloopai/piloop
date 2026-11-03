@@ -14,6 +14,7 @@ data = [
     "curl -fsSL --retry 3 -o lpaq1.zip https://mattmahoney.net/dc/lpaq1.zip",
     "echo 'e4b54c3e03d3217c87d12c0ee20c4e756cd9bafd893583c4e326b043d57e3b47  lpaq1.zip' | sha256sum -c -",
     "unzip -q lpaq1.zip lpaq1.cpp && rm lpaq1.zip",
+    "cp lpaq1.cpp data/lpaq1-ref.cpp",
 ]
 
 [piloop]
@@ -32,4 +33,14 @@ name = "seconds"
 direction = "lower"
 role = "guardrail"
 margin = 120
-floor = 120
+floor = 126                               # 120 s on the reference machine, plus a 5% band for the noise of timing
+
+[[piloop.metrics]]
+name = "raw_seconds"
+direction = "lower"
+role = "watch"
+
+[[piloop.metrics]]
+name = "ref_seconds"
+direction = "lower"
+role = "watch"

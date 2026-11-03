@@ -12,7 +12,8 @@
 - Decompression gets only the compressed file. It must not read the input from anywhere else.
 - Every byte of every file you add or change counts, xz-compressed: a model or dictionary tuned to `data/dev.bin`
   costs its size. The final version is also scored on Wikipedia text it has never seen.
-- Compression plus decompression must stay under 120 s of CPU. Do not edit `evaluate.py` or `data/`.
+- Compression plus decompression must stay under 120 s of CPU on the reference machine, with 5% for noise: the
+  evaluator scales `raw_seconds` by lpaq1's own time on the machine (`ref_seconds`). Do not edit `evaluate.py` or `data/`.
 
 ## Measure
 

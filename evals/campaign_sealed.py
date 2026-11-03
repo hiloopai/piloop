@@ -23,7 +23,7 @@ def main(task: Path, sealed: Path, direction: str) -> dict[str, object]:
     """Score the version in the current directory."""
     with tempfile.TemporaryDirectory() as tmp:
         tree, out = Path(tmp) / 'tree', Path(tmp) / 'sealed.json'
-        shutil.copytree(Path.cwd(), tree, ignore=shutil.ignore_patterns('.git', '.venv', 'data'))
+        shutil.copytree(Path.cwd(), tree, ignore=shutil.ignore_patterns('.git', '.venv'))
         shutil.copy(task / 'repo' / 'evaluate.py', tree / 'evaluate.py')
         argv = [sys.executable, str(task / 'sealed.py'), str(tree), str(task / 'repo'), str(sealed), str(out)]
         done = subprocess.run(argv, capture_output=True, text=True)

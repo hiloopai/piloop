@@ -495,10 +495,56 @@ def test_t5_holdout_fails_a_round_trip_over_its_cpu_rule(tmp_path: Path):
         'def score(path, tree):\n    return {"bytes": 90, "seconds": float(path.read_text())}\n'
     )
     (tmp_path / 'meta.json').write_text(json.dumps({'base': 100, 'ref': 80}))
-    (tmp_path / 'holdout.bin').write_text('121')
+    (tmp_path / 'holdout.bin').write_text('127')
     assert sealed.main(tmp_path, tmp_path, tmp_path)['status'] == 'over_limit'
-    (tmp_path / 'holdout.bin').write_text('119')
+    (tmp_path / 'holdout.bin').write_text('125')  # within the 5% band over 120 s
     assert sealed.main(tmp_path, tmp_path, tmp_path)['score'] == pytest.approx(0.5)
+
+
+def fake_codec(root: Path) -> Path:
+    """A codec that copies its input: no CPU of its own."""
+    codec = root / 'build' / 'codec'
+    codec.parent.mkdir(parents=True, exist_ok=True)
+    codec.write_text('#!/bin/sh\ncp "$2" "$3"\n')
+    codec.chmod(0o755)
+    return codec
+
+
+def test_t5_counts_the_codecs_cpu_not_its_build_and_scales_it_by_the_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    evaluate = module(TASKS / 't5-lpaq' / 'repo' / 'evaluate.py')
+
+    def build(root: Path) -> Path:
+        subprocess.run(
+            [sys.executable, '-c', 'import time\nt = time.process_time()\nwhile time.process_time() - t < 0.5: pass'],
+            check=True,
+        )
+        return fake_codec(root)
+
+    monkeypatch.setattr(evaluate, 'build', build)
+    monkeypatch.setattr(evaluate, 'reference_seconds', lambda data: 2 * evaluate.CANONICAL)
+    (tmp_path / 'data.bin').write_bytes(b'x' * 1000)
+    metrics = evaluate.score(tmp_path / 'data.bin', tmp_path)
+    assert metrics['raw_seconds'] < 0.3
+    assert metrics['ref_seconds'] == 2 * evaluate.CANONICAL
+    assert metrics['seconds'] == pytest.approx(metrics['raw_seconds'] / 2, abs=0.01)
+
+
+def test_t5_times_its_reference_once_per_box_until_it_is_old(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    evaluate = module(TASKS / 't5-lpaq' / 'repo' / 'evaluate.py')
+    timed: list[float] = []
+    now = [1000.0]
+    monkeypatch.setattr(evaluate, 'CACHE', tmp_path / 'cache')
+    monkeypatch.setattr(evaluate.time, 'time', lambda: now[0])
+    monkeypatch.setattr(evaluate, 'time_reference', lambda data: timed.append(now[0]) or 18.0)
+    (tmp_path / 'data.bin').write_bytes(b'x' * 1000)
+    assert evaluate.reference_seconds(tmp_path / 'data.bin') == 18.0
+    now[0] += evaluate.REFRESH - 1
+    evaluate.reference_seconds(tmp_path / 'data.bin')
+    now[0] += 2
+    evaluate.reference_seconds(tmp_path / 'data.bin')
+    assert timed == [1000.0, 1000.0 + evaluate.REFRESH + 1]
 
 
 AVX512 = """#include <immintrin.h>
