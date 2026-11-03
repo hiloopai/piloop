@@ -49,6 +49,37 @@ def final_keeps(db: sqlite3.Connection, bundle: Path) -> tuple[dict[str, int], d
     return dict(kept), dict(held)
 
 
+def final_line(db: sqlite3.Connection, heads: list[tuple[str, float]]) -> tuple[dict[str, int], dict[str, int]]:
+    """A pool run's new bests by the role of their run, and its candidates on the final best's line, by role.
+
+    The line is the final best's chain of parents, the best included, but the baseline: the gains that stacked.
+    """
+    role = {
+        rev: r
+        for rev, r in db.execute(
+            'select c.revision, r.role from candidates c join runs r on r.id = c.run_id'
+        ).fetchall()
+    }
+    bests: Counter[str] = Counter(role[rev] for rev, _ in heads if rev in role)
+    if not heads:
+        return {}, {}
+    parent = dict(db.execute('select id, parent_id from candidates').fetchall())
+    by_id = {
+        c: (rev, r)
+        for c, rev, r in db.execute(
+            'select c.id, c.revision, r.role from candidates c left join runs r on r.id = c.run_id'
+        )
+    }
+    final = next(c for c, (rev, _) in by_id.items() if rev == heads[-1][0])
+    line: Counter[str] = Counter()
+    at: int | None = final
+    while at is not None:
+        if (r := by_id[at][1]) is not None:
+            line[r] += 1
+        at = parent.get(at)
+    return dict(bests), dict(line)
+
+
 def races(db: sqlite3.Connection) -> int:
     """Submissions lost to a race: not kept, though they beat the version they started from.
 

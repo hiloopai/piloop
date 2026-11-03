@@ -15,10 +15,6 @@ scoring = "submit"
 submissions = 3
 noise_runs = 3
 
-[overlay.plugins.verdict_rule]
-provider = "noise"
-m = 2
-
 [overlay.plugins.role.implementer]
 max_concurrent = 4
 timeout = 3600                           # one hour per run, a fresh session per idea

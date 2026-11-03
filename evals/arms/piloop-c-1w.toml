@@ -10,10 +10,6 @@ split = "sealed"
 scoring = "submit"
 noise_runs = 3
 
-[overlay.plugins.verdict_rule]
-provider = "noise"
-m = 2
-
 [overlay.plugins.role.implementer]
 max_concurrent = 1
 timeout = 3600

@@ -47,7 +47,7 @@ from evals.drive import (
     watch,
 )
 from evals.loop import evaluations
-from evals.metrics import at, result
+from evals.metrics import at, pool, pool_counts, pool_heads, result
 from evals.model import (
     ARMS,
     ROOT,
@@ -57,6 +57,7 @@ from evals.model import (
     PiloopArm,
     PlainArm,
     Point,
+    PoolCounts,
     Resources,
     Result,
     Sample,
@@ -69,9 +70,10 @@ from evals.pilot import guard, spent
 from evals.report import plain_bar, write
 from evals.sandbox import WORK, Box, Copy, Egress, Run, Step, memory, network_policy
 from evals.score import Score, Scoring
-from evals.team import final_keeps, notes, races
+from evals.team import final_keeps, final_line, notes, races
 from evals.telemetry import exported
 from piloop.config import CampaignConfig
+from piloop.db.session import Database
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.settings import Settings as PiloopSettings
 
@@ -1095,3 +1097,43 @@ def test_a_run_whose_export_fails_still_writes_its_record_before_its_sandbox_clo
         drive(Task.load('t5-lpaq'), plain_run(settings).arm, 1, 10, 0, settings)
     meta = json.loads((tmp_path / 't5-lpaq' / 'p-1' / 'run.json').read_text())
     assert meta['export_failed'][0].startswith('control: RuntimeError') and box.closed
+
+
+def test_a_pool_run_s_heads_are_its_best_over_time_and_its_line_holds_what_stacked(db: Database) -> None:
+    """A piloop with a pool (0.6) has no verdicts: its curve is the best that each score names, and its team counts
+    the candidates on the final best's line. A database at piloop's head is one; a verdict run's is not."""
+    with sqlite3.connect(db.engine.url.database or '') as at_head:
+        assert pool(at_head)
+    con = sqlite3.connect(':memory:')
+    con.executescript(
+        """
+        create table campaigns (id integer, evaluator_id integer);
+        create table evaluators (id integer, definition text);
+        create table runs (id integer, role text);
+        create table candidates (id integer, revision text, parent_id integer, run_id integer, origin text);
+        create table measurements (candidate_id integer, evaluator_id integer, error text, rung text);
+        create table events (id integer, target_kind text, target_id integer, kind text, at text, payload text);
+        insert into campaigns values (1, 1);
+        insert into evaluators values (1, '{"evaluate": []}'), (2, '{"sealed": ["s"]}');
+        insert into runs values (1, 'implementer'), (2, 'implementer');
+        insert into candidates values (1, 'base', null, null, 'baseline'), (2, 'a', 1, 1, 'run'),
+            (3, 'b', 2, 2, 'run'), (4, 'c', 1, 2, 'run');
+        insert into measurements values (1, 1, null, null), (2, 1, null, null), (2, 1, null, null),
+            (3, 1, null, null), (3, 1, null, null), (4, 1, null, null), (2, 2, null, null), (1, 2, null, null),
+            (3, 2, null, null);
+        """
+    )
+    scored = [(2, 2, '00:30'), (4, 2, '01:00'), (3, 3, '02:00'), (3, 3, '02:30')]
+    for i, (target, best, at_) in enumerate(scored, start=1):
+        payload = json.dumps({'kind': 'candidate.scored', 'best': best})
+        con.execute(
+            "insert into events values (?, 'candidate', ?, 'candidate.scored', ?, ?)",
+            (i, target, f'2026-01-01 {at_}:00', payload),
+        )
+    chosen = json.dumps({'kind': 'run.base_chosen', 'candidate': 2, 'was': 1})
+    con.execute("insert into events values (9, 'run', 2, 'run.base_chosen', '2026-01-01 01:30:00', ?)", (chosen,))
+    started = datetime(2026, 1, 1, tzinfo=UTC)
+    heads = pool_heads(con, 'base', started)
+    assert heads == [('a', 0.5), ('b', 2.0)], 'a score of a candidate that is not the best moves nothing'
+    assert final_line(con, heads) == ({'implementer': 2}, {'implementer': 2}), 'b, and a under it; not c'
+    assert pool_counts(con) == PoolCounts(confirmations=2, sealed_scorings=3, based_runs=1)

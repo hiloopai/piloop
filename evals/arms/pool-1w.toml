@@ -1,0 +1,20 @@
+# The pool model (piloop 0.6): 1 identical Codex worker(s), no lead. The same as the worker-curve bench's wc-1w, at
+# the commit that replaced verdicts with a scored pool (#681), plus the provisioners that the driver needs; piloop
+# changed only in piloop/plugins/provisioner between the two.
+kind = "piloop"
+name = "pool-1w"
+piloop = "piloop[modal,daytona] @ git+https://github.com/hiloopai/piloop@084abf641963732f8aabf3a55f1716186d4c8e7e"
+agents = [{ harness = "codex", model = "gpt-6.1-sol" }]
+split = "sealed"
+
+[overlay.evaluator]
+scoring = "submit"
+noise_runs = 3
+
+[overlay.plugins.role.orchestrator]
+triggers = []
+
+[overlay.plugins.role.implementer]
+max_concurrent = 1
+timeout = 3600
+effort = "high"

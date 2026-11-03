@@ -14,10 +14,6 @@ scoring = "submit"
 submissions = 1000
 noise_runs = 3
 
-[overlay.plugins.verdict_rule]
-provider = "noise"
-m = 2
-
 [overlay.plugins.role.implementer]
 max_concurrent = 1
 timeout = 14400                          # the whole budget

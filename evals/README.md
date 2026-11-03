@@ -52,7 +52,8 @@ exports. Never signal the driver: Modal's client ends the sandboxes that it made
 
 Scoring runs the base and every head of a run in sandboxes without network: the task's own `evaluate.py` over the
 head's tree gives the dev score, and `sealed.py` the sealed one, with the data from `EVALS_SEALED_URI/<task>/`.
-Heads are a piloop arm's keeps and a plain arm's commits on `main`. A task that times its runs scores each version in
+Heads are a piloop arm's keeps (before piloop 0.6) or its best over time (0.6's pool: each candidate that a score made
+the best), and a plain arm's commits on `main`. The driver tells the two piloop schemas apart by the database. A task that times its runs scores each version in
 `score_repeats` sandboxes and takes the means; `scores.json` keeps each scoring with its CPU. A task's `cloud` pins
 the CPU type of its sandboxes, the agents' and the scorers'.
 
@@ -64,8 +65,9 @@ and the gap between the dev and sealed score of the final head. Spend is split i
 start, the driver evaluates the starting repo 5 times with the dev command and records the CPU (`selftest`): how much
 the evaluator varies on that machine. Dev evaluations are counted where they run: `wrap/sitecustomize.py`, on the
 sandbox's `PYTHONPATH`, logs each run of `evaluate.py`, however it was started. A piloop arm also records each role's
-keeps, those of them that the final head contains, and its races: submissions that beat the version they started
-from but not the head that another run had moved on to. The report draws each arm's median curve over repeats with
+keeps (0.6: new bests), and those of them that the final head contains (0.6: the candidates on the final best's line).
+Before 0.6 it records its races: submissions that beat the version they started from but not the head that another
+run had moved on to. A 0.6 run records its confirmations, its sealed scorings and the runs that chose another base. The report draws each arm's median curve over repeats with
 the band from its lowest to its highest repeat, with plotly, as static pages.
 
 ## Telemetry

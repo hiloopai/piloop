@@ -1,7 +1,9 @@
 """Turn a run's export into its ``Result``: the heads over $ and time, the funnel, and the coordination counts.
 
-A piloop arm's heads are its keeps, at the time of their verdict. A plain arm's heads are the commits of ``main``'s
-first-parent line, at their commit time: it was told to commit only what beats its best.
+A piloop arm's heads are its keeps, at the time of their verdict, for a piloop with verdicts (before 0.6). For one with
+a pool (``pool``), they are its best over time: each candidate that a score made the best, at the time of that score.
+A plain arm's heads are the commits of ``main``'s first-parent line, at their commit time: it was told to commit only
+what beats its best.
 """
 
 import json
@@ -13,9 +15,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from evals.loop import loop
-from evals.model import Funnel, Point, Result, Sample, SelfTest, Tokens
+from evals.model import Funnel, Point, PoolCounts, Result, Sample, SelfTest, Tokens
 from evals.score import Score
-from evals.team import final_keeps, notes, races
+from evals.team import final_keeps, final_line, notes, races
 
 LEADS = ('orchestrator', 'lead')
 """The roles whose tokens are the lead's share."""
@@ -71,8 +73,15 @@ def plain_heads(bundle: Path, base: str, started: datetime) -> tuple[list[tuple[
     return heads, int(count)
 
 
+def pool(db: sqlite3.Connection) -> bool:
+    """Whether the run's piloop has the pool (0.6): its candidates have no verdict."""
+    return 'verdict' not in {row[1] for row in db.execute('pragma table_info(candidates)')}
+
+
 def piloop_heads(db: sqlite3.Connection, base: str, started: datetime) -> list[tuple[str, float]]:
-    """The keeps after the baseline, in the order of their verdicts, with their hours."""
+    """The heads after the baseline, in order, with their hours: the keeps, or the pool's best over time."""
+    if pool(db):
+        return pool_heads(db, base, started)
     rows = db.execute(
         """
         select c.revision, coalesce(
@@ -86,17 +95,62 @@ def piloop_heads(db: sqlite3.Connection, base: str, started: datetime) -> list[t
     return [(rev, hours_since(started, stamp)) for rev, stamp in rows]
 
 
+def pool_heads(db: sqlite3.Connection, base: str, started: datetime) -> list[tuple[str, float]]:
+    """The best of a pool run over time: each change of the best that a ``candidate.scored`` records, oldest first.
+
+    Every score names the best of its track at that moment. The tasks have one track.
+    """
+    revision = dict(db.execute('select id, revision from candidates').fetchall())
+    heads: list[tuple[str, float]] = []
+    last = base
+    for stamp, best in db.execute(
+        "select at, json_extract(payload, '$.best') from events where kind = 'candidate.scored' order by id"
+    ):
+        if best is None or (rev := revision[best]) == last:
+            continue
+        last = rev
+        if rev != base:
+            heads.append((rev, hours_since(started, stamp)))
+    return heads
+
+
+def pool_counts(db: sqlite3.Connection) -> PoolCounts:
+    """A pool run's confirmations, sealed scorings and runs from another base."""
+    sealed = [i for i, d in db.execute('select id, definition from evaluators') if 'sealed' in json.loads(d)]
+    marks = ','.join('?' * len(sealed)) or 'null'
+    confirmations = db.execute(
+        """
+        select count(*) from (select m.candidate_id from measurements m join campaigns p on p.evaluator_id = m.evaluator_id
+        join candidates c on c.id = m.candidate_id
+        where c.origin != 'baseline' and m.error is null and m.rung is null group by m.candidate_id having count(*) > 1)
+        """
+    ).fetchone()[0]
+    scorings = db.execute(f'select count(*) from measurements where evaluator_id in ({marks})', sealed).fetchone()[0]
+    based = db.execute(
+        "select count(*) from events where kind = 'run.base_chosen'"
+        " and json_extract(payload, '$.candidate') != json_extract(payload, '$.was')"
+    ).fetchone()[0]
+    return PoolCounts(confirmations=confirmations, sealed_scorings=scorings, based_runs=based)
+
+
 def piloop_counts(db: sqlite3.Connection, base: str) -> tuple[Funnel, int, int, float | None]:
     """The funnel, the escalations, the people's comments, and the lead's share of the tokens."""
 
     def one(query: str, *args: object) -> int:
         return int(db.execute(query, args).fetchone()[0] or 0)
 
+    if pool(db):
+        scored = "select distinct target_id from events where kind = 'candidate.scored' and target_kind = 'candidate'"
+        submissions = one(f'select count(*) from candidates where id in ({scored}) and revision != ?', base)
+        kept = len(pool_heads(db, base, datetime.now(UTC)))
+    else:
+        submissions = one('select count(*) from candidates where verdict is not null and revision != ?', base)
+        kept = one("select count(*) from candidates where verdict = 'keep' and revision != ?", base)
     funnel = Funnel(
         ideas=one('select count(*) from ideas'),
         runs=one('select count(*) from runs'),
-        submissions=one('select count(*) from candidates where verdict is not null and revision != ?', base),
-        kept=one("select count(*) from candidates where verdict = 'keep' and revision != ?", base),
+        submissions=submissions,
+        kept=kept,
     )
     escalations = one("select count(*) from comments where kind = 'escalation'")
     people = one("select count(*) from comments where author like 'human%'")
@@ -144,14 +198,17 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         funnel = Funnel(ideas=None, runs=sessions, submissions=commits, kept=len(heads))
         sent = delivered = refused = None
         escalations, people, lead = 0, 0, None
-        kept, held, written, read, raced = {}, {}, {}, {}, None
+        kept, held, line, written, read, raced, counted = {}, {}, {}, {}, {}, None, None
     else:
         with sqlite3.connect(export / 'piloop.db') as db:
             heads = piloop_heads(db, base, started)
             funnel, escalations, people, lead = piloop_counts(db, base)
             sent, delivered, refused = messages(db)
-            kept, held = final_keeps(db, export / 'repo.bundle')
-            raced = races(db)
+            if pool(db):
+                (kept, line), held, raced, counted = final_line(db, heads), {}, None, pool_counts(db)
+            else:
+                kept, held = final_keeps(db, export / 'repo.bundle')
+                line, raced, counted = {}, races(db), None
             written, read = notes(db, run / 'export')
         made = None
     curve = []
@@ -195,6 +252,8 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         selftest=SelfTest.model_validate_json(test.read_text()) if (test := run / 'selftest.json').exists() else None,
         keeps=kept,
         keeps_in_final=held,
+        on_final_line=line,
+        pool=counted,
         races=raced,
         notes_written=written,
         notes_read=read,

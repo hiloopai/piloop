@@ -215,12 +215,27 @@ class Point(Frozen):
 
 
 class Funnel(Frozen):
-    """Ideas → runs → submissions → kept. A plain session has no ideas; its runs are its sessions."""
+    """Ideas → runs → submissions → kept. A plain session has no ideas; its runs are its sessions.
+
+    ``kept`` is a verdict run's keeps, a pool run's new bests, and a plain session's commits on ``main``.
+    """
 
     ideas: int | None
     runs: int
     submissions: int
     kept: int
+
+
+class PoolCounts(Frozen):
+    """What a piloop run of the pool model (0.6) did beyond its funnel."""
+
+    confirmations: int
+    """Candidates evaluated more than once under the campaign's evaluator: confirmed, as their first score beat the
+    best's. The baseline is not one."""
+    sealed_scorings: int
+    """Evaluations on the campaign's sealed split, the baseline's included."""
+    based_runs: int
+    """Runs whose claim chose another candidate than the best they started from (``--base``)."""
 
 
 class Loop(Frozen):
@@ -305,10 +320,16 @@ class Result(Frozen):
     keeps: dict[str, int] = {}
     """The keeps of each role that does runs (``evals.team``)."""
     keeps_in_final: dict[str, int] = {}
-    """The keeps of each role that the final head contains: the gains that stacked."""
+    """The keeps of each role that the final head contains: the gains that stacked. Empty for a pool run, which has
+    ``on_final_line`` instead."""
+    on_final_line: dict[str, int] = {}
+    """A pool run's candidates on the final best's line (its chain of parents, the best included), by the role of
+    their run."""
+    pool: PoolCounts | None = None
+    """A pool run's confirmations, sealed scorings and runs from another base. None: a plain run, or a verdict run."""
     races: int | None = None
     """Submissions that beat the version they started from, but not the head that another run's keep had moved on to
-    by the time they were judged. None: a plain run."""
+    by the time they were judged. None: a plain run, or a pool run, which has no head to race."""
     notes_written: dict[str, int] = {}
     """The notes that the workers of each role wrote."""
     notes_read: dict[str, int] = {}
