@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from evals.loop import loop
-from evals.model import Funnel, Point, Result, Sample, SelfTest
+from evals.model import Funnel, Point, Result, Sample, SelfTest, Tokens
 from evals.score import Score
 from evals.team import final_keeps, notes, races
 
@@ -21,16 +21,31 @@ LEADS = ('orchestrator', 'lead')
 """The roles whose tokens are the lead's share."""
 
 
+def between(points: list[tuple[float, float]], hours: float) -> float:
+    """The value at ``hours`` of ``points``, its (hours, value) pairs in order.
+
+    It is linear between the pairs around ``hours``, and the last value after them.
+    """
+    i = bisect_right([h for h, _ in points], hours)
+    if i == 0:
+        return points[0][1] if points else 0.0
+    if i == len(points):
+        return points[-1][1]
+    (ha, a), (hb, b) = points[i - 1], points[i]
+    return a + (b - a) * (hours - ha) / (hb - ha)
+
+
 def at(spend: list[Sample], hours: float) -> float:
     """The $ spent at ``hours``: linear between the samples around it, the last one after them."""
-    times = [s.hours for s in spend]
-    i = bisect_right(times, hours)
-    if i == 0:
-        return spend[0].usd if spend else 0.0
-    if i == len(spend):
-        return spend[-1].usd
-    a, b = spend[i - 1], spend[i]
-    return a.usd + (b.usd - a.usd) * (hours - a.hours) / (b.hours - a.hours)
+    return between([(s.hours, s.usd) for s in spend], hours)
+
+
+def tokens_at(spend: list[Sample], hours: float) -> Tokens | None:
+    """The tokens spent by ``hours``, as ``at``, rounded down. None: a sample from before the driver kept them."""
+    counts = [(s.hours, s.tokens.model_dump()) for s in spend if s.tokens is not None]
+    if not counts or len(counts) < len(spend):
+        return None
+    return Tokens(**{k: int(between([(h, c[k]) for h, c in counts], hours)) for k in Tokens.model_fields})
 
 
 def hours_since(started: datetime, stamp: str) -> float:
@@ -145,7 +160,19 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         if usd > meta['budget_usd']:
             break
         s = scores[rev]
-        curve.append(Point(revision=rev, hours=hours, usd=usd, dev=s.dev, sealed=s.sealed, sealed_detail=s.detail))
+        models = between([(x.hours, x.models_usd) for x in spend], hours)
+        curve.append(
+            Point(
+                revision=rev,
+                hours=hours,
+                usd=usd,
+                models_usd=models,
+                tokens=tokens_at(spend, hours),
+                dev=s.dev,
+                sealed=s.sealed,
+                sealed_detail=s.detail,
+            )
+        )
     return Result(
         task=meta['task'],
         arm=meta['arm'],

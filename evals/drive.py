@@ -21,10 +21,11 @@ import tomli_w
 from opentelemetry import trace
 from pydantic import JsonValue
 
-from evals.model import PiloopArm, PlainArm, Sample, SelfTest, Settings, Task
-from evals.sandbox import EVALUATIONS, OPT, PILOOP_HOME, WORK, Box, image
+from evals.model import PiloopArm, PlainArm, Resources, Sample, SelfTest, Settings, Task, Tokens
+from evals.sandbox import EVALUATIONS, OPT, PILOOP_HOME, WORK, Box, Shell, image
 from evals.score import sealed_data
 from evals.telemetry import exported, tracer
+from piloop.config import CampaignConfig
 from piloop.plugins.harness.codex import toml
 from piloop.plugins.harness.contract import ModelId, Usage
 from piloop.plugins.price_list.genai_prices import GenaiPrices
@@ -152,6 +153,19 @@ def price(tokens: dict[str, dict[str, dict[str, int]]]) -> float:
     return usd
 
 
+def sandbox(task: Task, arm: PiloopArm, settings: Settings, hours: float) -> tuple[Resources, int]:
+    """The resources of a piloop arm's sandbox, and its daemon's evaluation slots.
+
+    The sandbox grows with the arm's workers, the runs that it keeps open at once (``run_slots``), to ``worker_cpu``
+    and ``worker_memory_mb`` each, and never below the arm's own ``resources``. Each worker gets
+    ``evaluation_slots_per_worker`` slots, so that a large team's submissions do not queue for the evaluator.
+    """
+    workers = CampaignConfig.model_validate(piloop_config(task, arm, settings, hours)).run_slots
+    r = arm.resources
+    cpu, memory = max(r.cpu, workers * settings.worker_cpu), max(r.memory_mb, workers * settings.worker_memory_mb)
+    return Resources(cpu=cpu, memory_mb=memory, gpus=r.gpus), workers * settings.evaluation_slots_per_worker
+
+
 @dataclass
 class Piloop:
     """A piloop campaign in the sandbox, under its own ``PILOOP_HOME``."""
@@ -160,16 +174,18 @@ class Piloop:
     arm: PiloopArm
     settings: Settings
     hours: float
+    slots: int
+    """The daemon's evaluation slots (``executor.pools.serve.slots.evaluation``), set before the campaign starts."""
     version: str = ''
 
     @property
     def name(self) -> str:
         return str(self.task.piloop['name'])
 
-    def sql(self, box: Box, query: str) -> str:
+    def sql(self, box: Shell, query: str) -> str:
         return box.run(f'sqlite3 {PILOOP_HOME}/piloop.db {shlex.quote(query)}').strip()
 
-    def start(self, box: Box) -> None:
+    def start(self, box: Shell) -> None:
         if self.arm.split == 'sealed':
             box.write(f'{WORK}/campaign.tgz', sealed_data(f'{self.task.name}.campaign', self.settings))
             box.run(f'mkdir -p {SEALED} && tar xzf {WORK}/campaign.tgz -C {SEALED} && rm {WORK}/campaign.tgz')
@@ -187,11 +203,13 @@ class Piloop:
             f'for i in $(seq {self.settings.daemon_start_seconds:.0f}); do'
             ' printf %s "$GATEWAY_TOKEN" | piloop secret set GATEWAY_TOKEN 2>/dev/null && exit 0; sleep 1; done; exit 1'
         )
+        reason = shlex.quote(f'evals: {self.settings.evaluation_slots_per_worker} per worker')
+        box.run(f'piloop limits set executor.pools.serve.slots.evaluation={self.slots} --reason {reason}')
         box.run(f'cd {REPO} && piloop init . > {OUT}/init.log 2>&1', timeout=1800)
         self.version = box.run('piloop --version').strip()
         trace.get_current_span().set_attribute('piloop.version', self.version)
 
-    def ended(self, box: Box) -> str | None:
+    def ended(self, box: Shell) -> str | None:
         """The campaign's own stop reason, once it stopped."""
         status = self.sql(
             box, f"select status || '|' || coalesce(stopped_reason, '') from campaigns where name = '{self.name}'"
@@ -199,7 +217,7 @@ class Piloop:
         state, _, reason = status.partition('|')
         return None if state == 'active' else f'campaign: {reason}'
 
-    def stop(self, box: Box, reason: str) -> None:
+    def stop(self, box: Shell, reason: str) -> None:
         """Stop at once and give the daemon ``stop_grace_minutes`` to score what the agents committed."""
         box.run(f'piloop campaign stop {self.name} --kill --reason {shlex.quote(reason)} || true')
         deadline = time.monotonic() + self.settings.stop_grace_minutes * 60
@@ -207,7 +225,7 @@ class Piloop:
         while time.monotonic() < deadline and self.sql(box, pending) != '0':
             time.sleep(self.settings.poll_seconds / 4)
 
-    def export(self, box: Box) -> None:
+    def export(self, box: Shell) -> None:
         box.run(f'sqlite3 {PILOOP_HOME}/piloop.db ".backup {OUT}/piloop.db" && piloop stop || true')
 
 
@@ -308,13 +326,14 @@ def selftest(box: Box, task: Task, settings: Settings) -> SelfTest:
     return SelfTest(cpu=cpu, values=values)
 
 
-def sample(box: Box, arm: PiloopArm | PlainArm, settings: Settings, hours: float) -> Sample:
-    """What the run has spent so far."""
+def sample(box: Shell, r: Resources, settings: Settings, hours: float) -> Sample:
+    """What the run has spent so far, in a sandbox of ``r``: its models' tokens and their price, and its compute."""
     box.run(f'python3 {OPT}/meter.py {SESSIONS["claude"]} {SESSIONS["codex"]} {WORK}/meter.json')
     tokens = json.loads(box.read(f'{WORK}/meter.json'))
-    r = arm.resources
+    counts = [count for models in tokens.values() for count in models.values()]
+    summed = Tokens(**{k: sum(c[k] for c in counts) for k in Tokens.model_fields})
     compute = hours * (r.cpu * settings.cpu_usd_per_core_hour + r.memory_mb / 1024 * settings.memory_usd_per_gib_hour)
-    return Sample(hours=hours, models_usd=price(tokens), compute_usd=compute)
+    return Sample(hours=hours, models_usd=price(tokens), compute_usd=compute, tokens=summed)
 
 
 def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hours: float, settings: Settings) -> Path:
@@ -326,13 +345,14 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
     name = f'{task.name}/{arm.name}-{repeat}'
     match arm:
         case PiloopArm():
-            run: Piloop | Plain = Piloop(task, arm, settings, hours)
+            r, slots = sandbox(task, arm, settings, hours)
+            run: Piloop | Plain = Piloop(task, arm, settings, hours, slots=slots)
             env = exported(settings, name) | arm.env
         case PlainArm():
+            r = arm.resources
             run = Plain(task, arm, settings, hours)
             env = dict(arm.env)
     env['EVALS_EVAL_LOG'] = f'{OUT}/{EVALUATIONS}'
-    r = arm.resources
     with tracer.start_as_current_span('evals.run', attributes={'evals.run': name, 'budget_usd': budget}) as span:
         with tracer.start_as_current_span('evals.sandbox'):
             img = image([task], arm)
@@ -359,7 +379,7 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
             with tracer.start_as_current_span('evals.start'):
                 run.start(box)
             started_at, started = datetime.now(UTC), time.monotonic()
-            stopped = watch(box, run, arm, budget, hours, settings, out / 'spend.jsonl', started)
+            stopped = watch(box, run, r, budget, hours, settings, out / 'spend.jsonl', started)
             span.set_attribute('stopped', stopped)
             with tracer.start_as_current_span('evals.export'):
                 run.export(box)
@@ -394,7 +414,7 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
 def watch(
     box: Box,
     run: Piloop | Plain,
-    arm: PiloopArm | PlainArm,
+    r: Resources,
     budget: float,
     hours: float,
     settings: Settings,
@@ -412,7 +432,7 @@ def watch(
             with tracer.start_as_current_span('evals.spend') as span:
                 for attempt in range(settings.sample_attempts):
                     try:
-                        now = sample(box, arm, settings, (time.monotonic() - started) / 3600)
+                        now = sample(box, r, settings, (time.monotonic() - started) / 3600)
                         break
                     except ConnectionError as e:  # Modal's link to the sandbox drops now and then: try again
                         span.add_event('evals.sample_retry', {'attempt': attempt, 'error': str(e)})

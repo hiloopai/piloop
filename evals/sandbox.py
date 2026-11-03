@@ -2,6 +2,7 @@
 
 import shlex
 from dataclasses import dataclass
+from typing import Protocol
 
 import modal
 
@@ -65,6 +66,18 @@ def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
     return img.add_local_file(ROOT / 'meter.py', f'{OPT}/meter.py').add_local_file(
         ROOT / 'scorer.py', f'{OPT}/scorer.py'
     )
+
+
+class Shell(Protocol):
+    """What the driver does in a sandbox. ``Box`` is one; a test gives a fake."""
+
+    def run(self, script: str, timeout: float | None = None) -> str: ...
+
+    def start(self, script: str) -> object: ...
+
+    def read(self, path: str) -> bytes: ...
+
+    def write(self, path: str, data: bytes) -> None: ...
 
 
 @dataclass

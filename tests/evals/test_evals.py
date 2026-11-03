@@ -18,7 +18,7 @@ import pytest
 from pydantic import JsonValue, SecretStr
 
 from evals import meter
-from evals.drive import HALT, Plain, piloop_config, price
+from evals.drive import HALT, Piloop, Plain, piloop_config, price, sample, sandbox
 from evals.loop import evaluations
 from evals.metrics import at, result
 from evals.model import (
@@ -35,6 +35,7 @@ from evals.model import (
     Sample,
     Settings,
     Task,
+    Tokens,
     load_arm,
 )
 from evals.pilot import guard, spent
@@ -149,6 +150,64 @@ def test_piloop_config_puts_agents_on_the_gateway():
     assert config['name'] == 't2-circles'
 
 
+class FakeBox:
+    """A sandbox that records each command, answers each with ``out``, and holds the meter's last count."""
+
+    def __init__(self, meter: object = None, out: str = '') -> None:
+        self.meter, self.out, self.commands = meter, out, []
+
+    def run(self, script: str, timeout: float | None = None) -> str:
+        self.commands.append(script)
+        return self.out
+
+    def start(self, script: str) -> None:
+        self.commands.append(script)
+
+    def read(self, path: str) -> bytes:
+        return json.dumps(self.meter).encode()
+
+    def write(self, path: str, data: bytes) -> None:
+        pass
+
+
+def test_a_sample_keeps_the_meters_tokens_and_the_sandboxs_compute():
+    count = {'input': 10, 'output': 5, 'cache_read': 100, 'cache_write': 1, 'turns': 1}
+    box = FakeBox({'claude': {'claude-opus-5-5': count}, 'codex': {'gpt-6.1-sol': count}})
+    settings = Settings(cpu_usd_per_core_hour=1, memory_usd_per_gib_hour=0.5)
+    s = sample(box, Resources(cpu=40, memory_mb=4096), settings, 2)
+    assert s.tokens == Tokens(input=20, output=10, cache_read=200, cache_write=2, turns=2)
+    assert s.compute_usd == 2 * (40 + 4 * 0.5) and s.models_usd > 0
+
+
+def identical(n: int) -> PiloopArm:
+    return PiloopArm(
+        kind='piloop',
+        name=f'{n}w',
+        piloop='piloop==0.6.0',
+        agents=[Agent(harness='codex', model='gpt-6.1-sol')],
+        overlay={'plugins': {'role': {'implementer': {'max_concurrent': n}}}},
+        resources=Resources(cpu=8, memory_mb=16384),
+    )
+
+
+def test_a_piloop_arms_sandbox_and_evaluation_slots_grow_with_its_workers():
+    task, settings = Task.load('t5-lpaq'), Settings()
+    assert sandbox(task, identical(1), settings, 6) == (Resources(cpu=8, memory_mb=16384), 2)
+    assert sandbox(task, identical(20), settings, 6) == (Resources(cpu=40, memory_mb=20 * 6144), 40)
+    roles = {'implementer': {'max_concurrent': 1}, 'implementer_b': {'runs': True, 'max_concurrent': 2}}
+    charters = identical(1).model_copy(update={'overlay': {'plugins': {'role': roles}}})
+    assert sandbox(task, charters, settings, 6) == (Resources(cpu=8, memory_mb=3 * 6144), 6)
+
+
+def test_a_piloop_campaign_gets_its_evaluation_slots_before_it_starts():
+    run = Piloop(Task.load('t2-circles'), identical(20), Settings(), 6, slots=40)
+    box = FakeBox()
+    run.start(box)
+    limits = next(i for i, c in enumerate(box.commands) if 'piloop limits set' in c)
+    init = next(i for i, c in enumerate(box.commands) if 'piloop init' in c)
+    assert 'executor.pools.serve.slots.evaluation=40' in box.commands[limits] and limits < init
+
+
 def test_spend_between_samples():
     spend = [Sample(hours=0, models_usd=0, compute_usd=0), Sample(hours=1, models_usd=8, compute_usd=2)]
     assert [at(spend, h) for h in (0, 0.5, 2)] == [0, 5, 10]
@@ -178,11 +237,16 @@ def test_plain_result_and_report(tmp_path: Path):
     meta = {'task': 't2-circles', 'arm': 'plain-codex', 'repeat': 1, 'piloop': None, 'base': revs[0]}
     meta |= {'started_at': started.isoformat(), 'budget_usd': 20, 'max_hours': 4, 'stopped': 'budget'}
     (run / 'run.json').write_text(json.dumps(meta))
-    spend = [Sample(hours=h, models_usd=10 * h, compute_usd=0) for h in (0, 1, 2, 3)]
+    spend = [
+        Sample(hours=h, models_usd=10 * h, compute_usd=0, tokens=Tokens(input=100 * h, output=10 * h, turns=h))
+        for h in (0, 1, 2, 3)
+    ]
     (run / 'spend.jsonl').write_text('\n'.join(s.model_dump_json() for s in spend))
     scores = {rev: Score(dev=i / 3, sealed=i / 4, detail='') for i, rev in enumerate(revs)}
     r = result(run, scores)
     assert [(p.revision, p.usd) for p in r.curve] == [(revs[0], 0), (revs[1], 5), (revs[2], 15)]
+    assert [p.models_usd for p in r.curve] == [0, 5, 15]
+    assert [p.tokens for p in r.curve] == [Tokens(), Tokens(input=50, output=5), Tokens(input=150, output=15, turns=1)]
     assert r.funnel == Funnel(ideas=None, runs=2, submissions=3, kept=3)
     assert r.first_keep is not None and r.first_keep.usd == 5
     assert r.gap == pytest.approx(2 / 3 - 2 / 4)
@@ -386,5 +450,6 @@ def test_a_result_from_an_earlier_round_loads_without_its_removed_fields():
                escalations=0, interventions=0, lead_token_share=None)  # fmt: skip
     old = json.loads(r.model_dump_json()) | {'built_on': {'a>b': 1}, 'replaced': {}}
     assert Result.model_validate(old) == r
+    assert r.curve[0].tokens is None and Sample(hours=0, models_usd=0, compute_usd=0).tokens is None
     with pytest.raises(ValueError, match='extra'):
         Result.model_validate(old | {'unknown': 1})

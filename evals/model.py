@@ -136,12 +136,30 @@ def load_arm(name: str) -> PiloopArm | PlainArm:
     return ArmFile.model_validate({'arm': tomllib.loads(path.read_text())}).arm
 
 
+class Tokens(Frozen):
+    """The tokens of a run's agents, summed over every harness and model, as ``meter.py`` counts them."""
+
+    input: int = 0
+    """Input tokens not served by the cache."""
+    output: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
+    turns: int = 0
+
+    @property
+    def total(self) -> int:
+        """Every token of every kind: input, output, cache reads and cache writes."""
+        return self.input + self.output + self.cache_read + self.cache_write
+
+
 class Sample(Frozen):
     """What a run had spent at one moment, list price, in USD."""
 
     hours: float
     models_usd: float
     compute_usd: float
+    tokens: Tokens | None = None
+    """What the models' spend bought. None: a sample from before the driver kept the tokens."""
 
     @property
     def usd(self) -> float:
@@ -155,6 +173,10 @@ class Point(Frozen):
     revision: str
     hours: float
     usd: float
+    models_usd: float | None = None
+    """The models' share of ``usd``. None: a result from before the driver kept it."""
+    tokens: Tokens | None = None
+    """The tokens spent by then. None: a result from before the driver kept them."""
     dev: float | None
     """Its normalised dev score, re-measured outside the run with the task's own evaluator. None: it failed."""
     sealed: float | None
@@ -295,6 +317,14 @@ class Settings(BaseSettings):
     results: Path = ROOT / 'results'
     modal_app: str = 'piloop-evals'
     modal_environment: str | None = None
+    worker_cpu: float = 2
+    """The CPU cores of a piloop arm's sandbox for each of its workers: its own builds and dev runs, and the daemon's
+    evaluations of what it submits. The arm's ``resources`` are the least it gets."""
+    worker_memory_mb: int = 6144
+    """The memory of a piloop arm's sandbox for each of its workers, as ``worker_cpu``."""
+    evaluation_slots_per_worker: int = 2
+    """The daemon's evaluation slots for each worker of a piloop arm: a submission runs its visible and its sealed
+    evaluation together, so each worker can have one in flight without a queue."""
     cpu_usd_per_core_hour: float = 0.1419
     """The list price of a sandbox's CPU core."""
     memory_usd_per_gib_hour: float = 0.0242

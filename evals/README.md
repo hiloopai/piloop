@@ -19,14 +19,17 @@ the gateway that `EVALS_GATEWAY` names, with `EVALS_GATEWAY_TOKEN`.
 - **piloop arm:** `piloop init` in the repo, with the task's keys, the arm's agents and `max_hours`. An arm with
   `split = "sealed"` also gets the task's dev command as `[evaluator] dev`, and a sealed split of its own as
   `[evaluator] sealed`: `EVALS_SEALED_URI/<task>.campaign/`, copied into the campaign's home. It is not the holdout
-  that scores every arm afterwards. The run ends at
+  that scores every arm afterwards. Its sandbox gets `EVALS_WORKER_CPU` cores and `EVALS_WORKER_MEMORY_MB` for each
+  worker (the runs it keeps open at once), and never less than the arm's `resources`. Before the campaign starts, its
+  daemon gets `EVALS_EVALUATION_SLOTS_PER_WORKER` evaluation slots for each worker
+  (`executor.pools.serve.slots.evaluation`), so that a large team's submissions do not queue. The run ends at
   the budget, at `max_hours`, or at the campaign's own stop; then the daemon gets `EVALS_STOP_GRACE_MINUTES` to
   score what was committed.
 - **plain arm:** one Codex or Claude Code session, told to keep `main` at its best version. When it ends early, it
   is resumed with the same short prompt.
 
 The driver reads the spend every `EVALS_POLL_SECONDS`: the tokens of every session file in the sandbox at list
-price, plus the sandbox's CPU and memory. The export (git bundle, piloop's database, session files, spend) goes to
+price, plus the sandbox's CPU and memory. Each sample keeps the tokens too, by kind. The export (git bundle, piloop's database, session files, spend) goes to
 `results/<task>/<arm>-<repeat>/`, and to `EVALS_ARCHIVE_URI` when it is set.
 
 Scoring runs the base and every head of a run in sandboxes without network: the task's own `evaluate.py` over the
@@ -37,7 +40,7 @@ the CPU type of its sandboxes, the agents' and the scorers'.
 
 ## Metrics
 
-`result.json` holds, per run: the sealed and dev score of each head against $ and hours, $ and hours to the first
+`result.json` holds, per run: the sealed and dev score of each head against hours, $, the models' $ and the tokens, $ and hours to the first
 keep, the funnel (ideas, runs, submissions, kept), escalations, comments by people, the lead's share of the tokens,
 and the gap between the dev and sealed score of the final head. Spend is split into models and compute. Before the agents
 start, the driver evaluates the starting repo 5 times with the dev command and records the CPU (`selftest`): how much
