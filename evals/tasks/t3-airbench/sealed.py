@@ -7,6 +7,13 @@ an absolute path, such as the task's dev data in the image, which no version can
 the GPU lock where the machine has one: timings differ by a few percent from one GPU to the next, so only a ratio
 taken on one GPU is comparable. Writes ``{"score", "status", "detail", "raw"}`` to ``<out>``, ``raw`` being the ratio; ``status`` is ``ok``, ``crash``
 or ``infra_error``.
+
+The floors in the metas agree with the dev floor in ``evaluate.py``, each measured on L4:
+
+- piloop's split (``t3-airbench.campaign``, 5 seeds): 0.9296, the starting code's mean of 0.9319 over 20 evaluations,
+  less 3 standard errors of a 5-seed mean, as the dev floor (0.9300, from 0.9322). The starting code passed 20 of 20.
+- The holdout (``t3-airbench``, 10 seeds): 0.9354, the starting code's 0.9402 less 2.2 times the dev floor's margin:
+  the test set loses about 2.2 times the accuracy that the agents' 5k images lose.
 """
 
 import json
