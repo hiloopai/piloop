@@ -35,11 +35,11 @@ from types import ModuleType
 ROOT = Path(__file__).resolve().parent
 VENV = Path('/opt/evals/venv/t3-airbench/bin/python')
 SEEDS = 5
-FLOOR = 0.9314
-"""The accuracy below which a version fails, over 5 seeds: the starting code's mean on ``data/val.pt``, 0.9325, less
-0.11 points. The test set loses about 2.2 times the accuracy that ``val.pt`` loses, and its floor is 0.25 points below
-the starting code there, so 0.25 / 2.2. The starting code itself falls below it in about 7% of 5-seed evaluations (one
-seed's standard deviation is 0.0017)."""
+FLOOR = 0.9300
+"""The accuracy below which a version fails, over 5 seeds: the starting code's mean on ``data/val.pt``, 0.9322 over 20
+evaluations on L4, less 3 standard errors of a 5-seed mean (one seed's standard deviation is 0.0017), so the starting
+code passes 99.8% of evaluations: it passed 20 of 20, the lowest at 0.9309. The test set loses about 2.2 times the
+accuracy that ``val.pt`` loses, so the sealed floor sits 2.2 times as far below its own starting code."""
 SERVE_WAIT = 600
 """Seconds that the fast loop waits for its warm process to start, then for one evaluation."""
 
