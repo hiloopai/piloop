@@ -298,6 +298,11 @@ better per dollar. A `piloop.toml` that sets it keeps its value.
 a campaign's stored copy alike. `news` wakes it only for an escalation or what a person writes; the rest
 of the news comes with the next wake.
 
+### With no orchestrator, an agent's escalation reaches you at once
+
+With the orchestrator role off (no `news` in its `triggers`), an agent's escalation no longer waits
+`[plugins.escalation] grace` for an orchestrator: your notifiers send it at once. With the role on, it waits as before.
+
 ### Only a stop rule or a person stops a campaign
 
 `piloop campaign stop` by an agent, or with `PILOOP_ACTOR=orchestrator`, is refused: the agent escalates a stop

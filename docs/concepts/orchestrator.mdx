@@ -127,9 +127,10 @@ run#41 timed out.
 
 `piloop inbox choose 1 A` answers it: a decision signed as you, and an acknowledgement.
 
-- An agent's escalation goes to the orchestrator first. The orchestrator answers it, gives its duplicates the same
-  answer, or files one escalation of its own for you. A [notifier](/guides/notifications) sends it to you only when
-  nobody has acknowledged it 30 minutes after it was filed.
+- With the orchestrator role on (`triggers` names `news`), an agent's escalation goes to the orchestrator first. The
+  orchestrator answers it, gives its duplicates the same answer, or files one escalation of its own for you. A
+  [notifier](/guides/notifications) sends it to you only when nobody has acknowledged it 30 minutes after it was filed.
+- With the orchestrator role off, the default, an agent's escalation reaches you at once.
 - The orchestrator's escalations, and the daemon's, reach you at once.
 - The form, its limits and that wait are the campaign's `[plugins.escalation]`. `structured`, built in, is the
   default. The [configuration reference](/reference/configuration#plugins) lists its keys.

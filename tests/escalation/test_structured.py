@@ -21,9 +21,11 @@ GOOD: dict[str, JsonValue] = EXAMPLE.model_dump(mode='json')
 OPTIONS: list[JsonValue] = [o.model_dump(mode='json') for o in EXAMPLE.options]
 
 
-def item(author: str = 'implementer#12', form: object = GOOD, body: str = 'x') -> Escalated:
+def item(
+    author: str = 'implementer#12', form: object = GOOD, body: str = 'x', *, orchestrated: bool = True
+) -> Escalated:
     stored = Structured().form(form) if isinstance(form, dict) else None
-    return Escalated(CommentId(7), CampaignId(1), author, FILED, body, stored)
+    return Escalated(CommentId(7), CampaignId(1), author, FILED, body, stored, orchestrated)
 
 
 def test_a_good_form_is_stored_as_it_was_filed_and_its_body_is_plain_text() -> None:
@@ -99,6 +101,11 @@ def test_an_agent_s_escalation_waits_for_the_orchestrator_and_the_rest_reach_a_h
     author: str, reach: object
 ) -> None:
     assert Structured().reach(item(author), FILED) == reach
+
+
+@pytest.mark.parametrize('author', ['implementer#12', 'implementer_b#4', 'orchestrator#9', 'daemon'])
+def test_with_no_orchestrator_that_takes_escalations_every_escalation_reaches_a_human_at_once(author: str) -> None:
+    assert Structured().reach(item(author, orchestrated=False), FILED) == Now()
 
 
 def test_the_view_has_the_ask_the_why_and_lettered_choices_and_a_free_text_one_reads_as_filed() -> None:

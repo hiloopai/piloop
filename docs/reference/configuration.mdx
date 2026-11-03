@@ -156,7 +156,7 @@ With `provider = "structured"`:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `grace` | duration | `"PT30M"` | How long an agent's escalation waits for the orchestrator before it goes to a human too. 0: at once. |
+| `grace` | duration | `"PT30M"` | How long an agent's escalation waits for the orchestrator before it goes to a human too. 0: at once. With the orchestrator off, it waits for nothing. |
 | `ask_words` | integer | `25` | The most words that the ask has. |
 | `why_sentences` | integer | `3` | The most sentences that the why has. |
 | `sentence_words` | integer | `20` | The most words of each sentence of the why. |

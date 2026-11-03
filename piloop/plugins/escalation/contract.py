@@ -71,6 +71,9 @@ class Escalated:
     form: JsonValue | None
     """What ``EscalationPolicy.form`` returned when it was filed. None for one that an older piloop filed as free text,
     which every surface shows as its body: piloop asks the provider of no view or choice for it."""
+    orchestrated: bool
+    """Whether piloop launches an orchestrator for the campaign that takes the agents' escalations: its role wakes on
+    ``news``. False with the orchestrator off, the default: no agent answers an escalation, so it waits for nobody."""
 
 
 @dataclass(frozen=True)

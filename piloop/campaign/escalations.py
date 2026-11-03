@@ -27,6 +27,7 @@ from piloop.plugins.escalation.contract import (
     EscalationPolicy,
     EscalationView,
 )
+from piloop.plugins.role.orchestrator import OrchestratorRole
 
 
 class EscalationWritten(Commented):
@@ -72,14 +73,29 @@ def policy(s: Session, campaign: CampaignId | None) -> EscalationPolicy:
 def escalated(s: Session, comment: Comment) -> Escalated:
     """``comment``, an escalation, as its provider reads it."""
     found = s.scalar(select(campaign_of(Comment.target_kind, Comment.target_id)).where(Comment.id == comment.id))
+    campaign = CampaignId(found) if found is not None else None
     return Escalated(
         comment=comment.id,
-        campaign=CampaignId(found) if found is not None else None,
+        campaign=campaign,
         author=comment.author,
         filed=comment.created_at,
         body=comment.body,
         form=comment.form,
+        orchestrated=orchestrated(s, campaign),
     )
+
+
+def orchestrated(s: Session, campaign: CampaignId | None) -> bool:
+    """Whether piloop launches an orchestrator for ``campaign`` that takes the agents' escalations (``news``).
+
+    A stored config that no longer validates has none, as ``policy`` falls back: the escalation goes to a human.
+    """
+    row = s.get(Campaign, campaign) if campaign is not None else None
+    try:
+        roles = row.config.roles.sweeping().values() if row is not None else ()
+    except ValidationError:  # the campaigns' pass records this error for the campaign
+        return False
+    return any(isinstance(role, OrchestratorRole) and role.takes_escalations for role in roles)
 
 
 type Asked = JsonValue | EscalationView

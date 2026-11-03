@@ -6,8 +6,9 @@ the rules of Simplified Technical English that a program can check: short senten
 which go in ``details``. The limits are keys.
 
 An escalation of the orchestrator or of the daemon reaches a human at once. Any other agent's goes to the orchestrator,
-which answers it, merges it with its duplicates, or escalates it itself; it reaches a human only when nobody has
-acknowledged it ``grace`` after it was filed.
+when piloop launches one that takes escalations (``Escalated.orchestrated``), which answers it, merges it with its
+duplicates, or escalates it itself; it reaches a human only when nobody has acknowledged it ``grace`` after it was
+filed. With the orchestrator off, an agent's escalation reaches a human at once too: no agent would answer it.
 """
 
 import json
@@ -87,7 +88,8 @@ class Structured(EscalationPolicy):
     """``structured``: one decision in plain words, with choices; an agent's goes to the orchestrator first."""
 
     grace: timedelta = Field(default=timedelta(minutes=30), ge=timedelta(0))
-    """How long an agent's escalation waits for the orchestrator before it goes to a human too. 0: at once."""
+    """How long an agent's escalation waits for the orchestrator before it goes to a human too. 0: at once. With the
+    orchestrator off, it waits for nothing."""
     ask_words: int = Field(default=25, gt=0)
     """The most words that the ask has."""
     why_sentences: int = Field(default=3, gt=0)
@@ -173,7 +175,7 @@ class Structured(EscalationPolicy):
         except ValidationError:  # a signature that an older piloop wrote: the human decides, at once
             return Now()
         match actor:
-            case Agent() as agent if agent.party != System.ORCHESTRATOR.party:
+            case Agent() as agent if agent.party != System.ORCHESTRATOR.party and item.orchestrated:
                 return At(item.filed + self.grace)
             case _:  # the orchestrator, the daemon, a person or a service
                 return Now()

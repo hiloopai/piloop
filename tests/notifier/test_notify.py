@@ -893,26 +893,54 @@ def test_an_edit_of_a_reply_changes_it_as_its_author_and_it_waits_to_be_read_aga
     ], 'the orchestrator that read the old text gets the new one as news'
 
 
-def test_an_agent_s_escalation_waits_its_grace_for_the_orchestrator_then_reaches_a_human_with_its_view(
-    db: Database, campaign: Campaign
-) -> None:
-    form: JsonValue = {
-        'ask': 'Do you approve a longer timeout?',
-        'why': 'Each run takes 3 hours.',
-        'options': [
-            {'choice': 'Raise it.', 'result': 'Runs cost more.'},
-            {'choice': 'Keep it.', 'result': 'It stops.'},
-        ],
-        'recommend': 1,
-    }
+TIMEOUT_FORM: JsonValue = {
+    'ask': 'Do you approve a longer timeout?',
+    'why': 'Each run takes 3 hours.',
+    'options': [
+        {'choice': 'Raise it.', 'result': 'Runs cost more.'},
+        {'choice': 'Keep it.', 'result': 'It stops.'},
+    ],
+    'recommend': 1,
+}
+"""An implementer's escalation, in the ``structured`` form."""
+
+
+def lead_on(db: Database, campaign: Campaign) -> None:
+    """Turn on ``campaign``'s orchestrator role, woken by news: it takes the agents' escalations."""
+    with db.session() as s:
+        stored = s.get_one(Campaign, campaign.id)
+        stored.config = reconfigured(stored.config, plugins={'role': {'orchestrator': {'triggers': ['news']}}})
+        s.commit()
+
+
+def implementer_escalates(db: Database, campaign: Campaign) -> Comment:
     with db.session() as s:
         filed = escalations.escalate(
             s,
             TargetRef(TargetKind.CAMPAIGN, campaign.id),
-            form,
+            TIMEOUT_FORM,
             author=Agent(role='implementer', session=12),
             priority=1,
         )
+        s.commit()
+        return filed
+
+
+def test_with_no_orchestrator_on_an_agent_s_escalation_reaches_a_human_at_once(
+    db: Database, campaign: Campaign
+) -> None:
+    filed = implementer_escalates(db, campaign)
+    with db.session() as s:
+        [notice] = due(s, route_of(db, campaign, 'outbox', Outbox()), filed.created_at).notices
+    assert notice.comment == filed.id
+
+
+def test_an_agent_s_escalation_waits_its_grace_for_the_orchestrator_then_reaches_a_human_with_its_view(
+    db: Database, campaign: Campaign
+) -> None:
+    lead_on(db, campaign)
+    filed = implementer_escalates(db, campaign)
+    with db.session() as s:
         found = due(s, route_of(db, campaign, 'outbox', Outbox()), filed.created_at)
         assert (found.notices, found.later) == ((), filed.created_at + timedelta(minutes=30))
         [notice] = due(s, route_of(db, campaign, 'outbox', Outbox()), filed.created_at + timedelta(minutes=30)).notices
@@ -951,6 +979,7 @@ def test_a_provider_decides_whether_an_escalation_reaches_a_human_and_a_broken_c
     store_config(db, campaign.id, {'name': 'demo', 'plugins': {'escalation': {'provider': 'nope'}}})
     with db.session() as s:
         assert isinstance(escalations.policy(s, campaign.id), Structured), 'a stored config that no longer loads'
+        assert not escalations.orchestrated(s, campaign.id), 'nor has it an orchestrator: a human gets its escalations'
         routes_of = [route_of(db, owner, 'outbox', Outbox()) for owner in (campaign, None)]
         assert [len(due(s, route, utcnow()).notices) for route in routes_of] == [1, 1]
         mocker.patch.object(escalations, 'policy', return_value=Silent())

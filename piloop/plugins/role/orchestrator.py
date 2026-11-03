@@ -17,7 +17,9 @@ from piloop.plugins.role.kit.guides import READER
 from piloop.plugins.section.contract import SectionName
 from piloop.plugins.trigger.contract import TriggerName
 
-LEAD_TRIGGERS = frozenset({'news', 'run_failed'})
+NEWS = 'news'
+"""The trigger that hands the orchestrator an escalation or what a person writes."""
+LEAD_TRIGGERS = frozenset({NEWS, 'run_failed'})
 """What may wake the orchestrator: an escalation or what a person writes (``news``), and a failed run."""
 
 
@@ -86,6 +88,11 @@ class OrchestratorRole(SweepRole):
     ]
     """The guides, and the status that each brief shows after the news: lean, because each one stays in the resumed
     session."""
+
+    @property
+    def takes_escalations(self) -> bool:
+        """Whether it wakes on ``news``, and so answers the agents' escalations before they reach a human."""
+        return NEWS in self.triggers
 
     @model_validator(mode='before')
     @classmethod
