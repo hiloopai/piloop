@@ -7,6 +7,8 @@
 
 - The codec builds from the repo's C++ files with `g++ -O2`, and keeps lpaq1's command line: `codec 9 <in> <out>`
   compresses, `codec d <in> <out>` decompresses. The round trip must return exactly the input.
+- The codec targets x86-64-v3: AVX2 at most. The evaluator refuses a codec with AVX-512 instructions, since a scoring
+  machine may have none.
 - Decompression gets only the compressed file. It must not read the input from anywhere else.
 - Every byte of every file you add or change counts, xz-compressed: a model or dictionary tuned to `data/dev.bin`
   costs its size. The final version is also scored on Wikipedia text it has never seen.

@@ -223,7 +223,7 @@ class SelfTest(Frozen):
     """The task's dev evaluator on the starting repo, run in the run's sandbox before the agents start."""
 
     cpu: str
-    """The vendor, family and model of the sandbox's CPU, such as ``AuthenticAMD 25/17``."""
+    """The vendor, family and model of the sandbox's CPU, and its AVX-512: ``AuthenticAMD 25/17 avx512``."""
     values: list[float]
     """The dev metric of each run."""
 

@@ -4,7 +4,7 @@ Usage: ``python scorer.py <task dir> <data dir> <work dir>``, where the work dir
 ``sealed.tgz``. The tree gets the task's own ``evaluate.py`` and dev data (``data/``) over its own. It writes one JSON object to
 ``<work dir>/score.json``:
 ``{"dev": {"metrics": ...} | null, "dev_error": str, "sealed": <what sealed.py printed>, "cpu": str}``, ``cpu`` the
-vendor, family and model of the sandbox's CPU, such as ``AuthenticAMD 25/17``.
+vendor, family and model of the sandbox's CPU and its AVX-512, such as ``AuthenticAMD 25/17 avx512``.
 """
 
 import json
@@ -14,14 +14,20 @@ import sys
 import tarfile
 from pathlib import Path
 
+CPUINFO = Path('/proc/cpuinfo')
+
 
 def cpu() -> str:
-    """The vendor, family and model of this machine's CPU: Modal's sandboxes report no model name."""
+    """The vendor, family and model of this machine's CPU, and whether it has AVX-512.
+
+    Modal's sandboxes report no model name, and a sandbox of one family and model may lack AVX-512.
+    """
     fields: dict[str, str] = {}
-    for line in Path('/proc/cpuinfo').read_text().splitlines():
+    for line in CPUINFO.read_text().splitlines():
         key, _, value = line.partition(':')
         fields.setdefault(key.strip(), value.strip())
-    return f'{fields.get("vendor_id", "?")} {fields.get("cpu family", "?")}/{fields.get("model", "?")}'
+    avx512 = 'avx512' if 'avx512f' in fields.get('flags', '').split() else 'no-avx512'
+    return f'{fields.get("vendor_id", "?")} {fields.get("cpu family", "?")}/{fields.get("model", "?")} {avx512}'
 
 
 def main(task: Path, data: Path, work: Path) -> dict[str, object]:

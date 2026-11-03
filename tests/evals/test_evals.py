@@ -501,6 +501,40 @@ def test_t5_holdout_fails_a_round_trip_over_its_cpu_rule(tmp_path: Path):
     assert sealed.main(tmp_path, tmp_path, tmp_path)['score'] == pytest.approx(0.5)
 
 
+AVX512 = """#include <immintrin.h>
+__attribute__((target("avx512f"))) void add(int *a, const int *b) {
+    _mm512_storeu_si512(a, _mm512_add_epi32(_mm512_loadu_si512(a), _mm512_loadu_si512(b)));
+}
+int main(int argc, char **argv) { int a[16] = {0}, b[16] = {1}; if (argc > 5) add(a, b); return a[0]; }
+"""
+AVX2 = """#include <immintrin.h>
+__attribute__((target("avx2"))) void add(int *a, const int *b) {
+    _mm256_storeu_si256((__m256i *)a, _mm256_add_epi32(_mm256_loadu_si256((__m256i *)a), _mm256_loadu_si256((__m256i *)b)));
+}
+int main(int argc, char **argv) { int a[8] = {0}, b[8] = {1}; if (argc > 5) add(a, b); return a[0]; }
+"""
+
+
+@pytest.mark.skipif(shutil.which('g++') is None or shutil.which('objdump') is None, reason='needs g++ and objdump')
+def test_t5_refuses_a_codec_with_avx512_instructions(tmp_path: Path):
+    evaluate = module(TASKS / 't5-lpaq' / 'repo' / 'evaluate.py')
+    for name, source in (('v4', AVX512), ('v3', AVX2)):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / 'codec.cpp').write_text(source)
+    with pytest.raises(RuntimeError, match='AVX-512'):
+        evaluate.build(tmp_path / 'v4')
+    assert evaluate.build(tmp_path / 'v3').exists()
+
+
+def test_the_scorer_records_the_cpus_avx512_support(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    scorer = module(ROOT / 'scorer.py')
+    flags = 'vendor_id\t: AuthenticAMD\ncpu family\t: 25\nmodel\t\t: 17\nflags\t\t: fpu avx2 {}\n'
+    for extra, label in (('avx512f avx512vnni', 'AuthenticAMD 25/17 avx512'), ('', 'AuthenticAMD 25/17 no-avx512')):
+        (tmp_path / 'cpuinfo').write_text(flags.format(extra))
+        monkeypatch.setattr(scorer, 'CPUINFO', tmp_path / 'cpuinfo')
+        assert scorer.cpu() == label
+
+
 def test_the_wrapper_logs_each_evaluation_and_who_ran_it(tmp_path: Path):
     log = tmp_path / 'evaluations.jsonl'
     (tmp_path / 'evaluate.py').write_text('print(1)\n')

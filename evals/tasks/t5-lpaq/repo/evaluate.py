@@ -10,6 +10,7 @@ import io
 import json
 import lzma
 import os
+import re
 import resource
 import subprocess
 import sys
@@ -31,6 +32,10 @@ SKIP = {
     '.gitignore',
 }
 TIMEOUT = 300
+PREFIXES = {'26', '2e', '36', '3e', '64', '65', '67'}
+"""Legacy prefixes that may come before an EVEX-encoded instruction in objdump's bytes."""
+INSTRUCTION = re.compile(r'^\s*[0-9a-f]+:\t((?:[0-9a-f]{2} )+)\s*\t\S')
+"""A line of ``objdump -d`` that starts an instruction: its address, its bytes, then its mnemonic."""
 
 
 def files(root: Path) -> list[Path]:
@@ -62,7 +67,23 @@ def build(root: Path) -> Path:
     proc = subprocess.run(['g++', '-O2', '-o', str(out), *cpp], capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f'build failed\n{proc.stderr[-4000:]}')
+    if found := avx512(out):
+        raise RuntimeError(
+            f'the codec has {found} AVX-512 instructions: build for x86-64-v3 (AVX2 at most), as brief.md says, '
+            'since a scoring machine may have no AVX-512'
+        )
     return out
+
+
+def avx512(binary: Path) -> int:
+    """How many AVX-512 instructions ``binary`` has: those encoded with EVEX, whose first byte is 0x62."""
+    dump = subprocess.run(['objdump', '-d', str(binary)], capture_output=True, text=True, check=True).stdout
+    count = 0
+    for line in dump.splitlines():
+        if m := INSTRUCTION.match(line):
+            first = next((b for b in m[1].split() if b not in PREFIXES), '')
+            count += first == '62'
+    return count
 
 
 def score(data: Path, root: Path = ROOT) -> dict[str, float]:

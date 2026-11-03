@@ -29,7 +29,7 @@ class Scoring(Frozen):
     sealed: float | None
     detail: str
     cpu: str
-    """The vendor, family and model of the sandbox's CPU, such as ``AuthenticAMD 25/17``."""
+    """The vendor, family and model of the sandbox's CPU, and its AVX-512: ``AuthenticAMD 25/17 avx512``."""
 
 
 class Score(Frozen):
