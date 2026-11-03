@@ -13,7 +13,7 @@ from piloop.text import cell
 class RunFailed(Trigger):
     """A run failed or timed out, and no agent of the campaign got it yet. The agent gets it to investigate.
 
-    The row gets one ``anomaly.reported`` event for each such run. For the watchdog, that makes it an incident sweep.
+    The row gets one ``anomaly.reported`` event for each such run, which makes it an incident sweep.
     """
 
     INVESTIGATES: ClassVar[bool] = True

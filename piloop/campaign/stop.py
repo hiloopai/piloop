@@ -1,7 +1,7 @@
 """Stop conditions: decide when a campaign's stop rule, or a request, ends the campaign.
 
 The scheduler checks every active campaign once per pass. The reason goes into ``campaigns.stopped_reason`` and into
-the trigger of the closing watchdog. A stop or a cancel that someone asks for is an event that the daemon acts on and
+the ``stopped`` trigger. A stop or a cancel that someone asks for is an event that the daemon acts on and
 answers (``piloop.db.requests``).
 """
 

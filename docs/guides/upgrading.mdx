@@ -165,6 +165,8 @@ warning, until 0.7.0, and do nothing. What they wrote stays in the database.
 | Ideas that wait for a review, and the escalation of the slots that wait for them. | `idle_alert` of a role that does runs |
 | The rules that gave ideas to runs: an implementer claims its idea now. | `takes`, `explore_every` and `recovery_requeues` of a role that does runs |
 | The research role, and the `low_water` and `stalled` triggers that started it. Each worker proposes its own idea when the board has none for it, and the notes on the board are the workers' forum. Its sessions stay readable. | `[plugins.role.research]`, `"low_water"` and `"stalled"` in a role's `triggers`, `[plugins.trigger.low_water]`, `[plugins.trigger.stalled]` |
+| The watchdog role and its prompts. The orchestrator takes escalations and failed runs when its triggers name them, and a role of your own can still name `cron`, `stopped`, `low_yield` or `dead_at_startup`. Its sessions stay readable. | `[plugins.role.watchdog]` |
+| The `idle_queue` section: every free slot gets a fresh run, so a free slot with no open idea is not idle. | `"idle_queue"` in `[plugins.section] use` or a role's `sections`, `[plugins.section.idle_queue]` |
 
 ### The board
 
@@ -360,7 +362,7 @@ its body: answer it with `piloop inbox reply`, since it has no choices.
 A brief's context is the `context` section. A role's `sections` list puts it where it names it:
 
 ```toml
-[plugins.role.watchdog]
+[plugins.role.orchestrator]
 sections = ["database", "search", "context", "goal", "queue", "pack"]
 ```
 

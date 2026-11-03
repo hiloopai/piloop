@@ -78,7 +78,6 @@ from piloop.plugins.campaign_type.kit.evaluation.section.funnel import RunFunnel
 from piloop.plugins.campaign_type.optimization.section.yields import Yields
 from piloop.plugins.section.cost import Cost
 from piloop.plugins.campaign_type.kit.verdicts.section.candidates import Candidates
-from piloop.plugins.campaign_type.kit.backlog.section.idle_queue import IdleQueue
 from piloop.plugins.campaign_type.kit.verdicts.section.same_as_parent import SameAsParent
 from piloop.plugins.section.reported import Reported
 from piloop.plugins.section.inbox import Inbox
@@ -107,7 +106,6 @@ from piloop.plugins.section.orchestration import Orchestration
 from piloop.plugins.role.contract import ROLES, ImplementerRole, SweepRole
 from piloop.plugins.role.contract import Files, Continuity
 from piloop.plugins.role.contract import RoleConfig, Sweep
-from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.role.orchestrator import OrchestratorRole
 
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, VerdictRule, Case

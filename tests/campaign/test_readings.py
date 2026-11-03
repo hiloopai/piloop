@@ -34,9 +34,9 @@ from piloop.plugins.fact_source.kit.readings import FactRead, Readings
 from piloop.plugins.stop_rule.contract import STOP_RULES, Hold
 from piloop.reports.overview import progress
 from tests.campaign.test_stop import add_run
-from tests.conftest import END_RUN, SETTLE, WATCHDOG, ScriptRuntime, run_all, write_toml
+from tests.conftest import END_RUN, SETTLE, SWEEPER, ScriptRuntime, run_all, write_toml
 from tests.daemon.test_roles import PLUGIN, installed
-from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_watchdog, set_config, stop_campaign
+from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_sweeper, set_config, stop_campaign
 
 COMMAND = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
 
@@ -208,7 +208,7 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
     assert len(daemon_comments(db)) == 1, 'each notice once'
 
     bill(db, campaign, file, '1012')
-    request_watchdog(db, campaign)
+    request_sweeper(db, campaign)
     assert run_all(scheduler) == [], 'at the limit nothing launches, not even a row inserted by hand'
     note, (kind, priority, body) = daemon_comments(db)[1:]
     assert note == ('note', 1, 'Notice: spend is 1012, past the 200 notice.')
@@ -237,7 +237,7 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
     with db.session() as s:
         sync(s, s.get_one(Campaign, campaign.id))  # This is what `piloop init` does.
         s.commit()
-    assert len(run_all(scheduler)) == 2, 'the limit raised: the watchdog and the next run launch'
+    assert len(run_all(scheduler)) == 2, 'the limit raised: the sweeper and the next run launch'
     scheduler.wait(SETTLE)
 
 
@@ -319,7 +319,7 @@ def test_a_stopped_campaign_is_held_only_while_its_closing_review_waits(db: Data
         assert progress(s, p, cfg, p.created_at).endswith(' · spend —/10 · no limit stops it: open-ended'), (
             'stopped, no review waits'
         )
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=p.id, reason='campaign stopped'))
+        s.add(AgentSession(kind=SWEEPER, campaign_id=p.id, reason='campaign stopped'))
         s.flush()
         assert progress(s, p, cfg, p.created_at).endswith(' (launches held: spend not known)'), 'its review waits'
 
@@ -337,7 +337,7 @@ def test_a_closing_review_waits_only_on_a_stopped_campaign_with_wait_and_a_reque
     stop_campaign(db, campaign, 'max_runs: 3 runs')
     assert not waits(), 'run by default'
     assert not waits('wait'), 'nothing requested'
-    request_watchdog(db, campaign)
+    request_sweeper(db, campaign)
     assert not waits('run')
     assert waits('wait')
 

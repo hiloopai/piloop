@@ -1,6 +1,6 @@
 """Raw SQL access for agents: any statement except a schema change.
 
-The same rules apply to every client (``piloop sql``, the watchdog, any agent). SQLite's authorizer denies DDL,
+The same rules apply to every client (``piloop sql``, any agent). SQLite's authorizer denies DDL,
 ATTACH, transactions, writes to ``alembic_version``, ``session_actor``, ``tokens`` and ``secrets``, and all PRAGMAs
 except the read-only ones that describe the schema. ``secrets.value`` reads as NULL. The connection is in autocommit
 mode, because a forgotten BEGIN would lock the database. Everything else is allowed, DELETE included. The schema

@@ -77,7 +77,7 @@ from piloop.plugins.vcs.contract import Conflicts, Pin, Repository
 def head(s: Session, campaign: Campaign, *, excluding: Candidate | None = None) -> Candidate | None:
     """Return the head: the campaign's verdict rule chooses it among the trunk keeps (``VerdictRule.head``).
 
-    Every run that pins no base starts from the head. The watchdog gets the head checked out, and
+    Every run that pins no base starts from the head. A sweep gets the head checked out, and
     ``target`` is read on it. ``excluding`` leaves out one candidate: the one being judged, which is never its own bar.
 
     Raises:

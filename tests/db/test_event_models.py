@@ -118,7 +118,7 @@ def test_every_trigger_writes_an_event_that_loads_as_the_model_that_renders_it(
             'DELETE FROM comments WHERE id = 1',
             'DELETE FROM candidates WHERE id = 2',
             'DELETE FROM ideas WHERE id = 2',
-            "INSERT INTO agent_sessions (kind, campaign_id, state, reason) VALUES ('watchdog', 1, 'requested', 'r')",
+            "INSERT INTO agent_sessions (kind, campaign_id, state, reason) VALUES ('sweeper', 1, 'requested', 'r')",
             "UPDATE campaigns SET config = json_set(config, '$.confidence', 0.9) WHERE id = 1",
             "INSERT INTO evaluations (candidate_id, evaluator_id, started_at) VALUES (1, 1, '2026-10-01 12:00:00')",
             "UPDATE evaluations SET cancelled_by = 'human'",

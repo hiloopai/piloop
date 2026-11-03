@@ -4895,7 +4895,7 @@
           "line"
         ],
         "title": "AnomalyNews",
-        "description": "An anomaly that the daemon gave to a watchdog."
+        "description": "An anomaly that the daemon gave to an agent."
       },
       "Batch": {
         "properties": {

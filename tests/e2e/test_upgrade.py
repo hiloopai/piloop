@@ -104,7 +104,7 @@ CONFIG = {
     'roles': {
         'implementer': {'max_concurrent': 2, 'timeout': 600},
         'research': {'max_ideas': 0},
-        'watchdog': {
+        'sweeper': {
             'timeout': 60,
             'interval': 100_000,
             'triggers': [{'provider': 'anomaly'}, {'provider': 'stopped'}],

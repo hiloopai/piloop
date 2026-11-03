@@ -24,7 +24,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import record, request_
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from tests.conftest import WATCHDOG
+from tests.conftest import SWEEPER
 
 
 def test_an_ask_is_pending_while_it_is_the_latest_of_its_kind_on_its_target_and_unanswered(
@@ -71,7 +71,7 @@ def test_a_cancel_is_answered_once_none_of_its_agents_is_requested_starting_or_r
     run_id, agent = queued_run(db, campaign, AgentSessionState.STARTING)
     with db.session() as s:
         request_cancel(s, s.get_one(Run, run_id), System.HUMAN, ending=Ending.NOW)
-        sweep = AgentSession(kind=WATCHDOG, campaign_id=campaign.id, state=AgentSessionState.RUNNING)
+        sweep = AgentSession(kind=SWEEPER, campaign_id=campaign.id, state=AgentSessionState.RUNNING)
         s.add(sweep)
         s.flush()
         request_cancel(s, sweep, System.HUMAN, ending=Ending.WRAP_UP)

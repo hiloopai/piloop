@@ -430,8 +430,8 @@ class Campaigns:
     ) -> None:
         """Close a stopped campaign: each provider that ``Closes`` does its share, then the triggers of ``sweeping`` fire.
 
-        The pass closes a campaign that the daemon stopped once it ``settled``, with every sweeping role: by default,
-        the watchdog's closing review, which can then search the campaign's reports. A stop rule with
+        The pass closes a campaign that the daemon stopped once it ``settled``, with every sweeping role whose triggers
+        name ``stopped``, which can then search the campaign's reports. A stop rule with
         ``while_held = "skip"`` closes it at the stop, with none. The stop and the close are events (``unclosed``), so a daemon that
         restarts in between still closes it, once.
         """
@@ -769,8 +769,7 @@ class Campaigns:
         sweep's lines: the checkout, the workspace, the role's own (``SweepRole.context``), then the notes on the row so
         far, which it gets here and not again. A sweep that got anomalies is
         an incident sweep: its sections read them (``Rendering.given``), and the brief adds the role's incident prompt.
-        Every other sweep's brief adds the role's routine prompt. The watchdog's are its incident sweep and its
-        progress review. Nothing that a sweep commits is scored. In a worktree at the head, the commits are removed
+        Every other sweep's brief adds the role's routine prompt. Nothing that a sweep commits is scored. In a worktree at the head, the commits are removed
         with the worktree when the agent ends.
         """
         with self._db.session() as s:

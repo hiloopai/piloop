@@ -105,13 +105,13 @@ def test_an_orchestrator_on_another_machine_may_run_the_commands_that_its_brief_
 def test_the_commands_that_run_are_those_of_the_agents_role(
     db: Database, campaign: Campaign, tmp_path: Path, runner: Runner
 ) -> None:
-    watchdog = agent_job(db, campaign, tmp_path)
+    sweeper = agent_job(db, campaign, tmp_path)
     with db.session() as s:
         orchestrator = AgentSession(kind='orchestrator', campaign_id=campaign.id)
         s.add(orchestrator)
         s.commit()
-        job = watchdog.model_copy(update={'agent_session': orchestrator.id})
-    refused = runner(watchdog, Call(argv=['inbox', 'show', '1'], token=launched(db, watchdog)))
+        job = sweeper.model_copy(update={'agent_session': orchestrator.id})
+    refused = runner(sweeper, Call(argv=['inbox', 'show', '1'], token=launched(db, sweeper)))
     assert refused.exit_code == 2, 'not in the default list'
     shown = runner(job, Call(argv=['inbox', 'show', '1'], token=launched(db, job)))
     assert 'an agent on another machine runs only' not in shown.stderr, shown.stderr
@@ -137,7 +137,7 @@ def test_a_relayed_call_runs_on_the_server_as_the_agent_in_its_campaigns_checkou
 ) -> None:
     job = agent_job(db, campaign, tmp_path)
     token = launched(db, job)
-    actor = Agent(role='watchdog', session=job.agent_session).signature
+    actor = Agent(role='sweeper', session=job.agent_session).signature
     note = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('campaign', 1, '{actor}', 'note', 'hi')"
     done = runner(job, Call(argv=['sql', '-'], stdin=note, token=token))
     assert done.exit_code == 0, done.stderr

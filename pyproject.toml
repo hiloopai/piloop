@@ -200,7 +200,6 @@ funnel = "piloop.plugins.campaign_type.kit.evaluation.section.funnel:RunFunnel"
 yields = "piloop.plugins.campaign_type.optimization.section.yields:Yields"
 cost = "piloop.plugins.section.cost:Cost"
 candidates = "piloop.plugins.campaign_type.kit.verdicts.section.candidates:Candidates"
-idle_queue = "piloop.plugins.campaign_type.kit.backlog.section.idle_queue:IdleQueue"
 same_as_parent = "piloop.plugins.campaign_type.kit.verdicts.section.same_as_parent:SameAsParent"
 reported = "piloop.plugins.section.reported:Reported"
 inbox = "piloop.plugins.section.inbox:Inbox"
@@ -319,7 +318,6 @@ review = "piloop.plugins.campaign_type.optimization.skills:REVIEW"
 
 [project.entry-points."piloop.roles"]
 implementer = "piloop.plugins.role.implementer:ImplementerRole"
-watchdog = "piloop.plugins.campaign_type.kit.runs.role.watchdog:WatchdogRole"
 orchestrator = "piloop.plugins.role.orchestrator:OrchestratorRole"
 
 [tool.hatch.build.targets.wheel]

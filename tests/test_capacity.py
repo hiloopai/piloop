@@ -14,7 +14,7 @@ from piloop.plugins.executor.kit.capacity import GB, HostSample, Pool, admits, s
 from piloop.plugins.executor.kit.leases import SERVE, Grant, Leases
 from piloop.plugins.executor.kit.tables import LeaseWorker, NoLease
 from piloop.plugins.executor.workers import Workers
-from tests.conftest import WATCHDOG, home_cas
+from tests.conftest import SWEEPER, home_cas
 from tests.test_lease import TIMING, Recorder, agent_job, evaluation_job, granted, queue
 
 HOST = HostSample(at=utcnow(), cpus=4, load1=2.0, memory_available=8 * GB, disk_free=100 * GB)
@@ -100,7 +100,7 @@ def test_a_worker_whose_slots_are_full_says_slots_while_core_holds_back_a_job_fo
     assert leases.acquire('w1', uuid4().hex, HOST) is NoLease.SLOTS
     assert leases.acquire('w2', uuid4().hex, HOST) is NoLease.NOTHING, 'w2 has not the runner of the waiting evaluation'
     with db.session() as s:
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id))  # a requested agent, not launched
+        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id))  # a requested agent, not launched
         s.commit()
     assert leases.acquire('w2', uuid4().hex, HOST) is NoLease.SLOTS
 

@@ -561,11 +561,11 @@ def test_a_package_s_bridge_runs_on_its_file_after_the_bridges_it_reads(
     order = deprecated.bridges(Scope.CAMPAIGN)
     assert order.index(shade) > order.index(deprecated.campaign_finding_grace)
     assert shade not in deprecated.bridges(Scope.HOME), 'config.toml has no roles'
-    raw: dict[str, object] = {'plugins': {'role': {'watchdog': {'shade': 2}}}}
+    raw: dict[str, object] = {'plugins': {'role': {'sweeper': {'shade': 2}}}}
     toml = tmp_path / 'piloop.toml'
-    toml.write_text('[plugins.role.watchdog]\nshade = 2\n')
+    toml.write_text('[plugins.role.sweeper]\nshade = 2\n')
     deprecated.apply(toml, raw, deprecated.bridges(Scope.CAMPAIGN))
-    assert deprecated.table_at(raw, 'plugins', 'role', 'watchdog') == {'tint': 2}
+    assert deprecated.table_at(raw, 'plugins', 'role', 'sweeper') == {'tint': 2}
     installed(monkeypatch, [EntryPoint(n, f'{__name__}:{n}', deprecated.BRIDGES.group) for n in ('shade', 'early')])
     order = deprecated.bridges(Scope.CAMPAIGN)
     assert order.index(early) < order.index(shade), 'a bridge can name one that runs after it'

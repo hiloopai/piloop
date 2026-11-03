@@ -45,7 +45,7 @@ Each command takes `--reason '<why>'`, signs the change with your actor and reco
 
 ### Ask for an agent
 
-- `INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('watchdog', <p>, 'requested')`. The daemon starts it at once.
+- `INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('<role>', <p>, 'requested')`. The daemon starts it at once.
 - Kinds: the sweeping roles of `piloop.toml`. A role that does runs needs a run, so leave its agents to the
   scheduler.
 - Optional: `harness` and `model` pin the choice. `reason` says why.
@@ -77,7 +77,7 @@ daemon never overwrites a verdict that is not its own.
 - `piloop pause <campaign> --reason '<why>'` launches nothing more: no run, no sweep, no requested agent. Running work
   finishes and is scored. It raises no escalation.
 - The daemon still measures what a new evaluator or a request needs. `--evals` holds that too.
-- No watchdog starts for an anomaly while paused; it gets the anomaly after the resume. Paused time does not count
+- No agent starts for an anomaly while paused; it gets the anomaly after the resume. Paused time does not count
   toward `max_hours`.
 - `piloop resume <campaign>` ends it. `campaigns.paused` and `paused_reason` show it, and `campaign.paused` events log it.
 - Pause with `piloop pause`, never with a `hold_at` fact that you set by hand: a hold stops every measurement too.
@@ -90,7 +90,7 @@ daemon never overwrites a verdict that is not its own.
   - drops the requests and queued runs pending at that moment (their ideas go back to `open`);
   - tells each running implementer to save its work and stop, and ends it 10 minutes later (`--kill`: at once); its
     versions are scored;
-  - checks the `stopped` triggers once those versions are judged: by default, they request one closing watchdog sweep;
+  - checks the `stopped` triggers once those versions are judged: a role that names one gets one closing sweep;
   - starts and files nothing more.
 - An orchestrator or an agent asks for a stop with an escalation: its `piloop campaign stop` is refused. Never
   UPDATE `campaigns.status`: an UPDATE gets no closing sweep.

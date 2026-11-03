@@ -75,28 +75,6 @@ max_concurrent = 1                        # the most runs at once; more finish s
 # startup_relaunches = 2                  # new implementers for a run whose implementer failed to start
 # follow_head = "off"                     # "message": a running implementer hears when another run's version is the head
 
-[plugins.role.watchdog]                   # a watchdog investigates anomalies and reviews progress every `interval` seconds
-# harnesses = ["pi", "claude", "codex"]   # if not set: [plugins.harness] use
-# model = { pi = "..." }                  # over the model of each [plugins.harness.<name>]
-# effort = "high"                         # how hard its agents think, as the harness names it
-# addendum = "briefs/watchdog.md"         # a file appended to brief.md in this role's briefs only
-# mcp = []                                # the [plugins.mcp_server.<name>] servers that this role's agents get; none by default
-# prompt = "briefs/my-watchdog.md"        # a file that replaces the built-in start of this role's brief
-# runtime = "subprocess"                  # if not set: [plugins.runtime] use
-# writes = ["comments(note)"]             # what the brief says the role may write; default: what piloop expects of it
-# files = "nothing"                       # what its agents may file with `piloop idea`: nothing or ideas
-# plan_words = 150                        # the most words in the plan of an idea that its agents file
-runs = false                              # a sweeping role: its triggers start it and nothing it commits is scored
-triggers = ["run_failed", "dead_at_startup", "low_yield", "cron", "stopped"]  # names of [plugins.trigger.<name>]: incidents, the timer below, the stop
-# sections = ["context", "lessons", …]  # names of [plugins.section.<name>]; if not set: the installed sections of its briefs
-interval = 1800                           # seconds between two progress reviews of the cron trigger; 0 turns it off
-# continuity = "fresh"                   # or "resume": each sweep continues the last sweep's harness session
-# incident_prompt = "briefs/incident.md"  # follows the prompt in a sweep that got anomalies; default: watchdog_incident.md
-# routine_prompt = "briefs/review.md"     # follows the prompt in every other sweep; default: watchdog_progress.md
-max_ideas = 1                             # new ideas per sweep of a role that files ideas; the watchdog files none
-timeout = 600
-max_concurrent = 1
-
 [plugins.role.orchestrator]               # piloop launches the campaign's orchestrator when news arrives for it
 # harnesses = ["claude"]                  # if not set: [plugins.harness] use; it keeps the harness of its last session
 # model = { claude = "claude-opus-5-5" }  # over the model of each [plugins.harness.<name>]
@@ -123,7 +101,7 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 # [plugins.role.reviewer]                 # a role of your own: any new name; it needs a prompt and triggers
 # prompt = "briefs/reviewer.md"           # the file that starts its brief
 # triggers = ["new_keep"]                # names of [plugins.trigger.<name>], such as the one below
-# max_concurrent = 1                      # it takes every key of [plugins.role.watchdog] except its defaults
+# max_concurrent = 1                      # it takes every key of a sweeping role, as [plugins.role.orchestrator] shows them
 
 # [plugins.role.quick]                    # a role of your own that does runs: any new name with runs = true
 # runs = true                             # it takes every key and default of [plugins.role.implementer], its prompt included

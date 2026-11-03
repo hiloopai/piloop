@@ -131,7 +131,7 @@ class RoleConfig(Parameters):
     slot is free."""
     addendum: str | None = None
     """A repo-relative file that is appended to ``brief.md`` in the briefs of this role only. Use it for instructions
-    that only this role needs, for example how the watchdog reads a loss table."""
+    that only this role needs, for example how the orchestrator reads a loss table."""
     mcp: list[McpServerName] = []
     """The MCP servers that the agents of this role get, by the name of their ``[plugins.mcp_server.<name>]`` table.
     Every harness in the role's rotation must be able to take them in the invocation of the role's runtime."""
@@ -234,16 +234,11 @@ class Sweep(Pass, Protocol):
 
 
 class SweepRole(RoleConfig):
-    """``[plugins.role.<name>]`` of a sweeping role: the watchdog, the orchestrator, or a new role that you define.
+    """``[plugins.role.<name>]`` of a sweeping role: the orchestrator, or a new role that you define.
 
     A sweep is an agent without a run. Its triggers request it, and nothing is scored when it ends. A table with a new
     name defines a new role, and needs ``prompt`` and ``triggers``.
     """
-
-    INCIDENT_PROMPT: ClassVar[Traversable | None] = None
-    """The role's own ``incident_prompt``: a resource of its package, or None."""
-    ROUTINE_PROMPT: ClassVar[Traversable | None] = None
-    """The role's own ``routine_prompt``: a resource of its package, or None."""
 
     runs: Literal[False] = False
     """The agents of this role do no runs. Set ``runs = true`` in a new table to define a role that does runs."""
@@ -264,11 +259,10 @@ class SweepRole(RoleConfig):
     """The maximum number of new ideas one sweep of a role that files ideas may insert, as its brief states it."""
     incident_prompt: str | None = None
     """A file that follows ``prompt`` in the brief of an incident sweep, a sweep that got incidents from a
-    trigger that investigates, such as ``run_failed``: a path relative to the repo root, or an absolute path. When unset, the role's own (the watchdog's
-    ``watchdog_incident.md``), else nothing."""
+    trigger that investigates, such as ``run_failed``: a path relative to the repo root, or an absolute path. When
+    unset, nothing."""
     routine_prompt: str | None = None
-    """A file that follows ``prompt`` in the brief of every other sweep. When unset, the role's own (the watchdog's
-    ``watchdog_progress.md``), else nothing."""
+    """A file that follows ``prompt`` in the brief of every other sweep. When unset, nothing."""
     SURFACE: ClassVar[Surface] = Surface.SWEEP
 
     def context(self, sweep: Sweep) -> list[str]:

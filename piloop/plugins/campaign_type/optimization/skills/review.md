@@ -70,8 +70,8 @@ The subagents:
    below.
 3. **Orchestrator.** Its session: decisions it took for the human, briefs, status reports compared with the database,
    spend.
-4. **Ideas and the watchdog.** For each idea: where it came from and what it produced. Sweeps that produced nothing. What the watchdog
-   caught and missed.
+4. **Ideas and sweeps.** For each idea: where it came from and what it produced. Sweeps that produced nothing, and
+   what they caught and missed.
 5. **Evaluation design.** Is the scoring panel held out? How much does a single unit move the score? Could an agent
    read the labels?
 
@@ -156,7 +156,7 @@ FROM comments e LEFT JOIN comments d ON d.id = (SELECT MIN(id) FROM comments WHE
             OR (target_kind = 'comment' AND target_id = e.id)))
 WHERE e.kind = 'escalation' AND e.created_at BETWEEN '<start>' AND '<end>';
 
--- Lessons that the closing watchdog left, and what past campaigns on the same code tried (campaigns.repo)
+-- Lessons that the campaign left, and what past campaigns on the same code tried (campaigns.repo)
 SELECT id, created_at, family, status, effect, metric, body FROM lessons WHERE campaign_id = <p> ORDER BY id;
 SELECT p.name, i.id, i.status, i.title FROM ideas_fts JOIN ideas i ON i.id = ideas_fts.rowid
 JOIN campaigns p ON p.id = i.campaign_id
@@ -206,7 +206,7 @@ Run all of them on every kept candidate. Cheating and honest overfitting both sh
   - Join its units against everything that any candidate trained on or was tuned against.
   - Report the trained and the untrained slices separately.
 - **Report against measurement.**
-  - Compare every number that an implementer, the watchdog or the orchestrator reported with the
+  - Compare every number that an implementer or the orchestrator reported with the
     `measurements` row it names.
   - Query again before you repeat any of them.
 - **Side channels.**

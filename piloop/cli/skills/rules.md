@@ -11,7 +11,7 @@ SELECT at, actor, kind, payload FROM events WHERE target_kind = '<k>' AND target
 ```
 
 - Changes to an idea's status, priority or track, a candidate's verdict and a campaign's status or pause carry
-  `{old, new}` and the actor (`human`, `orchestrator`, `daemon`, `watchdog#7` …).
+  `{old, new}` and the actor (`human`, `orchestrator`, `daemon`, `implementer#7` …).
 - `idea.linked` and `idea.unlinked` carry the target and the kind.
   The commands put their reason in a note on the idea. `measurement.recorded` has the metrics.
 - Deletes of ideas, comments and candidates leave `*.deleted` tombstones.

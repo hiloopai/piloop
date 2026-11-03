@@ -1099,7 +1099,7 @@ def test_an_implementer_brief_ends_with_its_roles_sections(
                 effect=0,
                 metric='score',
                 body='idea#1 on evaluator#1',
-                created_by='watchdog#9',
+                created_by='sweeper#9',
             )
         )
         s.commit()
@@ -1861,7 +1861,7 @@ def test_uncommitted_changes_of_a_run_that_was_not_ended_are_kept_but_not_an_att
                 body='x',
             )
         )
-        s.add(Comment(target=TargetRef(IDEA, idea_id), author='watchdog#9', kind='note', body='y'))
+        s.add(Comment(target=TargetRef(IDEA, idea_id), author='sweeper#9', kind='note', body='y'))
         s.commit()
     write_toml(Path(campaign.path), '#!/bin/sh\necho other >> solve.txt\n')
     reload_campaign(db, campaign)

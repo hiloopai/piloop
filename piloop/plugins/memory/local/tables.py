@@ -25,7 +25,7 @@ class LessonStatus(StrEnum):
 class Lesson(Base):
     """The standing conclusion about one mechanism family of a campaign, for the next campaigns.
 
-    The closing watchdog writes one for each family that a campaign tried, and the orchestrator may write more. The
+    The orchestrator, or a role that the ``stopped`` trigger starts, writes one for each family that a campaign tried. The
     newest lesson for a (campaign, family) is the current one: a new conclusion is a new row, and rows are never
     updated. Briefs open with the current lessons of the repo (``piloop.reports.wake``).
     """
@@ -51,7 +51,7 @@ class Lesson(Base):
     body: Mapped[str]
     """Why: what was tried, the evaluator that measured the effect, why it stopped. It cites idea and candidate ids."""
     created_by: Mapped[str]
-    """Who wrote it: the closing watchdog (``watchdog#<agent session id>``), the orchestrator or a human."""
+    """Who wrote it: an agent (``orchestrator#<agent session id>``) or a human."""
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
 

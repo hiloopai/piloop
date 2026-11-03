@@ -14,6 +14,7 @@ from piloop.agents.refill import usage_of
 from piloop.config import load_campaign_config
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.session import Database
+from piloop.ids import RoleName
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.harness import pi
 from piloop.plugins.harness.contract import Custom, Harness, Usage, each_provider
@@ -21,7 +22,10 @@ from piloop.plugins.harness.kit import jsonl as jsonl_module
 from piloop.plugins.harness.kit.jsonl import JsonlSessions, dash_non_alnum, dash_separators_wrapped, no_cwd
 from piloop.settings import env_names, expand_env
 from piloop.usage import UsageError, human
-from tests.conftest import WATCHDOG, bare_config
+from tests.conftest import SWEEPER, bare_config
+
+LEAD = RoleName('orchestrator')
+"""A built-in sweeping role: the only role of ``bare_config`` besides the implementer."""
 
 SESSIONS = Path(__file__).parent.parent / 'fixtures' / 'sessions'
 """Redacted heads of real session files: the records that carry usage, with the prompts and outputs cut."""
@@ -305,7 +309,7 @@ def test_usage_of_an_implementer_never_raises(
         found = AgentSession(kind=IMPLEMENTER, harness='pi', session_id=PI_ID, **ended)
         removed = AgentSession(kind=IMPLEMENTER, harness='local-agent', session_id='x', **ended)
         no_spec = AgentSession(kind=IMPLEMENTER, harness='script', session_id='x', **ended)
-        orphan = AgentSession(kind=WATCHDOG, harness='pi', session_id=PI_ID, state=AgentSessionState.EXITED)
+        orphan = AgentSession(kind=SWEEPER, harness='pi', session_id=PI_ID, state=AgentSessionState.EXITED)
         s.add_all([found, removed, no_spec, orphan])
         s.flush()
         usage = usage_of(s, found)
@@ -331,7 +335,7 @@ def test_the_usage_column_holds_a_usage_and_an_unknown_usage_is_null(db: Databas
     with db.session() as s:
         s.add(Campaign(name='p', path='/p', config=bare_config('p')))
         s.flush()
-        s.add_all([AgentSession(kind=WATCHDOG, campaign_id=1, usage=usage), AgentSession(kind=WATCHDOG, campaign_id=1)])
+        s.add_all([AgentSession(kind=LEAD, campaign_id=1, usage=usage), AgentSession(kind=LEAD, campaign_id=1)])
         s.flush()
         s.get_one(AgentSession, 2).usage = None
         s.commit()

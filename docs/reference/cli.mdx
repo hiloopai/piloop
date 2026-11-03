@@ -205,8 +205,8 @@ The pause is a state of the campaign in the database (`campaigns.paused`), not a
 command. `piloop status` shows it with the reason. The paused time does not count toward `max_hours`, and no limit of
 the stop rule is checked while paused.
 
-A pause launches no agent at all, so no watchdog sweep starts for an anomaly of the running work either: the anomaly
-shows in `piloop status`, and the watchdog gets it after `piloop resume`. The running agents keep their timeouts.
+A pause launches no agent at all, so no sweep starts for an anomaly of the running work either: the anomaly shows in
+`piloop status`, and a role whose triggers name it gets it after `piloop resume`. The running agents keep their timeouts.
 
 ### piloop resume
 
@@ -433,7 +433,7 @@ piloop status [REF] [--status active|stopped|retired] [--json]
 
 Prints the daemon's state, then for each campaign the sections of its `[status] sections`: by default the head, the
 goal, the tracks, the trajectory, the open runs, the queue, the running agents with their last line, the recent
-candidates, the incidents that agents got, the inbox and the recent events. The watchdog gets the same sections in its
+candidates, the incidents that agents got, the inbox and the recent events. A sweep gets the same sections in its
 brief.
 
 Without `REF`, it lists the active and stopped campaigns. `--status` lists the campaigns of that status instead, and
@@ -530,7 +530,7 @@ piloop inbox wait [REF] [--after EVENT_ID] [--timeout SECONDS]
 
 Blocks until something needs the orchestrator, then prints it, one line each, and the command for the next wait. It
 returns for a new inbox item that someone else wrote, a campaign that the daemon stopped,
-an anomaly that the daemon gave to a watchdog, and the daemon's verdict on a measured candidate. `--after` is the cursor
+an anomaly that the daemon gave to an agent, and the daemon's verdict on a measured candidate. `--after` is the cursor
 that the last wait printed (default: now). `--timeout` (default 1800) is how long to wait before it returns with
 nothing. Set the timeout of your shell tool above it.
 
@@ -581,7 +581,7 @@ ids. Without `--campaign`, it uses the campaign of the current directory, else t
 piloop launch REF ROLE [--harness NAME] [--model MODEL] [--reason TEXT]
 ```
 
-Asks the daemon for one more agent of `ROLE`, a sweeping role: `watchdog`, `orchestrator` or a
+Asks the daemon for one more agent of `ROLE`, a sweeping role: `orchestrator` or a
 [role that you defined](/concepts/roles#define-a-role). The daemon starts it at once, within the role's
 `max_concurrent`.
 Only the daemon starts implementers, because an implementer needs a run.

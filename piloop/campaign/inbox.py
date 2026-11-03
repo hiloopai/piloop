@@ -112,7 +112,7 @@ def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party
     - new or edited unacknowledged inbox items that wait for ``party`` (``waiting_for``). The orchestrator's own
       decisions are for the human.
     - campaigns that the daemon stopped.
-    - anomalies that the daemon gave to a watchdog.
+    - anomalies that the daemon gave to an agent.
     - the verdicts that another party gave: the daemon's, or a person's.
 
     It reads the ``WAKES`` events from the feed (``piloop.db.feed``), a page at a time until a page gives a line.

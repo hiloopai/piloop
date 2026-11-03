@@ -1,4 +1,4 @@
-"""The ``low_yield`` trigger and its alarm: few runs that reach scoring, or none kept, wake the watchdog and page once."""
+"""The ``low_yield`` trigger and its alarm: few runs that reach scoring, or none kept, wake the sweeper and page once."""
 
 from pathlib import Path
 from typing import Never
@@ -22,7 +22,7 @@ from piloop.plugins.escalation.structured import Structured
 from piloop.plugins.section.contract import SECTIONS, Rendering, markdown
 from piloop.plugins.trigger.contract import Fire
 from tests.campaign.test_stop import add_candidate, add_run
-from tests.conftest import WATCHDOG, cas_of
+from tests.conftest import SWEEPER, cas_of
 from tests.daemon.test_scheduler import set_config
 from tests.reports.test_overview import agent
 
@@ -52,7 +52,7 @@ def finished(db: Database, campaign: Campaign, *results: Result) -> None:
 
 
 def fired(db: Database, campaign: Campaign, trigger: LowYield) -> Fire | None:
-    """What ``trigger`` of the watchdog fires on a pass now."""
+    """What ``trigger`` of the sweeper fires on a pass now."""
 
     def unread(_: object) -> Never:
         raise AssertionError('the yield reads no backlog and no stall')
@@ -62,14 +62,14 @@ def fired(db: Database, campaign: Campaign, trigger: LowYield) -> Fire | None:
             s=s,
             now=utcnow(),
             campaign=s.get_one(Campaign, campaign.id),
-            role=WATCHDOG,
+            role=SWEEPER,
             last=None,
             quiet=None,
             interval=0,
         )
         found = trigger.fire(p)
-        if found is not None:  # the scheduler gives the incident to the watchdog's row
-            row = agent(s, p.campaign, WATCHDOG, 0, 5)
+        if found is not None:  # the scheduler gives the incident to the sweeper's row
+            row = agent(s, p.campaign, SWEEPER, 0, 5)
             for event in found.events:
                 s.add(Event(actor='daemon', target=TargetRef(TargetKind.AGENT_SESSION, row.id), payload=event))
             s.commit()
@@ -110,7 +110,7 @@ def test_the_yield_counts_the_latest_finished_attempts_by_how_far_each_got(db: D
         )
 
 
-def test_few_scored_runs_wake_the_watchdog_once_until_the_yield_recovers(db: Database, campaign: Campaign) -> None:
+def test_few_scored_runs_wake_the_sweeper_once_until_the_yield_recovers(db: Database, campaign: Campaign) -> None:
     """Fewer than ``min_scored`` of a full window scored: one incident, with the breakdown, until it recovers."""
     trigger = LowYield(window=4, min_scored=0.5)
     finished(db, campaign, NONE, NONE, SCORED)
@@ -124,7 +124,7 @@ def test_few_scored_runs_wake_the_watchdog_once_until_the_yield_recovers(db: Dat
         ' fewer than 50% scored'
     )
     finished(db, campaign, NONE)
-    assert fired(db, campaign, trigger) is None, 'the watchdog got this spell'
+    assert fired(db, campaign, trigger) is None, 'the sweeper got this spell'
     watched(db, campaign, trigger)
     finished(db, campaign, SCORED, SCORED, SCORED)
     watched(db, campaign, trigger)
@@ -133,7 +133,7 @@ def test_few_scored_runs_wake_the_watchdog_once_until_the_yield_recovers(db: Dat
     assert fired(db, campaign, trigger) is not None, 'a new spell after the recovery'
 
 
-def test_scored_runs_without_a_keep_wake_the_watchdog(db: Database, campaign: Campaign) -> None:
+def test_scored_runs_without_a_keep_wake_the_sweeper(db: Database, campaign: Campaign) -> None:
     """``keepless`` scored runs in the window and none kept: the runs reach the evaluator, and nothing is better."""
     finished(db, campaign, SCORED, SCORED, SCORED, NONE)
     assert fired(db, campaign, LowYield(window=4, min_scored=0.5, keepless=None)) is None

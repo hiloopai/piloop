@@ -26,16 +26,16 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization.planner import NO_RUN_ERROR
 from piloop.plugins.executor.workers import Workers
+from piloop.plugins.role.contract import SweepRole
 from piloop.plugins.trigger.cron import CronTrigger
 from tests.conftest import (
     HARNESS_NOOP,
     HARNESS_PROMPT_TO_FILE,
     SETTLE,
-    WATCHDOG,
+    SWEEPER,
     ScriptRuntime,
     campaigns_of,
     end_of,
@@ -110,7 +110,7 @@ def fail_a_run(db: Database, campaign: Campaign, title: str, status: RunStatus =
 def finish_a_run(db: Database, campaign: Campaign, title: str, verdict: Outcome = Outcome.DISCARD) -> RunId:
     """Add a run that succeeded just now with a measured candidate, a discard by default.
 
-    The watchdog trigger sees no failure.
+    The sweeper trigger sees no failure.
     """
     time.sleep(0.01)
     run_id = fail_a_run(db, campaign, title, RunStatus.SUCCEEDED)
@@ -176,7 +176,7 @@ def test_an_anomaly_requests_an_incident_sweep_once_and_collapses_while_one_is_p
     fail_a_run(db, campaign, 'third')
     run_all(sched)
     wait_for(db, AgentSessionId(1), AgentSessionState.RUNNING)
-    assert agent_sessions(db, WATCHDOG) == [
+    assert agent_sessions(db, SWEEPER) == [
         (1, AgentSessionState.RUNNING, 'run_failed: run#1 failed'),
         (2, AgentSessionState.REQUESTED, 'run_failed: run#2 failed'),
     ], 'one pending request absorbs later anomalies'
@@ -196,14 +196,14 @@ def test_an_anomaly_requests_an_incident_sweep_once_and_collapses_while_one_is_p
     again = scheduler(db, runtime, tmp_path)
     assert run_all(again) == [], 'the events are the record: a restarted daemon replays nothing'
     again.stop(timeout=5)
-    assert [w[1] for w in agent_sessions(db, WATCHDOG)] == [AgentSessionState.EXITED] * 3
+    assert [w[1] for w in agent_sessions(db, SWEEPER)] == [AgentSessionState.EXITED] * 3
 
 
 def test_an_anomaly_takes_the_tick_and_does_not_reset_the_timer(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """When a timer is due and a new failure arrives in the same tick, the incident sweep starts first."""
-    configure(db, campaign, HARNESS_PROMPT_TO_FILE, watchdog={'interval': 30})
+    configure(db, campaign, HARNESS_PROMPT_TO_FILE, sweeper={'interval': 30})
     with db.session() as s:
         s.get_one(Campaign, campaign.id).created_at = utcnow() - timedelta(seconds=31)
         s.commit()
@@ -213,51 +213,35 @@ def test_an_anomaly_takes_the_tick_and_does_not_reset_the_timer(
     sched.wait(SETTLE)
     assert run_all(sched) == [2], 'the incident sweep is not a progress review: the timer is still due'
     sched.wait(SETTLE)
-    assert agent_sessions(db, WATCHDOG) == [
+    assert agent_sessions(db, SWEEPER) == [
         (1, AgentSessionState.EXITED, 'run_failed: run#1 failed'),
         (2, AgentSessionState.EXITED, 'timer: 30s'),
     ]
     assert run_all(sched) == [], 'the timer counts from the progress review'
 
     incident = (tmp_path / 'agent_sessions' / '1' / 'brief.md').read_text()
-    assert incident.index('# Watchdog') < incident.index('## This sweep: an incident') < incident.index('# Demo')
+    assert incident.index('# Sweeper') < incident.index('## This sweep: an incident') < incident.index('# Demo')
     assert '## Incidents to investigate\n\n- run#1 failed' in incident
-    assert '## Goal' in incident and '## Research pack' not in incident
+    assert '## Goal' in incident
     progress = (tmp_path / 'agent_sessions' / '2' / 'brief.md').read_text()
     assert '## This sweep: a progress review' in progress and '## This sweep: an incident' not in progress
     assert '## Incidents to investigate' not in progress
-    assert '## Goal' in progress and '## Research pack' not in progress, 'a review judges the work, it proposes none'
+    assert '## Goal' in progress
     sched.stop(timeout=5)
-
-
-def test_a_watchdog_brief_shows_a_sweep_s_sections_without_the_research_pack_unless_its_list_names_it() -> None:
-    shown = WatchdogRole().shown()
-    assert 'goal' in shown and 'pack' not in shown
-    assert WatchdogRole(sections=['goal', 'pack']).shown() == ['goal', 'pack']
-
-
-def test_an_idle_queue_requests_no_sweep(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """An idle queue is a cost that the progress review weighs (the ``idle_queue`` section), not an incident."""
-    sched = scheduler(db, runtime, tmp_path)
-    assert run_all(sched) == []
-    assert agent_sessions(db, WATCHDOG) == []
-    sched.stop(timeout=1)
 
 
 def test_cron_fires_once_per_interval_when_the_role_has_news(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """A routine sweep with nothing new to read finds nothing: the timer waits for news, up to ``max_interval``."""
-    configure(db, campaign, watchdog={'interval': 30})
+    configure(db, campaign, sweeper={'interval': 30})
     sched = scheduler(db, runtime, tmp_path)
     assert run_all(sched) == [], 'the campaign was registered a moment ago'
     with db.session() as s:
         s.get_one(Campaign, campaign.id).created_at = utcnow() - timedelta(seconds=31)
         s.commit()
     assert run_all(sched) == [1], 'the first review needs no news'
-    assert agent_sessions(db, WATCHDOG)[0][2] == 'timer: 30s'
+    assert agent_sessions(db, SWEEPER)[0][2] == 'timer: 30s'
     sched.wait(SETTLE)
     assert run_all(sched) == [], 'not due again'
     backdate(db, AgentSessionId(1), 31)
@@ -265,7 +249,7 @@ def test_cron_fires_once_per_interval_when_the_role_has_news(
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         cfg = CampaignConfig.model_validate(p.config)
-        on = campaigns_of(sched)._pass(s, p, cfg, WATCHDOG, role_of(cfg, WatchdogRole), utcnow())
+        on = campaigns_of(sched)._pass(s, p, cfg, SWEEPER, role_of(cfg, SweepRole), utcnow())
         due = CronTrigger().due_in(on)
         assert due is not None and timedelta(hours=3, minutes=59) < due < timedelta(hours=4), (
             'max_interval, unless news'
@@ -283,21 +267,21 @@ def test_cron_fires_once_per_interval_when_the_role_has_news(
         )
         s.commit()
     assert run_all(sched) == [2]
-    assert agent_sessions(db, WATCHDOG)[1][2] == 'timer: 30s; news: 1 items (comment)'
+    assert agent_sessions(db, SWEEPER)[1][2] == 'timer: 30s; news: 1 items (comment)'
     sched.wait(SETTLE)
     backdate(db, AgentSessionId(2), 31)
     assert run_all(sched) == [], 'the review took that news'
     backdate(db, AgentSessionId(2), 4 * 3600)
     assert run_all(sched) == [3], 'after max_interval, a stuck campaign is still looked at'
-    assert agent_sessions(db, WATCHDOG)[2][2] == 'timer: no news since agent_session#2'
+    assert agent_sessions(db, SWEEPER)[2][2] == 'timer: no news since agent_session#2'
     sched.wait(SETTLE)
 
-    configure(db, campaign, watchdog={'interval': 30}, trigger={'cron': {'max_interval': 0}})
+    configure(db, campaign, sweeper={'interval': 30}, trigger={'cron': {'max_interval': 0}})
     backdate(db, AgentSessionId(3), 31)
     assert run_all(sched) == [4], 'max_interval at or below interval: the timer alone'
     sched.wait(SETTLE)
 
-    configure(db, campaign, watchdog={'interval': 0})
+    configure(db, campaign, sweeper={'interval': 0})
     backdate(db, AgentSessionId(4), 5 * 3600)
     assert run_all(sched) == [], 'interval 0 turns the timer off'
     sched.stop(timeout=5)
@@ -310,11 +294,11 @@ def test_a_sweep_whose_launch_the_stop_rule_stops_never_starts_and_the_stop_clos
     settled. The sweep never starts, so it is not killed after 0 seconds; the pass that stops the campaign closes it,
     as every requested row."""
     cfg = load_campaign_config(
-        Path(campaign.path), plugins={'stop_rule': {'max_runs': 1}, 'role': {'watchdog': {'triggers': []}}}
+        Path(campaign.path), plugins={'stop_rule': {'max_runs': 1}, 'role': {'sweeper': {'triggers': []}}}
     )
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = cfg
-        row = AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='by hand')
+        row = AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand')
         s.add(row)
         s.flush()
         requested = (row.id, AgentSessionState.REQUESTED, 'by hand')
@@ -323,7 +307,7 @@ def test_a_sweep_whose_launch_the_stop_rule_stops_never_starts_and_the_stop_clos
     finish_a_run(db, campaign, 'one')
     sched = scheduler(db, runtime, tmp_path)
     campaigns_of(sched)._sweep(AgentSessionId(requested[0]))
-    assert agent_sessions(db, WATCHDOG) == [requested], 'never started: requested again'
+    assert agent_sessions(db, SWEEPER) == [requested], 'never started: requested again'
     run_all(sched)
     sched.wait(SETTLE)
     sched.stop(timeout=5)
@@ -384,18 +368,18 @@ def test_manual_requests_are_launched_under_max_concurrent(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     release = tmp_path / 'release'
-    configure(db, campaign, BLOCKING.format(release=release), watchdog={'triggers': []})
+    configure(db, campaign, BLOCKING.format(release=release), sweeper={'triggers': []})
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
         for _ in range(2):
             sql.run(
                 con,
-                f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('watchdog', {campaign.id}, 'requested')",
+                f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('sweeper', {campaign.id}, 'requested')",
             )
     sched = scheduler(db, runtime, tmp_path)
     assert run_all(sched) == [1]
     assert run_all(sched) == []
     wait_for(db, AgentSessionId(1), AgentSessionState.RUNNING)
-    assert agent_sessions(db, WATCHDOG) == [
+    assert agent_sessions(db, SWEEPER) == [
         (1, AgentSessionState.RUNNING, None),
         (2, AgentSessionState.REQUESTED, None),
     ]
@@ -406,7 +390,7 @@ def test_manual_requests_are_launched_under_max_concurrent(
     sched.stop(timeout=5)
     with db.session() as s:
         second = s.get_one(AgentSession, 2)
-    assert (second.state, second.harness, second.model) == (AgentSessionState.EXITED, 'script', 'watchdog-model')
+    assert (second.state, second.harness, second.model) == (AgentSessionState.EXITED, 'script', 'sweeper-model')
     assert (
         'Why this agent started (context, not a scope): requested'
         in (tmp_path / 'agent_sessions' / '2' / 'brief.md').read_text()
@@ -432,11 +416,11 @@ def test_requests_go_through_the_agent_sql_path(db: Database, campaign: Campaign
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
         result = sql.run(
             con,
-            f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('watchdog', {campaign.id}, 'requested')",
+            f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('sweeper', {campaign.id}, 'requested')",
         )
         assert result.last_insert_rowid == 1
         row = sql.run(con, 'SELECT kind, state, harness, reason FROM agent_sessions').rows
-    assert row == [('watchdog', 'requested', None, None)]
+    assert row == [('sweeper', 'requested', None, None)]
     with (
         closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con,
         pytest.raises(sqlite3.IntegrityError),

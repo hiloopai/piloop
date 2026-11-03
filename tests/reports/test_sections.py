@@ -16,7 +16,7 @@ from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.section.idea_comments import IdeaComments
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.host import Scope
-from piloop.plugins.role.contract import ROLES, ImplementerRole
+from piloop.plugins.role.contract import ROLES, ImplementerRole, SweepRole
 from piloop.plugins.section.contract import SECTIONS, Guide, Rendering, Section, Surface, defaults, guides, markdown
 from piloop.plugins.stop_rule.contract import STOP_RULES
 from tests.campaign.test_stop import add_run
@@ -110,7 +110,7 @@ def test_an_installed_section_shows_where_it_declares_in_its_order_unless_a_list
 
 
 def test_each_surface_shows_its_built_in_sections_by_default() -> None:
-    overview = ['headline', 'goal', 'tracks', 'trajectory', 'runs', 'queue', 'idle_queue', 'agents', 'evaluations']
+    overview = ['headline', 'goal', 'tracks', 'trajectory', 'runs', 'queue', 'agents', 'evaluations']
     overview += ['funnel', 'yields', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
     assert defaults(Surface.SWEEP) == ['context', 'lessons', 'incidents', *overview, 'tools', 'pack']
@@ -243,7 +243,6 @@ def test_each_role_has_guides_of_its_own_that_extend_a_shared_list() -> None:
         {
             'implementer': [],
             'orchestrator': ['database', 'concepts', 'judging', 'comments', 'priorities', 'links', 'research_commands'],
-            'watchdog': ['database', 'concepts', 'judging', 'comments', 'priorities', 'search', 'past_campaigns'],
         }
     )
     assert not any(SECTIONS.providers()[n].model.SHOWN_IN for n in guides()), (
@@ -254,9 +253,10 @@ def test_each_role_has_guides_of_its_own_that_extend_a_shared_list() -> None:
 @pytest.mark.usefixtures('units')
 def test_a_packages_guide_shows_in_every_role_of_its_surface_after_the_roles_own() -> None:
     sweeps = {name: p.model().shown() for name, p in ROLES.providers().items() if p.model.SURFACE is Surface.SWEEP}
+    sweeps['new'] = SweepRole(prompt='new.md', triggers=[]).shown()
     assert {name: 'units' in shown for name, shown in sweeps.items()} == {
         'orchestrator': False,
-        'watchdog': True,
+        'new': True,
     }, 'the orchestrator lists its sections'
     assert all(shown.index('units') < shown.index('context') for shown in sweeps.values() if 'units' in shown), (
         'a guide goes before the other sections of a default list'

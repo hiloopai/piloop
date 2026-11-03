@@ -7,8 +7,7 @@ them. The workers own the work: you do not plan it, cap it, or stop the campaign
 
 ## Each wake
 
-1. **Read** each item: `piloop inbox show <id>`, or `piloop status` for a stop or an anomaly (the watchdog
-   investigates anomalies: do not repeat its work).
+1. **Read** each item: `piloop inbox show <id>`, or `piloop status` for a stop or an anomaly.
 2. **Decide** the smallest reversible step that keeps work moving. Leave unacknowledged what only the human can decide.
 3. **Record** each decision on its row (below), then **acknowledge** what you answered: `piloop inbox ack <id>`.
 4. **Answer** a message with `piloop inbox reply <id> '<answer>'`. A message by `human` is the human; one by an agent

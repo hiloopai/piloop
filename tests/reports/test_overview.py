@@ -25,7 +25,7 @@ from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.plugins.section.contract import SECTIONS, Rendering, Surface, defaults, markdown
 from piloop.reports import overview as overview_module
 from piloop.text import LINKED_CHARS, age, block
-from tests.conftest import WATCHDOG, cas_of, end_of, has_lines, home_cas, reconfigured, spent
+from tests.conftest import SWEEPER, cas_of, end_of, has_lines, home_cas, reconfigured, spent
 
 T = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 NOW = T + timedelta(hours=2)
@@ -154,12 +154,12 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
         stuck = run(s, pinned, RunStatus.RUNNING, 1, 50, None)
         agent(s, p, IMPLEMENTER, 50, 300, run_id=stuck.id, usage=spent(2000))
         idea(s, p, 'after the crash', IdeaStatus.OPEN, after=(bad.id,))
-        agent(s, p, WATCHDOG, 60, 120, usage=spent(500))
+        agent(s, p, SWEEPER, 60, 120, usage=spent(500))
         s.add_all(
             [
                 Comment(
                     target=TargetRef(RUN, failed.id),
-                    author='watchdog#9',
+                    author='sweeper#9',
                     kind=ESCALATION,
                     priority=1,
                     body='run#2 died in a dialog\nevidence below',
@@ -231,7 +231,7 @@ def test_the_overview_of_a_campaign(db: Database, campaign: Campaign) -> None:
         '- candidate#3, 1h ago: scored what candidate#2 did on score and on 1 of 1 other metrics; 3.0 min of evaluation',
         '## Incidents given to agents',
         '## Inbox (1 unacknowledged; 1 escalation, the oldest comment#1 1h old), decisions and escalations',
-        '- comment#1 escalation (p1, unacknowledged) on run#2 by watchdog#9, 1h ago: run#2 died in a dialog',
+        '- comment#1 escalation (p1, unacknowledged) on run#2 by sweeper#9, 1h ago: run#2 died in a dialog',
         '## Recent events',
         '- comment.note comment#3 0s ago',
     )
@@ -264,7 +264,7 @@ def test_stop_conditions_say_how_far_each_one_is(db: Database, campaign: Campaig
 
 
 def test_a_fresh_campaign_has_little_to_say(db: Database, campaign: Campaign) -> None:
-    """A campaign with no run, no comment and no trunk keep shows no trajectory and reports an idle queue."""
+    """A campaign with no run, no comment and no trunk keep shows no trajectory."""
     stop = {'max_hours': 4, 'plateau': 2}
     cfg = load_campaign_config(Path(campaign.path), plugins={'stop_rule': stop})
     with db.session() as s:
@@ -276,7 +276,6 @@ def test_a_fresh_campaign_has_little_to_say(db: Database, campaign: Campaign) ->
     assert "- No trunk keep: the baseline's verdict was overridden and nothing was kept since." in text
     assert 'median:' not in text, 'the baseline has no recorded seconds'
     assert 'evaluations: 1 · crashed: 0 · waiting for a verdict: 1 candidates' in text
-    assert '- 1 free implementer slots and no runnable idea since 2h ago; no defining sweep pending' in text
     assert '## Inbox (0 unacknowledged), decisions and escalations\n\n- None.' in text
 
 
@@ -369,7 +368,7 @@ def test_the_queue_the_live_agents_the_inbox_and_the_events(db: Database, campai
         s.add_all(
             [
                 AgentSession(
-                    kind=WATCHDOG,
+                    kind=SWEEPER,
                     campaign_id=p.id,
                     harness='script',
                     model='m',
@@ -379,7 +378,7 @@ def test_the_queue_the_live_agents_the_inbox_and_the_events(db: Database, campai
                     reason='low_water: 2 ready < 10',
                     log_dir=str(log_dir),
                 ),
-                AgentSession(kind=WATCHDOG, campaign_id=p.id, state=AgentSessionState.REQUESTED, reason='cron'),
+                AgentSession(kind=SWEEPER, campaign_id=p.id, state=AgentSessionState.REQUESTED, reason='cron'),
             ]
         )
         s.commit()
@@ -393,11 +392,11 @@ def test_the_queue_the_live_agents_the_inbox_and_the_events(db: Database, campai
         '  - idea#6 p1 "even longer lines" by research#4, 10m ago',
         '  - idea#4 p2 "after the crash" by research#4, 0s ago; after idea#2',
         '## Agents',
-        '- Agents live: 1; requested: watchdog#6',
-        '  - watchdog#5 script/m 5m, on low_water: 2 ready < 10: ran evaluate.py: METRIC score=3',
+        '- Agents live: 1; requested: sweeper#6',
+        '  - sweeper#5 script/m 5m, on low_water: 2 ready < 10: ran evaluate.py: METRIC score=3',
         '## Inbox (1 unacknowledged; 1 escalation, the oldest comment#1 1h old), decisions and escalations',
         '- comment#2 decision on campaign#1 by pi, 1h ago: keep going',
-        '- comment#1 escalation (p1, unacknowledged) on run#2 by watchdog#9, 1h ago: run#2 died in a dialog',
+        '- comment#1 escalation (p1, unacknowledged) on run#2 by sweeper#9, 1h ago: run#2 died in a dialog',
         '## Recent events',
         '- agent_session.requested agent_session#6 0s ago',
         '- idea.created idea#6 0s ago',
@@ -436,7 +435,7 @@ def test_live_agents_say_their_last_words_from_the_stored_session_else_their_out
         ):
             s.add(
                 AgentSession(
-                    kind=WATCHDOG,
+                    kind=SWEEPER,
                     campaign_id=campaign.id,
                     state=AgentSessionState.RUNNING,
                     harness=harness,
@@ -451,12 +450,12 @@ def test_live_agents_say_their_last_words_from_the_stored_session_else_their_out
                 )
             )
         s.commit()
-    assert [line for line in render(db, campaign).splitlines() if line.startswith('  - watchdog#')] == snapshot(
+    assert [line for line in render(db, campaign).splitlines() if line.startswith('  - sweeper#')] == snapshot(
         [
-            '  - watchdog#1 claude/m 20m, on cron: Starting both training runs (16 processes each).',
-            '  - watchdog#2 claude/m 20m, on cron: {"type":"item.completed"}',
-            '  - watchdog#3 codex/m 20m, on cron: Ran the evaluation; measurement pending.',
-            '  - watchdog#4 script/m 20m, on cron: —',
+            '  - sweeper#1 claude/m 20m, on cron: Starting both training runs (16 processes each).',
+            '  - sweeper#2 claude/m 20m, on cron: {"type":"item.completed"}',
+            '  - sweeper#3 codex/m 20m, on cron: Ran the evaluation; measurement pending.',
+            '  - sweeper#4 script/m 20m, on cron: —',
         ]
     )
 

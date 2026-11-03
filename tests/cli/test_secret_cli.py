@@ -46,7 +46,7 @@ def test_a_secret_is_set_from_stdin_listed_by_name_and_deleted_and_no_output_sho
     run_cli(['secret', 'list'])
     rows = [line.split() for line in out().splitlines() if 'EXA_API_KEY' in line]
     assert [(r[0], r[1], r[-1]) for r in rows] == [('EXA_API_KEY', 'home', 'human'), ('EXA_API_KEY', 'demo', 'human')]
-    with closing(sql.connect(tmp_path / 'piloop.db', actor=Agent(role='watchdog', session=1))) as con:
+    with closing(sql.connect(tmp_path / 'piloop.db', actor=Agent(role='sweeper', session=1))) as con:
         assert sql.run(con, 'SELECT name, value FROM secrets ORDER BY id').rows == [
             ('EXA_API_KEY', None),
             ('EXA_API_KEY', None),
@@ -72,10 +72,10 @@ def test_an_agent_sets_and_removes_only_its_own_campaign_s_secrets(
     """Its token has ``act`` access, which writes a campaign's secrets, and an agent acts on its own campaign only."""
     with db.session() as s:
         s.add(Campaign(name='other', path=str(tmp_path / 'other'), config=campaign.config))
-        session = AgentSession(kind='watchdog', campaign_id=campaign.id, state=AgentSessionState.RUNNING)
+        session = AgentSession(kind='sweeper', campaign_id=campaign.id, state=AgentSessionState.RUNNING)
         s.add(session)
         s.flush()
-        agent = Agent(role='watchdog', session=session.id)
+        agent = Agent(role='sweeper', session=session.id)
         token = mint_agent(s, agent)
         s.commit()
     monkeypatch.setattr(common, 'settings', common.settings.model_copy(update={'actor': agent, 'agent_token': token}))
@@ -84,9 +84,9 @@ def test_an_agent_sets_and_removes_only_its_own_campaign_s_secrets(
     run_cli(['secret', 'rm', 'KEY', '--campaign', 'demo'])
     assert out().strip() == 'KEY of campaign demo deleted'
     for argv in (['set', 'KEY', '--campaign', 'other'], ['set', 'KEY']):
-        with pytest.raises(SystemExit, match='^watchdog#1 writes only the secrets of its own campaign$'):
+        with pytest.raises(SystemExit, match='^sweeper#1 writes only the secrets of its own campaign$'):
             piped(monkeypatch, argv, 'v')
-    with pytest.raises(SystemExit, match='^watchdog#1 writes only the secrets of its own campaign$'):
+    with pytest.raises(SystemExit, match='^sweeper#1 writes only the secrets of its own campaign$'):
         run_cli(['secret', 'rm', 'KEY'])
 
 

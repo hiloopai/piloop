@@ -159,9 +159,15 @@ use = ["script"]
 timeout = {implementer_timeout}
 max_concurrent = {max_implementers}
 
-[plugins.role.watchdog]
+[plugins.role.sweeper]
+prompt = "{sweeper}/sweeper.md"
+incident_prompt = "{sweeper}/incident.md"
+routine_prompt = "{sweeper}/progress.md"
+triggers = ["run_failed", "dead_at_startup", "low_yield", "cron", "stopped"]
+interval = 1800
+writes = ["comments(escalation, note)", "lessons on the campaign once it stopped"]
 harnesses = ["script"]
-model = {{ script = "watchdog-model" }}
+model = {{ script = "sweeper-model" }}
 timeout = {sweep_timeout}
 
 [[metrics]]
@@ -187,8 +193,12 @@ headless = ["{{prompt}}"]
 steers_mid_turn = true
 """
 
-WATCHDOG = RoleName('watchdog')
-"""The name of piloop's sweeping role. Core names none of its roles but the implementer."""
+SWEEPER_TRIGGERS = 'triggers = ["run_failed", "dead_at_startup", "low_yield", "cron", "stopped"]'
+"""The line of ``TOML`` that lists the triggers of ``SWEEPER``: a test replaces it to set its own."""
+SWEEPER = RoleName('sweeper')
+"""The tests' sweeping role, a role that ``piloop.toml`` defines: piloop has none that is on by default."""
+SWEEPER_PROMPTS = Path(__file__).parent / 'fixtures' / 'sweeper'
+"""The prompts of ``SWEEPER``: its own, its incident prompt and its routine prompt."""
 
 
 def spent(total: int, turns: int = 1) -> Usage:
@@ -234,6 +244,7 @@ def write_toml(
             evaluate=json.dumps(evaluate),
             implementer_timeout=implementer_timeout,
             sweep_timeout=AGENT_TIMEOUT,
+            sweeper=SWEEPER_PROMPTS,
             max_implementers=max_implementers,
             script=script,
         )

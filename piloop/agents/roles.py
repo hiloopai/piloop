@@ -73,8 +73,8 @@ def role(cfg: CampaignConfig, kind: RoleName, repo: Path) -> Role:
     assert prompt is not None  # RoleConfig refuses a role with neither
     incident = routine = None
     if isinstance(table, SweepRole):
-        incident = _prompt(repo, table.incident_prompt, table.INCIDENT_PROMPT)
-        routine = _prompt(repo, table.routine_prompt, table.ROUTINE_PROMPT)
+        incident = _prompt(repo, table.incident_prompt, None)
+        routine = _prompt(repo, table.routine_prompt, None)
     ideas = table.IDEAS or IDEAS[filed(table)]
     return Role(kind, prompt, incident, routine, ideas)
 
@@ -124,7 +124,7 @@ def steers_mid_turn(s: Session, agent_session: AgentSession) -> bool:
 
 
 def files_of(cfg: CampaignConfig, actor: Actor) -> Files | None:
-    """Return what ``actor`` may file with ``piloop idea``, by the role in its signature (``watchdog#4``).
+    """Return what ``actor`` may file with ``piloop idea``, by the role in its signature (``orchestrator#4``).
 
     None for an actor that is not a role, such as ``orchestrator`` or ``human``: it may file anything. An agent of a
     role that ``piloop.toml`` no longer has files nothing.

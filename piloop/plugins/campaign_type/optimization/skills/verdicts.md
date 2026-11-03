@@ -20,7 +20,7 @@ session that worked a past idea.
   under another: `SELECT p.name, i.id, i.status, i.title FROM ideas_fts JOIN ideas i ON i.id = ideas_fts.rowid JOIN
   campaigns p ON p.id = i.campaign_id WHERE ideas_fts MATCH '<mechanism>' AND p.repo = (SELECT repo FROM campaigns WHERE
   id = <p>) ORDER BY bm25(ideas_fts) LIMIT 20`.
-- Lessons: the standing conclusion about each mechanism family, written by the closing watchdog when a campaign stops.
+- Lessons: the standing conclusion about each mechanism family, written when a campaign stops.
   The newest for each campaign and family is the current one, and `piloop wake` lists them. You may write one too: a
   row of `lessons` with the family, the status (`dead`, `promising` or `untested`), the best effect and its metric
   (both NULL when none was measured), and a body that says why, citing ids.

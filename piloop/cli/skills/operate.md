@@ -1,6 +1,6 @@
 ---
 name: piloop-operate
-description: Operate a running piloop autoresearch campaign as its orchestrator, from any harness with a shell (Claude Code, Codex, pi, Gemini CLI, Cursor), by looping on piloop inbox wait to decide escalations, manage ideas, launch sweeps, steer implementers and judge candidates. Use when the human asks you to orchestrate, watch, run or report on a campaign, when an escalation arrives, or when you take a decision for the human; do not use it in an agent that piloop launched (PILOOP_ACTOR is an implementer, watchdog or research id).
+description: Operate a running piloop autoresearch campaign as its orchestrator, from any harness with a shell (Claude Code, Codex, pi, Gemini CLI, Cursor), by looping on piloop inbox wait to decide escalations, manage ideas, launch sweeps, steer implementers and judge candidates. Use when the human asks you to orchestrate, watch, run or report on a campaign, when an escalation arrives, or when you take a decision for the human; do not use it in an agent that piloop launched (PILOOP_ACTOR is an implementer or orchestrator id).
 ---
 
 # Operate a piloop campaign
@@ -33,7 +33,7 @@ It returns, one line each, as soon as something needs you:
 
 - a new unacknowledged inbox item that someone else wrote,
 - a campaign that the daemon stopped,
-- an anomaly that the daemon gave to a watchdog,
+- an anomaly that the daemon gave to an agent,
 - the daemon's verdict on a measured candidate.
 
 Otherwise it returns `nothing new` at the timeout.
@@ -65,8 +65,7 @@ Steps:
 2. **Wait.** Run the command above.
 3. **Read** each line.
    - An item: `piloop inbox show <id>` shows it with its thread.
-   - A stop or an anomaly: `piloop status <name>`. The watchdog investigates anomalies and escalates what needs a
-     decision. Do not repeat its work.
+   - A stop or an anomaly: `piloop status <name>`.
 4. **Decide and record.** See "The inbox" below: escalations, every decision, the surfacing policy.
 5. **Acknowledge** what you answered: `PILOOP_ACTOR=orchestrator piloop inbox ack <id>`. Leave unacknowledged what
    only the human can decide.
@@ -93,7 +92,7 @@ orchestrator itself: do not loop. Write to it with `piloop message <name> '<text
 
 ## Status
 
-`piloop status [<name>]` shows the same overview that watchdog sweeps get in their brief.
+`piloop status [<name>]` shows the same overview that sweeps get in their brief.
 Without a name, it uses the campaign in the current directory, else the only active campaign, else every campaign.
 
 `piloop watch` shows the same as `piloop status`, live, in the human's terminal.

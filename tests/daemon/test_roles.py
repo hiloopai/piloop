@@ -51,7 +51,7 @@ from tests.conftest import (
     END_RUN,
     HARNESS_APPEND,
     SETTLE,
-    WATCHDOG,
+    SWEEPER,
     ScriptRuntime,
     campaigns_of,
     console_lines,
@@ -184,7 +184,7 @@ def test_a_role_that_piloop_toml_defines_runs_on_its_sql_trigger_with_its_prompt
 def test_a_role_adds_its_incident_prompt_to_an_incident_sweep_and_its_routine_prompt_to_any_other(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """The keys that give the watchdog its two kinds of sweep work for a role that ``piloop.toml`` defines."""
+    """The keys that give the sweeper its two kinds of sweep work for a role that ``piloop.toml`` defines."""
     repo = Path(campaign.path)
     for name, text in (('triage.md', '# Triage'), ('incident.md', '## An incident'), ('routine.md', '## A routine')):
         (repo / name).write_text(text + '\n')
@@ -194,7 +194,7 @@ def test_a_role_adds_its_incident_prompt_to_an_incident_sweep_and_its_routine_pr
         'incident_prompt': 'incident.md',
         'routine_prompt': 'routine.md',
     }
-    configure(db, campaign, '#!/bin/sh\ntrue\n', triage=triage, watchdog={'triggers': []})
+    configure(db, campaign, '#!/bin/sh\ntrue\n', triage=triage, sweeper={'triggers': []})
     sched = scheduler(db, recording(runtime, []), tmp_path)
     fail_a_run(db, campaign, 'broken')
     assert run_all(sched) == [1]
@@ -219,7 +219,7 @@ def test_a_role_that_defines_ideas_is_told_how_many_its_sweep_may_add(
     """The brief of a sweep of a role that files ideas states the most that it may add."""
     (Path(campaign.path) / 'ideator.md').write_text('# Ideate\n')
     ideator: dict[str, object] = {'prompt': 'ideator.md', 'triggers': [], 'files': 'ideas', 'max_ideas': 2}
-    configure(db, campaign, '#!/bin/sh\ntrue\n', ideator=ideator, watchdog={'triggers': []})
+    configure(db, campaign, '#!/bin/sh\ntrue\n', ideator=ideator, sweeper={'triggers': []})
     with db.session() as s:
         s.add(AgentSession(kind='ideator', campaign_id=campaign.id, reason='by hand'))
         s.commit()
@@ -348,8 +348,8 @@ def test_a_queued_run_of_a_role_that_piloop_toml_no_longer_has_fails_and_its_cla
 def test_a_built_in_role_takes_other_triggers(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """The watchdog with a ``sql`` trigger in place of its own ignores a failure, and wakes on a new decision."""
-    configure(db, campaign, '#!/bin/sh\ntrue\n', watchdog={'triggers': ['reviewed']}, trigger=REVIEWED)
+    """The sweeper with a ``sql`` trigger in place of its own ignores a failure, and wakes on a new decision."""
+    configure(db, campaign, '#!/bin/sh\ntrue\n', sweeper={'triggers': ['reviewed']}, trigger=REVIEWED)
     sched = scheduler(db, recording(runtime, []), tmp_path)
     fail_a_run(db, campaign, 'broken')
     assert run_all(sched) == [], 'no anomaly trigger, and no decision yet'
@@ -357,8 +357,8 @@ def test_a_built_in_role_takes_other_triggers(
     assert run_all(sched) == [1]
     sched.wait(SETTLE)
     sched.stop(timeout=5)
-    assert agent_sessions(db, WATCHDOG) == [(1, AgentSessionState.EXITED, f'sql: {REVIEW}')]
-    assert reported_events(db) == [], 'the watchdog got no anomaly'
+    assert agent_sessions(db, SWEEPER) == [(1, AgentSessionState.EXITED, f'sql: {REVIEW}')]
+    assert reported_events(db) == [], 'the sweeper got no anomaly'
 
 
 @pytest.mark.usefixtures('no_fresh_runs')
@@ -383,9 +383,9 @@ def test_a_request_for_a_role_that_piloop_toml_no_longer_has_is_refused(
 def test_a_message_to_a_sweep_that_has_not_started_is_in_its_brief_and_is_not_sent_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    configure(db, campaign, '#!/bin/sh\ntrue\n', watchdog={'triggers': []})
+    configure(db, campaign, '#!/bin/sh\ntrue\n', sweeper={'triggers': [], 'sections': ['context']})
     with db.session() as s:
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='by hand'))
+        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand'))
         s.flush()
         on_it = TargetRef(TargetKind.AGENT_SESSION, 1)
         s.add(Comment(target=on_it, author='human', kind=CommentKind.MESSAGE, body='look at run#4 first'))
@@ -409,9 +409,9 @@ def test_a_hand_over_leaves_a_sweep_running_and_the_next_scheduler_re_attaches_t
     hold = tmp_path / 'hold'
     hold.touch()
     harness = f'#!/bin/sh\necho $$ > {tmp_path}/agent.pid\nwhile [ -f {hold} ]; do sleep 0.05; done\n'
-    configure(db, campaign, harness, watchdog={'triggers': []})
+    configure(db, campaign, harness, sweeper={'triggers': []})
     with db.session() as s:
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='by hand'))
+        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand'))
         s.commit()
     first = scheduler(db, recording(runtime, []), tmp_path)
     assert run_all(first) == [1]
@@ -514,7 +514,7 @@ def test_only_a_trigger_that_names_the_quiet_phase_fires_and_launches_while_its_
     configure(db, campaign, '#!/bin/sh\ntrue\n', auditor={'triggers': ['every_pass', 'awake']})
     with db.session() as s:
         ops.pause(s, campaign.id, evals=False, reason='a person reads the results')
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='by hand'))
+        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand'))
         s.commit()
     sched = scheduler(db, recording(runtime, []), tmp_path)
     [audit] = run_all(sched)
@@ -522,7 +522,7 @@ def test_only_a_trigger_that_names_the_quiet_phase_fires_and_launches_while_its_
     assert agent_sessions(db, 'auditor') == [(audit, AgentSessionState.EXITED, 'every pass for auditor (paused)')], (
         'every_pass sleeps through the pause, and awake fires alone'
     )
-    assert [state for _, state, _ in agent_sessions(db, WATCHDOG)] == [AgentSessionState.REQUESTED], (
+    assert [state for _, state, _ in agent_sessions(db, SWEEPER)] == [AgentSessionState.REQUESTED], (
         'a role without such a trigger launches nothing while paused'
     )
     with db.session() as s:
@@ -596,7 +596,7 @@ def test_a_package_role_takes_its_defaults_and_a_roles_value_that_is_not_a_table
             EntryPoint('auditor', f'{PLUGIN}:NOT_A_ROLE', ROLE_GROUP),
             'is not a subclass of piloop.plugins.role.contract.RoleConfig',
         ),
-        (EntryPoint('watchdog', f'{PLUGIN}:Auditor', ROLE_GROUP), "'watchdog' is a role already, from piloop "),
+        (EntryPoint('orchestrator', f'{PLUGIN}:Auditor', ROLE_GROUP), "'orchestrator' is a role already, from piloop "),
         (
             EntryPoint('typed', f'{PLUGIN}:NOT_A_RUNTIME', RUNTIME_GROUP),
             'is not a subclass of piloop.plugins.runtime.contract.RuntimeConfig',
@@ -648,10 +648,10 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
     write_toml(Path(campaign.path), HARNESS_NICENESS)
     with db.session() as s:
         cfg = load_campaign_config(
-            Path(campaign.path), plugins={'runtime': {'use': 'nice'}, 'role': {'watchdog': {'runtime': 'nice'}}}
+            Path(campaign.path), plugins={'runtime': {'use': 'nice'}, 'role': {'sweeper': {'runtime': 'nice'}}}
         )
         s.get_one(Campaign, campaign.id).config = cfg
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='by hand'))
+        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand'))
         s.commit()
     cas = f'[plugins.cas]\nprovider = "sqlite"\npath = "{tmp_path / "blobs.sqlite"}"\n'
     (tmp_path / 'config.toml').write_text(f'{cas}[plugins.runtime.nice]\nniceness = 5\n')
@@ -685,7 +685,7 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
     selected = lines[lines.index('selected:') + 1 :]
     by_list = ('  demo: section ', '  demo: trigger ', '  demo: fact source ')
     assert (
-        f'  demo: trigger cron, from {TRIGGERS.sources()["cron"].release} ([plugins.role.watchdog] triggers, {stored})'
+        f'  demo: trigger cron, from {TRIGGERS.sources()["cron"].release} ([plugins.role.sweeper] triggers, {stored})'
         in selected
     )
     assert (
@@ -696,8 +696,8 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
         f'  demo: lineage provider optimization, from {LINEAGE.sources()["optimization"].release} ([plugins.lineage]'
         f' use, {stored})',
         f'  demo: {nice} ([plugins.runtime] use, {stored})',
-        f'  demo: {nice} ([plugins.role.watchdog] runtime, {stored})',
         f'  demo: {nice} ([plugins.role.fast] runtime, {stored})',
+        f'  demo: {nice} ([plugins.role.sweeper] runtime, {stored})',
         f'  demo: verdict rule bootstrap, from {VERDICT_RULES.sources()["bootstrap"].release} ([plugins.verdict_rule]'
         f' provider, {stored})',
     ]
@@ -728,6 +728,6 @@ def test_a_runtime_that_is_not_registered_fails_with_the_registered_ones(campaig
     ):
         load_campaign_config(campaign_path, plugins={'runtime': {'use': 'tmux'}})
     with pytest.raises(
-        ConfigError, match=re.escape("plugins.role.watchdog.runtime = 'tmux': no [plugins.runtime.tmux]")
+        ConfigError, match=re.escape("plugins.role.sweeper.runtime = 'tmux': no [plugins.runtime.tmux]")
     ):
-        load_campaign_config(campaign_path, plugins={'role': {'watchdog': {'runtime': 'tmux'}}})
+        load_campaign_config(campaign_path, plugins={'role': {'sweeper': {'runtime': 'tmux'}}})

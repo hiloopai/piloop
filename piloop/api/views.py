@@ -497,7 +497,7 @@ class StoppedNews(View):
 
 
 class AnomalyNews(View):
-    """An anomaly that the daemon gave to a watchdog."""
+    """An anomaly that the daemon gave to an agent."""
 
     kind: Literal['anomaly_requested'] = 'anomaly_requested'
     role: str

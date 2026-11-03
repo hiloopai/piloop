@@ -87,7 +87,7 @@ from tests.conftest import (
     HARNESS_NOOP,
     HARNESS_WORSE,
     SETTLE,
-    WATCHDOG,
+    SWEEPER,
     ScriptRuntime,
     details,
     end_of,
@@ -420,15 +420,15 @@ def test_max_tokens_sums_the_usage_of_every_ended_agent_of_the_campaign(db: Data
         s.add_all(
             [
                 AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, usage=spent(60_000, 9), **ended),
-                AgentSession(kind=WATCHDOG, campaign_id=campaign.id, usage=spent(30_000, 2), **ended),
-                AgentSession(kind=WATCHDOG, campaign_id=campaign.id, usage=None, **ended),
+                AgentSession(kind=SWEEPER, campaign_id=campaign.id, usage=spent(30_000, 2), **ended),
+                AgentSession(kind=SWEEPER, campaign_id=campaign.id, usage=None, **ended),
                 AgentSession(kind=IMPLEMENTER, campaign_id=other.id, usage=spent(50_000, 1), **ended),
             ]
         )
         s.commit()
     assert reason(db, campaign) is None, "90k: every role counts, another campaign's agents do not, unknown usage is 0"
     with db.session() as s:
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, usage=spent(10_000, 1), **ended))
+        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, usage=spent(10_000, 1), **ended))
         s.commit()
     assert reason(db, campaign) == 'max_tokens: 100000 tokens spent'
 
@@ -570,24 +570,24 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
                 kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), harness='script', model='m'
             )
         )
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='requested before the stop'))
+        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='requested before the stop'))
         s.commit()
     sched = make_scheduler(db, runtime, tmp_path)
 
-    assert run_all(sched) == [3], 'only the closing watchdog launches'
+    assert run_all(sched) == [3], 'only the closing sweeper launches'
     sched.wait(SETTLE)
     with db.session() as s:
         assert [(w.kind, w.state, w.error, w.ended_at is not None) for w in s.scalars(select(AgentSession))] == [
             (IMPLEMENTER, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
-            (WATCHDOG, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
-            (WATCHDOG, AgentSessionState.EXITED, None, True),
+            (SWEEPER, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
+            (SWEEPER, AgentSessionState.EXITED, None, True),
         ]
         run = s.get_one(Run, 2)
         assert (run.status, run.end, run.finished_at is not None) == (RunStatus.FAILED, RunEnd.CAMPAIGN_STOPPED, True)
         assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
         [(event, finished)] = in_order(s, RunFinished)
         assert (event.target_id, finished) == (2, RunFinished(end=RunEnd.CAMPAIGN_STOPPED, error=None))
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='by hand, after the stop'))
+        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand, after the stop'))
         s.commit()
     assert run_all(sched) == [4], 'a request made after the stop is explicit and launches'
     sched.wait(SETTLE)
@@ -617,7 +617,7 @@ def test_a_requested_stop_ends_the_campaign_as_a_stop_condition_does(
         request_stop(s, s.get_one(Campaign, campaign.id), System.HUMAN, reason='machine needed', ending=Ending.WRAP_UP)
         s.commit()
     sched = make_scheduler(db, runtime, tmp_path)
-    assert run_all(sched) == [2], 'only the closing watchdog launches'
+    assert run_all(sched) == [2], 'only the closing sweeper launches'
     sched.wait(SETTLE)
     assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'stopped by human: machine needed')
     with db.session() as s:
@@ -681,7 +681,7 @@ def due_now(db: Database, campaign: Campaign) -> None:
 def closing_reviews(db: Database, campaign: Campaign) -> list[AgentSessionState]:
     with db.session() as s:
         rows = s.scalars(
-            select(AgentSession).where(AgentSession.campaign_id == campaign.id, AgentSession.kind == WATCHDOG)
+            select(AgentSession).where(AgentSession.campaign_id == campaign.id, AgentSession.kind == SWEEPER)
         )
         return [w.state for w in rows]
 
@@ -793,15 +793,15 @@ def test_the_closing_review_waits_until_the_stopped_campaigns_runs_are_judged_an
 def test_the_closing_sweep_is_each_stopped_trigger_and_none_without_one(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """``[plugins.role.watchdog] triggers = []`` drops the closing review; a ``stopped`` trigger of another role fires once."""
+    """``[plugins.role.sweeper] triggers = []`` drops the closing review; a ``stopped`` trigger of another role fires once."""
     (Path(campaign.path) / 'closer.md').write_text('# Close\n')
     closer = {'prompt': 'closer.md', 'triggers': ['stopped']}
-    configure(db, campaign, harness=HARNESS_WORSE, roles={'watchdog': {'triggers': []}, 'closer': closer}, max_runs=1)
+    configure(db, campaign, harness=HARNESS_WORSE, roles={'sweeper': {'triggers': []}, 'closer': closer}, max_runs=1)
     add_ideas(db, campaign, 'a')
     sched = make_scheduler(db, runtime, tmp_path)
     assert run_all(sched) == [1]
     sched.wait(SETTLE)
-    assert run_all(sched) == [2], 'the closer, and no watchdog'
+    assert run_all(sched) == [2], 'the closer, and no sweeper'
     sched.wait(SETTLE)
     assert run_all(sched) == [], 'it fires once'
     sched.stop(timeout=5)
@@ -810,7 +810,7 @@ def test_the_closing_sweep_is_each_stopped_trigger_and_none_without_one(
     assert rows == [('closer', 'campaign stopped: max_runs: 1 runs')]
 
 
-def test_a_stopped_campaign_gets_one_closing_watchdog_and_no_trigger_requests(
+def test_a_stopped_campaign_gets_one_closing_sweeper_and_no_trigger_requests(
     db: Database,
     campaign: Campaign,
     runtime: ScriptRuntime,
@@ -825,7 +825,7 @@ def test_a_stopped_campaign_gets_one_closing_watchdog_and_no_trigger_requests(
     sched.wait(SETTLE)
     assert campaign_state(db, campaign) == (CampaignStatus.ACTIVE, None)
 
-    assert run_all(sched) == [2], 'the closing watchdog launches on the tick that stops the campaign'
+    assert run_all(sched) == [2], 'the closing sweeper launches on the tick that stops the campaign'
     assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'max_runs: 1 runs')
     sched.wait(SETTLE)
     assert run_all(sched) == []
@@ -834,8 +834,8 @@ def test_a_stopped_campaign_gets_one_closing_watchdog_and_no_trigger_requests(
         assert [
             (w.kind, w.reason)
             for w in s.scalars(select(AgentSession).where(AgentSession.id > 1).order_by(AgentSession.id))
-        ] == [(WATCHDOG, 'campaign stopped: max_runs: 1 runs')], (
-            'requested exactly once, and no implementer or watchdog request follows'
+        ] == [(SWEEPER, 'campaign stopped: max_runs: 1 runs')], (
+            'requested exactly once, and no implementer or sweeper request follows'
         )
         assert s.scalars(select(Run)).all() and s.get_one(Idea, 2).status is IdeaStatus.OPEN, 'idea b never ran'
         [(event, change)] = in_order(s, CampaignStatusChanged)
@@ -856,7 +856,7 @@ def test_a_stopped_campaign_gets_one_closing_watchdog_and_no_trigger_requests(
     )
 
     with db.session() as s:
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, reason='by hand'))
+        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand'))
         s.commit()
     assert run_all(sched) == [3], 'a hand-inserted request is explicit and launches'
     sched.wait(SETTLE)
@@ -865,7 +865,7 @@ def test_a_stopped_campaign_gets_one_closing_watchdog_and_no_trigger_requests(
         assert s.get_one(AgentSession, 3).state is AgentSessionState.EXITED
 
 
-def test_a_stop_syncs_the_memory_documents_before_the_closing_watchdog_whose_brief_asks_for_lessons(
+def test_a_stop_syncs_the_memory_documents_before_the_closing_sweeper(
     db: Database,
     campaign: Campaign,
     runtime: ScriptRuntime,
@@ -884,11 +884,11 @@ def test_a_stop_syncs_the_memory_documents_before_the_closing_watchdog_whose_bri
     Path(campaign.path, 'docs').mkdir()
     Path(campaign.path, 'docs', 'report.md').write_text('# Closing report\n')
     sched = make_scheduler(db, runtime, tmp_path, tracer)
-    [watchdog] = run_all(sched)
+    [sweeper] = run_all(sched)
     sched.wait(SETTLE)
     sched.stop(timeout=5)
     with db.session() as s:
-        assert s.get_one(AgentSession, watchdog).reason == 'campaign stopped: max_runs: 1 runs'
+        assert s.get_one(AgentSession, sweeper).reason == 'campaign stopped: max_runs: 1 runs'
         [document] = s.scalars(select(Document)).all()
         assert (document.path, document.title, document.created_by) == ('docs/report.md', 'Closing report', 'daemon')
     assert dict(span_named(spans, 'campaign.closing').attributes or {}) == {
@@ -896,14 +896,9 @@ def test_a_stop_syncs_the_memory_documents_before_the_closing_watchdog_whose_bri
         'provider': 'memory local',
         'result': 'documents: 1 added, 0 unchanged',
     }
-    brief = (tmp_path / 'agent_sessions' / str(watchdog) / 'brief.md').read_text()
-    assert 'leave one row of `lessons` for each family that this campaign tried' in brief
-    assert 'INSERT INTO lessons (campaign_id, family, status, effect, metric, body, created_by)' in brief, (
-        'the INSERT, from the procedures'
-    )
 
 
-def test_a_stop_whose_document_sync_fails_still_stops_and_launches_the_closing_watchdog(
+def test_a_stop_whose_document_sync_fails_still_stops_and_launches_the_closing_sweeper(
     db: Database,
     campaign: Campaign,
     runtime: ScriptRuntime,
@@ -927,12 +922,12 @@ def test_a_stop_whose_document_sync_fails_still_stops_and_launches_the_closing_w
 
     monkeypatch.setattr(LocalMemory, 'sync', broken)
     sched = make_scheduler(db, runtime, tmp_path, tracer)
-    [watchdog] = run_all(sched)
+    [sweeper] = run_all(sched)
     sched.wait(SETTLE)
     sched.stop(timeout=5)
     with db.session() as s:
         assert s.get_one(Campaign, campaign.id).status is CampaignStatus.STOPPED
-        assert s.get_one(AgentSession, watchdog).reason == 'campaign stopped: max_runs: 1 runs'
+        assert s.get_one(AgentSession, sweeper).reason == 'campaign stopped: max_runs: 1 runs'
     result = dict(span_named(spans, 'campaign.closing').attributes or {})['result']
     assert isinstance(result, str) and result.startswith('documents: not synced: PermissionError: [Errno 13]')
 

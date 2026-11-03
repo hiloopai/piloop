@@ -79,7 +79,7 @@ class CampaignAgents(BaseModel):
 class Roles:
     """The campaign's roles: one instance of ``ROLES`` for each, by its name (``[plugins.role.<name>]``).
 
-    Every role is a provider: piloop's (implementer, watchdog, orchestrator) and those that packages add, each with
+    Every role is a provider: piloop's (implementer, orchestrator) and those that packages add, each with
     its table over its defaults, then the roles that the file defines. A table with a new name defines a new role: a
     role that does runs (``ImplementerRole``) with ``runs = true``, else a sweeping role (``SweepRole``).
     """
@@ -186,6 +186,61 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
             **data,
             'plugins': {**kept, **({'trigger': triggers} if isinstance(plugins.get('trigger'), dict) else {})},
         }
+
+    @model_validator(mode='before')
+    @classmethod
+    @deprecated.until('0.7.0', 'the watchdog is removed in 0.6: delete CampaignConfig._watchdog')
+    def _watchdog(cls, data: object) -> object:
+        """Drop ``[plugins.role.watchdog]``, with a warning: of a file, or of a stored config."""
+        plugins = data.get('plugins') if isinstance(data, dict) else None
+        roles = plugins.get('role') if isinstance(plugins, dict) else None
+        if not isinstance(data, dict) or not isinstance(plugins, dict) or not isinstance(roles, dict):
+            return data
+        if 'watchdog' not in roles:
+            return data
+        deprecated.dropped(
+            'the watchdog role is removed; delete [plugins.role.watchdog]: the orchestrator takes escalations and failed'
+            ' runs when its triggers name them',
+            removed_in='0.7.0',
+        )
+        return {**data, 'plugins': {**plugins, 'role': {n: t for n, t in roles.items() if n != 'watchdog'}}}
+
+    @model_validator(mode='before')
+    @classmethod
+    @deprecated.until('0.7.0', 'idle_queue is removed in 0.6: delete CampaignConfig._idle_queue')
+    def _idle_queue(cls, data: object) -> object:
+        """Drop the ``idle_queue`` section from ``[plugins.section]`` and from each role's ``sections``, with a warning.
+
+        Every free slot gets a fresh run, so a free slot with no open idea is not idle.
+        """
+        plugins = data.get('plugins') if isinstance(data, dict) else None
+        if not isinstance(data, dict) or not isinstance(plugins, dict):
+            return data
+        gone = 'idle_queue'
+
+        def dropped(where: str) -> None:
+            deprecated.dropped(
+                f'the {gone} section is removed: every free slot gets a run; delete it from {where}', removed_in='0.7.0'
+            )
+
+        kept = dict(plugins)
+        if isinstance(sections := plugins.get('section'), dict):
+            table = dict(sections)
+            if isinstance(use := table.get('use'), list) and gone in use:
+                dropped('[plugins.section] use')
+                table['use'] = [n for n in use if n != gone]
+            if table.pop(gone, None) is not None:
+                dropped(f'[plugins.section.{gone}]')
+            kept['section'] = table
+        if isinstance(roles := plugins.get('role'), dict):
+            listed = {n: t for n, t in roles.items() if isinstance(t, dict) and gone in (t.get('sections') or [])}
+            for name in listed:
+                dropped(f'[plugins.role.{name}] sections')
+            kept['role'] = {
+                n: {**t, 'sections': [x for x in t['sections'] if x != gone]} if n in listed else t
+                for n, t in roles.items()
+            }
+        return {**data, 'plugins': kept}
 
     @model_validator(mode='after')
     def _check(self) -> Self:

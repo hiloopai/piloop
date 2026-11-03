@@ -58,7 +58,7 @@ from piloop.watch.app import (
 )
 from piloop.watch.panels import Api, Part, read_frame, sparkline, touched
 from tests.campaign.test_inbox import news_lines
-from tests.conftest import WATCHDOG, has_lines, reconfigured, register, serving_api, spent, store_config
+from tests.conftest import SWEEPER, has_lines, reconfigured, register, serving_api, spent, store_config
 from tests.reports.test_history import idea
 
 
@@ -258,7 +258,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
                     started_at=ago(minutes=3),
                 ),
                 AgentSession(
-                    kind=WATCHDOG,
+                    kind=SWEEPER,
                     campaign_id=p.id,
                     harness='claude',
                     model='opus',
@@ -268,14 +268,14 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
                     started_at=ago(minutes=10, seconds=30),  # "10m" for 30 s: "40s" became "41s" on a loaded host
                 ),
                 AgentSession(
-                    kind=WATCHDOG,
+                    kind=SWEEPER,
                     campaign_id=p.id,
                     state=AgentSessionState.EXITED,
                     usage=spent(1_234_567, 9),
                 ),
             ]
         )
-        comment = dict(author='watchdog#3', created_at=ago(minutes=30))
+        comment = dict(author='sweeper#3', created_at=ago(minutes=30))
         s.add_all(
             [
                 Comment(
@@ -353,7 +353,7 @@ def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, 
         ' head: candidate#4 · score: 4 · score vs baseline: 3 · kept: 3 · candidates: 4 · tokens:'
     )
     assert re.findall(r'╭─ \[\d\] (\w+)', rest) == ['Inbox', 'inbox', 'Agents', 'Ideas', 'Candidates', 'Status']
-    assert ' comment#3 escalation on campaign#1 by watchdog#3, 30m ago · p1,' in detail(rest), (
+    assert ' comment#3 escalation on campaign#1 by sweeper#3, 30m ago · p1,' in detail(rest), (
         'the detail opens on the first item of the inbox'
     )
     assert 'esc campaigns' in rest.splitlines()[-1]
@@ -971,7 +971,7 @@ def _reply_wakes_the_wait(db: Database, campaign: Campaign, env: dict[str, str])
         s.add(
             Comment(
                 target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
-                author='watchdog#3',
+                author='sweeper#3',
                 kind=ESCALATION,
                 priority=1,
                 body='Codex cannot start: trust dialog.',

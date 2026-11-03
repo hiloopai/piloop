@@ -52,7 +52,7 @@ from piloop.plugins.network.https import Https, HttpsNetwork
 from piloop.plugins.secrets.contract import SECRETS, HomeSecrets, set_secret
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.plugins.vcs.contract import MAX_HAVE
-from tests.conftest import WATCHDOG, Dial, disk, elsewhere, home_cas, wait_until
+from tests.conftest import SWEEPER, Dial, disk, elsewhere, home_cas, wait_until
 from tests.fixtures.netfault import CutResponse, Proxy
 from tests.test_lease import (
     DONE,
@@ -233,7 +233,7 @@ def test_a_worker_gets_the_values_of_the_secrets_that_its_agents_job_names_and_i
     assert isinstance(w1.acquire(uuid4().hex, HOST), Grant)
     found = w1.secrets(lease)
     assert {name: value.get_secret_value() for name, value in found.values.items()} == {'KEY': 'campaign'}
-    agent = Agent(role=WATCHDOG, session=job.agent_session)
+    agent = Agent(role=SWEEPER, session=job.agent_session)
     assert Tokens(db).verify(found.token.get_secret_value()) is None, 'a session that is not live yet acts as nobody'
     with db.session() as s:
         s.get_one(AgentSession, job.agent_session).state = AgentSessionState.STARTING

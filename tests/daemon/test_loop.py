@@ -347,7 +347,7 @@ WRITES = (
     "INSERT INTO ideas (track, campaign_id, title, hypothesis, created_by, status) VALUES ('score', 1, 's', 'h', 'scout#9',"
     " 'dropped')",
     "UPDATE ideas SET priority = 0 WHERE title = 'a'",
-    "INSERT INTO agent_sessions (kind, campaign_id, state, reason) VALUES ('watchdog', 1, 'requested', 'by hand')",
+    "INSERT INTO agent_sessions (kind, campaign_id, state, reason) VALUES ('sweeper', 1, 'requested', 'by hand')",
     "UPDATE campaigns SET paused = 'launches', paused_reason = 'night' WHERE id = 1",
     'UPDATE campaigns SET paused = NULL, paused_reason = NULL WHERE id = 1',
     "UPDATE ideas SET status = 'dropped' WHERE title = 'a'",

@@ -242,7 +242,7 @@ def test_a_secret_that_a_stopped_campaign_lacks_is_a_warning(
     cfg: Settings, db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """As its ``piloop.toml``: a stopped campaign runs no agent that needs the secret until ``piloop init`` resumes it."""
-    give_watchdog(db, campaign, {}, {'GATEWAY_KEY': {'secret': 'TEAM_KEY'}})
+    give_sweeper(db, campaign, {}, {'GATEWAY_KEY': {'secret': 'TEAM_KEY'}})
     monkeypatch.delenv('TEAM_KEY', raising=False)
     assert by_name(cfg)['secrets demo'].fails, 'an active campaign needs it now'
     with db.session() as s:
@@ -302,7 +302,7 @@ def test_mcp_servers_are_checked_for_their_commands_and_their_secrets_by_name_on
         'exa': {'provider': 'http', 'url': 'https://mcp.exa.ai/mcp', 'headers_env': {'x-api-key': 'EXA_API_KEY'}},
         'xai': {'provider': 'stdio', 'command': ['xai-server'], 'env': ['XAI_API_KEY', 'EXA_API_KEY']},
     }
-    give_watchdog(
+    give_sweeper(
         db, campaign, servers, {'GATEWAY_URL': 'https://gw.example.com', 'GATEWAY_KEY': {'secret': 'TEAM_KEY'}}
     )
     for name in ('EXA_API_KEY', 'XAI_API_KEY', 'TEAM_KEY'):
@@ -328,10 +328,10 @@ def test_mcp_servers_are_checked_for_their_commands_and_their_secrets_by_name_on
     assert 'value' not in ' '.join(report(checks(cfg)))
 
 
-def give_watchdog(
+def give_sweeper(
     db: Database, campaign: Campaign, servers: Mapping[str, object], env: Mapping[str, object] | None = None
 ) -> None:
-    """Give the watchdog ``servers`` on a harness that takes them, with ``env``."""
+    """Give the sweeper ``servers`` on a harness that takes them, with ``env``."""
     script = {'provider': 'claude', 'executable': 'script', 'headless': ['{mcp}', '{prompt}'], 'env': dict(env or {})}
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
@@ -340,7 +340,7 @@ def give_watchdog(
             plugins={
                 'harness': {'script': script},
                 'mcp_server': dict(servers),
-                'role': {'watchdog': {'mcp': list(servers)}},
+                'role': {'sweeper': {'mcp': list(servers)}},
             },
         )
         s.commit()

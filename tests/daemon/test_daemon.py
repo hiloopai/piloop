@@ -17,6 +17,7 @@ from piloop.daemon.main import ACTOR, Daemon
 from piloop.daemon.serve import RESTART_SIGNAL, SERVE_ARGV
 from piloop.db.models import AgentSession, AgentSessionState, Campaign
 from piloop.db.session import Database, migrate
+from piloop.ids import RoleName
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
@@ -30,7 +31,7 @@ from tests.conftest import (
     HARNESS_APPEND,
     HARNESS_FAILS,
     SETTLE,
-    WATCHDOG,
+    SWEEPER,
     WRITE_PID,
     ScriptRuntime,
     bare_config,
@@ -79,7 +80,7 @@ def test_daemon_end_to_end(
         with daemon.db.session() as s:
             s.get_one(Campaign, campaign.id).config = load_campaign_config(campaign_path)
             s.commit()
-        assert run_all(daemon.scheduler) == [2], 'a fresh run fills the free slot; the successful run woke no watchdog'
+        assert run_all(daemon.scheduler) == [2], 'a fresh run fills the free slot; the successful run woke no sweeper'
         daemon.scheduler.wait(SETTLE)
         assert trace(daemon.db) == snapshot(
             [
@@ -119,17 +120,17 @@ def test_daemon_end_to_end(
         with daemon.db.session() as s:
             s.get_one(Campaign, campaign.id).config = load_campaign_config(campaign_path)
             s.commit()
-        assert run_all(daemon.scheduler) == [3, 4], 'a fresh run, and the watchdog sweep that the failure requests'
+        assert run_all(daemon.scheduler) == [3, 4], 'a fresh run, and the sweeper sweep that the failure requests'
         daemon.scheduler.wait(SETTLE)
         with daemon.db.session() as s:
-            watchdog = s.get_one(AgentSession, 4)
-            assert (watchdog.kind, watchdog.reason, watchdog.state, watchdog.harness) == (
-                WATCHDOG,
+            sweeper = s.get_one(AgentSession, 4)
+            assert (sweeper.kind, sweeper.reason, sweeper.state, sweeper.harness) == (
+                SWEEPER,
                 'run_failed: run#2 failed',
                 AgentSessionState.EXITED,
                 'script',
             )
-            assert watchdog.log_dir == str(home / 'agent_sessions' / '4')
+            assert sweeper.log_dir == str(home / 'agent_sessions' / '4')
         brief = (home / 'agent_sessions' / '4' / 'brief.md').read_text()
         assert (
             'Why this agent started (context, not a scope): run_failed: run#2 failed' in brief
@@ -459,7 +460,7 @@ def test_shutdown_fails_open_runs(tmp_path: Path, capsys: pytest.CaptureFixture[
             )
         )
         s.flush()  # the run first: the unit of work orders unrelated mappers by name
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=1, reason='by hand'))
+        s.add(AgentSession(kind=RoleName('orchestrator'), campaign_id=1, reason='by hand'))
         s.commit()
     daemon.shutdown(timeout=1)
     after = Database(daemon.db.engine.url.render_as_string(hide_password=False), actor=System.HUMAN)

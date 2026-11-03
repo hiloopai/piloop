@@ -44,7 +44,7 @@ CONFIG = {
         'role': {
             'implementer': {'max_concurrent': 2, 'timeout': 600},
             'research': {'triggers': []},
-            'watchdog': {'triggers': []},
+            'sweeper': {'triggers': []},
         },
         'stop_rule': {'max_runs': 5, 'max_hours': 1, 'max_tokens': 20_000_000},
     },

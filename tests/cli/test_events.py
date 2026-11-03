@@ -113,7 +113,7 @@ def test_status_and_inbox_print_one_json_document_with_the_cursor_they_were_read
         s.add(
             Comment(
                 target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
-                author='watchdog#2',
+                author='sweeper#2',
                 kind=ESCALATION,
                 priority=0,
                 body='a long body ' * 20,

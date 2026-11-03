@@ -52,7 +52,6 @@ from piloop.ids import AgentSessionId, CampaignId, RoleName, TargetKind, TargetR
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
-from piloop.plugins.campaign_type.kit.runs.role.watchdog import WatchdogRole
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.contract import AGENT, AgentJob, HarnessSession, RepoId, Source
 from piloop.plugins.executor.kit import jobs, sessions
@@ -75,7 +74,8 @@ from tests.conftest import (
     HARNESS_FAILS,
     HARNESS_PROMPT_TO_FILE,
     HARNESS_SLEEPS,
-    WATCHDOG,
+    SWEEPER,
+    SWEEPER_PROMPTS,
     ScriptRuntime,
     cas_of,
     events,
@@ -101,14 +101,14 @@ CODEX_LIKE = f'#!/bin/sh\necho \'{{"type":"thread.started","thread_id":"{CODEX_I
 UUID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
 
 
-def role_in(campaign: Campaign, kind: RoleName = WATCHDOG) -> Role:
+def role_in(campaign: Campaign, kind: RoleName = SWEEPER) -> Role:
     return role(campaign.config, kind, Path(campaign.path))
 
 
 def brief_in(
     s: Session,
     campaign: Campaign,
-    kind: RoleName = WATCHDOG,
+    kind: RoleName = SWEEPER,
     *,
     lines: tuple[str, ...] = (),
     incident: bool = False,
@@ -124,7 +124,7 @@ def brief_in(
     return compose_brief(role_in(campaign, kind), campaign, sections.whole, incident=incident)
 
 
-def request(db: Database, campaign: Campaign, kind: RoleName = WATCHDOG, **fields: object) -> AgentSessionId:
+def request(db: Database, campaign: Campaign, kind: RoleName = SWEEPER, **fields: object) -> AgentSessionId:
     """A requested row, on ``script`` unless ``fields`` names a harness: the pass that takes a row chooses one."""
     fields.setdefault('harness', 'script')
     with db.session() as s:
@@ -226,22 +226,21 @@ def context_of(brief: str) -> str:
 def test_brief_is_role_prompt_campaign_brief_guides_then_the_context_section(campaign: Campaign, db: Database) -> None:
     with db.session() as s:
         brief = brief_in(s, s.get_one(Campaign, campaign.id), lines=('- extra line',))
-    assert WatchdogRole.PROMPT is not None
-    assert brief.startswith(WatchdogRole.PROMPT.read_text()[:40])
+    assert brief.startswith((SWEEPER_PROMPTS / 'sweeper.md').read_text()[:40])
     assert "The orchestrator's procedures" not in brief and 'piloop pause' not in brief, 'only `piloop schema` has them'
     assert (
-        brief.index('# Watchdog')
+        brief.index('# Sweeper')
         < brief.index('# Demo')
         < brief.index('## Working with the piloop')
         < brief.index('## Context')
     )
     assert '# Guides' not in brief and '\n# Context' not in brief, 'every section is a ## heading'
     assert context_of(brief) == (
-        f"""- You are watchdog#7, the watchdog for campaign#1 (demo): sign what you write as 'watchdog#7'.
+        f"""- You are sweeper#7, the sweeper for campaign#1 (demo): sign what you write as 'sweeper#7'.
 - Why this agent started (context, not a scope): timer
 - Run every `piloop` command as `{PILOOP_HINT}`. `{PILOOP_HINT} sql -` runs one SQL statement from stdin: pipe it from a quoted heredoc (`<<'EOF'`, which expands nothing), and double each `'` in your text.
 - You may write: comments(escalation, note), lessons on the campaign once it stopped.
-- `{PILOOP_HINT} schema <guide>` prints another guide: links, research_commands, provenance, queries, orchestration, long_jobs, workspace.
+- `{PILOOP_HINT} schema <guide>` prints another guide: concepts, judging, comments, priorities, search, past_campaigns, links, research_commands, provenance, queries, orchestration, long_jobs, workspace.
 - A hunch worth a run of its own goes in a note, with pointers (ids, paths, the number). You file no ideas.
 - extra line"""
     )
@@ -250,44 +249,38 @@ def test_brief_is_role_prompt_campaign_brief_guides_then_the_context_section(cam
 def test_a_brief_has_its_roles_guides_before_the_context_and_names_the_others(campaign: Campaign, db: Database) -> None:
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        brief = brief_in(s, p, WATCHDOG)
-        resumed = brief_in(s, p, WATCHDOG, resumed=True)
+        brief = brief_in(s, p, SWEEPER)
+        resumed = brief_in(s, p, SWEEPER, resumed=True)
     guides = brief[brief.index('## Working with the piloop database') : brief.index('## Context')]
     assert [line for line in guides.splitlines() if line.startswith('## ')] == [
-        '## Working with the piloop database',
-        '## The model',
-        '## Judge results',
-        '## Talk',
-        '## The inbox',
-        '## Search',
-        '## Remember past campaigns',
-    ]
+        '## Working with the piloop database'
+    ], "a role's own guides: a new role has the shared one"
     assert (
-        f'- `{PILOOP_HINT} schema <guide>` prints another guide: links, research_commands, provenance, queries, orchestration, long_jobs, workspace.'
+        f'- `{PILOOP_HINT} schema <guide>` prints another guide: concepts, judging, comments, priorities, search, past_campaigns, links, research_commands, provenance, queries, orchestration, long_jobs, workspace.'
         in (context_of(brief))
     )
-    assert resumed.startswith('You continue this session as a new agent, watchdog#7.')
+    assert resumed.startswith('You continue this session as a new agent, sweeper#7.')
     assert '## Working with the piloop database' not in resumed and '## Context' in resumed, (
         'the resumed session has the guides already'
     )
 
 
 def test_the_context_is_a_section_that_a_list_moves_and_its_lines_configure(campaign: Campaign, db: Database) -> None:
-    """A line whose field is empty is left out: this watchdog writes nothing that its brief lists."""
+    """A line whose field is empty is left out: this sweeper writes nothing that its brief lists."""
     plugins = {
         'section': {'context': {'lines': ['- You are {agent}, in {repo}.', '- You may write: {writes}.']}},
-        'role': {'watchdog': {'writes': [], 'sections': ['goal', 'context', 'database']}},
+        'role': {'sweeper': {'writes': [], 'sections': ['goal', 'context', 'database']}},
     }
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         p.config = load_campaign_config(Path(campaign.path), plugins=plugins)
-        brief = brief_in(s, p, WATCHDOG, lines=('- the type',))
+        brief = brief_in(s, p, SWEEPER, lines=('- the type',))
     assert brief.index('## Goal') < brief.index('## Context') < brief.index('## Working with the piloop database')
     with db.session() as s:
         status = Rendering(s, utcnow(), s.get_one(Campaign, campaign.id), Path('/no/workspace'), cas_of(s))
         assert Context().render(status) is None, 'no agent reads piloop status'
     context = context_of(brief).splitlines()
-    assert (context[0], context[-1]) == (f'- You are watchdog#7, in {campaign.path}.', '- the type')
+    assert (context[0], context[-1]) == (f'- You are sweeper#7, in {campaign.path}.', '- the type')
     assert not any(line.startswith('- You may write') for line in context)
     with pytest.raises(ConfigError, match=r"'- \{who\}' has the field who: use agent, role,"):
         load_campaign_config(Path(campaign.path), plugins={'section': {'context': {'lines': ['- {who}']}}})
@@ -296,7 +289,9 @@ def test_the_context_is_a_section_that_a_list_moves_and_its_lines_configure(camp
 def test_the_example_queries_of_a_brief_read_its_own_campaign_and_primary(campaign: Campaign, db: Database) -> None:
     with db.session() as s:
         first = s.get_one(Campaign, campaign.id)
-        second = Campaign(name='second', path=first.path, config=first.config)
+        guides = {'role': {'sweeper': {'sections': ['database', 'judging', 'search', 'past_campaigns', 'context']}}}
+        config = load_campaign_config(Path(first.path), plugins=guides)
+        second = Campaign(name='second', path=first.path, config=config)
         s.add(second)
         s.flush()
         brief = brief_in(s, second)
@@ -307,7 +302,7 @@ def test_the_example_queries_of_a_brief_read_its_own_campaign_and_primary(campai
     assert 'campaign_id = 1' not in procedures and '<campaign id>' not in procedures, procedures
 
 
-@pytest.mark.parametrize('kind', [IMPLEMENTER, WATCHDOG])
+@pytest.mark.parametrize('kind', [IMPLEMENTER, SWEEPER])
 @pytest.mark.parametrize('incident', [False, True])
 def test_a_brief_says_git_or_commit_only_in_the_vcs_providers_parts(
     campaign: Campaign, db: Database, mocker: MockerFixture, kind: RoleName, incident: bool
@@ -331,9 +326,9 @@ def test_a_roles_addendum_follows_the_campaign_brief_in_that_roles_briefs_only(
             Path(campaign.path), plugins={'role': {'orchestrator': {'addendum': 'orchestrator.md'}}}
         )
         lead = brief_in(s, p, RoleName('orchestrator'))
-        watchdog = brief_in(s, p)
+        sweeper = brief_in(s, p)
     assert lead.index('# Demo') < lead.index('# Decide fast') < lead.index('## Working with the piloop')
-    assert '# Decide fast' not in watchdog
+    assert '# Decide fast' not in sweeper
 
 
 def test_a_roles_first_message_names_its_brief(
@@ -342,19 +337,19 @@ def test_a_roles_first_message_names_its_brief(
     use_harness(db, campaign, HARNESS_PROMPT_TO_FILE.replace('prompt.txt', '../prompt.txt'))
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = load_campaign_config(
-            Path(campaign.path), plugins={'role': {'watchdog': {'first_message': 'Read {brief}, then work.'}}}
+            Path(campaign.path), plugins={'role': {'sweeper': {'first_message': 'Read {brief}, then work.'}}}
         )
         s.commit()
     exit_of(launch(db, runtime, tmp_path, request(db, campaign)))
     assert (tmp_path / 'w' / 'prompt.txt').read_text() == f'Read {tmp_path / "w" / "brief.md"}, then work.'
     with pytest.raises(ConfigError, match=r"first_message = 'Read it': 'Read it' names no \{brief\}"):
-        load_campaign_config(Path(campaign.path), plugins={'role': {'watchdog': {'first_message': 'Read it'}}})
+        load_campaign_config(Path(campaign.path), plugins={'role': {'sweeper': {'first_message': 'Read it'}}})
     resumes = load_campaign_config(
-        Path(campaign.path), plugins={'role': {'watchdog': {'resume_message': 'Go, {agent}.'}}}
+        Path(campaign.path), plugins={'role': {'sweeper': {'resume_message': 'Go, {agent}.'}}}
     )
-    assert resumes.role(WATCHDOG).resume_message == 'Go, {agent}.'
+    assert resumes.role(SWEEPER).resume_message == 'Go, {agent}.'
     with pytest.raises(ConfigError, match=r"'\{who\} goes on' has who: only \{agent\} is filled in"):
-        load_campaign_config(Path(campaign.path), plugins={'role': {'watchdog': {'resume_message': '{who} goes on'}}})
+        load_campaign_config(Path(campaign.path), plugins={'role': {'sweeper': {'resume_message': '{who} goes on'}}})
 
 
 def test_launch_runs_the_row_through_its_lifecycle(
@@ -374,34 +369,34 @@ def test_launch_runs_the_row_through_its_lifecycle(
     assert (w.state, w.harness, w.model, w.runtime, w.log_dir, w.error) == (
         AgentSessionState.EXITED,
         'script',
-        'watchdog-model',
+        'sweeper-model',
         'subprocess',
         str(tmp_path / 'w'),
         None,
     )
     assert w.handle['pid'] and w.ended_at is not None and w.ended_at >= w.started_at
     assert (tmp_path / 'w' / 'prompt.txt').read_text() == FIRST_MESSAGE.format(brief=tmp_path / 'w' / 'brief.md')
-    assert (tmp_path / 'w' / 'brief.md').read_text().startswith('# Watchdog')
+    assert (tmp_path / 'w' / 'brief.md').read_text().startswith('# Sweeper')
     assert (tmp_path / 'w' / 'transcript.txt').is_file()
     assert runtime.killed, 'the runtime is told to release the implementer'
     with db.session() as s:
         events = [(e.target_id, e.payload) for e in s.scalars(select(Event).order_by(Event.id))]
     assert [e for e in events if not isinstance(e[1], JobEnded)] == [
-        (1, AgentSessionRequested(role=WATCHDOG, campaign=campaign.id, reason='test')),
+        (1, AgentSessionRequested(role=SWEEPER, campaign=campaign.id, reason='test')),
         (1, LeaseWorkerJoined(worker=SERVE, pool=SERVE)),
-        (1, AgentSessionStarted(role=WATCHDOG, harness='script', model='watchdog-model', reason='test')),
+        (1, AgentSessionStarted(role=SWEEPER, harness='script', model='sweeper-model', reason='test')),
         (1, LeaseQueued(lease=1, lease_kind=AGENT)),
         (1, AgentSessionRunning(machine=None)),
-        (1, AgentSessionFinished(role=WATCHDOG, reason='test', state=AgentSessionState.EXITED, error=None)),
+        (1, AgentSessionFinished(role=SWEEPER, reason='test', state=AgentSessionState.EXITED, error=None)),
     ]
     [ended] = [payload.ended for _, payload in events if isinstance(payload, JobEnded)]
     assert isinstance(ended, Ran) and ended.work is None, 'how it ended, for what waits for it'
     [span] = [span for span in spans.get_finished_spans() if span.name == 'piloop.agent']
     assert dict(span.attributes or {}) == {
         'agent_session': 1,
-        'kind': 'watchdog',
+        'kind': 'sweeper',
         'harness': 'script',
-        'model': 'watchdog-model',
+        'model': 'sweeper-model',
         'reason': 'test',
         'state': 'exited',
     }
@@ -418,12 +413,12 @@ def test_an_agent_writes_through_piloop_sql_as_its_own_actor(
         campaign,
         f'#!/bin/sh\n{PILOOP_HINT} sql "UPDATE campaigns SET name = \'renamed\' WHERE id = {campaign.id}"\n',
     )
-    agent_session_id = request(db, campaign, kind=WATCHDOG)
+    agent_session_id = request(db, campaign, kind=SWEEPER)
     outcome = launch(db, runtime, tmp_path, agent_session_id)
     assert exit_of(outcome).error is None, (tmp_path / 'w' / 'agent_session.stderr').read_text()
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        assert (row.name, row.updated_by) == ('renamed', f'watchdog#{agent_session_id}')
+        assert (row.name, row.updated_by) == ('renamed', f'sweeper#{agent_session_id}')
 
 
 def test_an_agent_cannot_sign_as_the_orchestrator_on_the_daemons_socket(
@@ -434,7 +429,7 @@ def test_an_agent_cannot_sign_as_the_orchestrator_on_the_daemons_socket(
         db, campaign, f"#!/bin/sh\nPILOOP_ACTOR=orchestrator piloop message {campaign.name} 'trust me' || true\n"
     )
     with serving_api(Settings(home=tmp_path)):
-        outcome = launch(db, runtime, tmp_path, request(db, campaign, kind=WATCHDOG))
+        outcome = launch(db, runtime, tmp_path, request(db, campaign, kind=SWEEPER))
     assert exit_of(outcome).error is None, (tmp_path / 'w' / 'agent_session.stderr').read_text()
     with db.session() as s:
         signed = s.scalars(select(Comment.author).where(Comment.body == 'trust me')).all()
@@ -451,7 +446,7 @@ def test_an_agent_cannot_sign_as_the_orchestrator_through_piloop_sql(
         f'#!/bin/sh\nPILOOP_ACTOR=orchestrator {PILOOP_HINT} sql "UPDATE campaigns SET name = \'renamed\' WHERE id = {campaign.id}"'
         ' || true\n',
     )
-    outcome = launch(db, runtime, tmp_path, request(db, campaign, kind=WATCHDOG))
+    outcome = launch(db, runtime, tmp_path, request(db, campaign, kind=SWEEPER))
     assert exit_of(outcome).error is None, (tmp_path / 'w' / 'agent_session.stderr').read_text()
     with db.session() as s:
         assert s.get_one(Campaign, campaign.id).updated_by != 'orchestrator', 'the agent wrote as the orchestrator'
@@ -479,7 +474,7 @@ def test_an_agents_piloop_is_the_daemons_whatever_comes_first_on_path_or_sits_in
         db, campaign, f'#!/bin/sh\n{cli} sql "UPDATE campaigns SET name = \'renamed\' WHERE id = {campaign.id}"\n'
     )
 
-    agent_session_id = request(db, campaign, kind=WATCHDOG)
+    agent_session_id = request(db, campaign, kind=SWEEPER)
     outcome = launch(db, runtime, tmp_path, agent_session_id)
     assert exit_of(outcome).error is None, (tmp_path / 'w' / 'agent_session.stderr').read_text()
     with db.session() as s:
@@ -548,7 +543,7 @@ def test_an_agent_that_works_and_exits_0_has_no_error(
 
 def test_timeout_kills_and_records(campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path) -> None:
     write_toml(Path(campaign.path), HARNESS_SLEEPS)
-    cfg = load_campaign_config(Path(campaign.path), plugins={'role': {'watchdog': {'timeout': 0.3}}})
+    cfg = load_campaign_config(Path(campaign.path), plugins={'role': {'sweeper': {'timeout': 0.3}}})
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
@@ -586,7 +581,7 @@ def test_runtime_failure_is_isolated(
     assert span_attributes(spans, 'piloop.agent', agent_session_id)['state'] == 'killed'
     with db.session() as s:
         [(_, finished)] = in_order(s, AgentSessionFinished)
-    assert (finished.role, finished.error) == (WATCHDOG, 'RuntimeError: no server')
+    assert (finished.role, finished.error) == (SWEEPER, 'RuntimeError: no server')
 
 
 def anomalies(db: Database) -> list[tuple[int, StartupAnomaly]]:
@@ -615,7 +610,7 @@ def test_an_agent_that_never_got_going_is_an_anomaly(
     assert (on, anomaly.model_dump(exclude={'kind'})) == (
         dialog,
         {
-            'role': 'watchdog',
+            'role': 'sweeper',
             'harness': 'script',
             'subject': None,
             'seconds': IsFloat(ge=0),
@@ -962,7 +957,7 @@ def test_a_killed_agents_usage_is_read_too(
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         config = p.config.model_dump(mode='json')
-        config['plugins']['role']['watchdog']['timeout'] = 0.5
+        config['plugins']['role']['sweeper']['timeout'] = 0.5
         p.config = CampaignConfig.model_validate(config)
         s.commit()
     agent_session_id = request(db, campaign)
@@ -1047,11 +1042,11 @@ def test_a_brief_past_the_limit_of_one_argument_reaches_the_agent_as_a_file(
     assert (tmp_path / 'w' / 'brief.md').read_text() == brief
 
 
-def give_watchdog_servers(db: Database, campaign: Campaign, servers: dict[str, object]) -> None:
-    """``[plugins.mcp_server.*]`` tables in the stored config, all listed by ``[plugins.role.watchdog] mcp``."""
+def give_sweeper_servers(db: Database, campaign: Campaign, servers: dict[str, object]) -> None:
+    """``[plugins.mcp_server.*]`` tables in the stored config, all listed by ``[plugins.role.sweeper] mcp``."""
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        p.config = reconfigured(p.config, plugins={'mcp_server': servers, 'role': {WATCHDOG: {'mcp': list(servers)}}})
+        p.config = reconfigured(p.config, plugins={'mcp_server': servers, 'role': {SWEEPER: {'mcp': list(servers)}}})
         s.commit()
 
 
@@ -1069,7 +1064,7 @@ def test_the_mcp_element_expands_to_the_roles_servers_and_their_env_reaches_the_
         headless=['--no-extensions', MCP, '{prompt}'],
         session_id_pattern='(never)',
     )
-    give_watchdog_servers(db, campaign, {'probe': {'provider': 'stdio', 'command': ['cat'], 'env': ['PROBE_KEY']}})
+    give_sweeper_servers(db, campaign, {'probe': {'provider': 'stdio', 'command': ['cat'], 'env': ['PROBE_KEY']}})
     monkeypatch.delenv('PROBE_KEY', raising=False)
     put_secret(db, None, 'PROBE_KEY', 'probe-value')
     specs: list[AgentSpec] = []
@@ -1098,7 +1093,7 @@ def test_an_agent_knows_when_its_timeout_ends(
     before = time.time()
     launch(db, runtime, tmp_path, request(db, campaign))
     env = dict(line.split('=', 1) for line in (tmp_path / 'w' / 'env.txt').read_text().splitlines() if '=' in line)
-    timeout = load_campaign_config(Path(campaign.path)).role(WATCHDOG).timeout
+    timeout = load_campaign_config(Path(campaign.path)).role(SWEEPER).timeout
     assert before + timeout - 1 <= int(env['PILOOP_DEADLINE']) <= time.time() + timeout
 
 
@@ -1113,7 +1108,7 @@ def test_a_secret_that_the_home_lacks_fails_the_launch_naming_it_even_when_the_e
         headless=['--no-extensions', MCP, '{prompt}'],
         session_id_pattern='(never)',
     )
-    give_watchdog_servers(
+    give_sweeper_servers(
         db, campaign, {'probe': {'provider': 'http', 'url': 'https://x', 'bearer_token_env': 'PROBE_TOKEN'}}
     )
     monkeypatch.setenv('PROBE_TOKEN', 'from-the-environment')
@@ -1142,7 +1137,7 @@ def test_a_harness_env_gives_values_and_secrets_and_a_campaigns_secret_wins_over
     launch(db, runtime, tmp_path, agent_session_id)
     seen = (tmp_path / 'w' / 'env.txt').read_text().splitlines()
     assert {'GATEWAY_URL=https://gw.example.com', 'GATEWAY_KEY=campaign-key'} <= set(seen)
-    assert f'PILOOP_ACTOR=watchdog#{agent_session_id}' in seen, "piloop's own variables win"
+    assert f'PILOOP_ACTOR=sweeper#{agent_session_id}' in seen, "piloop's own variables win"
     assert other not in ' '.join(seen) and 'TEAM_KEY=' not in ' '.join(seen), 'only what the job names, by variable'
     with db.session() as s:
         job = read_job(CAS.selected({}).open(tmp_path), *s.execute(select(Lease.id, Lease.job_cid)).one())
@@ -1177,7 +1172,7 @@ def test_servers_that_cannot_be_rendered_fail_the_launch_on_the_row(
     campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     use_harness(db, campaign, RECORDS_ARGV_AND_ENV, provider='codex', headless=[MCP, '{prompt}'], resume=[])
-    give_watchdog_servers(db, campaign, {'probe': {'provider': 'stdio', 'command': ['cat']}})
+    give_sweeper_servers(db, campaign, {'probe': {'provider': 'stdio', 'command': ['cat']}})
     agent_session_id = request(db, campaign)
     launch(db, runtime, tmp_path, agent_session_id)
     w = agent_session(db, agent_session_id)
@@ -1195,7 +1190,7 @@ def test_a_subprocess_agent_gets_the_arguments_that_resume_its_session(
     start = mocker.spy(runtime, 'start')
     launch(db, runtime, tmp_path, request(db, campaign), tracer)
     [spec] = [c.args[0] for c in start.call_args_list]
-    assert spec.resume_args == ['resume', '{session_id}', '--model', 'watchdog-model', '{prompt}']
+    assert spec.resume_args == ['resume', '{session_id}', '--model', 'sweeper-model', '{prompt}']
 
 
 def test_an_agent_whose_start_cannot_be_recorded_is_killed_and_waited_for(
@@ -1224,9 +1219,9 @@ def sweep_argv(
     tmp_path: Path,
     mocker: MockerFixture,
     harness: str,
-    **watchdog: object,
+    **sweeper: object,
 ) -> list[str]:
-    """The argv that a watchdog starts on the built-in ``harness``, with ``watchdog`` over its role's table."""
+    """The argv that a sweeper starts on the built-in ``harness``, with ``sweeper`` over its role's table."""
     write_toml(Path(campaign.path), HARNESS_PROMPT_TO_FILE)
     cfg = load_campaign_config(
         Path(campaign.path),
@@ -1241,7 +1236,7 @@ def sweep_argv(
                 },
                 'script': {'model': 'm'},
             },
-            'role': {'watchdog': {'harnesses': [harness, 'script'], **watchdog}},
+            'role': {'sweeper': {'harnesses': [harness, 'script'], **sweeper}},
         },
     )
     assert cfg.role_models(IMPLEMENTER)[harness] == 'the-campaigns-model'
@@ -1249,7 +1244,7 @@ def sweep_argv(
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
     start = mocker.spy(runtime, 'start')
-    launch(db, runtime, tmp_path, request(db, campaign, kind=WATCHDOG, harness=harness))
+    launch(db, runtime, tmp_path, request(db, campaign, kind=SWEEPER, harness=harness))
     [spec] = [c.args[0] for c in start.call_args_list]
     return spec.args
 

@@ -31,7 +31,7 @@ from tests.daemon.test_scheduler import (
     died_at_startup,
     make_scheduler,
     pause_escalations,
-    request_watchdog,
+    request_sweeper,
 )
 
 
@@ -178,11 +178,11 @@ def test_the_startup_breaker_counts_with_the_launch_policys_limits(
     """``[plugins.launch_policy] startup_breaker = 1``: a single death at startup pauses the campaign's launches."""
     policy = FewestLive(startup_breaker=1, startup_window=timedelta(minutes=2))
     died_at_startup(db, campaign, IMPLEMENTER, minutes_ago=3)
-    wanted = request_watchdog(db, campaign)
+    wanted = request_sweeper(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path, plugins={'launch_policy': policy})
     assert wanted in run_all(scheduler), 'the death is older than the window'
     died_at_startup(db, campaign, IMPLEMENTER)
-    request_watchdog(db, campaign)
+    request_sweeper(db, campaign)
     assert run_all(scheduler) == []
     [escalation] = pause_escalations(db)
     assert '1 agents failed in the last 2 minutes.' in escalation.body

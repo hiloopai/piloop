@@ -3,35 +3,31 @@
 from pathlib import Path
 from typing import Never
 
-import pytest
 from inline_snapshot import snapshot
 from sqlalchemy.orm import Session
 
 from piloop.agents.results import StartupAnomaly
-from piloop.config import load_campaign_config
 from piloop.db.events import AnomalyReported
-from piloop.db.models import AgentSessionState, Campaign, CampaignStatus, Event, Pause
+from piloop.db.models import AgentSessionState, Campaign, Event
 from piloop.db.session import Database
 from piloop.ids import RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.consumers import RolePass
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
-from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunStatus
-from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.section.contract import SECTIONS, Rendering, markdown
 from piloop.plugins.section.reported import REPORTED_SHOWN
 from piloop.plugins.trigger.contract import Fire
 from piloop.plugins.trigger.dead_at_startup import DeadAtStartup
-from tests.conftest import WATCHDOG, cas_of
-from tests.reports.test_overview import NOW, agent, at, candidate, idea, live_campaign, run
+from tests.conftest import SWEEPER, cas_of
+from tests.reports.test_overview import NOW, agent, candidate, idea, live_campaign, run
 
 
 def fired(s: Session, campaign: Campaign, trigger: RunFailed | DeadAtStartup) -> Fire | None:
-    """What ``trigger`` of the watchdog fires on a pass now."""
+    """What ``trigger`` of the sweeper fires on a pass now."""
 
     def unread(_: object) -> Never:
         raise AssertionError('an incident trigger reads no backlog and no stall')
@@ -40,7 +36,7 @@ def fired(s: Session, campaign: Campaign, trigger: RunFailed | DeadAtStartup) ->
         s=s,
         now=NOW,
         campaign=s.get_one(Campaign, campaign.id),
-        role=WATCHDOG,
+        role=SWEEPER,
         last=None,
         quiet=None,
         interval=0,
@@ -95,14 +91,14 @@ def test_an_incident_wakes_an_agent_once(db: Database, campaign: Campaign) -> No
 
 
 def test_an_agent_dead_at_startup_is_an_incident_unless_its_role_investigates(db: Database, campaign: Campaign) -> None:
-    """A watchdog that died at startup would request a watchdog that could die the same way, and so on.
+    """A sweeper that died at startup would request a sweeper that could die the same way, and so on.
 
     The startup breaker pauses the launches instead. The orchestrator does not investigate, so its death is an incident.
     """
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        agent(s, p, WATCHDOG, 0, 5)  # a short life, without the launcher's event: no incident
-        for kind in (WATCHDOG, RoleName('orchestrator')):
+        agent(s, p, SWEEPER, 0, 5)  # a short life, without the launcher's event: no incident
+        for kind in (SWEEPER, RoleName('orchestrator')):
             dead = agent(s, p, kind, 0, 35, state=AgentSessionState.KILLED)
             payload = StartupAnomaly(role=kind, harness='script', subject=None, seconds=35.0, error='prompt_lost')
             s.add(Event(actor='daemon', target=TargetRef(TargetKind.AGENT_SESSION, dead.id), payload=payload))
@@ -113,12 +109,12 @@ def test_an_agent_dead_at_startup_is_an_incident_unless_its_role_investigates(db
 def test_the_incidents_given_to_agents_are_listed_newest_first(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
         assert shown(s, campaign, 'reported') == '## Incidents given to agents\n\n- None.'
-        watchdog = agent(s, s.get_one(Campaign, campaign.id), WATCHDOG, 0, 5)
+        sweeper = agent(s, s.get_one(Campaign, campaign.id), SWEEPER, 0, 5)
         for run_id in range(3, 3 + REPORTED_SHOWN + 1):
             subject = TargetRef(RUN, run_id)
             reported = AnomalyReported(subject=subject, trigger='run_failed', line=f'- {subject}')
             s.add(
-                Event(actor='daemon', target=TargetRef(TargetKind.AGENT_SESSION, watchdog.id), payload=reported, at=NOW)
+                Event(actor='daemon', target=TargetRef(TargetKind.AGENT_SESSION, sweeper.id), payload=reported, at=NOW)
             )
         s.commit()
         text = shown(s, campaign, 'reported')
@@ -128,41 +124,6 @@ def test_the_incidents_given_to_agents_are_listed_newest_first(db: Database, cam
         f'- run#{2 + REPORTED_SHOWN} (run_failed), given to agent_session#1 0s ago',
     ], 'newest first'
     assert (len(lines), lines[-1]) == (REPORTED_SHOWN + 1, '- … and 1 older incidents.')
-
-
-def test_the_idle_queue_counts_from_the_last_run_and_names_the_pending_sweeps_that_file_ideas(
-    db: Database, campaign: Campaign
-) -> None:
-    live_campaign(db, campaign)
-    with db.session() as s:
-        s.get_one(Run, 3).status, s.get_one(Run, 3).end = RunStatus.SUCCEEDED, RunEnd.FINISHED
-        s.get_one(Run, 3).finished_at = at(70)
-        s.get_one(Idea, 4).status = IdeaStatus.DROPPED  # free once its prerequisite was dropped: the board is empty
-        agent(s, s.get_one(Campaign, campaign.id), WATCHDOG, 100, 0, state=AgentSessionState.REQUESTED)
-        s.commit()
-        assert shown(s, campaign, 'idle_queue') == snapshot("""\
-## Idle queue
-
-- 1 free implementer slots and no runnable idea since 50m ago; no defining sweep pending\
-""")
-
-
-@pytest.mark.parametrize('held', ['max_runs', 'stopped', 'paused'])
-def test_no_idle_queue_while_nothing_may_start(db: Database, campaign: Campaign, held: str) -> None:
-    """Two runs count toward ``max_runs``; the run that failed with no candidate does not count."""
-    live_campaign(db, campaign)
-    with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        p.config = load_campaign_config(
-            Path(campaign.path),
-            plugins={
-                'role': {'implementer': {'max_concurrent': 4}},
-                **({'stop_rule': {'max_runs': 2}} if held == 'max_runs' else {}),
-            },
-        )
-        p.status = CampaignStatus.STOPPED if held == 'stopped' else p.status
-        p.paused = Pause.LAUNCHES if held == 'paused' else None
-        assert shown(s, campaign, 'idle_queue') == ''
 
 
 def test_candidates_that_scored_exactly_their_parent_share_a_line(db: Database, campaign: Campaign) -> None:

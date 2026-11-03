@@ -63,7 +63,7 @@ PLUGINS: dict[str, object] = {
     'role': {
         'implementer': {'timeout': ROLE_TIMEOUT, 'max_concurrent': MAX_CONCURRENT},
         'research': {'triggers': [], 'max_ideas': 0},
-        'watchdog': {'triggers': [], 'interval': 0},
+        'sweeper': {'triggers': [], 'interval': 0},
         'orchestrator': {'triggers': ['news'], 'addendum': 'orchestrator.md', 'timeout': ROLE_TIMEOUT},
     },
     'trigger': {'news': {'quiet_seconds': 5, 'routine_every': 86_400}},
@@ -75,7 +75,7 @@ CONFIG = {
     'plugins': PLUGINS,
     'metrics': [{'name': 'bytes', 'direction': 'lower', 'role': 'primary'}],
 }
-"""The toy's ``piloop.toml``, without its name and harness: no research or watchdog sweeps, an orchestrator that piloop
+"""The toy's ``piloop.toml``, without its name and harness: no research or sweeper sweeps, an orchestrator that piloop
 launches on a message or an escalation (and on routine news once), and limits only as a backstop on what it costs. Two
 ideas run, so ``max_runs`` never stops it."""
 ORCHESTRATOR = """# This campaign is a test

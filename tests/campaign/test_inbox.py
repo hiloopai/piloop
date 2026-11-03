@@ -29,7 +29,7 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.settings import DaemonSettings
-from tests.conftest import WATCHDOG, elsewhere
+from tests.conftest import SWEEPER, elsewhere
 from tests.reports.test_history import idea
 from tests.reports.test_overview import render
 
@@ -47,11 +47,11 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
         theirs = idea(s, other, 'theirs', IdeaStatus.OPEN)
         run = Run(campaign_id=mine.campaign_id, idea=mine, attempt=1, base_candidate_id=1, harness='h', model='m')
         s.add(run)
-        s.add(AgentSession(kind=WATCHDOG, campaign_id=campaign.id, state=AgentSessionState.EXITED))
+        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, state=AgentSessionState.EXITED))
         s.flush()
         s.add(Measurement(candidate_id=1, evaluator_id=1, metrics={'score': 1}))
         s.flush()
-        escalation = dict(author='watchdog', kind=ESCALATION, priority=1)
+        escalation = dict(author='sweeper', kind=ESCALATION, priority=1)
         s.add_all(
             [
                 Comment(target=TargetRef(TargetKind.CAMPAIGN, campaign.id), body='on campaign', **escalation),
@@ -196,7 +196,7 @@ def test_every_agent_of_a_role_and_the_outside_orchestrator_are_one_party_for_wh
             assert inbox.waiting_for(s, me.party) == [], f'{me} wrote it, as one party'
             assert news_lines(s, cursor, me=me)[1] == ['candidate#1 keep: the daemon'], 'its own verdict is no news'
             assert [r.outcome for r in inbox.ack(s, [decided.id], me)] == [AckOutcome.OWN]
-        assert [c.id for c, _ in inbox.waiting_for(s, Agent(role='watchdog', session=41).party)] == [decided.id]
+        assert [c.id for c, _ in inbox.waiting_for(s, Agent(role='sweeper', session=41).party)] == [decided.id]
         assert party_of('not an actor') == 'not an actor'
         assert Service(name='ci').party == Service(name='ci').signature, 'a service writes for itself'
         assert party_of('orchestrator via human:ana') == party_of('orchestrator#7') == 'orchestrator'
@@ -252,7 +252,7 @@ def test_each_comment_of_a_thread_has_the_thread_of_its_root(db: Database, campa
     on_campaign = TargetRef(TargetKind.CAMPAIGN, campaign.id)
     with db.session() as s:
         s.add(Comment(target=on_campaign, author='research#2', kind=CommentKind.NOTE, body='the login expires'))
-        root = Comment(target=on_campaign, author='watchdog#1', kind=ESCALATION, priority=1, body='SSO, see comment#1')
+        root = Comment(target=on_campaign, author='sweeper#1', kind=ESCALATION, priority=1, body='SSO, see comment#1')
         s.add(root)
         s.commit()
         first = inbox.reply(s, root.id, 'logged in, Re: comment#2', author=System.ORCHESTRATOR, priority=3)
@@ -275,7 +275,7 @@ def test_each_comment_of_a_thread_has_the_thread_of_its_root(db: Database, campa
         title, lines = thread_lines(inbox.thread_of(s, second), datetime.now(UTC))
         assert [title.split(', ')[0], *(re.sub(r'\d+s ago', '0s ago', line) for line in lines)] == snapshot(
             [
-                'comment#2 escalation on campaign#1 by watchdog#1',
+                'comment#2 escalation on campaign#1 by sweeper#1',
                 'SSO, see comment#1',
                 '',
                 '- comment#3 decision by orchestrator, 0s ago, answers comment#2: logged in, Re: comment#2',
@@ -297,16 +297,16 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
     with db.session() as s:
         other = Campaign(name='other', path='/other', config=campaign.config)
         s.add(other)
-        s.add(Comment(author='watchdog#1', kind=ESCALATION, priority=1, body='before', **on(campaign)))
+        s.add(Comment(author='sweeper#1', kind=ESCALATION, priority=1, body='before', **on(campaign)))
         s.commit()
         cursor = s.scalar(select(func.max(Event.id)))
         assert cursor is not None
-        watchdog = AgentSession(kind=WATCHDOG, campaign_id=campaign.id)
-        s.add(watchdog)
+        sweeper = AgentSession(kind=SWEEPER, campaign_id=campaign.id)
+        s.add(sweeper)
         s.flush()
         s.add_all(
             [
-                Comment(author='watchdog#1', kind=ESCALATION, priority=1, body='SSO\nlog in', **on(campaign)),
+                Comment(author='sweeper#1', kind=ESCALATION, priority=1, body='SSO\nlog in', **on(campaign)),
                 Comment(author='orchestrator', kind=DECISION, priority=3, body='mine', **on(campaign)),
                 Comment(author='research#2', kind=CommentKind.NOTE, body='the forum', **on(campaign)),
                 Comment(
@@ -317,7 +317,7 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
                     acked_at=utcnow(),
                     **on(campaign),
                 ),
-                Comment(author='watchdog#5', kind=ESCALATION, priority=0, body='theirs', **on(other)),
+                Comment(author='sweeper#5', kind=ESCALATION, priority=0, body='theirs', **on(other)),
             ]
         )
         ideas = [
@@ -333,7 +333,7 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
             for n, (p, status, by) in enumerate(
                 [
                     (campaign, IdeaStatus.OPEN, 'implementer#3'),
-                    (other, IdeaStatus.OPEN, 'watchdog#1'),
+                    (other, IdeaStatus.OPEN, 'sweeper#1'),
                 ]
             )
         ]
@@ -341,7 +341,7 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
         s.flush()
         run3 = TargetRef(RUN, 3)
         reported = AnomalyReported(subject=run3, trigger='run_failed', line='run#3 failed: boom')
-        emit(s, reported, TargetRef(TargetKind.AGENT_SESSION, watchdog.id), System.DAEMON)
+        emit(s, reported, TargetRef(TargetKind.AGENT_SESSION, sweeper.id), System.DAEMON)
         judged = CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='score +1 over candidate#1\nmore')
         candidate = TargetRef(CANDIDATE, 1)
         emit(s, judged, candidate, System.DAEMON)
@@ -351,9 +351,9 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
         last, lines = news_lines(s, cursor, me=System.ORCHESTRATOR)
         assert lines == snapshot(
             [
-                'comment#6 escalation p0 on campaign#2 (other) by watchdog#5: theirs',
-                'comment#2 escalation p1 on campaign#1 (demo) by watchdog#1: SSO',
-                'anomaly, watchdog#1 requested: run#3 failed: boom',
+                'comment#6 escalation p0 on campaign#2 (other) by sweeper#5: theirs',
+                'comment#2 escalation p1 on campaign#1 (demo) by sweeper#1: SSO',
+                'anomaly, sweeper#1 requested: run#3 failed: boom',
                 'candidate#1 keep: score +1 over candidate#1',
                 'campaign demo stopped: max_tokens 100 reached',
             ]
@@ -361,7 +361,7 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
         assert news_lines(s, last, me=System.ORCHESTRATOR) == (last, []), 'the cursor moved past all of it'
         assert news_lines(s, cursor, campaign_id=other.id, me=System.ORCHESTRATOR)[1] == snapshot(
             [
-                'comment#6 escalation p0 on campaign#2 (other) by watchdog#5: theirs',
+                'comment#6 escalation p0 on campaign#2 (other) by sweeper#5: theirs',
             ]
         )
 
@@ -375,13 +375,13 @@ def test_news_reads_only_what_wakes_a_page_at_a_time_until_a_page_has_a_line(
         cursor = s.scalar(select(func.max(Event.id))) or 0
         on_campaign = TargetRef(TargetKind.CAMPAIGN, campaign.id)
         for n in range(3):
-            s.add(Comment(target=on_campaign, author='watchdog#1', priority=1, body=f'acked {n}', acked_at=utcnow()))
+            s.add(Comment(target=on_campaign, author='sweeper#1', priority=1, body=f'acked {n}', acked_at=utcnow()))
         emit(s, IdeaCreated(), TargetRef(IDEA, 99), System.HUMAN)  # a deleted idea: no line
-        s.add(Comment(target=on_campaign, author='watchdog#1', priority=1, body='open'))
-        s.add(Comment(target=on_campaign, author='watchdog#1', body='a note: an event, but not of the inbox'))
+        s.add(Comment(target=on_campaign, author='sweeper#1', priority=1, body='open'))
+        s.add(Comment(target=on_campaign, author='sweeper#1', body='a note: an event, but not of the inbox'))
         s.commit()
         last, lines = news_lines(s, cursor, me=System.ORCHESTRATOR)
-        assert lines == ['comment#4 note p1 on campaign#1 (demo) by watchdog#1: open']
+        assert lines == ['comment#4 note p1 on campaign#1 (demo) by sweeper#1: open']
         newest = db_feed.newest(s)
         assert last < newest and news_lines(s, last, me=System.ORCHESTRATOR) == (newest, []), 'it passes the note'
 
@@ -503,7 +503,7 @@ def test_an_item_that_lands_while_news_reads_is_news_now_or_after_its_cursor(
                 other.add(
                     Comment(
                         target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
-                        author='watchdog#2',
+                        author='sweeper#2',
                         kind=ESCALATION,
                         priority=1,
                         body='SSO expired',
@@ -517,4 +517,4 @@ def test_an_item_that_lands_while_news_reads_is_news_now_or_after_its_cursor(
         start = db_feed.newest(s)
         cursor, now = news_lines(s, start, campaign_id=campaign.id, me=System.ORCHESTRATOR)
         _, then = news_lines(s, cursor, campaign_id=campaign.id, me=System.ORCHESTRATOR)
-    assert [*now, *then] == ['comment#1 escalation p1 on campaign#1 (demo) by watchdog#2: SSO expired']
+    assert [*now, *then] == ['comment#1 escalation p1 on campaign#1 (demo) by sweeper#2: SSO expired']

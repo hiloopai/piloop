@@ -142,7 +142,7 @@ def bridges(scope: Scope) -> list[Bridge]:
 class Move:
     """A key that moved: ``old`` is ``new`` now. Both are dotted paths, and each ``*`` stands for one name, in order.
 
-    ``Move('roles.*', 'plugins.role.*')`` moves ``[roles.watchdog]`` to ``[plugins.role.watchdog]``, and
+    ``Move('roles.*', 'plugins.role.*')`` moves ``[roles.orchestrator]`` to ``[plugins.role.orchestrator]``, and
     ``Move('model.*', 'plugins.harness.*.model')`` moves ``model = { claude = "…" }`` into each harness's table. A key
     that ``new`` already sets keeps its value, and a table merges into the table at ``new`` key by key.
     """
@@ -371,7 +371,7 @@ def show_in_cli() -> None:
 def warn(toml: Path, key: str, message: str, *, removed_in: Version, nth: int = 0) -> None:
     """Warn at the line of ``toml`` that sets ``key`` for the ``nth`` time, or at line 0 if no line sets it.
 
-    A dotted ``key`` (``plugins.role.watchdog``) is set by its table header, or by a line that sets its last part. The
+    A dotted ``key`` (``plugins.role.orchestrator``) is set by its table header, or by a line that sets its last part. The
     output looks like a compiler error: ``piloop.toml:12: PiloopDeprecationWarning: …``, then the line.
     """
     lines = _lines(toml, key)

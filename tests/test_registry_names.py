@@ -33,9 +33,6 @@ LEAVES: dict[str, frozenset[str] | None] = {
     'plugins/campaign_type/*/migrations/*.py': None,
     'actor.py': frozenset({'orchestrator'}),
     'daemon/api.py': frozenset({'news'}),
-    'plugins/campaign_type/kit/runs/role/watchdog.py': frozenset(
-        {'run_failed', 'dead_at_startup', 'low_yield', 'cron', 'stopped'}
-    ),
     'deprecated.py': None,
     'plugins/role/contract.py': frozenset({'sql', 'orchestrator'}),
     'plugins/role/orchestrator.py': frozenset({'sql', 'news', 'run_failed'}),

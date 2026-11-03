@@ -155,7 +155,7 @@ def test_an_escalation_that_a_wake_left_unacknowledged_comes_back_in_the_next_wa
     with db.session() as s:
         asked = Comment(
             target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
-            author='watchdog#9',
+            author='sweeper#9',
             kind=ESCALATION,
             priority=1,
             body='which floor?',
@@ -258,7 +258,7 @@ def test_only_an_escalation_or_what_a_person_writes_wakes_it_also_while_the_camp
             TargetRef(CANDIDATE, 1),
             System.DAEMON,
         )
-        s.add(Comment(target=TargetRef(TargetKind.CAMPAIGN, campaign.id), author='watchdog#9', kind=DECISION, priority=2,
+        s.add(Comment(target=TargetRef(TargetKind.CAMPAIGN, campaign.id), author='sweeper#9', kind=DECISION, priority=2,
                       body='a progress review'))  # fmt: skip
         s.commit()
     assert wake(db, runtime, tmp_path) == [], 'nothing that needs a decision'
@@ -365,7 +365,7 @@ def test_one_launched_by_hand_gets_no_notes_and_a_live_one_that_ends_before_it_r
 
 
 def test_an_escalation_and_what_a_person_writes_wake_it_and_nothing_else_does() -> None:
-    def comment(kind: str, author: str = 'watchdog#3') -> CommentNews:
+    def comment(kind: str, author: str = 'sweeper#3') -> CommentNews:
         view = CommentView(
             id=CommentId(1), kind=kind, target='campaign#1', in_reply_to=None, author=author, created='now',
             priority=1, acked_at=None, acked_by=None, body='b',
