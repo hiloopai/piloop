@@ -12,39 +12,43 @@ what each hands in on data that no agent saw.
 
 ## How a run works
 
-Every run gets its own Modal sandbox, from the same image: the task's repo at the same starting commit, its dev
-data, both agent CLIs, and, for a piloop arm, that arm's piloop with a fresh home. The agents call models through
-the gateway that `EVALS_GATEWAY` names, with `EVALS_GATEWAY_TOKEN`.
+Every sandbox of a run starts from the same image: the task's repo at the same starting commit, its dev data, both
+agent CLIs, and, for a piloop arm, that arm's piloop with a fresh home. The agents call models through the gateway
+that `EVALS_GATEWAY` names, with `EVALS_GATEWAY_TOKEN`.
 
 - **piloop arm:** `piloop init` in the repo, with the task's keys, the arm's agents and `max_hours`. An arm with
   `split = "sealed"` also gets the task's dev command as `[evaluator] dev`, and a sealed split of its own as
-  `[evaluator] sealed`: `EVALS_SEALED_URI/<task>.campaign/`, copied into the campaign's home. It is not the holdout
-  that scores every arm afterwards. Its sandbox gets `EVALS_WORKER_CPU` cores and `EVALS_WORKER_MEMORY_MB` for each
-  worker (the runs it keeps open at once), and never less than the arm's `resources`. Before the campaign starts, its
-  daemon gets `EVALS_EVALUATION_SLOTS_PER_WORKER` evaluation slots for each worker
-  (`executor.pools.serve.slots.evaluation`), so that a large team's submissions do not queue. The run ends at
-  the budget, at `max_hours`, or at the campaign's own stop; then the daemon gets `EVALS_STOP_GRACE_MINUTES` to
-  score what was committed.
+  `[evaluator] sealed`: `EVALS_SEALED_URI/<task>.campaign/`, in the evaluators' image and no agent's. It is not the
+  holdout that scores every arm afterwards. The run ends at the budget, at `max_hours`, or at the campaign's own stop;
+  then the daemon gets `EVALS_STOP_GRACE_MINUTES` to score what was committed.
 - **plain arm:** one Codex or Claude Code session, told to keep `main` at its best version. When it ends early, it
-  is resumed with the same short prompt.
+  is resumed with the same short prompt. It runs in a Modal sandbox of the arm's `resources`, or with
+  `EVALS_PLATFORM=daytona` in one of 2 CPUs and a hard 8 GiB, as each agent of a piloop arm.
 
-With `EVALS_PLATFORM=daytona`, a run splits by role:
+A piloop arm runs as a team (`drive.on_team`):
 
-- Each agent, a plain arm's included, runs in a Modal sandbox of 2 CPUs and a hard 8 GiB, whatever the arm asks.
-- A piloop arm's daemon (`piloop serve --listen`, `piloop cas serve`) and its evaluators run on Daytona
-  (`daytona.py`), one evaluation per sandbox, `EVALS_EVALUATORS_PER_WORKER` of them for each worker. So every timing
-  that decides a verdict runs on one platform, with hard limits.
-- The workers and the evaluators are `piloop worker`s in the pools `agents` and `eval`. They dial the daemon through
-  Daytona's preview proxy, each with a token of its own.
-- It needs `EVALS_DAYTONA_API_KEY`. The holdout's scorings run on Modal either way.
+- Its daemon (`piloop serve --listen`, `piloop cas serve`) runs in a control sandbox on Daytona, which takes no job.
+  Its `config.toml` gives it two pools whose provisioners start the rest at once, and drain it when the run is over.
+- The pool `agents`: a Modal sandbox for each worker (the runs it keeps open at once), with 2 CPUs and a hard 8 GiB
+  (or the task's `memory_limit_mb`), reaching what the task's `network` allows and the control sandbox.
+- The pool `eval`: `EVALS_EVALUATORS_PER_WORKER` evaluators for each worker, one evaluation at a time each, where the
+  task is scored: on Daytona for a task with `scorer = "daytona"`, else on Modal at the scorer's size. So every
+  timing that decides a verdict runs where the holdout is scored, with hard limits.
+- The control sandbox keeps the gateway's token and the platforms' keys in a file that its daemon reads, never in its
+  environment. It needs `EVALS_DAYTONA_API_KEY` and Modal's token (`modal token new`).
 
 A run holds its agent sessions in `EVALS_SESSION_LEDGER` while it lives. The driver refuses a run that would take the
 sessions of every run on this machine over `EVALS_MAX_SESSIONS`. Sessions that no driver here starts, such as another
 campaign's on the same gateway pool, are a file there with `run`, `sessions` and `until`.
 
-The driver reads the spend every `EVALS_POLL_SECONDS`: the tokens of every session file in the sandbox at list
-price, plus the sandbox's CPU and memory. Each sample keeps the tokens too, by kind. The export (git bundle, piloop's database, session files, spend) goes to
-`results/<task>/<arm>-<repeat>/`, and to `EVALS_ARCHIVE_URI` when it is set.
+The driver reads the spend every `EVALS_POLL_SECONDS`: the tokens of every session file in the agents' sandboxes at
+list price (a team's, found by its provisioner's tags), plus the sandboxes' CPU and memory. Each sample keeps the
+tokens too, by kind. The export (git bundle, piloop's database, session files, spend) goes to
+`results/<task>/<arm>-<repeat>/`, and to `EVALS_ARCHIVE_URI` when it is set. The export goes box by box: one that
+fails is named in `run.json`'s `export_failed`, and stops no other. A sandbox is deleted only after its export.
+
+To stop a run early, write the reason into a file `halt` in its directory: the driver stops at its next sample and
+exports. Never signal the driver: Modal's client ends the sandboxes that it made when its process is interrupted.
 
 Scoring runs the base and every head of a run in sandboxes without network: the task's own `evaluate.py` over the
 head's tree gives the dev score, and `sealed.py` the sealed one, with the data from `EVALS_SEALED_URI/<task>/`.

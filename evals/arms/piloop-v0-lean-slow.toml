@@ -9,7 +9,6 @@ agents = [
 ]
 split = "sealed"
 env = { EVALS_DEV_LOOP = "slow" }
-resources = { cpu = 8, memory_mb = 16384, gpus = 2 }   # gpus: on a GPU task, two, so dev runs don't queue behind the daemon's evaluations
 
 [overlay.evaluator]
 scoring = "submit"

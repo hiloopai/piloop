@@ -1,3 +1,4 @@
+import gzip
 import importlib.util
 import itertools
 import json
@@ -16,26 +17,33 @@ from datetime import UTC, datetime, timedelta
 from io import BytesIO, StringIO
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import cast
 
+import modal
 import pytest
+from daytona import Daytona, Sandbox
 from pydantic import JsonValue, SecretStr
 
 from evals import daytona, meter
 from evals.drive import (
+    CREDENTIALS,
     HALT,
+    HEADERS,
     REPO,
     Fleet,
     Piloop,
     Plain,
     admitted,
+    credentials,
     drive,
     export,
+    on_team,
     piloop_config,
     prepare,
     price,
     private_files,
     sample,
-    sandbox,
+    sealed_steps,
     watch,
 )
 from evals.loop import evaluations
@@ -59,7 +67,7 @@ from evals.model import (
 )
 from evals.pilot import guard, spent
 from evals.report import plain_bar, write
-from evals.sandbox import WORK, Copy, Egress, Run, memory, network_policy
+from evals.sandbox import WORK, Box, Copy, Egress, Run, Step, memory, network_policy
 from evals.score import Score, Scoring
 from evals.team import final_keeps, notes, races
 from evals.telemetry import exported
@@ -161,7 +169,6 @@ def test_piloop_config_puts_agents_on_the_gateway():
         piloop='piloop==0.5.0',
         agents=[Agent(harness='codex', model='gpt-6.1-sol'), Agent(harness='claude', model='claude-opus-5-5')],
         overlay={'plugins': {'role': {'implementer': {'max_concurrent': 2}}}},
-        resources=Resources(cpu=1, memory_mb=512),
     )
     config = piloop_config(Task.load('t2-circles'), arm, settings, 4)
     assert get(config, 'plugins', 'stop_rule') == {'max_hours': 4}
@@ -229,7 +236,9 @@ class FakeBox:
 
 
 def fleet(box: FakeBox, usd_per_hour: float = 0) -> Fleet:
-    return Fleet(control=box, agents=[box], usd_per_hour=usd_per_hour, ids=['sb-fake'], close=box.close)
+    return Fleet(
+        control=box, agents=lambda: {'sb-fake': box}, usd_per_hour=usd_per_hour, ids=['sb-fake'], close=box.close
+    )
 
 
 METER = {'codex': {'gpt-6.1-sol': {'input': 10, 'output': 5, 'cache_read': 100, 'cache_write': 0, 'turns': 1}}}
@@ -267,7 +276,9 @@ def test_a_fatal_error_still_exports_the_run_before_its_sandbox_closes(tmp_path:
     box = FakeBox(METER, fail=('env -u EVALS_EVAL_LOG',))
     monkeypatch.setattr('evals.drive.Box.create', lambda *args, **kwargs: box)
     monkeypatch.setattr('evals.drive.image', lambda *args: None)
-    settings = Settings(gateway='https://gw.example', gateway_token=SecretStr('t'), results=tmp_path)
+    settings = Settings(
+        gateway='https://gw.example', gateway_token=SecretStr('t'), results=tmp_path, session_ledger=tmp_path / 'ledger'
+    )
     arm = plain_run(settings).arm
     with pytest.raises(RuntimeError, match='exited 137'):
         drive(Task.load('t5-lpaq'), arm, 1, 10, 1, settings)
@@ -280,9 +291,17 @@ def test_a_fatal_error_still_exports_the_run_before_its_sandbox_closes(tmp_path:
 def test_a_sample_keeps_the_meters_tokens_and_the_sandboxs_compute():
     count = {'input': 10, 'output': 5, 'cache_read': 100, 'cache_write': 1, 'turns': 1}
     box = FakeBox({'claude': {'claude-opus-5-5': count}, 'codex': {'gpt-6.1-sol': count}})
-    s = sample([box, box], 3.0, 2)
+    s = sample({'a': box, 'b': box}, {}, 3.0, 2)
     assert s.tokens == Tokens(input=40, output=20, cache_read=400, cache_write=4, turns=4), 'summed over the boxes'
     assert s.compute_usd == 2 * 3.0 and s.models_usd > 0
+
+
+def test_a_sample_still_counts_a_box_that_ended_since_the_last():
+    box = FakeBox(METER)
+    seen: dict[str, dict[str, dict[str, dict[str, int]]]] = {}
+    sample({'a': box, 'b': box}, seen, 0, 1)
+    tokens = sample({'b': box}, seen, 0, 1).tokens
+    assert tokens is not None and tokens.input == 20, "a's last count stays"
 
 
 def identical(n: int) -> PiloopArm:
@@ -292,37 +311,48 @@ def identical(n: int) -> PiloopArm:
         piloop='piloop==0.6.0',
         agents=[Agent(harness='codex', model='gpt-6.1-sol')],
         overlay={'plugins': {'role': {'implementer': {'max_concurrent': n}}}},
-        resources=Resources(cpu=8, memory_mb=16384),
     )
 
 
-def test_a_piloop_arms_sandbox_and_evaluation_slots_grow_with_its_workers():
-    task, settings = Task.load('t5-lpaq'), Settings()
-    assert sandbox(task, identical(1), settings, 6) == (Resources(cpu=8, memory_mb=16384), 2)
-    assert sandbox(task, identical(20), settings, 6) == (Resources(cpu=40, memory_mb=20 * 6144), 40)
-    roles = {'implementer': {'max_concurrent': 1}, 'implementer_b': {'runs': True, 'max_concurrent': 2}}
-    charters = identical(1).model_copy(update={'overlay': {'plugins': {'role': roles}}})
-    assert sandbox(task, charters, settings, 6) == (Resources(cpu=8, memory_mb=3 * 6144), 6)
-
-
-def test_a_piloop_campaign_gets_its_evaluation_slots_before_it_starts():
-    run = Piloop(
-        Task.load('t2-circles'), identical(20), Settings(), 6, limits={'executor.pools.serve.slots.evaluation': 40}
-    )
+def test_a_piloop_daemon_reads_its_credentials_from_a_file_and_serves_the_cas_before_init():
     box = FakeBox()
+    run = Piloop(Task.load('t2-circles'), identical(2), Settings(), 6)
     run.start(box)
-    limits = next(i for i, c in enumerate(box.commands) if 'piloop limits set' in c)
-    init = next(i for i, c in enumerate(box.commands) if 'piloop init' in c)
-    assert 'executor.pools.serve.slots.evaluation=40' in box.commands[limits] and limits < init
+    assert run.served
+    serve = next(c for c in box.commands if 'piloop serve --listen 0.0.0.0:8443' in c)
+    secret = next(c for c in box.commands if 'piloop secret set GATEWAY_TOKEN' in c)
+    assert serve.startswith(f'. {CREDENTIALS} && ') and secret.startswith(f'. {CREDENTIALS} && ')
+    order = [next(i for i, c in enumerate(box.commands) if w in c) for w in ('secret set', 'cas serve', 'piloop init')]
+    assert order == sorted(order), 'the CAS serves the database that the daemon made, before the baseline waits on it'
 
 
-def test_workers_elsewhere_join_before_piloop_init_waits_for_the_baselines_measurement():
-    box = FakeBox()
-    run = Piloop(Task.load('t2-circles'), identical(2), Settings(), 6, listen='0.0.0.0:8443')
-    run.ready = lambda: box.commands.append('JOINED')
-    run.start(box)
-    assert box.commands.index('JOINED') < next(i for i, c in enumerate(box.commands) if 'piloop init' in c)
-    assert any('piloop serve --listen 0.0.0.0:8443' in c for c in box.commands)
+def test_a_piloop_run_drains_its_team_before_it_keeps_the_database_and_stops_the_daemon():
+    box = FakeBox(out='0')
+    Piloop(Task.load('t2-circles'), identical(2), Settings(), 6, served=True).export(box)
+    drains = [i for i, c in enumerate(box.commands) if 'piloop limits set' in c]
+    assert [box.commands[i].split()[3] for i in drains] == [
+        'executor.pools.agents.provisioner.min=0',
+        'executor.pools.agents.provisioner.max=0',
+        'executor.pools.eval.provisioner.min=0',
+        'executor.pools.eval.provisioner.max=0',
+    ], 'min first: a max below min is refused'
+    backup = next(i for i, c in enumerate(box.commands) if '.backup' in c)
+    assert max(drains) < backup and 'piloop stop' in box.commands[backup]
+    assert not any('|| true' in box.commands[i] for i in drains), 'a drain that fails says so'
+
+
+def test_a_team_that_does_not_end_in_time_fails_the_run_once_its_database_is_kept(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr('evals.drive.DRAIN_SECONDS', 0)
+    box = FakeBox(out='2')
+    with pytest.raises(RuntimeError, match='2 of the team'):
+        Piloop(Task.load('t2-circles'), identical(2), Settings(), 6, served=True).export(box)
+    assert any('.backup' in c for c in box.commands)
+
+
+def test_a_run_whose_daemon_never_served_has_no_team_to_drain():
+    box = FakeBox(out='0')
+    Piloop(Task.load('t2-circles'), identical(2), Settings(), 6).export(box)
+    assert not any('provisioner.max' in c for c in box.commands)
 
 
 def test_spend_between_samples():
@@ -754,53 +784,166 @@ def test_t6_counts_a_private_split_in_proved_and_alone(tmp_path: Path):
 
 
 class FakeControl(FakeBox):
-    """The control sandbox of a team: it makes a token for each worker, and has a public URL for each port."""
+    """The control sandbox of a team: it has a public URL for each port, and an id."""
 
-    def run(self, script: str, timeout: float | None = None) -> str:
-        super().run(script, timeout)
-        return f'plt_secret_{len(self.commands)}\n' if 'token create' in script else self.out
+    id = 'sb-control'
 
     def preview(self, port: int) -> str:
         return f'https://{port}-sb.example'
 
 
-def test_a_daytona_teams_homes_are_valid_piloop_configs_that_keep_jobs_off_the_daemon(tmp_path: Path):
-    team = daytona.plan(10, Settings(evaluators_per_worker=1.5))
-    assert (team.workers, team.evaluators) == (10, 15)
-    assert team.sizes == [daytona.CONTROL, *[daytona.EVALUATOR] * 15], 'on Daytona: the daemon and the evaluators only'
-    used = daytona.plan(20, Settings()).sizes
-    assert (sum(r.cpu for r in used), sum(r.memory_mb for r in used) // 1024) == (22, 164), 'n = 20 fits Tier 2'
-    assert daytona.plan(1, Settings(evaluators_per_worker=0.1)).evaluators == 1, 'at least one evaluator'
-    for name, text in (
-        ('control', daytona.home_config('https://8443-sb.example')),
-        ('worker', daytona.worker_config('https://7701-sb.example')),
-    ):
-        (tmp_path / name).mkdir()
-        (tmp_path / name / 'config.toml').write_text(text)
-        assert PiloopSettings(home=tmp_path / name).providers is not None
-    pools = tomllib.loads(daytona.home_config('https://8443-sb.example'))['plugins']['executor']['pools']
+def team(
+    monkeypatch: pytest.MonkeyPatch, task: str, arm: PiloopArm, evaluators_per_worker: float = 1.0
+) -> tuple[Fleet, FakeControl, list[list[Step]], dict[str, dict[str, str]]]:
+    """A team of ``arm`` on ``task`` with no platform: what it built, and the tags that its meter lists by."""
+    control, listed = FakeControl(), {}
+    made: list[list[Step]] = []
+    monkeypatch.setattr('evals.drive.daytona.client', lambda settings: 'daytona')
+    monkeypatch.setattr('evals.drive.daytona.control', lambda *args: control)
+    monkeypatch.setattr('evals.drive.daytona.snapshot', lambda cloud, steps, size: made.append(steps) or 'snap-1')
+    monkeypatch.setattr('evals.drive.built', lambda settings, steps: made.append(steps) or f'im-{len(made)}')
+    monkeypatch.setattr('evals.drive.sealed_data', lambda name, settings: tgz({'split.json': b'{}'}))
+    monkeypatch.setattr('evals.drive.modal_config', {'token_id': 'ak-1', 'token_secret': 'as-1'})
+    monkeypatch.setattr('evals.drive.tagged', lambda settings, tags: listed.update(tags) or {'sb-w': FakeBox(METER)})
+    settings = Settings(
+        gateway='https://gw.example',
+        gateway_token=SecretStr('gw-secret'),
+        daytona_api_key=SecretStr('dtn-secret'),
+        evaluators_per_worker=evaluators_per_worker,
+    ).model_copy(update={'otlp_headers': SecretStr('authorization=otlp-secret')})
+    env = {
+        'OTEL_EXPORTER_OTLP_ENDPOINT': 'https://otel.example',
+        'OTEL_EXPORTER_OTLP_HEADERS': 'authorization=otlp-secret',
+        'EVALS_EVAL_LOG': '/work/out/e.jsonl',
+    }
+    found, run = on_team(Task.load(task), arm, settings, 6, env, f'{task}/{arm.name}-1')
+    assert isinstance(run, Piloop)
+    found.agents()
+    return found, control, made, {'tags': listed}
+
+
+def tgz(files: dict[str, bytes]) -> bytes:
+    buf = BytesIO()
+    with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, BytesIO(data))
+    return buf.getvalue()
+
+
+def test_a_piloop_arms_team_is_its_daemons_own_pools_on_modal_and_daytona(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    arm = identical(2).model_copy(update={'split': 'sealed'})
+    found, control, made, listed = team(monkeypatch, 't5-lpaq', arm, evaluators_per_worker=1.5)
+    (tmp_path / 'config.toml').write_bytes(control.writes['/root/.piloop-evals/config.toml'])
+    assert PiloopSettings(home=tmp_path).providers is not None, 'a valid home, its provisioners included'
+    pools = tomllib.loads((tmp_path / 'config.toml').read_text())['plugins']['executor']['pools']
     assert pools['serve'] == {'agents': 0, 'slots': {'evaluation': 0}}
-    assert (pools['agents']['agents'], pools['eval']['slots']) == (1, {'evaluation': 1})
+    agents, evaluate = pools['agents']['provisioner'], pools['eval']['provisioner']
+    assert (agents['min'], agents['max'], evaluate['min'], evaluate['max']) == (2, 2, 3, 3), 'the whole team at once'
+    assert agents['compute'] | {'env': None} == {
+        'provider': 'modal',
+        'app': 'piloop-evals',
+        'image_id': 'im-1',
+        'cpu': 2,
+        'memory_mb': 8192,
+        'memory_limit_mb': 8192,
+        'cloud': 'gcp',
+        'timeout_hours': 7,
+        'env': None,
+    }
+    assert evaluate['compute'] | {'env': None} == {
+        'provider': 'daytona',
+        'snapshot': 'snap-1',
+        'ttl_hours': 7,
+        'env': None,
+    }, 't5 is scored on Daytona'
+    assert [type(s).__name__ for s in made[1][len(made[0]) :]] == ['Copy'], "the sealed split: the evaluators' only"
+    sealed = made[1][-1]
+    assert isinstance(sealed, Copy) and sealed.remote == '/root/.piloop-evals/sealed'
+    env = agents['compute']['env']
+    assert json.loads(env['PILOOP_PLUGINS'])['cas']['remote'] == {'provider': 'http', 'url': 'https://7701-sb.example'}
+    assert not any(k.startswith('OTEL_') for k in env) and env['EVALS_EVAL_LOG'] == '/work/out/e.jsonl'
+    secrets = control.writes['/root/.piloop-evals/credentials.env'].decode()
+    assert all(f'{k}=' in secrets for k in ('GATEWAY_TOKEN', 'MODAL_TOKEN_SECRET', 'DAYTONA_API_KEY', HEADERS))
+    assert 'secret' not in control.writes['/root/.piloop-evals/config.toml'].decode(), 'no key in the config'
+    assert control.commands[0] == 'mkdir -p -m 700 /root/.piloop-evals', (
+        'the daemon serves its socket in a private home'
+    )
+    owner = control.writes['/root/.piloop-evals/owner'].decode()
+    assert listed['tags'] == {'piloop-owner': owner, 'piloop-pool': 'agents'}, "the meter finds the daemon's workers"
+    assert found.ids == ['sb-control'] and found.described['evaluators_on'] == 'daytona'
 
 
-def test_enlisting_gives_each_worker_its_own_token_and_pool_and_the_evaluators_the_sealed_split():
-    control, agents, evaluators = FakeControl(), [FakeBox(), FakeBox()], [FakeBox()]
-    daytona.enlist(control, agents, evaluators, b'split', '/root/.piloop-evals/sealed')
-    assert any('piloop cas serve' in c for c in control.commands)
-    tokens = {b.writes[daytona.TOKEN] for b in [*agents, *evaluators]}
-    assert len(tokens) == 3, 'a token of its own each'
-    assert all('--pool agents' in b.commands[-1] for b in agents) and '--pool eval' in evaluators[0].commands[-1]
-    assert all(daytona.TOKEN in b.commands[-1] and 'plt_' not in b.commands[-1] for b in [*agents, *evaluators])
-    assert '/work/campaign.tgz' in evaluators[0].writes and '/work/campaign.tgz' not in agents[0].writes
+def test_a_team_on_a_gateway_only_task_reaches_the_gateway_and_its_control_sandbox_and_is_scored_on_modal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    found, control, _, _ = team(monkeypatch, 't6-optcomp', identical(1))
+    pools = tomllib.loads(control.writes['/root/.piloop-evals/config.toml'].decode())['plugins']['executor']['pools']
+    agents, evaluate = pools['agents']['provisioner']['compute'], pools['eval']['provisioner']['compute']
+    hosts = ['8443-sb.example', '7701-sb.example']
+    assert agents['outbound_domains'] == ['gw.example', *hosts] and agents['memory_limit_mb'] == 12288
+    assert (evaluate['provider'], evaluate['outbound_domains'], evaluate['memory_limit_mb']) == ('modal', hosts, 12288)
+    assert found.described['evaluators_on'] == 'modal'
 
 
-def test_the_export_puts_each_other_workers_sessions_in_a_directory_of_its_own(tmp_path: Path):
+def test_the_same_sealed_split_gives_the_evaluators_the_same_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = gzip.decompress(tgz({'split.json': b'{}'}))
+    first, later = gzip.compress(raw, mtime=1), gzip.compress(raw, mtime=2)  # as sealed_data makes it, a second apart
+    assert first != later
+    splits = iter([first, later])
+    monkeypatch.setattr('evals.drive.sealed_data', lambda name, settings: next(splits))
+    arm = identical(1).model_copy(update={'split': 'sealed'})
+    task = Task.load('t5-lpaq')
+    assert sealed_steps(task, arm, Settings()) == sealed_steps(task, arm, Settings())
+
+
+def test_a_team_that_cannot_start_deletes_its_control_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evals.drive.credentials', lambda settings: (_ for _ in ()).throw(ValueError('no Modal token')))
+    with pytest.raises(ValueError, match='Modal'):
+        team(monkeypatch, 't5-lpaq', identical(1))
+
+
+def test_the_credentials_name_what_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evals.drive.modal_config', {})
+    with pytest.raises(ValueError, match='MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, DAYTONA_API_KEY'):
+        credentials(Settings(gateway_token=SecretStr('t')))
+
+
+def test_a_team_drains_even_when_an_agents_sandbox_cannot_give_its_sessions(tmp_path: Path):
+    control, worker = FakeBox(METER, out='0'), FakeBox(METER, fail=('sessions.tgz',))
+    good = FakeBox(METER)
+    agents = {'sb-w': worker, 'sb-g': good}
+    team_ = Fleet(control=control, agents=lambda: agents, usd_per_hour=0, ids=['a'], close=control.close)
+    failed = export(team_, Piloop(Task.load('t2-circles'), identical(2), Settings(), 6, served=True), tmp_path)
+    assert [f.split(':')[0] for f in failed] == ['workers/sb-w'] and 'exited 137' in failed[0]
+    assert any('provisioner.max=0' in c for c in control.commands) and any('piloop stop' in c for c in control.commands)
+    assert (tmp_path / 'export' / 'workers' / 'sb-g').is_dir() and (tmp_path / 'export' / 'out').is_dir(), 'the rest'
+
+
+def test_a_provisioned_sandbox_gets_the_driver_s_work_directory_before_the_meter_writes_there():
+    box = FakeBox(METER)
+    sample({'sb-w': box}, {}, 0, 1)
+    assert box.commands[0].startswith(f'mkdir -p {WORK} && ')
+
+
+def test_the_export_takes_each_agents_sessions_before_the_run_drains(tmp_path: Path):
     control, worker = FakeBox(METER), FakeBox(METER)
-    team = Fleet(control=control, agents=[worker], usd_per_hour=0, ids=['a', 'b'], close=control.close)
-    team.exported = [('workers/0', worker)]
-    export(team, plain_run(Settings()), tmp_path)
+    team_ = Fleet(
+        control=control,
+        agents=lambda: {'sb-c': control, 'sb-w': worker},
+        usd_per_hour=0,
+        ids=['a'],
+        close=control.close,
+    )
+    export(team_, plain_run(Settings()), tmp_path)
     assert (tmp_path / 'export' / 'out' / 'sessions').exists() and (tmp_path / 'export.tgz').exists()
-    assert (tmp_path / 'export' / 'workers' / '0' / 'out' / 'sessions').exists()
+    assert (tmp_path / 'export' / 'workers' / 'sb-w').is_dir() and not (
+        tmp_path / 'export' / 'workers' / 'sb-c'
+    ).exists()
+    assert ' out' not in worker.commands[0], "a worker's logs stay behind"
 
 
 def test_a_snapshots_name_changes_with_the_files_it_copies(tmp_path: Path):
@@ -873,3 +1016,82 @@ def test_a_solved_task_leads_with_the_time_dollars_and_tokens_to_solve():
 def test_only_t6_is_scored_on_solving():
     assert Task.load('t6-optcomp').solve == 1.0
     assert [Task.load(name).solve for name in ('t3-airbench', 't4-1brc', 't5-lpaq')] == [None, None, None]
+
+
+class Hung:
+    """A platform's object whose every call hangs until ``released``."""
+
+    def __init__(self) -> None:
+        self.released = threading.Event()
+
+    def __getattr__(self, name: str) -> Hung:
+        return self
+
+    def __call__(self, *args: object, **kwargs: object) -> Hung:
+        self.released.wait()
+        return self
+
+
+def hung_box(kind: str, hung: Hung) -> Box | daytona.DaytonaBox:
+    match kind:
+        case 'modal':
+            return Box(cast(modal.Sandbox, hung))
+        case _:
+            return daytona.DaytonaBox(cast(Daytona, hung), cast(Sandbox, hung), daytona.CONTROL)
+
+
+@pytest.mark.parametrize('kind', ['modal', 'daytona'])
+@pytest.mark.parametrize('verb', ['run', 'start', 'read', 'write', 'ended'])
+def test_a_sandbox_call_that_hangs_fails_rather_than_holding_the_driver(
+    monkeypatch: pytest.MonkeyPatch, kind: str, verb: str
+) -> None:
+    monkeypatch.setattr('evals.sandbox.CALL_SECONDS', 0.05)
+    monkeypatch.setattr('evals.sandbox.MARGIN_SECONDS', 0)
+    hung = Hung()
+    box = hung_box(kind, hung)
+    calls = {
+        'run': lambda: box.run('true'),
+        'start': lambda: box.start('true'),
+        'read': lambda: box.read('/f'),
+        'write': lambda: box.write('/f', b''),
+        'ended': box.ended,
+    }
+    with pytest.raises(TimeoutError, match='did not answer'):
+        calls[verb]()
+    hung.released.set()
+
+
+def test_a_spend_sample_that_times_out_is_tried_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    settings = Settings(poll_seconds=0)
+    box = FakeBox(METER)
+    errors = iter([TimeoutError('Box.run did not answer in 960 s')])
+    real = box.run
+
+    def flaky(script: str, timeout: float | None = None) -> str:
+        if 'meter.py' in script and (error := next(errors, None)) is not None:
+            raise error
+        return real(script, timeout)
+
+    monkeypatch.setattr(box, 'run', flaky)
+    assert (
+        watch(fleet(box), plain_run(settings), 100, 0, settings, tmp_path / 'spend.jsonl', time.monotonic()) == 'hours'
+    )
+
+
+def test_a_run_whose_export_fails_still_writes_its_record_before_its_sandbox_closes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    box = FakeBox(METER, fail=('env -u EVALS_EVAL_LOG', 'bundle create'))
+    monkeypatch.setattr('evals.drive.Box.create', lambda *args, **kwargs: box)
+    monkeypatch.setattr('evals.drive.image', lambda *args: None)
+    settings = Settings(
+        gateway='https://gw.example',
+        gateway_token=SecretStr('t'),
+        results=tmp_path,
+        session_ledger=tmp_path / 'ledger',
+        poll_seconds=0,
+    )
+    with pytest.raises(RuntimeError, match='exited 137'):
+        drive(Task.load('t5-lpaq'), plain_run(settings).arm, 1, 10, 0, settings)
+    meta = json.loads((tmp_path / 't5-lpaq' / 'p-1' / 'run.json').read_text())
+    assert meta['export_failed'][0].startswith('control: RuntimeError') and box.closed

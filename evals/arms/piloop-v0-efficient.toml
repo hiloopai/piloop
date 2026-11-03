@@ -9,7 +9,6 @@ agents = [
 ]
 split = "sealed"
 instruction = """Your dev loop is your speed limit. Keep each dev eval as fast and cheap as it can be while it still tells ideas apart: screen on the cheapest signal that ranks them, cache what doesn't change, and slow the loop only when the gain is worth it. Note each eval's time."""
-resources = { cpu = 8, memory_mb = 16384, gpus = 2 }   # gpus: on a GPU task, two, so dev runs don't queue behind the daemon's evaluations
 
 [overlay.evaluator]
 scoring = "submit"

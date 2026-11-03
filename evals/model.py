@@ -116,7 +116,8 @@ class PiloopArm(Frozen):
     kind: Literal['piloop']
     name: str
     piloop: str
-    """What ``uv tool install`` installs, such as ``piloop[modal]==0.5.0`` or a git URL at a commit."""
+    """What ``uv tool install`` installs, such as ``piloop[modal,daytona]==0.6.0`` or a git URL at a commit: a piloop
+    with the ``modal`` and ``daytona`` provisioners and their extras, which start the arm's team."""
     agents: list[Agent] = Field(min_length=1)
     """The rotation of ``[plugins.harness] use``, each with its model."""
     overlay: dict[str, JsonValue] = {}
@@ -130,9 +131,8 @@ class PiloopArm(Frozen):
     """For each task, for each role that does runs: what its workers own, appended to that role's brief. An arm with
     charters runs only on the tasks that it names."""
     env: dict[str, str] = {}
-    """Variables of the arm's sandbox, which a task's evaluator may read: ``EVALS_DEV_LOOP = "slow"`` turns a warm
+    """Variables of the arm's sandboxes, which a task's evaluator may read: ``EVALS_DEV_LOOP = "slow"`` turns a warm
     dev loop off."""
-    resources: Resources
 
 
 class PlainArm(Frozen):
@@ -348,12 +348,10 @@ class Settings(BaseSettings):
     modal_app: str = 'piloop-evals'
     modal_environment: str | None = None
     platform: Literal['modal', 'daytona'] = 'modal'
-    """Where a run's sandboxes run. ``modal``: one Modal sandbox for the whole run. ``daytona``: each agent in a Modal
-    sandbox of ``drive.AGENT``, a plain arm's included, and a piloop arm's daemon and evaluators on Daytona
-    (``evals.daytona``), so that every timing that decides a verdict runs there. The holdout's scorings run on Modal
-    either way."""
+    """Where a plain arm's session runs: ``modal``, a Modal sandbox of the arm's ``resources``; ``daytona``, one of
+    ``drive.AGENT``, as each agent of a piloop arm. A piloop arm always runs as a team (``drive.on_team``)."""
     daytona_api_key: SecretStr = SecretStr('')
-    """Daytona's API key, for ``platform = "daytona"``."""
+    """Daytona's API key: a piloop arm's control sandbox and evaluators, and the scorings of a task scored there."""
     daytona_usd_per_vcpu_hour: float = 0.0504
     """Daytona's list price of a vCPU."""
     daytona_usd_per_gib_hour: float = 0.0162
@@ -364,15 +362,7 @@ class Settings(BaseSettings):
     session_ledger: Path = Path('/tmp/evals-sessions')
     """The entries of the sessions that the drivers hold, one file each, under a lock."""
     evaluators_per_worker: float = 1.0
-    """On Daytona, the evaluator sandboxes of a piloop arm for each of its workers: each runs one evaluation at a time."""
-    worker_cpu: float = 2
-    """The CPU cores of a piloop arm's sandbox for each of its workers: its own builds and dev runs, and the daemon's
-    evaluations of what it submits. The arm's ``resources`` are the least it gets."""
-    worker_memory_mb: int = 6144
-    """The memory of a piloop arm's sandbox for each of its workers, as ``worker_cpu``."""
-    evaluation_slots_per_worker: int = 2
-    """The daemon's evaluation slots for each worker of a piloop arm: a submission runs its visible and its sealed
-    evaluation together, so each worker can have one in flight without a queue."""
+    """The evaluator sandboxes of a piloop arm for each of its workers: each runs one evaluation at a time."""
     cpu_usd_per_core_hour: float = 0.1419
     """The list price of a sandbox's CPU core."""
     memory_usd_per_gib_hour: float = 0.0242

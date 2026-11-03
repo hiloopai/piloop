@@ -6,34 +6,57 @@ campaign's own stop. The export is ``export/``: the repo as a git bundle, piloop
 agent session files, and ``spend.jsonl``, beside ``run.json``.
 """
 
+import contextlib
 import fcntl
+import gzip
+import hashlib
 import json
 import os
 import shlex
 import tarfile
+import tempfile
 import time
 import uuid
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import boto3
 import tomli_w
+from modal.config import config as modal_config
 from opentelemetry import trace
 from pydantic import JsonValue
 
 from evals import daytona
 from evals.model import PiloopArm, PlainArm, Resources, Sample, SelfTest, Settings, Task, Tokens
-from evals.sandbox import EVALUATIONS, OPT, PILOOP_HOME, WORK, Box, Process, Shell, image
+from evals.sandbox import (
+    EVALUATIONS,
+    OPT,
+    PILOOP_HOME,
+    WORK,
+    Box,
+    Copy,
+    Process,
+    Shell,
+    Step,
+    built,
+    image,
+    network_policy,
+    recipe,
+    tagged,
+)
 from evals.score import sealed_data
 from evals.telemetry import exported, tracer
 from piloop.config import CampaignConfig
+from piloop.plugins.executor.kit.scaling import OWNER_FILE
 from piloop.plugins.harness.codex import toml
 from piloop.plugins.harness.contract import ModelId, Usage
 from piloop.plugins.price_list.genai_prices import GenaiPrices
+from piloop.plugins.provisioner.modal import OWNER as MODAL_OWNER, POOL as MODAL_POOL
 
 REPO = f'{WORK}/repo'
 SEALED = f'{PILOOP_HOME}/sealed'
@@ -41,12 +64,22 @@ SEALED = f'{PILOOP_HOME}/sealed'
 OUT = f'{WORK}/out'
 SESSIONS = {'claude': '/root/.claude/projects', 'codex': '/root/.codex/sessions'}
 VENDORS = {'claude': 'anthropic', 'codex': 'openai'}
+type Counts = dict[str, dict[str, dict[str, int]]]
+"""The meter's tokens: by harness, by model, by kind."""
+CREDENTIALS = f'{PILOOP_HOME}/credentials.env'
+"""On the control sandbox, what its daemon reads: the gateway's token, and the keys of the platforms that its
+provisioners start the team on. Never in its environment, which Daytona's API shows."""
 SUPERVISE = (
-    'while true; do piloop serve {listen}>> ' + OUT + '/serve.out 2>&1; code=$?; [ $code -eq 0 ] && break;'
-    ' echo "$(date -u +%FT%TZ) exit $code" >> ' + OUT + '/restarts; sleep 5; done'
+    f'. {CREDENTIALS} && while true; do piloop serve --listen {{listen}} >> {OUT}/serve.out 2>&1; code=$?;'
+    f' [ $code -eq 0 ] && break; echo "$(date -u +%FT%TZ) exit $code" >> {OUT}/restarts; sleep 5; done'
 )
 """Run the daemon in the foreground and start it again after an exit other than 0: one line per restart in
-``restarts``. ``piloop stop`` ends it with 0, and the loop with it. ``{listen}`` is its ``--listen``, if any."""
+``restarts``. ``piloop stop`` ends it with 0, and the loop with it. ``{listen}`` is its ``--listen``."""
+DRAIN_SECONDS = 600
+"""How long the team's workers get to end once the run is over, before the daemon stops: a worker that is left
+ends at its provisioner's TTL."""
+HEADERS = 'OTEL_EXPORTER_OTLP_HEADERS'
+"""The collector's credentials, which only the control sandbox gets (``CREDENTIALS``)."""
 HALT = 'halt'
 INSTRUCTION = 'worker-instruction.md'
 """The file of an arm's instruction in the campaign's checkout, out of git: the implementer's ``addendum``."""
@@ -137,7 +170,7 @@ def piloop_config(task: Task, arm: PiloopArm, settings: Settings, hours: float) 
     return merge(merge(task.piloop, own), arm.overlay)
 
 
-def price(tokens: dict[str, dict[str, dict[str, int]]]) -> float:
+def price(tokens: Counts) -> float:
     """The list price of the meter's tokens. A model without a price raises: an unknown cost is never 0."""
     prices = GenaiPrices()
     usd = 0.0
@@ -163,19 +196,6 @@ def workers(task: Task, arm: PiloopArm, settings: Settings, hours: float) -> int
     return CampaignConfig.model_validate(piloop_config(task, arm, settings, hours)).run_slots
 
 
-def sandbox(task: Task, arm: PiloopArm, settings: Settings, hours: float) -> tuple[Resources, int]:
-    """The resources of a piloop arm's sandbox on Modal, and its daemon's evaluation slots.
-
-    The sandbox grows with the arm's workers to ``worker_cpu`` and ``worker_memory_mb`` each, and never below the
-    arm's own ``resources``. Each worker gets ``evaluation_slots_per_worker`` slots, so that a large team's submissions
-    do not queue for the evaluator.
-    """
-    n = workers(task, arm, settings, hours)
-    r = arm.resources
-    cpu, memory = max(r.cpu, n * settings.worker_cpu), max(r.memory_mb, n * settings.worker_memory_mb)
-    return Resources(cpu=cpu, memory_mb=memory, gpus=r.gpus), n * settings.evaluation_slots_per_worker
-
-
 @dataclass
 class Piloop:
     """A piloop campaign in the sandbox, under its own ``PILOOP_HOME``."""
@@ -184,13 +204,8 @@ class Piloop:
     arm: PiloopArm
     settings: Settings
     hours: float
-    limits: dict[str, int] = field(default_factory=dict)
-    """Live keys of the daemon, set before the campaign starts: on Modal, its evaluation slots."""
-    listen: str | None = None
-    """``piloop serve --listen``: the address where workers elsewhere reach it. None: the socket only."""
-    ready: Callable[[], None] = lambda: None
-    """What runs once the daemon answers and before ``piloop init``, which waits for the baseline's measurement: on
-    Daytona, the workers and the evaluators join."""
+    served: bool = False
+    """Its daemon started, and with it the team that ``export`` drains."""
     version: str = ''
 
     @property
@@ -201,9 +216,7 @@ class Piloop:
         return box.run(f'sqlite3 {PILOOP_HOME}/piloop.db {shlex.quote(query)}').strip()
 
     def start(self, box: Shell) -> None:
-        if self.arm.split == 'sealed':
-            box.write(f'{WORK}/campaign.tgz', sealed_data(f'{self.task.name}.campaign', self.settings))
-            box.run(f'mkdir -p {SEALED} && tar xzf {WORK}/campaign.tgz -C {SEALED} && rm {WORK}/campaign.tgz')
+        """Start the daemon, whose provisioners start the team, and register the campaign once its baseline is in."""
         config = piloop_config(self.task, self.arm, self.settings, self.hours)
         if self.arm.instruction:
             box.write(f'{REPO}/{INSTRUCTION}', self.arm.instruction.encode())
@@ -213,14 +226,15 @@ class Piloop:
             box.run(f'cd {REPO} && echo {CHARTER.format(role=role)} >> .git/info/exclude')
         box.write(f'{REPO}/piloop.toml', tomli_w.dumps(config).encode())
         box.run(f'cd {REPO} && echo piloop.toml >> .git/info/exclude')
-        box.start(SUPERVISE.format(listen=f'--listen {self.listen} ' if self.listen else ''))
+        box.start(SUPERVISE.format(listen=f'0.0.0.0:{daytona.API}'))
         box.run(
-            f'for i in $(seq {self.settings.daemon_start_seconds:.0f}); do'
+            f'. {CREDENTIALS} && for i in $(seq {self.settings.daemon_start_seconds:.0f}); do'
             ' printf %s "$GATEWAY_TOKEN" | piloop secret set GATEWAY_TOKEN 2>/dev/null && exit 0; sleep 1; done; exit 1'
         )
-        for key, value in self.limits.items():
-            box.run(f'piloop limits set {key}={value} --reason {shlex.quote("evals: sized by its workers")}')
-        self.ready()
+        self.served = True
+        box.start(
+            f'piloop cas serve --listen 0.0.0.0:{daytona.CAS} >> {OUT}/cas.out 2>&1'
+        )  # the daemon made its database
         box.run(f'cd {REPO} && piloop init . > {OUT}/init.log 2>&1', timeout=1800)
         self.version = box.run('piloop --version').strip()
         trace.get_current_span().set_attribute('piloop.version', self.version)
@@ -242,7 +256,26 @@ class Piloop:
             time.sleep(self.settings.poll_seconds / 4)
 
     def export(self, box: Shell) -> None:
+        """Drain the team, keep the database, and stop the daemon.
+
+        Raises:
+            RuntimeError: a sandbox of the team did not end in ``DRAIN_SECONDS``; it ends at its provisioner's TTL.
+        """
+        left = '0'
+        if self.served:
+            reason = shlex.quote('evals: the run is over')
+            for pool in (daytona.AGENTS, daytona.EVAL):
+                for key in ('min', 'max'):  # min first: a max below min is refused
+                    box.run(f'piloop limits set executor.pools.{pool}.provisioner.{key}=0 --reason {reason}')
+            deadline = time.monotonic() + DRAIN_SECONDS
+            query = shlex.quote("select count(*) from worker_instances where state != 'ended'")
+            while (left := box.run(f'sqlite3 {PILOOP_HOME}/piloop.db {query}').strip()) != '0':
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(self.settings.poll_seconds / 4)
         box.run(f'sqlite3 {PILOOP_HOME}/piloop.db ".backup {OUT}/piloop.db" && piloop stop || true')
+        if left != '0':
+            raise RuntimeError(f'{left} of the team did not end in {DRAIN_SECONDS} s: they end at their TTL')
 
 
 @dataclass
@@ -361,22 +394,26 @@ def selftest(box: Shell, task: Task, settings: Settings) -> SelfTest:
     return SelfTest(cpu=cpu, values=values)
 
 
-def meter(boxes: Sequence[Shell]) -> dict[str, dict[str, dict[str, int]]]:
-    """The tokens of the agents' session files in ``boxes``, by harness and model, summed over the boxes."""
-    total: dict[str, dict[str, dict[str, int]]] = {}
-    for box in boxes:
-        box.run(f'python3 {OPT}/meter.py {SESSIONS["claude"]} {SESSIONS["codex"]} {WORK}/meter.json')
-        for harness, models in json.loads(box.read(f'{WORK}/meter.json')).items():
+def meter(box: Shell) -> dict[str, dict[str, dict[str, int]]]:
+    """The tokens of the agents' session files in ``box``, by harness and model."""
+    box.run(f'mkdir -p {WORK} && python3 {OPT}/meter.py {SESSIONS["claude"]} {SESSIONS["codex"]} {WORK}/meter.json')
+    return json.loads(box.read(f'{WORK}/meter.json'))
+
+
+def sample(boxes: Mapping[str, Shell], seen: dict[str, Counts], usd_per_hour: float, hours: float) -> Sample:
+    """What the run has spent so far: the tokens of its agents and their price, and its compute.
+
+    ``seen`` keeps each box's last count, by its id, so that a box that ended still counts.
+    """
+    for name, box in boxes.items():
+        seen[name] = meter(box)
+    tokens: Counts = {}
+    for counted in seen.values():
+        for harness, models in counted.items():
             for model, count in models.items():
-                into = total.setdefault(harness, {}).setdefault(model, {})
+                into = tokens.setdefault(harness, {}).setdefault(model, {})
                 for k, v in count.items():
                     into[k] = into.get(k, 0) + v
-    return total
-
-
-def sample(boxes: Sequence[Shell], usd_per_hour: float, hours: float) -> Sample:
-    """What the run has spent so far: the tokens of the agents in ``boxes`` and their price, and its compute."""
-    tokens = meter(boxes)
     counts = [count for models in tokens.values() for count in models.values()]
     summed = Tokens(**{k: sum(c.get(k, 0) for c in counts) for k in Tokens.model_fields})
     return Sample(hours=hours, models_usd=price(tokens), compute_usd=hours * usd_per_hour, tokens=summed)
@@ -391,34 +428,23 @@ def compute_rate(r: Resources, settings: Settings) -> float:
 class Fleet:
     """The sandboxes of a run.
 
-    ``control`` holds the repo and the run. The meter reads the agents' session files in ``agents``. ``exported`` are
-    the agents' sandboxes other than ``control``, whose files the export takes too.
+    ``control`` holds the repo and the run. ``agents`` lists the sandboxes of its agents now, by id, ``control`` among
+    them for a plain arm: the meter reads their session files, and the export takes those of each but ``control``.
     """
 
     control: Shell
-    agents: list[Shell]
+    agents: Callable[[], Mapping[str, Shell]]
     usd_per_hour: float
     ids: list[str]
     close: Callable[[], None]
-    before_start: Callable[[], None] = lambda: None
-    """What runs before the run starts: on Daytona, the daemon's ``config.toml``."""
-    exported: list[tuple[str, Shell]] = field(default_factory=list)
     described: dict[str, object] = field(default_factory=dict)
 
 
 def on_modal(
-    task: Task, arm: PiloopArm | PlainArm, settings: Settings, hours: float, env: dict[str, str], name: str
-) -> tuple[Fleet, Piloop | Plain]:
-    """One Modal sandbox for the whole run, grown with a piloop arm's workers."""
-    match arm:
-        case PiloopArm():
-            r, slots = sandbox(task, arm, settings, hours)
-            run: Piloop | Plain = Piloop(
-                task, arm, settings, hours, limits={'executor.pools.serve.slots.evaluation': slots}
-            )
-        case PlainArm():
-            r = arm.resources
-            run = Plain(task, arm, settings, hours)
+    task: Task, arm: PlainArm, settings: Settings, hours: float, env: dict[str, str], name: str
+) -> tuple[Fleet, Plain]:
+    """One Modal sandbox of the arm's ``resources`` for the plain session."""
+    r = arm.resources
     box = Box.create(
         settings,
         image([task], arm),
@@ -432,19 +458,20 @@ def on_modal(
         env=env,
         run=name,
     )
-    fleet = Fleet(box, [box], compute_rate(r, settings), [box.sandbox.object_id], box.close)
+    fleet = Fleet(
+        box, lambda: {box.sandbox.object_id: box}, compute_rate(r, settings), [box.sandbox.object_id], box.close
+    )
     fleet.described = {'platform': 'modal'}
-    return fleet, run
+    return fleet, Plain(task, arm, settings, hours)
 
 
 AGENT = Resources(cpu=2, memory_mb=8192)
-"""On the ``daytona`` platform, the Modal sandbox of each agent, a plain arm's included, whatever the arm asks: its
-memory a hard limit, the brief's 8 GiB. Every arm builds and dev-runs on the same box."""
+"""The Modal sandbox of each agent of a piloop arm, and of a plain arm on the ``daytona`` platform, whatever the arm
+asks: its memory a hard limit, the brief's 8 GiB, or the task's own limit. Every arm builds and dev-runs on the same
+box."""
 
 
-def agent_box(
-    task: Task, arm: PiloopArm | PlainArm, settings: Settings, hours: float, env: dict[str, str], run: str
-) -> Box:
+def agent_box(task: Task, arm: PlainArm, settings: Settings, hours: float, env: dict[str, str], run: str) -> Box:
     """A Modal sandbox of ``AGENT``."""
     return Box.create(
         settings,
@@ -461,37 +488,160 @@ def agent_box(
 
 
 def on_daytona(
-    task: Task, arm: PiloopArm | PlainArm, settings: Settings, hours: float, env: dict[str, str], name: str
-) -> tuple[Fleet, Piloop | Plain]:
-    """Each agent in a Modal sandbox of ``AGENT``; a piloop arm's daemon and evaluators on Daytona (``daytona``)."""
-    if isinstance(arm, PlainArm):
-        only = agent_box(task, arm, settings, hours, env, name)
-        fleet = Fleet(only, [only], compute_rate(AGENT, settings), [only.sandbox.object_id], only.close)
-        fleet.described = {'platform': 'daytona', 'agents_on': 'modal'}
-        return fleet, Plain(task, arm, settings, hours)
-    team, plan = daytona.sandboxes(task, arm, workers(task, arm, settings, hours), env, settings, name)
-    agents: list[Box] = []
+    task: Task, arm: PlainArm, settings: Settings, hours: float, env: dict[str, str], name: str
+) -> tuple[Fleet, Plain]:
+    """The plain session in a Modal sandbox of ``AGENT``, as each agent of a piloop arm."""
+    only = agent_box(task, arm, settings, hours, env, name)
+    ids = [only.sandbox.object_id]
+    fleet = Fleet(only, lambda: {ids[0]: only}, compute_rate(AGENT, settings), ids, only.close)
+    fleet.described = {'platform': 'daytona', 'agents_on': 'modal'}
+    return fleet, Plain(task, arm, settings, hours)
 
-    def close() -> None:
-        team.close()
-        for a in agents:
-            a.close()
 
+def sealed_steps(task: Task, arm: PiloopArm, settings: Settings) -> list[Step]:
+    """The campaign's sealed split as a copy into ``SEALED``, for the evaluators' image: no agent's has it.
+
+    It is unpacked here, under a directory named by its content, so that its image is the same for the same split: the
+    content of the tar, not of its gzip stream, which holds the time it was made.
+    """
+    if arm.split != 'sealed':
+        return []
+    data = sealed_data(f'{task.name}.campaign', settings)
+    here = (
+        Path(tempfile.gettempdir())
+        / 'evals-sealed'
+        / hashlib.sha256(gzip.decompress(data)).hexdigest()[:16]
+        / f'{task.name}.campaign'
+    )
+    if not here.is_dir():
+        unpacked = here.with_name(f'{here.name}.{uuid.uuid4().hex}')
+        with tarfile.open(fileobj=BytesIO(data)) as tar:
+            tar.extractall(unpacked, filter='data')
+        with contextlib.suppress(OSError):  # another driver unpacked the same split first
+            unpacked.rename(here)
+    return [Copy(here, SEALED)]
+
+
+def credentials(settings: Settings) -> bytes:
+    """The control sandbox's ``CREDENTIALS``: shell lines that export them.
+
+    Raises:
+        ValueError: Modal's token or Daytona's key is missing, which the team's provisioners need.
+    """
+    values = {
+        'GATEWAY_TOKEN': settings.gateway_token.get_secret_value(),
+        'MODAL_TOKEN_ID': str(modal_config.get('token_id') or ''),
+        'MODAL_TOKEN_SECRET': str(modal_config.get('token_secret') or ''),
+        'DAYTONA_API_KEY': settings.daytona_api_key.get_secret_value(),
+    }
+    if missing := [k for k, v in values.items() if not v]:
+        raise ValueError(f"a piloop arm's team needs {', '.join(missing)}: `modal token new`, EVALS_DAYTONA_API_KEY")
+    if settings.otlp_headers is not None:
+        values[HEADERS] = settings.otlp_headers.get_secret_value()
+    return ''.join(f'export {k}={shlex.quote(v)}\n' for k, v in values.items()).encode()
+
+
+def present(table: dict[str, JsonValue | None]) -> dict[str, JsonValue]:
+    """``table`` without its unset keys, which TOML cannot hold."""
+    return {k: v for k, v in table.items() if v is not None}
+
+
+def on_team(
+    task: Task, arm: PiloopArm, settings: Settings, hours: float, env: dict[str, str], name: str
+) -> tuple[Fleet, Piloop]:
+    """A piloop arm's team: its daemon on a Daytona control sandbox (``daytona``), whose provisioners start the rest.
+
+    Each agent's worker is a Modal sandbox of ``AGENT``, which reaches what the task's ``network`` allows and the
+    control sandbox. Each evaluator runs one evaluation at a time where the task is scored (``Task.scorer``): a Daytona
+    sandbox of ``daytona.EVALUATOR``, or a Modal one of the scorer's size. The driver starts only the control sandbox:
+    the meter and the export find the agents' sandboxes by their provisioner's tags.
+    """
+    cloud = daytona.client(settings)
+    steps = recipe([task], arm)
+    labels = {'purpose': 'piloop-evals', 'run': name.replace('/', '_')}
+    control = daytona.control(cloud, steps, {k: v for k, v in env.items() if k != HEADERS}, labels)
     try:
-        agents += [agent_box(task, arm, settings, hours, env, f'{name}/worker{i}') for i in range(plan.workers)]
+        api, cas = control.preview(daytona.API), control.preview(daytona.CAS)
+        own: list[JsonValue] = [h for h in (urlsplit(api).hostname, urlsplit(cas).hostname) if h]
+        reach = network_policy(settings, task.network).outbound_domain_allowlist
+        n = workers(task, arm, settings, hours)
+        e = daytona.evaluators(n, settings)
+        # Spans come from the daemon alone: a worker without the collector's credentials would be refused.
+        team_env: dict[str, JsonValue] = {k: v for k, v in env.items() if not k.startswith('OTEL_')}
+        team_env['PILOOP_PLUGINS'] = daytona.worker_plugins(cas)
+        on_modal_: dict[str, JsonValue] = {
+            'provider': 'modal',
+            'app': settings.modal_app,
+            'environment': settings.modal_environment,
+        }
+        limit = task.memory_limit_mb or AGENT.memory_mb
+        agents = present(
+            on_modal_
+            | {
+                'image_id': built(settings, steps),
+                'cpu': AGENT.cpu,
+                'memory_mb': limit,
+                'memory_limit_mb': limit,
+                'gpu': task.gpu,
+                'cloud': task.cloud,
+                'outbound_domains': None if reach is None else [*reach, *own],
+                'timeout_hours': min(hours + 1, 24),
+                'env': team_env,
+            }
+        )
+        judged = [*steps, *sealed_steps(task, arm, settings)]
+        evaluate: dict[str, JsonValue]
+        match task.scorer:
+            case 'daytona':
+                evaluate = {
+                    'provider': 'daytona',
+                    'snapshot': daytona.snapshot(cloud, judged, daytona.EVALUATOR),
+                    'ttl_hours': hours + 1,
+                    'env': team_env,
+                }
+                evaluator_rate = daytona.rate(daytona.EVALUATOR, settings)
+            case 'modal':
+                memory = max(settings.score_memory_mb, task.memory_limit_mb or 0)
+                evaluate = present(
+                    on_modal_
+                    | {
+                        'image_id': built(settings, judged),
+                        'cpu': settings.score_cpu,
+                        'memory_mb': memory,
+                        'memory_limit_mb': task.memory_limit_mb,
+                        'gpu': task.gpu,
+                        'cloud': task.cloud,
+                        'outbound_domains': own,
+                        'timeout_hours': min(hours + 1, 24),
+                        'env': team_env,
+                    }
+                )
+                evaluator_rate = compute_rate(Resources(cpu=settings.score_cpu, memory_mb=memory), settings)
+        owner = uuid.uuid4().hex
+        control.run(f'mkdir -p -m 700 {PILOOP_HOME}')  # a daemon serves its socket only in a home that is its own
+        control.write(f'{PILOOP_HOME}/{OWNER_FILE}', owner.encode())
+        control.write(CREDENTIALS, credentials(settings))
+        control.write(f'{PILOOP_HOME}/config.toml', daytona.home_config(api, n, agents, e, evaluate).encode())
     except Exception:
-        close()  # what was made so far: none outlives a run that never started
+        control.close()  # none outlives a run that never started
         raise
-    usd = sum(daytona.rate(b.size, settings) for b in team.boxes) + len(agents) * compute_rate(AGENT, settings)
-    ids = [b.id for b in team.boxes] + [a.sandbox.object_id for a in agents]
-    fleet = Fleet(team.control, list(agents), usd, ids, close)
-    fleet.described = daytona.described(plan, team) | {'agents_on': 'modal'}
-    sealed = sealed_data(f'{task.name}.campaign', settings) if arm.split == 'sealed' else None
-    fleet.before_start = lambda: daytona.configure(team.control)
-    fleet.exported = [(f'workers/{i}', a) for i, a in enumerate(agents)]
-    run = Piloop(task, arm, settings, hours, listen=f'0.0.0.0:{daytona.API}')
-    run.ready = lambda: daytona.enlist(team.control, agents, team.evaluators, sealed, SEALED)
-    return fleet, run
+    usd = daytona.rate(daytona.CONTROL, settings) + n * compute_rate(AGENT, settings) + e * evaluator_rate
+    fleet = Fleet(
+        control,
+        lambda: tagged(settings, {MODAL_OWNER: owner, MODAL_POOL: daytona.AGENTS}),
+        usd,
+        [control.id],
+        control.close,
+    )
+    fleet.described = {
+        'platform': 'team',
+        'control': control.id,
+        'workers': n,
+        'evaluators': e,
+        'agents_on': 'modal',
+        'evaluators_on': task.scorer,
+    }
+    return fleet, Piloop(task, arm, settings, hours)
 
 
 def alive(entry: dict[str, JsonValue]) -> bool:
@@ -542,7 +692,7 @@ def sessions(task: Task, arm: PiloopArm | PlainArm, settings: Settings, hours: f
 
 
 PLATFORMS = {'modal': on_modal, 'daytona': on_daytona}
-"""How a run gets its sandboxes, by ``Settings.platform``."""
+"""How a plain arm gets its sandbox, by ``Settings.platform``. A piloop arm runs as a team (``on_team``)."""
 
 
 def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hours: float, settings: Settings) -> Path:
@@ -560,7 +710,11 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
         tracer.start_as_current_span('evals.run', attributes={'evals.run': name, 'budget_usd': budget}) as span,
     ):
         with tracer.start_as_current_span('evals.sandbox'):
-            fleet, run = PLATFORMS[settings.platform](task, arm, settings, hours, env, name)
+            match arm:
+                case PiloopArm():
+                    fleet, run = on_team(task, arm, settings, hours, env, name)
+                case PlainArm():
+                    fleet, run = PLATFORMS[settings.platform](task, arm, settings, hours, env, name)
         span.set_attribute('sandboxes', ' '.join(fleet.ids))
         (out / 'sandbox').write_text('\n'.join(fleet.ids))
         control = fleet.control
@@ -571,7 +725,6 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
             with tracer.start_as_current_span('evals.selftest'):
                 (out / 'selftest.json').write_text(selftest(control, task, settings).model_dump_json())
             with tracer.start_as_current_span('evals.start'):
-                fleet.before_start()
                 run.start(control)
             started_at, started = datetime.now(UTC), time.monotonic()
             stopped = watch(fleet, run, budget, hours, settings, out / 'spend.jsonl', started)
@@ -581,54 +734,78 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
         finally:
             span.set_attribute('stopped', stopped)
             try:
-                with tracer.start_as_current_span('evals.export'):
-                    export(fleet, run, out)
+                with tracer.start_as_current_span('evals.export') as exporting:
+                    failed = export(fleet, run, out)
+                    exporting.set_attribute('failed', ' | '.join(failed))
+                meta = {
+                    'task': task.name,
+                    'arm': arm.name,
+                    'repeat': repeat,
+                    'piloop': run.version if isinstance(run, Piloop) else None,
+                    'base': base,
+                    'started_at': started_at.isoformat(),
+                    'budget_usd': budget,
+                    'max_hours': hours,
+                    'stopped': stopped,
+                    'supervised': isinstance(run, Piloop),
+                    'export_failed': failed,
+                    **fleet.described,
+                }
+                (out / 'run.json').write_text(json.dumps(meta, indent=2))
+                archive(out, settings)
             finally:
-                fleet.close()
-            meta = {
-                'task': task.name,
-                'arm': arm.name,
-                'repeat': repeat,
-                'piloop': run.version if isinstance(run, Piloop) else None,
-                'base': base,
-                'started_at': started_at.isoformat(),
-                'budget_usd': budget,
-                'max_hours': hours,
-                'stopped': stopped,
-                'supervised': isinstance(run, Piloop),
-                **fleet.described,
-            }
-            (out / 'run.json').write_text(json.dumps(meta, indent=2))
-            archive(out, settings)
+                fleet.close()  # after its export, which it gave or gave up
     return out
 
 
-def export(fleet: Fleet, run: Piloop | Plain, out: Path) -> None:
-    """Export the run to ``out/export``.
+def export(fleet: Fleet, run: Piloop | Plain, out: Path) -> list[str]:
+    """Export the run to ``out/export``, box by box, and return what failed: one box that fails stops no other.
 
-    The control sandbox gives its repo, its run and its sessions; each other agent's sandbox, its sessions, under its
-    own directory.
+    Each agent's sandbox but the control one gives its session files, under ``workers/<id>``, while it runs; then the
+    run ends (a team drains), and the control sandbox gives its repo, its run and its own sessions.
     """
-    control = fleet.control
-    run.export(control)
-    control.run(
-        f'git -C {REPO} bundle create {OUT}/repo.bundle --all'
-        f' && tar czf {WORK}/export.tgz --ignore-failed-read -C {WORK} out'
-        ' -C /root .claude/projects .codex/sessions',
-        timeout=900,
-    )
-    archives = [('', control.read(f'{WORK}/export.tgz'))]
-    for where, box in fleet.exported:
+    control, failed = fleet.control, []
+
+    def take(where: str, give: Callable[[], bytes]) -> None:
+        try:
+            data = give()
+            if not where:
+                (out / 'export.tgz').write_bytes(data)
+            with tarfile.open(fileobj=BytesIO(data)) as tar:
+                tar.extractall(out / 'export' / where, filter='data')
+        except Exception as e:  # recorded in run.json: the next box still gives its own
+            failed.append(f'{where or "control"}: {type(e).__name__}: {e}'[:500])
+
+    def sessions(box: Shell) -> bytes:
         box.run(
-            f'mkdir -p {WORK}/out && tar czf {WORK}/sessions.tgz --ignore-failed-read'
-            f' -C /root .claude/projects .codex/sessions -C {WORK} out',
+            f'mkdir -p {WORK} && tar czf {WORK}/sessions.tgz --ignore-failed-read'
+            ' -C /root .claude/projects .codex/sessions',
             timeout=900,
         )
-        archives.append((where, box.read(f'{WORK}/sessions.tgz')))
-    (out / 'export.tgz').write_bytes(archives[0][1])
-    for where, data in archives:
-        with tarfile.open(fileobj=BytesIO(data)) as tar:
-            tar.extractall(out / 'export' / where, filter='data')
+        return box.read(f'{WORK}/sessions.tgz')
+
+    def own() -> bytes:
+        try:
+            run.export(control)  # a team drains, whatever its sandboxes gave
+        finally:
+            control.run(
+                f'git -C {REPO} bundle create {OUT}/repo.bundle --all'
+                f' && tar czf {WORK}/export.tgz --ignore-failed-read -C {WORK} out'
+                ' -C /root .claude/projects .codex/sessions',
+                timeout=900,
+            )
+        return control.read(f'{WORK}/export.tgz')
+
+    try:
+        agents = fleet.agents()
+    except Exception as e:  # recorded: the control sandbox still gives its own
+        agents = {}
+        failed.append(f'workers: {type(e).__name__}: {e}'[:500])
+    for name, box in agents.items():
+        if box is not control:
+            take(f'workers/{name}', lambda box=box: sessions(box))
+    take('', own)
+    return failed
 
 
 def watch(
@@ -646,18 +823,19 @@ def watch(
     ``sample_attempts`` times: then the run stops with that error, and the driver still exports it.
     """
     stopped = ''
+    seen: dict[str, Counts] = {}
     with log.open('w') as f:
 
-        def record() -> Sample | RuntimeError | ConnectionError:
+        def record() -> Sample | RuntimeError | ConnectionError | TimeoutError:
             """The spend now, written to ``log``; or the error of the last attempt, when every attempt failed."""
             with tracer.start_as_current_span('evals.spend') as span:
-                failed: RuntimeError | ConnectionError = RuntimeError('no attempt: sample_attempts is 0')
+                failed: RuntimeError | ConnectionError | TimeoutError = RuntimeError('no attempt: sample_attempts is 0')
                 for attempt in range(settings.sample_attempts):
                     try:
-                        now = sample(fleet.agents, fleet.usd_per_hour, (time.monotonic() - started) / 3600)
+                        now = sample(fleet.agents(), seen, fleet.usd_per_hour, (time.monotonic() - started) / 3600)
                     # Modal's link to the sandbox drops now and then, and the meter can be killed (exit 137 when the
                     # sandbox runs out of memory): try again.
-                    except (ConnectionError, RuntimeError) as e:
+                    except (ConnectionError, RuntimeError, TimeoutError) as e:
                         span.add_event('evals.sample_retry', {'attempt': attempt, 'error': str(e)})
                         failed = e
                         if fleet.control.ended():

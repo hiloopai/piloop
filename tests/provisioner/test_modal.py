@@ -3,6 +3,7 @@ check of every provisioner."""
 
 import re
 import sys
+import threading
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from itertools import count
@@ -243,3 +244,68 @@ def test_the_doctor_finds_modal_s_login_in_the_environment_else_in_its_config_fi
     config.write_text('[default]\n')
     assert provider.checks()[1] == Check('modal login', f'in {config}')
     assert 'as-1' not in str(provider.checks())
+
+
+def test_a_built_image_by_its_id_passes_the_conformance_check(sdk: FakeModal, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(modal.Image, 'from_id', lambda image_id: ('built image', image_id))
+
+    def by_id(owner: str) -> ModalProvisioning:
+        config = PROVISIONERS.validated({'provider': 'modal', 'image_id': 'im-123'})
+        assert isinstance(config, Modal)
+        return config.open(ProvisionerHost(owner, Tracer(None)))
+
+    check_provisioning(by_id, LAUNCH, timeout=1)
+    assert {s.options['image'] for s in sdk.sandboxes} == {('built image', 'im-123')}
+
+
+def test_a_hard_memory_limit_an_egress_allowlist_and_a_cloud_reach_each_sandbox(sdk: FakeModal) -> None:
+    keys = {'memory_mb': 4096, 'memory_limit_mb': 8192, 'outbound_domains': ['gw.test'], 'cloud': 'aws'}
+    opened('owner-a', **keys).start(LAUNCH)
+    opened('owner-b', memory_limit_mb=8192).start(LAUNCH.model_copy(update={'name': 'gpu-other'}))
+    limited, alone = sdk.sandboxes
+    assert (limited.options['memory'], limited.options['outbound_domain_allowlist'], limited.options['cloud']) == (
+        (4096, 8192),
+        ['gw.test'],
+        'aws',
+    )
+    assert (alone.options['memory'], alone.options['outbound_domain_allowlist'], alone.options['cloud']) == (
+        (8192, 8192),
+        None,
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    ('keys', 'error'),
+    [
+        ({'image': 'i', 'image_id': 'im-1'}, 'image or an image_id'),
+        ({}, 'image or an image_id'),
+        ({'image_id': 'im-1', 'registry': {'kind': 'basic', 'secret': 's'}}, 'registry'),
+        ({'image': 'i', 'memory_mb': 9000, 'memory_limit_mb': 8192}, 'memory_limit_mb'),
+    ],
+)
+def test_the_modal_table_names_one_image_and_a_limit_above_its_reservation(keys: dict[str, object], error: str) -> None:
+    with pytest.raises(ValueError, match=error):
+        PROVISIONERS.validated({'provider': 'modal', **keys})
+
+
+@pytest.mark.parametrize('verb', ['list', 'start', 'stop'])
+def test_a_modal_call_that_hangs_fails_in_its_seconds(
+    sdk: FakeModal, monkeypatch: pytest.MonkeyPatch, verb: str
+) -> None:
+    provisioning = opened('owner-a', call_seconds=0.05, start_seconds=0.05)
+    released = threading.Event()
+
+    def hung(name: str, *, create_if_missing: bool = False, environment_name: str | None = None) -> object:
+        released.wait()
+        return None
+
+    monkeypatch.setattr(modal.App, 'lookup', hung)
+    verbs = {
+        'list': provisioning.list,
+        'start': lambda: provisioning.start(LAUNCH),
+        'stop': lambda: provisioning.stop('x'),
+    }
+    with pytest.raises(TimeoutError, match=r'did not answer in 0\.05 s'):
+        verbs[verb]()
+    released.set()

@@ -147,6 +147,10 @@ gpu = "A100"
 secrets = ["piloop-cas"]
 ```
 
+`image_id` names an image that Modal built already, in place of `image`. `memory_limit_mb` is a hard limit on each
+sandbox's memory, `outbound_domains` the only hosts that it reaches (the server's and the CAS's among them), and `cloud`
+the cloud that it runs on.
+
 Each worker gets a token of its own, and dials `url`. Give it the server's `[plugins.cas]` in its image, or as
 `PILOOP_PLUGINS` in the provider's `env`.
 

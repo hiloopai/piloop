@@ -45,6 +45,7 @@ from piloop.plugins.provisioner.contract import (
     ProvisionerHost,
     StartRefused,
 )
+from piloop.plugins.provisioner.kit.deadline import within
 
 if TYPE_CHECKING:
     import daytona as daytona_sdk
@@ -55,8 +56,6 @@ KEY = 'DAYTONA_API_KEY'
 SESSION = 'piloop-worker'
 CREDENTIAL = '/tmp/piloop-worker.env'
 """Where the worker's credential waits in the sandbox until its command reads it."""
-START_SECONDS = 600
-"""How long a start waits for its sandbox to run: an image's first build takes minutes."""
 
 
 class Daytona(ProvisionerConfig):
@@ -74,6 +73,10 @@ class Daytona(ProvisionerConfig):
     """The GiB of disk of each sandbox of ``image``. Unset: Daytona's default."""
     ttl_hours: float = Field(default=24, gt=0)
     """The longest that a sandbox lives: Daytona deletes it then, whatever it runs."""
+    start_seconds: float = Field(default=600, gt=0)
+    """The longest that a start may take, its sandbox running: one that takes longer fails, and the pool tries again."""
+    call_seconds: float = Field(default=60, gt=0)
+    """The longest that a list or a stop may take: one that hangs fails, and the next pass tries again."""
     secrets: dict[str, str] = {}
     """Daytona Secrets of each sandbox, by the variable that holds each one's placeholder: ``{ HF_TOKEN = "hf-read" }``."""
     env: dict[str, str] = {}
@@ -140,12 +143,18 @@ class DaytonaProvisioning:
         return InstanceState.PENDING if sandbox.state in self._booting else InstanceState.ENDED
 
     def list(self) -> Sequence[Instance]:
+        return within(self._config.call_seconds, lambda: self._list(), f'{type(self).__name__}.list')
+
+    def _list(self) -> Sequence[Instance]:
         return [
             Instance(name=s.labels[NAME], pool=s.labels[POOL], state=self._state(s), handle={'id': s.id})
             for s in self._sandboxes()
         ]
 
     def start(self, launch: Launch) -> None:
+        return within(self._config.start_seconds, lambda: self._start(launch), f'{type(self).__name__}.start')
+
+    def _start(self, launch: Launch) -> None:
         """Create the sandbox, and start its worker. One of its name that boots or runs is the start that came before.
 
         A sandbox whose worker did not start is deleted, and the error raised: the next start makes another one.
@@ -157,7 +166,7 @@ class DaytonaProvisioning:
             return
         sdk, client = self._sdk, self.client()
         try:
-            sandbox = client.create(self._params(launch), timeout=START_SECONDS)
+            sandbox = client.create(self._params(launch), timeout=self._config.start_seconds)
         except (
             sdk.DaytonaBadRequestError,
             sdk.DaytonaNotFoundError,
@@ -194,6 +203,9 @@ class DaytonaProvisioning:
         return sdk.CreateSandboxFromImageParams.model_validate({**fields, 'image': config.image, 'resources': size})
 
     def stop(self, name: str) -> None:
+        return within(self._config.call_seconds, lambda: self._stop(name), f'{type(self).__name__}.stop')
+
+    def _stop(self, name: str) -> None:
         sdk, client = self._sdk, self.client()
         for sandbox in self._sandboxes(**{NAME: name}):
             try:

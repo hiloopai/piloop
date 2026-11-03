@@ -28,9 +28,9 @@ The server needs Modal's credentials (``MODAL_TOKEN_ID`` and ``MODAL_TOKEN_SECRE
 import os
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, assert_never
+from typing import TYPE_CHECKING, Literal, Self, assert_never
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from piloop.plugins.host import Check, extra
 from piloop.plugins.provisioner.contract import (
@@ -41,6 +41,7 @@ from piloop.plugins.provisioner.contract import (
     ProvisionerHost,
     StartRefused,
 )
+from piloop.plugins.provisioner.kit.deadline import within
 
 if TYPE_CHECKING:
     import modal as modal_sdk
@@ -66,8 +67,10 @@ class Registry(BaseModel):
 class Modal(ProvisionerConfig):
     """``provider = "modal"``: a Modal Sandbox for each worker."""
 
-    image: str
+    image: str | None = None
     """The image of each sandbox, from a registry: ``piloop`` is on its ``PATH``."""
+    image_id: str | None = None
+    """An image that Modal built already, by its id (``im-…``), in place of ``image``."""
     app: str = 'piloop'
     """The Modal app that holds the sandboxes. Made when it is missing."""
     environment: str | None = None
@@ -77,11 +80,21 @@ class Modal(ProvisionerConfig):
     cpu: float | None = Field(default=None, gt=0)
     """The CPU cores that each sandbox reserves. Unset: Modal's default."""
     memory_mb: int | None = Field(default=None, gt=0)
-    """The MiB of memory that each sandbox reserves. Unset: Modal's default."""
+    """The MiB of memory that each sandbox reserves. Unset: Modal's default, or ``memory_limit_mb``."""
+    memory_limit_mb: int | None = Field(default=None, gt=0)
+    """The MiB of memory past which Modal kills a sandbox's process. Unset: no limit."""
     region: str | None = None
     """Where the sandboxes run, such as ``"us-east"``. Unset: anywhere."""
+    cloud: str | None = None
+    """The cloud of the sandboxes, such as ``"aws"``. Unset: any."""
+    outbound_domains: list[str] | None = None
+    """The only hosts that a sandbox reaches: the server's and the CAS's among them. Unset: any."""
     timeout_hours: float = Field(default=24, gt=0, le=24)
     """The longest that a sandbox lives."""
+    start_seconds: float = Field(default=600, gt=0)
+    """The longest that a start may take: one that takes longer fails, and the pool tries again."""
+    call_seconds: float = Field(default=60, gt=0)
+    """The longest that a list or a stop may take: one that hangs fails, and the next pass tries again."""
     registry: Registry | None = None
     """Where a private ``image`` is pulled from, and with which Secret. Unset: ``image`` is public."""
     secrets: list[str] = []
@@ -89,6 +102,16 @@ class Modal(ProvisionerConfig):
     job's secrets (piloop's ``secrets`` capability gives those)."""
     env: dict[str, str] = {}
     """More environment of each sandbox, such as ``PILOOP_PLUGINS__CAS__PROVIDER``: never a secret."""
+
+    @model_validator(mode='after')
+    def _one_image(self) -> Self:
+        if (self.image is None) == (self.image_id is None):
+            raise ValueError('name an image or an image_id, not both')
+        if self.registry is not None and self.image is None:
+            raise ValueError('a registry pulls an image: an image_id is built already')
+        if (mb := self.memory_mb) is not None and (limit := self.memory_limit_mb) is not None and mb > limit:
+            raise ValueError('memory_limit_mb is below memory_mb')
+        return self
 
     def open(self, host: ProvisionerHost) -> ModalProvisioning:
         return ModalProvisioning(self, host.owner)
@@ -138,6 +161,9 @@ class ModalProvisioning:
         return list(self._modal.Sandbox.list(app_id=self.app().app_id, tags={OWNER: self._owner, **tags}))
 
     def list(self) -> Sequence[Instance]:
+        return within(self._config.call_seconds, lambda: self._list(), f'{type(self).__name__}.list')
+
+    def _list(self) -> Sequence[Instance]:
         found = []
         for sandbox in self._sandboxes():
             tags = sandbox.get_tags()
@@ -146,6 +172,9 @@ class ModalProvisioning:
         return found
 
     def start(self, launch: Launch) -> None:
+        return within(self._config.start_seconds, lambda: self._start(launch), f'{type(self).__name__}.start')
+
+    def _start(self, launch: Launch) -> None:
         """Create the sandbox. A running one of its name is the start that came before: nothing to do.
 
         Raises:
@@ -168,8 +197,10 @@ class ModalProvisioning:
                 timeout=int(config.timeout_hours * 3600),
                 gpu=config.gpu,
                 cpu=config.cpu,
-                memory=config.memory_mb,
+                memory=self._memory(),
                 region=config.region,
+                cloud=config.cloud,
+                outbound_domain_allowlist=config.outbound_domains,
             )
         except modal.exception.AlreadyExistsError:
             return
@@ -183,8 +214,18 @@ class ModalProvisioning:
         ) as e:
             raise StartRefused(f'Modal refused the sandbox {launch.name}: {type(e).__name__}: {e}') from e
 
+    def _memory(self) -> int | tuple[int, int] | None:
+        """Modal's ``memory``: what a sandbox reserves, or that and its limit."""
+        config = self._config
+        if config.memory_limit_mb is None:
+            return config.memory_mb
+        return (config.memory_mb or config.memory_limit_mb, config.memory_limit_mb)
+
     def _image(self) -> modal_sdk.Image:
         modal, config = self._modal, self._config
+        if config.image is None:
+            assert config.image_id is not None  # _one_image
+            return modal.Image.from_id(config.image_id)
         if (registry := config.registry) is None:
             return modal.Image.from_registry(config.image)
         secret = modal.Secret.from_name(registry.secret, environment_name=config.environment)
@@ -197,5 +238,8 @@ class ModalProvisioning:
                 assert_never(registry.kind)
 
     def stop(self, name: str) -> None:
+        return within(self._config.call_seconds, lambda: self._stop(name), f'{type(self).__name__}.stop')
+
+    def _stop(self, name: str) -> None:
         for sandbox in self._sandboxes(**{NAME: name}):
             sandbox.terminate()

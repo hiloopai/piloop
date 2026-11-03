@@ -2,6 +2,7 @@
 check of every provisioner."""
 
 import sys
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from itertools import count
@@ -285,3 +286,25 @@ def test_the_doctor_finds_daytona_s_key_in_the_environment(monkeypatch: pytest.M
     assert provider.checks()[1] == Check(
         'daytona login', 'DAYTONA_API_KEY is not set', 'set DAYTONA_API_KEY where the daemon runs'
     )
+
+
+@pytest.mark.parametrize('verb', ['list', 'start', 'stop'])
+def test_a_daytona_call_that_hangs_fails_in_its_seconds(
+    sdk: FakeDaytona, monkeypatch: pytest.MonkeyPatch, verb: str
+) -> None:
+    provisioning = opened('owner-a', call_seconds=0.05, start_seconds=0.05)
+    released = threading.Event()
+
+    def hung(query: ListSandboxesQuery) -> Iterator[FakeSandbox]:
+        released.wait()
+        return iter(())
+
+    monkeypatch.setattr(sdk, 'list', hung)
+    verbs = {
+        'list': provisioning.list,
+        'start': lambda: provisioning.start(LAUNCH),
+        'stop': lambda: provisioning.stop('x'),
+    }
+    with pytest.raises(TimeoutError, match=r'did not answer in 0\.05 s'):
+        verbs[verb]()
+    released.set()

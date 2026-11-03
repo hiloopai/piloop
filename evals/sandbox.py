@@ -1,6 +1,7 @@
 """The Modal sandboxes: the image every run and every scoring uses, and running commands in one."""
 
 import shlex
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -9,6 +10,7 @@ from urllib.parse import urlsplit
 import modal
 
 from evals.model import ROOT, TASKS, PiloopArm, PlainArm, Settings, Task
+from piloop.plugins.provisioner.kit.deadline import within
 
 PYTHON = '3.14'
 DEPS = ['numpy==2.3.4', 'scipy==1.16.3', 'uv==0.11.23']
@@ -24,6 +26,18 @@ WRAP = f'{OPT}/wrap'
 """Where ``wrap/sitecustomize.py`` goes, on ``PYTHONPATH``: it logs each run of a task's evaluator."""
 EVALUATIONS = 'evaluations.jsonl'
 """The log of ``wrap/sitecustomize.py`` in a run's export: each run of the task's evaluator."""
+CALL_SECONDS = 900.0
+"""The longest that a call to a sandbox that names no timeout may take: one that hangs fails, and never holds the
+driver."""
+BUILD_SECONDS = 3600.0
+"""The longest that an image may build, with its sandbox's start."""
+MARGIN_SECONDS = 60.0
+"""What a call that names its own timeout gets on top of it: the time for the platform to say that it timed out."""
+
+
+def bounded[T](timeout: float | None, call: Callable[[], T], what: str) -> T:
+    """``call()``, or ``TimeoutError`` once ``timeout`` (``CALL_SECONDS`` when None) and ``MARGIN_SECONDS`` passed."""
+    return within((CALL_SECONDS if timeout is None else timeout) + MARGIN_SECONDS, call, what)
 
 
 @dataclass(frozen=True)
@@ -107,7 +121,14 @@ def recipe(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> list[Step]:
 
 def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
     """``recipe`` as a Modal image. A copy that build steps follow goes into the image itself (``copy``)."""
-    steps = recipe(tasks, arm)
+    return modal_image(recipe(tasks, arm))
+
+
+def modal_image(steps: Sequence[Step], *, baked: bool = False) -> modal.Image:
+    """``steps`` as a Modal image.
+
+    ``baked``: every copy goes into the image itself, for a sandbox that another process starts from the image's id.
+    """
     img = modal.Image.debian_slim(python_version=PYTHON)
     for i, step in enumerate(steps):
         match step:
@@ -118,12 +139,31 @@ def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
             case Pip(packages):
                 img = img.pip_install(*packages)
             case Copy(local, remote):
-                later = any(not isinstance(s, Copy) for s in steps[i + 1 :])
+                later = baked or any(not isinstance(s, Copy) for s in steps[i + 1 :])
                 if local.is_dir():
                     img = img.add_local_dir(local, remote, copy=later)
                 else:
                     img = img.add_local_file(local, remote, copy=later)
     return img
+
+
+def app(settings: Settings) -> modal.App:
+    """The app of every sandbox of the runs."""
+    return modal.App.lookup(settings.modal_app, create_if_missing=True, environment_name=settings.modal_environment)
+
+
+def built(settings: Settings, steps: Sequence[Step]) -> str:
+    """The id of ``steps`` as a Modal image, built now with every copy in it.
+
+    piloop's ``modal`` provisioner starts sandboxes of it (``image_id``).
+    """
+    return bounded(BUILD_SECONDS, lambda: modal_image(steps, baked=True).build(app(settings)).object_id, 'image build')
+
+
+def tagged(settings: Settings, tags: dict[str, str]) -> dict[str, Box]:
+    """The running sandboxes of the app that have ``tags``, by id: those that a piloop daemon's provisioner started."""
+    found = bounded(None, lambda: list(modal.Sandbox.list(app_id=app(settings).app_id, tags=tags)), 'Sandbox.list')
+    return {s.object_id: Box(s) for s in found}
 
 
 class Reader(Protocol):
@@ -221,53 +261,78 @@ class Box:
         One that reaches anything has ``GATEWAY_TOKEN`` and ``env`` in its environment, as a secret: never in a command
         line. ``memory_limit_mb`` is the task's (``memory``).
         """
-        app = modal.App.lookup(settings.modal_app, create_if_missing=True, environment_name=settings.modal_environment)
         own = {'GATEWAY_TOKEN': settings.gateway_token.get_secret_value(), **(env or {})}
         secrets = [modal.Secret.from_dict(dict(own))] if network != 'none' else []
         egress = network_policy(settings, network)
-        sandbox = modal.Sandbox.create(
-            'sleep',
-            'infinity',
-            app=app,
-            image=img,
-            secrets=secrets,
-            cpu=cpu,
-            memory=memory(memory_mb, memory_limit_mb),
-            gpu=gpu,
-            cloud=cloud,
-            timeout=int(hours * 3600),
-            block_network=egress.block_network,
-            outbound_domain_allowlist=egress.outbound_domain_allowlist,
-            workdir=WORK,
-        )
-        sandbox.set_tags({'purpose': 'piloop-evals', **tags})
-        return cls(sandbox)
+
+        def made() -> modal.Sandbox:
+            sandbox = modal.Sandbox.create(
+                'sleep',
+                'infinity',
+                app=app(settings),
+                image=img,
+                secrets=secrets,
+                cpu=cpu,
+                memory=memory(memory_mb, memory_limit_mb),
+                gpu=gpu,
+                cloud=cloud,
+                timeout=int(hours * 3600),
+                block_network=egress.block_network,
+                outbound_domain_allowlist=egress.outbound_domain_allowlist,
+                workdir=WORK,
+            )
+            sandbox.set_tags({'purpose': 'piloop-evals', **tags})
+            return sandbox
+
+        return cls(bounded(BUILD_SECONDS, made, 'Sandbox.create'))
 
     def run(self, script: str, timeout: float | None = None) -> str:
         """Run ``script`` in bash and return its stdout. Raises ``RuntimeError`` with its stderr when it fails."""
+        return bounded(timeout, lambda: self._run(script, timeout), 'Box.run')
+
+    def _run(self, script: str, timeout: float | None) -> str:
         proc = self.sandbox.exec('bash', '-c', script, timeout=None if timeout is None else int(timeout))
         out, err = proc.stdout.read(), proc.stderr.read()
         if proc.wait() != 0:
             raise RuntimeError(f'{script[:200]!r} exited {proc.returncode}: {err[-3000:]}')
         return out
 
-    def start(self, script: str) -> modal.container_process.ContainerProcess[str]:
+    def start(self, script: str) -> Running:
         """Start ``script`` in bash, in the background: its output goes where it redirects it."""
-        return self.sandbox.exec('bash', '-c', script)
+        return Running(bounded(None, lambda: self.sandbox.exec('bash', '-c', script), 'Box.start'))
 
     def write(self, path: str, data: bytes) -> None:
         """Write ``data`` to ``path`` in the sandbox."""
         self.run(f'mkdir -p {shlex.quote(path.rsplit("/", 1)[0])}')
-        self.sandbox.filesystem.write_bytes(data, path)
+        bounded(None, lambda: self.sandbox.filesystem.write_bytes(data, path), 'Box.write')
 
     def read(self, path: str) -> bytes:
         """The bytes of ``path`` in the sandbox."""
-        return self.sandbox.filesystem.read_bytes(path)
+        return bounded(None, lambda: self.sandbox.filesystem.read_bytes(path), 'Box.read')
 
     def ended(self) -> bool:
         """Whether the sandbox has ended."""
-        return self.sandbox.poll() is not None
+        return bounded(None, lambda: self.sandbox.poll() is not None, 'Box.ended')
 
     def close(self) -> None:
         """End the sandbox."""
-        self.sandbox.terminate()
+        bounded(None, self.sandbox.terminate, 'Box.close')
+
+
+@dataclass
+class Running:
+    """A command that ``Box.start`` started: ``Process``, with each read of it bounded."""
+
+    proc: modal.container_process.ContainerProcess[str]
+
+    def poll(self) -> int | None:
+        """Its exit code, or None while it runs."""
+        return bounded(None, self.proc.poll, 'Running.poll')
+
+    @property
+    def stderr(self) -> Running:
+        return self
+
+    def read(self) -> str:
+        """Its error output."""
+        return bounded(None, self.proc.stderr.read, 'Running.read')

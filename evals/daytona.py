@@ -1,31 +1,29 @@
-"""The Daytona half of a run: a piloop arm's daemon and its evaluators, while its agents' workers run on Modal.
+"""The Daytona half of a run: a piloop arm's control sandbox, and the configuration of the team that it starts.
 
 A piloop arm runs as a **team**:
 
-- one control sandbox on Daytona runs ``piloop serve --listen`` and ``piloop cas serve``, holds the repo of record and
-  the campaign's sealed split, and takes no job;
-- each evaluator is a Daytona sandbox that runs ``piloop worker`` in the pool ``eval``, one evaluation at a time, so no
-  agent's load reaches a timing that decides a verdict;
-- each worker is a Modal sandbox (``drive.AGENT``) that runs ``piloop worker`` in the pool ``agents``, one agent at a
-  time: its builds and dev runs only.
+- one control sandbox on Daytona runs ``piloop serve --listen`` and ``piloop cas serve``, holds the repo of record, and
+  takes no job;
+- its daemon's provisioners start the rest, all at once (``min = max``): the agents' workers in the pool ``agents``,
+  Modal sandboxes that run one agent each, and the evaluators in the pool ``eval``, one evaluation at a time each, on
+  Daytona for a task scored there (``Task.scorer``), else on Modal. The evaluators' snapshot or image holds the
+  campaign's sealed split; no agent's does.
 
 Workers and evaluators dial the control sandbox through Daytona's preview proxy, which ends TLS. A Daytona sandbox's
-memory is a hard limit, and so is that of a worker on Modal.
-
-Retirement: the Modal path of the runs (``sandbox.Box`` in ``drive``) goes once a full block runs here. This module goes
-with ``evals/``.
+memory is a hard limit, and so is that of a sandbox on Modal here. This module goes with ``evals/``.
 """
 
 import contextlib
 import hashlib
+import json
 import math
 import shlex
 import time
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass, field
-from typing import Protocol
+from dataclasses import dataclass
 
+import tomli_w
 from daytona import (
     CreateSandboxFromSnapshotParams,
     CreateSnapshotParams,
@@ -40,78 +38,60 @@ from daytona import (
     SessionExecuteRequest,
 )
 from daytona_api_client.models.snapshot_state import SnapshotState
+from pydantic import JsonValue
 
-from evals.model import PiloopArm, Resources, Settings, Task
-from evals.sandbox import PILOOP_HOME, WORK, Copy, Env, Pip, Run, Shell, Step, recipe
+from evals.model import Resources, Settings, Task
+from evals.sandbox import Copy, Env, Pip, Run, Step, bounded, recipe
 
 PYTHON = '3.13'
 """The Python of Daytona's base image: its newest. The repos run on the recipe's own, through uv."""
 CONTROL = Resources(cpu=2, memory_mb=4096)
 """The control sandbox: the daemon, the CAS and the repo of record."""
 EVALUATOR = Resources(cpu=1, memory_mb=8192)
-"""An evaluator: one single-threaded codec at a time, up to the brief's 8 GiB, which is this sandbox's hard limit."""
+"""An evaluator, or a scorer: one single-threaded codec at a time, up to the brief's 8 GiB, which is this sandbox's hard
+limit."""
 API, CAS = 8443, 7701
 """The ports of ``piloop serve`` and ``piloop cas serve`` in the control sandbox."""
 AGENTS, EVAL = 'agents', 'eval'
 """The pools of the workers and of the evaluators."""
 SNAPSHOT_SECONDS = 3600
 """How long a snapshot may build."""
-TOKEN = f'{WORK}/worker.token'
-"""Where a worker's sandbox keeps its token: never on a command line."""
 
 
-def home_config(api: str) -> str:
-    """The control sandbox's ``config.toml``: its network behind the preview proxy, and pools that keep jobs off it."""
-    return f"""[plugins.network]
-provider = "https"
-listen = "0.0.0.0:{API}"
-tls = "proxy"
-url = "{api}"
+def home_config(
+    api: str, workers: int, agents: dict[str, JsonValue], evaluators: int, evaluate: dict[str, JsonValue]
+) -> str:
+    """The control sandbox's ``config.toml``: its network, a daemon that takes no job, and the team's pools.
 
-[plugins.executor]
-provider = "workers"
+    The network is behind the preview proxy. The pools' provisioners start the whole team at once: ``workers`` on the
+    ``compute`` table ``agents``, and ``evaluators`` on ``evaluate``.
+    """
 
-[plugins.executor.pools.serve]
-agents = 0
-slots = {{ evaluation = 0 }}
+    def fixed(n: int, compute: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        return {'min': n, 'max': n, 'max_starting': n, 'compute': compute}
 
-[plugins.executor.pools.{AGENTS}]
-agents = 1
-slots = {{ evaluation = 0 }}
-
-[plugins.executor.pools.{EVAL}]
-agents = 0
-slots = {{ evaluation = 1 }}
-runners = ["process"]
-"""
-
-
-def worker_config(cas: str) -> str:
-    """A worker's or an evaluator's ``config.toml``: the control sandbox's CAS, cached on its own disk."""
-    return f"""[plugins.cas]
-provider = "cached"
-local_max_gb = 5
-remote = {{ provider = "http", url = "{cas}" }}
-"""
+    pools: dict[str, JsonValue] = {
+        'serve': {'agents': 0, 'slots': {'evaluation': 0}},
+        AGENTS: {'agents': 1, 'slots': {'evaluation': 0}, 'provisioner': fixed(workers, agents)},
+        EVAL: {
+            'agents': 0,
+            'slots': {'evaluation': 1},
+            'runners': ['process'],
+            'provisioner': fixed(evaluators, evaluate),
+        },
+    }
+    network = {'provider': 'https', 'listen': f'0.0.0.0:{API}', 'tls': 'proxy', 'url': api}
+    return tomli_w.dumps({'plugins': {'network': network, 'executor': {'provider': 'workers', 'pools': pools}}})
 
 
-@dataclass(frozen=True)
-class Plan:
-    """The sandboxes of a piloop arm's team."""
-
-    workers: int
-    """On Modal."""
-    evaluators: int
-
-    @property
-    def sizes(self) -> list[Resources]:
-        """The team's Daytona sandboxes, which count against its quota: the control one first."""
-        return [CONTROL, *[EVALUATOR] * self.evaluators]
+def worker_plugins(cas: str) -> str:
+    """A worker's or an evaluator's ``PILOOP_PLUGINS``: the control sandbox's CAS, cached on its own disk."""
+    return json.dumps({'cas': {'provider': 'cached', 'local_max_gb': 5, 'remote': {'provider': 'http', 'url': cas}}})
 
 
-def plan(workers: int, settings: Settings) -> Plan:
-    """The team of an arm of ``workers``: ``evaluators_per_worker`` evaluators each, at least one."""
-    return Plan(workers=workers, evaluators=max(1, math.ceil(workers * settings.evaluators_per_worker)))
+def evaluators(workers: int, settings: Settings) -> int:
+    """The evaluators of a team of ``workers``: ``evaluators_per_worker`` each, at least one."""
+    return max(1, math.ceil(workers * settings.evaluators_per_worker))
 
 
 def rate(r: Resources, settings: Settings) -> float:
@@ -155,14 +135,19 @@ class Started:
 
     def poll(self) -> int | None:
         """Its exit code, or None while it runs."""
-        return self._sandbox.process.get_session_command(self._session, self._command).exit_code
+        return bounded(
+            None, lambda: self._sandbox.process.get_session_command(self._session, self._command).exit_code, 'poll'
+        )
 
     @property
     def stderr(self) -> Logs:
         return Logs(self)
 
     def logs(self) -> str:
-        return self._sandbox.process.get_session_command_logs(self._session, self._command).stderr or ''
+        logs = bounded(
+            None, lambda: self._sandbox.process.get_session_command_logs(self._session, self._command), 'logs'
+        )
+        return logs.stderr or ''
 
 
 @dataclass
@@ -173,12 +158,6 @@ class Logs:
 
     def read(self) -> str:
         return self.started.logs()
-
-
-class Linked(Shell, Protocol):
-    """A sandbox that other sandboxes reach: the control one."""
-
-    def preview(self, port: int) -> str: ...
 
 
 @dataclass
@@ -195,10 +174,13 @@ class DaytonaBox:
 
     def preview(self, port: int) -> str:
         """The public URL of ``port``, through Daytona's preview proxy, which ends TLS."""
-        return self.sandbox.get_preview_link(port).url
+        return bounded(None, lambda: self.sandbox.get_preview_link(port).url, 'DaytonaBox.preview')
 
     def run(self, script: str, timeout: float | None = None) -> str:
         """Run ``script`` in bash and return its stdout. Raises ``RuntimeError`` with its stderr when it fails."""
+        return bounded(timeout, lambda: self._run(script, timeout), 'DaytonaBox.run')
+
+    def _run(self, script: str, timeout: float | None) -> str:
         err = f'/tmp/.evals-{uuid.uuid4().hex}.err'
         wrapped = f'bash -c {shlex.quote(script)} 2>{err}'
         done = self.sandbox.process.exec(wrapped, timeout=None if timeout is None else int(timeout))
@@ -209,6 +191,9 @@ class DaytonaBox:
 
     def start(self, script: str) -> Started:
         """Start ``script`` in bash, in a session of its own, in the background."""
+        return bounded(None, lambda: self._start(script), 'DaytonaBox.start')
+
+    def _start(self, script: str) -> Started:
         session = uuid.uuid4().hex
         self.sandbox.process.create_session(session)
         command = f'bash -c {shlex.quote(script)}'
@@ -220,36 +205,20 @@ class DaytonaBox:
     def write(self, path: str, data: bytes) -> None:
         """Write ``data`` to ``path`` in the sandbox."""
         self.run(f'mkdir -p {shlex.quote(path.rsplit("/", 1)[0])}')
-        self.sandbox.fs.upload_file(data, path)
+        bounded(None, lambda: self.sandbox.fs.upload_file(data, path), 'DaytonaBox.write')
 
     def read(self, path: str) -> bytes:
         """The bytes of ``path`` in the sandbox."""
-        return self.sandbox.fs.download_file(path)
+        return bounded(None, lambda: self.sandbox.fs.download_file(path), 'DaytonaBox.read')
 
     def ended(self) -> bool:
         """Whether the sandbox no longer runs."""
-        self.sandbox.refresh_data()
+        bounded(None, self.sandbox.refresh_data, 'DaytonaBox.ended')
         return self.sandbox.state not in (SandboxState.STARTED, SandboxState.STARTING)
 
     def close(self) -> None:
         """Delete the sandbox."""
-        self.client.delete(self.sandbox)
-
-
-@dataclass
-class Sandboxes:
-    """A team's Daytona sandboxes: its control one, and its evaluators."""
-
-    control: DaytonaBox
-    evaluators: list[DaytonaBox] = field(default_factory=list)
-
-    @property
-    def boxes(self) -> list[DaytonaBox]:
-        return [self.control, *self.evaluators]
-
-    def close(self) -> None:
-        for b in self.boxes:
-            b.close()
+        bounded(None, lambda: self.client.delete(self.sandbox), 'DaytonaBox.close')
 
 
 def client(settings: Settings) -> Daytona:
@@ -271,14 +240,14 @@ def snapshot(daytona: Daytona, steps: Sequence[Step], size: Resources) -> str:
     """
     name = f'{fingerprint(steps)}-{size.cpu:g}c{size.memory_mb // 1024}g'
     try:
-        found = daytona.snapshot.get(name)
+        found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
     except DaytonaNotFoundError:
         sized = Size(cpu=int(size.cpu), memory=size.memory_mb // 1024, disk=10)
         with contextlib.suppress(DaytonaConflictError):  # another caller started its build first: wait for it below
             daytona.snapshot.create(
                 CreateSnapshotParams(name=name, image=image(steps), resources=sized), timeout=SNAPSHOT_SECONDS
             )
-        found = daytona.snapshot.get(name)
+        found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
     deadline = time.monotonic() + SNAPSHOT_SECONDS
     while found.state != SnapshotState.ACTIVE:
         if found.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED):
@@ -286,7 +255,7 @@ def snapshot(daytona: Daytona, steps: Sequence[Step], size: Resources) -> str:
         if time.monotonic() > deadline:
             raise TimeoutError(f'snapshot {name} is still {found.state} after {SNAPSHOT_SECONDS} s')
         time.sleep(10)
-        found = daytona.snapshot.get(name)
+        found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
     return name
 
 
@@ -316,75 +285,12 @@ def box(
     return DaytonaBox(daytona, sandbox, size)
 
 
-def sandboxes(
-    task: Task, arm: PiloopArm, workers: int, env: dict[str, str], settings: Settings, run: str
-) -> tuple[Sandboxes, Plan]:
-    """The Daytona sandboxes of a team of ``workers``: its control sandbox and its evaluators.
-
-    Only the control sandbox gets the gateway's token in its environment, for ``piloop secret set``: a worker gets each
-    job's keys from piloop's secrets when the job starts. (A Daytona secret would not do: it is a placeholder that only
-    that sandbox's own requests replace, and the agents' requests leave from the workers.)
-    """
-    daytona = client(settings)
-    steps = recipe([task], arm)
-    labels = {'purpose': 'piloop-evals', 'run': run.replace('/', '_')}
-    team = plan(workers, settings)
-    holder = env | {'GATEWAY_TOKEN': settings.gateway_token.get_secret_value()}
-    made = Sandboxes(
-        control=box(daytona, snapshot(daytona, steps, CONTROL), CONTROL, holder, public=True, labels=labels)
-    )
-    try:
-        name = snapshot(daytona, steps, EVALUATOR)
-        made.evaluators = [
-            box(daytona, name, EVALUATOR, env, public=False, labels=labels) for _ in range(team.evaluators)
-        ]
-    except Exception:
-        made.close()  # the sandboxes made so far: none outlives a run that never started
-        raise
-    return made, team
+def control(daytona: Daytona, steps: Sequence[Step], env: dict[str, str], labels: dict[str, str]) -> DaytonaBox:
+    """The control sandbox of ``steps``: public, so that the team reaches its preview URLs."""
+    return box(daytona, snapshot(daytona, steps, CONTROL), CONTROL, env, public=True, labels=labels)
 
 
 def scorer(daytona: Daytona, task: Task, labels: dict[str, str]) -> DaytonaBox:
     """A sandbox that scores one version of ``task``: the size of an evaluator, without network."""
     name = snapshot(daytona, recipe([task], None), EVALUATOR)
     return box(daytona, name, EVALUATOR, {}, public=False, labels=labels, offline=True)
-
-
-def configure(control: Linked) -> None:
-    """Write the control sandbox's ``config.toml`` before its daemon starts."""
-    control.write(f'{PILOOP_HOME}/config.toml', home_config(control.preview(API)).encode())
-
-
-def enlist(
-    control: Linked, agents: Sequence[Shell], evaluators: Sequence[Shell], sealed: bytes | None, sealed_dir: str
-) -> None:
-    """Serve the CAS, and start each worker and evaluator with a token of its own, once the daemon answers.
-
-    Evaluators get the campaign's sealed split at ``sealed_dir``, where the campaign's sealed command reads it.
-    """
-    api, cas = control.preview(API), control.preview(CAS)
-    control.start(f'piloop cas serve --listen 0.0.0.0:{CAS} >> {WORK}/out/cas.out 2>&1')
-    for i, (pool, member) in enumerate([(AGENTS, b) for b in agents] + [(EVAL, b) for b in evaluators]):
-        name = f'{pool}{i}'
-        token = control.run(f'piloop token create {name} --access worker').strip()
-        member.write(TOKEN, token.encode())
-        member.write(f'{PILOOP_HOME}/config.toml', worker_config(cas).encode())
-        if pool == EVAL and sealed is not None:
-            member.write(f'{WORK}/campaign.tgz', sealed)
-            member.run(
-                f'mkdir -p {sealed_dir} && tar xzf {WORK}/campaign.tgz -C {sealed_dir} && rm {WORK}/campaign.tgz'
-            )
-        member.start(
-            f'mkdir -p {WORK}/out && PILOOP_HTTPS_TOKEN="$(cat {TOKEN})" piloop worker --server {shlex.quote(api)}'
-            f' --pool {pool} >> {WORK}/out/worker.out 2>&1'
-        )
-
-
-def described(team: Plan, boxes: Sandboxes) -> dict[str, object]:
-    """What ``run.json`` records of the team."""
-    return {
-        'platform': 'daytona',
-        'daytona_sandboxes': [b.id for b in boxes.boxes],
-        'workers': team.workers,
-        'evaluators': team.evaluators,
-    }
