@@ -16,6 +16,8 @@ data = [
     "python3 /opt/evals/build/t4-1brc/gen.py 10000000 10000 2 20261101 data/quick.txt data/quick-expected.txt",
 ]
 
+scorer = "daytona"                        # scored on Daytona, where its verdicts are timed
+
 [piloop]
 name = "t4-1brc"
 evaluate = ["uv", "run", "python", "evaluate.py"]

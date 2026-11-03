@@ -6,23 +6,28 @@ campaign's own stop. The export is ``export/``: the repo as a git bundle, piloop
 agent session files, and ``spend.jsonl``, beside ``run.json``.
 """
 
+import fcntl
 import json
+import os
 import shlex
 import tarfile
 import time
+import uuid
+from collections.abc import Callable, Generator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
 import boto3
-import modal
 import tomli_w
 from opentelemetry import trace
 from pydantic import JsonValue
 
+from evals import daytona
 from evals.model import PiloopArm, PlainArm, Resources, Sample, SelfTest, Settings, Task, Tokens
-from evals.sandbox import EVALUATIONS, OPT, PILOOP_HOME, WORK, Box, Shell, image
+from evals.sandbox import EVALUATIONS, OPT, PILOOP_HOME, WORK, Box, Process, Shell, image
 from evals.score import sealed_data
 from evals.telemetry import exported, tracer
 from piloop.config import CampaignConfig
@@ -37,11 +42,11 @@ OUT = f'{WORK}/out'
 SESSIONS = {'claude': '/root/.claude/projects', 'codex': '/root/.codex/sessions'}
 VENDORS = {'claude': 'anthropic', 'codex': 'openai'}
 SUPERVISE = (
-    f'while true; do piloop serve >> {OUT}/serve.out 2>&1; code=$?; [ $code -eq 0 ] && break;'
-    f' echo "$(date -u +%FT%TZ) exit $code" >> {OUT}/restarts; sleep 5; done'
+    'while true; do piloop serve {listen}>> ' + OUT + '/serve.out 2>&1; code=$?; [ $code -eq 0 ] && break;'
+    ' echo "$(date -u +%FT%TZ) exit $code" >> ' + OUT + '/restarts; sleep 5; done'
 )
 """Run the daemon in the foreground and start it again after an exit other than 0: one line per restart in
-``restarts``. ``piloop stop`` ends it with 0, and the loop with it."""
+``restarts``. ``piloop stop`` ends it with 0, and the loop with it. ``{listen}`` is its ``--listen``, if any."""
 HALT = 'halt'
 INSTRUCTION = 'worker-instruction.md'
 """The file of an arm's instruction in the campaign's checkout, out of git: the implementer's ``addendum``."""
@@ -153,17 +158,22 @@ def price(tokens: dict[str, dict[str, dict[str, int]]]) -> float:
     return usd
 
 
-def sandbox(task: Task, arm: PiloopArm, settings: Settings, hours: float) -> tuple[Resources, int]:
-    """The resources of a piloop arm's sandbox, and its daemon's evaluation slots.
+def workers(task: Task, arm: PiloopArm, settings: Settings, hours: float) -> int:
+    """The runs that a piloop arm keeps open at once (``run_slots``): its workers."""
+    return CampaignConfig.model_validate(piloop_config(task, arm, settings, hours)).run_slots
 
-    The sandbox grows with the arm's workers, the runs that it keeps open at once (``run_slots``), to ``worker_cpu``
-    and ``worker_memory_mb`` each, and never below the arm's own ``resources``. Each worker gets
-    ``evaluation_slots_per_worker`` slots, so that a large team's submissions do not queue for the evaluator.
+
+def sandbox(task: Task, arm: PiloopArm, settings: Settings, hours: float) -> tuple[Resources, int]:
+    """The resources of a piloop arm's sandbox on Modal, and its daemon's evaluation slots.
+
+    The sandbox grows with the arm's workers to ``worker_cpu`` and ``worker_memory_mb`` each, and never below the
+    arm's own ``resources``. Each worker gets ``evaluation_slots_per_worker`` slots, so that a large team's submissions
+    do not queue for the evaluator.
     """
-    workers = CampaignConfig.model_validate(piloop_config(task, arm, settings, hours)).run_slots
+    n = workers(task, arm, settings, hours)
     r = arm.resources
-    cpu, memory = max(r.cpu, workers * settings.worker_cpu), max(r.memory_mb, workers * settings.worker_memory_mb)
-    return Resources(cpu=cpu, memory_mb=memory, gpus=r.gpus), workers * settings.evaluation_slots_per_worker
+    cpu, memory = max(r.cpu, n * settings.worker_cpu), max(r.memory_mb, n * settings.worker_memory_mb)
+    return Resources(cpu=cpu, memory_mb=memory, gpus=r.gpus), n * settings.evaluation_slots_per_worker
 
 
 @dataclass
@@ -174,8 +184,13 @@ class Piloop:
     arm: PiloopArm
     settings: Settings
     hours: float
-    slots: int
-    """The daemon's evaluation slots (``executor.pools.serve.slots.evaluation``), set before the campaign starts."""
+    limits: dict[str, int] = field(default_factory=dict)
+    """Live keys of the daemon, set before the campaign starts: on Modal, its evaluation slots."""
+    listen: str | None = None
+    """``piloop serve --listen``: the address where workers elsewhere reach it. None: the socket only."""
+    ready: Callable[[], None] = lambda: None
+    """What runs once the daemon answers and before ``piloop init``, which waits for the baseline's measurement: on
+    Daytona, the workers and the evaluators join."""
     version: str = ''
 
     @property
@@ -198,13 +213,14 @@ class Piloop:
             box.run(f'cd {REPO} && echo {CHARTER.format(role=role)} >> .git/info/exclude')
         box.write(f'{REPO}/piloop.toml', tomli_w.dumps(config).encode())
         box.run(f'cd {REPO} && echo piloop.toml >> .git/info/exclude')
-        box.start(SUPERVISE)
+        box.start(SUPERVISE.format(listen=f'--listen {self.listen} ' if self.listen else ''))
         box.run(
             f'for i in $(seq {self.settings.daemon_start_seconds:.0f}); do'
             ' printf %s "$GATEWAY_TOKEN" | piloop secret set GATEWAY_TOKEN 2>/dev/null && exit 0; sleep 1; done; exit 1'
         )
-        reason = shlex.quote(f'evals: {self.settings.evaluation_slots_per_worker} per worker')
-        box.run(f'piloop limits set executor.pools.serve.slots.evaluation={self.slots} --reason {reason}')
+        for key, value in self.limits.items():
+            box.run(f'piloop limits set {key}={value} --reason {shlex.quote("evals: sized by its workers")}')
+        self.ready()
         box.run(f'cd {REPO} && piloop init . > {OUT}/init.log 2>&1', timeout=1800)
         self.version = box.run('piloop --version').strip()
         trace.get_current_span().set_attribute('piloop.version', self.version)
@@ -240,7 +256,7 @@ class Plain:
     arm: PlainArm
     settings: Settings
     hours: float
-    proc: modal.container_process.ContainerProcess[str] | None = field(default=None, repr=False)
+    proc: Process | None = field(default=None, repr=False)
 
     def command(self, prompt: str, session: str | None) -> str:
         """The shell command of the first session (``session`` None), or of a resume of ``session``, a shell word."""
@@ -278,7 +294,7 @@ class Plain:
             f' {self.command(CONTINUE_PROMPT, "$session")} < /dev/null > {OUT}/session-$n.jsonl 2>&1; sleep 1; done'
         )
 
-    def start(self, box: Box) -> None:
+    def start(self, box: Shell) -> None:
         prompt = PLAIN_PROMPT.format(dev=shlex.join(self.task.dev), hours=self.hours)
         self.proc = box.start(self.script(f'{prompt}\n\n{self.arm.instruction}' if self.arm.instruction else prompt))
 
@@ -327,7 +343,7 @@ def prepare(box: Shell, task: Task, private: bytes | None = None) -> str:
     ).strip()
 
 
-def selftest(box: Box, task: Task, settings: Settings) -> SelfTest:
+def selftest(box: Shell, task: Task, settings: Settings) -> SelfTest:
     """Evaluate the starting repo ``selftest_runs`` times with the task's dev command, and read the CPU.
 
     It runs before the agents start, and outside the evaluations log. A base that fails raises: no run starts on a
@@ -345,14 +361,188 @@ def selftest(box: Box, task: Task, settings: Settings) -> SelfTest:
     return SelfTest(cpu=cpu, values=values)
 
 
-def sample(box: Shell, r: Resources, settings: Settings, hours: float) -> Sample:
-    """What the run has spent so far, in a sandbox of ``r``: its models' tokens and their price, and its compute."""
-    box.run(f'python3 {OPT}/meter.py {SESSIONS["claude"]} {SESSIONS["codex"]} {WORK}/meter.json')
-    tokens = json.loads(box.read(f'{WORK}/meter.json'))
+def meter(boxes: Sequence[Shell]) -> dict[str, dict[str, dict[str, int]]]:
+    """The tokens of the agents' session files in ``boxes``, by harness and model, summed over the boxes."""
+    total: dict[str, dict[str, dict[str, int]]] = {}
+    for box in boxes:
+        box.run(f'python3 {OPT}/meter.py {SESSIONS["claude"]} {SESSIONS["codex"]} {WORK}/meter.json')
+        for harness, models in json.loads(box.read(f'{WORK}/meter.json')).items():
+            for model, count in models.items():
+                into = total.setdefault(harness, {}).setdefault(model, {})
+                for k, v in count.items():
+                    into[k] = into.get(k, 0) + v
+    return total
+
+
+def sample(boxes: Sequence[Shell], usd_per_hour: float, hours: float) -> Sample:
+    """What the run has spent so far: the tokens of the agents in ``boxes`` and their price, and its compute."""
+    tokens = meter(boxes)
     counts = [count for models in tokens.values() for count in models.values()]
-    summed = Tokens(**{k: sum(c[k] for c in counts) for k in Tokens.model_fields})
-    compute = hours * (r.cpu * settings.cpu_usd_per_core_hour + r.memory_mb / 1024 * settings.memory_usd_per_gib_hour)
-    return Sample(hours=hours, models_usd=price(tokens), compute_usd=compute, tokens=summed)
+    summed = Tokens(**{k: sum(c.get(k, 0) for c in counts) for k in Tokens.model_fields})
+    return Sample(hours=hours, models_usd=price(tokens), compute_usd=hours * usd_per_hour, tokens=summed)
+
+
+def compute_rate(r: Resources, settings: Settings) -> float:
+    """USD per hour of a Modal sandbox of ``r``."""
+    return r.cpu * settings.cpu_usd_per_core_hour + r.memory_mb / 1024 * settings.memory_usd_per_gib_hour
+
+
+@dataclass
+class Fleet:
+    """The sandboxes of a run.
+
+    ``control`` holds the repo and the run. The meter reads the agents' session files in ``agents``. ``exported`` are
+    the agents' sandboxes other than ``control``, whose files the export takes too.
+    """
+
+    control: Shell
+    agents: list[Shell]
+    usd_per_hour: float
+    ids: list[str]
+    close: Callable[[], None]
+    before_start: Callable[[], None] = lambda: None
+    """What runs before the run starts: on Daytona, the daemon's ``config.toml``."""
+    exported: list[tuple[str, Shell]] = field(default_factory=list)
+    described: dict[str, object] = field(default_factory=dict)
+
+
+def on_modal(
+    task: Task, arm: PiloopArm | PlainArm, settings: Settings, hours: float, env: dict[str, str], name: str
+) -> tuple[Fleet, Piloop | Plain]:
+    """One Modal sandbox for the whole run, grown with a piloop arm's workers."""
+    match arm:
+        case PiloopArm():
+            r, slots = sandbox(task, arm, settings, hours)
+            run: Piloop | Plain = Piloop(
+                task, arm, settings, hours, limits={'executor.pools.serve.slots.evaluation': slots}
+            )
+        case PlainArm():
+            r = arm.resources
+            run = Plain(task, arm, settings, hours)
+    box = Box.create(
+        settings,
+        image([task], arm),
+        cpu=r.cpu,
+        memory_mb=r.memory_mb,
+        hours=hours + 1,
+        network=task.network,
+        memory_limit_mb=task.memory_limit_mb,
+        gpu=f'{task.gpu}:{r.gpus}' if task.gpu else None,
+        cloud=task.cloud,
+        env=env,
+        run=name,
+    )
+    fleet = Fleet(box, [box], compute_rate(r, settings), [box.sandbox.object_id], box.close)
+    fleet.described = {'platform': 'modal'}
+    return fleet, run
+
+
+AGENT = Resources(cpu=2, memory_mb=8192)
+"""On the ``daytona`` platform, the Modal sandbox of each agent, a plain arm's included, whatever the arm asks: its
+memory a hard limit, the brief's 8 GiB. Every arm builds and dev-runs on the same box."""
+
+
+def agent_box(
+    task: Task, arm: PiloopArm | PlainArm, settings: Settings, hours: float, env: dict[str, str], run: str
+) -> Box:
+    """A Modal sandbox of ``AGENT``."""
+    return Box.create(
+        settings,
+        image([task], arm),
+        cpu=AGENT.cpu,
+        memory_mb=AGENT.memory_mb,
+        memory_limit_mb=AGENT.memory_mb,
+        hours=hours + 1,
+        network=task.network,
+        cloud=task.cloud,
+        env=env,
+        run=run,
+    )
+
+
+def on_daytona(
+    task: Task, arm: PiloopArm | PlainArm, settings: Settings, hours: float, env: dict[str, str], name: str
+) -> tuple[Fleet, Piloop | Plain]:
+    """Each agent in a Modal sandbox of ``AGENT``; a piloop arm's daemon and evaluators on Daytona (``daytona``)."""
+    if isinstance(arm, PlainArm):
+        only = agent_box(task, arm, settings, hours, env, name)
+        fleet = Fleet(only, [only], compute_rate(AGENT, settings), [only.sandbox.object_id], only.close)
+        fleet.described = {'platform': 'daytona', 'agents_on': 'modal'}
+        return fleet, Plain(task, arm, settings, hours)
+    team, plan = daytona.sandboxes(task, arm, workers(task, arm, settings, hours), env, settings, name)
+    agents: list[Box] = []
+
+    def close() -> None:
+        team.close()
+        for a in agents:
+            a.close()
+
+    try:
+        agents += [agent_box(task, arm, settings, hours, env, f'{name}/worker{i}') for i in range(plan.workers)]
+    except Exception:
+        close()  # what was made so far: none outlives a run that never started
+        raise
+    usd = sum(daytona.rate(b.size, settings) for b in team.boxes) + len(agents) * compute_rate(AGENT, settings)
+    ids = [b.id for b in team.boxes] + [a.sandbox.object_id for a in agents]
+    fleet = Fleet(team.control, list(agents), usd, ids, close)
+    fleet.described = daytona.described(plan, team) | {'agents_on': 'modal'}
+    sealed = sealed_data(f'{task.name}.campaign', settings) if arm.split == 'sealed' else None
+    fleet.before_start = lambda: daytona.configure(team.control)
+    fleet.exported = [(f'workers/{i}', a) for i, a in enumerate(agents)]
+    run = Piloop(task, arm, settings, hours, listen=f'0.0.0.0:{daytona.API}')
+    run.ready = lambda: daytona.enlist(team.control, agents, team.evaluators, sealed, SEALED)
+    return fleet, run
+
+
+def alive(entry: dict[str, JsonValue]) -> bool:
+    """Whether a ledger entry still holds its sessions: until its ``until``, or while its driver's ``pid`` lives."""
+    if isinstance(until := entry.get('until'), str):
+        return datetime.now(UTC) < datetime.fromisoformat(until)
+    try:
+        os.kill(int(str(entry.get('pid'))), 0)
+    except ProcessLookupError, ValueError:
+        return False
+    except PermissionError:  # another user's process: it lives
+        return True
+    return True
+
+
+@contextmanager
+def admitted(settings: Settings, run: str, sessions: int) -> Generator[None]:
+    """Hold ``sessions`` of the gateway's ``max_sessions`` while the run lives, or refuse the run.
+
+    Each driver on this machine writes an entry in ``session_ledger``, under a lock, and deletes it when its run ends.
+    Sessions that no driver here starts, such as another campaign's on the same pool, are an entry with an ``until``,
+    written by hand. An entry whose driver died holds nothing.
+
+    Raises:
+        ValueError: The run would take the sessions over ``max_sessions``.
+    """
+    ledger = settings.session_ledger
+    ledger.mkdir(parents=True, exist_ok=True)
+    mine = ledger / f'{os.getpid()}-{uuid.uuid4().hex[:8]}.json'
+    with (ledger / 'lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        held = {f.name: json.loads(f.read_text()) for f in ledger.glob('*.json')}
+        live = {name: e for name, e in held.items() if alive(e)}
+        taken = sum(int(e['sessions']) for e in live.values())
+        if taken + sessions > settings.max_sessions:
+            runs = ', '.join(f'{e["run"]} ({e["sessions"]})' for e in live.values())
+            raise ValueError(f'{run} needs {sessions} sessions: {taken} of {settings.max_sessions} are taken by {runs}')
+        mine.write_text(json.dumps({'run': run, 'sessions': sessions, 'pid': os.getpid()}))
+    try:
+        yield
+    finally:
+        mine.unlink(missing_ok=True)
+
+
+def sessions(task: Task, arm: PiloopArm | PlainArm, settings: Settings, hours: float) -> int:
+    """The agent sessions that a run of ``arm`` keeps open at once on the gateway: its workers, or one."""
+    return workers(task, arm, settings, hours) if isinstance(arm, PiloopArm) else 1
+
+
+PLATFORMS = {'modal': on_modal, 'daytona': on_daytona}
+"""How a run gets its sandboxes, by ``Settings.platform``."""
 
 
 def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hours: float, settings: Settings) -> Path:
@@ -362,46 +552,29 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
     out = settings.results / task.name / f'{arm.name}-{repeat}'
     out.mkdir(parents=True, exist_ok=False)
     name = f'{task.name}/{arm.name}-{repeat}'
-    match arm:
-        case PiloopArm():
-            r, slots = sandbox(task, arm, settings, hours)
-            run: Piloop | Plain = Piloop(task, arm, settings, hours, slots=slots)
-            env = exported(settings, name) | arm.env
-        case PlainArm():
-            r = arm.resources
-            run = Plain(task, arm, settings, hours)
-            env = dict(arm.env)
+    env = (exported(settings, name) if isinstance(arm, PiloopArm) else {}) | arm.env
     env['EVALS_EVAL_LOG'] = f'{OUT}/{EVALUATIONS}'
     private = private_files(task, settings)
-    with tracer.start_as_current_span('evals.run', attributes={'evals.run': name, 'budget_usd': budget}) as span:
+    with (
+        admitted(settings, name, sessions(task, arm, settings, hours)),
+        tracer.start_as_current_span('evals.run', attributes={'evals.run': name, 'budget_usd': budget}) as span,
+    ):
         with tracer.start_as_current_span('evals.sandbox'):
-            img = image([task], arm)
-            gpu = f'{task.gpu}:{r.gpus}' if task.gpu else None
-            box = Box.create(
-                settings,
-                img,
-                cpu=r.cpu,
-                memory_mb=r.memory_mb,
-                hours=hours + 1,
-                network=task.network,
-                memory_limit_mb=task.memory_limit_mb,
-                gpu=gpu,
-                cloud=task.cloud,
-                env=env,
-                run=name,
-            )
-        span.set_attribute('modal.sandbox', box.sandbox.object_id)
-        (out / 'sandbox').write_text(box.sandbox.object_id)
+            fleet, run = PLATFORMS[settings.platform](task, arm, settings, hours, env, name)
+        span.set_attribute('sandboxes', ' '.join(fleet.ids))
+        (out / 'sandbox').write_text('\n'.join(fleet.ids))
+        control = fleet.control
         base, started_at, stopped = '', datetime.now(UTC), 'error: the run failed before its agents started'
         try:
             with tracer.start_as_current_span('evals.prepare'):
-                base = prepare(box, task, private)
+                base = prepare(control, task, private)
             with tracer.start_as_current_span('evals.selftest'):
-                (out / 'selftest.json').write_text(selftest(box, task, settings).model_dump_json())
+                (out / 'selftest.json').write_text(selftest(control, task, settings).model_dump_json())
             with tracer.start_as_current_span('evals.start'):
-                run.start(box)
+                fleet.before_start()
+                run.start(control)
             started_at, started = datetime.now(UTC), time.monotonic()
-            stopped = watch(box, run, r, budget, hours, settings, out / 'spend.jsonl', started)
+            stopped = watch(fleet, run, budget, hours, settings, out / 'spend.jsonl', started)
         except Exception as e:
             stopped = f'error: {type(e).__name__}: {e}'[:500]
             raise
@@ -409,18 +582,9 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
             span.set_attribute('stopped', stopped)
             try:
                 with tracer.start_as_current_span('evals.export'):
-                    run.export(box)
-                    box.run(
-                        f'git -C {REPO} bundle create {OUT}/repo.bundle --all'
-                        f' && tar czf {WORK}/export.tgz --ignore-failed-read -C {WORK} out'
-                        ' -C /root .claude/projects .codex/sessions',
-                        timeout=900,
-                    )
-                    (out / 'export.tgz').write_bytes(box.read(f'{WORK}/export.tgz'))
+                    export(fleet, run, out)
             finally:
-                box.close()
-            with tarfile.open(fileobj=BytesIO((out / 'export.tgz').read_bytes())) as tar:
-                tar.extractall(out / 'export', filter='data')
+                fleet.close()
             meta = {
                 'task': task.name,
                 'arm': arm.name,
@@ -432,16 +596,44 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
                 'max_hours': hours,
                 'stopped': stopped,
                 'supervised': isinstance(run, Piloop),
+                **fleet.described,
             }
             (out / 'run.json').write_text(json.dumps(meta, indent=2))
             archive(out, settings)
     return out
 
 
+def export(fleet: Fleet, run: Piloop | Plain, out: Path) -> None:
+    """Export the run to ``out/export``.
+
+    The control sandbox gives its repo, its run and its sessions; each other agent's sandbox, its sessions, under its
+    own directory.
+    """
+    control = fleet.control
+    run.export(control)
+    control.run(
+        f'git -C {REPO} bundle create {OUT}/repo.bundle --all'
+        f' && tar czf {WORK}/export.tgz --ignore-failed-read -C {WORK} out'
+        ' -C /root .claude/projects .codex/sessions',
+        timeout=900,
+    )
+    archives = [('', control.read(f'{WORK}/export.tgz'))]
+    for where, box in fleet.exported:
+        box.run(
+            f'mkdir -p {WORK}/out && tar czf {WORK}/sessions.tgz --ignore-failed-read'
+            f' -C /root .claude/projects .codex/sessions -C {WORK} out',
+            timeout=900,
+        )
+        archives.append((where, box.read(f'{WORK}/sessions.tgz')))
+    (out / 'export.tgz').write_bytes(archives[0][1])
+    for where, data in archives:
+        with tarfile.open(fileobj=BytesIO(data)) as tar:
+            tar.extractall(out / 'export' / where, filter='data')
+
+
 def watch(
-    box: Shell,
+    fleet: Fleet,
     run: Piloop | Plain,
-    r: Resources,
     budget: float,
     hours: float,
     settings: Settings,
@@ -462,13 +654,13 @@ def watch(
                 failed: RuntimeError | ConnectionError = RuntimeError('no attempt: sample_attempts is 0')
                 for attempt in range(settings.sample_attempts):
                     try:
-                        now = sample(box, r, settings, (time.monotonic() - started) / 3600)
+                        now = sample(fleet.agents, fleet.usd_per_hour, (time.monotonic() - started) / 3600)
                     # Modal's link to the sandbox drops now and then, and the meter can be killed (exit 137 when the
                     # sandbox runs out of memory): try again.
                     except (ConnectionError, RuntimeError) as e:
                         span.add_event('evals.sample_retry', {'attempt': attempt, 'error': str(e)})
                         failed = e
-                        if box.ended():
+                        if fleet.control.ended():
                             break
                         time.sleep(settings.poll_seconds / 4)
                     else:
@@ -491,10 +683,10 @@ def watch(
             elif now.hours >= hours:
                 stopped = 'hours'
             else:
-                stopped = run.ended(box) or ''
+                stopped = run.ended(fleet.control) or ''
                 time.sleep(0 if stopped else settings.poll_seconds)
         with tracer.start_as_current_span('evals.stop', attributes={'reason': stopped}):
-            run.stop(box, stopped)
+            run.stop(fleet.control, stopped)
         record()
     return stopped
 
@@ -506,4 +698,5 @@ def archive(out: Path, settings: Settings) -> None:
     bucket, _, prefix = settings.archive_uri.removeprefix('s3://').partition('/')
     s3 = boto3.client('s3')
     for name in ('export.tgz', 'run.json', 'spend.jsonl'):
-        s3.upload_file(str(out / name), bucket, f'{prefix}/{out.parent.name}/{out.name}/{name}')
+        if (out / name).exists():  # a run that failed before its first sample has no spend
+            s3.upload_file(str(out / name), bucket, f'{prefix}/{out.parent.name}/{out.name}/{name}')

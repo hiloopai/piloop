@@ -17,6 +17,8 @@ data = [
     "cp lpaq1.cpp data/lpaq1-ref.cpp",
 ]
 
+scorer = "daytona"                        # scored on Daytona, where its verdicts are timed
+
 [piloop]
 name = "t5-lpaq"
 evaluate = ["uv", "run", "python", "evaluate.py"]

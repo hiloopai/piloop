@@ -28,6 +28,20 @@ the gateway that `EVALS_GATEWAY` names, with `EVALS_GATEWAY_TOKEN`.
 - **plain arm:** one Codex or Claude Code session, told to keep `main` at its best version. When it ends early, it
   is resumed with the same short prompt.
 
+With `EVALS_PLATFORM=daytona`, a run splits by role:
+
+- Each agent, a plain arm's included, runs in a Modal sandbox of 2 CPUs and a hard 8 GiB, whatever the arm asks.
+- A piloop arm's daemon (`piloop serve --listen`, `piloop cas serve`) and its evaluators run on Daytona
+  (`daytona.py`), one evaluation per sandbox, `EVALS_EVALUATORS_PER_WORKER` of them for each worker. So every timing
+  that decides a verdict runs on one platform, with hard limits.
+- The workers and the evaluators are `piloop worker`s in the pools `agents` and `eval`. They dial the daemon through
+  Daytona's preview proxy, each with a token of its own.
+- It needs `EVALS_DAYTONA_API_KEY`. The holdout's scorings run on Modal either way.
+
+A run holds its agent sessions in `EVALS_SESSION_LEDGER` while it lives. The driver refuses a run that would take the
+sessions of every run on this machine over `EVALS_MAX_SESSIONS`. Sessions that no driver here starts, such as another
+campaign's on the same gateway pool, are a file there with `run`, `sessions` and `until`.
+
 The driver reads the spend every `EVALS_POLL_SECONDS`: the tokens of every session file in the sandbox at list
 price, plus the sandbox's CPU and memory. Each sample keeps the tokens too, by kind. The export (git bundle, piloop's database, session files, spend) goes to
 `results/<task>/<arm>-<repeat>/`, and to `EVALS_ARCHIVE_URI` when it is set.

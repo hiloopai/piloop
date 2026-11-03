@@ -2,6 +2,7 @@
 
 import shlex
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, Protocol
 from urllib.parse import urlsplit
 
@@ -25,20 +26,54 @@ EVALUATIONS = 'evaluations.jsonl'
 """The log of ``wrap/sitecustomize.py`` in a run's export: each run of the task's evaluator."""
 
 
-def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
+@dataclass(frozen=True)
+class Run:
+    """Shell lines run as root when the image is built."""
+
+    lines: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Env:
+    """Variables of every process in the image."""
+
+    values: dict[str, str]
+
+
+@dataclass(frozen=True)
+class Pip:
+    """Packages of the image's Python."""
+
+    packages: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Copy:
+    """A local file or directory, put at ``remote`` in the image."""
+
+    local: Path
+    remote: str
+
+
+Step = Run | Env | Pip | Copy
+"""One step of an image, in the words of both Modal's and Daytona's image builders."""
+
+
+def recipe(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> list[Step]:
     """The tasks' data, the dependencies of their repos, both agents, and the arm's piloop, if any."""
-    img = (
-        modal.Image.debian_slim(python_version=PYTHON)
-        .apt_install('git', 'curl', 'ca-certificates', 'procps', 'sqlite3', 'xz-utils')
-        .run_commands(
-            f'curl -fsSL https://deb.nodesource.com/setup_{NODE}.x | bash -',
-            'apt-get install -y nodejs',
-            f'npm install -g {" ".join(AGENTS)}',
-            'git config --global user.name evals && git config --global user.email evals@localhost',
-            'git config --global init.defaultBranch main',
-        )
-        .pip_install(*DEPS)
-        .env(
+    steps: list[Step] = [
+        Run(
+            (
+                'apt-get update && apt-get install -y git curl ca-certificates procps sqlite3 xz-utils',
+                f'curl -fsSL https://deb.nodesource.com/setup_{NODE}.x | bash -',
+                'apt-get install -y nodejs',
+                f'npm install -g {" ".join(AGENTS)}',
+                'git config --global user.name evals && git config --global user.email evals@localhost',
+                'git config --global init.defaultBranch main',
+            )
+        ),
+        Pip(tuple(DEPS)),
+        Env(
             {
                 'PATH': PATH,
                 'IS_SANDBOX': '1',
@@ -46,27 +81,64 @@ def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
                 'UV_PYTHON_PREFERENCE': 'only-managed',
                 'PYTHONPATH': WRAP,
             }
-        )
-        .run_commands(f'uv python install {PYTHON}')
-    )
+        ),
+        Run((f'uv python install {PYTHON}',)),
+    ]
     for task in tasks:
         if task.setup:
-            img = img.run_commands(*task.setup)
+            steps.append(Run(tuple(task.setup)))
         if (TASKS / task.name / 'build').is_dir():
-            img = img.add_local_dir(TASKS / task.name / 'build', f'{OPT}/build/{task.name}', copy=True)
+            steps.append(Copy(TASKS / task.name / 'build', f'{OPT}/build/{task.name}'))
         if task.data:
             here = f'{OPT}/data/{task.name}'
-            img = img.run_commands(f'mkdir -p {here}', *(f'cd {here} && {line}' for line in task.data))
+            steps.append(Run((f'mkdir -p {here}', *(f'cd {here} && {line}' for line in task.data))))
     if isinstance(arm, PiloopArm):
-        img = img.run_commands(f'uv tool install {shlex.quote(arm.piloop)}')
-        img = img.env({'PILOOP_HOME': PILOOP_HOME})
-    img = img.add_local_dir(TASKS, f'{OPT}/tasks')
-    img = img.add_local_file(ROOT / 'campaign_sealed.py', f'{OPT}/campaign_sealed.py')
-    img = img.add_local_file(ROOT / 'gpu-lock', f'{OPT}/gpu-lock')
-    img = img.add_local_dir(ROOT / 'wrap', WRAP)
-    return img.add_local_file(ROOT / 'meter.py', f'{OPT}/meter.py').add_local_file(
-        ROOT / 'scorer.py', f'{OPT}/scorer.py'
-    )
+        steps += [Run((f'uv tool install {shlex.quote(arm.piloop)}',)), Env({'PILOOP_HOME': PILOOP_HOME})]
+    return [
+        *steps,
+        Copy(TASKS, f'{OPT}/tasks'),
+        Copy(ROOT / 'campaign_sealed.py', f'{OPT}/campaign_sealed.py'),
+        Copy(ROOT / 'gpu-lock', f'{OPT}/gpu-lock'),
+        Copy(ROOT / 'wrap', WRAP),
+        Copy(ROOT / 'meter.py', f'{OPT}/meter.py'),
+        Copy(ROOT / 'scorer.py', f'{OPT}/scorer.py'),
+    ]
+
+
+def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
+    """``recipe`` as a Modal image. A copy that build steps follow goes into the image itself (``copy``)."""
+    steps = recipe(tasks, arm)
+    img = modal.Image.debian_slim(python_version=PYTHON)
+    for i, step in enumerate(steps):
+        match step:
+            case Run(lines):
+                img = img.run_commands(*lines)
+            case Env(values):
+                img = img.env(values)
+            case Pip(packages):
+                img = img.pip_install(*packages)
+            case Copy(local, remote):
+                later = any(not isinstance(s, Copy) for s in steps[i + 1 :])
+                if local.is_dir():
+                    img = img.add_local_dir(local, remote, copy=later)
+                else:
+                    img = img.add_local_file(local, remote, copy=later)
+    return img
+
+
+class Reader(Protocol):
+    """A stream that a background command wrote."""
+
+    def read(self) -> str: ...
+
+
+class Process(Protocol):
+    """A command that a sandbox runs in the background: Modal's process, or ``daytona.Started``."""
+
+    def poll(self) -> int | None: ...
+
+    @property
+    def stderr(self) -> Reader: ...
 
 
 Network = Literal['none', 'gateway', 'open']
@@ -109,11 +181,11 @@ def memory(request_mb: int, limit_mb: int | None) -> int | tuple[int, int]:
 
 
 class Shell(Protocol):
-    """What the driver does in a sandbox. ``Box`` is one; a test gives a fake."""
+    """What the driver does in a sandbox: ``Box`` on Modal, ``daytona.DaytonaBox``, or a test's fake."""
 
     def run(self, script: str, timeout: float | None = None) -> str: ...
 
-    def start(self, script: str) -> object: ...
+    def start(self, script: str) -> Process: ...
 
     def read(self, path: str) -> bytes: ...
 

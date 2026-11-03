@@ -9,23 +9,27 @@ import sys
 import tarfile
 import threading
 import time
+import tomllib
 import warnings
 from collections import Counter
 from datetime import UTC, datetime, timedelta
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
 from pydantic import JsonValue, SecretStr
 
-from evals import meter
+from evals import daytona, meter
 from evals.drive import (
     HALT,
     REPO,
+    Fleet,
     Piloop,
     Plain,
+    admitted,
     drive,
+    export,
     piloop_config,
     prepare,
     price,
@@ -55,12 +59,13 @@ from evals.model import (
 )
 from evals.pilot import guard, spent
 from evals.report import plain_bar, write
-from evals.sandbox import WORK, Egress, memory, network_policy
+from evals.sandbox import WORK, Copy, Egress, Run, memory, network_policy
 from evals.score import Score, Scoring
 from evals.team import final_keeps, notes, races
 from evals.telemetry import exported
 from piloop.config import CampaignConfig
 from piloop.deprecated import PiloopDeprecationWarning
+from piloop.settings import Settings as PiloopSettings
 
 
 def module(path: Path) -> ModuleType:
@@ -166,6 +171,15 @@ def test_piloop_config_puts_agents_on_the_gateway():
     assert config['name'] == 't2-circles'
 
 
+class FakeProcess:
+    """A background command that runs until the test ends."""
+
+    stderr = StringIO('')
+
+    def poll(self) -> int | None:
+        return None
+
+
 class FakeBox:
     """A sandbox that records each command, answers each with ``out``, and holds the meter's last count.
 
@@ -178,9 +192,9 @@ class FakeBox:
     ) -> None:
         self.meter, self.out, self.commands, self.fail, self.fail_once = meter, out, [], fail, fail_once
         self.failed: set[str] = set()
+        self.writes: dict[str, bytes] = {}
         self.closed = False
         self.sandbox = SimpleNamespace(object_id='sb-fake')
-        self.writes: dict[str, bytes] = {}
 
     def run(self, script: str, timeout: float | None = None) -> str:
         self.commands.append(script)
@@ -190,8 +204,9 @@ class FakeBox:
                 raise RuntimeError(f'{script[:40]!r} exited 137: ')
         return self.out
 
-    def start(self, script: str) -> None:
+    def start(self, script: str) -> FakeProcess:
         self.commands.append(script)
+        return FakeProcess()
 
     def read(self, path: str) -> bytes:
         if path.endswith('.tgz'):
@@ -213,6 +228,10 @@ class FakeBox:
         self.closed = True
 
 
+def fleet(box: FakeBox, usd_per_hour: float = 0) -> Fleet:
+    return Fleet(control=box, agents=[box], usd_per_hour=usd_per_hour, ids=['sb-fake'], close=box.close)
+
+
 METER = {'codex': {'gpt-6.1-sol': {'input': 10, 'output': 5, 'cache_read': 100, 'cache_write': 0, 'turns': 1}}}
 
 
@@ -230,9 +249,7 @@ def test_a_failed_spend_sample_is_tried_again(tmp_path: Path):
     settings = Settings(poll_seconds=0)
     box = FakeBox(METER, fail=('meter.py',), fail_once=True)
     run = plain_run(settings)
-    stopped = watch(
-        box, run, Resources(cpu=1, memory_mb=512), 100, 0, settings, tmp_path / 'spend.jsonl', time.monotonic()
-    )
+    stopped = watch(fleet(box), run, 100, 0, settings, tmp_path / 'spend.jsonl', time.monotonic())
     assert stopped == 'hours'
     assert len((tmp_path / 'spend.jsonl').read_text().splitlines()) == 2
 
@@ -241,9 +258,7 @@ def test_a_spend_sample_that_keeps_failing_stops_the_run_and_says_why(tmp_path: 
     settings = Settings(poll_seconds=0, sample_attempts=2)
     box = FakeBox(METER, fail=('meter.py',))
     run = plain_run(settings)
-    stopped = watch(
-        box, run, Resources(cpu=1, memory_mb=512), 100, 6, settings, tmp_path / 'spend.jsonl', time.monotonic()
-    )
+    stopped = watch(fleet(box), run, 100, 6, settings, tmp_path / 'spend.jsonl', time.monotonic())
     assert stopped.startswith('sample failed:') and 'exited 137' in stopped
     assert any('pkill' in c for c in box.commands)
 
@@ -265,10 +280,9 @@ def test_a_fatal_error_still_exports_the_run_before_its_sandbox_closes(tmp_path:
 def test_a_sample_keeps_the_meters_tokens_and_the_sandboxs_compute():
     count = {'input': 10, 'output': 5, 'cache_read': 100, 'cache_write': 1, 'turns': 1}
     box = FakeBox({'claude': {'claude-opus-5-5': count}, 'codex': {'gpt-6.1-sol': count}})
-    settings = Settings(cpu_usd_per_core_hour=1, memory_usd_per_gib_hour=0.5)
-    s = sample(box, Resources(cpu=40, memory_mb=4096), settings, 2)
-    assert s.tokens == Tokens(input=20, output=10, cache_read=200, cache_write=2, turns=2)
-    assert s.compute_usd == 2 * (40 + 4 * 0.5) and s.models_usd > 0
+    s = sample([box, box], 3.0, 2)
+    assert s.tokens == Tokens(input=40, output=20, cache_read=400, cache_write=4, turns=4), 'summed over the boxes'
+    assert s.compute_usd == 2 * 3.0 and s.models_usd > 0
 
 
 def identical(n: int) -> PiloopArm:
@@ -292,12 +306,23 @@ def test_a_piloop_arms_sandbox_and_evaluation_slots_grow_with_its_workers():
 
 
 def test_a_piloop_campaign_gets_its_evaluation_slots_before_it_starts():
-    run = Piloop(Task.load('t2-circles'), identical(20), Settings(), 6, slots=40)
+    run = Piloop(
+        Task.load('t2-circles'), identical(20), Settings(), 6, limits={'executor.pools.serve.slots.evaluation': 40}
+    )
     box = FakeBox()
     run.start(box)
     limits = next(i for i, c in enumerate(box.commands) if 'piloop limits set' in c)
     init = next(i for i, c in enumerate(box.commands) if 'piloop init' in c)
     assert 'executor.pools.serve.slots.evaluation=40' in box.commands[limits] and limits < init
+
+
+def test_workers_elsewhere_join_before_piloop_init_waits_for_the_baselines_measurement():
+    box = FakeBox()
+    run = Piloop(Task.load('t2-circles'), identical(2), Settings(), 6, listen='0.0.0.0:8443')
+    run.ready = lambda: box.commands.append('JOINED')
+    run.start(box)
+    assert box.commands.index('JOINED') < next(i for i, c in enumerate(box.commands) if 'piloop init' in c)
+    assert any('piloop serve --listen 0.0.0.0:8443' in c for c in box.commands)
 
 
 def test_spend_between_samples():
@@ -611,6 +636,8 @@ def test_the_scorer_records_the_cpus_avx512_support(tmp_path: Path, monkeypatch:
         (tmp_path / 'cpuinfo').write_text(flags.format(extra))
         monkeypatch.setattr(scorer, 'CPUINFO', tmp_path / 'cpuinfo')
         assert scorer.cpu() == label
+    (tmp_path / 'cpuinfo').write_text(flags.format('avx512f') + 'model name\t: AMD EPYC 9254 24-Core Processor\n')
+    assert scorer.cpu() == 'AuthenticAMD 25/17 avx512 (AMD EPYC 9254 24-Core Processor)'
 
 
 def test_the_wrapper_logs_each_evaluation_and_who_ran_it(tmp_path: Path):
@@ -724,3 +751,93 @@ def test_t6_counts_a_private_split_in_proved_and_alone(tmp_path: Path):
     spec = evaluate.load_spec(tmp_path)
     assert spec['targets'] == ['a', 'b', 'c']
     assert spec['splits'] == {'public': ['a', 'b'], 'private': ['c']}
+
+
+class FakeControl(FakeBox):
+    """The control sandbox of a team: it makes a token for each worker, and has a public URL for each port."""
+
+    def run(self, script: str, timeout: float | None = None) -> str:
+        super().run(script, timeout)
+        return f'plt_secret_{len(self.commands)}\n' if 'token create' in script else self.out
+
+    def preview(self, port: int) -> str:
+        return f'https://{port}-sb.example'
+
+
+def test_a_daytona_teams_homes_are_valid_piloop_configs_that_keep_jobs_off_the_daemon(tmp_path: Path):
+    team = daytona.plan(10, Settings(evaluators_per_worker=1.5))
+    assert (team.workers, team.evaluators) == (10, 15)
+    assert team.sizes == [daytona.CONTROL, *[daytona.EVALUATOR] * 15], 'on Daytona: the daemon and the evaluators only'
+    used = daytona.plan(20, Settings()).sizes
+    assert (sum(r.cpu for r in used), sum(r.memory_mb for r in used) // 1024) == (22, 164), 'n = 20 fits Tier 2'
+    assert daytona.plan(1, Settings(evaluators_per_worker=0.1)).evaluators == 1, 'at least one evaluator'
+    for name, text in (
+        ('control', daytona.home_config('https://8443-sb.example')),
+        ('worker', daytona.worker_config('https://7701-sb.example')),
+    ):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / 'config.toml').write_text(text)
+        assert PiloopSettings(home=tmp_path / name).providers is not None
+    pools = tomllib.loads(daytona.home_config('https://8443-sb.example'))['plugins']['executor']['pools']
+    assert pools['serve'] == {'agents': 0, 'slots': {'evaluation': 0}}
+    assert (pools['agents']['agents'], pools['eval']['slots']) == (1, {'evaluation': 1})
+
+
+def test_enlisting_gives_each_worker_its_own_token_and_pool_and_the_evaluators_the_sealed_split():
+    control, agents, evaluators = FakeControl(), [FakeBox(), FakeBox()], [FakeBox()]
+    daytona.enlist(control, agents, evaluators, b'split', '/root/.piloop-evals/sealed')
+    assert any('piloop cas serve' in c for c in control.commands)
+    tokens = {b.writes[daytona.TOKEN] for b in [*agents, *evaluators]}
+    assert len(tokens) == 3, 'a token of its own each'
+    assert all('--pool agents' in b.commands[-1] for b in agents) and '--pool eval' in evaluators[0].commands[-1]
+    assert all(daytona.TOKEN in b.commands[-1] and 'plt_' not in b.commands[-1] for b in [*agents, *evaluators])
+    assert '/work/campaign.tgz' in evaluators[0].writes and '/work/campaign.tgz' not in agents[0].writes
+
+
+def test_the_export_puts_each_other_workers_sessions_in_a_directory_of_its_own(tmp_path: Path):
+    control, worker = FakeBox(METER), FakeBox(METER)
+    team = Fleet(control=control, agents=[worker], usd_per_hour=0, ids=['a', 'b'], close=control.close)
+    team.exported = [('workers/0', worker)]
+    export(team, plain_run(Settings()), tmp_path)
+    assert (tmp_path / 'export' / 'out' / 'sessions').exists() and (tmp_path / 'export.tgz').exists()
+    assert (tmp_path / 'export' / 'workers' / '0' / 'out' / 'sessions').exists()
+
+
+def test_a_snapshots_name_changes_with_the_files_it_copies(tmp_path: Path):
+    (tmp_path / 'f').write_text('a')
+    steps = [Run(('true',)), Copy(tmp_path / 'f', '/opt/f')]
+    first = daytona.fingerprint(steps)
+    assert daytona.fingerprint(steps) == first
+    (tmp_path / 'f').write_text('b')
+    assert daytona.fingerprint(steps) != first
+
+
+def test_the_driver_refuses_a_run_that_would_take_the_gateways_sessions_over_the_cap(tmp_path: Path):
+    settings = Settings(max_sessions=20, session_ledger=tmp_path / 'ledger')
+    (tmp_path / 'ledger').mkdir()
+    later = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    (tmp_path / 'ledger' / 'lean.json').write_text(json.dumps({'run': 'lean pilot', 'sessions': 3, 'until': later}))
+    (tmp_path / 'ledger' / 'gone.json').write_text(json.dumps({'run': 'ended', 'sessions': 9, 'pid': 2**22 + 7}))
+    with admitted(settings, 'a', 10):
+        with pytest.raises(ValueError, match='20'), admitted(settings, 'b', 8):
+            pass
+        with admitted(settings, 'c', 7):
+            assert len(list((tmp_path / 'ledger').glob('*.json'))) == 4
+    assert sorted(p.name for p in (tmp_path / 'ledger').glob('*.json')) == ['gone.json', 'lean.json']
+
+
+def test_each_task_names_its_scorer_and_daytona_refuses_a_task_that_needs_a_gpu_or_more_than_8_gib():
+    scorers = {p.name: Task.load(p.name).scorer for p in sorted(TASKS.iterdir())}
+    assert scorers == {
+        't1-enwik8': 'modal',
+        't2-circles': 'modal',
+        't3-airbench': 'modal',
+        't4-1brc': 'daytona',
+        't5-lpaq': 'daytona',
+        't6-optcomp': 'modal',
+    }
+    t5 = Task.load('t5-lpaq').model_dump()
+    for need in ({'gpu': 'L4'}, {'memory_limit_mb': 12288}):
+        with pytest.raises(ValueError, match='daytona'):
+            Task.model_validate(t5 | need)
+    assert Task.model_validate(t5 | {'memory_limit_mb': 8192}).scorer == 'daytona'

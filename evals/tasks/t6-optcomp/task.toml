@@ -21,6 +21,8 @@ data = [
     "rm -f lakefile.toml lake-manifest.json lean-toolchain",
 ]
 
+scorer = "modal"                          # scored on Modal: it needs 12 GiB, over a Daytona sandbox
+
 [piloop]
 name = "t6-optcomp"
 evaluate = ["python3", "evaluate.py"]

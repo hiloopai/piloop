@@ -1,5 +1,7 @@
 """Score versions of a run outside it: the task's own dev evaluator and its sealed scorer, in sandboxes without network.
 
+A task's ``scorer`` says where: on Daytona, in a sandbox the size of an evaluator, or on Modal.
+
 The sealed data comes from ``sealed_uri`` on the machine of the driver and goes only into these sandboxes, never into
 an arm's.
 """
@@ -14,9 +16,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import boto3
+from daytona import Daytona
 from opentelemetry import context
 from opentelemetry.context import Context
 
+from evals import daytona
 from evals.model import Frozen, Settings, Task
 from evals.sandbox import OPT, WORK, Box, image
 from evals.telemetry import tracer
@@ -89,25 +93,41 @@ def sealed_data(name: str, settings: Settings) -> bytes:
     return buf.getvalue()
 
 
+def scorer_box(task: Task, settings: Settings, cloud: Daytona | None) -> Box | daytona.DaytonaBox:
+    """A sandbox without network that scores one version, where the task's ``scorer`` says."""
+    match task.scorer:
+        case 'daytona':
+            if cloud is None:
+                raise ValueError(f'{task.name} is scored on Daytona: score() opens its client')
+            return daytona.scorer(cloud, task, {'purpose': 'piloop-evals', 'task': task.name})
+        case 'modal':
+            return Box.create(
+                settings,
+                image([task], None),
+                cpu=settings.score_cpu,
+                memory_mb=settings.score_memory_mb,
+                hours=1,
+                network='none',
+                memory_limit_mb=task.memory_limit_mb,
+                gpu=task.gpu,
+                cloud=task.cloud,
+                task=task.name,
+            )
+
+
 def score_one(
-    task: Task, rev: str, base: bytes, tree: bytes, sealed: bytes, settings: Settings, parent: Context
+    task: Task,
+    rev: str,
+    base: bytes,
+    tree: bytes,
+    sealed: bytes,
+    settings: Settings,
+    parent: Context,
+    cloud: Daytona | None = None,
 ) -> Scoring:
     """Score one tree in a sandbox of its own, in a span under ``parent``."""
     with tracer.start_as_current_span('evals.score.tree', context=parent, attributes={'revision': rev}) as span:
-        cpu, memory = settings.score_cpu, settings.score_memory_mb
-        img = image([task], None)
-        box = Box.create(
-            settings,
-            img,
-            cpu=cpu,
-            memory_mb=memory,
-            hours=1,
-            network='none',
-            memory_limit_mb=task.memory_limit_mb,
-            gpu=task.gpu,
-            cloud=task.cloud,
-            task=task.name,
-        )
+        box = scorer_box(task, settings, cloud)
         try:
             for name, data in (('tree.tgz', tree), ('base.tgz', base), ('sealed.tgz', sealed)):
                 box.write(f'{WORK}/{name}', data)
@@ -135,10 +155,11 @@ def score(task: Task, bundle: Path, base: str, revisions: list[str], settings: S
         trees = archives(bundle, [base, *revisions])
         sealed = sealed_data(task.name, settings)
         parent = context.get_current()
+        cloud = daytona.client(settings) if task.scorer == 'daytona' else None
         with ThreadPoolExecutor(settings.score_concurrency) as pool:
             futures = {
                 rev: [
-                    pool.submit(score_one, task, rev, trees[base], trees[rev], sealed, settings, parent)
+                    pool.submit(score_one, task, rev, trees[base], trees[rev], sealed, settings, parent, cloud)
                     for _ in range(task.score_repeats)
                 ]
                 for rev in trees

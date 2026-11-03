@@ -20,6 +20,8 @@ data = [
     "rm /tmp/cifar.tgz",
 ]
 
+scorer = "modal"                          # scored on Modal: it needs a GPU
+
 [piloop]
 name = "t3-airbench"
 evaluate = ["/opt/evals/gpu-lock", "python3", "evaluate.py"]

@@ -18,16 +18,19 @@ CPUINFO = Path('/proc/cpuinfo')
 
 
 def cpu() -> str:
-    """The vendor, family and model of this machine's CPU, and whether it has AVX-512.
+    """The vendor, family and model of this machine's CPU, whether it has AVX-512, and its model name when it has one.
 
-    Modal's sandboxes report no model name, and a sandbox of one family and model may lack AVX-512.
+    Modal's sandboxes report no model name, and a sandbox of one family and model may lack AVX-512. Daytona's name it,
+    such as ``AMD EPYC 9254 24-Core Processor``.
     """
     fields: dict[str, str] = {}
     for line in CPUINFO.read_text().splitlines():
         key, _, value = line.partition(':')
         fields.setdefault(key.strip(), value.strip())
     avx512 = 'avx512' if 'avx512f' in fields.get('flags', '').split() else 'no-avx512'
-    return f'{fields.get("vendor_id", "?")} {fields.get("cpu family", "?")}/{fields.get("model", "?")} {avx512}'
+    found = f'{fields.get("vendor_id", "?")} {fields.get("cpu family", "?")}/{fields.get("model", "?")} {avx512}'
+    name = fields.get('model name', 'unknown')
+    return found if name in ('', 'unknown') else f'{found} ({name})'
 
 
 def main(task: Path, data: Path, work: Path) -> dict[str, object]:

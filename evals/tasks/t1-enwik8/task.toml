@@ -11,6 +11,8 @@ data = [
     "rm enwik8.zip",
 ]
 
+scorer = "modal"                          # scored on Modal
+
 [piloop]
 name = "t1-enwik8"
 evaluate = ["uv", "run", "python", "evaluate.py"]

@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, SecretStr, model_v
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).parent
+DAYTONA_MEMORY_MB = 8192
+"""The most memory of a Daytona sandbox."""
 TASKS = ROOT / 'tasks'
 ARMS = ROOT / 'arms'
 
@@ -52,11 +54,25 @@ class Task(Frozen):
     memory_limit_mb: int | None = Field(default=None, gt=0)
     """The memory every sandbox of the task reserves and is capped at, or its arm's own request when that is larger.
     Modal's memory alone is a request, which a sandbox may outgrow until the host kills it. None: a request only."""
+    scorer: Literal['modal', 'daytona']
+    """Where its versions are scored afterwards: ``daytona``, in a sandbox of ``daytona.EVALUATOR`` on the same
+    platform as the evaluators that decide its verdicts (``EVALS_PLATFORM=daytona``); ``modal``, for a task that needs a
+    GPU or more memory than a Daytona sandbox has."""
     private: bool = False
     """The task has a private split: the files of ``<sealed_uri>/<task>.private/``, which the driver copies into the
     repo before its starting commit. They are in no repository and no image, and no sandbox can read sealed storage."""
     piloop: dict[str, JsonValue]
     """The task's own keys of ``piloop.toml``: its name, evaluator and metrics. An arm adds the rest."""
+
+    @model_validator(mode='after')
+    def _scorer_fits(self) -> Task:
+        """A ``daytona`` scorer has no GPU and at most ``DAYTONA_MEMORY_MB``."""
+        if self.scorer == 'daytona' and (self.gpu or (self.memory_limit_mb or 0) > DAYTONA_MEMORY_MB):
+            raise ValueError(
+                f'{self.name}: scorer = "daytona" has no GPU and at most {DAYTONA_MEMORY_MB} MiB; it needs '
+                f'gpu = {self.gpu!r}, memory_limit_mb = {self.memory_limit_mb}: use scorer = "modal"'
+            )
+        return self
 
     @classmethod
     def load(cls, name: str) -> Task:
@@ -327,6 +343,24 @@ class Settings(BaseSettings):
     results: Path = ROOT / 'results'
     modal_app: str = 'piloop-evals'
     modal_environment: str | None = None
+    platform: Literal['modal', 'daytona'] = 'modal'
+    """Where a run's sandboxes run. ``modal``: one Modal sandbox for the whole run. ``daytona``: each agent in a Modal
+    sandbox of ``drive.AGENT``, a plain arm's included, and a piloop arm's daemon and evaluators on Daytona
+    (``evals.daytona``), so that every timing that decides a verdict runs there. The holdout's scorings run on Modal
+    either way."""
+    daytona_api_key: SecretStr = SecretStr('')
+    """Daytona's API key, for ``platform = "daytona"``."""
+    daytona_usd_per_vcpu_hour: float = 0.0504
+    """Daytona's list price of a vCPU."""
+    daytona_usd_per_gib_hour: float = 0.0162
+    """Daytona's list price of a GiB of memory."""
+    max_sessions: int = Field(default=20, ge=1)
+    """The most agent sessions that this machine's drivers keep open at once on the model gateway's pool: a run that
+    would take more is refused (``drive.admitted``)."""
+    session_ledger: Path = Path('/tmp/evals-sessions')
+    """The entries of the sessions that the drivers hold, one file each, under a lock."""
+    evaluators_per_worker: float = 1.0
+    """On Daytona, the evaluator sandboxes of a piloop arm for each of its workers: each runs one evaluation at a time."""
     worker_cpu: float = 2
     """The CPU cores of a piloop arm's sandbox for each of its workers: its own builds and dev runs, and the daemon's
     evaluations of what it submits. The arm's ``resources`` are the least it gets."""
