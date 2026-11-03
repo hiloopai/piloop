@@ -13,6 +13,7 @@ follow.
 - A line that starts with `[piloop]` is a message for you: follow it.
 - Work in your checkout and in your idea's directory in `workspace/`, never in the campaign repo or the data files.
 
-## End your run
+## End
 
-Note on your idea what worked, with the numbers, then `piloop run end submitted`.
+When you are done, stop: your run ends with what you submitted. A note on your idea of what worked, with the numbers,
+helps the next run. `piloop run end gave_up` ends your run now and gives your idea back.

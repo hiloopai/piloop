@@ -77,7 +77,7 @@ Use these commands, not SQL. Each one validates, takes `--reason '<why, with ids
 - A message on the campaign is for you, not for an implementer. To change the work of a running implementer, write a
   message on its run.
 - An implementer asks for what it cannot do itself with an escalation. The escalation holds nothing: the run goes on,
-  and ends when its implementer runs `piloop run end` or at its deadline. Answer with a message on the run while it
+  and ends when its implementer exits, runs `piloop run end`, or reaches its deadline. Answer with a message on the run while it
   runs, or with a note on the idea for the next run.
 
 ### Cancel or extend a run

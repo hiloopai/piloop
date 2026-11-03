@@ -66,12 +66,8 @@ from piloop.settings import AgentSettings
 
 WRAP_UP_PROMPT = (
     '[piloop] {what} ({cause}). Save what you have now, with a summary that says where it stands.'
-    ' Leave a note on what you did, then {last}. This session ends in {minutes:g} minutes.'
+    ' Leave a note on what you did, then stop. This session ends in {minutes:g} minutes.'
 )
-END_YOUR_RUN = 'end your run (`piloop run end`)'
-"""How a worker closes, in its wrap-up prompt."""
-STOP = 'stop'
-"""How a sweep closes, in its wrap-up prompt: it has no run to end."""
 
 
 ENDED = 'ended its run'
@@ -350,8 +346,7 @@ class Agents:
                 if ending is Ending.NOW:
                     self._end(s, agent_session, reason, end)
                 elif told is None:
-                    last = END_YOUR_RUN if run_of(agent_session) is not None else STOP
-                    text = WRAP_UP_PROMPT.format(what=what, cause=cause, last=last, minutes=grace.total_seconds() / 60)
+                    text = WRAP_UP_PROMPT.format(what=what, cause=cause, minutes=grace.total_seconds() / 60)
                     self._wrap_up(s, agent_session, reason, text)
                     soonest.add(now + grace)
                 elif now - told >= grace:
@@ -362,9 +357,7 @@ class Agents:
                 left = self._time_left(s, agent_session, now)
                 if isinstance(left, TimeLeft):
                     cause = left.cut.value.format(timeout=left.timeout)
-                    text = WRAP_UP_PROMPT.format(
-                        what='Your time is almost up', cause=cause, last=END_YOUR_RUN, minutes=left.minutes
-                    )
+                    text = WRAP_UP_PROMPT.format(what='Your time is almost up', cause=cause, minutes=left.minutes)
                     self._wrap_up(s, agent_session, TIMEOUT, text)
                 else:  # when its lead comes, or None once it was told
                     soonest.add(left)

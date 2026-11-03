@@ -28,7 +28,7 @@ from piloop.settings import Settings
 from tests.conftest import (
     END_RUN,
     HARNESS_APPEND,
-    HARNESS_NOOP,
+    HARNESS_FAILS,
     SETTLE,
     WATCHDOG,
     WRITE_PID,
@@ -75,7 +75,7 @@ def test_daemon_end_to_end(
             assert (run.status, run.updated_by) == (RunStatus.SUCCEEDED, ACTOR.signature)
             assert s.get_one(Idea, 1).status is IdeaStatus.DONE
 
-        write_toml(campaign_path, HARNESS_NOOP)
+        write_toml(campaign_path, HARNESS_FAILS)
         with daemon.db.session() as s:
             s.get_one(Campaign, campaign.id).config = load_campaign_config(campaign_path)
             s.commit()

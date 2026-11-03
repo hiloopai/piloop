@@ -654,7 +654,9 @@ def test_a_worker_proposes_its_own_idea_and_claims_it_but_files_none_for_others(
         assert s.get_one(Run, run_id).idea_id == idea.id
 
 
-def test_a_worker_ends_its_own_running_run_once_and_gives_a_reason_to_give_up(me: Database, campaign: Campaign) -> None:
+def test_a_worker_ends_its_own_running_run_once_with_or_without_a_reason_to_give_up(
+    me: Database, campaign: Campaign
+) -> None:
     run_id, implementer = worker(me)
     _, queued = worker(me, RunStatus.QUEUED)
     ending_id, ending = worker(me)
@@ -665,7 +667,6 @@ def test_a_worker_ends_its_own_running_run_once_and_gives_a_reason_to_give_up(me
         (RunEnding.SUBMITTED, None, ACTOR, 'orchestrator has no run'),
         (RunEnding.SUBMITTED, None, queued, r'run#\d+ is queued: a run ends while it runs'),
         (RunEnding.SUBMITTED, None, ending, 'is ending: the daemon ended it before its run ended'),
-        (RunEnding.GAVE_UP, ' ', implementer, 'a reason is required'),
     ]:
         with me.session() as s, pytest.raises(ops.Refused, match=error):
             runs_ops.end_run(s, how, reason, actor=actor)
@@ -678,6 +679,13 @@ def test_a_worker_ends_its_own_running_run_once_and_gives_a_reason_to_give_up(me
     with me.session() as s, pytest.raises(ops.Refused, match=f'run#{run_id} was ended already: gave_up'):
         runs_ops.end_run(s, RunEnding.SUBMITTED, None, actor=implementer)
     assert [k for k, _, _ in kinds(me, RUN, run_id)] == ['run.end_requested']
+    silent_id, silent = worker(me)
+    with me.session() as s:
+        runs_ops.end_run(s, RunEnding.GAVE_UP, ' ', actor=silent)
+        s.commit()
+        assert runs_ops.end_requested(s, s.get_one(Run, silent_id)) == RunEndRequested(how=RunEnding.GAVE_UP), (
+            'a reason is optional'
+        )
     assert [k for k, _, _ in kinds(me, RUN, ending_id)] == []
 
 

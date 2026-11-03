@@ -2204,7 +2204,7 @@ def test_implementers_of_a_stopped_campaign_are_told_to_wrap_up_then_ended_after
         [
             (
                 1,
-                '[piloop] The campaign stopped (max_runs: 2 runs). Save what you have now, with a summary that says where it stands. Leave a note on what you did, then end your run (`piloop run end`). This session ends in 10 minutes.',
+                '[piloop] The campaign stopped (max_runs: 2 runs). Save what you have now, with a summary that says where it stands. Leave a note on what you did, then stop. This session ends in 10 minutes.',
             )
         ]
     ), 'a sweep is bounded by its timeout and the closing watchdog is one: only implementers are wound down'
@@ -2320,7 +2320,7 @@ def test_a_cancelled_run_is_told_to_wrap_up_and_ended_after_the_grace(
         [
             (
                 1,
-                '[piloop] Your run was cancelled (by human). Save what you have now, with a summary that says where it stands. Leave a note on what you did, then end your run (`piloop run end`). This session ends in 10 minutes.',
+                '[piloop] Your run was cancelled (by human). Save what you have now, with a summary that says where it stands. Leave a note on what you did, then stop. This session ends in 10 minutes.',
             ),
             (
                 3,
@@ -2648,7 +2648,7 @@ def test_an_implementer_is_told_once_to_wrap_up_before_its_timeout(
     assert agent == 1 and prompt.text == IsStr(
         regex=re.escape(
             f'[piloop] Your time is almost up (the role timeout of {timeout:g}s). Save what you have now, with a'
-            ' summary that says where it stands. Leave a note on what you did, then end your run (`piloop run end`). This session'
+            ' summary that says where it stands. Leave a note on what you did, then stop. This session'
             ' ends in'
         )
         + r' [\d.]+ minutes\.'  # the time left when the tick ran: a loaded host takes seconds of it

@@ -14,8 +14,7 @@ from piloop.db.session import Database
 from piloop.ids import CampaignStatus, TargetKind, TargetRef
 from piloop.plugins.campaign_type.consumers import RolePass
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
-from piloop.plugins.campaign_type.kit.runs.controller import NOT_ENDED
-from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.optimization.trigger.low_yield import LowYield
 from piloop.plugins.campaign_type.optimization.yields import Found, Low, Result, Yield, asked, recent, watch
 from piloop.plugins.escalation.contract import ESCALATION
@@ -41,7 +40,7 @@ def finished(db: Database, campaign: Campaign, *results: Result) -> None:
     for result in results:
         match result:
             case Result.NO_CANDIDATE:
-                add_run(db, campaign, status=RunStatus.FAILED, error=NOT_ENDED, measured=False)
+                add_run(db, campaign, status=RunStatus.FAILED, end=RunEnd.GAVE_UP, measured=False)
             case Result.CRASHED:
                 add_run(db, campaign, status=RunStatus.FAILED, error='agent exit 1', measured=False)
             case Result.SKIPPED:

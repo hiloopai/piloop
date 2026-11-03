@@ -8471,7 +8471,7 @@
           "worker_lost"
         ],
         "title": "RunEnd",
-        "description": "How a run ended. ``runs.error`` adds the detail, when there is one.\n\n``finished``: its worker ended it as submitted (``piloop run end submitted``). ``gave_up``: its worker ended it\nwithout a result (the error says why). ``failed``: its process failed, or ended without ``piloop run end`` (the\nerror says which). ``timed_out``: its role's timeout. ``cancelled``: someone cancelled it. ``campaign_stopped``,\n``daemon_stopped``, ``stale`` (a daemon died while it ran) and ``worker_lost``: something else ended it.\n``role_removed``: ``piloop init`` removed its role while it was queued. ``not_started``: no agent of it started to\nwork. Only the first four are attempts at an idea."
+        "description": "How a run ended. ``runs.error`` adds the detail, when there is one.\n\n``finished``: its worker submitted a version, and ended its run or exited. ``gave_up``: its worker ended it without\na result, or exited without submitting (the error says why, if the worker said). ``failed``: its process failed,\nor the save of what it left unsaved did (the error says which). ``timed_out``: its role's timeout. ``cancelled``: someone cancelled it. ``campaign_stopped``,\n``daemon_stopped``, ``stale`` (a daemon died while it ran) and ``worker_lost``: something else ended it.\n``role_removed``: ``piloop init`` removed its role while it was queued. ``not_started``: no agent of it started to\nwork. Only the first four are attempts at an idea."
       },
       "RunEnding": {
         "type": "string",
@@ -8480,7 +8480,7 @@
           "gave_up"
         ],
         "title": "RunEnding",
-        "description": "How a worker ends its run (``piloop run end``): the only way a run ends before its timeout."
+        "description": "How a worker ends its run (``piloop run end``), before its session exits: a clean exit ends it too."
       },
       "RunStatus": {
         "type": "string",

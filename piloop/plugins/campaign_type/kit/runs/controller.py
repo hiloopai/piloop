@@ -155,7 +155,6 @@ SKIPPED_REASON = 'not evaluated: its version asked to be skipped'
 type Unmeasured = Literal[Origin.RECOVERED, Origin.SKIPPED]
 """A version that the daemon does not measure: its recovered work, or one that asked to be skipped."""
 UNMEASURED_REASONS: Final[dict[Unmeasured, str]] = {Origin.RECOVERED: RECOVERED_REASON, Origin.SKIPPED: SKIPPED_REASON}
-NOT_ENDED = 'its worker stopped without `piloop run end`'
 UNSUBMITTED = 'not submitted: never measured'
 """The reason of a version of a run that its implementer did not submit (``[evaluator] scoring = "submit"``)."""
 UNSAVED = 'what the implementer left unsaved could not be saved, agent_session.work_unsaved has it in the CAS'
@@ -627,7 +626,10 @@ class RunController:
             )
             cancelled = run_cancel(s, run_id) is not None
             unsaved = latest(s, WorkUnsaved, Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
-            scoring = s.get_one(Run, run_id).campaign.config.evaluator.scoring
+            if s.get_one(Run, run_id).campaign.config.evaluator.scoring is Scoring.SUBMIT:
+                sent = bool(submitted(s, run_id))
+            else:
+                sent = any(not v.recovered for v in versions)
         facts = RunFacts(
             ending=ending,
             ended=stop_ended is not None,
@@ -636,8 +638,7 @@ class RunController:
             stop_cut=stop_cut,
             error=outcome.error,
             unsaved=unsaved[1].error if unsaved is not None else None,
-            scoring=scoring,
-            committed=any(not v.recovered for v in versions),
+            submitted=sent,
         )
         end, error = run_outcome(facts)
         self._close(span, run_id, end, error)
@@ -1745,8 +1746,7 @@ class RunController:
         lines += [
             f"- Your idea's directory in the shared workspace: `./{WORKSPACE}/idea<your idea>/`, in no version.",
             "- A note on your idea: INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea',"
-            f" <your idea>, '{author}', 'note', '...'). A run with nothing to submit ends with `piloop run end gave_up"
-            " --reason '…'`.",
+            f" <your idea>, '{author}', 'note', '...').",
             '- What you cannot do or decide yourself: `piloop escalate idea#<your idea> --priority 1`, its form as JSON'
             ' on stdin (`--guide` shows it).',
         ]
@@ -1851,10 +1851,9 @@ class RunFacts:
     """How the implementer's process failed, a timeout included."""
     unsaved: str | None = None
     """Why the save of what the implementer left unsaved failed (``WorkUnsaved``)."""
-    scoring: Scoring = Scoring.SUBMIT
-    """How its campaign scores its runs (``[evaluator] scoring``): only a run of ``submit`` ends with the verb."""
-    committed: bool = False
-    """It saved a version of its own, not only what it left unsaved (``Version.recovered``)."""
+    submitted: bool = False
+    """It submitted a version (``piloop submit``), or, in a campaign that scores every version after the run, it saved
+    one of its own: not only what it left unsaved (``Version.recovered``)."""
 
 
 def run_outcome(facts: RunFacts) -> tuple[RunEnd, str | None]:
@@ -1883,13 +1882,11 @@ def run_outcome(facts: RunFacts) -> tuple[RunEnd, str | None]:
         # What it left unsaved is only in the CAS.
         case RunFacts(unsaved=str() as error):
             return RunEnd.FAILED, f'{UNSAVED}: {error}'
-        # A campaign that scores every version after the run, as 0.5 did: a clean exit after a commit ends the run, as it
-        # did then.
-        case RunFacts(scoring=Scoring.RUN_END, committed=True):
+        # A clean exit ends the run: with what it submitted, or with nothing.
+        case RunFacts(submitted=True):
             return RunEnd.FINISHED, None
-        # It stopped without ending its run.
         case _:
-            return RunEnd.FAILED, NOT_ENDED
+            return RunEnd.GAVE_UP, None
 
 
 def close_run(s: Session, run: Run, end: RunEnd, error: str | None) -> Run:

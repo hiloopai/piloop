@@ -44,7 +44,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.controller import NOT_ENDED, SKIPPED_REASON, RunFinished
+from piloop.plugins.campaign_type.kit.runs.controller import SKIPPED_REASON, RunFinished
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.stop import runs, runs_without_keep
 from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -283,7 +283,7 @@ def test_a_campaign_that_max_runs_stopped_shows_all_its_runs_in_the_progress_lin
     )
     with db.session() as s:
         run = s.get_one(Run, in_flight)
-        run.status, run.end, run.error = RunStatus.FAILED, RunEnd.FAILED, NOT_ENDED
+        run.status, run.end = RunStatus.FAILED, RunEnd.GAVE_UP
         run.finished_at = utcnow()
         s.commit()
     assert (reason(db, campaign), progress_line(db, campaign, cfg)) == (None, 'run 1/2'), 'a run without a commit'
@@ -459,7 +459,7 @@ def test_only_runs_that_produced_a_measured_candidate_count_toward_max_runs(db: 
     whose candidate waits for its measurement also counts.
     """
     configure(db, campaign, max_runs=3)
-    add_run(db, campaign, status=RunStatus.FAILED, error=NOT_ENDED, measured=False)
+    add_run(db, campaign, status=RunStatus.FAILED, end=RunEnd.GAVE_UP, measured=False)
     add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.SKIPPED, SKIPPED_REASON)
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
@@ -481,7 +481,7 @@ def test_plateau_counts_every_finished_attempt_also_one_that_never_reached_the_e
     """
     configure(db, campaign, plateau=4)
     add_run(db, campaign, keep_score=5.0)
-    add_run(db, campaign, status=RunStatus.FAILED, error=NOT_ENDED, measured=False)
+    add_run(db, campaign, status=RunStatus.FAILED, end=RunEnd.GAVE_UP, measured=False)
     add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.SKIPPED, SKIPPED_REASON)
     add_run(db, campaign, status=RunStatus.SUCCEEDED, measured=False)
     assert reason(db, campaign) is None, 'three runs without a keep'

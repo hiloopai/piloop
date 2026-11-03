@@ -94,7 +94,7 @@ an idea goes into the brief of its next run.
 | `decision` | A decision, with the reason and how to revert it. |
 | `escalation` | A question that needs a decision, filed with `piloop escalate`. It always has a priority, and holds no run. |
 
-No kind has a side effect: a run ends only with `piloop run end`, or at its deadline.
+No kind has a side effect: a run ends when its implementer exits or runs `piloop run end`, or at its deadline.
 
 ## Escalations
 

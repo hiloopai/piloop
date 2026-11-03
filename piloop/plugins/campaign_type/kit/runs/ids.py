@@ -38,7 +38,7 @@ FINISHED_RUNS = (RunStatus.SUCCEEDED, *FAILED_RUNS)
 
 
 class RunEnding(StrEnum):
-    """How a worker ends its run (``piloop run end``): the only way a run ends before its timeout."""
+    """How a worker ends its run (``piloop run end``), before its session exits: a clean exit ends it too."""
 
     SUBMITTED = 'submitted'
     """Its work is done: what it saved is its result."""
@@ -49,9 +49,9 @@ class RunEnding(StrEnum):
 class RunEnd(StrEnum):
     """How a run ended. ``runs.error`` adds the detail, when there is one.
 
-    ``finished``: its worker ended it as submitted (``piloop run end submitted``). ``gave_up``: its worker ended it
-    without a result (the error says why). ``failed``: its process failed, or ended without ``piloop run end`` (the
-    error says which). ``timed_out``: its role's timeout. ``cancelled``: someone cancelled it. ``campaign_stopped``,
+    ``finished``: its worker submitted a version, and ended its run or exited. ``gave_up``: its worker ended it without
+    a result, or exited without submitting (the error says why, if the worker said). ``failed``: its process failed,
+    or the save of what it left unsaved did (the error says which). ``timed_out``: its role's timeout. ``cancelled``: someone cancelled it. ``campaign_stopped``,
     ``daemon_stopped``, ``stale`` (a daemon died while it ran) and ``worker_lost``: something else ended it.
     ``role_removed``: ``piloop init`` removed its role while it was queued. ``not_started``: no agent of it started to
     work. Only the first four are attempts at an idea.

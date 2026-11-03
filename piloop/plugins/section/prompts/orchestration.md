@@ -38,8 +38,8 @@ Each command takes `--reason '<why>'`, signs the change with your actor and reco
   records `comment.undelivered` with the error.
 - Nothing is sent twice, and a daemon restart loses nothing: those events are the record.
 - So put the instruction in the first line of the body, and the reasons below it.
-- Only messages are pushed. An escalation or a decision holds no run: a run ends when its implementer ends it, or at
-  its deadline.
+- Only messages are pushed. An escalation or a decision holds no run: a run ends when its implementer exits or ends
+  it, or at its deadline.
 - `piloop prompt <agent_session_id> '<text>'` steers any running agent with a message on the agent itself, which it
   gets in full.
 

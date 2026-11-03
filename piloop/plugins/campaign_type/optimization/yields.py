@@ -22,7 +22,6 @@ from piloop.db.models import Campaign, Comment, Event, EventModel, ReadBy
 from piloop.ids import CampaignStatus, CommentId, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.runs.controller import NOT_ENDED
 from piloop.plugins.campaign_type.kit.runs.ids import FAILED_RUNS, FINISHED_RUNS
 from piloop.plugins.campaign_type.kit.runs.stop import attempt, scored, unsettled
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
@@ -44,7 +43,7 @@ class Result(StrEnum):
     SKIPPED = 'skipped scoring'
     """Its candidates all asked to be skipped (``Piloop-Eval: skip``)."""
     CRASHED = 'crashed'
-    """It failed or timed out without a scored candidate, other than by saving no version."""
+    """It failed or timed out without a scored candidate."""
     NO_CANDIDATE = 'no candidate'
 
 
@@ -138,7 +137,7 @@ class Found:
 def _result() -> ColumnElement[str]:
     """The ``Result`` of a finished attempt."""
     mine = Candidate.run_id == Run.id
-    crashed = Run.end.in_(FAILED_RUNS) & (Run.error.is_(None) | (Run.error != NOT_ENDED))
+    crashed = Run.end.in_(FAILED_RUNS)
     return case(
         (exists().where(mine, Candidate.verdict == Outcome.KEEP), Result.KEPT.value),
         (scored(), Result.SCORED.value),

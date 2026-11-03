@@ -5,7 +5,7 @@ from typing import Literal
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
-from piloop.campaign.ops import Refused, required_reason
+from piloop.campaign.ops import Refused
 from piloop.db.events import emit, latest
 from piloop.db.models import AgentSession, AgentSessionState, Event, EventModel
 from piloop.db.session import write_transaction
@@ -22,7 +22,7 @@ class RunEndRequested(EventModel):
     kind: Literal['run.end_requested'] = 'run.end_requested'
     how: RunEnding
     reason: str | None = None
-    """Why the worker gave up. None for a submit."""
+    """Why the worker gave up, if it said. None for a submit."""
 
 
 def run_of_actor(s: Session, actor: Actor) -> Run:
@@ -51,8 +51,7 @@ def end_run(s: Session, how: RunEnding, reason: str | None, *, actor: Actor) -> 
 
     Raises:
         Refused: the actor has no open run, the daemon is ending the actor, its run is not running or was ended
-            already, ``gave_up`` has no reason, or ``submitted`` comes from a run that submitted nothing
-            (``[evaluator] scoring = "submit"``).
+            already, or ``submitted`` comes from a run that submitted nothing (``[evaluator] scoring = "submit"``).
     """
     write_transaction(s)
     s.expire_all()  # read inside the lock what an earlier read of this session may have cached
@@ -68,12 +67,12 @@ def end_run(s: Session, how: RunEnding, reason: str | None, *, actor: Actor) -> 
     match how, run.campaign.config.evaluator.scoring:
         case RunEnding.SUBMITTED, Scoring.SUBMIT if not submitted(s, run.id):
             raise Refused(
-                f'run#{run.id} submitted nothing: `piloop submit` first, or `piloop run end gave_up --reason "…"`'
-                ' to put its idea back on the board'
+                f'run#{run.id} submitted nothing: `piloop submit` first, or `piloop run end gave_up` to put its idea'
+                ' back on the board'
             )
         case _:
             pass
-    why = required_reason(reason or '') if how is RunEnding.GAVE_UP else None
+    why = ((reason or '').strip() or None) if how is RunEnding.GAVE_UP else None
     emit(s, RunEndRequested(how=how, reason=why), TargetRef(RUN, run.id), actor)
     return run
 

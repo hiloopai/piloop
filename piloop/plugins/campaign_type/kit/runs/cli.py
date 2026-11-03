@@ -56,13 +56,13 @@ def run_end(
     ],
     /,
     *,
-    reason: Annotated[str | None, cyclopts.Parameter(help='Why you give up, with ids. Required with gave_up.')] = None,
+    reason: Annotated[str | None, cyclopts.Parameter(help='Why you give up, with ids.')] = None,
 ) -> None:
-    """End your own run. Only this ends a run before its deadline.
+    """End your own run now, with every process that you started.
 
-    The daemon ends you a moment later, with every process that you started. `submitted` settles your idea as done
-    once your work is judged: in a campaign that scores what you submit, only after a `piloop submit`. `gave_up` puts
-    your idea back on the board, with your reason.
+    Optional: when your session exits, your run ends as `submitted` if it submitted a version, else as `gave_up`.
+    `submitted` settles your idea as done once your work is judged: in a campaign that scores what you submit, only
+    after a `piloop submit`. `gave_up` puts your idea back on the board, with your reason if you give one.
     """
     with RunsClient.connect(daemon_http()) as client:
         run = client.end_run(EndBody(how=how, reason=reason)).run
