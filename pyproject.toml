@@ -159,6 +159,7 @@ proxy = "piloop.plugins.network.proxy:Proxy"
 
 [project.entry-points."piloop.provisioners"]
 modal = "piloop.plugins.provisioner.modal:Modal"
+daytona = "piloop.plugins.provisioner.daytona:Daytona"
 
 [project.entry-points."piloop.vcs"]
 git = "piloop.plugins.vcs.git:Git"
@@ -314,6 +315,7 @@ packages = ["piloop"]
 default-groups = ["dev", "lint"]
 
 [project.optional-dependencies]
+daytona = ["daytona>=0.227"]
 gcs = ["google-cloud-storage>=3.0"]
 modal = ["modal>=1.6"]
 slack = ["slack-sdk>=3.36"]

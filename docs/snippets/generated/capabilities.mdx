@@ -18,7 +18,7 @@
 | network: `NETWORKS` (`piloop.networks`) | host | `[plugins.network] provider` in `config.toml` | `https`: `Https`<br/>`proxy`: `Proxy` |
 | notifier: `NOTIFIERS` (`piloop.notifiers`) | host | `[plugins.notifier.<name>]` | `slack`: `Slack`<br/>`slack_app`: `SlackApp` |
 | price list: `PRICE_LISTS` (`piloop.price_lists`) | pure | `[plugins.price_list] provider` | `genai_prices`: `GenaiPrices` |
-| provisioner: `PROVISIONERS` (`piloop.provisioners`) | host | its name, where the configuration uses it | `modal`: `Modal` |
+| provisioner: `PROVISIONERS` (`piloop.provisioners`) | host | its name, where the configuration uses it | `daytona`: `Daytona`<br/>`modal`: `Modal` |
 | role: `ROLES` (`piloop.roles`) | host | `[plugins.role.<name>]` | `implementer`: `ImplementerRole`<br/>`orchestrator`: `OrchestratorRole` |
 | runtime: `RUNTIMES` (`piloop.runtimes`) | host | `[plugins.runtime.<name>]` in `config.toml` | `docker`: `Docker`<br/>`subprocess`: `Subprocess` |
 | secrets: `SECRETS` (`piloop.secrets`) | host | `[plugins.secrets] provider` in `config.toml` | `local`: `LocalSecrets` |

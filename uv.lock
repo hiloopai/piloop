@@ -1777,6 +1777,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+daytona = [
+    { name = "daytona" },
+]
 gcs = [
     { name = "google-cloud-storage" },
 ]
@@ -1822,6 +1825,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.43.112" },
     { name = "covalence", specifier = "==0.1.0.dev6" },
     { name = "cyclopts", specifier = ">=3.20" },
+    { name = "daytona", marker = "extra == 'daytona'", specifier = ">=0.227" },
     { name = "fastapi", specifier = ">=0.161" },
     { name = "genai-prices", specifier = ">=0.1.13" },
     { name = "gitpython", specifier = ">=3.1.45" },
@@ -1839,7 +1843,7 @@ requires-dist = [
     { name = "textual", specifier = ">=8.2,<9" },
     { name = "uvicorn", specifier = ">=0.54" },
 ]
-provides-extras = ["gcs", "modal", "slack"]
+provides-extras = ["daytona", "gcs", "modal", "slack"]
 
 [package.metadata.requires-dev]
 dev = [

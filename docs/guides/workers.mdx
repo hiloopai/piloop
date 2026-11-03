@@ -168,8 +168,33 @@ registry = { kind = "aws-ecr", secret = "piloop-ecr-pull" }
 ```
 
 `aws-ecr` takes `AWS_ROLE_ARN` and `AWS_REGION` (Modal's OIDC) or an IAM user's keys. `basic` takes
-`REGISTRY_USERNAME` and `REGISTRY_PASSWORD`. The pull Secret is not in the sandbox's environment. The server needs Modal's credentials and `piloop[modal]`. To stop every
-worker of the pool, drain them:
+`REGISTRY_USERNAME` and `REGISTRY_PASSWORD`. The pull Secret is not in the sandbox's environment. The server needs Modal's credentials and `piloop[modal]`.
+
+On Daytona, each worker is a sandbox of a snapshot with `piloop` in it:
+
+```toml
+[plugins.executor.pools.eval]
+agents = 0
+slots = { evaluation = 1 }
+runners = ["process"]
+
+[plugins.executor.pools.eval.provisioner]
+max = 4
+
+[plugins.executor.pools.eval.provisioner.compute]
+provider = "daytona"
+snapshot = "piloop-worker-0.5"
+ttl_hours = 4
+```
+
+A snapshot fixes the size of its sandboxes. In place of `snapshot`, name an `image`, which Daytona builds into a
+snapshot at its first sandbox, and size it with `cpu` (4 at most), `memory_gib` and `disk_gib`. Memory is a hard limit.
+The worker's token goes into a file in the sandbox that its command reads and deletes: Daytona's API shows a sandbox's
+`env`, so put no secret there. `secrets` maps a variable to a Daytona Secret, which the sandbox sees as a placeholder that
+Daytona replaces in requests to the Secret's hosts. Daytona deletes a sandbox after `ttl_hours` (24 by default). A
+server behind Daytona's preview URL uses `tls = "proxy"`. The server needs `DAYTONA_API_KEY` and `piloop[daytona]`.
+
+To stop every worker of the pool, drain them:
 
 ```bash
 piloop limits set executor.pools.gpu.provisioner.max=0 --reason "the GPU budget is spent"
