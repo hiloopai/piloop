@@ -295,12 +295,31 @@ class Plain:
         box.run(f'ls {OUT}/session-*.jsonl | wc -l > {OUT}/sessions')
 
 
-def prepare(box: Box, task: Task) -> str:
-    """Copy the task's repo and data into ``REPO``, make the starting commit, install its deps. Its commit id."""
+def private_files(task: Task, settings: Settings) -> bytes | None:
+    """The task's private split, as a gzipped tar, fetched here, on the driver's machine. None: it has none.
+
+    Raises:
+        ValueError: the task has a private split, but sealed storage holds none of its files.
+    """
+    if not task.private:
+        return None
+    data = sealed_data(f'{task.name}.private', settings)
+    with tarfile.open(fileobj=BytesIO(data)) as tar:
+        if not tar.getmembers():
+            raise ValueError(f'{task.name} has a private split, and <sealed_uri>/{task.name}.private/ is empty')
+    return data
+
+
+def prepare(box: Shell, task: Task, private: bytes | None = None) -> str:
+    """Copy the task's repo, data and private split into ``REPO``, commit it, install its deps. Its commit id."""
     data = f'{OPT}/data/{task.name}'
+    unpack = ''
+    if private is not None:
+        box.write(f'{WORK}/private.tgz', private)
+        unpack = f' && tar xzf {WORK}/private.tgz -C {REPO} && rm {WORK}/private.tgz'
     return box.run(
         f'mkdir -p {REPO} {OUT} && cp -r {OPT}/tasks/{task.name}/repo/. {REPO}/'
-        f' && if [ -d {data} ]; then cp -r {data}/. {REPO}/; fi'
+        f' && if [ -d {data} ]; then cp -r {data}/. {REPO}/; fi{unpack}'
         f' && cd {REPO} && git init -q && git add -A'
         f' && GIT_AUTHOR_DATE={BASE_DATE} GIT_COMMITTER_DATE={BASE_DATE} git commit -qm base'
         ' && if [ -f pyproject.toml ]; then uv sync -q; fi && git rev-parse HEAD',
@@ -353,6 +372,7 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
             run = Plain(task, arm, settings, hours)
             env = dict(arm.env)
     env['EVALS_EVAL_LOG'] = f'{OUT}/{EVALUATIONS}'
+    private = private_files(task, settings)
     with tracer.start_as_current_span('evals.run', attributes={'evals.run': name, 'budget_usd': budget}) as span:
         with tracer.start_as_current_span('evals.sandbox'):
             img = image([task], arm)
@@ -363,7 +383,8 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
                 cpu=r.cpu,
                 memory_mb=r.memory_mb,
                 hours=hours + 1,
-                network=True,
+                network=task.network,
+                memory_limit_mb=task.memory_limit_mb,
                 gpu=gpu,
                 cloud=task.cloud,
                 env=env,
@@ -374,7 +395,7 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
         base, started_at, stopped = '', datetime.now(UTC), 'error: the run failed before its agents started'
         try:
             with tracer.start_as_current_span('evals.prepare'):
-                base = prepare(box, task)
+                base = prepare(box, task, private)
             with tracer.start_as_current_span('evals.selftest'):
                 (out / 'selftest.json').write_text(selftest(box, task, settings).model_dump_json())
             with tracer.start_as_current_span('evals.start'):

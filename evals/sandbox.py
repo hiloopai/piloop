@@ -2,7 +2,8 @@
 
 import shlex
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
+from urllib.parse import urlsplit
 
 import modal
 
@@ -68,6 +69,45 @@ def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
     )
 
 
+Network = Literal['none', 'gateway', 'open']
+"""What a sandbox reaches: nothing (a scorer), the model gateway alone, or anything."""
+
+
+@dataclass(frozen=True)
+class Egress:
+    """The ``modal.Sandbox.create`` keys of a ``Network``."""
+
+    block_network: bool
+    outbound_domain_allowlist: list[str] | None = None
+    """The only hosts it reaches. None: any."""
+
+
+def network_policy(settings: Settings, network: Network) -> Egress:
+    """The egress of ``network``.
+
+    Raises:
+        ValueError: a gateway-only sandbox, without a gateway host to reach.
+    """
+    match network:
+        case 'none':
+            return Egress(block_network=True)
+        case 'open':
+            return Egress(block_network=False)
+        case 'gateway':
+            host = urlsplit(settings.gateway).hostname
+            if not host:
+                raise ValueError(f'EVALS_GATEWAY {settings.gateway!r} names no host for a gateway-only sandbox')
+            return Egress(block_network=False, outbound_domain_allowlist=[host])
+
+
+def memory(request_mb: int, limit_mb: int | None) -> int | tuple[int, int]:
+    """The ``memory`` of a sandbox that asks for ``request_mb``, of a task with ``limit_mb``: reserved and capped."""
+    if limit_mb is None:
+        return request_mb
+    held = max(request_mb, limit_mb)
+    return (held, held)
+
+
 class Shell(Protocol):
     """What the driver does in a sandbox. ``Box`` is one; a test gives a fake."""
 
@@ -97,19 +137,22 @@ class Box:
         cpu: float,
         memory_mb: int,
         hours: float,
-        network: bool,
+        network: Network,
+        memory_limit_mb: int | None = None,
         gpu: str | None = None,
         cloud: str | None = None,
         env: dict[str, str] | None = None,
         **tags: str,
     ) -> Box:
-        """Start a sandbox that lives at most ``hours``. Without ``network``, it reaches nothing outside.
+        """Start a sandbox that lives at most ``hours``, reaching what ``network`` names.
 
-        With ``network``, its environment has ``GATEWAY_TOKEN`` and ``env``, as a secret: never in a command line.
+        One that reaches anything has ``GATEWAY_TOKEN`` and ``env`` in its environment, as a secret: never in a command
+        line. ``memory_limit_mb`` is the task's (``memory``).
         """
         app = modal.App.lookup(settings.modal_app, create_if_missing=True, environment_name=settings.modal_environment)
         own = {'GATEWAY_TOKEN': settings.gateway_token.get_secret_value(), **(env or {})}
-        secrets = [modal.Secret.from_dict(dict(own))] if network else []
+        secrets = [modal.Secret.from_dict(dict(own))] if network != 'none' else []
+        egress = network_policy(settings, network)
         sandbox = modal.Sandbox.create(
             'sleep',
             'infinity',
@@ -117,11 +160,12 @@ class Box:
             image=img,
             secrets=secrets,
             cpu=cpu,
-            memory=memory_mb,
+            memory=memory(memory_mb, memory_limit_mb),
             gpu=gpu,
             cloud=cloud,
             timeout=int(hours * 3600),
-            block_network=not network,
+            block_network=egress.block_network,
+            outbound_domain_allowlist=egress.outbound_domain_allowlist,
             workdir=WORK,
         )
         sandbox.set_tags({'purpose': 'piloop-evals', **tags})

@@ -1,0 +1,15 @@
+name = "optcomp"
+defaultTargets = ["Silmaril"]
+
+[leanOptions]
+autoImplicit = false
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+git = "https://github.com/leanprover-community/mathlib4"
+rev = "1f414401f69059aa7eead47b53ee40bd38455eeb"
+
+[[lean_lib]]
+name = "Silmaril"
+globs = ["Silmaril.+"]

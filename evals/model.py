@@ -45,6 +45,16 @@ class Task(Frozen):
     data: list[str] = []
     """Shell lines that write the dev data into the current directory when the image is built. It is copied into the
     repo, and git ignores it."""
+    network: Literal['open', 'gateway'] = 'open'
+    """What an agent's sandbox reaches. ``gateway``: the model gateway's host alone, for a task whose answers are on
+    the web, so that a run measures the agents and not a search. ``setup`` and ``data`` run when the image is built,
+    with network either way; scoring sandboxes reach nothing."""
+    memory_limit_mb: int | None = Field(default=None, gt=0)
+    """The memory every sandbox of the task reserves and is capped at, or its arm's own request when that is larger.
+    Modal's memory alone is a request, which a sandbox may outgrow until the host kills it. None: a request only."""
+    private: bool = False
+    """The task has a private split: the files of ``<sealed_uri>/<task>.private/``, which the driver copies into the
+    repo before its starting commit. They are in no repository and no image, and no sandbox can read sealed storage."""
     piloop: dict[str, JsonValue]
     """The task's own keys of ``piloop.toml``: its name, evaluator and metrics. An arm adds the rest."""
 

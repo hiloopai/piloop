@@ -20,7 +20,20 @@ import pytest
 from pydantic import JsonValue, SecretStr
 
 from evals import meter
-from evals.drive import HALT, Piloop, Plain, drive, piloop_config, price, sample, sandbox, watch
+from evals.drive import (
+    HALT,
+    REPO,
+    Piloop,
+    Plain,
+    drive,
+    piloop_config,
+    prepare,
+    price,
+    private_files,
+    sample,
+    sandbox,
+    watch,
+)
 from evals.loop import evaluations
 from evals.metrics import at, result
 from evals.model import (
@@ -42,6 +55,7 @@ from evals.model import (
 )
 from evals.pilot import guard, spent
 from evals.report import plain_bar, write
+from evals.sandbox import WORK, Egress, memory, network_policy
 from evals.score import Score, Scoring
 from evals.team import final_keeps, notes, races
 from evals.telemetry import exported
@@ -166,6 +180,7 @@ class FakeBox:
         self.failed: set[str] = set()
         self.closed = False
         self.sandbox = SimpleNamespace(object_id='sb-fake')
+        self.writes: dict[str, bytes] = {}
 
     def run(self, script: str, timeout: float | None = None) -> str:
         self.commands.append(script)
@@ -189,7 +204,7 @@ class FakeBox:
         return json.dumps(self.meter).encode()
 
     def write(self, path: str, data: bytes) -> None:
-        pass
+        self.writes[path] = data
 
     def ended(self) -> bool:
         return False
@@ -627,3 +642,85 @@ def test_a_result_from_an_earlier_round_loads_without_its_removed_fields():
     assert r.curve[0].tokens is None and Sample(hours=0, models_usd=0, compute_usd=0).tokens is None
     with pytest.raises(ValueError, match='extra'):
         Result.model_validate(old | {'unknown': 1})
+
+
+def test_a_gateway_only_sandbox_reaches_the_gateways_host_alone():
+    settings = Settings(gateway='https://gateway.example.com/route')
+    assert network_policy(settings, 'gateway') == Egress(
+        block_network=False, outbound_domain_allowlist=['gateway.example.com']
+    )
+    assert network_policy(settings, 'open') == Egress(block_network=False)
+    assert network_policy(settings, 'none') == Egress(block_network=True)
+    with pytest.raises(ValueError, match='EVALS_GATEWAY'):
+        network_policy(Settings(gateway=''), 'gateway')
+
+
+def test_a_tasks_memory_limit_is_reserved_and_capped():
+    assert memory(4096, None) == 4096
+    assert memory(4096, 12288) == (12288, 12288)
+    assert memory(24576, 12288) == (24576, 24576)
+
+
+def test_only_t6_locks_egress_caps_memory_and_has_a_private_split():
+    t6 = Task.load('t6-optcomp')
+    assert (t6.network, t6.memory_limit_mb, t6.private) == ('gateway', 12288, True)
+    for name in ('t3-airbench', 't4-1brc', 't5-lpaq'):
+        task = Task.load(name)
+        assert (task.network, task.memory_limit_mb, task.private) == ('open', None, False)
+
+
+def test_a_private_split_lands_in_the_base_commit():
+    box = FakeBox(out='abc\n')
+    assert prepare(box, Task.load('t6-optcomp'), private=b'split') == 'abc'
+    assert box.writes == {f'{WORK}/private.tgz': b'split'}
+    script = box.commands[-1]
+    assert script.index(f'tar xzf {WORK}/private.tgz -C {REPO}') < script.index('git add -A')
+
+
+def test_a_private_task_needs_its_split_and_others_fetch_none(monkeypatch: pytest.MonkeyPatch):
+    import evals.drive
+
+    def tar(*names: str) -> bytes:
+        buf = BytesIO()
+        with tarfile.open(fileobj=buf, mode='w:gz') as t:
+            for name in names:
+                info = tarfile.TarInfo(name)
+                info.size = 1
+                t.addfile(info, BytesIO(b'x'))
+        return buf.getvalue()
+
+    fetched: list[str] = []
+    monkeypatch.setattr(evals.drive, 'sealed_data', lambda name, settings: fetched.append(name) or tar())
+    with pytest.raises(ValueError, match='t6-optcomp.private'):
+        private_files(Task.load('t6-optcomp'), Settings())
+    monkeypatch.setattr(evals.drive, 'sealed_data', lambda name, settings: fetched.append(name) or tar('a.lean'))
+    assert private_files(Task.load('t6-optcomp'), Settings()) == tar('a.lean')
+    assert private_files(Task.load('t5-lpaq'), Settings()) is None
+    assert fetched == ['t6-optcomp.private', 't6-optcomp.private']
+
+
+def test_t6_refuses_code_that_runs_or_skips_the_kernel_but_not_a_comment_naming_it():
+    evaluate = module(TASKS / 't6-optcomp' / 'repo' / 'evaluate.py')
+    for bad in (
+        'by native_decide',
+        'axiom cheat : False',
+        'set_option debug.skipKernelTC true in',
+        '#eval IO.println 1',
+    ):
+        assert evaluate.BANNED.search(evaluate.code_of(f'theorem t : True := by\n  trivial\n{bad}\n'))
+    assert not evaluate.BANNED.search(
+        evaluate.code_of('/-- In general it is unsafe: no `native_decide`. -/\n-- #eval\n')
+    )
+
+
+def test_t6_counts_a_private_split_in_proved_and_alone(tmp_path: Path):
+    evaluate = module(TASKS / 't6-optcomp' / 'repo' / 'evaluate.py')
+    axioms = ['Classical.choice', 'Quot.sound', 'propext']
+    public = {'targets': ['a', 'b'], 'protected': {}, 'modules_of': {}, 'standard_axioms': axioms}
+    (tmp_path / 'targets.json').write_text(json.dumps(public))
+    assert evaluate.load_spec(tmp_path)['splits'] == {'public': ['a', 'b']}
+    private = {'split': 'private', 'targets': ['c'], 'protected': {}, 'modules_of': {}, 'standard_axioms': axioms}
+    (tmp_path / 'targets.private.json').write_text(json.dumps(private))
+    spec = evaluate.load_spec(tmp_path)
+    assert spec['targets'] == ['a', 'b', 'c']
+    assert spec['splits'] == {'public': ['a', 'b'], 'private': ['c']}
