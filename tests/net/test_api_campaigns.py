@@ -76,9 +76,8 @@ def test_a_checkout_registers_at_once_the_daemon_measures_its_baseline_and_its_p
             CandidateId(1),
         )
         assert isinstance(added.campaign, CampaignState)
-        head = added.campaign.head
-        assert head is not None and (head.candidate, [t.value for t in head.tracks]) == (added.baseline, [None]), (
-            'the baseline is the head, and nothing measured it yet'
+        assert [(b.candidate, b.value) for b in added.campaign.best] == [(added.baseline, None)], (
+            'the baseline is the best, and nothing measured it yet'
         )
         assert added.documents.line() == 'documents: 0 added, 0 unchanged'
         with measuring(cfg):  # the daemon's next pass, which also follows a restart

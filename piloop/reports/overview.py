@@ -1,7 +1,7 @@
 """The facts of one campaign that its views share, computed from the database.
 
 The sections (``piloop.plugins.section``), the API's status and ``piloop wake`` read them here, so they always say the
-same thing: the summary line, the head's scores, the queue, the live agents and their output, the inbox threads, and the
+same thing: the summary line, the best's scores, the queue, the live agents and their output, the inbox threads, and the
 progress against the stop rule.
 """
 

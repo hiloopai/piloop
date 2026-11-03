@@ -8,15 +8,13 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
-    String,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from piloop.db.models import NOW, Base, Tracked, by_value, text_checks, utcnow
 from piloop.ids import CampaignId, Revision
-from piloop.plugins.campaign_type.kit.candidates.ids import VERDICTED, CandidateId, Cause, Origin, Outcome
-from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
 if TYPE_CHECKING:  # evaluation and runs need candidates: only the relationships name them
@@ -30,10 +28,7 @@ from piloop.db.models import Campaign
 Base.registry.update_type_annotation_map(
     {
         CandidateId: Integer,
-        Cause: by_value(Cause),
         Origin: by_value(Origin),
-        Outcome: by_value(Outcome),
-        TrackName: String,
     }
 )
 
@@ -44,25 +39,20 @@ class Candidate(Tracked, Base):
     The baseline has no run and no parent. A reference has neither (``piloop candidate import`` makes one from the
     tree of any commit, pinned at ``refs/piloop/<campaign>/reference/<id>``). An implementer committed every other candidate,
     and it descends from the candidate that its run started from. When the last commit of a run reverts to its base,
-    the run produces nothing new: the commit resolves to the base candidate. Measurements score candidates, and the
-    verdict judges them against a bar.
+    the run produces nothing new: the commit resolves to the base candidate. Measurements score candidates into the
+    campaign's pool (``piloop.plugins.campaign_type.kit.pool``).
     """
 
     __tablename__ = 'candidates'
     __table_args__ = (
         UniqueConstraint('campaign_id', 'tree_sha'),
-        Index('ix_candidates_campaign_verdict', 'campaign_id', 'verdict'),
         # the candidates of a run (every history row), and the FK action when a run is deleted
         Index('ix_candidates_run', 'run_id'),
         # the FK check on every delete of a candidate (deleting a campaign deletes thousands)
         Index('ix_candidates_parent', 'parent_id'),
-        *text_checks('candidates', nullable=('summary', 'verdict_by', 'verdict_reason', 'track')),
+        *text_checks('candidates', nullable=('summary', 'excluded_reason', 'excluded_by')),
         CheckConstraint(
-            f'verdict IS NULL OR origin IN ({", ".join(repr(o.value) for o in sorted(VERDICTED))})',
-            name='candidates.verdict needs a judged origin',
-        ),
-        CheckConstraint(
-            f"cause IS NULL OR verdict = '{Outcome.INTERESTING}'", name='candidates.cause needs interesting'
+            '(excluded_reason IS NULL) = (excluded_by IS NULL)', name='candidates.an exclusion has its author'
         ),
     )
 
@@ -78,16 +68,11 @@ class Candidate(Tracked, Base):
     summary: Mapped[str | None]
     """The first line of what the version says about itself."""
     origin: Mapped[Origin] = mapped_column(default=Origin.RUN, server_default=Origin.RUN.value)
-    verdict: Mapped[Outcome | None]
-    """The judgement against the candidate's bar. NULL while it is pending, and on a candidate whose origin is not
-    judged."""
-    cause: Mapped[Cause | None]
-    verdict_by: Mapped[str | None]
-    verdict_reason: Mapped[str | None]
-    """The reason of the verdict, for a human."""
-    track: Mapped[TrackName | None]
-    """The track of the daemon's verdict: the best of the tracks that it judged the candidate on. NULL before the daemon
-    judges it, and for a verdict from before it judged on every track: that one is on the track of its run."""
+    excluded_reason: Mapped[str | None]
+    """Why someone excluded it from being best (``piloop candidate exclude``), such as a gamed evaluation. NULL
+    otherwise."""
+    excluded_by: Mapped[str | None]
+    """Who excluded it."""
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
     run: Mapped[Run | None] = relationship(back_populates='candidates', foreign_keys=[run_id])

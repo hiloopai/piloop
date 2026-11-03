@@ -200,7 +200,7 @@ piloop pause REF --reason TEXT [--evals]
 ```
 
 Pauses one campaign. The daemon queues no run, requests no role and launches no requested agent. Running work goes on, and its commits are scored. Nothing is escalated. The daemon still measures what a new evaluator or
-`piloop candidate remeasure` needs, so the pause can end on a measured head. `--evals` holds those measurements too.
+`piloop candidate remeasure` needs, so the pause can end on a measured best. `--evals` holds those measurements too.
 The pause is a state of the campaign in the database (`campaigns.paused`), not a file, so it holds wherever you run the
 command. `piloop status` shows it with the reason. The paused time does not count toward `max_hours`, and no limit of
 the stop rule is checked while paused.
@@ -242,7 +242,7 @@ See [Reopen, fork and retire](/concepts/campaigns#reopen-fork-and-retire).
 piloop campaign fork REF [--at VERSION] [--name NAME]
 ```
 
-Makes a new campaign that starts from `VERSION` of another one, by default its head. See
+Makes a new campaign that starts from `VERSION` of another one, by default its best. See
 [Reopen, fork and retire](/concepts/campaigns#reopen-fork-and-retire).
 
 ### piloop campaign sync
@@ -297,19 +297,22 @@ Adds an `open` idea to the board, where an implementer can claim it. The board l
 ### piloop idea claim
 
 ```text
-piloop idea claim IDEA_ID
+piloop idea claim IDEA_ID [--base CANDIDATE]
 ```
 
 Claims an `open` idea for the caller's run, which tries it until the run ends. Only an implementer claims, once per
-run. An idea that an `after` link holds waits until its prerequisites are `done`.
+run. An idea that an `after` link holds waits until its prerequisites are `done`. With `--base`, the run starts from
+that candidate instead of the best: the caller's checkout moves to it, and its submissions build on it. See
+[Lines and bases](/concepts/pool#lines-and-bases).
 
 ### piloop idea propose
 
 ```text
-piloop idea propose TITLE [--hypothesis TEXT] [--plan TEXT] [--from TEXT] [--track TRACK]
+piloop idea propose TITLE [--hypothesis TEXT] [--plan TEXT] [--from TEXT] [--track TRACK] [--base CANDIDATE]
 ```
 
-Adds an idea of the implementer's own and claims it for its run, in one step, instead of `claim`.
+Adds an idea of the implementer's own and claims it for its run, in one step, instead of `claim`. `--base` is as in
+`claim`.
 
 ### piloop idea status
 
@@ -340,7 +343,7 @@ piloop idea track IDEA_ID TRACK --reason TEXT
 ```
 
 Moves an idea to another track of `piloop.toml`, with a note on the idea that says why. An idea whose run is open
-keeps its track, because the run's commits are judged on it.
+keeps its track, because the run's commits are scored on it.
 
 Each of these commands writes its reason in a note on the idea. The change log records the change, signed with
 `PILOOP_ACTOR`, whether a command or raw SQL made it: `idea.status` and `idea.track` with the old and new value, and `idea.linked` and `idea.unlinked` with the target and the kind.
@@ -351,7 +354,8 @@ Each of these commands writes its reason in a note on the idea. The change log r
 piloop candidate show CANDIDATE_ID
 ```
 
-Prints the candidate's verdict, its metrics beside its parent's under the current evaluator, and each
+Prints where the candidate stands in the pool, why it is excluded if it is, its metrics beside its parent's under the
+current evaluator, and each
 [rung](/concepts/campaigns#the-evaluation-ladder) that it measured: its values, its time and why its climb stopped
 there. `GET /v1/candidates/{candidate}` answers the same as data.
 
@@ -362,7 +366,7 @@ piloop candidate remeasure CANDIDATE_ID [--repeats K]
 ```
 
 Asks the daemon to measure the candidate again with the current evaluator, also on a stopped campaign. See
-[Measure a candidate again](/concepts/verdict#act-on-a-candidate).
+[Act on a candidate](/concepts/pool#act-on-a-candidate).
 
 ### piloop eval queue
 
@@ -371,7 +375,7 @@ piloop eval queue
 ```
 
 Lists the running evaluations, then the waiting ones in the order in which they get a slot. See
-[The evaluation queue](/concepts/verdict#act-on-a-candidate).
+[Act on a candidate](/concepts/pool#act-on-a-candidate).
 
 ### piloop eval cancel
 
@@ -379,8 +383,9 @@ Lists the running evaluations, then the waiting ones in the order in which they 
 piloop eval cancel CANDIDATE_ID
 ```
 
-Cancels the evaluation of a candidate, waiting or running, or a requested remeasure. The candidate gets a crashed
-measurement that names you.
+Cancels the evaluation of a candidate, waiting or running, or a requested remeasure. A cancel records no measurement.
+A run's candidate that has no measurement is `skipped` at once, and is evaluated again only when someone asks
+(`piloop candidate remeasure`).
 
 ### piloop candidate import
 
@@ -389,8 +394,8 @@ piloop candidate import REF COMMIT [--summary TEXT]
 ```
 
 Registers the tree of a commit, branch or tag of the repo as a `reference` candidate, whose change an idea can name.
-The daemon measures it, but never judges it. Once measured, a reference that builds on the head
-can be kept by hand with `piloop candidate verdict`, and is the head then. To import a candidate
+The daemon scores it into the pool with the current evaluator, as any candidate: it may become the best. A run starts
+from it with `piloop idea claim <id> --base <candidate>`. To import a candidate
 of another campaign, fetch its commit into this repo first: `git fetch <its repo> <sha>`.
 
 ### piloop candidate note
@@ -399,18 +404,20 @@ of another campaign, fetch its commit into this repo first: `git fetch <its repo
 piloop candidate note CANDIDATE_ID REASON [--follow-up HUNCH]... [--track TRACK]
 ```
 
-Keeps a measured `discard` or `interesting` candidate in view as a starting point. Each `--follow-up` adds an open
-idea about the candidate. The `candidate.noted` event records the note and its author; `verdict_by` changes only with
-the verdict. See [Notes](/concepts/verdict#act-on-a-candidate).
+Notes why a candidate is worth starting from: a `note` comment on the candidate, signed as `PILOOP_ACTOR`. Each
+`--follow-up` is an open idea about the candidate, whose run can start from it with `--base`. An implementer files no
+follow-ups.
 
-### piloop candidate verdict
+### piloop candidate exclude
 
 ```text
-piloop candidate verdict CANDIDATE_ID keep|interesting|discard|crash --reason TEXT
+piloop candidate exclude CANDIDATE_ID --reason TEXT
 ```
 
-Overrides the judgement of a candidate. The daemon never changes a verdict that it did not set. See
-[Override a verdict](/concepts/verdict#act-on-a-candidate).
+Takes a candidate out of the race for the best, such as one that gamed the evaluation. Its scores stay in the pool,
+and a run may still start from it. The `candidate.excluded_reason` event records the reason, signed as
+`PILOOP_ACTOR`. The baseline cannot be excluded. To take it back, set `excluded_reason` and `excluded_by` to NULL with
+`piloop sql`. See [Act on a candidate](/concepts/pool#act-on-a-candidate).
 
 ### piloop measurement add
 
@@ -420,8 +427,8 @@ piloop measurement add CANDIDATE_ID --report FILE
 
 Records a measurement that you made yourself, under the campaign's current evaluator. `FILE` is JSON:
 `{"metrics": {"<name>": <value>}, "seconds": <s>, "error": "<why>"}`. Every metric of `piloop.toml` is needed unless
-`error` says why the evaluation failed. The command says whether the daemon judges the candidate again. See
-[Add a measurement by hand](/concepts/verdict#act-on-a-candidate).
+`error` says why the evaluation failed. The candidate's mean includes it at once, and the command says where the
+candidate stands now. See [Act on a candidate](/concepts/pool#act-on-a-candidate).
 
 ## Status and the inbox
 
@@ -431,7 +438,7 @@ Records a measurement that you made yourself, under the campaign's current evalu
 piloop status [REF] [--status active|stopped|retired] [--json]
 ```
 
-Prints the daemon's state, then for each campaign the sections of its `[status] sections`: by default the head, the
+Prints the daemon's state, then for each campaign the sections of its `[status] sections`: by default the best, the
 goal, the tracks, the trajectory, the open runs, the queue, the running agents with their last line, the recent
 candidates, the incidents that agents got, the inbox and the recent events. A sweep gets the same sections in its
 brief.
@@ -469,7 +476,7 @@ multiplexer that misreads it. See [Watching a campaign](/guides/watch).
 piloop history [REF]
 ```
 
-Prints the research pack: the metrics, the analysis files, the latest 60 ideas with their outcomes, the kept lineage, the agents' notes and the digests.
+Prints the research pack: the metrics, the analysis files, the latest 60 ideas with their outcomes, the new bests, the agents' notes and the digests.
 
 ### piloop inbox
 
@@ -530,7 +537,7 @@ piloop inbox wait [REF] [--after EVENT_ID] [--timeout SECONDS]
 
 Blocks until something needs the orchestrator, then prints it, one line each, and the command for the next wait. It
 returns for a new inbox item that someone else wrote, a campaign that the daemon stopped,
-an anomaly that the daemon gave to an agent, and the daemon's verdict on a measured candidate. `--after` is the cursor
+an anomaly that the daemon gave to an agent, and a candidate that the daemon scored into the pool. `--after` is the cursor
 that the last wait printed (default: now). `--timeout` (default 1800) is how long to wait before it returns with
 nothing. Set the timeout of your shell tool above it.
 
@@ -650,7 +657,7 @@ piloop run end submitted|gave_up [--reason <why>]
 ```
 
 Ends your own run, as the implementer that works on it. `submitted`: your work is done, and your idea is `done` once
-its commits are judged. `gave_up` needs `--reason`: your idea goes back to `open`. The daemon ends you `end_grace`
+its commits are scored. `gave_up` needs `--reason`: your idea goes back to `open`. The daemon ends you `end_grace`
 later (60 seconds), with every process that you started. Nothing else ends a run before its deadline.
 
 ```text

@@ -1,22 +1,20 @@
 """Execute one run: make a worktree, run the worker, close the run, score its commits and end its claim.
 
 The run closes when its implementer ends, so the implementer slot is free while the daemon measures the commits. The idea stays
-``claimed`` until its candidates are judged, because a dependent idea builds on the keeps of its prerequisites.
+``claimed`` until its candidates are scored.
 """
 
 import json
 import re
-import threading
-from collections import defaultdict
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import ExitStack, closing
-from dataclasses import dataclass, replace
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import ClassVar, Final, Literal, assert_never
+from typing import ClassVar, Literal, assert_never
 
 from covalence import Cid
 from pydantic import ValidationError
@@ -53,6 +51,7 @@ from piloop.db.models import (
     AgentSession,
     AgentSessionState,
     Campaign,
+    Comment,
     Event,
     EventModel,
     Limit,
@@ -60,77 +59,44 @@ from piloop.db.models import (
     utcnow,
 )
 from piloop.db.session import Database, write_transaction
-from piloop.ids import AgentSessionId, CampaignId, Revision, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CampaignId, CommentKind, Revision, RoleName, TargetKind, TargetRef
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, Tracer
 from piloop.plugins import limits
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import queue
-from piloop.plugins.campaign_type.kit.evaluation.config import Metric, Scoring, Track
+from piloop.plugins.campaign_type.kit.evaluation import queue, submissions
+from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId
 from piloop.plugins.campaign_type.kit.evaluation.jobs import (
     EVALUATION,
-    HELD,
-    Bar,
     EvaluationJob,
     InfraFailed,
     Sample,
     record,
-    take_held,
 )
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     Split,
     current_evaluator,
     gate_of,
     measured,
-    noise,
     remeasure_asked,
     score,
     sealed_evaluator,
 )
-from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline, noise_unknown
+from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline
 from piloop.plugins.campaign_type.kit.evaluation.submissions import submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
+from piloop.plugins.campaign_type.kit.pool.due import needs
+from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, baseline, branching, carried, criterion, track_of
+from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
 from piloop.plugins.campaign_type.kit.runs.stop import release
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
-from piloop.plugins.campaign_type.kit.verdicts.judge import (
-    MOVED,
-    CandidateJudged,
-    Evidence,
-    OnTrack,
-    RejudgeFailed,
-    answer_rejudge,
-    bar_of,
-    baseline,
-    case_of,
-    criterion,
-    fallback_track,
-    head,
-    judge_tracks,
-    on_moved,
-    reproposed,
-    short_of_noise,
-    track_of,
-    unjudged,
-    verdict_rule,
-)
-from piloop.plugins.campaign_type.kit.verdicts.verdict import (
-    UNMEASURED,
-    judgeable,
-    label,
-    note,
-    pending,
-    refusal,
-    rejudgeable,
-    write,
-)
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Sealed
 from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.executor.contract import (
     DEADLINE_ENV,
@@ -149,14 +115,8 @@ from piloop.plugins.stop_rule.contract import Stop
 from piloop.plugins.vcs.contract import Pin, Repository, Transfer, Version
 from piloop.settings import AgentSettings, EvaluationSettings, StorageSettings
 
-RECOVERED_REASON = 'recovered: what the implementer of run#{run} left unsaved, never declared ready; not measured'
-CUT_REASON = 'recovered: where run#{run} was when a daemon stop cut it, never declared ready; not measured'
-SKIPPED_REASON = 'not evaluated: its version asked to be skipped'
 type Unmeasured = Literal[Origin.RECOVERED, Origin.SKIPPED]
 """A version that the daemon does not measure: its recovered work, or one that asked to be skipped."""
-UNMEASURED_REASONS: Final[dict[Unmeasured, str]] = {Origin.RECOVERED: RECOVERED_REASON, Origin.SKIPPED: SKIPPED_REASON}
-UNSUBMITTED = 'not submitted: never measured'
-"""The reason of a version of a run that its implementer did not submit (``[evaluator] scoring = "submit"``)."""
 UNSAVED = 'what the implementer left unsaved could not be saved, agent_session.work_unsaved has it in the CAS'
 RUNS = 'runs'
 """The directory under the home of each run's place: ``runs/<id>``, its implementer's log directory and worktree."""
@@ -209,13 +169,13 @@ class Measuring(StrEnum):
     MEASURED = 'measured'
     """A measurement of it is recorded: a score, or a crash."""
     CANCELLED = 'cancelled'
-    """Someone cancelled it (``queue.cancel``): no measurement, and no verdict."""
+    """Someone cancelled it (``queue.cancel``): no measurement."""
     STOPPED = 'daemon_stopped'
     """The daemon stopped: the next one asks again."""
 
 
 type Halted = Literal[Measuring.CANCELLED, Measuring.STOPPED]
-"""Why a run's candidate has no measurement to judge it on."""
+"""Why a run's candidate has no measurement to score it on."""
 
 
 class RunController:
@@ -286,9 +246,6 @@ class RunController:
         self._jobs: dict[int, EvaluationJob] = {}
         """The job of each evaluation that this daemon asked for, by its queue row, until the row goes: a lost one is
         submitted again. A row without one is another daemon's: a reap drops it, and what needs it asks again."""
-        self._heads: defaultdict[CampaignId, threading.Lock] = defaultdict(threading.Lock)
-        """One lock per campaign, around the judgement of a submission against its head: two submissions that beat the
-        head at once are judged one after the other, the second against the first."""
 
     def configure(self) -> None:
         """Hand the executor its config with the live limits applied (``Executor.configure``), when one changed.
@@ -692,7 +649,7 @@ class RunController:
         What the agent left unsaved was saved on its own (``AgentJob.capture``).
 
         The stop owns the run's row. A run that the stop ``cut`` is not an attempt (``ATTEMPTS``), so its
-        commits are not measured: each new one is ``recovered`` (``CUT_REASON``). A run whose implementer had left its
+        commits are not measured: each new one is ``recovered``. A run whose implementer had left its
         worker had ended it was handed off: the stop closed it as its end says, and the next daemon scores the pinned
         commits (``resume``).
         """
@@ -706,11 +663,9 @@ class RunController:
             run = s.get_one(Run, run_id)
             candidate = run.base
             for version in versions:
-                candidate, created = resolve(
+                candidate, _ = resolve(
                     s, run.campaign_id, version, parent=candidate, run_id=run_id, origin=Origin.RECOVERED
                 )
-                if created:
-                    candidate.verdict_reason = CUT_REASON.format(run=run_id)
             s.commit()
 
     def _received(
@@ -765,15 +720,16 @@ class RunController:
             self._settle(run_id, end, last)
 
     def remeasure(self, candidate_id: CandidateId) -> None:
-        """Measure a candidate with the campaign's current evaluator, then judge it again if it is ``rejudgeable``.
+        """Evaluate a candidate with the campaign's current evaluator, as ``pool.due`` asks, then confirm it if due.
 
         Never raises. If the evaluation cannot start, for example because the commit is gone, a crashed measurement is
         recorded. It is a result like any other, so the candidate is not tried again with this evaluator unless someone
-        asks (``ledger.request_remeasure``). What someone asked for is a paired evaluation: ``repeats`` samples, each
-        next to one of its bar's (``bar_of`` its parent). Then a ``crash``, ``discard`` or ``interesting`` that the
-        daemon judged is judged again on the pairs (``_rejudge``), as after ``piloop measurement add``. What runs need,
-        the head and the bars, gets one sample. A baseline that fails and never measured pauses its campaign
-        (``hold_on_failed_baseline``).
+        asks (``request_remeasure``). What someone asked for gets the evaluations that they asked for, and the baseline
+        and the carried best the ones that confirm them (``pool.needs``); anything else gets one. A candidate whose mean now beats the best's,
+        such as a new reference, is confirmed (``_confirm``), and a run's worker hears where its candidate stands
+        (``CandidateScored``). A confirmed candidate that the sealed split is due to score (``Pool.seal_due``) is only
+        scored there. A baseline
+        that fails and never measured pauses its campaign (``hold_on_failed_baseline``).
         """
         with self._db.session() as s:
             candidate = s.get_one(Candidate, candidate_id)
@@ -782,41 +738,41 @@ class RunController:
             evaluator_id = current_evaluator(s, campaign, cfg).id
             s.commit()
             asked = remeasure_asked(s, candidate)
-            parent = candidate.parent
-            # a merge that no run judges is measured as its run would: paired with its head when the track repeats
-            paired = (
-                fallback_track(cfg, candidate.run.idea.track if candidate.run.idea else None).repeats
-                if unjudged(candidate) and candidate.run
-                else None
-            )
-            bar = bar_of(s, parent).id if (asked is not None or paired) and parent is not None else None
-            repeats = (
-                asked.repeats
-                if asked is not None
-                else paired or short_of_noise(s, candidate, evaluator_id, campaign) or 1
-            )
-            campaign_id, revision = campaign.id, candidate.revision
+            firsts = {c.id for c in (baseline(s, campaign), carried(s, campaign)) if c is not None}
+            confirming = candidate.id in firsts
+            repeats = asked.repeats if asked is not None else max(needs(s, campaign, candidate), 1) if confirming else 1
+            visible = asked is not None or confirming or not measured(candidate, evaluator_id)
+            campaign_id, revision, run_id = campaign.id, candidate.revision, candidate.run_id
             vcs, campaign_path = vcs_of(campaign), Path(campaign.path)
         eval_dir = campaign_dir(self._home, campaign_id) / 'measure' / f'{candidate_id}-e{evaluator_id}'
-        with ExitStack() as opened:
-            try:
-                repo = opened.enter_context(closing(vcs.open(campaign_path)))
-                ended = self._measure(
-                    None, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir, bar=bar, repeats=repeats
-                )
-                if ended is not Measuring.MEASURED:
-                    return  # a stop killed the evaluator, or someone cancelled it: there is nothing new to judge
-            except Exception as e:
-                with self._db.session() as s:
-                    error = Sample(metrics={}, seconds=0.0, error=f'{type(e).__name__}: {e}')
-                    record(s, self._units_dir, None, candidate_id, evaluator_id, error)
-                    hold_on_failed_baseline(s, s.get_one(Candidate, candidate_id), None)
-                    s.commit()
-                return
+        try:
+            with closing(vcs.open(campaign_path)):  # a repo that is gone is the candidate's crash, not a job's
+                pass
+            ended = (
+                self._measure(None, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir, repeats=repeats)
+                if visible
+                else Measuring.MEASURED
+            )
+        except Exception as e:  # the thread's last frame: the failure is the candidate's measurement, never lost
             with self._db.session() as s:
-                hold_on_failed_baseline(s, s.get_one(Candidate, candidate_id), eval_dir)
+                error = Sample(metrics={}, seconds=0.0, error=f'{type(e).__name__}: {e}')
+                record(s, self._units_dir, None, candidate_id, evaluator_id, error)
+                hold_on_failed_baseline(s, s.get_one(Candidate, candidate_id), None)
                 s.commit()
-            self._rejudge(candidate_id, repo, eval_dir)
+            return
+        if ended is not Measuring.MEASURED:
+            return  # a stop killed the evaluator, or someone cancelled it: there is nothing new
+        with self._db.session() as s:
+            measured_now = s.get_one(Candidate, candidate_id)
+            hold_on_failed_baseline(s, measured_now, eval_dir)
+            if measured_now.origin in UNSCORED:  # a commit that no run measured enters the pool with its measurement
+                measured_now.origin = Origin.RUN
+            first = measured_now.origin is Origin.BASELINE
+            s.commit()
+        if first or self._confirm(run_id, candidate_id, eval_dir) is not Measuring.MEASURED:
+            return
+        if run_id is not None:
+            self._scored(candidate_id)
 
     def _unsubmitted(
         self, run_id: RunId, campaign_id: CampaignId, repo: Repository, versions: list[Version]
@@ -824,194 +780,125 @@ class RunController:
         """Keep each new version of the run as ``skipped``, and return its newest submission, or None.
 
         A version that it submitted is its submission's candidate. A tree that is a candidate already stays as it is.
-        The submissions settle the run's idea, not a skipped version, which has no verdict. ``_settle`` waits for their
-        verdicts.
+        The submissions settle the run's idea, not a skipped version, which never enters the pool. ``_settle`` waits
+        for their scores.
         """
         with self._db.session() as s:
             run = s.get_one(Run, run_id)
             name, candidate = run.campaign.name, run.base
             for version in versions:
-                candidate, created = resolve(
-                    s, campaign_id, version, parent=candidate, run_id=run_id, origin=Origin.SKIPPED
-                )
-                if created:
-                    candidate.verdict_reason = UNSUBMITTED
+                candidate, _ = resolve(s, campaign_id, version, parent=candidate, run_id=run_id, origin=Origin.SKIPPED)
             s.commit()
             mine = submitted(s, run_id)
         for i, version in enumerate(versions):
             repo.keep(version.revision, run_pin(name, run_id, i))
         return mine[-1] if mine else None
 
-    def judge_submission(self, candidate_id: CandidateId) -> None:
-        """Measure a submitted candidate and what the verdict rule needs, and judge it against the head. Never raises.
+    def score_submission(self, candidate_id: CandidateId) -> None:
+        """Score a submitted candidate into the pool (``_score_one``), and tell where it stands. Never raises.
 
-        The head is the bar: a submission becomes the head only when it beats the head. One that the head moved past
-        while it was measured is measured against the new head too. The sealed split scores it meanwhile, not after the
-        visible split (``_seal``): the verdict comes in the time of the slower of the two. Only a would-be keep records
-        that score. Otherwise its sealed evaluation is cancelled, and what it held is dropped (``_unseal``). A failure
-        is no verdict: the span records it, the candidate stays pending, and the next pass of the daemon judges it
+        A failure is no score: the span records it, the submission waits, and the next pass of the daemon scores it
         again.
         """
         with self._tracer.span('piloop.submission', candidate=candidate_id) as span:
             try:
-                self._judge_submission(candidate_id, span)
+                with self._db.session() as s:
+                    run_id = s.get_one(Candidate, candidate_id).run_id
+                assert run_id is not None  # a submission is a run's candidate
+                eval_dir = self._runs_dir / str(run_id) / f'submission-{candidate_id}'
+                span.set(status=self._score_one(run_id, candidate_id, eval_dir))
             except Exception as e:  # the thread's last frame: what failed goes into the span, never lost
                 span.error(e)
 
-    def _judge_submission(self, candidate_id: CandidateId, span: Span) -> None:
-        with ThreadPoolExecutor(1, thread_name_prefix=f'sealed-{candidate_id}') as pool:
-            sealed = pool.submit(self._seal, candidate_id)
-            try:
-                self._judge_on_head(candidate_id, span, sealed)
-            finally:
-                self._unseal(candidate_id, sealed)
+    def _score_one(self, run_id: RunId, candidate_id: CandidateId, eval_dir: Path) -> Measuring:
+        """Evaluate a run's candidate once, confirm it if its mean beats the best's, and record where it stands.
 
-    def _unseal(self, candidate_id: CandidateId, sealed: Future[None]) -> None:
-        """Cancel the held sealed evaluation of a judged submission (``_seal``), and drop what it held.
-
-        A would-be keep recorded its sealed score already (``_gather``): then there is nothing left to cancel or drop.
-        The cancel comes first, so a running evaluator stops now. A held result is dropped only once the evaluation
-        has ended, so none comes after.
+        The first evaluation may stop at a rung of the ladder, against the best's values there (``EvaluationJob.gate``).
+        A candidate that the current evaluator measured already is not evaluated again: the same tree again says
+        nothing new about it. An evaluator that ``piloop init`` makes meanwhile measures it again. Return how it ended: a stop of the daemon or a cancel records no score.
         """
-        with self.launcher.lock, self._db.session() as s:
-            write_transaction(s)  # the evaluation's end records in one write: it ends before this, or sees the cancel
-            candidate = s.get_one(Candidate, candidate_id)
-            run_id, visible = candidate.run_id, s.get_one(Campaign, candidate.campaign_id).evaluator_id
-            held = select(Evaluation).where(  # its visible evaluations ended with its judgement: what is left is sealed
-                Evaluation.candidate_id == candidate_id,
-                Evaluation.evaluator_id != visible,
-                Evaluation.cancelled_by.is_(None),
+        tried: set[EvaluatorId] = set()  # a climb that stopped at a rung is a measurement too: one per evaluator
+        while True:  # the evaluator now: one that ``piloop init`` made while it was measured measures it again
+            with self._db.session() as s:
+                candidate = s.get_one(Candidate, candidate_id)
+                campaign = s.get_one(Campaign, candidate.campaign_id)
+                cfg = campaign.config
+                evaluator_id = current_evaluator(s, campaign, cfg).id
+                s.commit()
+                best = Pool.of(s, campaign, track_of(cfg, candidate)).best()
+                known = any(m.evaluator_id == evaluator_id for m in candidate.measurements)
+                campaign_id, revision = campaign.id, candidate.revision
+            if known or evaluator_id in tried:
+                break
+            tried.add(evaluator_id)
+            ended = self._measure(
+                run_id, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir / 'eval', gate=best
             )
-            for evaluation in s.scalars(held):
-                if evaluation.started_at is None:
-                    s.delete(evaluation)
-                else:
-                    evaluation.cancelled_by = System.DAEMON.signature
-            s.commit()
-        self.stop_cancelled()
-        try:
-            sealed.result()  # its error goes into the span too
-        finally:
-            for place in (self._runs_dir / str(run_id) / f'submission-{candidate_id}').glob(f'sealed-e*/*/{HELD}'):
-                place.unlink()
+            if ended is not Measuring.MEASURED:
+                return ended
+        if (ended := self._confirm(run_id, candidate_id, eval_dir)) is not Measuring.MEASURED:
+            return ended
+        self._scored(candidate_id)
+        return Measuring.MEASURED
 
-    def _seal(self, candidate_id: CandidateId) -> None:
-        """Score a submitted candidate on the campaign's sealed split, unless it has no sealed split or has a score there.
+    def _confirm(self, run_id: RunId | None, candidate_id: CandidateId, eval_dir: Path) -> Measuring:
+        """Evaluate a candidate until it is confirmed, when its mean beats the best's (``Pool.confirm_due``).
 
-        The evaluation is held (``EvaluationJob.held``): it records nothing. ``_gather`` waits for it, and records what
-        it held for a would-be keep (``_take_held``). Any other verdict cancels it, and drops what it held (``_unseal``).
+        The sealed split scores it meanwhile when it has not (``Pool.seal_due``), and the baseline too when the split has
+        not scored it: the best rule reads both. Return how it ended: ``MEASURED`` also when nothing was due.
         """
         with self._db.session() as s:
             candidate = s.get_one(Candidate, candidate_id)
             campaign = s.get_one(Campaign, candidate.campaign_id)
             cfg = campaign.config
-            hidden = sealed_evaluator(s, campaign, cfg)
+            pool = Pool.of(s, campaign, track_of(cfg, candidate))
+            confirming, sealing_due = pool.confirm_due(candidate_id), pool.seal_due(candidate_id)
+            if not confirming and not sealing_due:
+                return Measuring.MEASURED
+            need = pool.confirm - pool.entries[candidate_id].measured if confirming else 0
+            hidden = sealed_evaluator(s, campaign, cfg) if sealing_due else None
             s.commit()
-            if hidden is None or measured(candidate, hidden.id):
-                return
-            run_id, campaign_id, revision, hidden_id = candidate.run_id, campaign.id, candidate.revision, hidden.id
-        eval_dir = self._held_dir(run_id, candidate_id, hidden_id)
-        self._measure(
-            run_id, campaign_id, cfg, revision, candidate_id, hidden_id, eval_dir, split=Split.SEALED, held=True
-        )
-
-    def _held_dir(self, run_id: RunId | None, candidate_id: CandidateId, evaluator_id: EvaluatorId) -> Path:
-        """The place of a submission's held sealed evaluation (``_seal``) under ``evaluator_id``."""
-        return self._runs_dir / str(run_id) / f'submission-{candidate_id}' / f'sealed-e{evaluator_id}'
-
-    def _take_held(self, run_id: RunId | None, candidate_id: CandidateId, evaluator_id: EvaluatorId) -> None:
-        """Record the samples that the submission's held sealed evaluation left, if any (``take_held``)."""
-        samples = take_held(self._held_dir(run_id, candidate_id, evaluator_id))
-        with self._db.session() as s:
-            for sample in samples:
-                record(s, self._units_dir, run_id, candidate_id, evaluator_id, sample)
-            s.commit()
-
-    def _judge_on_head(self, candidate_id: CandidateId, span: Span, sealed: Future[None]) -> None:
-        with self._db.session() as s:
-            candidate = s.get_one(Candidate, candidate_id)
-            run = candidate.run
-            assert run is not None  # a submission is a run's candidate
-            campaign = s.get_one(Campaign, candidate.campaign_id)
-            run_id, campaign_id, vcs, path = run.id, campaign.id, vcs_of(campaign), Path(campaign.path)
-        eval_dir = self._runs_dir / str(run_id) / f'submission-{candidate_id}'
-        with closing(vcs.open(path)) as repo:
-            while True:
-                with self._db.session() as s:
-                    campaign = s.get_one(Campaign, campaign_id)
-                    candidate = s.get_one(Candidate, candidate_id)
-                    best = head(s, campaign, excluding=candidate) or baseline(s, campaign)
-                    assert best is not None  # a campaign with a run has a baseline
-                    bar_id, judge_now = best.id, pending(candidate)
-                    gate = bar_id if judge_now else None
-                ready = self._ready(
-                    run_id, repo, candidate_id, eval_dir, bar=bar_id, gate=gate, judge_now=judge_now, sealed=sealed
+            first = baseline(s, campaign)
+            sides = [
+                c for c in (candidate, first) if c is not None and hidden is not None and not measured(c, hidden.id)
+            ]
+            seal = [(c.id, c.revision) for c in dict.fromkeys(sides)]
+            campaign_id, revision, evaluator_id = campaign.id, candidate.revision, campaign.evaluator_id
+            hidden_id = hidden.id if hidden is not None else None
+        assert evaluator_id is not None  # a campaign that measured a candidate has an evaluator
+        with ThreadPoolExecutor(1, thread_name_prefix=f'sealed-{candidate_id}') as threads:
+            sealing = [
+                threads.submit(
+                    self._measure,
+                    run_id,
+                    campaign_id,
+                    cfg,
+                    commit,
+                    c,
+                    hidden_id,
+                    eval_dir / f'sealed-{c}',
+                    split=Split.SEALED,
                 )
-                match ready:
-                    case Measuring.STOPPED | Measuring.CANCELLED as halted:
-                        span.set(status=halted)
-                        return
-                    case Scope() as scope:
-                        pass
-                    case never:
-                        assert_never(never)
-                with self._heads[campaign_id]:
-                    with self._db.session() as s:
-                        now = head(s, s.get_one(Campaign, campaign_id), excluding=s.get_one(Candidate, candidate_id))
-                    if now is not None and now.id != bar_id:
-                        continue  # the head moved while it was measured: beat the new one
-                    self._judge(scope, candidate_id, bar_id, span, judge_now=judge_now, unmeasured=None, notes=[])
-                    return
+                for c, commit in seal
+                if hidden_id is not None
+            ]
+            ended = (
+                self._measure(
+                    run_id, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir / 'confirm', repeats=need
+                )
+                if need > 0
+                else Measuring.MEASURED
+            )
+            halted = [h for f in sealing if (h := f.result()) is Measuring.STOPPED]
+        return Measuring.STOPPED if halted else ended
 
-    def rejudge(self, candidate_id: CandidateId) -> None:
-        """Judge again a candidate that someone measured by hand (``ledger.rejudges``), with all its measurements.
-
-        Never raises. When the judgement fails, for example because the repo is gone, a ``RejudgeFailed`` event records
-        the error, and the request is answered, so it is not tried on every pass.
-        """
+    def _scored(self, candidate_id: CandidateId) -> None:
+        """Record where a candidate stands now (``CandidateScored``): its run's worker hears it."""
         with self._db.session() as s:
             candidate = s.get_one(Candidate, candidate_id)
             campaign = s.get_one(Campaign, candidate.campaign_id)
-            campaign_id, vcs, campaign_path = campaign.id, vcs_of(campaign), Path(campaign.path)
-        try:
-            eval_dir = campaign_dir(self._home, campaign_id) / 'measure' / f'{candidate_id}-rejudge'
-            with closing(vcs.open(campaign_path)) as repo:
-                self._rejudge(candidate_id, repo, eval_dir)
-        except Exception as e:
-            with self._db.session() as s:
-                failed = RejudgeFailed(error=f'{type(e).__name__}: {e}')
-                emit(s, failed, TargetRef(CANDIDATE, candidate_id), System.DAEMON)
-                answer_rejudge(s, candidate_id)
-                s.commit()
-            self._tracer.event(failed.kind, candidate=candidate_id, error=str(e))
-
-    def _rejudge(self, candidate_id: CandidateId, repo: Repository, log_dir: Path) -> None:
-        """Judge again a run's candidate that is ``rejudgeable``, now that it has a new measurement.
-
-        It is judged as its run would have judged it (``_judge``): against the bar of its parent, a keep moves the head
-        only while that bar is the head, and else it is rebased onto the head (``_follow``). A crash that crashes again
-        stays a crash. It goes through the same gate first (``_gather``): a would-be keep is scored on the sealed split
-        again, and keeps only where it holds there. A stop meanwhile leaves its verdict as it was.
-        """
-        with self._db.session() as s:
-            candidate = s.get_one(Candidate, candidate_id)
-            run = candidate.run
-            if run is None or not (rejudgeable(candidate) or unjudged(candidate)):
-                answer_rejudge(s, candidate_id)  # its verdict stays: nothing to judge
-                s.commit()
-                return
-            assert candidate.parent is not None  # a run's candidate descends from the run's base
-            scope = Scope.now(s, run, repo)
+            record_scored(s, Pool.of(s, campaign, track_of(campaign.config, candidate)), candidate_id)
             s.commit()
-            bar_id, revision = bar_of(s, candidate.parent).id, candidate.revision
-        with self._tracer.span('piloop.candidate', run=scope.run_id, revision=revision, candidate=candidate_id) as span:
-            if (halted := self._gather(scope, candidate_id, bar_id, log_dir, fresh=True)) is not None:
-                span.set(status=halted)
-                return
-            notes = list(repo.version(revision).notes)
-            judged = self._judge(scope, candidate_id, bar_id, span, judge_now=True, unmeasured=None, notes=notes)
-        if judged.merged is not None:
-            self._follow(scope, judged.merged, log_dir)
 
     def _score(
         self, run_id: RunId, campaign_id: CampaignId, repo: Repository, versions: list[Version], log_dir: Path
@@ -1019,8 +906,8 @@ class RunController:
         """Score the versions of a run that ended, as ``[evaluator] scoring`` says. Return the candidate of its idea.
 
         That candidate settles the run's idea (``release``). ``run_end``: each version, now (``_score_each``).
-        ``submit``: its submissions, which ``judge_submission`` judges as they come; ``_unsubmitted`` keeps the other
-        versions as ``skipped``, and ``_settle`` waits for the verdicts.
+        ``submit``: its submissions, which ``score_submission`` scores as they come; ``_unsubmitted`` keeps the other
+        versions as ``skipped``, and ``_settle`` waits for their scores.
         """
         with self._db.session() as s:
             scoring = s.get_one(Run, run_id).campaign.config.evaluator.scoring
@@ -1034,45 +921,26 @@ class RunController:
                     " section's run_end.md and the vcs part that names them (Part.MARK), and a revision that sets"
                     ' scoring = "submit" where 0078 pinned run_end',
                 )
-                return self._score_each(run_id, campaign_id, repo, versions, log_dir)
+                return self._score_each(run_id, repo, versions, log_dir)
             case never:
                 assert_never(never)
 
     def _score_each(
-        self, run_id: RunId, campaign_id: CampaignId, repo: Repository, versions: list[Version], log_dir: Path
+        self, run_id: RunId, repo: Repository, versions: list[Version], log_dir: Path
     ) -> CandidateId | None:
-        """Turn each new version into a candidate, or find its existing candidate, then measure and judge it.
+        """Turn each new version into a candidate, or find its existing candidate, then score it (``_score_one``).
 
-        Return the id of the newest candidate of the run's versions that got a verdict, or None: none did, or scoring
-        was cancelled. A tree that is already a candidate keeps that candidate, and its verdict unless another run
-        proposes it again (``ledger.reproposed``).
-
-        The daemon judges each candidate with the campaign's config and evaluator at that moment, not at launch, against
-        a bar that the same evaluator measured (``_measure_with_bar``). A run that outlives a config change must not move the campaign back to the old evaluator. All commits are candidates and pinned first, so a
-        commit that waits for the evaluations before it is a ``pending`` candidate, and after a stop, ``resume`` finds
-        all of them. It judges the candidates that the stop left pending, including rebased ones
-        (``_follow``).
-
-        Each candidate is judged on every track, the run's first (``judge_tracks``), against a bar. The bar starts at
-        the bar of the run's base (``ledger.bar_of``). Each keep becomes the new bar. A run keeps on the
-        trunk only while its bar is the head. If the head has moved past the bar, a
-        keep is rebased onto the head and the merge is judged there (``_judge``, ``_follow``). A commit whose tree is
-        already a candidate is that candidate. It is measured only if the current evaluator has not measured it, and it
-        keeps its verdict, unless another run reached it (``ledger.reproposed``): then it is judged again on this
-        run's bar.
-
-        A version that asks to be skipped (``Version.skip``) is not measured: a new candidate is ``skipped``, with no
-        verdict, and moves no bar. So a later version that does not ask, with the same tree, is measured and judged like
-        a new one. Its notes are applied when it is judged (``_judge``). The version the worker saved of the
-        implementer's unsaved work (``Version.recovered``) is not measured either: it is ``recovered``, and the same tree
-        saved later is measured and judged like a new one.
+        Return the id of the newest candidate of the run's versions that has a score, or None: none has, or a stop cut
+        the scoring. Each version is a child of the one before, the first of the run's base. A version that asks to be
+        skipped (``Version.skip``) is not measured: a new candidate is ``skipped``, and never enters the pool. So a
+        later version that does not ask, with the same tree, is measured like a new one. The version the worker saved
+        of the implementer's unsaved work (``Version.recovered``) is not measured either: it is ``recovered``. All
+        commits are candidates and pinned first, so after a stop, ``resume`` finds all of them. A version's
+        ``Piloop-Note`` trailers become notes on its candidate, signed by the run's implementer.
         """
         with self._db.session() as s:
             run = s.get_one(Run, run_id)
-            name = run.campaign.name
-            scope = Scope.now(s, run, repo)
-            bar_id = bar_of(s, run.base).id
-            candidate = run.base
+            name, candidate, campaign_id = run.campaign.name, run.base, run.campaign_id
             ids: list[CandidateId] = []
             for version in versions:
                 candidate, _ = resolve(s, campaign_id, version, parent=candidate, run_id=run_id, origin=Origin.RUN)
@@ -1080,295 +948,48 @@ class RunController:
             s.commit()
         for i, version in enumerate(versions):
             repo.keep(version.revision, run_pin(name, run_id, i))
+        last: CandidateId | None = None
         for i, (version, candidate_id) in enumerate(zip(versions, ids, strict=True)):
-            revision, unmeasured = version.revision, unmeasured_of(version)
-            with self._db.session() as s:
-                scope = Scope.now(s, s.get_one(Run, run_id), repo)
-                s.commit()
-                candidate = s.get_one(Candidate, candidate_id)
-                match candidate.origin:
-                    case Origin.RECOVERED | Origin.SKIPPED as never if candidate.revision == revision:
-                        unmeasured = never  # this very version: its mark, or a cancel of its evaluation, holds
-                    case _:
-                        pass
-                again = candidate.origin in UNMEASURED or reproposed(candidate, s.get_one(Run, run_id))
-                judge_now = pending(candidate) or (unmeasured is None and again)
-                known = measured(candidate, scope.evaluator_id)
-                gate = bar_id if judgeable(candidate) else None
-            with self._tracer.span('piloop.candidate', run=run_id, revision=revision, candidate=candidate_id) as span:
-                if unmeasured is not None:
-                    span.set(status=unmeasured)
-                else:
-                    if known:
-                        span.set(status='known')
-                        self._tracer.event('candidate.known', run=run_id, revision=revision, candidate=candidate_id)
-                    match self._ready(
-                        run_id, repo, candidate_id, log_dir / f'eval-{i}', bar=bar_id, gate=gate, judge_now=judge_now
-                    ):
-                        case Measuring.STOPPED:
-                            span.set(status='cancelled')
-                            return None
-                        case Measuring.CANCELLED:  # no verdict: ``queue.cancel`` made it ``skipped``
-                            span.set(status='skipped')
+            with self._tracer.span(
+                'piloop.candidate', run=run_id, revision=version.revision, candidate=candidate_id
+            ) as span:
+                with self._db.session() as s:
+                    candidate = s.get_one(Candidate, candidate_id)
+                    match unmeasured_of(version):
+                        case Origin() as unmeasured if candidate.run_id == run_id and not candidate.measurements:
+                            candidate.origin = unmeasured
+                            s.commit()
+                            span.set(status=unmeasured)
                             continue
-                        case Scope() as measured_in:
-                            scope = measured_in
-                        case never:
-                            assert_never(never)
-                judged = self._judge(
-                    scope,
-                    candidate_id,
-                    bar_id,
-                    span,
-                    judge_now=judge_now,
-                    unmeasured=unmeasured,
-                    notes=list(version.notes),
-                )
-            if judged.merged is not None and not self._follow(scope, judged.merged, log_dir):
-                return None
-            if judged.advanced:
-                bar_id = candidate_id
-        with self._db.session() as s:
-            shas = [v.revision for v in versions]
-            mine = (
-                Candidate.run_id == run_id,
-                Candidate.origin == Origin.RUN,
-                Candidate.verdict.is_(None),
-                Candidate.revision.not_in(shas),
-            )
-            left = s.scalars(select(Candidate.id).where(*mine).order_by(Candidate.id)).all()
-        for candidate_id in left:  # Rebased candidates that a daemon stop left unjudged.
-            if not self._follow(scope, candidate_id, log_dir):
-                return None
-        with self._db.session() as s:
-            judged = s.scalars(select(Candidate.id).where(Candidate.id.in_(ids), Candidate.verdict.is_not(None)))
-            return max(judged, default=None)
-
-    def _follow(self, scope: Scope, candidate_id: CandidateId, log_dir: Path) -> bool:
-        """Measure a rebased candidate and judge it against its parent, the head it was merged onto.
-
-        If the head moved again and the merge keeps against its parent, the merge is rebased in turn (``_judge``). This
-        repeats until a merge is judged on the head or a merge conflicts. Returns False if the run was cancelled.
-        """
-        current: CandidateId | None = candidate_id
-        while current is not None:
-            with self._db.session() as s:
-                candidate = s.get_one(Candidate, current)
-                revision, parent_id = candidate.revision, candidate.parent_id
-                judge_now = pending(candidate)
-                gate = parent_id if judgeable(candidate) else None
-            assert parent_id is not None  # A rebased candidate's parent is the head it was merged onto.
-            with self._tracer.span('piloop.candidate', run=scope.run_id, revision=revision, candidate=current) as span:
-                span.set(rebased=True)
-                eval_dir = log_dir / f'eval-rebased-{current}'
-                ready = self._ready(
-                    scope.run_id, scope.repo, current, eval_dir, bar=parent_id, gate=gate, judge_now=judge_now
-                )
-                match ready:
+                        case None if candidate.origin in UNSCORED and candidate.revision == version.revision:
+                            span.set(status=candidate.origin)  # this very version: its mark, or a cancel, holds
+                            continue
+                        case _:
+                            if candidate.origin in UNSCORED:
+                                candidate.origin = Origin.RUN  # a tree that was skipped or recovered is measured now
+                            s.commit()
+                match ended := self._score_one(run_id, candidate_id, log_dir / f'eval-{i}'):
                     case Measuring.STOPPED:
                         span.set(status='cancelled')
-                        return False
-                    case Measuring.CANCELLED:  # no verdict: ``queue.cancel`` made it ``skipped``
+                        return None
+                    case Measuring.CANCELLED:  # no score: ``queue.cancel`` made it ``skipped``
                         span.set(status='skipped')
-                        return True
-                    case Scope() as measured_in:
-                        scope = measured_in
+                    case Measuring.MEASURED:
+                        span.set(status=ended)
+                        last = candidate_id
                     case never:
                         assert_never(never)
-                judged = self._judge(scope, current, parent_id, span, judge_now=judge_now, unmeasured=None, notes=[])
-            current = judged.merged
-        return True
-
-    def _measure_with_bar(
-        self,
-        run_id: RunId,
-        repo: Repository,
-        candidate_id: CandidateId,
-        eval_dir: Path,
-        *,
-        bar: CandidateId,
-        gate: CandidateId | None,
-    ) -> Scope | Halted:
-        """Measure a run's candidate and its ``bar``, then return the scope to judge the candidate in.
-
-        Returns how it halted instead when the daemon stopped, or someone cancelled the candidate's evaluation. Each is
-        measured once under the scope's evaluator unless that evaluator measured it already (``measured``), and the bar
-        until it has ``noise_runs`` measurements, whose spread is the noise (``short_of_noise``). The scope is read again
-        after each measurement. So when ``piloop init``
-        registers an evaluator meanwhile, both are measured under the new one: a candidate is never judged under an old
-        evaluator, nor against a bar that its evaluator has not measured. The bar is measured as the scheduler measures
-        the bars of open runs (``remeasure``, ``judge.due``), and a run joins that evaluation when the scheduler queued
-        it first.
-        """
-        tried = set[tuple[CandidateId, EvaluatorId]]()  # a climb that stopped at a rung is not ``measured``
-        while True:
-            with self._db.session() as s:
-                scope = Scope.now(s, s.get_one(Run, run_id), repo)
-                s.commit()
-                both = (s.get_one(Candidate, bar), s.get_one(Candidate, candidate_id))
-                ev = scope.evaluator_id
-                todo = [
-                    c.id
-                    for c in both
-                    if (c.id, ev) not in tried
-                    and (
-                        not measured(c, ev)
-                        or (c.id == bar and short_of_noise(s, c, ev, s.get_one(Campaign, c.campaign_id)))
-                    )
-                ]
-                revision = both[1].revision
-            match todo:
-                case []:
-                    return scope
-                case [first, *_] if first == bar:
-                    tried.add((bar, scope.evaluator_id))
-                    self.remeasure(bar)
-                    if self.launcher.cancelled.is_set():
-                        return Measuring.STOPPED
-                case _:
-                    tried.add((candidate_id, scope.evaluator_id))
-                    ended = self._measure(
-                        run_id,
-                        scope.campaign_id,
-                        scope.cfg,
-                        revision,
-                        candidate_id,
-                        scope.evaluator_id,
-                        eval_dir,
-                        bar=bar if scope.track.repeats else None,
-                        repeats=scope.track.repeats or 1,
-                        gate=gate,
-                    )
-                    if ended is not Measuring.MEASURED:
-                        return ended
-
-    def _ready(
-        self,
-        run_id: RunId,
-        repo: Repository,
-        candidate_id: CandidateId,
-        eval_dir: Path,
-        *,
-        bar: CandidateId,
-        gate: CandidateId | None,
-        judge_now: bool,
-        sealed: Future[None] | None = None,
-    ) -> Scope | Halted:
-        """Measure a run's candidate and its ``bar``, and what the verdict rule needs when it is to be judged now.
-
-        Return the scope to judge it in (``_measure_with_bar``, ``_gather``), or how it halted. ``sealed`` scores the
-        candidate on the sealed split meanwhile (``_seal``).
-        """
-        match measured := self._measure_with_bar(run_id, repo, candidate_id, eval_dir, bar=bar, gate=gate):
-            case Scope() if judge_now:
-                return self._gather(measured, candidate_id, bar, eval_dir, sealed=sealed) or measured
-            case _:
-                return measured
-
-    def _evidence(self, s: Session, scope: Scope, candidate: Candidate, bar: Candidate) -> Evidence:
-        """What the verdict on ``candidate`` against ``bar`` reads beyond them.
-
-        That is the noise of each track's primary over the bar's own measurements, and the sealed split's scores once
-        both sides have one (``_gather``). The noise is the bar's, not the baseline's: it is what the candidate is
-        compared against now, and a head far faster than the baseline is far less noisy. With ``noise_runs`` below 2,
-        or a baseline whose evaluations agree (a deterministic evaluator), the noise is 0: any gain counts. A noise
-        that the bar's evaluations cannot give, because too few succeeded, is left out, and escalated once
-        (``noise_unknown``).
-        """
-        campaign = s.get_one(Campaign, scope.campaign_id)
-        first = baseline(s, campaign)
-        runs = scope.cfg.evaluator.noise_runs
-        found: dict[str, float] = {}
-        for t in scope.cfg.all_tracks:
-            name = t.primary.name
-            if runs < 2 or (first is not None and noise(first, scope.evaluator_id, name) == 0):
-                found[name] = 0.0
-            elif (sigma := noise(bar, scope.evaluator_id, name)) is not None:
-                found[name] = sigma
-            else:
-                noise_unknown(s, campaign, bar, name)
-        hidden = sealed_evaluator(s, campaign, scope.cfg)
-        if hidden is None or not all(measured(c, hidden.id) for c in (candidate, bar)):
-            return Evidence(found)
-        primary = scope.cfg.all_tracks[0].primary
-        return Evidence(found, Sealed(score(candidate, hidden.id, primary), score(bar, hidden.id, primary)))
-
-    def _gather(
-        self,
-        scope: Scope,
-        candidate_id: CandidateId,
-        bar_id: CandidateId,
-        eval_dir: Path,
-        *,
-        fresh: bool = False,
-        sealed: Future[None] | None = None,
-    ) -> Halted | None:
-        """Measure what the verdict rule needs before it judges ``candidate_id`` against ``bar_id``. None when done.
-
-        First the measurements that it asks for (``VerdictRule.samples``), once. Then, for a would-be keep of a
-        campaign with a sealed split, the split's score of the candidate and of the bar that it would replace: the bar
-        is scored there once, and once more when that crashed, a fault of the split, not of the candidate. With
-        ``fresh``, a remeasure's, the candidate is scored on the split again, once, even when it was before. With
-        ``sealed``, the held evaluation that scores the candidate there meanwhile (``_seal``), a would-be keep waits for
-        it first, records what it held, and is not scored there twice.
-        """
-        rule, resampled, resealed, refreshed = verdict_rule(scope.cfg), False, False, not fresh
-        while True:
-            with self._db.session() as s:
-                candidate, bar = s.get_one(Candidate, candidate_id), s.get_one(Candidate, bar_id)
-                evidence = self._evidence(s, scope, candidate, bar)
-                case = case_of(candidate, bar, scope.evaluator_id, scope.cfg, scope.track, self._units_dir, evidence)
-                more = 0 if resampled else rule.samples(case) - case.candidate.measured
-                hidden = sealed_evaluator(s, s.get_one(Campaign, scope.campaign_id), scope.cfg)
-                s.commit()
-                sealing = [
-                    c
-                    for c in (candidate, bar)
-                    if hidden is not None and evidence.sealed is None and not measured(c, hidden.id)
-                ]
-                if evidence.sealed is not None and evidence.sealed.bar is None and not resealed:
-                    sealing, resealed = [bar], True
-                if hidden is not None and not refreshed and candidate not in sealing:
-                    sealing = [candidate, *sealing]
-                revisions = {c.id: c.revision for c in (candidate, bar)}
-            if more > 0:
-                resampled = True
-                paired = bar_id if scope.track.repeats else None
-                ended = self._measure(
-                    scope.run_id,
-                    scope.campaign_id,
-                    scope.cfg,
-                    revisions[candidate_id],
-                    candidate_id,
-                    scope.evaluator_id,
-                    eval_dir,
-                    bar=paired,
-                    repeats=more,
-                )
-                if ended is not Measuring.MEASURED:
-                    return ended
-                continue
-            if not sealing or hidden is None or rule.decide(replace(case, sealed=None)).verdict is not Outcome.KEEP:
-                return None
-            if sealed is not None:
-                sealed.result()
-                sealed = None
-                self._take_held(scope.run_id, candidate_id, hidden.id)
-                continue
-            refreshed = True
-            for c in sealing:
-                ended = self._measure(
-                    scope.run_id,
-                    scope.campaign_id,
-                    scope.cfg,
-                    revisions[c.id],
-                    c.id,
-                    hidden.id,
-                    eval_dir / f'sealed-{c.id}',
-                    split=Split.SEALED,
-                )
-                if ended is not Measuring.MEASURED:
-                    return ended
+            if version.notes:
+                with self._db.session() as s:
+                    by = implementer_of(s, run_id).signature
+                    for why in version.notes:
+                        s.add(
+                            Comment(
+                                target=TargetRef(CANDIDATE, candidate_id), author=by, kind=CommentKind.NOTE, body=why
+                            )
+                        )
+                    s.commit()
+        return last
 
     def _measure(
         self,
@@ -1380,24 +1001,21 @@ class RunController:
         evaluator_id: EvaluatorId,
         eval_dir: Path,
         *,
-        bar: CandidateId | None = None,
         repeats: int = 1,
         gate: CandidateId | None = None,
         split: Split = Split.VISIBLE,
-        held: bool = False,
     ) -> Measuring:
         """Measure ``revision`` on the executor, and wait until its measurement is recorded. Return how it ended.
 
-        With ``bar``, it is a paired evaluation: ``repeats`` samples of ``revision``, each next to one of the bar's
-        (``EvaluationJob.bar``). Without, ``repeats`` samples of ``revision`` alone. With ``gate``, the candidate whose
-        rungs the ladder's stops compare with, the first sample may stop at a rung (``EvaluationJob.gate``): only a run's
-        own version that the daemon may judge. Without, every sample climbs every rung, as what may become a bar must.
+        ``repeats`` samples of ``revision``. With ``gate``, the candidate whose rungs the ladder's stops compare with
+        (the best), the first sample may stop at a rung (``EvaluationJob.gate``): only a run's own version's first
+        evaluation. Without, every sample climbs every rung.
 
         An evaluation that failed for a cause that is not its candidate's records nothing (``InfraFailed``): it waits in
         the queue, where ``piloop eval queue`` lists it and ``piloop eval cancel`` cancels it, and runs again after
         ``[evaluation] infra_retry``, twice as long after each failure up to ``infra_retry_max``. Each failure is an
         event. It ends once it measures, someone cancels it, the daemon stops, or, on the sealed split, a new
-        ``[evaluator] sealed`` replaces its command (``_replaced``): the candidate's next judgement uses the new one.
+        ``[evaluator] sealed`` replaces its command (``_replaced``): the candidate's next confirmation uses the new one.
         """
         failures = 0
         while True:
@@ -1409,11 +1027,9 @@ class RunController:
                 candidate_id,
                 evaluator_id,
                 eval_dir,
-                bar,
                 repeats,
                 gate,
                 split,
-                held,
             ):
                 case InfraFailed(error=error):
                     retry = min(self._evaluation.infra_retry * 2**failures, self._evaluation.infra_retry_max)
@@ -1468,11 +1084,9 @@ class RunController:
         candidate_id: CandidateId,
         evaluator_id: EvaluatorId,
         eval_dir: Path,
-        bar: CandidateId | None,
         repeats: int,
         gate: CandidateId | None,
         split: Split,
-        held: bool = False,
     ) -> Measuring | InfraFailed:
         """Ask for one evaluation (``_measure``), and wait until it leaves the queue. Return how it ended.
 
@@ -1492,10 +1106,6 @@ class RunController:
                 mine = created or (evaluation.started_at is None and evaluation.id not in self._jobs)
                 job = None
                 if mine:
-                    paired = None
-                    if bar is not None:
-                        bar_commit = s.get_one(Candidate, bar).revision
-                        paired = Bar(candidate=bar, artifact=artifact.model_copy(update={'revision': bar_commit}))
                     score = Score.of(cfg.all_tracks[0].primary)
                     job = EvaluationJob(
                         evaluation=evaluation.id,
@@ -1515,7 +1125,6 @@ class RunController:
                         if gate is not None and cfg.ladder
                         else None,
                         stop_grace=self._evaluation.stop_grace_seconds,
-                        bar=paired,
                         repeats=repeats,
                     )
                     match split, cfg.evaluator.sealed:
@@ -1527,7 +1136,6 @@ class RunController:
                                     'ladder': [],
                                     'gate': None,
                                     'sealed': True,
-                                    'held': held,
                                 }
                             )
                         case _:
@@ -1567,126 +1175,6 @@ class RunController:
                 )
         return Measuring.MEASURED
 
-    def _judge(
-        self,
-        scope: Scope,
-        candidate_id: CandidateId,
-        bar_id: CandidateId,
-        span: Span,
-        *,
-        judge_now: bool,
-        unmeasured: Unmeasured | None,
-        notes: list[str],
-    ) -> Judged:
-        """Set the daemon's verdict on a candidate while it is ``judgeable``, if ``judge_now``. Return the result.
-
-        A known candidate keeps its verdict, because the same tree again (a revert) says nothing new about it, unless
-        another run proposes it again (``_score``). ``judgeable`` is read in the transaction that judges, so a keep
-        that another run made meanwhile, of the same tree, stays. An ``unmeasured`` commit gets no verdict: its origin
-        is ``recovered`` or ``skipped`` instead, with the reason of ``UNMEASURED_REASONS``.
-
-        A keep against a bar that is no longer the head stays off the trunk. The head
-        moved while the run worked or while the daemon measured. The candidate becomes ``interesting``
-        (``Cause.MOVED``), and what the verdict rule says follows is done in the same transaction (``ledger.on_moved``):
-        by default its merge onto the head, which is judged next (``Judged.merged``). See ``_verdict``.
-
-        Otherwise the commit's ``Piloop-Note`` ``notes`` are added after the verdict, signed by the run. They turn a
-        discard or an interesting candidate into a noted ``interesting`` (``Cause.NOTE``). A keep or a crash keeps
-        its verdict (``verdict.refusal``).
-        """
-        merged: CandidateId | None = None
-        moved = False
-        with self._db.session() as s:
-            candidate = s.get_one(Candidate, candidate_id)
-            if judge_now and judgeable(candidate):
-                match unmeasured:
-                    case Origin() as origin:
-                        candidate.origin = origin
-                        candidate.verdict_reason = UNMEASURED_REASONS[origin].format(run=scope.run_id)
-                    case None:
-                        leader = head(s, s.get_one(Campaign, candidate.campaign_id), excluding=candidate)
-                        judged, onto = self._verdict(s, scope, candidate, bar_id)
-                        *others, best = judged
-                        cause = Cause.MOVED if onto is not None else None
-                        write(candidate, best.verdict, cause=cause, reason=best.reason, by=System.DAEMON)
-                        candidate.track = best.track.name
-                        if onto is not None:
-                            moved = True
-                            rebased = on_moved(s, scope.cfg, scope.repo, candidate, onto)
-                            merged = rebased.rebased if rebased is not None else None
-                        target = TargetRef(CANDIDATE, candidate_id)
-                        for j in (*others, replace(best, reason=candidate.verdict_reason or best.reason)):
-                            primary = j.track.primary
-                            mine = score(candidate, scope.evaluator_id, primary)
-                            on = CandidateJudged(
-                                verdict=j.verdict,
-                                score=mine,
-                                reason=j.reason,
-                                track=j.track.name,
-                                parent_delta=delta(mine, candidate.parent, scope.evaluator_id, primary),
-                                best_delta=delta(mine, leader, scope.evaluator_id, primary),
-                            )
-                            emit(s, on, target, System.DAEMON)
-                        answer_rejudge(s, candidate_id)
-                        why = '; '.join(notes)
-                        if why and not moved and refusal(candidate, Outcome.INTERESTING, Cause.NOTE) is None:
-                            by = implementer_of(s, scope.run_id)
-                            note(s, candidate, why, by=by)
-                    case _:
-                        assert_never(unmeasured)
-                s.commit()
-            advanced = candidate.verdict is Outcome.KEEP or moved
-            span.set(
-                verdict=label(candidate),
-                summary=candidate.summary,
-                score=score(candidate, scope.evaluator_id, track_of(scope.cfg, candidate).primary),
-            )
-        return Judged(advanced=advanced, merged=merged)
-
-    def _verdict(
-        self, s: Session, scope: Scope, candidate: Candidate, bar_id: CandidateId
-    ) -> tuple[list[OnTrack], Candidate | None]:
-        """Return the verdict on each track against the run's bar, the candidate's own last, and the head to rebase onto.
-
-        Each track judges it (``judge_tracks``), and the candidate has the best verdict. On the trunk, a candidate
-        whose history contains a head that is not the run's bar is judged against the head instead, whatever it scores
-        against the bar: the head may have moved below the bar, by a keep by hand. Else a rebase is needed for a keep
-        against a bar that is no longer the head.
-        """
-        trunk = head(s, s.get_one(Campaign, candidate.campaign_id), excluding=candidate)
-        match trunk:
-            case Candidate() as moved if moved.id != bar_id and scope.repo.contains(candidate.revision, moved.revision):
-                judged = judge_tracks(
-                    candidate,
-                    moved,
-                    scope.evaluator_id,
-                    scope.cfg,
-                    scope.track,
-                    self._units_dir,
-                    self._evidence(s, scope, candidate, moved),
-                )
-                why = f'the head candidate#{moved.id} is in its history: '
-                return [replace(j, reason=why + j.reason) for j in judged], None
-            case _:
-                pass
-        bar = s.get_one(Candidate, bar_id)
-        judged = judge_tracks(
-            candidate,
-            bar,
-            scope.evaluator_id,
-            scope.cfg,
-            scope.track,
-            self._units_dir,
-            self._evidence(s, scope, candidate, bar),
-        )
-        *others, best = judged
-        match best.verdict, trunk:
-            case Outcome.KEEP, Candidate() as moved if moved.id != bar_id:
-                reason = MOVED.format(head=moved.id) + best.reason
-                return [*others, replace(best, verdict=Outcome.INTERESTING, reason=reason)], moved
-            case _:
-                return judged, None
-
     def _close(self, span: Span, run_id: RunId, end: RunEnd, error: str | None) -> None:
         """Record the run's end when its implementer ends, so the slot is free while the commits are scored (``scoring``)."""
         with self.launcher.lock:
@@ -1699,17 +1187,18 @@ class RunController:
         span.set(status=end.status, end=end, error=error)
 
     def _settle(self, run_id: RunId, end: RunEnd, last: CandidateId | None) -> None:
-        """After the run's commits are judged, end its ``scoring`` and its claim (``release``).
+        """After the run's commits are scored, end its ``scoring`` and its claim (``release``).
 
-        ``last`` is the newest candidate of the run's versions that got a verdict: it decides whether the idea is done.
-        It first waits until each submission of the run has its verdict (``judge_submission``), however the run ended:
-        its idea is settled on them. A daemon that stops meanwhile leaves the run ``scoring``, for the next one.
+        ``last`` is the newest candidate of the run's versions that has a score: it decides whether the idea is done.
+        It first waits until each submission of the run is scored (``score_submission``), however the run ended: its
+        idea is settled on them. A daemon that stops meanwhile leaves the run ``scoring``, for the next one.
         """
 
-        def judged(s: Session) -> bool:
-            return not any(pending(s.get_one(Candidate, c)) for c in submitted(s, run_id))
+        def scored(s: Session) -> bool:
+            waiting = {c.id for c in submissions.waiting(s, s.get_one(Run, run_id).campaign)}
+            return waiting.isdisjoint(submitted(s, run_id))
 
-        if not self._db.wait_until(judged, give_up=self.launcher.cancelled.is_set):
+        if not self._db.wait_until(scored, give_up=self.launcher.cancelled.is_set):
             return
         with self.launcher.lock:
             if self.launcher.cancelled.is_set():  # stop() ends the claim; the run's end stands
@@ -1735,14 +1224,9 @@ class RunController:
         lines = [
             f'- Your session ends at `${DEADLINE_ENV}` (Unix time), {round(timeout / 60, 1):g} minutes after it starts.'
             f' You are told to wrap up {round(lead / 60, 1):g} minutes before: start no command that can run past it.',
-            f'- Starting from candidate#{base.id}, the head: {at_base} — {base.summary}',
+            f'- Starting from candidate#{base.id}, the best: {at_base} — {base.summary}',
+            *branching(s, campaign),
         ]
-        if (bar := bar_of(s, base)) is not base:
-            at_bar = ', '.join(f'{t.primary.name}={score(bar, evaluator_id, t.primary)}' for t in cfg.all_tracks)
-            lines.append(
-                f'- candidate#{base.id} is not your bar: your versions are judged against candidate#{bar.id}'
-                f' ({at_bar}).'
-            )
         lines += [
             f"- Your idea's directory in the shared workspace: `./{WORKSPACE}/idea<your idea>/`, in no version.",
             "- A note on your idea: INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea',"
@@ -1754,7 +1238,7 @@ class RunController:
 
 
 def track_brief(idea: Idea) -> str | None:
-    """What the track of a claimed ``idea`` asks of its run, for its worker: the keep rule, then the track's addendum.
+    """What the track of a claimed ``idea`` asks of its run, for its worker: what the best needs, then the addendum.
 
     The brief is written before the claim, so the claim answers this. None with one track: the brief says it all.
     """
@@ -1767,51 +1251,11 @@ def track_brief(idea: Idea) -> str | None:
         for m in track.guardrails
     )
     rule = (
-        f'Your run is on track {track.name}: a keep must improve {track.primary.name} ({track.primary.direction} is'
-        f' better) with confidence and hold {guards}.'
+        f'Your run is on track {track.name}: its best has the best {track.primary.name} ({track.primary.direction} is'
+        f' better), and holds {guards} against the baseline.'
     )
     addendum = (Path(idea.campaign.path) / track.addendum).read_text().rstrip() if track.addendum else ''
     return '\n\n'.join(p for p in (rule, addendum) if p)
-
-
-@dataclass(frozen=True)
-class Scope:
-    """The scope for scoring one candidate of a run: the run, the campaign's config and evaluator now, and the track.
-
-    The track is the claimed idea's, else the first: a run that claimed nothing is judged as on one track.
-    """
-
-    run_id: RunId
-    campaign_id: CampaignId
-    cfg: CampaignConfig
-    track: Track
-    repo: Repository
-    evaluator_id: EvaluatorId
-
-    @classmethod
-    def now(cls, s: Session, run: Run, repo: Repository) -> Scope:
-        """The scope of ``run``'s next candidate, so a candidate scored after ``piloop init`` uses its evaluator."""
-        campaign = run.campaign
-        cfg = campaign.config
-        evaluator = current_evaluator(s, campaign, cfg)
-        return cls(
-            run.id,
-            campaign.id,
-            cfg,
-            fallback_track(cfg, run.idea.track if run.idea is not None else None),
-            repo,
-            evaluator.id,
-        )
-
-
-@dataclass(frozen=True)
-class Judged:
-    """The result of ``_judge``: whether the run's bar moves to the candidate, and the merge to judge next."""
-
-    advanced: bool
-    """It kept against the run's bar, on the trunk or for a rebase. The run's next commit is judged against it."""
-    merged: CandidateId | None
-    """The candidate of its merge onto the head, if it was rebased and the merge is a new tree."""
 
 
 def _last_measurement(s: Session, candidate_id: CandidateId, evaluator_id: EvaluatorId) -> MeasurementId | None:
@@ -1820,12 +1264,6 @@ def _last_measurement(s: Session, candidate_id: CandidateId, evaluator_id: Evalu
         Measurement.candidate_id == candidate_id, Measurement.evaluator_id == evaluator_id
     )
     return s.scalar(found)
-
-
-def delta(mine: float | None, other: Candidate | None, evaluator_id: EvaluatorId, primary: Metric) -> float | None:
-    """How much better ``mine`` is than ``other``'s ``primary``: positive when better. None when either lacks one."""
-    theirs = None if other is None else score(other, evaluator_id, primary)
-    return None if mine is None or theirs is None else primary.gain(mine, theirs)
 
 
 def wrap_up_lead(timeout: float, most: timedelta) -> float:

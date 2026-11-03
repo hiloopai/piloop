@@ -3,7 +3,7 @@
 The daemon asks the role on each pass (``StartsItsAgents.request``), and launches its requested rows as it launches
 every row. The orchestrator answers with its wake-ups (``triggers``): ``run_failed`` requests an agent, and ``news``
 writes a note for the agent, which requests one when none is open (``Steer``). Its agent runs without a run, in a
-checkout of the head, with a brief made from its row.
+checkout of the best, with a brief made from its row.
 """
 
 from datetime import datetime
@@ -22,7 +22,7 @@ from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import AgentSessionId, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.consumers import AGENT_SESSIONS
 from piloop.plugins.campaign_type.kit.evaluation.measure import score
-from piloop.plugins.campaign_type.kit.verdicts.judge import checkout_candidate
+from piloop.plugins.campaign_type.kit.pool.pool import checkout_candidate
 from piloop.plugins.contribution import DaemonHost
 from piloop.plugins.role.contract import PUSHED, Continuity, Wake
 from piloop.plugins.role.orchestrator.news import news
@@ -106,12 +106,12 @@ def place(agent_session_id: AgentSessionId) -> str:
 
 
 def launch(role: OrchestratorRole, host: DaemonHost, agent_session_id: AgentSessionId) -> None:
-    """Run the agent of the requested row ``agent_session_id``, in a worktree at the head, with a brief made from its row.
+    """Run the agent of the requested row ``agent_session_id``, in a worktree at the best, with a brief made from its row.
 
     The brief shows the role's sections (``[plugins.role.orchestrator] sections``). Its ``context`` section ends with the
     agent's lines: the checkout, the workspace, the role's own (``OrchestratorRole.context``), then the notes on the row
     so far, which it gets here and not again. An agent that a failed run woke reads the failures in its sections
-    (``Rendering.given``). Nothing that it commits is scored. In a worktree at the head, the commits are removed with
+    (``Rendering.given``). Nothing that it commits is scored. In a worktree at the best, the commits are removed with
     the worktree when the agent ends.
     """
     controller = host.controller
@@ -141,7 +141,7 @@ def launch(role: OrchestratorRole, host: DaemonHost, agent_session_id: AgentSess
         ).all()
         workspace = workspace_dir(host.home, campaign.id)
         lines = [
-            f'- Your cwd is a detached checkout of candidate#{base.id}, the head ({values}): read and run the'
+            f'- Your cwd is a detached checkout of candidate#{base.id}, the best ({values}): read and run the'
             ' code, try things. Nothing you commit here is scored or kept; it goes with the checkout when you end.',
             f'- Shared workspace for notes and artifacts to other agents: `./{WORKSPACE}/` (not committed). The files'
             ' of a done idea are archived, and removed from it after some days or when the disk is short; `piloop'

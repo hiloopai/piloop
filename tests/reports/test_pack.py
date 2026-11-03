@@ -12,7 +12,7 @@ from piloop.db.session import Database
 from piloop.ids import CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import Yield, source, yields
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
-from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.optimization.pack import OUTLINE_CHARS, pack
 from piloop.plugins.escalation.contract import DECISION
 from tests.conftest import has_lines
@@ -52,7 +52,7 @@ def note(s: Session, campaign: Campaign, author: str, kind: CommentKind, body: s
 
 
 def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Path:
-    """Add ideas from four sources, a keep, a discard, proposals, notes, digests and artifacts."""
+    """Add ideas from four sources, a new best, two others, proposals, notes, digests and artifacts."""
     repo = Path(campaign.path)
     write(
         repo / 'docs' / 'losses.md', '# Where we lose\n## By slice\n```\n# not a heading\n```\n#12 is no heading\n', 2
@@ -64,11 +64,11 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Path:
     write(workspace / 'research' / 'losses-c2.md', '# Losses of candidate#2\n', 5)
     with db.session() as s:
         kept = idea(s, campaign, 'more lines', created_by='orchestrator', priority=1)
-        e2 = scored(s, kept, 1, (Outcome.KEEP, {'score': 3, 'size': 12}, None))
+        e2 = scored(s, kept, 1, ({'score': 3, 'size': 12}, None))
         worse = idea(s, campaign, 'fewer lines', created_by='research#4')
-        scored(s, worse, e2.id, (Outcome.DISCARD, {'score': 2, 'size': 8}, None))
+        scored(s, worse, e2.id, ({'score': 2, 'size': 8}, None))
         odd = idea(s, campaign, 'odd lines', created_by='research#4')
-        scored(s, odd, e2.id, (Outcome.INTERESTING, {'score': 3, 'size': 9}, None))
+        scored(s, odd, e2.id, ({'score': 3, 'size': 9}, None))
         idea(s, campaign, 'pad lines', IdeaStatus.OPEN, created_by='implementer#7', provenance='run#1')
         idea(s, campaign, 'ask the human', IdeaStatus.OPEN, created_by='human')
         idea(s, campaign, 'dropped lines', IdeaStatus.DROPPED, created_by='implementer#3')
@@ -86,7 +86,7 @@ def test_the_pack_of_a_campaign(db: Database, campaign: Campaign, tmp_path: Path
     text = render(db, campaign, workspace)
     has_lines(
         text,
-        '### Research pack: metrics (verdict rule bootstrap, confidence = 0.95; start candidate#1, head candidate#2)',
+        '### Research pack: metrics (best rule baseline; start candidate#1, best candidate#2)',
         '| score | primary | higher | — | — | 1 | 3 | +2 |',
         '| size | watch | lower | — | — | 5 | 12 | -7 |',
         '### Research pack: analysis artifacts (read before proposing; newest first)',
@@ -108,7 +108,7 @@ def test_the_pack_of_a_campaign(db: Database, campaign: Campaign, tmp_path: Path
         '- comment#2 note by orchestrator on campaign#1: digest: best #2 +2 over the start (+1 lines)',
     )
     assert '| #2 | #1 | 3 | +2 | idea#1 (orchestrator) |' in text, (
-        'the lineage shows the gain of each keep and who proposed its idea'
+        'the new bests show the gain of each over its parent and who proposed its idea'
     )
     assert 'not a digest' not in text, "a note by the daemon is neither an agent's report nor a digest"
     assert 'family' not in text and 'seed' not in text, 'the pack has no families and no seeds'
@@ -119,8 +119,8 @@ def test_an_idea_whose_commits_were_all_skipped_is_skipped_not_a_dead_end(
 ) -> None:
     with db.session() as s:
         scaffold = idea(s, campaign, 'scaffold only', created_by='research#4')
-        skipped = scored(s, scaffold, 1, (Outcome.DISCARD, {}, None))
-        skipped.verdict, skipped.origin = None, Origin.SKIPPED
+        skipped = scored(s, scaffold, 1, ({}, None))
+        skipped.origin = Origin.SKIPPED
         s.commit()
     text = render(db, campaign, None)
     assert '| research#4 | — | 2 | scaffold only | skipped (candidate#2) |' in text
@@ -162,20 +162,20 @@ def test_the_pack_is_bounded(db: Database, campaign: Campaign, tmp_path: Path) -
     assert len(pack_only) < 40_000, 'the module docstring promises about 40 KB on top of the history'
 
 
-def test_yields_count_ideas_runs_keeps_and_interesting_per_source(db: Database, campaign: Campaign) -> None:
+def test_yields_count_ideas_runs_and_new_bests_per_source(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
         a = idea(s, campaign, 'a', created_by='research#1')
-        c = scored(s, a, 1, (Outcome.KEEP, {'score': 2, 'size': 1}, None), (Outcome.INTERESTING, {'score': 2}, None))
-        scored(s, a, c.id, (Outcome.KEEP, {'score': 3, 'size': 1}, None))
+        c = scored(s, a, 1, ({'score': 2, 'size': 1}, None), ({'score': 2}, None))
+        scored(s, a, c.id, ({'score': 3, 'size': 1}, None))
         idea(s, campaign, 'b', created_by='research#2')
         d = idea(s, campaign, 'd', created_by='orchestrator')
-        scored(s, d, 1, (Outcome.INTERESTING, {'score': 1}, None))
+        scored(s, d, 1, ({'score': 1}, None))
         s.commit()
         assert yields(s, campaign.id) == [
-            Yield('research', ideas=2, ran=1, keeps=2, interesting=1),
-            Yield('orchestrator', ideas=1, ran=1, keeps=0, interesting=1),
+            Yield('research', ideas=2, ran=1, bests=2),
+            Yield('orchestrator', ideas=1, ran=1, bests=0),
         ]
-    assert Yield('implementer', 3, 2, 1, 0).line() == 'implementer 3 ideas, 2 ran → 1 keep, 0 interesting'
+    assert Yield('implementer', 3, 2, 1).line() == 'implementer 3 ideas, 2 ran → 1 new bests'
 
 
 def test_where_an_idea_comes_from_and_which_roles_file_ideas(campaign_path: Path) -> None:

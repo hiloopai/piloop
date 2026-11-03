@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from piloop.actor import Agent, Person, System
 from piloop.agents.results import PromptOutcome, SessionNotResumed, Unresumed
-from piloop.api.views import CommentNews, CommentView, StoppedNews, VerdictNews
+from piloop.api.views import CommentNews, CommentView, ScoreNews, StoppedNews
 from piloop.campaign import inbox, ops
 from piloop.campaign.stop import request_cancel
 from piloop.cli.main import COMMANDS
@@ -23,8 +23,9 @@ from piloop.db.events import emit, in_order
 from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Outcome
-from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.optimization.section.research_commands import ResearchCommands
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.plugins.role.orchestrator import OrchestratorRole
@@ -250,14 +251,12 @@ def test_news_that_comes_while_a_wake_is_requested_goes_on_that_wake_and_its_bri
 def test_only_an_escalation_or_what_a_person_writes_wakes_it_also_while_the_campaign_is_paused(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, on: None
 ) -> None:
-    """A verdict, an anomaly, the stop or an agent's note waits in the inbox: the lead neither plans nor reviews."""
+    """A score, an anomaly, the stop or an agent's note waits in the inbox: the lead neither plans nor reviews."""
     with db.session() as s:
-        emit(
-            s,
-            CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='score +1'),
-            TargetRef(CANDIDATE, 1),
-            System.DAEMON,
+        scored = CandidateScored(
+            track=TrackName('score'), score=2.0, measured=1, best=CandidateId(1), rank=1, told='the best: score 2.0'
         )
+        emit(s, scored, TargetRef(CANDIDATE, 1), System.DAEMON)
         s.add(Comment(target=TargetRef(TargetKind.CAMPAIGN, campaign.id), author='implementer#9', kind=DECISION, priority=2,
                       body='a progress review'))  # fmt: skip
         s.commit()
@@ -265,10 +264,10 @@ def test_only_an_escalation_or_what_a_person_writes_wakes_it_also_while_the_camp
     with db.session() as s:
         ops.pause(s, campaign.id, evals=False, reason='a person reads the results')
         s.commit()
-    message(db, campaign, 'resume it when the head is measured')
+    message(db, campaign, 'resume it when the best is measured')
     [paused] = wake(db, runtime, tmp_path)
-    assert 'resume it when the head is measured' in brief(tmp_path, paused)
-    assert 'candidate#1 keep: score +1' in brief(tmp_path, paused), 'what waited comes with it'
+    assert 'resume it when the best is measured' in brief(tmp_path, paused)
+    assert 'candidate#1: the best: score 2.0' in brief(tmp_path, paused), 'what waited comes with it'
 
 
 def test_a_failed_orchestrator_leaves_its_news_to_the_next_and_off_is_the_default(
@@ -380,7 +379,7 @@ def test_an_escalation_and_what_a_person_writes_wake_it_and_nothing_else_does() 
         False,
     ]
     assert not wakes(StoppedNews(campaign_name='demo', reason='done'))
-    assert not wakes(VerdictNews(candidate=1, verdict='keep', reason='r'))
+    assert not wakes(ScoreNews(candidate=CandidateId(1), told='the best'))
 
 
 def test_the_orchestrator_prompt_names_no_command_of_a_campaign_type_and_the_types_guide_teaches_them() -> None:

@@ -16,7 +16,7 @@ review the piloop campaign
 The agent follows the `piloop-review` skill. While it reviews, it opens the database read-only and changes nothing in
 the running campaign. It answers four questions, in this order:
 
-1. **Is the result real?** The trajectory of the head, the noise between sibling candidates, and whether the gains
+1. **Is the result real?** The trajectory of the best, the noise between sibling candidates, and whether the gains
    hold on data that no agent tuned against.
 2. **Did any agent game the evaluation?** Edits to frozen files, reads of labels or per-unit results, and tuning
    against the evaluate command.
@@ -28,30 +28,30 @@ items for the decisions that only you can take. It posts the inbox items as `esc
 
 ## By hand
 
-The trajectory of the head and every keep:
+The trajectory of the best and every new best:
 
 ```bash
 piloop status my-campaign
-piloop history my-campaign     # the kept lineage, with the gain of each keep over its parent
+piloop history my-campaign     # the new bests, each with its gain over its parent
 ```
 
 The commit of a candidate, and its diff from its parent:
 
 ```bash
-piloop sql "SELECT revision, summary, verdict_reason FROM candidates WHERE id = 42"
+piloop sql "SELECT revision, summary, excluded_reason FROM candidates WHERE id = 42"
 git show <revision>
 ```
 
-Check that no keep changed a frozen file, such as the evaluate command or the data:
+Check that the best changed no frozen file, such as the evaluate command or the data:
 
 ```bash
-git diff --stat <baseline-sha> <head-sha> -- evaluate.py data/
+git diff --stat <baseline-sha> <best-sha> -- evaluate.py data/
 ```
 
 <Warning>
   An evaluator is defined by the evaluate command, the names and directions of the metrics and the `link` paths, not
   by the contents of `evaluate.py` or of the linked files. An implementer that edits `evaluate.py` changes the score without
-  a new evaluator. Check the diffs of the kept candidates.
+  a new evaluator. Check the diff of the best, and of each candidate that may be best.
 </Warning>
 
 Read the [session](/concepts/roles#sessions) of an agent, its harness's own file:
@@ -67,8 +67,8 @@ Tokens and time for each role and harness:
 piloop sql "SELECT kind, harness, COUNT(*) AS agents, SUM(usage->>'$.total') AS tokens FROM agent_sessions WHERE campaign_id = 1 GROUP BY kind, harness"
 ```
 
-Who changed a verdict or a status, other than the daemon:
+Who excluded a candidate or changed a status, other than the daemon:
 
 ```bash
-piloop sql "SELECT at, actor, kind, payload FROM events WHERE kind IN ('candidate.verdict', 'campaign.status') AND actor != 'daemon'"
+piloop sql "SELECT at, actor, kind, payload FROM events WHERE kind IN ('candidate.excluded_reason', 'campaign.status') AND actor != 'daemon'"
 ```

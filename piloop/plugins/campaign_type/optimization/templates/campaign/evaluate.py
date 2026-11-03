@@ -5,7 +5,7 @@ piloop runs this command (``evaluate`` in ``piloop.toml``) in a clean checkout o
 in ``metrics``, and optionally one line of ``feedback``. piloop reads the line from the pipe that ``PILOOP_RESULT_FILE``
 names. ``status`` is ``ok``, or why nothing counts: ``crash`` or ``timeout`` when the candidate failed, and
 ``infra_error`` when something else failed (a rate limit, a missing input), which piloop runs again later and never
-judges. Be deterministic: use fixed seeds and fixed splits. Make sure the candidate can change the score only through
+scores. Be deterministic: use fixed seeds and fixed splits. Make sure the candidate can change the score only through
 what it is supposed to change.
 
 Per-unit results (optional): add ``units``, each metric's contribution per unit (one record, example or test case), as

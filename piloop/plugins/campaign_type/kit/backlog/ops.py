@@ -1,6 +1,7 @@
 """The operations on the backlog that the API and the CLI run: ideas, claims, links, tracks and statuses."""
 
 from collections.abc import Sequence
+from typing import ClassVar, Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -8,14 +9,17 @@ from sqlalchemy.orm import Session
 from piloop.actor import Actor
 from piloop.agents.roles import files_ideas
 from piloop.campaign.ops import Refused, existing, required_reason
-from piloop.db.models import Campaign, Comment
+from piloop.db.events import emit
+from piloop.db.models import Campaign, Comment, EventModel, ReadBy
 from piloop.db.session import write_lock
 from piloop.ids import CampaignId, CommentKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ideas import holders
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
-from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
+from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN
 from piloop.plugins.campaign_type.kit.runs.ops import run_of_actor
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 
@@ -88,8 +92,10 @@ def _added(
     return idea
 
 
-def claim(s: Session, idea_id: IdeaId, *, actor: Actor) -> Idea:
+def claim(s: Session, idea_id: IdeaId, *, actor: Actor, base: CandidateId | None = None) -> Idea:
     """Claim the open idea for the actor's run: the run works on it, and the idea is ``claimed``. The caller commits.
+
+    With ``base``, the run starts from that candidate instead of the best (``_based``).
 
     A run claims one idea, and the claim ends with the run (``release``). The checks and the write are one write
     transaction, so two runs never claim one idea, and no claim lands after its run ended. The ``idea.status`` event,
@@ -99,7 +105,38 @@ def claim(s: Session, idea_id: IdeaId, *, actor: Actor) -> Idea:
         Refused: ``run_of_actor`` refuses, or ``_claim`` does.
     """
     write_lock(s)
-    return _claim(s, run_of_actor(s, actor), idea_id)
+    run = run_of_actor(s, actor)
+    _based(s, run, base, actor)
+    return _claim(s, run, idea_id)
+
+
+class BaseChosen(EventModel):
+    """A run's worker chose the candidate that the run starts from, instead of the best (``--base``)."""
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['run.base_chosen'] = 'run.base_chosen'
+    candidate: CandidateId
+    was: CandidateId
+    """The candidate that the run started from: the best when it was queued."""
+
+
+def _based(s: Session, run: Run, base: CandidateId | None, actor: Actor) -> None:
+    """Start ``run`` from ``base``, any candidate of its campaign, when one is given. Every candidate has a version.
+
+    A run chooses its base with its claim, before its first submission: a submission is a child of its run's base.
+
+    Raises:
+        Refused: the candidate is missing or of another campaign, or the run claimed an idea already.
+    """
+    if base is None:
+        return
+    candidate = existing(s, Candidate, base, 'candidate')
+    if candidate.campaign_id != run.campaign_id:
+        raise Refused(f'candidate#{candidate.id} is in another campaign than run#{run.id}')
+    if run.idea_id is not None:
+        raise Refused(f'run#{run.id} claimed idea#{run.idea_id} already: a run chooses its base with its claim')
+    was, run.base_candidate_id = run.base_candidate_id, candidate.id
+    emit(s, BaseChosen(candidate=candidate.id, was=was), TargetRef(RUN, run.id), actor)
 
 
 def _claim(s: Session, run: Run, idea_id: IdeaId) -> Idea:
@@ -137,16 +174,19 @@ def propose(
     plan: str | None = None,
     provenance: str | None = None,
     track: TrackName | None = None,
+    base: CandidateId | None = None,
 ) -> Idea:
     """Add an open idea to the board of the actor's run and claim it for the run, in one write transaction.
 
-    A worker's own idea: it files no idea for others (``files``), but it may try one of its own.
+    A worker's own idea: it files no idea for others (``files``), but it may try one of its own. With ``base``, the run
+    starts from that candidate instead of the best (``_based``).
 
     Raises:
         Refused: ``run_of_actor`` or ``_claim`` refuses, or the track is not the campaign's.
     """
     write_lock(s)
     run = run_of_actor(s, actor)
+    _based(s, run, base, actor)
     idea = _added(s, run.campaign, title, actor, hypothesis, plan, provenance, 2, track, ())
     return _claim(s, run, idea.id)
 
@@ -159,8 +199,8 @@ its run."""
 def open_run(idea: Idea) -> Run | None:
     """Return the idea's run that is queued, running or being scored, or None.
 
-    While it is open, the daemon still owns the idea: it settles the idea's status when the run's commits are judged,
-    and it judges them on the idea's track. So only dropping the idea is safe meanwhile.
+    While it is open, the daemon still owns the idea: it settles the idea's status when the run's commits are scored,
+    and it scores them on the idea's track. So only dropping the idea is safe meanwhile.
     """
     return next((r for r in idea.runs if r.status in OPEN_RUNS or r.scoring), None)
 
@@ -278,7 +318,7 @@ def set_track(s: Session, idea_id: IdeaId, track: TrackName, *, reason: str, act
 
     Raises:
         Refused: the reason is blank, the idea is missing, the track is not in ``piloop.toml``, it is the idea's track,
-            or the idea is scheduled or has an open run: the run's commits are judged on the idea's track.
+            or the idea is scheduled or has an open run: the run's commits are scored on the idea's track.
     """
     idea = existing(s, Idea, idea_id, 'idea')
     why = required_reason(reason)
@@ -286,7 +326,7 @@ def set_track(s: Session, idea_id: IdeaId, track: TrackName, *, reason: str, act
     if idea.track == track:
         raise Refused(f'idea#{idea.id} is on track {track} already')
     if (busy := _busy(idea)) is not None:
-        raise Refused(f'idea#{idea.id} {busy}: its commits are judged on track {idea.track}')
+        raise Refused(f'idea#{idea.id} {busy}: its commits are scored on track {idea.track}')
     old = idea.track
     _note(s, idea, f'track {old} → {track}: {why}', actor)
     idea.track = track

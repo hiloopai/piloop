@@ -56,7 +56,7 @@ model = "gpt-6.1-sol"
 # token = { secret = "SLACK_BOT_TOKEN" }  # a secret of this campaign, else of the home
 # app_token = { secret = "SLACK_APP_TOKEN" }  # one Socket Mode connection for each app token, however many campaigns use it
 
-[plugins.role.implementer]                # an implementer claims one idea and tries it in a new worktree of the head; its commits are scored
+[plugins.role.implementer]                # an implementer claims one idea and tries it in a new worktree of the best; its commits are scored
 runs = true                               # its agents do runs; the orchestrator has runs = false
 # harnesses = ["pi", "claude", "codex"]   # if not set: [plugins.harness] use
 # model = { pi = "..." }                  # over the model of each [plugins.harness.<name>]
@@ -73,7 +73,6 @@ max_concurrent = 1                        # the most runs at once; more finish s
 # wrap_up_lead = 600                      # seconds before its timeout that an implementer is told to wrap up
 # end_grace = 60                          # seconds after `piloop run end` before an implementer is ended
 # startup_relaunches = 2                  # new implementers for a run whose implementer failed to start
-# follow_head = "off"                     # "message": a running implementer hears when another run's version is the head
 
 [plugins.role.orchestrator]               # piloop launches the campaign's orchestrator when news arrives for it
 # harnesses = ["claude"]                  # if not set: [plugins.harness] use; it keeps the harness of its last session
@@ -100,10 +99,10 @@ max_concurrent = 1                        # at most 1: two orchestrators would a
 
 [evaluator]                               # how versions are scored, beside evaluate
 # dev = ["uv", "run", "python", "evaluate.py", "--quick"]  # a fast check that implementers run themselves; piloop never runs it
-# sealed = ["python3", "/srv/sealed/score.py"]  # scores a would-be keep on data outside the repo; it must win there too
+# sealed = ["python3", "/srv/sealed/score.py"]  # scores each confirmed candidate on data outside the repo; the best must beat the baseline there
 scoring = "submit"                        # submit: what an implementer submits (piloop submit) · run_end: every commit, after the run
 # submissions = 20                        # the most versions that one run may submit; no cap if not set
-noise_runs = 3                            # evaluations of each bar; the stdev of its score is the noise a gain must exceed
+noise_runs = 3                            # evaluations that confirm a candidate whose first score beats the best's
 
 # [agents]                                # the agents' wrap-up and the brief's budget; if not set: the home's [agents]
 # wrap_up_grace = 600                     # seconds to save their work after a stop or a cancel with --wrap-up
@@ -120,16 +119,15 @@ noise_runs = 3                            # evaluations of each bar; the stdev o
 # provider = "<name>"                     # the other keys of the table are its parameters; `piloop plugins` lists them
 #                                         # a capability of several instances: [plugins.<name>.<instance>] for each
 
-# [plugins.verdict_rule]                  # how a candidate is judged; without the table: noise
-# m = 2                                   # a keep's mean gain over n evaluations must exceed m·σ/√n, σ the noise
-# provider = "bootstrap"                  # instead: a paired bootstrap over units or repeats (keys: confidence)
+# [plugins.best_rule]                     # which confirmed candidates may be best; without the table: baseline
+# provider = "baseline"                   # within each guardrail of the baseline, and better than it on the sealed split
 
 # [plugins.stop_rule]                     # the limits of the built-in rule `limits`; any one ends the campaign; none: no end
-# target = 0.85                           # the primary metric at the head reaches this value (one track only)
+# target = 0.85                           # the primary metric at the best reaches this value (one track only)
 # max_runs = 200                          # runs of every role that reached the evaluator (a scored commit)
 # max_hours = 12                          # hours since the campaign's first run started
 # max_tokens = 50000000                   # tokens that all the agents of the campaign spent together
-# plateau = 50                            # finished runs, scored or not, since the last keep or reactivation
+# plateau = 50                            # finished runs, scored or not, since the last new best or reactivation
 # hold_at = { spend = 1000 }              # facts of the fact sources at which nothing starts; raise one, then `piloop init` again
 
 # [plugins.fact_source]                   # where the facts of the stop rule and the sections come from
@@ -161,22 +159,21 @@ noise_runs = 3                            # evaluations of each bar; the stdev o
 [[metrics]]                               # one entry for each metric that evaluate reports; one primary for each track
 name = "score"
 direction = "higher"                      # higher | lower
-role = "primary"                          # primary: must beat the head · guardrail · watch (the default)
+role = "primary"                          # primary: ranks the pool · guardrail · watch (the default)
 # track = "score"                         # primaries only; the track this metric decides; default: the metric's name
 
-# [[metrics]]                             # a guardrail may get worse by at most `margin` (else interesting) and never past `floor` (else discard)
+# [[metrics]]                             # a best's guardrail is worse than the baseline's by at most `margin`, and never past `floor`
 # name = "latency_ms"
 # direction = "lower"
 # role = "guardrail"
-# margin = 20                             # in the metric's own units, compared with the run's bar
-# fraction = 0.1                         # instead of margin: a fraction of the bar's value (0.1 = 10%)
+# margin = 20                             # in the metric's own units, compared with the baseline
+# fraction = 0.1                         # instead of margin: a fraction of the baseline's value (0.1 = 10%)
 # ratio = { numerator = "cost_usd", denominator = "solved" }  # computed by piloop; keys: numerator, denominator
 # floor = 500                             # optional hard limit on the value
-# repeats = 3                             # a noisy metric (a time): each candidate runs 3 times next to its bar
 
 # [[ladder]]                             # a rung that a run's own version climbs before the full panel, cheapest first
 # name = "screen"                         # evaluate reports it first, as a line with "rung": "screen"
-# stop = { score = { margin = 0.05 } }    # when the climb stops here, with a guardrail's keys: floor, margin, fraction
+# stop = { score = { margin = 0.05 } }    # when the climb stops here, against the best; keys: floor, margin, fraction
 # evaluate = ["uv", "run", "python", "smoke.py"]  # optional: a command of its own that reports this rung; such rungs come first
 
 # [tracks.<name>]                         # experimental: a table for a track that has a brief of its own

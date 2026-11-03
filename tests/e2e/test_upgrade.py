@@ -38,7 +38,7 @@ import tomli_w
 
 from piloop.api.views import CampaignState
 from piloop.db.models import EVENT, LIVE_LEASES, UnknownEvent
-from piloop.plugins.campaign_type.kit.candidates.ids import JUDGED
+from piloop.plugins.campaign_type.kit.candidates.ids import SCORED
 from piloop.plugins.runtime.kit.tags import tagged
 from tests.conftest import wait_until
 from tests.e2e.campaign import CHEAPEST_MODEL, OPEN, ROOT, STATUS, TEMPLATES, Smoke, merged, needs
@@ -66,9 +66,18 @@ RENAMES = Renames(
 """The renames since ``RELEASE`` that the upgrading guide documents: ``agent_sessions.run_id`` (0070), with
 ``subject_kind`` beside it, ``leases.evaluation_id`` (0073), with the lease's ``kind`` and its ``runner`` beside it, and
 the idea states, which optimization revision 0005 maps onto the board. A rename of a later release goes here."""
-DROPPED = {'ideas.family', 'ideas.harness', 'ideas.base_candidate_id', 'ideas.max_runs', 'runs.branch'}
+DROPPED = {
+    'ideas.family',
+    'ideas.harness',
+    'ideas.base_candidate_id',
+    'ideas.max_runs',
+    'runs.branch',
+    *(f'candidates.{c}' for c in ('verdict', 'cause', 'verdict_by', 'verdict_reason', 'track')),
+    'measurements.pair_id',
+}
 """The columns that the upgrading guide documents as removed: an idea's family (optimization 0005), what assigned it
-to a run (0006), and branch runs (0008)."""
+to a run (0006), branch runs (0008), and a candidate's verdict and a measurement's pair (0009): each verdict stays in a
+``candidate.verdict`` event (``test_nothing_of_the_release_is_lost``)."""
 CONFIG_REWRITES = (
     'agents',
     'agents.*',
@@ -88,12 +97,16 @@ CONFIG_REWRITES = (
     'evaluator.noise_runs',
     'plugins.verdict_rule',
     'plugins.verdict_rule.provider',
+    'plugins.role.*.follow_head',
+    'plugins.role.*.sections',
+    'metrics',
 )
 """The keys of the stored ``piloop.toml`` that a migration may change, as patterns: revision 0072 drops the null keys of
 ``agents`` that the release stored, and moves ``agents.finding_grace`` to the implementer's, which 0077 renames
-``end_grace``. 0075 drops the seed trigger and the keys that filed seeds, 0076 the keys that assigned ideas, and 0078
-pins 0.5's scoring. The keys that a later ``piloop init`` stores again, such as each role's defaults, are not a
-migration's."""
+``end_grace``. 0075 drops the seed trigger and the keys that filed seeds, 0076 the keys that assigned ideas, 0078
+pins 0.5's scoring, and 0079 drops the verdict rule, each role's ``follow_head`` and each metric's ``repeats`` (a list:
+``metrics`` as a whole), and renames the section ``judging`` to ``scoring``. The keys that a later ``piloop init``
+stores again, such as each role's defaults, are not a migration's."""
 
 QUEUE = re.compile(r'evaluations#\d+: |home/runs/\d+/eval-\d+/')
 """The evaluation queue, rows and worktrees: a daemon's start empties it, and what still needs a measurement asks
@@ -434,6 +447,17 @@ def test_nothing_of_the_release_is_lost(upgrade: Upgrade) -> None:
     assert lost == [], '\n'.join(lost)
     candidates = {r['revision'] for r in before.tables['candidates']}
     assert candidates <= after.commits, 'every candidate commit is still in the repo'
+    verdicts = {
+        r['__rowid']: r['verdict']
+        for r in before.tables['candidates']
+        if r['verdict'] is not None and ('candidates', r['__rowid']) not in open_rows
+    }
+    logged = {
+        e['target_id']: payload['new']
+        for e in after.tables['events']
+        if (payload := json.loads(str(e['payload'])))['kind'] == 'candidate.verdict'
+    }  # in the order of the events: the latest of each candidate
+    assert {c: logged.get(c) for c in verdicts} == verdicts, 'each verdict of the release stays in the events'
     worktree = next(w for p, w in before.worktrees.items() if p.endswith(f'runs/{upgrade.in_flight}/worktree'))
     kept = after.worktrees.get(worktree.path)
     assert kept is not None and kept.head is not None and worktree.head is not None, after.worktrees
@@ -514,6 +538,7 @@ def test_the_cancel_ends_every_process_of_the_release_agent(upgrade: Upgrade) ->
 
 @needs(test_upgrade_with_an_agent_in_flight)
 def test_the_run_in_flight_is_scored_by_the_new_code(upgrade: Upgrade) -> None:
+    """The run that the release started ends on the new code, which scores each of its commits into the pool."""
     smoke = upgrade.smoke
 
     def done() -> sqlite3.Row | None:
@@ -525,11 +550,14 @@ def test_the_run_in_flight_is_scored_by_the_new_code(upgrade: Upgrade) -> None:
     wait_until(done, timeout=600)
     run = done()
     assert run is not None and run['status'] == 'succeeded', run and dict(run)
-    judged = smoke.sql('SELECT id, origin, verdict FROM candidates WHERE run_id = ?', upgrade.in_flight)
-    assert judged and not any(r['verdict'] is None and r['origin'] in JUDGED for r in judged), [dict(r) for r in judged]
-    print(
-        f'run {upgrade.in_flight} {run["status"]}: ' + ', '.join(f'candidate#{r["id"]} {r["verdict"]}' for r in judged)
+    scored = smoke.sql(
+        "SELECT c.id, c.origin, (SELECT json_extract(e.payload, '$.told') FROM events e"
+        " WHERE e.kind = 'candidate.scored' AND e.target_kind = 'candidate' AND e.target_id = c.id"
+        ' ORDER BY e.id DESC LIMIT 1) AS told FROM candidates c WHERE c.run_id = ?',
+        upgrade.in_flight,
     )
+    assert scored and not any(r['told'] is None and r['origin'] in SCORED for r in scored), [dict(r) for r in scored]
+    print(f'run {upgrade.in_flight} {run["status"]}: ' + ', '.join(f'candidate#{r["id"]} {r["told"]}' for r in scored))
 
 
 @needs(test_the_run_in_flight_is_scored_by_the_new_code)

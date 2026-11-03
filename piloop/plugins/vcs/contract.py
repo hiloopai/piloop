@@ -46,12 +46,6 @@ class Version:
 
 
 @dataclass(frozen=True)
-class Conflicts:
-    """A merge that cannot be made without a human: the paths that both sides changed."""
-
-    paths: tuple[str, ...]
-
-
 class Transfer(BaseModel):
     """Versions in the CAS, in the provider's own format: what ``head`` has beyond the version that a job started from."""
 
@@ -212,18 +206,6 @@ class Repository(Protocol):
         """
         ...
 
-    def merge(self, onto: Revision, other: Revision, message: str) -> Version | Conflicts:
-        """Save the merge of ``other`` onto ``onto`` as a version, without a checkout, or return what conflicts."""
-        ...
-
-    def contains(self, revision: Revision, ancestor: Revision) -> bool:
-        """Whether ``revision`` has all of ``ancestor``: it descends from it, or merging it in changes nothing.
-
-        Raises:
-            VcsError: The repository lacks one of them.
-        """
-        ...
-
     def keep(self, revision: Revision, why: Pin) -> None:
         """Keep ``revision`` for ``why``, also after whatever named it is gone."""
         ...
@@ -232,6 +214,16 @@ class Repository(Protocol):
         """Put the files of ``revision`` at ``path``, where an agent or an evaluator works on them.
 
         A directory left at ``path`` is replaced.
+        """
+        ...
+
+    def switch(self, revision: Revision) -> None:
+        """Move this checkout, an agent's, to ``revision``: its files and the history that it builds on.
+
+        The directory stays, so an agent that works in it goes on there.
+
+        Raises:
+            VcsError: the checkout lacks the revision, or has changes that the move would lose.
         """
         ...
 

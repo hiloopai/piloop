@@ -1,11 +1,11 @@
 [project]
 name = "piloop-min-gain"
 version = "0.1.0"
-description = "A piloop verdict rule that calls the built-in rule and keeps only a gain of at least a fixed size"
+description = "A piloop best rule that calls the built-in rule and lets only a gain of at least a fixed size be best"
 requires-python = ">=3.14"
 dependencies = ["piloop"]
 
-[project.entry-points."piloop.verdict_rules"]
+[project.entry-points."piloop.best_rules"]
 min_gain = "piloop_min_gain:MinGain"
 
 [build-system]

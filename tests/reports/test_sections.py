@@ -128,10 +128,10 @@ def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaig
         assert markdown(sections('measure'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s))) == snapshot("""\
 ## Measure a change
 
-- After your run ends, piloop scores each of its versions on its own, and judges it. Nothing is scored while you work:
+- After your run ends, piloop scores each of its versions on its own. Nothing is scored while you work:
   do not wait for a score.
-- End the message of a commit that scores worse but opens a direction with the trailer `Piloop-Note: <why>`, and its
-  candidate is `interesting`, not a failure. Mark a commit that cannot run at all with `Piloop-Eval: skip`, never one
+- End the message of a commit that scores worse but opens a direction with the trailer `Piloop-Note: <why>`: its
+  candidate gets the note, so that a later run can start from it. Mark a commit that cannot run at all with `Piloop-Eval: skip`, never one
   that you want to keep from a score.\
 """)
     dev = ['uv', 'run', 'evaluate.py', '--n', '50 rows']
@@ -143,14 +143,14 @@ def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaig
 ## Measure a change
 
 - `uv run evaluate.py --n '50 rows'` checks a change fast, in your checkout: piloop never runs it or records it.
-- `piloop submit` scores the version that your checkout is at, on the full evaluation. It returns at once: work on. The verdict and score come as a `[piloop]` message: `keep` makes it the head, `discard` does not beat the head, `crash` did not run.
-- Submit each version that beats your best so far: your run has 2 submissions. Only submitted versions are scored and kept.\
+- `piloop submit` scores the version that your checkout is at, on the full evaluation. It returns at once: work on. Its score comes as a `[piloop]` message, with its gain over its parent, your line's best and the best. A score that beats the best is evaluated again until it is confirmed. Nothing is discarded: every score stays in the pool.
+- Submit each version that beats your best so far: your run has 2 submissions. Only submitted versions are scored.\
 """)
     set_config(db, campaign, evaluator={'scoring': 'submit'})
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         text = markdown(sections('measure'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
-    assert '- Submit each version that beats your best so far. Only submitted versions are scored and kept.' in text, (
+    assert '- Submit each version that beats your best so far. Only submitted versions are scored.' in text, (
         'no cap, and no count'
     )
 
@@ -166,7 +166,7 @@ def test_the_funnel_shows_how_far_the_attempts_got_and_where_the_others_ended(db
     assert text == snapshot("""\
 ## Funnel
 
-ideas: 4 · attempts: 4 · reached the evaluator: 2 · measured: 2 · keeps: 1
+ideas: 4 · attempts: 4 · reached the evaluator: 2 · measured: 2 · new bests: 1
 
 | ended | unmeasured attempts |
 |---|---|
@@ -212,14 +212,14 @@ def test_cost_reads_the_metric_it_names_and_shows_nothing_without_a_spend_or_a_m
     assert text == snapshot("""\
 ## Cost
 
-spend: 412.3 · per keep: 412.3 · since the latest keep: 0
+spend: 412.3 · per new best: 412.3 · since the latest new best: 0
 
 evaluations (size): 5 · per evaluation: 2.5 · without the evaluator: 407.3 · per attempt: 407.3\
 """)
     assert plain == snapshot("""\
 ## Cost
 
-spend: 412.3 · per keep: 412.3 · since the latest keep: 0\
+spend: 412.3 · per new best: 412.3 · since the latest new best: 0\
 """)
 
 
@@ -243,7 +243,7 @@ def test_each_role_has_guides_of_its_own_that_extend_a_shared_list() -> None:
     assert shown == snapshot(
         {
             'implementer': [],
-            'orchestrator': ['database', 'concepts', 'judging', 'comments', 'priorities', 'links', 'research_commands'],
+            'orchestrator': ['database', 'concepts', 'scoring', 'comments', 'priorities', 'links', 'research_commands'],
         }
     )
     assert not any(SECTIONS.providers()[n].model.SHOWN_IN for n in guides()), (
@@ -264,8 +264,8 @@ def test_a_packages_guide_shows_in_every_role_of_its_surface_after_the_roles_own
 def test_a_guide_renders_with_its_campaigns_id_and_primary_metric(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        text = markdown(sections('judging'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
-    assert text.startswith('## Judge results') and f'c.campaign_id = {campaign.id} ' in text and "'$.score'" in text
+        text = markdown(sections('scoring'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
+    assert text.startswith('## Read the pool') and f'c.campaign_id = {campaign.id} ' in text and "'$.score'" in text
 
 
 def test_the_comments_on_an_idea_show_only_in_the_brief_of_its_run(db: Database, campaign: Campaign) -> None:

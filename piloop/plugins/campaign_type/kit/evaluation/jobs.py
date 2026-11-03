@@ -7,11 +7,10 @@ measuring.
 
 import subprocess
 from collections.abc import Sequence
-from enum import StrEnum
 from pathlib import Path
 from typing import ClassVar, Literal, assert_never
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -46,7 +45,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import evaluator_runner
 from piloop.plugins.campaign_type.kit.evaluation.ops import sealed_refused
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
-from piloop.plugins.executor.contract import Applying, Control, Job, JobKind, Report, Settled, Site, Source
+from piloop.plugins.executor.contract import Applying, Control, Job, JobKind, Report, Settled, Site
 from piloop.plugins.executor.kit.jobs import SHOWN, rebuilt
 from piloop.plugins.vcs.contract import UnknownRevision
 from piloop.proc import kill_group
@@ -70,7 +69,7 @@ class InfraError(BaseModel):
 class InfraFailed(EventModel):
     """An evaluation failed for a cause that is not its candidate's (``Failed.infra``): it recorded no measurement.
 
-    The request that waits for it asks for it again (``RunController``), so it never becomes a verdict.
+    The request that waits for it asks for it again (``RunController``), so it never becomes a score.
     """
 
     READ_BY: ClassVar[ReadBy] = ReadBy.READERS
@@ -80,21 +79,10 @@ class InfraFailed(EventModel):
     error: str
 
 
-class Bar(BaseModel):
-    """The bar of a paired evaluation: the candidate that the measured one must beat, and its tree."""
-
-    model_config = ConfigDict(frozen=True)
-
-    candidate: CandidateId
-    artifact: Source
-
-
 class EvaluationJob(Job):
     """The description of an evaluation's job: the evaluator's runner and its arguments, on the candidate's tree.
 
-    It runs the evaluator ``repeats`` times on the candidate. With a ``bar``, it is a **paired evaluation**: each run of
-    the candidate has a run of the bar next to it, in the order candidate, bar, bar, candidate, candidate, bar. So a
-    load that changes slowly hits both sides alike.
+    It runs the evaluator ``repeats`` times on the candidate.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -124,17 +112,11 @@ class EvaluationJob(Job):
     stop_grace: float = Field(default=0, ge=0)
     """The seconds between the SIGTERM and the SIGKILL that end an evaluate command at a stop
     (``[evaluation] stop_grace_seconds``)."""
-    bar: Bar | None = None
-    """The bar to run next to the candidate. None: the candidate alone."""
     repeats: int = Field(default=1, ge=1)
-    """How many times the evaluator runs on the candidate, and on the bar."""
+    """How many times the evaluator runs on the candidate."""
     sealed: bool = False
     """It scores the sealed split (``[evaluator] sealed``): a result of its command that piloop refuses is the setup's
     fault, not the candidate's (``Failed.infra``)."""
-    held: bool = False
-    """Its samples wait in ``HELD`` in its place instead of being recorded, until the daemon records them
-    (``take_held``) or drops them. The sealed split's evaluation of a submission that runs beside the visible one is
-    held: a version that does not keep never records a sealed score."""
 
 
 class Sample(BaseModel):
@@ -161,8 +143,6 @@ class EvaluationReport(Report):
     kind: Literal['evaluation'] = EVALUATION
     samples: list[Sample] = Field(min_length=1)
     """The candidate's samples. The first one ran first."""
-    bar_samples: list[Sample] = Field(default_factory=list)
-    """The bar's samples of a paired evaluation: the i-th ran next to the i-th of ``samples``."""
     infra_error: InfraError | None = None
     """Set when its last run failed for a cause that is not the candidate's (``Failed.infra``): then no sample of it
     counts, and it records no measurement."""
@@ -223,30 +203,12 @@ KIND = Evaluations()
 """The kind, as its entry point names it."""
 
 
-HELD = 'held.json'
-"""The file in the place of a held evaluation's lease that keeps its samples (``EvaluationJob.held``)."""
-SAMPLES = TypeAdapter(list[Sample])
-
-
-def take_held(place: Path) -> list[Sample]:
-    """The samples that a held evaluation left under ``place``, in the place of its lease, which this removes."""
-    samples: list[Sample] = []
-    for path in sorted(place.glob(f'*/{HELD}')):
-        samples += SAMPLES.validate_json(path.read_bytes())
-        path.unlink()
-    return samples
-
-
 def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: Applying) -> None:
     """Record each sample of an evaluation as one measurement, and take the evaluation out of the queue.
 
-    A sample of the full panel of the candidate names the bar's that ran next to it (``Measurement.pair``): the i-th
-    of one side with the i-th of the other. A rung's sample has no pair.
-
     A cancelled evaluation records nothing (``queue.cancel``). Nor does one that ends while the daemon stops: its
     evaluator was killed, and the next daemon measures it again. Nor does an infra error: it emits ``InfraFailed``, and
-    its request asks again. A sealed command whose result piloop refuses escalates too, once (``sealed_refused``). A
-    held evaluation leaves its samples in its place, unrecorded (``EvaluationJob.held``).
+    its request asks again. A sealed command whose result piloop refuses escalates too, once (``sealed_refused``).
     """
     evaluation = s.get(Evaluation, job.evaluation)
     if evaluation is None or evaluation.started_at is None:
@@ -260,23 +222,8 @@ def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: A
         if infra.why is Infra.SEALED:
             sealed_refused(s, s.get_one(Campaign, s.get_one(Candidate, job.candidate).campaign_id), infra.error)
         return
-    if job.held:
-        place = daemon.home / job.place
-        place.mkdir(parents=True, exist_ok=True)
-        (place / HELD).write_bytes(SAMPLES.dump_json(report.samples))
-        return
-    evaluator_id = evaluation.evaluator_id
-    bar = job.bar
-    pairs: list[MeasurementId] = []
-    for b in report.bar_samples:
-        assert bar is not None  # a bar's samples come only from a paired evaluation
-        measurement = record(s, daemon.home / UNITS_DIR, None, bar.candidate, evaluator_id, b)
-        if b.rung is None:
-            pairs.append(measurement)
-    pending = iter(pairs)
     for sample in report.samples:
-        pair = next(pending, None) if sample.rung is None else None
-        record(s, daemon.home / UNITS_DIR, job.run, job.candidate, evaluator_id, sample, pair=pair)
+        record(s, daemon.home / UNITS_DIR, job.run, job.candidate, evaluation.evaluator_id, sample)
 
 
 def record(
@@ -286,12 +233,10 @@ def record(
     candidate_id: CandidateId,
     evaluator_id: EvaluatorId,
     sample: Sample,
-    *,
-    pair: MeasurementId | None = None,
 ) -> MeasurementId:
     """Store one sample as the daemon's measurement (``ledger.record``), with its per-unit results, and return its id.
 
-    The caller commits. ``pair`` is the bar's measurement that ran next to it in a paired evaluation.
+    The caller commits.
     """
     candidate = s.get_one(Candidate, candidate_id)
     measurement = ledger.record(
@@ -303,7 +248,6 @@ def record(
         error=sample.error,
         seconds=sample.seconds,
         run=run_id,
-        pair=pair,
         rung=sample.rung,
         stopped=sample.stopped,
         feedback=sample.feedback,
@@ -313,55 +257,32 @@ def record(
 
 
 def run_evaluation(job: EvaluationJob, control: Control, site: Site, span: Span) -> EvaluationReport:
-    """Run the evaluator ``repeats`` times on the candidate's tree, each next to a run on the bar's tree, if any.
+    """Run the evaluator ``repeats`` times on the candidate's tree.
 
-    The order is candidate, bar, bar, candidate, candidate, bar (``order``). It stops at the first run that fails: a
-    candidate that crashes once crashes again, and a pair needs both sides. The candidate runs first, so each job
-    measures it. Each run climbs the job's ladder (``_climb``): one sample for each rung, then one for the full panel.
-    Only the first run, on the candidate, runs the rungs that have a command of their own, and only it may stop at a
-    rung (``EvaluationJob.gate``), which ends the job too. A run that fails for a cause that is not the candidate's
-    (``Failed.infra``) ends the job, and the report says so: none of its samples count. Each run has its own worktree
-    and logs, under ``<side>-<n>`` in the job's place, and the report names the files of all of them.
+    It stops at the first run that fails: a candidate that crashes once crashes again. Each run climbs the job's ladder
+    (``_climb``): one sample for each rung, then one for the full panel. Only the first run runs the rungs that have a
+    command of their own, and only it may stop at a rung (``EvaluationJob.gate``), which ends the job too. A run that
+    fails for a cause that is not the candidate's (``Failed.infra``) ends the job, and the report says so: none of its
+    samples count. Each run has its own worktree and logs, under ``candidate-<n>`` in the job's place, and the report
+    names the files of all of them.
     """
-    samples: dict[Tree, list[Sample]] = {Tree.CANDIDATE: [], Tree.BAR: []}
-    runs: dict[Tree, int] = {Tree.CANDIDATE: 0, Tree.BAR: 0}
-    for i, side in enumerate(order(job.repeats, paired=job.bar is not None)):
-        artifact = job.artifact if side is Tree.CANDIDATE or job.bar is None else job.bar.artifact
-        one = job.model_copy(update={'artifact': artifact, 'place': f'{job.place}/{side}-{runs[side]}'})
-        runs[side] += 1
+    samples: list[Sample] = []
+    for i in range(job.repeats):
+        one = job.model_copy(update={'place': f'{job.place}/candidate-{i}'})
         first = i == 0
         own = tuple(r for r in job.ladder if r.evaluate is not None) if first else ()
         results = _evaluate(one, control, site, span, own=own, gate=job.gate if first else None)
         climb = [sample(r) for r in results]
         last = climb[-1]
         span.set(error=last.error, stopped=last.stopped)
-        samples[side].extend(climb)
+        samples.extend(climb)
         if isinstance(failed := results[-1], Failed) and (why := failed.infra(sealed=job.sealed)) is not None:
             return EvaluationReport(
                 samples=climb, infra_error=InfraError(why=why, error=failed.error), files=site.files(job)
             )
         if last.error is not None or last.stopped is not None or control.asked() or control.stopping():
             break
-    return EvaluationReport(samples=samples[Tree.CANDIDATE], bar_samples=samples[Tree.BAR], files=site.files(job))
-
-
-class Tree(StrEnum):
-    """The tree that one run of an evaluation measures."""
-
-    CANDIDATE = 'candidate'
-    BAR = 'bar'
-
-
-def order(repeats: int, *, paired: bool) -> list[Tree]:
-    """The runs of an evaluation: ``repeats`` of the candidate, and with ``paired``, as many of the bar in ABBA order.
-
-    Linear drift of the load then costs both sides alike. The candidate opens, so a first run that is slower (a cold
-    cache) counts against the candidate, never for it.
-    """
-    if not paired:
-        return [Tree.CANDIDATE] * repeats
-    pairs = [(Tree.CANDIDATE, Tree.BAR), (Tree.BAR, Tree.CANDIDATE)]
-    return [side for i in range(repeats) for side in pairs[i % 2]]
+    return EvaluationReport(samples=samples, files=site.files(job))
 
 
 def _evaluate(

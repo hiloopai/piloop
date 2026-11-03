@@ -6,22 +6,22 @@
 | `TOKENS` (`tokens`) | `campaign` | `int` | The tokens that the agents of the campaign spent, summed over the agents that ended. A reopened campaign counts the agents since the latest reopen. |
 | `COMPUTE_USD` (`compute_usd`) | `leases` | `float` | USD: the seconds that the campaign's jobs held a worker, each worker's time split among the jobs that it held, times the pool's `usd_per_hour`. |
 | `MODELS_USD` (`models_usd`) | `models` | `float` | USD, API-equivalent: the tokens of the agents that ended, priced per model. Not an invoice: a subscription bills otherwise. |
-| `HEAD` (`head`) | `optimization` | `float` | The primary metric of the first track at the head, under the current evaluator. |
+| `BEST` (`best`) | `optimization` | `float` | The primary metric of the first track at its best, under the current evaluator. |
 | `RUNS` (`runs`) | `optimization` | `int` | The runs that hold a place under a limit on runs: those that count, and the attempts that may still count. A reopened campaign counts those since the latest reopen. |
 | `UNSETTLED` (`unsettled`) | `optimization` | `int` | The attempts whose outcome can still change: queued, running, or being scored. |
-| `WITHOUT_KEEP` (`without_keep`) | `optimization` | `int` | The finished attempts since the latest keep, or since the campaign was last set active again: scored or not. |
-| `KEEPS` (`keeps`) | `optimization` | `int` | The candidates of runs that are kept, on the trunk or on a branch. The baseline is not one. |
-| `EVALUATIONS` (`evaluations`) | `optimization` | `int` | The runs of the evaluate command under every evaluator: each measurement, failed ones and bar samples among them. |
+| `WITHOUT_BEST` (`without_best`) | `optimization` | `int` | The finished attempts since a candidate last became the best, or since the campaign was last set active again: scored or not. |
+| `NEW_BESTS` (`new_bests`) | `optimization` | `int` | The times that a run's candidate became the best of its track when it was scored. |
+| `EVALUATIONS` (`evaluations`) | `optimization` | `int` | The runs of the evaluate command under every evaluator: each measurement, failed ones among them. |
 | `METRIC_SUMS` (`metric_sums`) | `optimization` | `dict[str, float]` | Each metric summed over every measurement. A rule that reads a cost metric names it. |
 | `ATTEMPTS` (`attempts`) | `optimization` | `int` | The runs that are an attempt at their idea: the open ones, and those whose end is one. |
-| `FUNNEL` (`funnel`) | `optimization` | `Funnel` | How far the attempts that ended and are judged got (`Funnel`). |
+| `FUNNEL` (`funnel`) | `optimization` | `Funnel` | How far the attempts that ended and are scored got (`Funnel`). |
 | `SPEND` (`spend`) | `spend` | `float` | USD: the sum of the facts that the spend source names. None while one is unknown. |
 
 | Ratio | What it is |
 |---|---|
 | `reading(name: str) -> Fact[float]` | The fact of a value that a source reads under `name`, such as `spend` in a result of `command`. |
-| `since_keep(name: str) -> Fact[float]` | How much the value of `reading(name)` grew since the latest keep: `<name>_since_keep`. |
-| `per_keep(facts: Facts, spend: str) -> float \| None` | The fact `spend` per keep. Reads `reading(spend)` and `KEEPS`. |
+| `since_best(name: str) -> Fact[float]` | How much the value of `reading(name)` grew since a candidate last became the best: `<name>_since_best`. |
+| `per_best(facts: Facts, spend: str) -> float \| None` | The fact `spend` per new best. Reads `reading(spend)` and `NEW_BESTS`. |
 | `per_evaluation(facts: Facts, cost: str) -> float \| None` | The sum of the evaluator's metric `cost` per evaluation. Reads `EVALUATIONS` and `METRIC_SUMS`. |
 | `worker_spend(facts: Facts, spend: str, cost: str) -> float \| None` | The fact `spend` less the sum of the evaluator's metric `cost`. Reads `reading(spend)` and `METRIC_SUMS`. |
 | `per_run(facts: Facts, spend: str, cost: str) -> float \| None` | `worker_spend` per attempt. Reads `reading(spend)`, `METRIC_SUMS` and `ATTEMPTS`. |

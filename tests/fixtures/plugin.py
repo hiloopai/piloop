@@ -1,22 +1,12 @@
 """What a package can add to piloop through entry points: triggers, roles, a runtime, a stop rule, a capability of
-its own with a provider and a verdict rule that calls it, and objects of the wrong type."""
+its own with a provider and a best rule that calls it, and objects of the wrong type."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
 from typing import Annotated
 
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
-    Case,
-    Judgement,
-    Leave,
-    Moved,
-    Node,
-    Rebase,
-    VerdictRule,
-)
-from piloop.plugins.fact_source.facts import ATTEMPTS, EVALUATIONS, FUNNEL, Fact, FactValue, since_keep
+from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BestRule, Case
+from piloop.plugins.fact_source.facts import ATTEMPTS, EVALUATIONS, FUNNEL, Fact, FactValue, since_best
 from piloop.plugins.host import Capability, Parameters, Tier
 from piloop.plugins.role.contract import ImplementerRole
 from piloop.plugins.runtime.contract import Handle, RuntimeName
@@ -50,7 +40,7 @@ class GoesOn(StopRule):
         return GO
 
 
-WATCHED: dict[Fact[FactValue], float] = {EVALUATIONS: 100, ATTEMPTS: 50, since_keep('spend'): 300, FUNNEL: 1}
+WATCHED: dict[Fact[FactValue], float] = {EVALUATIONS: 100, ATTEMPTS: 50, since_best('spend'): 300, FUNNEL: 1}
 
 
 class Watches(StopRule):
@@ -95,87 +85,43 @@ class Fast(ImplementerRole):
     runtime: RuntimeName | None = 'nice'
 
 
-class VerdictCheck(Parameters, ABC):
-    """A capability that a plugin declares: a check that can refuse a candidate that ``bootstrap`` keeps."""
+class BestCheck(Parameters, ABC):
+    """A capability that a plugin declares: a check that can refuse a candidate that ``baseline`` lets be best."""
 
     @abstractmethod
     def check(self, case: Case) -> str | None:
-        """Return why the candidate must not be kept, or None."""
+        """Return why the candidate may not be best, or None."""
 
 
-VERDICT_CHECKS = Capability('verdict_check', VerdictCheck, tier=Tier.PURE)
+BEST_CHECKS = Capability('best_check', BestCheck, tier=Tier.PURE)
 
 
-class NoUnitRegression(VerdictCheck):
-    """``no_unit_regression``: refuses a keep when a unit of the primary metric got worse."""
+class AsMeasured(BestCheck):
+    """``as_measured``: refuses a candidate with fewer evaluations than the baseline has."""
 
     def check(self, case: Case) -> str | None:
-        name, direction = case.primary.name, case.primary.direction
-        mine, theirs = case.candidate.units.get(name, {}), case.bar.units.get(name, {})
-        worse = sorted(u for u in mine.keys() & theirs.keys() if direction.gain(mine[u], theirs[u]) < 0)
-        return f'{len(worse)} units of {name} got worse: {", ".join(worse[:3])}' if worse else None
+        mine, theirs = case.candidate.measured, case.baseline.measured
+        return f'{case.candidate.name} has {mine} evaluations, the baseline {theirs}' if mine < theirs else None
 
 
-class Checked(Bootstrap):
-    """``checked``: what ``bootstrap`` decides, but a keep that one of ``vetoes`` refuses is ``interesting``."""
+class Checked(Baseline):
+    """``checked``: what ``baseline`` allows, but a candidate that one of ``vetoes`` refuses may not be best."""
 
-    vetoes: list[Annotated[VerdictCheck, VERDICT_CHECKS.entry]]
+    vetoes: list[Annotated[BestCheck, BEST_CHECKS.entry]]
 
-    def decide(self, case: Case) -> Judgement:
-        judged = super().decide(case)
-        held = [f'{VERDICT_CHECKS.name_of(c)}: {why}' for c in self.vetoes if (why := c.check(case)) is not None]
-        if judged.verdict is not Outcome.KEEP or not held:
-            return judged
-        return Judgement(Outcome.INTERESTING, f'{judged.reason}; held by {"; ".join(held)}')
+    def refuse(self, case: Case) -> str | None:
+        if (why := super().refuse(case)) is not None:
+            return why
+        held = [f'{BEST_CHECKS.name_of(c)}: {why}' for c in self.vetoes if (why := c.check(case)) is not None]
+        return '; '.join(held) or None
 
 
-class Undecided(VerdictRule):
-    """A verdict rule without ``decide``."""
+class Unrefusing(BestRule):
+    """A best rule without ``refuse``."""
 
 
 NOT_A_ROLE = 'auditor'
 NOT_A_RUNTIME = 'typed'
-
-
-class BaseBar(Bootstrap):
-    """``base_bar``: the built-in rule, but a run's bar is its base, a keep or not."""
-
-    def bar(self, ancestry: Sequence[Node]) -> CandidateId:
-        return ancestry[0].id
-
-
-class FirstHead(Bootstrap):
-    """``first_head``: the built-in rule, but the head is the first trunk keep."""
-
-    def head(self, trunk: Sequence[Node]) -> CandidateId | None:
-        return trunk[0].id if trunk else None
-
-
-class Leaves(Bootstrap):
-    """``leaves``: the built-in rule, but a keep that lacks the head is not merged onto it."""
-
-    def on_moved(self, moved: Moved) -> Rebase | Leave:
-        return Leave()
-
-
-class Astray(Bootstrap):
-    """``astray``: the built-in rule, but its lineage methods choose a candidate that they were not given."""
-
-    def bar(self, ancestry: Sequence[Node]) -> CandidateId:
-        return CandidateId(10**6)
-
-    def head(self, trunk: Sequence[Node]) -> CandidateId | None:
-        return CandidateId(10**6)
-
-
-class StopIsInteresting(Bootstrap):
-    """``stop_is_interesting``: the built-in rule, but a candidate whose climb stopped at a rung is ``interesting``."""
-
-    def decide(self, case: Case) -> Judgement:
-        stopped = case.candidate.stopped
-        if stopped is not None and case.primary.name not in case.candidate.means:
-            return Judgement(Outcome.INTERESTING, f'stopped at {stopped.rung}, worth a full look: {stopped.reason}')
-        return super().decide(case)
 
 
 class AlsoDefault(Subprocess):

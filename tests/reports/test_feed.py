@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 from dirty_equals import IsDatetime
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, select, text
 
 from piloop.actor import System
 from piloop.api.contract import MAX_LIMIT
@@ -22,7 +22,7 @@ from piloop.db.triggers.changelog import IdeaCreated
 from piloop.ids import CampaignId, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -357,11 +357,8 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
         'paused': None,
         'paused_reason': None,
         'evaluator': campaign.evaluator_id,
-        'head': {
-            'candidate': candidate_id,
-            'tracks': [{'track': 'score', 'metric': 'score', 'value': 1.0, 'delta': None}],
-        },
-        'kept': 1,
+        'best': [{'track': 'score', 'candidate': candidate_id, 'metric': 'score', 'value': 1.0, 'delta': None}],
+        'new_bests': 0,
         'candidates': 1,
         'ideas': {**{str(v): 0 for v in IdeaStatus}, 'open': 1, 'dropped': 1},
         'runnable': 1,
@@ -401,9 +398,11 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
     json.dumps([state.model_dump(mode='json'), inbox])
 
 
-def test_a_campaign_without_a_keep_has_no_head(db: Database, campaign: Campaign) -> None:
+def test_a_campaign_without_a_baseline_has_no_best(db: Database, campaign: Campaign) -> None:
+    """A campaign added by hand, with SQL, before its baseline."""
     with db.session() as s:
-        s.execute(update(Candidate).values(verdict=Outcome.DISCARD))
+        bare = Campaign(name='bare', path='/elsewhere', config=campaign.config)
+        s.add(bare)
         s.commit()
-        [state] = feed.status_view(s, [s.get_one(Campaign, campaign.id)], System.HUMAN)
-    assert isinstance(state, CampaignState) and state.head is None and state.kept == 0
+        [state] = feed.status_view(s, [bare], System.HUMAN)
+    assert isinstance(state, CampaignState) and state.best == [] and state.new_bests == 0

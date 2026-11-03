@@ -129,7 +129,10 @@ def test_status_and_inbox_print_one_json_document_with_the_cursor_they_were_read
     [state] = status.campaigns
     assert isinstance(state, views.CampaignState)
     assert state.name == 'demo' and state.paused == 'all' and state.paused_reason == 'budget review'
-    assert state.inbox == 1 and state.head is not None
+    assert state.inbox == 1 and state.new_bests == 0
+    assert [(b.track, b.candidate, b.metric, b.value, b.delta) for b in state.best] == [
+        ('score', 1, 'score', 1.0, None)
+    ]
 
     run_cli(['inbox', 'demo', '--json', '--kind', 'escalation'])
     inbox = document(InboxDocument, out())

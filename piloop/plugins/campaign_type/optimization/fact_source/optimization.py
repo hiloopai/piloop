@@ -10,25 +10,24 @@ from sqlalchemy.orm import Session
 
 from piloop.db.models import Campaign, count
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.measure import score
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.stop import attempt, kept, runs, runs_without_keep, scored, unsettled
+from piloop.plugins.campaign_type.kit.pool.pool import Pool
+from piloop.plugins.campaign_type.kit.pool.scored import new_bests
+from piloop.plugins.campaign_type.kit.runs.stop import attempt, kept, runs, runs_without_best, scored, unsettled
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
-from piloop.plugins.campaign_type.kit.verdicts.judge import head
 from piloop.plugins.fact_source.contract import FactSource
 from piloop.plugins.fact_source.facts import (
     ATTEMPTS,
+    BEST,
     EVALUATIONS,
     FUNNEL,
-    HEAD,
-    KEEPS,
     METRIC_SUMS,
+    NEW_BESTS,
     OPTIMIZATION,
     RUNS,
     UNSETTLED,
-    WITHOUT_KEEP,
+    WITHOUT_BEST,
     Fact,
     FactValue,
     Funnel,
@@ -37,9 +36,9 @@ from piloop.plugins.fact_source.facts import (
 type Gatherer = Callable[[Session, Campaign, datetime], FactValue]
 
 
-def _head(s: Session, campaign: Campaign, now: datetime) -> float | None:
-    trunk = head(s, campaign)
-    return score(trunk, campaign.evaluator_id, campaign.config.all_tracks[0].primary) if trunk is not None else None
+def _best(s: Session, campaign: Campaign, now: datetime) -> float | None:
+    pool = Pool.of(s, campaign, campaign.config.all_tracks[0])
+    return pool.mean(pool.best())
 
 
 def _runs(s: Session, campaign: Campaign, now: datetime) -> int:
@@ -50,11 +49,11 @@ def _unsettled(s: Session, campaign: Campaign, now: datetime) -> int:
     return count(s, campaign_runs(campaign.id).where(attempt(), unsettled()))
 
 
-def _without_keep(s: Session, campaign: Campaign, now: datetime) -> int:
-    return runs_without_keep(s, campaign)
+def _without_best(s: Session, campaign: Campaign, now: datetime) -> int:
+    return runs_without_best(s, campaign)
 
 
-def _keeps(s: Session, campaign: Campaign, now: datetime) -> int:
+def _new_bests(s: Session, campaign: Campaign, now: datetime) -> int:
     return kept(s, campaign)
 
 
@@ -83,17 +82,18 @@ class Stage(IntEnum):
 
     ATTEMPTED = 0
     REACHED = 1
-    """It left a candidate that is measured or waits for its verdict (``scored``)."""
+    """It left a candidate that is measured or waits for its score (``scored``)."""
     MEASURED = 2
     """One of its candidates has a measurement without an error."""
-    KEPT = 3
+    BEST = 3
+    """One of its candidates became the best when it was scored."""
 
 
-def _stage() -> ColumnElement[int]:
-    """The ``Stage`` of a run that was an attempt."""
+def _stage(bests: set[int]) -> ColumnElement[int]:
+    """The ``Stage`` of a run that was an attempt, with ``bests`` the candidates that became the best."""
     mine = Candidate.run_id == Run.id
     return case(
-        (exists().where(mine, Candidate.verdict == Outcome.KEEP), Stage.KEPT.value),
+        (exists().where(mine, Candidate.id.in_(bests)), Stage.BEST.value),
         (
             exists().where(mine, Measurement.candidate_id == Candidate.id, Measurement.error.is_(None)),
             Stage.MEASURED.value,
@@ -104,11 +104,12 @@ def _stage() -> ColumnElement[int]:
 
 
 def _funnel(s: Session, campaign: Campaign, now: datetime) -> Funnel:
-    # the attempts that ended and whose commits are judged
+    # the attempts that ended and whose commits are scored
+    bests = {e.target_id for e, _ in new_bests(s, campaign)}
     rows = s.execute(
         campaign_runs(campaign.id)
         .where(attempt(), ~unsettled())
-        .with_only_columns(_stage().label('stage'), Run.end, func.count(Run.id))
+        .with_only_columns(_stage(bests).label('stage'), Run.end, func.count(Run.id))
         .group_by('stage', Run.end)
     ).all()
     at_least = {at: sum(n for got, _, n in rows if got >= at) for at in Stage}
@@ -121,17 +122,17 @@ def _funnel(s: Session, campaign: Campaign, now: datetime) -> Funnel:
         attempts=at_least[Stage.ATTEMPTED],
         reached=at_least[Stage.REACHED],
         measured=at_least[Stage.MEASURED],
-        keeps=at_least[Stage.KEPT],
+        bests=at_least[Stage.BEST],
         unmeasured=dict(unmeasured.most_common()),
     )
 
 
 GATHERERS: dict[Fact[FactValue], Gatherer] = {
-    HEAD: _head,
+    BEST: _best,
     RUNS: _runs,
     UNSETTLED: _unsettled,
-    WITHOUT_KEEP: _without_keep,
-    KEEPS: _keeps,
+    WITHOUT_BEST: _without_best,
+    NEW_BESTS: _new_bests,
     EVALUATIONS: _evaluations,
     METRIC_SUMS: _metric_sums,
     ATTEMPTS: _attempts,
@@ -141,7 +142,7 @@ GATHERERS: dict[Fact[FactValue], Gatherer] = {
 
 
 class OptimizationFacts(FactSource):
-    """``optimization``: the research of the campaign: its head, runs, keeps, evaluations and funnel.
+    """``optimization``: the research of the campaign: its best, runs, new bests, evaluations and funnel.
 
     It is on by default (``DEFAULT``). A campaign that sets ``[plugins.fact_source] use`` lists it too, to keep these facts.
     """

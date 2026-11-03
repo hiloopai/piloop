@@ -1,4 +1,4 @@
-"""Pin the public behaviour of piloop: the verdict's bootstrap and the evaluate command's output protocol.
+"""Pin the public behaviour of piloop: the evaluate command's output protocol.
 
 Other tools and ports reproduce these values. Change a test here only together with a CHANGELOG entry.
 """
@@ -20,28 +20,7 @@ from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
     _check_units,
     run_evaluate,
 )
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import RESAMPLES, SEED, Over, compare, lower_bound
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Criterion
 from piloop.plugins.metric import Direction
-
-DIFFS = [0.137, -0.052, 0.311, 0.009, -0.274, 0.198, 0.066, -0.013, 0.245, 0.102, -0.087, 0.029]
-
-
-def test_the_bootstrap_draws_from_cpython_mersenne_twister_with_seed_0() -> None:
-    """The lower bound is the sorted sum at index ``int((1 - confidence) * 4000)`` of ``Random(0).choices`` draws."""
-    assert (RESAMPLES, SEED) == (4000, 0)
-    assert lower_bound(DIFFS, 0.95) == -0.22500000000000003
-    assert lower_bound(DIFFS, 0.9) == -0.030000000000000054
-    assert lower_bound([1.5], 0.95) == 1.5, 'one unit: every resample is that unit'
-
-
-def test_the_bootstrap_pairs_units_by_sorted_name_and_measures_gain_in_the_metric_direction() -> None:
-    errors = Criterion('errors', Direction.LOWER)
-    mine = {'b': 3.0, 'a': 5.0, 'd': 7.0, 'c': 0.0}
-    theirs = {'a': 6.0, 'b': 2.0, 'c': 1.0, 'd': 9.0}
-    c = compare(errors, 15.0, 18.0, mine, theirs, 0.95)
-    assert (c.gain, c.worst, c.count, c.over) == (3.0, lower_bound([1.0, -1.0, 1.0, 2.0], 0.95), 4, Over.UNITS)
-    assert c.worst == -1.0
 
 
 def test_a_result_is_one_json_line_of_a_status_a_score_its_direction_metrics_and_feedback() -> None:

@@ -19,8 +19,8 @@ from piloop.net import Refusal
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.candidates.views import candidate_view
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer, ImportBody
-from piloop.plugins.campaign_type.kit.verdicts.verdict import candidate_view
 
 router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUSALS_DOCUMENTED)
 """The candidates' route, beside the API's."""

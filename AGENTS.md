@@ -8,7 +8,7 @@ your brief, and ignore this file and the skills.
 
 piloop runs an autoresearch campaign on a git repo. A daemon starts coding agents (Claude Code, Codex or pi). Each
 agent tries an idea in its own git worktree, and submits commits with `piloop submit`. piloop scores each with the
-campaign's evaluate command and keeps what beats the head. You, the agent that the human talks to, set up the campaign and act as its orchestrator.
+campaign's evaluate command into a pool, and the best commit in the pool is the campaign's result. You, the agent that the human talks to, set up the campaign and act as its orchestrator.
 
 ## The skills
 

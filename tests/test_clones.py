@@ -10,13 +10,13 @@ import pytest
 from covalence import Cid
 from git import GitCommandError, Repo
 
-from piloop.ids import CampaignId, Revision, TargetRef
+from piloop.ids import AgentSessionId, CampaignId, Revision, TargetRef
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.cas.contract import Cas
-from piloop.plugins.executor.contract import RepoId, Source, Workspace
+from piloop.plugins.executor.contract import AgentJob, RepoId, Source, Workspace
 from piloop.plugins.executor.kit.clones import WORKSPACE, Clones, Fetch, of_record, own_replica
-from piloop.plugins.executor.kit.jobs import remote_site
-from piloop.plugins.vcs.contract import MAX_HAVE, Captured, UnknownRevision
+from piloop.plugins.executor.kit.jobs import land, remote_site
+from piloop.plugins.vcs.contract import MAX_HAVE, Captured, UnknownRevision, VcsError
 from piloop.plugins.vcs.git import FETCHED, Git
 from piloop.plugins.vcs.git.bundles import bundle, unbundle
 from piloop.plugins.vcs.git.commands import commits
@@ -277,3 +277,26 @@ def test_two_jobs_that_start_at_once_on_a_new_worker_share_its_first_clone(
         tried.set()
         first.join(10)
     assert (tmp_path / 'one' / 'a.txt').read_text() == (tmp_path / 'two' / 'a.txt').read_text() == 'a'
+
+
+def test_a_worker_elsewhere_moves_its_agents_checkout_to_a_base_that_its_clone_lacks(
+    tmp_path: Path, origin: Path, store: Cas
+) -> None:
+    """A run of a worker elsewhere chose another base after its checkout was made (``idea claim --base``): the commit
+    comes from the server through the CAS, and the agent's checkout moves to it in place."""
+    start = Repo(origin).head.commit.hexsha
+    site = remote_site(tmp_path / 'worker', store, fetch_from(store, origin, []), 0)
+    job = AgentJob.model_construct(
+        agent_session=AgentSessionId(1), place='p', artifact=Source(vcs=Git(), repo=REPO, revision=start)
+    )
+    site.cwd(job).parent.mkdir(parents=True)
+    site.clones.checkout(job.artifact, site.cwd(job))
+    base = commit(origin, 'b.txt', 'b')
+    assert not commits(Repo(site.clones.path(job.artifact)), [base]), 'the clone lacks the base'
+    inode = site.cwd(job).stat().st_ino
+    land(site, job, Revision(base))
+    assert Repo(site.cwd(job)).head.commit.hexsha == base and (site.cwd(job) / 'b.txt').read_text() == 'b'
+    assert site.cwd(job).stat().st_ino == inode, 'the directory stays: the agent works on in it'
+    (site.cwd(job) / 'b.txt').write_text('mine')
+    with pytest.raises(VcsError, match=f'the checkout cannot move to {start}'):
+        land(site, job, Revision(start))

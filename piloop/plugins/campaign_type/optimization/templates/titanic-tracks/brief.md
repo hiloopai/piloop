@@ -15,10 +15,11 @@
   records what you tried. If the idea did not work, commit anyway, say so, and leave a `note` on the idea.
 - Do not stop to ask questions. Decide and commit.
 
-## Two tracks, one trunk
+## Two tracks, one pool
 
-The campaign has two objectives. A keep on either track must improve its own track's metric and hold the other one:
-an accuracy keep may not make `solve.py` much slower, and a cost keep may not make it much less accurate. Your track,
+The campaign has two objectives. The best of each track has the best value of its own metric and holds the other
+one: the best on accuracy may not make `solve.py` much slower, and the best on cost may not make it much less
+accurate. Your track,
 and the margin and floor you must hold, are below.
 
 ## Context

@@ -61,7 +61,7 @@ def run_end(
     """End your own run now, with every process that you started.
 
     Optional: when your session exits, your run ends as `submitted` if it submitted a version, else as `gave_up`.
-    `submitted` settles your idea as done once your work is judged: in a campaign that scores what you submit, only
+    `submitted` settles your idea as done once your work is scored: in a campaign that scores what you submit, only
     after a `piloop submit`. `gave_up` puts your idea back on the board, with your reason if you give one.
     """
     with RunsClient.connect(daemon_http()) as client:

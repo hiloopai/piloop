@@ -39,8 +39,8 @@ class EvaluatorConfig(BaseModel):
     ``["uv", "run", "python", "evaluate.py", "--quick"]``."""
     sealed: list[str] | None = Field(default=None, min_length=1)
     """Optional. The command (argv) that scores a version on the sealed split, as ``evaluate`` does: its score is the
-    primary. piloop runs it only on a version that would become the new head, and on the head, and keeps the version
-    only if it beats the head there too. Keep its data and its scorer out of the repo, in the home or on the
+    primary. piloop runs it on each candidate that it confirms, and on the baseline. With the default best rule, a
+    candidate may be best only when it beats the baseline there too. Keep its data and its scorer out of the repo, in the home or on the
     evaluator's machines, so that no implementer reads them. Example: ``["python3", "/srv/sealed/score.py"]``."""
     scoring: Scoring = Scoring.SUBMIT
     """Which versions of a run piloop scores: ``submit``, those that the implementer submits; ``run_end``, every one,
@@ -48,14 +48,15 @@ class EvaluatorConfig(BaseModel):
     submissions: int | None = Field(default=None, ge=1)
     """Optional. The most versions that one run may submit (``piloop submit``). Not set: no cap."""
     noise_runs: int = Field(default=3, ge=1)
-    """How many times piloop evaluates each bar, the baseline and each new head, under each evaluator. The standard
-    deviation of its score is the noise that a gain over it must exceed (``[plugins.verdict_rule]``). When the
-    baseline's evaluations agree, the evaluator is deterministic: no other bar runs again, and the noise is 0. 1: no
-    noise, any gain counts."""
+    """How many successful evaluations confirm a candidate, under each evaluator. piloop evaluates the baseline this
+    many times, and each candidate whose first score beats the best's mean until it has this many: only then may it be
+    best. The standard deviation of the best's evaluations is the noise that a worker's message names. When the
+    baseline's evaluations agree, the evaluator is deterministic, and one evaluation confirms. 1: one evaluation
+    confirms."""
 
 
 class MetricRole(StrEnum):
-    """How a metric affects the verdict. https://piloop.autoresearch.inc/concepts/verdict explains the rule."""
+    """How a metric decides which candidate is best. https://piloop.autoresearch.inc/concepts/pool explains it."""
 
     PRIMARY = 'primary'
     GUARDRAIL = 'guardrail'
@@ -63,20 +64,20 @@ class MetricRole(StrEnum):
 
 
 class Tolerance(BaseModel):
-    """How far a metric may go: never past ``floor``, nor worse than the bar by more than ``margin`` or ``fraction``.
+    """How far a metric may go: never past ``floor``, nor worse by more than ``margin`` or ``fraction``.
 
-    A guardrail has one, and so has each stop of a rung of the ladder. A guardrail tests its regression on the confidence bound of the bootstrap when the evaluate command reports
-    per-unit results or pairs, else on the aggregate. A stop of the ladder tests the rung's values.
+    A guardrail has one, and its regression is from the baseline's value. Each stop of a rung of the ladder has one
+    too, and its regression is from the best's value at that rung.
     """
 
     model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
 
     floor: float | None = None
-    """Optional. The worst value allowed, whatever the bar: at least this for ``higher``, at most this for ``lower``."""
+    """Optional. The worst value allowed: at least this for ``higher``, at most this for ``lower``."""
     margin: float | None = Field(default=None, ge=0)
-    """The largest regression from the bar, in the metric's own units: ``20`` for 20 ms. Not with ``fraction``."""
+    """The largest regression, in the metric's own units: ``20`` for 20 ms. Not with ``fraction``."""
     fraction: float | None = Field(default=None, gt=0)
-    """The largest regression from the bar, as a fraction of the bar's value: ``0.1`` for 10%. Not with ``margin``."""
+    """The largest regression, as a fraction of the value it is from: ``0.1`` for 10%. Not with ``margin``."""
 
     @model_validator(mode='after')
     def _one_regression(self) -> Self:
@@ -86,7 +87,7 @@ class Tolerance(BaseModel):
 
     @property
     def regression(self) -> bool:
-        """Whether it limits the regression from the bar: it has a ``margin`` or a ``fraction``."""
+        """Whether it limits the regression: it has a ``margin`` or a ``fraction``."""
         return self.margin is not None or self.fraction is not None
 
     @property
@@ -98,8 +99,7 @@ class Tolerance(BaseModel):
 class Ratio(BaseModel):
     """A metric that piloop computes from two that the evaluate command reports: ``numerator / denominator``.
 
-    Each side's value is the ratio of its means. The bootstrap resamples the units of both parts together, or else the
-    pairs, and takes the ratio of their sums in each resample, so the verdict tests the ratio with confidence.
+    A candidate's value is the ratio of its means.
     """
 
     model_config = ConfigDict(extra='forbid', frozen=True, use_attribute_docstrings=True)
@@ -114,8 +114,8 @@ class Metric(Tolerance):
     """One metric that the evaluate command reports, by its name in ``metrics`` of its result.
 
     Its ``floor``, ``margin`` and ``fraction`` (``Tolerance``) apply to a guardrail, which needs a ``margin`` or a
-    ``fraction``, and to each primary of a campaign with several tracks: when a candidate of another track is judged,
-    that primary is a guardrail.
+    ``fraction``, and to each primary of a campaign with several tracks: for a candidate of another track, that
+    primary is a guardrail.
     """
 
     name: str
@@ -123,10 +123,10 @@ class Metric(Tolerance):
     direction: Direction
     """``higher`` when a larger value is better, ``lower`` when a smaller value is better."""
     role: MetricRole = MetricRole.WATCH
-    """How the metric affects the verdict. A ``primary`` metric must beat the bar with confidence for a ``keep``, and
-    each track has exactly one. A ``guardrail`` may get worse by at most its ``margin`` or ``fraction``, or the candidate is at most
-    ``interesting``. It must never pass its ``floor``, or the candidate is a ``discard``. A ``watch`` metric is
-    recorded and never affects the verdict."""
+    """How the metric decides. The ``primary`` metric of a track ranks its candidates, and each track has exactly one.
+    With the default best rule, a candidate may be best only when each ``guardrail`` is worse than the baseline's by at
+    most its ``margin`` or ``fraction``, and never past its ``floor``. A ``watch`` metric is recorded and never
+    decides."""
     track: TrackName | None = None
     """Primary metrics only. The name of the track (objective) that this metric is the primary of. When unset, the
     track has the metric's name, so a campaign with one primary needs nothing here. With several primaries, each one
@@ -134,18 +134,11 @@ class Metric(Tolerance):
     ratio: Ratio | None = None
     """Optional. Primaries and guardrails only. piloop computes this metric from two others of ``[[metrics]]``, and the
     evaluate command does not report it. Example: ``{ numerator = "cost_usd", denominator = "solved" }``."""
-    repeats: int | None = Field(default=None, ge=1)
-    """Optional. Marks a noisy metric, such as a time: each evaluation of a run's candidate that this metric judges runs
-    the evaluate command ``repeats`` times on the candidate and as many times on its bar, one after the other, and the
-    verdict compares these pairs. Load then slows both sides alike. With several, the largest number counts. Allowed on
-    a guardrail, and on a primary."""
 
     @model_validator(mode='after')
     def _check(self) -> Self:
         if self.role is MetricRole.GUARDRAIL and not self.regression:
             raise ValueError(f'guardrail {self.name!r} needs a margin or a fraction')
-        if self.role is MetricRole.WATCH and self.repeats is not None:
-            raise ValueError(f'{self.name!r}: repeats applies to primaries and guardrails only')
         if self.role is MetricRole.WATCH and not self.empty:
             raise ValueError(f'{self.name!r}: floor, margin and fraction apply to guardrails and primaries only')
         if self.role is MetricRole.WATCH and self.ratio is not None:
@@ -197,9 +190,9 @@ class Rung(BaseModel):
 class TrackConfig(BaseModel):
     """``[tracks.<name>]``: one track of the campaign. A track is an objective with its own primary metric and brief.
 
-    A track has the name of its primary's ``track``, or else the name of the primary. All tracks build on one trunk. A
-    run starts from the head, which is the latest keep on the trunk. A keep on any track must also hold the primary of
-    every other track within that primary's ``margin`` and ``floor``. A table is needed only for an addendum.
+    A track has the name of its primary's ``track``, or else the name of the primary. All tracks share one pool, and
+    each has its own best. A candidate may be best of its track only when it holds the primary of every other track
+    within that primary's ``margin`` and ``floor``. A table is needed only for an addendum.
 
     Experimental: campaigns with more than one track.
     """
@@ -208,13 +201,13 @@ class TrackConfig(BaseModel):
 
     addendum: str | None = None
     """A repo-relative file that a worker gets when it claims an idea of this track (``piloop idea claim``), after the
-    track's keep rule. Use it to say how work on this objective is done, for example "profile first" or "keep the
+    track's rule. Use it to say how work on this objective is done, for example "profile first" or "keep the
     output identical"."""
 
 
 @dataclass(frozen=True)
 class Track:
-    """One track, as the daemon judges and schedules it."""
+    """One track, as the daemon scores and schedules it."""
 
     name: TrackName
     primary: Metric
@@ -222,11 +215,3 @@ class Track:
     guardrails: tuple[Metric, ...]
     """What a candidate of this track must hold: the campaign's guardrails, then the primary of every other track, each
     with its margin and floor."""
-
-    @property
-    def repeats(self) -> int | None:
-        """The pairs of each evaluation of this track's candidates: the largest ``repeats`` of the metrics that judge.
-
-        None: one sample, unpaired.
-        """
-        return max((m.repeats for m in (self.primary, *self.guardrails) if m.repeats is not None), default=None)

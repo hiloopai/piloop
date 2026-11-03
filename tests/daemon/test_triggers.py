@@ -21,7 +21,6 @@ from piloop.ids import AgentSessionId, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
@@ -106,8 +105,8 @@ def fail_a_run(db: Database, campaign: Campaign, title: str, status: RunStatus =
         return run.id
 
 
-def finish_a_run(db: Database, campaign: Campaign, title: str, verdict: Outcome = Outcome.DISCARD) -> RunId:
-    """Add a run that succeeded just now with a measured candidate, a discard by default.
+def finish_a_run(db: Database, campaign: Campaign, title: str) -> RunId:
+    """Add a run that succeeded just now with a measured candidate.
 
     The sweeper trigger sees no failure.
     """
@@ -120,7 +119,6 @@ def finish_a_run(db: Database, campaign: Campaign, title: str, verdict: Outcome 
             parent_id=1,
             tree_sha=f'tree{run_id}',
             revision=f'commit{run_id}',
-            verdict=verdict,
         )
         s.add(candidate)
         s.flush()

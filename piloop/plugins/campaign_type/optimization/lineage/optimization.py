@@ -1,24 +1,25 @@
 """``optimization``: the default lineage, one node per candidate, with the head's ancestry as the spine."""
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from typing import ClassVar, Final
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent
-from piloop.db.models import AgentSession, Campaign, Event
+from piloop.db.models import AgentSession, Campaign
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, JUDGED, CandidateId, Origin
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Track
+from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.evaluation.measure import derive, full_clause, means, ratios
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
+from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, Standing, fallback_track
+from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged, head, trunk_keeps
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Outcome
 from piloop.plugins.lineage.contract import (
     Graph,
     Judged,
@@ -46,24 +47,29 @@ KINDS: Final[dict[Origin, NodeKind]] = {
     Origin.SKIPPED: NodeKind(name=KindName('skipped'), label='Skipped'),
 }
 """The kind of a candidate by its origin."""
-VERDICTS: Final[dict[Outcome, NodeStatus]] = {
-    Outcome.KEEP: NodeStatus(name=StatusName('kept'), label='Kept', tone=Tone.SUCCESS),
-    Outcome.INTERESTING: NodeStatus(name=StatusName('interesting'), label='Interesting', tone=Tone.ATTENTION),
-    Outcome.DISCARD: NodeStatus(name=StatusName('discarded'), label='Discarded', tone=Tone.NEUTRAL),
-    Outcome.CRASH: NodeStatus(name=StatusName('crashed'), label='Crashed', tone=Tone.DANGER),
-}
-"""The status of a judged candidate by its verdict."""
+BEST: Final = NodeStatus(name=StatusName('best'), label='Best', tone=Tone.SUCCESS)
+"""The best of its track."""
+RANKED: Final = NodeStatus(name=StatusName('ranked'), label='May be best', tone=Tone.ACCENT)
+"""Confirmed, and the best rule allows it."""
+SCORED: Final = NodeStatus(name=StatusName('scored'), label='Scored', tone=Tone.NEUTRAL)
+"""Scored, not confirmed, or refused by the best rule."""
+EXCLUDED: Final = NodeStatus(name=StatusName('excluded'), label='Excluded', tone=Tone.ATTENTION)
+"""Someone took it out of the race for the best."""
+CRASHED: Final = NodeStatus(name=StatusName('crashed'), label='Crashed', tone=Tone.DANGER)
+"""Every evaluation of it failed."""
 PENDING: Final = NodeStatus(name=StatusName('pending'), label='Pending', tone=Tone.ACCENT)
-"""A candidate of a judged origin without its verdict yet."""
-UNJUDGED: Final = NodeStatus(name=StatusName('unjudged'), label='Not judged', tone=Tone.NEUTRAL)
-"""A candidate of an origin that is never judged: a reference, a recovered or a skipped tree."""
+"""Not scored yet."""
+UNSCORED_STATUS: Final = NodeStatus(name=StatusName('unscored'), label='Not scored', tone=Tone.NEUTRAL)
+"""A candidate of an origin that is never scored: a recovered or a skipped tree."""
+STATUSES: Final = (BEST, RANKED, SCORED, EXCLUDED, CRASHED, PENDING, UNSCORED_STATUS)
 
 
 class OptimizationLineage(LineageProvider):
     """``[plugins.lineage] use = "optimization"``, the default: the candidates of the campaign and their parents.
 
-    Its spine is the head's ancestry, and its series the trunk's keeps, each when it was last judged. The scores are
-    the primary metric of each track, under the current evaluator.
+    Its spine is the ancestry of the best of the first track, and its series the new bests on it, each when it was
+    scored. The scores are the primary metric of each track, under the current evaluator. A node's status is where
+    it stands in the pool of its track.
     """
 
     DEFAULT: ClassVar[bool] = True
@@ -76,14 +82,14 @@ class OptimizationLineage(LineageProvider):
             Candidate.id,
             Candidate.parent_id,
             Candidate.origin,
-            Candidate.verdict,
-            Candidate.verdict_by,
-            Candidate.verdict_reason,
+            Candidate.excluded_by,
+            Candidate.excluded_reason,
             Candidate.summary,
             Candidate.created_at,
             Candidate.run_id,
             Run.idea_id,
             Idea.title,
+            Idea.track,
         )
         rows = s.execute(
             made.outerjoin(Run, Candidate.run_id == Run.id)
@@ -93,13 +99,16 @@ class OptimizationLineage(LineageProvider):
         )
         nodes: list[LineageNode] = []
         parents: dict[CandidateId, CandidateId | None] = {}
-        for c, parent, origin, verdict, by, reason, summary, created, run, idea, title in rows:
+        pools: dict[TrackName, Pool] = {}
+        for c, parent, origin, by, reason, summary, created, run, idea, title, on in rows:
             parents[c] = parent
+            track = fallback_track(campaign.config, on)
+            pool = pools.get(track.name) or pools.setdefault(track.name, Pool.of(s, campaign, track))
             nodes.append(
                 LineageNode(
                     id=_id(c),
                     kind=KINDS[origin].name,
-                    status=_status(origin, verdict).name,
+                    status=(UNSCORED_STATUS if origin in UNSCORED else _status(pool.standing(c))).name,
                     label=title or summary or KINDS[origin].label,
                     parents=[] if parent is None else [_id(parent)],
                     created=created,
@@ -109,16 +118,17 @@ class OptimizationLineage(LineageProvider):
                     summary=summary,
                 )
             )
-        found = head(s, campaign)
-        spine = _ancestry(found.id, parents) if found is not None else []
+        first = pools.get(tracks[0].name) or Pool.of(s, campaign, tracks[0])
+        found = first.best()
+        spine = _ancestry(found, parents) if found is not None else []
         return Graph(
             kinds=list(KINDS.values()),
-            statuses=[*VERDICTS.values(), PENDING, UNJUDGED],
+            statuses=list(STATUSES),
             tracks=[_track(t) for t in tracks],
             evaluator=None if campaign.evaluator_id is None else f'evaluator#{campaign.evaluator_id}',
             nodes=nodes,
             spine=[_id(c) for c in spine],
-            series=_series(s, trunk_keeps(s, campaign), set(spine)),
+            series=_series(s, campaign, tracks[0], set(spine)),
         )
 
 
@@ -126,12 +136,15 @@ def _id(candidate: CandidateId) -> NodeId:
     return NodeId(f'candidate#{candidate}')
 
 
-def _status(origin: Origin, verdict: Outcome | None) -> NodeStatus:
-    match verdict:
-        case None:
-            return PENDING if origin in JUDGED else UNJUDGED
-        case _:
-            return VERDICTS[verdict]
+def _status(standing: Standing) -> NodeStatus:
+    """The status of a scored candidate: where it stands in the pool of its track."""
+    if standing.best == standing.candidate:
+        return BEST
+    if standing.excluded is not None:
+        return EXCLUDED
+    if standing.mean is None:
+        return CRASHED if standing.failed else PENDING
+    return RANKED if standing.rank is not None else SCORED
 
 
 def _track(track: Track) -> ScoreTrack:
@@ -196,18 +209,9 @@ def _ancestry(candidate: CandidateId, parents: dict[CandidateId, CandidateId | N
     return line[::-1]
 
 
-def _series(s: Session, keeps: Iterable[Candidate], spine: set[CandidateId]) -> list[SeriesPoint]:
-    """The trunk's keeps on the spine, each when it was last judged, else when it was made."""
-    on = [c for c in keeps if c.id in spine]
-    judged = dict(
-        s.execute(
-            select(Event.target_id, func.max(Event.at))
-            .where(
-                Event.target_kind == CANDIDATE,
-                Event.target_id.in_([c.id for c in on]),
-                Event.kind.in_(CandidateJudged.kinds()),
-            )
-            .group_by(Event.target_id)
-        ).all()
-    )
-    return [SeriesPoint(node=_id(c.id), at=judged.get(c.id, c.created_at)) for c in on]
+def _series(s: Session, campaign: Campaign, track: Track, spine: set[CandidateId]) -> list[SeriesPoint]:
+    """The baseline, then the new bests of ``track`` on the spine, each when it was scored best."""
+    first = s.scalar(select(Candidate).where(Candidate.campaign_id == campaign.id).order_by(Candidate.id).limit(1))
+    start = {first.id: first.created_at} if first is not None and first.id in spine else {}
+    found = start | {e.target_id: e.at for e, _ in new_bests(s, campaign, track.name)}
+    return [SeriesPoint(node=_id(c), at=found[c]) for c in sorted(spine) if c in found]

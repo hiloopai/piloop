@@ -1,14 +1,14 @@
 [project]
 name = "piloop-inference"
 version = "0.1.0"
-description = "piloop plugins for inference campaigns: GPU-hours as facts, a minimum speedup to keep, a latency table"
+description = "piloop plugins for inference campaigns: GPU-hours as facts, a minimum speedup to be best, a latency table"
 requires-python = ">=3.14"
 dependencies = ["piloop"]
 
 [project.entry-points."piloop.fact_sources"]
 gpu_hours = "piloop_inference.gpu_hours:GpuHours"
 
-[project.entry-points."piloop.verdict_rules"]
+[project.entry-points."piloop.best_rules"]
 min_speedup = "piloop_inference.min_speedup:MinSpeedup"
 
 [project.entry-points."piloop.sections"]

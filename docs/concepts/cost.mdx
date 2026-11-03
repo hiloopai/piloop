@@ -80,7 +80,7 @@ use = ["campaign", "optimization", "leases", "models", "spend"]
     {"fact": "compute_usd", "usd": 1.0, "as_of": "2026-10-27T18:12:15.480248Z"},
     {"fact": "models_usd", "usd": 15.0, "as_of": "2026-10-27T18:12:15.480248Z"}
   ],
-  "per_keep_usd": 8.0
+  "per_best_usd": 8.0
 }
 ```
 
@@ -98,7 +98,7 @@ use = ["campaign", "optimization", "leases", "models", "spend"]
   prices = { sonnet = { input = 3.0, output = 15.0, cache_read = 0.3, cache_write = 3.75 } }
   ```
 
-- `per_keep_usd` is the sum per keep.
+- `per_best_usd` is the sum per new best.
 - `facts` in `[plugins.fact_source.spend]` names the parts. Add a value that a source reads, such as a cloud's bill
   below: `facts = ["compute_usd", "models_usd", "gpu_usd"]`.
 - `hold_at = { spend = 1000 }` holds the campaign at that sum, as below.

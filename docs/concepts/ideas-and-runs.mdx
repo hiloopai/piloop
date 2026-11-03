@@ -28,8 +28,8 @@ idea#2 open → dropped: idea#1 tests the same mechanism
 | Status | Meaning |
 |---|---|
 | `open` | On the board. An implementer can claim it, unless an `after` link holds it. |
-| `claimed` | A run claimed it. The run is open, or its commits wait for their verdicts. |
-| `done` | Its run finished and its commits are judged. |
+| `claimed` | A run claimed it. The run is open, or its commits wait for their scores. |
+| `done` | Its run finished and its last commit has a score. |
 | `dropped` | Off the board: by hand, after a cancel, or when its run ended on an open escalation. `open` puts it back. |
 
 ## Who adds ideas
@@ -38,17 +38,16 @@ idea#2 open → dropped: idea#1 tests the same mechanism
 |---|---|
 | You, the orchestrator | Ideas. You change the priority and status of any idea. |
 | Implementer | One idea of its own, which it claims at once (`piloop idea propose`). It files none for others. |
-| Daemon | Adds an idea when a merge conflicts. |
 
 `piloop idea add enwik8 "<title>" --after 1` holds the idea until idea 1 is `done` or `dropped`. Then a worker can
-claim it, and its run starts from the head, which holds what idea 1 kept.
+claim it, and its run starts from the best at that time.
 
 `piloop candidate import enwik8 <commit>` makes any commit a **reference**, such as a branch. To take its change, add
-an idea that names it.
+an idea that names it, or start a run from it ([lines and bases](/concepts/pool#lines-and-bases)).
 
 ## Runs
 
-A **run** is one implementer's session. For each free implementer slot, the daemon makes a worktree of the head,
+A **run** is one implementer's session. For each free implementer slot, the daemon makes a worktree of the best,
 writes the brief (your `brief.md`, the board and the state of the campaign), and starts the implementer, on the next
 harness of `harnesses`. The implementer first takes one idea:
 
@@ -76,16 +75,11 @@ The claim ends with the run:
 
 | How the run ended | What happens to the idea |
 |---|---|
-| `submitted` | `done` once its commits are judged. |
+| `submitted` | `done` once its last commit has a score. |
 | `gave_up`, failed, timed out or stopped | Back to `open`, for another implementer. |
 | It was cancelled | `dropped`. |
 
 An implementer that never started to work claimed nothing: its run is queued again, up to two times.
-
-A run builds on the head that it started from. With `follow_head = "message"` in `[plugins.role.implementer]`, each
-running implementer hears when another run's version becomes the head: one message that names its revision, to merge.
-A worktree of the campaign's repo has the commit at once. An implementer on a [worker elsewhere](/guides/workers) gets
-the message, but its checkout lacks the commit.
 
 ## Talk to a running implementer
 
@@ -97,5 +91,5 @@ An implementer can add a trailer to a commit message:
 
 | Trailer | Effect |
 |---|---|
-| `Piloop-Note: <why>` | The commit regressed, but is worth starting from. |
+| `Piloop-Note: <why>` | The commit scores worse, but is worth starting from: its candidate gets the note. Read only with `scoring = "run_end"`. |
 | `Piloop-Eval: skip` | The commit is scaffolding: it is not measured. |

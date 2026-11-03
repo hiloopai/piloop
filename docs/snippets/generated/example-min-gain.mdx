@@ -1,34 +1,32 @@
 {/* WARNING: This file is auto-generated (uv run -m scripts.generate_all). Update the example plugin in `examples/plugins/min-gain/` if you want to change anything here. */}
 
 ```toml pyproject.toml
-[project.entry-points."piloop.verdict_rules"]
+[project.entry-points."piloop.best_rules"]
 min_gain = "piloop_min_gain:MinGain"
 ```
 
 ```python piloop_min_gain/__init__.py
-"""``min_gain``: the built-in verdict, but a keep needs a gain of at least ``min_gain``. No state, no I/O.
+"""``min_gain``: the built-in best rule, but the best needs a gain of at least ``min_gain`` over the baseline.
 
-Use it when a tiny gain is not worth a keep. Each keep moves the head, and every later run must beat the head. The
-rule is the built-in rule ``bootstrap`` and changes one thing. The confidence, the guardrails and the reasons stay
-those of ``bootstrap``.
+Use it when a tiny gain is not worth a new best. The rule is the built-in rule ``baseline`` and changes one thing: the
+guardrails, the sealed split and the reasons stay those of ``baseline``. No state, no I/O.
 """
 
-from piloop.capabilities import Bootstrap, Case, Judgement, Outcome, number
+from piloop.capabilities import Baseline, Case, number
 
 
-class MinGain(Bootstrap):
-    """What ``bootstrap`` decides, but a keep with a gain below ``min_gain`` is ``interesting``."""
+class MinGain(Baseline):
+    """What ``baseline`` allows, but a candidate whose gain over the baseline is below ``min_gain`` may not be best."""
 
     min_gain: float
-    """The smallest gain that keeps, in the primary metric's units."""
+    """The smallest gain over the baseline that may be best, in the primary metric's units."""
 
-    def decide(self, case: Case) -> Judgement:
-        judged = super().decide(case)
+    def refuse(self, case: Case) -> str | None:
+        if (why := super().refuse(case)) is not None:
+            return why
         name = case.primary.name
-        if judged.verdict is not Outcome.KEEP or name not in case.bar.means:
-            return judged
-        gain = case.primary.direction.gain(case.candidate.means[name], case.bar.means[name])
-        if gain >= self.min_gain:
-            return judged
-        return Judgement(Outcome.INTERESTING, f'{judged.reason}; the gain is below min_gain {number(self.min_gain)}')
+        if name not in case.baseline.means:
+            return None
+        gain = case.primary.direction.gain(case.candidate.means[name], case.baseline.means[name])
+        return None if gain >= self.min_gain else f'its gain {number(gain)} is below min_gain {number(self.min_gain)}'
 ```

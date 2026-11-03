@@ -22,8 +22,8 @@ class Optimization(CampaignType):
         return OptimizationPlanner(host)
 
     def fork_point(self, s: Session, source: Campaign) -> Revision:
-        """The head, as an agent without a run gets it checked out: the baseline when nothing is kept."""
-        from piloop.plugins.campaign_type.kit.verdicts.judge import checkout_candidate
+        """The best of the first track, as an agent without a run gets it checked out."""
+        from piloop.plugins.campaign_type.kit.pool.pool import checkout_candidate
 
         return checkout_candidate(s, source).revision
 

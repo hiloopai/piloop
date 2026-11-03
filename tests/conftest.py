@@ -48,19 +48,19 @@ from piloop.plugins.campaign_type.consumers import Campaigns
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient
-from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidatesClient
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Measured, Score, run_evaluate
 from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import EvaluationClient
+from piloop.plugins.campaign_type.kit.pool.wire import PoolClient
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import end_run
 from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session
 from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
-from piloop.plugins.campaign_type.kit.verdicts.wire import VerdictsClient
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner
 from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
 from piloop.plugins.cas.contract import CAS, Cas
@@ -178,9 +178,6 @@ direction = "lower"
 [evaluator]  # 0.5's scoring: a test of submissions and of the noise sets its own
 scoring = "run_end"
 noise_runs = 1
-
-[plugins.verdict_rule]
-provider = "bootstrap"
 
 [plugins.harness.script]
 model = "test-model"
@@ -437,8 +434,6 @@ def register(db: Database, campaign_path: Path) -> Campaign:
             revision=sha,
             summary='baseline',
             origin=Origin.BASELINE,
-            verdict=Outcome.KEEP,
-            verdict_by=System.DAEMON,
         )
         s.add(base)
         s.flush()
@@ -937,7 +932,7 @@ def active(scheduler: Scheduler) -> list[AgentSessionId]:
 
 
 class EveryClient(
-    BacklogClient, CandidatesClient, VerdictsClient, OptimizationClient, EvaluationClient, RunsClient, LineageClient
+    BacklogClient, CandidatesClient, PoolClient, OptimizationClient, EvaluationClient, RunsClient, LineageClient
 ):
     """A client of every route: core's, those of optimization and its components, and the lineage's."""
 
@@ -945,3 +940,8 @@ class EveryClient(
 def no_ship(job: AgentJob, revision: Revision | None) -> Shipped:
     """A relay's ``Ship`` for a test whose agents submit nothing."""
     raise AssertionError(f'no agent of this test submits a version: {revision}')
+
+
+def no_land(job: AgentJob, revision: Revision) -> None:
+    """A relay's ``Land`` for a test whose agents move no checkout."""
+    raise AssertionError(f'no agent of this test moves its checkout: {revision}')

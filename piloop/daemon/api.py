@@ -134,7 +134,6 @@ from piloop.net.tokens import Caller
 from piloop.plugins import limits as limits_module
 from piloop.plugins.campaign_type.kit.candidates.references import ImportRefused
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRefused
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.contribution import collect, contributions_of, installed
 from piloop.plugins.escalation.contract import ESCALATION
@@ -847,7 +846,6 @@ REFUSALS: tuple[type[Exception], ...] = (
     ops.Refused,
     escalations.Refused,
     ImportRefused,
-    RemeasureRefused,
     limits_module.Refused,
     tokens.NameTaken,
     CampaignError,

@@ -204,19 +204,20 @@ The ideas of a campaign are a board with four statuses. The migration renames th
 
 ### Claims
 
-The daemon gives no idea to a run. For each free slot it starts a run from the head, and the implementer claims one
+The daemon gives no idea to a run. For each free slot it starts a run from the best, and the implementer claims one
 open idea (`piloop idea claim`), or proposes one of its own and claims it (`piloop idea propose`). The claim ends with
-the run: the idea is `done` after a finished run with a verdict, and `open` again otherwise, with a note that says why.
+the run: the idea is `done` after a finished run whose last candidate has a score, and `open` again otherwise, with a
+note that says why.
 
 - A run has a `campaign_id`. Its `idea_id` and `attempt` are null until its implementer claims an idea.
 - `piloop idea base` is removed, and `--harness` and `--base` of `piloop idea add`. The migration deletes
-  `ideas.base_candidate_id`, `ideas.harness` and `ideas.max_runs`. Every run starts from the head: to take the change
-  of a reference or a lead, add an idea that names it.
+  `ideas.base_candidate_id`, `ideas.harness` and `ideas.max_runs`. A run starts from the best, or from the candidate
+  that `--base` of `piloop idea claim` or `piloop idea propose` names.
 - `piloop candidate note --follow-up` adds an open idea about the candidate, not pinned to it.
 - A failed run's idea is not queued again from its last commit, and a queued run keeps its harness.
 - The `idea.base_candidate_id`, `run.rerouted` and `idea.recovery_requeued` events are retired: the old rows read as
   unknown events. `run.queued` has only the `harness`.
-- A run that claimed no idea is judged on the first track.
+- A run that claimed no idea is scored on the first track.
 - `[tracks.<name>] share` is removed: workers claim any open idea. It loads with a warning until 0.7.0, and a table
   that it leaves empty goes.
 
@@ -246,56 +247,86 @@ The result line names its `status`, and the primary is its `score`:
 |---|---|
 | `{"metrics": {"bytes": 3688775, "seconds": 0.82}}` | `{"status": "ok", "score": 3688775, "direction": "lower", "metrics": {"seconds": 0.82}}` |
 | exit 1 | `{"status": "crash", "feedback": "<why>"}`, or exit 1 |
-| exit 1 on a rate limit | `{"status": "infra_error", "feedback": "<why>"}`: no verdict, run again later |
+| exit 1 on a rate limit | `{"status": "infra_error", "feedback": "<why>"}`: no score, run again later |
 
 A line without `status` still reads as `ok`, with the primary among `metrics`, until 0.7.0. A rung's line keeps its
 form.
 
-### Implementers submit, and the noise decides
+### Implementers submit
 
-A new campaign scores what its implementers submit, judged by the noise of its baseline:
+A new campaign scores what its implementers submit:
 
 | 0.6 default | What it does | 0.5's behavior |
 |---|---|---|
 | `[evaluator] scoring = "submit"` | An implementer scores a commit with `piloop submit`, as many per run as `submissions` allows: no cap by default. Other commits are `skipped`. | `scoring = "run_end"` |
-| `[plugins.verdict_rule] provider = "noise"` | A mean gain must exceed `m·σ/√n`: `σ` is the noise of the bar's evaluations, `n` the candidate's evaluations ([the noise](/concepts/verdict#the-noise)). It must hold on `[evaluator] sealed` too, when that is set. | `provider = "bootstrap"` |
-| `[evaluator] noise_runs = 3` | The baseline is evaluated 3 times under each evaluator. | `noise_runs = 1` |
+| `[evaluator] noise_runs = 3` | The baseline, and each candidate whose first score beats the best, get 3 evaluations under each evaluator. | `noise_runs = 1` |
 
-A campaign that 0.5 made keeps 0.5's behavior: the upgrade stores the three old values in its stored config, where
-its `piloop.toml` did not set them. The repo's `piloop.toml` is not changed, so reading it again with
-`piloop campaign sync` or `piloop init` gives the 0.6 defaults. To switch a campaign to 0.6's scoring, run:
+A campaign that 0.5 made keeps 0.5's values: the upgrade stores them in its stored config, where its `piloop.toml` did
+not set them. The repo's `piloop.toml` is not changed, so reading it again with `piloop campaign sync` or `piloop init`
+gives the 0.6 defaults. To switch a campaign to them, run:
 
 ```bash
 piloop campaign sync enwik8
 ```
 
-To keep 0.5's scoring through a sync, put the old values in its `piloop.toml`. `scoring = "run_end"` works until
-0.7.0:
+To keep 0.5's values through a sync, put them in its `piloop.toml`. `scoring = "run_end"` works until 0.7.0:
 
 ```toml
 [evaluator]
 scoring = "run_end"
 noise_runs = 1
-
-[plugins.verdict_rule]
-provider = "bootstrap"
 ```
 
-### Verdict rules of a plugin
+### The pool replaces verdicts
 
-Every run keeps on the trunk now, and piloop files no idea for a merge that conflicts. A verdict rule of a plugin
-changes so:
+A candidate gets no verdict. piloop scores every candidate into the campaign's [pool](/concepts/pool), and the best is
+the confirmed candidate with the best mean that the best rule allows. There is no head, no bar, no trunk and no
+rebase: a run starts from the best, or from any candidate with `--base`.
+
+- `[plugins.verdict_rule]`, `[[metrics]] repeats` and `follow_head` of a role are dropped with a warning until 0.7.0.
+  The upgrade deletes them from each stored config. A [best rule](/plugins/rules#best-rules),
+  `[plugins.best_rule]`, says which confirmed candidate may be the best. The default is `baseline`.
+- A guardrail's `margin` and `fraction` compare with the baseline's value, not with the bar's. A `floor` is as before.
+- The section `judging` is `scoring`. The upgrade renames it in each stored config, and a `piloop.toml` that names it
+  loads with a warning until 0.7.0.
+- `candidates.verdict`, `cause`, `verdict_by`, `verdict_reason` and `track`, and `measurements.pair_id`, are deleted.
+  Each verdict stays in a `candidate.verdict` event: the upgrade writes one for each verdict that had none.
+  `candidates.excluded_reason` and `excluded_by` are new.
+- `piloop candidate verdict` is removed. To take a candidate out of the race for the best, run
+  `piloop candidate exclude <id> --reason "<why>"`. `piloop candidate note` adds a note and follow-up ideas, and
+  changes no standing.
+- `piloop candidate remeasure` never refuses: the candidate's mean includes the new evaluations, and the best
+  follows.
+
+The facts of the `optimization` source are renamed:
 
 | 0.5 | 0.6 |
 |---|---|
-| `raises_bar(self, node, lineage)` | Deleted: every keep raises its run's bar and is a trunk keep. |
-| `Branch`, `Lineage` | Deleted: `Node.made` is `Trunk` or `Imported`. |
-| `Rebase(conflicts=Seed())`, `Rebase(conflicts=Leave())` | `Rebase()`: a merge that conflicts names its paths in the reason. |
-| `Seed` | Deleted. |
+| `head` (`HEAD`) | `best` (`BEST`) |
+| `without_keep` (`WITHOUT_KEEP`) | `without_best` (`WITHOUT_BEST`) |
+| `keeps` (`KEEPS`) | `new_bests` (`NEW_BESTS`) |
+| `<name>_since_keep` (`since_keep`) | `<name>_since_best` (`since_best`) |
+| `per_keep` | `per_best` |
+| `Funnel.keeps` | `Funnel.bests` |
 
-A keep of a 0.5 branch run, which never moved the head, is `interesting` after the upgrade, so the head stays.
+The API changes so:
 
-### A cancelled evaluation is no verdict
+| 0.5 | 0.6 |
+|---|---|
+| `CampaignState.head`, `kept` | `CampaignState.best` (one `TrackBest` per track), `new_bests` |
+| Inbox news of kind `verdict` | Of kind `score`, with `told` |
+| The submit answer's `verdict` and `score` | `told`: where it stands, null until the daemon scored it |
+| `CandidateView.label`, `cause`, `verdict_reason` | `CandidateView.origin`, `excluded_reason` |
+
+A plugin imports `BestRule`, `Case`, `Scores`, `Criterion` and `Baseline` from `piloop.capabilities`. `VerdictRule`,
+`Judgement`, `Outcome`, `Node`, `Trunk`, `Imported`, `Rebase`, `Noise`, `Bootstrap` and `Bar` are removed. The
+example plugins `keep-cost` and `stop-after-keeps` are `best-cost` and `stop-after-bests`.
+
+The events `candidate.judged`, `candidate.rebased`, `candidate.noted`, `candidate.rejudge_requested`,
+`candidate.rejudge_failed`, `run.verdict_told`, `run.head_replaced` and `candidate.verdict` are retired: their old rows
+stay. The new ones are `candidate.scored`, `run.score_told`, `run.base_chosen` and `candidate.excluded_reason`.
+
+### A cancelled evaluation records nothing
 
 `piloop eval cancel` records no measurement. A run's candidate is `skipped`, not a `crash`. A baseline that never
 measured pauses its campaign's measurements until you resume it.
@@ -324,11 +355,10 @@ instead.
 
 ### `piloop submit` returns at once
 
-`piloop submit` prints the candidate and returns. The verdict and the score reach the implementer as a `[piloop]`
-message on its run. `--wait` is ignored until 0.7.0, and the route `GET /v1/submissions/{candidate}` is removed: read
-the verdict with `GET /v1/candidates/{candidate}`. `[agents] relay_wait` and `relay_deadline` of `config.toml` are
-dropped with a warning until 0.7.0. The sealed split starts on each submission at the same time as the evaluate command, and records a score only for
-a would-be keep.
+`piloop submit` prints the candidate and returns. Where it stands reaches the implementer as a `[piloop]` message on
+its run. `--wait` is ignored until 0.7.0, and the route `GET /v1/submissions/{candidate}` is removed: read where it
+stands with `GET /v1/candidates/{candidate}`. `[agents] relay_wait` and `relay_deadline` of `config.toml` are dropped
+with a warning until 0.7.0.
 
 ## Upgrading to 0.5.0
 

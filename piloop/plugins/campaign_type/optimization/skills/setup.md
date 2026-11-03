@@ -109,14 +109,14 @@ Map each answer to its keys:
 - **Objective and guardrails → `[[metrics]]`**, one table for each metric.
   - The objective: `role = "primary"`.
   - Each guardrail: `role = "guardrail"` with a `margin` and an optional hard `floor`. The `margin` is the regression
-    that the human accepts, in the units of the metric.
+    from the baseline that the human accepts, in the units of the metric.
   - The daemon enforces margins and floors. Never write them only in `brief.md`.
-  - A metric that changes between identical runs, such as a time: `repeats = 3`. The daemon then measures each
-    candidate 3 times next to its bar, so load on the host does not decide the verdict. Prefer CPU time to wall-clock
-    time, and put a `floor` only on a metric that load does not inflate.
+  - A score that changes between identical runs: `[evaluator] noise_runs` (3 by default) evaluations confirm a
+    candidate whose first score beats the best, so one lucky evaluation never makes the best. Prefer CPU time to
+    wall-clock time, and put a `floor` only on a metric that load does not inflate.
 - **Several tracks:**
   - Each primary metric names its `track`.
-  - Each primary has a `margin`: what a keep on another track may give up per step.
+  - Each primary has a `margin`: how much worse than the baseline a candidate of another track may make it.
   - Each primary may have a `floor`: a value it never goes past. Only an edit to `piloop.toml` moves it.
   - A track may have a `[tracks.<name>]` table with an `addendum`: a brief file that a worker gets when it claims an
     idea of the track.
@@ -160,16 +160,16 @@ Wire the existing measurement, or write `evaluate.py`. The contract:
   prints the line instead.
 - The evaluator, not the brief, checks the ceremony (manifests, size caps, inputs) and says what failed in `feedback`.
 - `status` is `crash` or `timeout` when the candidate failed, and `infra_error` for a fault that is not the candidate's
-  (a rate limit, a missing input): piloop runs it again later and never judges on it. After `ok` it exits 0.
+  (a rate limit, a missing input): piloop runs it again later and never scores on it. After `ok` it exits 0.
 - A fast `[evaluator] dev` command lets implementers check a change themselves.
 - It is deterministic: fixed seeds and splits.
 - When an evaluation costs money, it reports `eval_cost_usd` as a watch metric, also when it fails.
 - When the full panel is expensive, a `[[ladder]]` rung that it reports first can stop a bad commit early:
   https://piloop.autoresearch.inc/concepts/campaigns#the-evaluation-ladder
-- In `brief.md`, tell implementers to compare a local check with the head's stored scores, not to measure the head
+- In `brief.md`, tell implementers to compare a local check with the best's stored scores, not to measure the best
   again.
 
-Audit the evaluator end to end before the launch: read it, and check its output on a sample of the head's units.
+Audit the evaluator end to end before the launch: read it, and check its output on a sample of the baseline's units.
 Run it once now. Compare the result line and the duration with what the human said about measurement.
 
 Show both files to the human. Ask once more before you register.
@@ -208,12 +208,12 @@ scores from the new one.
 
 ## What happens next
 
-- `piloop status` prints the head, the running agents, the last candidates and the items in the human's inbox.
+- `piloop status` prints the best, the running agents, the last candidates and the items in the human's inbox.
 - `piloop watch` shows the same, live, in the human's terminal.
 - `piloop sql -` runs the SQL statement piped in from a quoted heredoc (`<<'EOF'`).
 - Agents run as background processes. `piloop attach <agent_session_id>` prints the last lines that one wrote.
-- Every commit an implementer makes becomes a candidate (a commit whose tree is already a candidate is that candidate). The
-  evaluate command measures it, unless the commit has a `Piloop-Eval: skip` trailer.
+- Every commit that an implementer submits (`piloop submit`) becomes a candidate, and the daemon scores it into the
+  campaign's pool. The best of the pool is the campaign's result.
 - Escalations go to the human's inbox. The orchestrator (any harness that runs `piloop-operate` and wakes on
   `piloop inbox wait`) decides them, with the human when they are present. It records every decision that it takes
   for the human in the inbox.

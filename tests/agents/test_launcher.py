@@ -238,7 +238,7 @@ def test_brief_is_role_prompt_campaign_brief_guides_then_the_context_section(cam
         f"""- You are orchestrator#7, the orchestrator for campaign#1 (demo): sign what you write as 'orchestrator#7'.
 - Why this agent started (context, not a scope): timer
 - Run every `piloop` command as `{PILOOP_HINT}`. `{PILOOP_HINT} sql -` runs one SQL statement from stdin: pipe it from a quoted heredoc (`<<'EOF'`, which expands nothing), and double each `'` in your text.
-- You may write: answers to messages via inbox reply, comments(decision) addressed to the human, with a priority, ideas, verdicts and the campaign changes of the piloop commands in this brief, journal lines.
+- You may write: answers to messages via inbox reply, comments(decision) addressed to the human, with a priority, ideas, exclusions and the campaign changes of the piloop commands in this brief, journal lines.
 - `{PILOOP_HINT} schema <guide>` prints another guide: search, past_campaigns, provenance, queries, orchestration, long_jobs, workspace.
 - Add an idea: `{PILOOP_HINT} idea add demo '<title>' --hypothesis '…' --plan '…' --from '<the evidence, with ids>'` (`--help` for links, a base, a priority).
 - extra line"""
@@ -254,7 +254,7 @@ def test_a_brief_has_its_roles_guides_before_the_context_and_names_the_others(ca
     assert [line for line in guides.splitlines() if line.startswith('## ')] == [
         '## Working with the piloop database',
         '## The model',
-        '## Judge results',
+        '## Read the pool',
         '## Talk',
         '## The inbox',
         '## Link ideas',
@@ -295,7 +295,7 @@ def test_the_example_queries_of_a_brief_read_its_own_campaign_and_primary(campai
     with db.session() as s:
         first = s.get_one(Campaign, campaign.id)
         guides = {
-            'role': {'orchestrator': {'sections': ['database', 'judging', 'search', 'past_campaigns', 'context']}}
+            'role': {'orchestrator': {'sections': ['database', 'scoring', 'search', 'past_campaigns', 'context']}}
         }
         config = load_campaign_config(Path(first.path), plugins=guides)
         second = Campaign(name='second', path=first.path, config=config)

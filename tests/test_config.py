@@ -2,6 +2,7 @@ import json
 import re
 import subprocess
 import tomllib
+import warnings
 from collections.abc import Mapping
 from datetime import timedelta
 from pathlib import Path
@@ -9,6 +10,7 @@ from unittest.mock import ANY
 
 import pytest
 from inline_snapshot import snapshot
+from pydantic import ValidationError
 
 from piloop import config as config_module
 from piloop.config import CampaignConfig, ConfigError, ConfigMissing, load_campaign_config
@@ -16,8 +18,9 @@ from piloop.deprecated import PiloopDeprecationWarning
 from piloop.ids import RoleName
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole, TrackConfig
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
+from piloop.plugins.campaign_type.kit.pool.pool import best_rule, criterion
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
-from piloop.plugins.campaign_type.kit.verdicts.judge import criterion
 from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.executor.contract import EXECUTORS
 from piloop.plugins.executor.workers import Workers
@@ -33,7 +36,7 @@ from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule
 from piloop.plugins.stop_rule.limits import Limits
 from piloop.settings import Settings
-from tests.conftest import AGENT_TIMEOUT, LEAD, LEAD_TRIGGERS, role_of
+from tests.conftest import AGENT_TIMEOUT, LEAD, LEAD_TRIGGERS, bare_config, role_of
 
 
 def test_load_precedence(campaign_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -411,7 +414,7 @@ def test_metric_roles_are_validated(campaign_path: Path) -> None:
     with pytest.raises(ValueError, match='set margin or fraction, not both'):
         load_campaign_config(campaign_path, metrics=[primary, {**guard, 'fraction': 0.1}])
     relative = load_campaign_config(campaign_path, metrics=[primary, {**guard, 'margin': None, 'fraction': 0.1}])
-    assert criterion(relative.guardrails[0]).allowed(40) == 4.0, "a fraction of the bar, in the metric's units"
+    assert criterion(relative.guardrails[0]).allowed(40) == 4.0, "a fraction of the baseline's, in the metric's units"
     with pytest.raises(ValueError, match="'size': floor, margin and fraction apply to guardrails and primaries only"):
         load_campaign_config(campaign_path, metrics=[primary, {**guard, 'role': 'watch'}])
     with pytest.raises(
@@ -426,8 +429,6 @@ def test_metric_roles_are_validated(campaign_path: Path) -> None:
         ValueError, match=r'metrics\[0\]\.primary = True: Extra inputs are not permitted\. Fix: delete the key'
     ):
         load_campaign_config(campaign_path, metrics=[{'name': 'score', 'direction': 'higher', 'primary': True}])
-    with pytest.raises(ValueError, match='plugins.verdict_rule.confidence'):
-        load_campaign_config(campaign_path, plugins={'verdict_rule': {'confidence': 1}})
 
 
 ACCURACY = {'name': 'score', 'direction': 'higher', 'role': 'primary', 'track': 'accuracy', 'margin': 1, 'floor': 2}
@@ -454,7 +455,7 @@ def test_tracks_are_primaries_each_with_a_margin_and_a_table_only_for_an_addendu
             **tracks,
             'tracks': {**ADDENDA, 'speed': {}},
         },
-        "the stop rule 'limits' limits the head, which needs a campaign of one track": {
+        "the stop rule 'limits' limits the best, which needs a campaign of one track": {
             **tracks,
             'plugins': {'stop_rule': {'target': 3}},
         },
@@ -474,10 +475,10 @@ def test_tracks_are_primaries_each_with_a_margin_and_a_table_only_for_an_addendu
     ]
     assert load_campaign_config(campaign_path, metrics=[ACCURACY, COST], tracks=ADDENDA).evaluator_key == (
         load_campaign_config(campaign_path, metrics=guarded).evaluator_key
-    ), 'tracks, margins and floors are verdict policy: they re-measure nothing'
+    ), 'tracks, margins and floors are the policy of the best: they re-measure nothing'
 
 
-def test_the_evaluator_is_what_scores_the_judging_metrics_not_how_the_verdict_reads_them(campaign_path: Path) -> None:
+def test_the_evaluator_is_what_scores_the_judging_metrics_not_how_the_best_rule_reads_them(campaign_path: Path) -> None:
     primary = {'name': 'score', 'direction': 'higher', 'role': 'primary'}
     size = {'name': 'size', 'direction': 'lower', 'role': 'guardrail', 'margin': 3}
     cfg = load_campaign_config(campaign_path, metrics=[primary, size])
@@ -497,11 +498,11 @@ def test_the_evaluator_is_what_scores_the_judging_metrics_not_how_the_verdict_re
             {**size, 'role': 'primary', 'track': 'b'},
         ),
         'another order of the metrics': key(size, primary),
-        'a verdict rule': key(primary, size, plugins={'verdict_rule': {'confidence': 0.9}}),
+        'a best rule': key(primary, size, plugins={'best_rule': {'provider': 'baseline'}}),
         'a new watch metric': key(primary, size, {'name': 'eval_cost_usd', 'direction': 'lower'}),
         'no ladder': key(primary, size, ladder=[]),
     }
-    assert unchanged == dict.fromkeys(unchanged, cfg.evaluator_key), 'none changes a verdict already given'
+    assert unchanged == dict.fromkeys(unchanged, cfg.evaluator_key), 'none changes a score already measured'
     changed = {
         'a watch metric that judges now': key(primary, size, {**size, 'name': 'cost', 'margin': 1}),
         'a guardrail that only watches now': key(primary, {'name': 'size', 'direction': 'lower'}),
@@ -514,34 +515,11 @@ def test_the_evaluator_is_what_scores_the_judging_metrics_not_how_the_verdict_re
     assert key(primary, size, ladder=[SCREEN]) == key(
         primary, size, ladder=[{**SCREEN, 'stop': {'size': {'floor': 9}}}]
     ), "a rung's stop is the policy of the climb"
-    assert len({cfg.evaluator_key, *changed.values()}) == len(changed) + 1, 'each can change a verdict'
+    assert len({cfg.evaluator_key, *changed.values()}) == len(changed) + 1, 'each can change a score'
     assert (
         load_campaign_config(campaign_path).evaluator_key
         == load_campaign_config(campaign_path, metrics=[primary]).evaluator_key
     ), 'a watch metric is no part of the evaluator'
-
-
-def test_repeats_marks_a_noisy_metric_and_a_track_pairs_with_the_largest_repeats_of_its_deciding_metrics(
-    campaign_path: Path,
-) -> None:
-    timing = {'name': 'seconds', 'direction': 'lower', 'role': 'guardrail', 'margin': 1, 'repeats': 3}
-    cpu = {'name': 'cpu', 'direction': 'lower', 'role': 'guardrail', 'margin': 1, 'repeats': 5}
-    primary = {'name': 'score', 'direction': 'higher', 'role': 'primary'}
-    assert load_campaign_config(campaign_path).all_tracks[0].repeats is None, 'no noisy metric: one sample'
-    noisy = load_campaign_config(campaign_path, metrics=[primary, timing, cpu])
-    assert noisy.all_tracks[0].repeats == 5
-    assert (
-        noisy.evaluator_key
-        == load_campaign_config(
-            campaign_path, metrics=[primary, {**timing, 'repeats': None}, {**cpu, 'repeats': None}]
-        ).evaluator_key
-    ), 'repeats is verdict policy: it re-measures nothing'
-    serving = load_campaign_config(campaign_path, metrics=[ACCURACY, {**COST, 'repeats': 3}], tracks=ADDENDA)
-    assert [t.repeats for t in serving.all_tracks] == [3, 3], 'the primary of another track is a guardrail'
-    with pytest.raises(ValueError, match="'size': repeats applies to primaries and guardrails only"):
-        load_campaign_config(campaign_path, metrics=[primary, {'name': 'size', 'direction': 'lower', 'repeats': 3}])
-    with pytest.raises(ValueError, match=r'metrics\[1\]\.repeats = 0'):
-        load_campaign_config(campaign_path, metrics=[primary, {**timing, 'repeats': 0}])
 
 
 def test_default_harnesses_keep_agents_out_of_the_harness_memory() -> None:
@@ -670,14 +648,14 @@ def test_a_rung_may_stop_on_a_floor_and_a_regression_together(campaign_path: Pat
 
 
 def test_a_capability_of_one_instance_written_as_named_tables_says_so(campaign_path: Path) -> None:
-    """``[plugins.verdict_rule.strict]`` reads as a key ``strict`` of the one verdict rule: the error says what to write."""
+    """``[plugins.best_rule.strict]`` reads as a key ``strict`` of the one best rule: the error says what to write."""
     with pytest.raises(ConfigError) as caught:
-        load_campaign_config(campaign_path, plugins={'verdict_rule': {'strict': {'confidence': 0.99}}})
+        load_campaign_config(campaign_path, plugins={'best_rule': {'strict': {'min_gain': 2}}})
     assert str(caught.value).split('\n', 1)[1] == snapshot(
-        '  plugins.verdict_rule: a verdict rule has one instance, not one for each name (strict): write its keys in [plugins.verdict_rule], with provider = "<verdict rule>" to choose one. Fix: https://piloop.autoresearch.inc/reference/configuration describes the key'
+        '  plugins.best_rule: a best rule has one instance, not one for each name (strict): write its keys in [plugins.best_rule], with provider = "<best rule>" to choose one. Fix: https://piloop.autoresearch.inc/reference/configuration describes the key'
     )
-    with pytest.raises(ConfigError, match=r"plugins\.verdict_rule\.confidence = 'high'"):
-        load_campaign_config(campaign_path, plugins={'verdict_rule': {'confidence': 'high'}})
+    with pytest.raises(ConfigError, match=r"plugins\.best_rule\.confidence = 'high'"):
+        load_campaign_config(campaign_path, plugins={'best_rule': {'confidence': 'high'}})
     held = load_campaign_config(campaign_path, plugins={'stop_rule': {'hold_at': {'hours': 5}}})
     assert STOP_RULES.selected(held.plugins) == Limits(hold_at={'hours': 5}), 'a parameter that is a table is one'
 
@@ -823,6 +801,39 @@ def test_a_scout_table_of_0_5_loads_without_a_scout_and_warns(campaign_path: Pat
     with pytest.warns(PiloopDeprecationWarning, match=r'the scout role is removed; delete \[plugins.role.scout\]'):
         cfg = load_campaign_config(campaign_path)
     assert 'scout' not in cfg.roles.all()
+
+
+def test_the_verdict_keys_of_0_5_load_without_them_and_warn_from_a_file_and_from_a_stored_config(
+    campaign_path: Path,
+) -> None:
+    """A candidate gets no verdict, an evaluation pairs with no bar, and there is no head: piloop drops
+    ``[plugins.verdict_rule]``, ``repeats`` and ``follow_head``, and reads the section ``judging`` as ``scoring``."""
+    toml = campaign_path / 'piloop.toml'
+    metric = '[[metrics]]\nname = "size"\ndirection = "lower"\n'
+    implementer = '[plugins.role.implementer]\n'
+    lead = f'{LEAD_TRIGGERS}\nsections = ["context", "judging", "goal"]'
+    text = toml.read_text().replace(metric, f'{metric}repeats = 3\n').replace(LEAD_TRIGGERS, lead)
+    text = text.replace(implementer, f'{implementer}follow_head = "message"\n')
+    toml.write_text(f'{text}\n[plugins.verdict_rule]\nprovider = "bootstrap"\nconfidence = 0.9\n')
+    with warnings.catch_warnings(record=True) as warned:
+        warnings.simplefilter('always')
+        cfg = load_campaign_config(campaign_path)
+    assert sorted(str(w.message).split('; removed')[0] for w in warned if w.category is PiloopDeprecationWarning) == [
+        'a candidate gets no verdict now, so [plugins.verdict_rule] is removed',
+        "an evaluation runs next to no bar now: delete repeats of metric 'size'",
+        'the section judging is scoring now: rename it in [plugins.role.orchestrator] sections',
+        'there is no head to follow now: delete follow_head of [plugins.role.implementer]',
+    ]
+    assert 'verdict_rule' not in cfg.plugins and best_rule(cfg) == Baseline()
+    assert [type(s).__name__ for s in cfg.sections_of(LEAD)] == ['Context', 'Scoring', 'Goal']
+    stored = bare_config('p').model_dump(mode='json')
+    stored['plugins']['verdict_rule'] = {'provider': 'bootstrap'}
+    stored['metrics'][0]['repeats'] = None
+    with pytest.warns(PiloopDeprecationWarning, match='verdict_rule'):
+        migrated = CampaignConfig.model_validate(stored)
+    assert migrated == bare_config('p'), 'a stored config of 0.5 loads, as 0078 pinned it'
+    with pytest.raises(ValidationError):  # what is no table is left to the validation
+        CampaignConfig.model_validate('not a table')
 
 
 def test_a_research_table_of_0_6_loads_without_research_and_warns_once(campaign_path: Path) -> None:

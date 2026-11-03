@@ -140,7 +140,7 @@ Any campaign then gets the `quick` role, with its table in `piloop.toml` over th
 
 A role is a table in `piloop.toml`: its prompt, where it works, how (harnesses, models, MCP servers, timeout,
 concurrency) and what it may file. A role that does runs starts one run per free slot, whose agent claims an idea from
-the board, and its commits are scored and judged. A plugin's role is a subclass of `ImplementerRole` whose fields have
+the board, and its commits are scored into the pool. A plugin's role is a subclass of `ImplementerRole` whose fields have
 the role's defaults, and whose `PROMPT` is the prompt that starts its brief: a file of its package. `prompt` in the
 table overrides it. The orchestrator is the one role that does no runs: piloop starts its agents itself. [Roles](/concepts/roles)
 describes each key.
@@ -157,29 +157,26 @@ The orchestrator wakes on its two triggers: [`news` and `run_failed`](/concepts/
 
 ## Sections
 
-### Example: the keeps per hour
+### Example: the new bests per hour
 
 ```python
-from sqlalchemy import func, select
-
 from piloop.capabilities import Figure, Figures, Rendered, Rendering, Section, Surface
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 
 
-class KeepRate(Section):
-    """The keeps per hour since the campaign started."""
+class BestRate(Section):
+    """The new bests per hour since the campaign started."""
 
     SHOWN_IN = frozenset({Surface.STATUS})
     ORDER = 175  # after the evaluations
 
     def render(self, r: Rendering) -> Rendered | None:
-        mine = (Candidate.campaign_id == r.campaign.id) & (Candidate.verdict == 'keep')
-        kept = r.s.scalar(select(func.count()).select_from(Candidate).where(mine)) or 0
+        found = len(new_bests(r.s, r.campaign))
         hours = (r.now - r.campaign.created_at).total_seconds() / 3600
-        if not kept or hours <= 0:
+        if not found or hours <= 0:
             return None
-        rate = Figure(label='keeps per hour', value=round(kept / hours, 2))
-        return Rendered(title='Keep rate', blocks=(Figures(figures=(rate,)),))
+        rate = Figure(label='new bests per hour', value=round(found / hours, 2))
+        return Rendered(title='New bests', blocks=(Figures(figures=(rate,)),))
 ```
 
 Declare it with an entry point in `piloop.sections`. `piloop status` then shows it after the evaluations, wherever
@@ -250,8 +247,8 @@ the route.
 | What | `optimization` |
 |---|---|
 | Kinds | The candidate's origin: `baseline`, `candidate`, `reference`, `recovered`, `skipped`. |
-| Statuses | The verdict: `kept`, `interesting`, `discarded`, `crashed`. Else `pending`, or `unjudged` for an origin that piloop never judges. |
+| Statuses | Where it stands in the pool of its track: `best`, `ranked` (it may be best), `scored`, `excluded`, `crashed`, `pending`, or `unscored` for an origin that piloop never scores. |
 | Scores | The primary metric of each track, under the current evaluator. |
-| Spine | The head's ancestry, from the baseline. |
-| Series | The trunk's keeps on the spine, each when it was last judged. |
+| Spine | The ancestry of the best of the first track, from the baseline. |
+| Series | The new bests on the spine, each when it was scored best. |
 | Links | The candidate, its idea, its run and the run's agent sessions. |

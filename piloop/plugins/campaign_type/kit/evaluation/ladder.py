@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict
 
 from piloop.plugins.campaign_type.kit.evaluation.config import Rung, Tolerance
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Criterion
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import Criterion
 from piloop.plugins.metric import Direction, number
 
 
@@ -39,7 +39,7 @@ def stop_reason(
 
 
 def _reason(name: str, test: Tolerance, mine: float, theirs: float | None, direction: Direction) -> str | None:
-    """Why ``test`` stops a climb on the metric ``name``, or None: the verdict's own reading of a tolerance."""
+    """Why ``test`` stops a climb on the metric ``name``, or None: as a best rule reads a tolerance."""
     tolerance = Criterion(name, direction, test.margin, test.floor, test.fraction)
     if test.floor is not None and tolerance.past_floor(mine):
         return f'{name} {number(mine)} past its floor {number(test.floor)}'

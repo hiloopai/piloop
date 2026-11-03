@@ -1,6 +1,6 @@
 ---
 title: Tracks
-description: Several objectives for one piece of code, on one trunk.
+description: Several objectives for one piece of code, in one pool.
 ---
 
 A **track** is one objective of a campaign that has several, such as the accuracy of a model and its cost to run.
@@ -12,7 +12,7 @@ name = "accuracy"
 direction = "higher"
 role = "primary"
 track = "accuracy"
-margin = 0.02          # what a cost keep may lose
+margin = 0.02          # what the best of cost may lose against the baseline
 floor = 0.74           # and never below this
 
 [[metrics]]
@@ -20,9 +20,8 @@ name = "cost_seconds"
 direction = "lower"
 role = "primary"
 track = "cost"
-margin = 0.3           # what an accuracy keep may add
+margin = 0.3           # what the best of accuracy may add to the baseline
 floor = 2.0            # and never past this
-repeats = 3
 
 [tracks.accuracy]
 addendum = "briefs/accuracy.md"
@@ -36,20 +35,25 @@ addendum = "briefs/cost.md"
 ```text
 ## Tracks
 
-- accuracy: accuracy 0.7416 at the head (+0 on the start); floor 0.74, 0.0016 to spare; 0 trunk keeps; 0 running; 0 open ideas.
-- cost: cost_seconds 1.66 at the head (+0 on the start); floor 2, 0.34 to spare; 0 trunk keeps; 0 running; 0 open ideas.
+- accuracy: accuracy 0.7416 at candidate#1; floor 0.74, 0.0016 to spare; 0 new bests; 0 running; 0 open ideas.
+- cost: cost_seconds 1.66 at candidate#1; floor 2, 0.34 to spare; 0 new bests; 0 running; 0 open ideas.
 ```
 
 ## The rules
 
 - Each idea names its track: `piloop idea add titanic-tracks "Add a family-size feature" --track accuracy`.
-- A candidate is judged on every track whose primary it has a value for: first its idea's track, then the others.
-  On each track, the other tracks' primaries are its guardrails, each with its own `margin` and `floor`.
-- The candidate gets the best of these verdicts, and `candidates.track` names its track. A tie goes to its idea's
-  track. Each track's verdict is a `candidate.judged` event.
-- All tracks share one head. A keep on any track moves it.
+- Each track has its own [best](/concepts/pool#the-best): the confirmed candidate with the best value of the track's
+  primary. On each track, the other tracks' primaries are guardrails against the baseline, each with its own `margin`
+  and `floor`.
+- A candidate is scored on its idea's track, and is confirmed when it beats that track's best. A candidate without an
+  idea, such as the baseline, is on the first track.
+- A run starts from the best of the first track, or from the candidate that `--base` names.
 - Workers claim any open idea, whatever its track.
-- A worker learns its track when it claims an idea: `piloop idea claim` prints the track's keep rule, then its
-  `addendum` file.
+- A worker learns its track when it claims an idea. `piloop idea claim` prints what the best of the track needs, then
+  its `addendum` file:
+
+```text
+Your run is on track accuracy: its best has the best accuracy (higher is better), and holds cost_seconds (margin 0.3, floor 2) against the baseline.
+```
 
 A `[tracks.<name>]` table is needed only for an `addendum`.

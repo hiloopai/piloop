@@ -57,16 +57,18 @@ from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusCh
 from piloop.ids import CampaignStatus, CommentId, CommentKind, Ending, TargetKind, TargetRef
 from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
+from piloop.plugins.campaign_type.kit.backlog.ops import BaseChosen
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import CandidateImported
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.measure import RemeasureRequested
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
+from piloop.plugins.campaign_type.kit.pool.pool import Pool, track_of
+from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
-from piloop.plugins.campaign_type.kit.verdicts.verdict import write
 from piloop.plugins.cas.disk import DiskCas
 from piloop.plugins.executor.kit.capacity import GB, HostSample
 from piloop.plugins.executor.kit.leases import Leases
@@ -163,14 +165,14 @@ def test_campaign_and_idea_lifecycle(campaign_path: Path, out) -> None:
 
     run_cli(['history', 'demo'])
     text = out()
-    assert 'History: ideas (3 of 3)' in text and 'History: kept lineage' in text
+    assert 'History: ideas (3 of 3)' in text and 'History: new bests' in text
     assert 'Research pack: metrics' in text and 'Research pack: orchestrator and human digests' in text, 'the pack'
     assert 'more lines' in text and 'held by idea#1 (open), idea#2 (open)' in text
-    assert ' baseline ' in text and '## ' not in text, 'a terminal table, not the brief markdown'
+    assert '  id   status ' in text and '## ' not in text, 'a terminal table, not the brief markdown'
 
     run_cli(['status'])
     text = re.sub(r'\b\d+s (old|ago)\b', r'Ns \1', out())  # the second may tick over since init
-    assert 'head: candidate#1 · score: 1 · kept: 1 · candidates: 1 · evaluator: #1, Ns old' in text
+    assert 'best: candidate#1 · score: 1 · may be best on score: 1 · candidates: 1 · evaluator: #1, Ns old' in text
     assert '- Ideas: 2 open, 1 held (idea#3 on idea#1 (open), idea#2 (open));' in text
     assert '  - idea#1 p1 "more lines" by human, Ns ago\n  - idea#2 p2 "later" by human, Ns ago\n\n## Agents' in text
     assert '### Tools' not in text, 'the cheat sheet is for agents'
@@ -238,6 +240,75 @@ def test_a_worker_claims_or_proposes_an_idea_and_ends_its_run_through_the_api_si
     with db.session() as s:
         ends = s.scalars(select(Event).where(Event.kind == 'run.end_requested').order_by(Event.id)).all()
         assert [(e.target_id, e.actor) for e in ends] == [(1, 'implementer#1'), (2, 'implementer#2')]
+    db.close()
+
+
+@pytest.mark.usefixtures('api')
+def test_a_claim_or_a_proposal_with_a_base_starts_the_run_from_that_candidate_and_moves_the_checkout_to_it(
+    campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_cli(['init', str(campaign_path)])
+    repo = Repo(campaign_path)
+    baseline = repo.head.commit.hexsha
+    repo.git.checkout('-qb', 'elsewhere')
+    (campaign_path / 'solve.txt').write_text('')
+    repo.git.commit('-qam', 'an empty solution')
+    elsewhere = repo.head.commit.hexsha
+    repo.git.checkout('-q', 'main')
+    run_cli(['candidate', 'import', 'demo', 'elsewhere'])
+    run_cli(['idea', 'add', 'demo', 'try a cache'])
+    db = Database(common.settings.database_url, actor=System.DAEMON)
+    with db.session() as s:
+        for _ in range(3):
+            run = Run(campaign_id=1, base_candidate_id=1, harness='script', model='m', status=RunStatus.RUNNING)
+            s.add(run)
+            s.flush()
+            s.add(AgentSession(kind=IMPLEMENTER, campaign_id=1, subject=TargetRef(RUN, run.id), reason='a free slot'))
+        s.commit()
+    checkout = tmp_path / 'checkout'
+    repo.git.worktree('add', '-q', '--detach', str(checkout), baseline)
+    monkeypatch.chdir(checkout)
+    out()
+
+    def as_(actor: str, *argv: str) -> None:
+        settings = Settings(home=tmp_path, uv_tool_dir=tmp_path / 'uv-tools', actor=actor)
+        monkeypatch.setattr(common, 'settings', settings.model_copy(update=launched(tmp_path, actor)))
+        run_cli(list(argv))
+
+    with pytest.raises(SystemExit, match='no candidate#99'):
+        as_('implementer#1', 'idea', 'claim', '1', '--base', '99')
+    as_('implementer#1', 'idea', 'claim', '1', '--base', '2')
+    assert out().splitlines() == [
+        'idea#1 claimed: try a cache',
+        f'your checkout is at candidate#2 ({elsewhere[:12]})',
+    ]
+    assert Repo(checkout).head.commit.hexsha == elsewhere, 'the checkout of the caller moved'
+    with pytest.raises(SystemExit, match='run#1 claimed idea#1 already: a run chooses its base with its claim'):
+        as_('implementer#1', 'idea', 'propose', 'another', '--base', '1')
+    as_('implementer#2', 'idea', 'propose', 'halve the window', '--base', '1')
+    assert out().splitlines() == [
+        'idea#2 claimed: halve the window',
+        f'your checkout is at candidate#1 ({baseline[:12]})',
+    ]
+    assert Repo(checkout).head.commit.hexsha == baseline
+    (checkout / 'solve.txt').write_text('a change of my own\n')
+    with pytest.raises(
+        SystemExit,
+        match=rf'(?s)^your run starts from candidate#2, but your checkout did not move: .*solve.txt.*Move it to'
+        rf' {elsewhere} before'
+        r' you commit\.$',
+    ):
+        as_('implementer#3', 'idea', 'propose', 'from the solution', '--base', '2')
+    with db.session() as s:
+        assert [r.base_candidate_id for r in s.scalars(select(Run).order_by(Run.id))] == [2, 1, 2], (
+            'the daemon starts the run from its base also when the checkout cannot move'
+        )
+        chosen = s.scalars(select(Event).where(Event.kind == 'run.base_chosen').order_by(Event.id)).all()
+        assert [(e.target_id, e.actor, e.payload) for e in chosen] == [
+            (1, 'implementer#1', BaseChosen(candidate=CandidateId(2), was=CandidateId(1))),
+            (2, 'implementer#2', BaseChosen(candidate=CandidateId(1), was=CandidateId(1))),
+            (3, 'implementer#3', BaseChosen(candidate=CandidateId(2), was=CandidateId(1))),
+        ]
     db.close()
 
 
@@ -627,7 +698,7 @@ def test_journal_lines_come_back_in_wake(campaign_path: Path, out, monkeypatch: 
     assert text.startswith('# piloop wake: demo, ')
     assert 'orchestrator: demo: parked idea#4, dup of #2' in text, 'one line, signed with the actor'
     assert 'other: started' not in text, "only the campaign's journal"
-    assert '- demo · head score' in text
+    assert '- demo · best score 1 (candidate#1) · 0 new bests / 1 candidates' in text
     run_cli(['wake'])
     text = out()
     assert text.startswith('# piloop wake: the home, '), 'two active campaigns, and the directory is in neither'
@@ -828,16 +899,12 @@ def test_candidate_import_registers_a_reference_shown_apart_and_refuses_a_bad_re
 
     run_cli(['candidate', 'import', 'demo', 'elsewhere', '--summary', 'from another campaign'])
     assert out().strip() == (
-        'candidate#2 reference: from another campaign; the daemon measures it; start an idea from it with'
-        ' `piloop idea add demo "<title>" --base 2`'
+        'candidate#2 reference: from another campaign; the daemon measures it; start a run from it with'
+        ' `piloop idea claim <id> --base 2`'
     )
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
         c = s.get_one(Candidate, 2)
-        assert (c.origin, c.verdict, c.verdict_reason) == (
-            Origin.REFERENCE,
-            None,
-            f'imported from elsewhere ({sha[:7]})',
-        )
+        assert (c.origin, c.summary) == (Origin.REFERENCE, 'from another campaign')
         assert (c.run_id, c.parent_id, c.revision, c.measurements) == (None, None, sha, [])
         [event] = s.scalars(select(Event).where(Event.kind == 'candidate.imported')).all()
         assert (event.actor, event.target_id, event.payload) == (
@@ -850,33 +917,31 @@ def test_candidate_import_registers_a_reference_shown_apart_and_refuses_a_bad_re
 
     run_cli(['status'])
     text = out()
-    assert 'head: candidate#1 · score: 1 · kept: 1 · candidates: 1 · starting points: 1 ·' in text
+    assert 'best: candidate#1 · score: 1 · may be best on score: 1 · candidates: 1 · starting points: 1 ·' in text
     assert '## Recent candidates (1 of 1; score)' in text, 'a starting point is no candidate of the campaign'
     run_cli(['history'])
     text = out()
-    assert 'History: starting points (take the change of one onto the head)' in text
+    assert 'History: starting points (start a run from one with --base)' in text
     assert re.search(rf'#2 +{sha[:7]} +— +from another campaign', text), 'unmeasured yet'
 
     with pytest.raises(
         SystemExit, match=r"the tree of 'refs/piloop/demo/reference/2' already is candidate#2 \(reference\)"
     ):
         run_cli(['candidate', 'import', 'demo', 'refs/piloop/demo/reference/2'])
-    with pytest.raises(SystemExit, match=r"the tree of 'main' already is candidate#1 \(keep\)"):
+    with pytest.raises(SystemExit, match=r"the tree of 'main' already is candidate#1 \(baseline\)"):
         run_cli(['candidate', 'import', 'demo', 'main'])
     with pytest.raises(SystemExit, match=r"^'nope' names no commit in "):
         run_cli(['candidate', 'import', 'demo', 'nope'])
 
 
 @pytest.mark.usefixtures('api')
-def test_candidate_remeasure_asks_the_daemon_to_measure_a_candidate_again_and_refuses_what_is_never_measured(
+def test_candidate_remeasure_asks_the_daemon_to_evaluate_a_candidate_again_and_says_what_holds_it(
     campaign_path: Path, out
 ) -> None:
     run_cli(['init', str(campaign_path)])
     out()
     run_cli(['candidate', 'remeasure', '1'])
-    assert out().strip() == 'candidate#1 keep: the daemon measures it 3 times alone; its verdict stays', (
-        'the baseline has no bar'
-    )
+    assert out().strip() == 'candidate#1: the daemon evaluates it 3 more times'
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
         [event] = s.scalars(select(Event).where(has(RemeasureRequested))).all()
         assert (event.actor, event.target_kind, event.target_id, event.payload) == (
@@ -885,25 +950,18 @@ def test_candidate_remeasure_asks_the_daemon_to_measure_a_candidate_again_and_re
             1,
             RemeasureRequested(repeats=3),
         )
-        s.add(Candidate(campaign_id=1, revision='0' * 40, tree_sha='1' * 40))
-        s.add(Candidate(campaign_id=1, revision='2' * 40, tree_sha='3' * 40, verdict=Outcome.DISCARD, parent_id=1))
+        s.add(Candidate(campaign_id=1, revision='0' * 40, tree_sha='1' * 40, parent_id=1, origin=Origin.SKIPPED))
         s.commit()
-    run_cli(['candidate', 'remeasure', '3', '--repeats', '5'])
-    assert (
-        out().strip()
-        == 'candidate#3 discard: the daemon measures it 5 times next to its bar candidate#1; its verdict stays'
-    )
+    run_cli(['candidate', 'remeasure', '2', '--repeats', '5'])
+    assert out().strip() == 'candidate#2: the daemon evaluates it 5 more times', 'a skipped commit gets its first'
     with pytest.raises(cyclopts.ValidationError, match='Must be >= 1'):
-        run_cli(['candidate', 'remeasure', '3', '--repeats', '0'])
+        run_cli(['candidate', 'remeasure', '2', '--repeats', '0'])
     run_cli(['pause', 'demo', '--evals', '--reason', 'review'])
     out()
     run_cli(['candidate', 'remeasure', '1'])
     assert out().strip() == (
-        'candidate#1 keep: the daemon measures it 3 times alone once campaign demo is resumed'
-        ' (its evaluations are paused); its verdict stays'
+        'candidate#1: the daemon evaluates it 3 more times once campaign demo is resumed (its evaluations are paused)'
     )
-    with pytest.raises(SystemExit, match=r'candidate#2 is pending: the daemon measures and judges it already'):
-        run_cli(['candidate', 'remeasure', '2'])
     with pytest.raises(SystemExit, match='no candidate#99'):
         run_cli(['candidate', 'remeasure', '99'])
 
@@ -1020,7 +1078,7 @@ def test_eval_queue_lists_the_running_then_the_waiting_evaluations_and_eval_canc
     assert summary == '2 running, 1 waiting; `piloop eval cancel <candidate>`'
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
         cancelled = s.get_one(Candidate, 2)
-        assert (cancelled.measurements, cancelled.origin, cancelled.verdict) == ([], Origin.SKIPPED, None)
+        assert (cancelled.measurements, cancelled.origin) == ([], Origin.SKIPPED)
     run_cli(['candidate', 'remeasure', '1'])
     out()
     run_cli(['eval', 'queue'])
@@ -1049,7 +1107,6 @@ def test_candidate_show_prints_its_metrics_beside_its_parents_and_each_rung_of_i
     stop = 'score 2 vs 3 (-1; margin 0.5)'
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
         c = Candidate(campaign_id=1, parent_id=1, tree_sha='t', revision='0123456789abcdef', summary='screened')
-        c.verdict, c.verdict_by, c.verdict_reason = Outcome.DISCARD, 'daemon', f'stopped at screen: {stop}'
         s.add(c)
         s.flush()
         s.add_all(
@@ -1073,7 +1130,7 @@ def test_candidate_show_prints_its_metrics_beside_its_parents_and_each_rung_of_i
     run_cli(['candidate', 'show', '2'])
     assert out().splitlines() == snapshot(
         [
-            'candidate#2 discard: stopped at screen: score 2 vs 3 (-1; margin 0.5)',
+            'candidate#2 run: score 2 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +1',
             'screened',
             'parent candidate#1 · run — · revision 0123456789ab · evaluator#1',
             'full panel (vs parent): score 2 (+1), size 4 (-1)',
@@ -1083,60 +1140,108 @@ def test_candidate_show_prints_its_metrics_beside_its_parents_and_each_rung_of_i
     )
     run_cli(['candidate', 'show', '1'])
     first, summary, where, full = out().splitlines()
-    assert (first, summary, full) == ('candidate#1 keep: —', 'baseline', 'full panel (vs parent): score 1, size 5')
+    assert (first, summary, full) == (
+        'candidate#1 baseline: score 1 over 1 eval: rank 2 of 2; vs best candidate#2 -1',
+        'baseline',
+        'full panel (vs parent): score 1, size 5',
+    )
     assert re.fullmatch(r'parent — · run — · revision [0-9a-f]{12} · evaluator#1', where), 'no parent, no rung'
 
 
 @pytest.mark.usefixtures('api')
-def test_candidate_note_keeps_a_regressed_result_in_view_with_follow_ups_pinned_to_it(
+def test_candidate_note_comments_on_a_candidate_with_follow_ups_pinned_to_it(
     campaign_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_cli(['init', str(campaign_path)])
     run_cli(['idea', 'add', 'demo', 'try again'])
     out()
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
-        for tree, verdict in (('worse', Outcome.DISCARD), ('waiting', None)):
-            c = Candidate(
-                campaign_id=1, tree_sha=tree, revision=tree, summary=tree, verdict=verdict, verdict_by='daemon'
-            )
-            c.verdict_reason = 'against candidate#1: score 0 vs 1' if verdict is Outcome.DISCARD else None
-            s.add(c)
-            s.flush()
-            s.add(Measurement(candidate_id=c.id, evaluator_id=1, metrics={'score': 0.0, 'size': 0.0}))
+        c = Candidate(campaign_id=1, parent_id=1, tree_sha='worse', revision='worse', summary='worse')
+        s.add(c)
+        s.flush()
+        s.add(Measurement(candidate_id=c.id, evaluator_id=1, metrics={'score': 0.0, 'size': 0.0}))
         s.commit()
 
     run_cli(['candidate', 'note', '2', 'halves the eval time', '--follow-up', 'try again', '--follow-up', 'cache it'])
     assert out().splitlines() == [
-        'candidate#2 interesting (note): halves the eval time; against candidate#1: score 0 vs 1',
+        'candidate#2: noted',
         'idea#2 open, about candidate#2: try again (from candidate#2)',
         'idea#3 open, about candidate#2: cache it',
     ]
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
-        assert s.get_one(Candidate, 2).verdict_by == 'human'
+        [note] = s.scalars(select(Comment).where(Comment.target == TargetRef(CANDIDATE, 2))).all()
+        assert (note.author, note.kind, note.body) == ('human', CommentKind.NOTE, 'halves the eval time')
         idea = s.get_one(Idea, 3)
-        assert (idea.status, idea.created_by, idea.hypothesis) == (
+        assert (idea.status, idea.created_by, idea.track, idea.provenance, idea.hypothesis) == (
             IdeaStatus.OPEN,
             'human',
+            'score',
+            'candidate#2',
             'Follow-up of candidate#2 (worse): halves the eval time',
         )
+        assert s.get_one(Candidate, 2).excluded_reason is None, 'a note changes no standing'
     run_cli(['candidate', 'note', '2', 'and more', '--follow-up', 'try again'])
-    assert out().splitlines() == [
-        'candidate#2 interesting (note): and more; halves the eval time; against candidate#1: score 0 vs 1'
-    ], 'a follow-up already filed from this candidate is not filed twice'
+    assert out().splitlines() == ['candidate#2: noted'], (
+        'a follow-up already filed from this candidate is not filed twice'
+    )
+    run_cli(['candidate', 'note', '1', 'the baseline is worth a fresh start'])
+    assert out().splitlines() == ['candidate#1: noted'], 'any candidate takes a note'
 
-    with pytest.raises(SystemExit, match=r'candidate#1 is keep \(no reason\): only a measured discard or interesting'):
-        run_cli(['candidate', 'note', '1', 'why'])
-    with pytest.raises(SystemExit, match=r'candidate#3 is pending'):
-        run_cli(['candidate', 'note', '3', 'why'])
     with pytest.raises(SystemExit, match='a reason is required'):
         run_cli(['candidate', 'note', '2', ' '])
     with pytest.raises(SystemExit, match='no candidate#99'):
         run_cli(['candidate', 'note', '99', 'why'])
+    with pytest.raises(SystemExit, match="no track 'nope'"):
+        run_cli(['candidate', 'note', '2', 'why', '--follow-up', 'x', '--track', 'nope'])
     monkeypatch.setattr(
         common, 'settings', common.settings.model_copy(update=launched(common.settings.home, 'implementer#3'))
     )
     with pytest.raises(SystemExit, match='implementer#3 files no ideas'):
         run_cli(['candidate', 'note', '2', 'worth a look', '--follow-up', 'a hunch'])
+    run_cli(['candidate', 'note', '2', 'worth a look'])
+    assert out().splitlines() == ['candidate#2: noted'], 'an implementer notes without follow-ups'
+
+
+@pytest.mark.usefixtures('api')
+def test_candidate_exclude_takes_a_candidate_out_of_the_race_for_the_best_with_the_reason(
+    campaign_path: Path, out
+) -> None:
+    run_cli(['init', str(campaign_path)])
+    out()
+    with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
+        c = Candidate(campaign_id=1, parent_id=1, tree_sha='gamed', revision='0123456789abcdef', summary='gamed')
+        s.add(c)
+        s.flush()
+        s.add(Measurement(candidate_id=c.id, evaluator_id=1, metrics={'score': 9.0, 'size': 5.0}))
+        s.commit()
+    run_cli(['candidate', 'show', '2'])
+    assert out().splitlines()[0] == (
+        'candidate#2 run: score 9 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +8'
+    )
+
+    run_cli(['candidate', 'exclude', '2', '--reason', 'reads the answers from comment#4'])
+    assert out().strip() == 'candidate#2 excluded: reads the answers from comment#4'
+    with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
+        c = s.get_one(Candidate, 2)
+        assert (c.excluded_reason, c.excluded_by) == ('reads the answers from comment#4', 'human')
+        [event] = s.scalars(select(Event).where(Event.kind == 'candidate.excluded_reason')).all()
+        assert (event.actor, event.target_id) == ('human', 2)
+    run_cli(['candidate', 'show', '2'])
+    first, excluded, *_ = out().splitlines()
+    assert (first, excluded) == (
+        'candidate#2 run: score 9 over 1 eval: excluded (reads the answers from comment#4); vs parent +8,'
+        ' vs best candidate#1 +8',
+        'excluded: reads the answers from comment#4',
+    ), 'its scores stay; the baseline is the best again'
+    run_cli(['status'])
+    assert 'best: candidate#1 · score: 1 · may be best on score: 1 ·' in out()
+
+    with pytest.raises(SystemExit, match='candidate#1 is the baseline, which may always be best'):
+        run_cli(['candidate', 'exclude', '1', '--reason', 'why'])
+    with pytest.raises(SystemExit, match='a reason is required'):
+        run_cli(['candidate', 'exclude', '2', '--reason', ' '])
+    with pytest.raises(SystemExit, match='no candidate#99'):
+        run_cli(['candidate', 'exclude', '99', '--reason', 'why'])
 
 
 @pytest.mark.usefixtures('api')
@@ -1691,8 +1796,8 @@ def test_status_without_results(campaign_path: Path, out, mocker: MockerFixture)
     run_cli(['init', str(campaign_path)])
     db = Database(common.settings.database_url, actor=common.settings.actor)
     with db.session() as s:
-        for c in s.scalars(select(Candidate)):
-            c.verdict = Outcome.DISCARD
+        for m in s.scalars(select(Measurement)):
+            s.delete(m)
         idea = Idea(track='score', campaign_id=1, title='x', hypothesis='x', created_by='t', status=IdeaStatus.CLAIMED)
         s.add(idea)
         s.flush()
@@ -1736,7 +1841,8 @@ def test_status_without_results(campaign_path: Path, out, mocker: MockerFixture)
     out()
     run_cli(['status', 'demo'])
     text = out()
-    assert 'head: no trunk keep · kept: 0 · candidates: 1' in text
+    assert 'best: candidate#1 · score: — · may be best on score: 0 · candidates: 1' in text, 'an unmeasured baseline'
+    assert '- Baseline candidate#1, best candidate#1: score unmeasured; 0 new bests.' in text
     # the agent's age is wall-clock time since its row was added: 0s, or 1s on a loaded machine
     assert re.search(r'^  - implementer#1 script/m \ds, on idea#1 x: —$', text, re.M), 'a headless agent has no tab'
     assert 'silent' not in text, 'a one-shot process tracks no jobs; a row not launched yet has no runtime to ask'
@@ -2094,7 +2200,7 @@ def test_with_several_tracks_every_idea_names_its_track_and_a_claim_says_what_it
     run_cli(['idea', 'add', 'demo', 'shorter lines', '--track', 'size'])
     run_cli(['idea', 'add', 'demo', 'more lines', '--from', 'run#1', '--track', 'score'])
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
-        worse = Candidate(campaign_id=1, tree_sha='w', revision='w', summary='w', verdict=Outcome.DISCARD)
+        worse = Candidate(campaign_id=1, tree_sha='w', revision='w', summary='w')
         s.add(worse)
         s.commit()
     run_cli(['candidate', 'note', '2', 'cheaper', '--follow-up', 'trim it', '--track', 'size'])
@@ -2116,8 +2222,8 @@ def test_with_several_tracks_every_idea_names_its_track_and_a_claim_says_what_it
     run_cli(['idea', 'claim', '1'])
     assert out().splitlines() == [
         'idea#1 claimed: shorter lines',
-        'Your run is on track size: a keep must improve size (lower is better) with confidence and hold score'
-        ' (margin 1).',
+        'Your run is on track size: its best has the best size (lower is better), and holds score (margin 1)'
+        ' against the baseline.',
         '',
         '# Size track',
         'Cut bytes, keep every line.',
@@ -2133,8 +2239,8 @@ def test_with_several_tracks_every_idea_names_its_track_and_a_claim_says_what_it
     run_cli(['idea', 'propose', 'drop a blank line', '--track', 'score'])
     assert out().splitlines()[:2] == [
         'idea#5 claimed: drop a blank line',
-        'Your run is on track score: a keep must improve score (higher is better) with confidence and hold size'
-        ' (margin 2).',
+        'Your run is on track score: its best has the best score (higher is better), and holds size (margin 2)'
+        ' against the baseline.',
     ], 'a proposal says it too, and a track without an addendum ends with its rule'
 
 
@@ -2516,7 +2622,7 @@ def test_an_escalation_is_filed_with_its_form_shown_by_its_provider_and_answered
 
 
 @pytest.mark.usefixtures('api')
-def test_submit_queues_the_commit_of_the_checkout_and_returns_before_its_verdict(
+def test_submit_queues_the_commit_of_the_checkout_and_returns_before_its_score(
     campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_cli(['init', str(campaign_path)])
@@ -2533,15 +2639,20 @@ def test_submit_queues_the_commit_of_the_checkout_and_returns_before_its_verdict
     monkeypatch.setattr(common, 'settings', Settings(home=tmp_path).model_copy(update=agent))
     monkeypatch.chdir(checkout)
     run_cli(['submit'])
-    assert out().strip() == 'candidate#2 is queued: its verdict comes as a [piloop] message', 'no wait'
+    assert out().strip() == 'candidate#2 is queued: where it stands comes as a [piloop] message', 'no wait'
+    run_cli(['submit', revision])
+    assert out().strip() == 'candidate#2 is queued: where it stands comes as a [piloop] message', 'not scored yet'
     with closing(Database(f'sqlite:///{tmp_path / "piloop.db"}', actor=System.DAEMON)) as db, db.session() as s:
         candidate = s.get_one(Candidate, run_candidate(db, run_id))
-        evaluator = s.get_one(Campaign, candidate.campaign_id).evaluator_id
-        s.add(Measurement(candidate_id=candidate.id, evaluator_id=evaluator, metrics={'score': 2.0}))
-        write(candidate, Outcome.KEEP, cause=None, reason='+1', by=System.DAEMON)
+        campaign = s.get_one(Campaign, candidate.campaign_id)
+        s.add(Measurement(candidate_id=candidate.id, evaluator_id=campaign.evaluator_id, metrics={'score': 2.0}))
+        s.flush()
+        record_scored(s, Pool.of(s, campaign, track_of(campaign.config, candidate)), candidate.id)
         s.commit()
     run_cli(['submit', revision, '--wait', '5'])
-    assert out().strip() == 'keep 2', 'its own submission again: its verdict, and no submission spent'
+    assert out().strip() == (
+        'candidate#2: score 2 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +1'
+    ), 'its own submission again: where it stands, and no submission spent'
 
 
 def db_campaign(db: Database) -> Campaign:

@@ -16,8 +16,8 @@
 | `Readings.notices: dict[str, list[float]]` | Values by the name that it reads. When a value passes one, the daemon posts one note to the inbox, at priority 1. |
 | `Readings.names() -> tuple[str, ...]` | The names of the values that it reads. |
 | `Readings.read(repo: Path) -> dict[str, float]` | Read every value of `names`. The daemon calls it outside any transaction, at the campaign's repo root. |
-| `Readings.supplies() -> tuple[Fact[FactValue], ...]` | `reading(name)` and `since_keep(name)` for each name of `names`. |
-| `Readings.gather(s: Session, campaign: Campaign, wanted: frozenset[Fact[FactValue]], now: datetime) -> dict[Fact[FactValue], FactValue]` | Each value of the latest reading that has it, None after a failed one, and its growth since the latest keep. |
+| `Readings.supplies() -> tuple[Fact[FactValue], ...]` | `reading(name)` and `since_best(name)` for each name of `names`. |
+| `Readings.gather(s: Session, campaign: Campaign, wanted: frozenset[Fact[FactValue]], now: datetime) -> dict[Fact[FactValue], FactValue]` | Each value of the latest reading that has it, None after a failed one, and its growth since the latest new best. |
 | `Readings.as_of(s: Session, campaign: Campaign, fact: Fact[FactValue], now: datetime) -> datetime \| None` | The time of the latest reading of the name that `fact` is of: None before the first. |
 | `Readings.due(s: Session, campaign: Campaign) -> datetime \| None` | When the source reads next: `interval` after its latest reading, or now before the first. |
 | `Readings.record(s: Session, campaign: Campaign, values: dict[str, float] \| FactReadError) -> None` | Record a reading as a `fact.read` event, with a note for each notice that it passed. The caller commits. |

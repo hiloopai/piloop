@@ -1,0 +1,13 @@
+[project]
+name = "piloop-best-cost"
+version = "0.1.0"
+description = "A piloop stop rule that escalates when a new best costs too much, and stops at a harder line"
+requires-python = ">=3.14"
+dependencies = ["piloop"]
+
+[project.entry-points."piloop.stop_rules"]
+best_cost = "piloop_best_cost:BestCost"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

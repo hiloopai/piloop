@@ -160,20 +160,21 @@ def test_an_evaluation_records_its_measurement(
     assert count == 2, 'the baseline and the new measurement'
 
 
-def test_a_paired_evaluation_records_each_sample_with_its_pair(
+def test_a_remeasure_records_as_many_evaluations_as_it_asks(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, provider: str, controller: Controller
 ) -> None:
     ex = controller(tmp_path, provider, runtime)
     execute(ex, db, make_run(db, campaign))
     with db.session() as s:
         candidate = s.scalars(select(Candidate).where(Candidate.run_id.is_not(None))).one()
+        before = len(candidate.measurements)
         request_remeasure(s, candidate, System.ORCHESTRATOR, repeats=2)
         s.commit()
         candidate_id = candidate.id
     ex.remeasure(candidate_id)
     with db.session() as s:
-        pairs = [(m.metrics, m.pair.metrics) for m in s.get_one(Candidate, candidate_id).measurements if m.pair]
-    assert pairs == [({'score': 2.0, 'size': 10.0}, {'score': 1.0, 'size': 5.0})] * 2
+        added = s.get_one(Candidate, candidate_id).measurements[before:]
+    assert [m.metrics for m in added] == [{'score': 2.0, 'size': 10.0}] * 2
 
 
 def test_a_cancelled_agent_is_stopped_and_still_reports(
@@ -302,9 +303,9 @@ def test_the_capacity_is_the_slots_of_the_executor_now(
 
 def test_config_toml_refuses_a_plugins_table_that_no_capability_of_the_home_declares(tmp_path: Path) -> None:
     """``[plugins.<name>]`` of ``config.toml`` is generic: the plugin host checks it, as ``piloop.toml``'s."""
-    (tmp_path / 'config.toml').write_text('[plugins.verdict_rul]\nprovider = "bootstrap"\n')
+    (tmp_path / 'config.toml').write_text('[plugins.best_rul]\nprovider = "baseline"\n')
     with pytest.raises(
-        SystemExit, match=r'verdict_rul\n  Value error, no capability has that name; there is archive, cas, executor'
+        SystemExit, match=r'best_rul\n  Value error, no capability has that name; there is archive, cas, executor'
     ):
         Daemon(Settings(home=tmp_path))
 

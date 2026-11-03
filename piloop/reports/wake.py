@@ -3,7 +3,7 @@
 A session reads a short overview first and queries for more only when it needs it (the idea of OptMem's
 ``memo wake``). Two readers use it. A brief shows the current lessons of the repo (the ``lessons`` section). The
 orchestrator runs ``piloop wake`` (``orchestrator_overview``): the latest lines of its campaign's journal, the open
-inbox, the head of the campaign and the current lessons. A budget is in tokens, counted as
+inbox, the best of the campaign and the current lessons. A budget is in tokens, counted as
 ``CHARS_PER_TOKEN`` characters each. It covers every line printed: the headings, and the last line of a list that
 counts what did not fit and says how to read it.
 """

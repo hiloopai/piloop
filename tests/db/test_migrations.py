@@ -20,7 +20,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
 
 from piloop.actor import System
-from piloop.config import CampaignConfig
 from piloop.db import session
 from piloop.db.models import Campaign
 from piloop.db.schema import CORE
@@ -47,9 +46,7 @@ from piloop.db.session import (
 )
 from piloop.db.triggers import PERSISTENT
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
-from piloop.plugins.campaign_type.kit.verdicts.judge import verdict_rule
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
+from piloop.plugins.campaign_type.kit.pool.pool import Pool
 from piloop.version import Version, installed
 from scripts.release_triggers import PATH as RELEASE_TRIGGERS, ReleaseTriggers
 from tests.conftest import bare_config, disk
@@ -949,9 +946,8 @@ def test_0078_pins_each_campaign_that_0_5_stored_to_0_5_s_scoring_and_downgrades
     command.upgrade(cfg, '0078')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         pinned, kept = [loads(c) for (c,) in con.execute(stored)]
-    migrated = CampaignConfig.model_validate(pinned)
-    assert migrated.evaluator.scoring is Scoring.RUN_END and migrated.evaluator.noise_runs == 1
-    assert isinstance(verdict_rule(migrated), Bootstrap)
+    assert pinned['evaluator'] == {'scoring': 'run_end', 'noise_runs': 1}
+    assert pinned['plugins']['verdict_rule'] == {'provider': 'bootstrap'}
     assert kept['evaluator'] == {'noise_runs': 5, 'scoring': 'run_end'}, 'what the file chose stays'
     assert kept['plugins']['verdict_rule'] == {'provider': 'own'}
     command.downgrade(cfg, '0077')
@@ -1246,3 +1242,78 @@ def test_optimization_0008_makes_each_branch_keep_interesting_so_the_head_stays_
             'keep',
             'against candidate#1: +2',
         )
+
+
+def test_optimization_0009_keeps_every_verdict_in_an_event_drops_the_columns_and_the_best_is_the_old_head(
+    tmp_path: Path,
+) -> None:
+    """The trunk keeps 1 → 2 → 4 and a discard of 3: the head of 0.5 was the keep of 4, the best of 0.6 is it too.
+
+    The keep of 2 has its ``candidate.verdict`` event; the others never had one, as 0008's update wrote none: the
+    upgrade writes them first. A pair goes with ``pair_id``. The downgrade gives each verdict back from its event.
+    """
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0008')
+    config = bare_config('c').model_copy(
+        update={'evaluator': bare_config('c').evaluator.model_copy(update={'noise_runs': 1})}
+    )
+    rows = (
+        ('base', None, 'keep', 1.0),
+        ('two', 1, 'keep', 2.0),
+        ('four', 2, 'keep', 4.0),
+        ('three', 2, 'discard', 3.0),
+    )
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('c', '/c', ?)", (config.model_dump_json(),))
+        con.execute("INSERT INTO evaluators (campaign_id, key, definition) VALUES (1, 'e', '{}')")
+        con.execute('UPDATE campaigns SET evaluator_id = 1')
+        for i, (tree, parent, verdict, score) in enumerate(rows, start=1):
+            origin = 'baseline' if parent is None else 'run'
+            con.execute(
+                'INSERT INTO candidates (campaign_id, parent_id, tree_sha, revision, origin, verdict, verdict_by,'
+                " verdict_reason) VALUES (1, ?, ?, ?, ?, ?, 'daemon', ?)",
+                (parent, tree, tree, origin, verdict, f'reason {i}'),
+            )
+            con.execute(
+                'INSERT INTO measurements (candidate_id, evaluator_id, metrics, pair_id) VALUES (?, 1, ?, ?)',
+                (i, dumps({'score': score}), 1 if i > 1 else None),
+            )
+        payload = {
+            'kind': 'candidate.verdict',
+            'old': None,
+            'new': 'keep',
+            'verdict_by': 'daemon',
+            'verdict_reason': 'r',
+        }
+        con.execute(
+            "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('daemon', 'candidate', 2, ?)",
+            (dumps(payload),),
+        )
+    command.upgrade(chain, '0009')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        columns = [c for _, c, *_ in con.execute('PRAGMA table_info(candidates)')]
+        assert {'verdict', 'cause', 'verdict_by', 'verdict_reason', 'track'}.isdisjoint(columns)
+        assert {'excluded_reason', 'excluded_by'} <= set(columns)
+        assert 'pair_id' not in [c for _, c, *_ in con.execute('PRAGMA table_info(measurements)')]
+        events = con.execute(
+            "SELECT target_id, json_extract(payload, '$.new'), json_extract(payload, '$.verdict_reason') FROM events"
+            " WHERE kind = 'candidate.verdict' ORDER BY id"
+        ).fetchall()
+    assert events == [(2, 'keep', 'r'), (1, 'keep', 'reason 1'), (3, 'keep', 'reason 3'), (4, 'discard', 'reason 4')]
+    database = session.Database(f'sqlite:///{path}', actor=System.DAEMON)
+    try:
+        with database.session() as s:
+            campaign = s.get_one(Campaign, 1)
+            assert Pool.of(s, campaign, campaign.config.all_tracks[0]).best() == 3, 'the old head'
+    finally:
+        database.close()
+    command.downgrade(chain, '0008')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT verdict FROM candidates ORDER BY id').fetchall() == [
+            ('keep',),
+            ('keep',),
+            ('keep',),
+            ('discard',),
+        ]

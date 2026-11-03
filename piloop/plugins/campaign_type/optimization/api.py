@@ -8,10 +8,10 @@ from piloop.plugins.campaign_type.kit.backlog import api as backlog_api
 from piloop.plugins.campaign_type.kit.backlog.ideas import idea_view
 from piloop.plugins.campaign_type.kit.candidates import api as candidates_api
 from piloop.plugins.campaign_type.kit.candidates.api import AddressedCandidate
+from piloop.plugins.campaign_type.kit.candidates.views import candidate_view
 from piloop.plugins.campaign_type.kit.evaluation import api as evaluation_api
+from piloop.plugins.campaign_type.kit.pool import api as pool_api
 from piloop.plugins.campaign_type.kit.runs import api as runs_api
-from piloop.plugins.campaign_type.kit.verdicts import api as verdicts_api
-from piloop.plugins.campaign_type.kit.verdicts.verdict import candidate_view
 from piloop.plugins.campaign_type.optimization import ops as optimization_ops
 from piloop.plugins.campaign_type.optimization.wire import NoteBody, Noted
 
@@ -21,7 +21,7 @@ router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUS
 
 @router.post('/candidates/{candidate}/note', operation_id='note', dependencies=[Depends(actor_access)])
 def note(s: Writing, me: Acting, candidate: AddressedCandidate, body: NoteBody) -> Noted:
-    """Keep a regressed result in view as a lead, with follow-up ideas pinned to it."""
+    """Note why a candidate is worth starting from, with follow-up ideas pinned to it."""
     _, ideas = optimization_ops.note_candidate(
         s, candidate.id, body.reason, actor=me, follow_ups=body.follow_ups, track=body.track
     )
@@ -33,7 +33,7 @@ def note(s: Writing, me: Acting, candidate: AddressedCandidate, body: NoteBody) 
 ROUTERS: tuple[APIRouter, ...] = (
     backlog_api.router,
     candidates_api.router,
-    verdicts_api.router,
+    pool_api.router,
     router,
     evaluation_api.router,
     runs_api.router,

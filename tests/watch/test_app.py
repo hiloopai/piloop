@@ -37,10 +37,12 @@ from piloop.net import tokens
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.pool.pool import Pool
+from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
@@ -186,7 +188,7 @@ def detail(below: str) -> str:
 
 @pytest.fixture
 def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
-    """A running campaign: kept candidates, two live agents, a queue, an inbox, a stopped twin."""
+    """A running campaign: scored candidates, two live agents, a queue, an inbox, a stopped twin."""
     log_dir = tmp_path / 'research-log'
     log_dir.mkdir()
     (log_dir / 'transcript.txt').write_text('reading the history\nproposing idea B\n')
@@ -212,9 +214,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
         )
         s.add(run)
         s.flush()
-        for n, (verdict, value, minutes) in enumerate(
-            [(Outcome.KEEP, 3, 90), (Outcome.DISCARD, 2, 70), (Outcome.KEEP, 4, 60)], start=2
-        ):
+        for n, (value, minutes) in enumerate([(3, 90), (2, 70), (4, 60)], start=2):
             s.add(
                 Candidate(
                     id=n,
@@ -224,12 +224,13 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
                     tree_sha=f't{n}',
                     revision='x',
                     summary=f'[wip] step {n}',
-                    verdict=verdict,
                     created_at=ago(minutes=minutes),
                 )
             )
             s.flush()
             s.add(Measurement(candidate_id=n, evaluator_id=1, metrics={'score': value, 'size': 1}, seconds=2))
+            s.flush()
+            record_scored(s, Pool.of(s, p, p.config.all_tracks[0]), CandidateId(n))
         live = idea(s, p, 'longer lines', IdeaStatus.CLAIMED, created_at=ago(minutes=20))
         live_run = Run(
             campaign_id=live.campaign_id,
@@ -350,7 +351,7 @@ def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, 
     header, rest = shots[1].split('\n', 2)[:2], shots[1].split('\n', 2)[2]
     assert header[0] == ' demo · active'
     assert header[1].startswith(
-        ' head: candidate#4 · score: 4 · score vs baseline: 3 · kept: 3 · candidates: 4 · tokens:'
+        ' best: candidate#4 · score: 4 · score vs baseline: 3 · may be best on score: 4 · candidates: 4 · tokens:'
     )
     assert re.findall(r'╭─ \[\d\] (\w+)', rest) == ['Inbox', 'inbox', 'Agents', 'Ideas', 'Candidates', 'Status']
     assert ' comment#3 escalation on campaign#1 by orchestrator#3, 30m ago · p1,' in detail(rest), (
@@ -587,14 +588,14 @@ def test_the_candidates_are_the_lineage_s_nodes_with_their_detail(db: Database, 
 
     drive(db, 'demo', scenario)
     candidates = shots[0].split('[4] ')[1].splitlines()
-    assert candidates[0].startswith('Candidates ▁▆█ 1 → 4 ─')
+    assert candidates[0].startswith('Candidates ▁▆█ 1 → 4 ─'), 'the baseline, then the new bests on the spine'
     assert [line.split('│')[1].rstrip() for line in candidates[1:6]] == snapshot(
         [
-            ' candidate#4  Kept                    4  +2  1h  [wip] step 4',
-            ' candidate#3  Discarded               2  -1  1h  [wip] step 3',
-            ' candidate#2  Kept                    3  +2  1h  [wip] step 2',
-            ' candidate#6  Reference · Not judged  —  —   2h  paper repro',
-            ' candidate#1  Baseline · Kept         1  —   3h  baseline',
+            ' candidate#4  Best                    4  +2  1h  [wip] step 4',
+            ' candidate#3  May be best             2  -1  1h  [wip] step 3',
+            ' candidate#2  May be best             3  +2  1h  [wip] step 2',
+            ' candidate#6  Reference · Pending     —  —   2h  paper repro',
+            ' candidate#1  Baseline · May be best  1  —   3h  baseline',
         ]
     )
     assert [
@@ -602,7 +603,7 @@ def test_the_candidates_are_the_lineage_s_nodes_with_their_detail(db: Database, 
     ] == snapshot(
         [
             ' candidate#4 more lines',
-            ' Kept —',
+            ' Best —',
             ' parent candidate#3 · 1h ago',
             '',
             ' scores under evaluator#1 (vs parent):',

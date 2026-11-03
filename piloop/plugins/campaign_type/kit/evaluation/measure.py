@@ -1,17 +1,16 @@
 """What the measurements mean: the current evaluator, a candidate's means and score under it, and remeasures.
 
 All code that reads measurements to answer "how good is this" uses this module, so the CLI, the scheduler, the run
-controller and the history block agree. What a score means against a bar is the verdicts component's
-(``piloop.plugins.campaign_type.kit.verdicts.judge``).
+controller and the history block agree. Where a score stands among the others is the pool's
+(``piloop.plugins.campaign_type.kit.pool``).
 """
 
 import hashlib
 import json
 from collections.abc import Sequence
-from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from statistics import fmean, stdev
+from statistics import fmean
 from typing import Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
@@ -42,14 +41,8 @@ from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import REPEATS, RungResult
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
-from piloop.plugins.campaign_type.kit.verdicts.verdict import (
-    pending,
-)
 
 EventModel.retire('evaluator.metric_lines')  # 0.4 noted an evaluator that printed METRIC lines; 0.5 reads none
-
-type Samples = dict[str, list[float]]
-"""The samples of a paired evaluation: metric name → the value of each sample, in the order of the pairs."""
 
 
 def current_evaluator(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Evaluator:
@@ -79,9 +72,9 @@ class Split(StrEnum):
     """What an evaluation of a version scores."""
 
     VISIBLE = 'visible'
-    """The evaluate command, with its ladder: what the head, the bars and the verdicts read."""
+    """The evaluate command, with its ladder: what the pool reads."""
     SEALED = 'sealed'
-    """The sealed split (``[evaluator] sealed``): only a would-be keep, and the bar that it would replace."""
+    """The sealed split (``[evaluator] sealed``): only a candidate to confirm, and the baseline."""
 
 
 def sealed_evaluator(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Evaluator | None:
@@ -90,20 +83,28 @@ def sealed_evaluator(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Eva
     It is an evaluator of its own, keyed by its command, so its measurements never count as the visible ones. It is
     never the campaign's current evaluator.
     """
-    if (command := cfg.evaluator.sealed) is None:
-        return None
-    definition: dict[str, object] = {'sealed': list(command)}
-    key = hashlib.sha256(json.dumps(definition, sort_keys=True).encode()).hexdigest()[:16]
-    row = select(Evaluator).where(Evaluator.campaign_id == campaign.id, Evaluator.key == key)
-    if (found := s.scalar(row)) is not None:
+    if (found := sealed_of(s, campaign, cfg)) is not None or (command := cfg.evaluator.sealed) is None:
         return found
     try:
-        with s.begin_nested():  # two submissions of one campaign judged at once both find none
-            found = Evaluator(campaign_id=campaign.id, key=key, definition=definition)
+        with s.begin_nested():  # two candidates of one campaign confirmed at once both find none
+            found = Evaluator(campaign_id=campaign.id, key=_sealed_key(command), definition={'sealed': list(command)})
             s.add(found)
     except IntegrityError:
-        return s.scalars(row).one()
+        found = sealed_of(s, campaign, cfg)
     return found
+
+
+def sealed_of(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Evaluator | None:
+    """Return the evaluator row of the campaign's sealed split, or None without one or before its first evaluation."""
+    if (command := cfg.evaluator.sealed) is None:
+        return None
+    row = select(Evaluator).where(Evaluator.campaign_id == campaign.id, Evaluator.key == _sealed_key(command))
+    return s.scalar(row)
+
+
+def _sealed_key(command: Sequence[str]) -> str:
+    definition: dict[str, object] = {'sealed': list(command)}
+    return hashlib.sha256(json.dumps(definition, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def evaluator_runners() -> tuple[str, ...]:
@@ -214,17 +215,6 @@ def score(candidate: Candidate, evaluator_id: EvaluatorId | None, primary: Metri
     return metrics(candidate, evaluator_id).get(primary.name)
 
 
-def noise(bar: Candidate, evaluator_id: EvaluatorId | None, name: str) -> float | None:
-    """Return the standard deviation of metric ``name`` over the bar's ``full`` measurements under ``evaluator_id``.
-
-    It is the noise that a gain must exceed. None with fewer than two values.
-    """
-    found = [
-        m.metrics[name] for m in bar.measurements if m.evaluator_id == evaluator_id and full(m) and name in m.metrics
-    ]
-    return stdev(found) if len(found) >= 2 else None
-
-
 def measured(candidate: Candidate, evaluator_id: EvaluatorId | None) -> bool:
     """Return whether the candidate needs no evaluation under ``evaluator_id``: a ``full`` measurement, or a crash.
 
@@ -241,28 +231,17 @@ class RemeasureRequested(EventModel):
 
     kind: Literal['candidate.remeasure_requested'] = 'candidate.remeasure_requested'
     repeats: int = Field(default=REPEATS, ge=1)
-    """How many samples of the candidate, each next to one of its bar."""
-
-
-class RemeasureRefused(Exception):
-    """``request_remeasure`` cannot ask for the candidate. The message says why."""
+    """How many evaluations of the candidate."""
 
 
 def request_remeasure(s: Session, candidate: Candidate, actor: Actor, repeats: int = REPEATS) -> None:
-    """Ask the daemon to measure ``candidate`` again with the current evaluator, next to its bar. The caller commits.
+    """Ask the daemon to evaluate ``candidate`` ``repeats`` more times with the current evaluator. The caller commits.
 
     Use it for a measurement that a fault of the host spoiled (a full disk, a lost GPU), or that load made noisy. The
     request (``RemeasureRequested``) is pending until a measurement of the candidate under the campaign's current
-    evaluator is recorded (``record``). The daemon runs ``repeats`` pairs of the candidate and its bar (``bar_of`` its
-    parent), then judges it again when it is ``rejudgeable`` (``RunController.remeasure``). A candidate without a
-    parent, the baseline or a reference, gets ``repeats`` samples alone. A commit that the daemon never measured
-    (``skipped`` or ``recovered``) gets its first measurement, to isolate a regression to it, say.
-
-    Raises:
-        RemeasureRefused: the candidate is pending: its run measures and judges it.
+    evaluator is recorded (``record``). A commit that the daemon never measured (``skipped`` or ``recovered``) gets
+    its first measurements, to isolate a regression to it, say. The candidate's mean then includes them.
     """
-    if pending(candidate):
-        raise RemeasureRefused(f'candidate#{candidate.id} is pending: the daemon measures and judges it already')
     emit(s, RemeasureRequested(repeats=repeats), TargetRef(CANDIDATE, candidate.id), actor)
 
 
@@ -296,15 +275,13 @@ def record(
     error: str | None,
     seconds: float | None,
     run: RunId | None = None,
-    pair: MeasurementId | None = None,
     rung: RungName | None = None,
     stopped: str | None = None,
     feedback: str | None = None,
 ) -> Measurement:
     """Store a measurement of ``candidate``, with ``MeasurementRecorded``. The caller commits.
 
-    The one writer of measurements. ``run`` is the run that the daemon measured it for, ``pair`` the bar's
-    measurement that ran next to it in a paired evaluation, ``rung`` the rung of the ladder that it measured, and
+    The one writer of measurements. ``run`` is the run that the daemon measured it for, ``rung`` the rung of the ladder that it measured, and
     ``stopped`` why the climb stopped there, and ``feedback`` the line that the result said of the run, which only its
     event keeps. A measurement of the full panel under the campaign's current evaluator
     answers the pending request to measure the candidate again (``request_remeasure``). A rung does not: the request
@@ -316,7 +293,6 @@ def record(
         metrics=metrics,
         error=error,
         seconds=seconds,
-        pair_id=pair,
         rung=rung,
         stopped=stopped,
     )
@@ -327,7 +303,6 @@ def record(
         metrics=metrics,
         error=error,
         run=run,
-        pair=pair,
         rung=rung,
         stopped=stopped,
         feedback=feedback,
@@ -348,8 +323,6 @@ class MeasurementRecorded(EventModel):
     error: str | None
     run: RunId | None
     """The run that the daemon measured it for. None for a measurement by hand or a cancelled evaluation."""
-    pair: MeasurementId | None = None
-    """The bar's measurement that ran next to it in a paired evaluation."""
     rung: RungName | None = None
     """The rung of the ladder that it measured. None for the full panel."""
     stopped: str | None = None
@@ -378,26 +351,6 @@ def save_units(units_dir: Path, measurement_id: MeasurementId, units: Units) -> 
     path.write_text(json.dumps(units))
 
 
-def pairs(candidate: Candidate, bar: Candidate, evaluator_id: EvaluatorId) -> tuple[Samples, Samples]:
-    """Return the samples that ``candidate`` and ``bar`` measured next to each other under ``evaluator_id``.
-
-    The i-th sample of a metric of the candidate and the i-th of the bar are one pair (``Measurement.pair``). A pair
-    counts when both of its measurements are ``full``. A ratio has no samples: a rule resamples its parts.
-    """
-    mine: Samples = {}
-    theirs: Samples = {}
-    for m in candidate.measurements:
-        other = m.pair
-        if m.evaluator_id != evaluator_id or not full(m) or other is None:
-            continue
-        if other.candidate_id != bar.id or not full(other):
-            continue
-        for name in m.metrics.keys() & other.metrics.keys():
-            mine.setdefault(name, []).append(m.metrics[name])
-            theirs.setdefault(name, []).append(other.metrics[name])
-    return mine, theirs
-
-
 def units(candidate: Candidate, evaluator_id: EvaluatorId, units_dir: Path) -> Units:
     """Return the candidate's per-unit results under ``evaluator_id``: each unit's mean over its measurements."""
     rows = [
@@ -416,8 +369,3 @@ def units(candidate: Candidate, evaluator_id: EvaluatorId, units_dir: Path) -> U
 def gate_of(bar: Candidate, evaluator_id: EvaluatorId, cfg: CampaignConfig) -> Gate:
     """What the ladder's stops compare with: ``bar``'s means at each rung, and the metrics' directions."""
     return Gate(bar=rungs(bar, evaluator_id), directions={m.name: m.direction for m in cfg.metrics})
-
-
-def known(c: Candidate) -> datetime:
-    """Return the time of the first ``full`` measurement of the candidate, else its creation time."""
-    return min((m.created_at for m in c.measurements if full(m)), default=c.created_at)

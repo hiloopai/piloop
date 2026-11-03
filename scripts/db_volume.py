@@ -170,23 +170,22 @@ def _runs(con: sqlite3.Connection, v: Volume, rng: random.Random) -> None:
 
 def _candidates(con: sqlite3.Connection, v: Volume, rng: random.Random) -> dict[int, int]:
     """Insert the candidates, each chained to the previous one of its campaign; returns candidate id → campaign id."""
-    verdicts = ['discard'] * 75 + ['keep'] * 12 + ['crash'] * 10 + ['interesting'] * 2 + [None] * 1
     last: dict[int, int] = {}
     owners: dict[int, int] = {}
     rows = []
     for c in range(1, v.candidates + 1):
-        if c <= v.campaigns:  # the baselines: no run, no parent, kept
-            rows.append((c, c, None, None, f'tree{c}', f'commit{c}', 'baseline', 'baseline', 'keep'))
+        if c <= v.campaigns:  # the baselines: no run, no parent
+            rows.append((c, c, None, None, f'tree{c}', f'commit{c}', 'baseline', 'baseline'))
             last[c] = owners[c] = c
             continue
         run = rng.randint(1, v.runs)
         p = _campaign_of((run - 1) % v.ideas + 1, v)
-        rows.append((c, p, run, last[p], f'tree{c}', f'commit{c}', f'summary {c}', 'run', rng.choice(verdicts)))
+        rows.append((c, p, run, last[p], f'tree{c}', f'commit{c}', f'summary {c}', 'run'))
         last[p] = c
         owners[c] = p
     con.executemany(
-        'INSERT INTO candidates (id, campaign_id, run_id, parent_id, tree_sha, revision, summary, origin, verdict)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO candidates (id, campaign_id, run_id, parent_id, tree_sha, revision, summary, origin)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         rows,
     )
     return owners
@@ -246,7 +245,15 @@ def _events(con: sqlite3.Connection, v: Volume, rng: random.Random) -> None:
         {'kind': 'run.started', 'harness': 'claude', 'model': 'm'},
         {'kind': 'run.finished', 'end': 'finished', 'error': None},
         {'kind': 'measurement.recorded', 'candidate': 1, 'metrics': {'score': 0.5}, 'error': None, 'run': 1},
-        {'kind': 'candidate.judged', 'verdict': 'discard', 'score': 0.5, 'reason': 'no gain'},
+        {
+            'kind': 'candidate.scored',
+            'track': 'score',
+            'score': 0.5,
+            'measured': 1,
+            'best': 1,
+            'rank': None,
+            'told': 'score 0.5 over 1 eval',
+        },
         {'kind': 'idea.status', 'old': 'open', 'new': 'claimed'},
         {'kind': 'agent_session.started', 'role': 'implementer', 'harness': 'claude', 'model': 'm', 'reason': None},
     ]

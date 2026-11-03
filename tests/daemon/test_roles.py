@@ -21,7 +21,7 @@ from piloop.cli.plugins import selections
 from piloop.config import ConfigError, load_campaign_config
 from piloop.daemon.main import Daemon
 from piloop.daemon.scheduler import Scheduler
-from piloop.db.events import emit, in_order
+from piloop.db.events import emit, in_order, latest
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
 from piloop.ids import CampaignStatus, CommentKind, RoleName, TargetKind, TargetRef
@@ -30,12 +30,13 @@ from piloop.plugins import host as plugins_module
 from piloop.plugins.campaign_type.consumers import awake_roles, quiet_phase
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.host import Capability, PluginError, compose
@@ -138,7 +139,7 @@ def test_a_role_that_does_runs_works_with_its_own_prompt_and_its_commits_are_sco
 ) -> None:
     """``[plugins.role.quick]`` with ``runs = true`` gets a fresh run of its own, as the implementer does.
 
-    The quick agent works with its own prompt in a new worktree at the head, and its commit is measured and judged.
+    The quick agent works with its own prompt in a new worktree at the best, and its commit is measured and scored.
     """
     (Path(campaign.path) / 'quick.md').write_text('# Quick\nTry the idea in a few minutes.\n')
     configure(db, campaign, HARNESS_SIGNS, quick=QUICK)
@@ -155,7 +156,7 @@ def test_a_role_that_does_runs_works_with_its_own_prompt_and_its_commits_are_sco
     with db.session() as s:
         assert s.get_one(Run, 1).status is RunStatus.SUCCEEDED
         candidate = s.scalars(select(Candidate).where(Candidate.run_id == 1)).one()
-        assert candidate.verdict is not None
+        assert latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, candidate.id)) is not None
         assert s.scalars(select(Measurement).where(Measurement.candidate_id == candidate.id)).all() != []
 
 
@@ -483,8 +484,6 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
         f'  demo: {nice} ([plugins.runtime] use, {stored})',
         f'  demo: {nice} ([plugins.role.orchestrator] runtime, {stored})',
         f'  demo: {nice} ([plugins.role.fast] runtime, {stored})',
-        f'  demo: verdict rule bootstrap, from {VERDICT_RULES.sources()["bootstrap"].release} ([plugins.verdict_rule]'
-        f' provider, {stored})',
     ]
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)

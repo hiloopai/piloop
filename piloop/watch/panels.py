@@ -155,7 +155,7 @@ class Panel[K](Protocol):
 
 
 def header(frame: Frame) -> Text:
-    """Return the campaign's name and state, and the first section of its overview: the head, by default."""
+    """Return the campaign's name and state, and the first section of its overview: the best, by default."""
     state = frame.state
     text = Text(f'{state.name} · {status_of(state, None)}', style='bold')
     for first in frame.sections[:1]:
@@ -177,13 +177,13 @@ def status_of(state: CampaignState | InvalidConfig, chars: int | None) -> str:
     return said if chars is None else cell(said, chars)
 
 
-CAMPAIGN_COLUMNS = ('campaign', 'status', 'head', 'vs baseline', 'agents', 'open', 'inbox', 'last event')
+CAMPAIGN_COLUMNS = ('campaign', 'status', 'best', 'vs baseline', 'agents', 'open', 'inbox', 'last event')
 
 
 def campaigns(
     states: Sequence[CampaignState | InvalidConfig], latest: Mapping[CampaignId, Envelope], now: datetime
 ) -> list[Item[str]]:
-    """Return one row per campaign, active ones first: status, head, delta to baseline, agents, queue, inbox.
+    """Return one row per campaign, active ones first: status, best, delta to baseline, agents, queue, inbox.
 
     ``latest`` is the last event of each campaign that the feed showed, by the campaign's id.
     """
@@ -193,7 +193,7 @@ def campaigns(
         seen = NONE if last is None or last.time is None else f'{last.kind} {age(_at(last.time), now)} ago'
         match c:
             case CampaignState():
-                tracks = c.head.tracks if c.head is not None else []
+                tracks = c.best
                 cells: tuple[Cell, ...] = (
                     ', '.join(f'{_value(t.value)} {t.metric}' for t in tracks) or NONE,
                     ', '.join(_value(t.delta, signed=True) for t in tracks) or NONE,

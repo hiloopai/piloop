@@ -14,7 +14,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measure
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
 REPEATS = 3
-"""The pairs of a remeasure that asks for no number: the 95% bound of 3 pairs is near their worst pair."""
+"""The evaluations of a remeasure that asks for no number."""
 
 
 class Report(Params):
@@ -35,10 +35,8 @@ class MeasurementAdded(View):
 
     cursor: int
     measurement: MeasurementId
-    rejudged: bool
-    """Whether the daemon judges the candidate again (``RejudgeRequested``)."""
-    effect: str
-    """What happens to the verdict, in one line: when the daemon judges it again, or why the verdict stays."""
+    standing: str
+    """Where the candidate stands in the pool now, in one line."""
 
 
 class RunningSince(View):
@@ -110,6 +108,9 @@ class CandidateDetail(View):
     """The same of its parent. Empty without a parent."""
     rungs: list[RungResult]
     """Each rung of the ladder that it measured, in the order that it first measured them."""
+    standing: str | None
+    """Where it stands in the pool of its track, in one line, or None when it never enters the pool (``skipped``,
+    ``recovered``)."""
 
 
 class SubmitBody(Params):
@@ -123,14 +124,11 @@ class SubmitBody(Params):
 
 
 class Submission(View):
-    """A submission as its implementer reads it: the verdict and the score, nothing else."""
+    """A submission as its implementer reads it: where it stands, once scored."""
 
     candidate: CandidateId
-    verdict: str
-    """The verdict, ``pending`` while piloop scores it, or ``skipped`` when someone cancelled its evaluation. A pending
-    verdict reaches the implementer as a message."""
-    score: float | None
-    """The primary's value, on the evaluate command's score. None without one."""
+    told: str | None
+    """Where it stands, as its message says it. None while piloop scores it: the message comes then."""
 
 
 class EvaluationClient(Client):

@@ -21,12 +21,13 @@ from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, 
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.evaluation import submissions
+from piloop.plugins.campaign_type.kit.pool.due import due, unready
+from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, handed_off, wrap_up_lead
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
 from piloop.plugins.campaign_type.kit.runs.stop import release
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of
-from piloop.plugins.campaign_type.kit.verdicts.judge import due, head, head_unmeasured, rejudges
 from piloop.plugins.fact_source import facts
 from piloop.plugins.fact_source.facts import Facts
 from piloop.plugins.role.contract import ImplementerRole
@@ -164,28 +165,21 @@ class OptimizationPlanner:
         self._tracer.event('run.handed_off', run=run.id, end=end)
 
     def remeasure(self, s: Session, campaign: Campaign) -> None:
-        """Measure what the current evaluator must measure (``ledger.due``), one candidate at a time per campaign.
+        """Measure what the current evaluator must measure (``pool.due``), one candidate at a time per campaign.
 
-        Each submission that waits for its verdict is judged at once, on a thread of its own (``judge_submission``).
+        Each submission that waits for its score is scored at once, on a thread of its own (``score_submission``).
 
-        After an evaluator change, no candidate has a score from the new evaluator. The head is measured first, and runs
-        that are not pinned wait until it has a score (``_queue``). Then the bars that runs need, and the candidates
-        that someone asked to measure again. Older keeps are measured again only when someone asks. A candidate that
-        someone measured by hand is judged again first (``rejudges``), in the same slot: a rebase can measure its merge.
+        After an evaluator change, no candidate has a score from the new evaluator. The baseline and the best before
+        the change are measured first, and runs wait until both have a score (``queue``). Then the candidates that
+        someone asked to measure again.
         """
         for submission in submissions.waiting(s, campaign):  # each on its own: an implementer waits for it
             mine = (CANDIDATE, submission.id)
             if (busy := self._scoring.get(mine)) is None or busy.done():
                 self._tracer.event('candidate.submission', campaign=campaign.name, candidate=submission.id)
-                self._scoring[mine] = self._host.submit(partial(self._controller.judge_submission, submission.id))
+                self._scoring[mine] = self._host.submit(partial(self._controller.score_submission, submission.id))
         key = (TargetKind.CAMPAIGN, campaign.id)
-        if (busy := self._scoring.get(key)) is not None and not busy.done():
-            return
-        if again := rejudges(s, campaign):
-            self._tracer.event('candidate.rejudge', campaign=campaign.name, candidate=again[0].id, left=len(again))
-            self._scoring[key] = self._host.submit(partial(self._controller.rejudge, again[0].id))
-            return
-        if not (todo := due(s, campaign)):
+        if ((busy := self._scoring.get(key)) is not None and not busy.done()) or not (todo := due(s, campaign)):
             return
         self._tracer.event('candidate.remeasure', campaign=campaign.name, candidate=todo[0].id, left=len(todo))
         self._scoring[key] = self._host.submit(partial(self._controller.remeasure, todo[0].id))
@@ -193,14 +187,15 @@ class OptimizationPlanner:
     def queue(self, s: Session, campaign: Campaign, left: Facts) -> None:
         """Start a fresh run, and request its worker, for each free slot within the runs ``left``.
 
-        A run starts from the head, with no idea: its worker claims one from the board, or proposes one and claims it.
-        Each role that does runs fills its own slots (``max_concurrent``), in the order of ``Roles.doing_runs``, on the
-        next harness of its rotation that is not at its cap. Nothing starts while the campaign has no head, or while a
-        new evaluator has not measured the head (``remeasure`` measures it first). Nor does a run whose session the
+        A run starts from the best of the first track, with no idea: its worker claims one from the board, or proposes
+        one and claims it, and may start from another candidate then (``--base``). Each role that does runs fills its
+        own slots (``max_concurrent``), in the order of ``Roles.doing_runs``, on the next harness of its rotation that
+        is not at its cap. Nothing starts while the campaign has no baseline, or while the current evaluator has not
+        measured it, nor the best before an evaluator change (``unready``: ``remeasure`` measures them first). Nor does a run whose session the
         stop rule's ``hours`` would end within its wrap-up lead: its worker would be told to wrap up as it starts.
         """
-        trunk = head(s, campaign)
-        if trunk is None or head_unmeasured(s, campaign):
+        best = best_of(s, campaign)
+        if best is None or unready(s, campaign):
             return
         cfg = campaign.config
         runs_left, hours_left = left.get(facts.RUNS), left.get(facts.HOURS)
@@ -214,7 +209,7 @@ class OptimizationPlanner:
                 if harness is None:
                     break
                 model = cfg.role_models(name)[harness]
-                run = Run(campaign=campaign, role=name, base_candidate_id=trunk.id, harness=harness, model=model)
+                run = Run(campaign=campaign, role=name, base_candidate_id=best.id, harness=harness, model=model)
                 s.add(run)
                 s.flush()
                 emit(s, RunQueued(harness=harness), TargetRef(RUN, run.id), System.DAEMON)

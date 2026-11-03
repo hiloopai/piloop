@@ -1,11 +1,11 @@
 ---
 title: Introduction
-description: Coding agents try ideas in your repo. piloop scores what they submit and keeps only what beats the best result so far.
+description: Coding agents try ideas in your repo. piloop scores every commit that they submit, and the best one is the result.
 ---
 
 piloop runs coding agents on a goal that a program can measure. Each agent tries one idea in its own checkout of your
-repo, and submits the commits that it would ship. piloop scores each with your evaluate command, and keeps a change only
-when it beats the best result so far.
+repo, and submits the commits that it would ship. piloop scores each with your evaluate command. Every score stays in the
+campaign's pool, and the best candidate in it is the result.
 
 ![piloop watch on the enwik8 example campaign](/images/watch-campaign.svg)
 
@@ -32,26 +32,26 @@ The agent sets up the campaign, starts it, and answers for you while it runs. Se
 flowchart LR
     B[(Ideas)] --> W[Implementer<br/>in a worktree]
     W -->|commit| E[Evaluate command]
-    E -->|result| V{Verdict}
-    V -->|keep| H[New head]
+    E -->|score| P[(Pool)]
+    P -->|the best| H[Best candidate]
     H -->|next runs start here| W
 ```
 
 1. You, your agent or the implementers add **ideas** to the **campaign**: one repo, one goal.
 2. The **daemon**, `piloop serve`, starts an **implementer** for each open idea. An implementer is a coding agent
-   (Claude Code, Codex or pi) in a **worktree**: its own checkout of the **head**, the best result so far.
+   (Claude Code, Codex or pi) in a **worktree**: its own checkout of the **best** candidate so far.
 3. The implementer commits. The daemon runs your **evaluate command** on the commit. The command writes one JSON line
    with each metric to `$PILOOP_RESULT_FILE`.
-4. The **verdict** is `keep` when the gain is real and no guardrail metric gets worse than you allow. A keep is the new
-   head.
+4. The score goes into the **pool**. A score that beats the best is evaluated again until it is **confirmed**. It is
+   then the new **best**, when no guardrail metric is worse than the baseline's by more than you allow.
 5. Your agent, the **orchestrator**, answers what the other agents escalate, and
    records each decision in your **inbox**.
 
 ## Why piloop
 
 - **No agent scores its own work.** piloop runs the evaluate command in a clean checkout of each commit.
-- **A gain must be real.** When the evaluate command reports a result for each example, a paired bootstrap rejects a
-  gain that comes from a few lucky examples.
+- **A gain must be real.** A candidate that beats the best is evaluated again, `noise_runs` times, before it can be
+  the best. A sealed split that no agent can read can check it too.
 - **Guardrails hold.** A second metric, such as latency, can get worse only by the margin that you set.
 - **Your state stays local.** piloop keeps a SQLite database in `~/.piloop` and git refs in your repo. It has no
   hosted service and no account. The agents send your code and prompts to their model providers, as they do when you
@@ -76,6 +76,6 @@ flowchart LR
     The same steps with the CLI, on the enwik8 example.
   </Card>
   <Card title="Concepts" icon="book" href="/concepts/campaigns">
-    Campaigns, ideas, runs and the verdict.
+    Campaigns, ideas, runs and the pool.
   </Card>
 </CardGroup>

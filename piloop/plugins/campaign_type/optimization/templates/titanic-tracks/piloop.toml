@@ -1,6 +1,6 @@
-# Two objectives as tracks on one trunk. Reference: https://piloop.autoresearch.inc/concepts/tracks
-# A keep improves the primary metric of its own track with confidence. It must also keep the other track's
-# primary metric within its margin and on the right side of its floor.
+# Two objectives as tracks on one pool. Reference: https://piloop.autoresearch.inc/concepts/tracks
+# The best of a track has the best primary metric of its track. It must also keep the other track's primary metric
+# within its margin of the baseline and on the right side of its floor.
 name = "titanic-tracks"
 evaluate = ["uv", "run", "python", "evaluate.py"]
 evaluate_timeout = 300
@@ -29,17 +29,16 @@ name = "accuracy"
 direction = "higher"
 role = "primary"
 track = "accuracy"
-margin = 0.02          # bounds the paired 95% worst case, not the mean: a cost keep must keep nearly every prediction
-floor = 0.74           # a cost keep may never push accuracy below this
+margin = 0.02          # the best of the cost track may lose at most this much accuracy against the baseline
+floor = 0.74           # the best of the cost track may never push accuracy below this
 
 [[metrics]]
 name = "cost_seconds"
 direction = "lower"
 role = "primary"
 track = "cost"
-margin = 0.3           # how much an accuracy keep may add per step, in CPU seconds
-floor = 2.0            # an accuracy keep may not make the CPU cost higher than this
-repeats = 3            # a time: measure each candidate 3 times next to its bar
+margin = 0.3           # how much the best of the accuracy track may add to the baseline, in CPU seconds
+floor = 2.0            # the best of the accuracy track may not make the CPU cost higher than this
 
 [tracks.accuracy]
 addendum = "briefs/accuracy.md"

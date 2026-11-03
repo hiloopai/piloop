@@ -16,9 +16,7 @@ from fastapi.routing import APIRoute
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from piloop.actor import System
 from piloop.daemon.api import openapi
-from piloop.db.events import emit
 from piloop.db.models import AgentSession, Campaign
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, TargetKind, TargetRef
@@ -27,10 +25,10 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.pool.pool import Pool
+from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Outcome
 from piloop.plugins.contribution import collect, contributions_of, installed as installed_contributions
 from piloop.plugins.lineage.contract import (
     LINEAGE,
@@ -216,21 +214,31 @@ def test_every_provider_shares_the_route_which_is_mounted_and_documented_once() 
     assert isinstance(lineage, dict) and list(lineage[PATH]) == ['get']
 
 
-def grow(db: Database, campaign: Campaign, verdicts: Sequence[Outcome | None]) -> list[CandidateId]:
-    """Add one run and its candidate for each of ``verdicts``, each a child of the latest keep, measured and judged.
+def grow(
+    db: Database, campaign: Campaign, nodes: Sequence[tuple[tuple[float | None, ...], str | None]]
+) -> list[CandidateId]:
+    """Add one run and its candidate for each of ``nodes``: its evaluations' scores (None for one that failed), and
+    why a human excluded it, or None.
 
-    Each run has an implementer, with its harness session. A keep's verdict is an event, as the daemon judges.
+    Each is a child of the latest one with 3 successful evaluations, which confirm it. Each run has an implementer,
+    with its harness session. Each measured candidate is scored into the pool, as the daemon scores it.
     """
     found: list[CandidateId] = []
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        bar = CandidateId(1)
-        for n, verdict in enumerate(verdicts):
+        row.config = reconfigured(row.config, evaluator={'noise_runs': 3})
+        parent = CandidateId(1)
+        for n, (scores, excluded) in enumerate(nodes):
             idea = Idea(campaign_id=row.id, track='score', title=f'idea {n}', hypothesis='h', created_by='human')
             s.add(idea)
             s.flush()
             run = Run(
-                campaign_id=idea.campaign_id, idea_id=idea.id, attempt=1, base_candidate_id=bar, harness='pi', model='m'
+                campaign_id=idea.campaign_id,
+                idea_id=idea.id,
+                attempt=1,
+                base_candidate_id=parent,
+                harness='pi',
+                model='m',
             )
             s.add(run)
             s.flush()
@@ -243,24 +251,31 @@ def grow(db: Database, campaign: Campaign, verdicts: Sequence[Outcome | None]) -
                     session_id=f's{n}',
                 )
             )
-            judged = {} if verdict is None else {'verdict_by': 'daemon', 'verdict_reason': f'{verdict} on score'}
             c = Candidate(
                 campaign_id=row.id,
                 run_id=run.id,
-                parent_id=bar,
+                parent_id=parent,
                 tree_sha=f'tree{n}',
                 revision=f'commit{n}',
                 summary=f'commit {n}',
-                verdict=verdict,
-                **judged,
+                excluded_reason=excluded,
+                excluded_by=None if excluded is None else 'human',
             )
             s.add(c)
             s.flush()
-            s.add(Measurement(candidate_id=c.id, evaluator_id=row.evaluator_id, metrics={'score': 2.0 + n}))
-            if verdict is not None:
-                event = CandidateJudged(verdict=verdict, score=2.0 + n, reason=c.verdict_reason)
-                emit(s, event, TargetRef(CANDIDATE, c.id), System.DAEMON)
-            bar = c.id if verdict is Outcome.KEEP else bar
+            s.add_all(
+                Measurement(
+                    candidate_id=c.id,
+                    evaluator_id=row.evaluator_id,
+                    metrics={} if v is None else {'score': v},
+                    error='boom' if v is None else None,
+                )
+                for v in scores
+            )
+            s.flush()
+            if scores:
+                record_scored(s, Pool.of(s, row, row.config.all_tracks[0]), c.id)
+            parent = c.id if sum(v is not None for v in scores) >= 3 else parent
             found.append(c.id)
         s.commit()
     return found
@@ -272,42 +287,52 @@ def _lineage(cfg: Settings, campaign: Campaign) -> httpx.Response:
         return http.get(PATH.format(campaign=campaign.name))
 
 
-def test_optimization_draws_the_candidates_with_the_head_s_ancestry_as_the_spine(
+def test_optimization_draws_the_candidates_with_the_best_s_ancestry_as_the_spine(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
-    keep, discard, crash, pending = grow(db, campaign, [Outcome.KEEP, Outcome.DISCARD, Outcome.CRASH, None])
+    """3 evaluations confirm a candidate (``noise_runs``): one evaluation is scored, not ranked."""
+    best, ranked, scored, crashed, pending, excluded = grow(
+        db,
+        campaign,
+        [((3.0, 3.0, 3.0), None), ((2.0, 2.0, 2.0), None), ((1.5,), None), ((None,), None), ((), None)]
+        + [((4.0, 4.0, 4.0), 'gamed the split')],
+    )
     lineage = Lineage.model_validate_json(_lineage(Settings(home=tmp_path), campaign).content)
     graph = lineage.graph
     assert lineage.provider == 'optimization', 'the default'
     assert [(n.id, n.kind, n.status, n.parents) for n in graph.nodes] == [
-        ('candidate#1', 'baseline', 'kept', []),
-        (f'candidate#{keep}', 'candidate', 'kept', ['candidate#1']),
-        (f'candidate#{discard}', 'candidate', 'discarded', [f'candidate#{keep}']),
-        (f'candidate#{crash}', 'candidate', 'crashed', [f'candidate#{keep}']),
-        (f'candidate#{pending}', 'candidate', 'pending', [f'candidate#{keep}']),
+        ('candidate#1', 'baseline', 'ranked', []),
+        (f'candidate#{best}', 'candidate', 'best', ['candidate#1']),
+        (f'candidate#{ranked}', 'candidate', 'ranked', [f'candidate#{best}']),
+        (f'candidate#{scored}', 'candidate', 'scored', [f'candidate#{ranked}']),
+        (f'candidate#{crashed}', 'candidate', 'crashed', [f'candidate#{ranked}']),
+        (f'candidate#{pending}', 'candidate', 'pending', [f'candidate#{ranked}']),
+        (f'candidate#{excluded}', 'candidate', 'excluded', [f'candidate#{ranked}']),
     ]
-    assert graph.spine == ['candidate#1', f'candidate#{keep}']
-    assert [p.node for p in graph.series] == graph.spine
+    assert graph.spine == ['candidate#1', f'candidate#{best}']
+    assert [p.node for p in graph.series] == ['candidate#1', f'candidate#{best}'], 'the baseline, then the new bests'
     assert [n.scores for n in graph.nodes] == [
         {'score': 1.0},
-        {'score': 2.0},
         {'score': 3.0},
+        {'score': 2.0},
+        {'score': 1.5},
+        {},
+        {},
         {'score': 4.0},
-        {'score': 5.0},
     ]
+    assert graph.nodes[-1].judged == Judged(by='human', reason='gamed the split'), 'who excluded it, and why'
     assert graph.evaluator == f'evaluator#{campaign.evaluator_id}'
     [track] = graph.tracks
     assert (track.name, track.metric, track.direction) == ('score', 'score', Direction.HIGHER)
-    kept = graph.nodes[1]
-    assert (kept.label, kept.summary, kept.judged) == (
-        'idea 0',
-        'commit 0',
-        Judged(by='daemon', reason='keep on score'),
-    )
-    assert [(link.kind, link.label) for link in kept.links] == [
+    best_node = graph.nodes[1]
+    assert (best_node.label, best_node.summary, best_node.judged) == ('idea 0', 'commit 0', None)
+    assert [(link.kind, link.label) for link in best_node.links] == [
         (CANDIDATE, None),
         (IDEA, 'idea 0'),
         (RUN, None),
-        (TargetKind.AGENT_SESSION, f'implementer#{kept.links[3].id}'),
+        (TargetKind.AGENT_SESSION, f'implementer#{best_node.links[3].id}'),
     ]
-    assert isinstance(kept.links[3], SessionLink) and (kept.links[3].harness, kept.links[3].session_id) == ('pi', 's0')
+    assert isinstance(best_node.links[3], SessionLink) and (
+        best_node.links[3].harness,
+        best_node.links[3].session_id,
+    ) == ('pi', 's0')

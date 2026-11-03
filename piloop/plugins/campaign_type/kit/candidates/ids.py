@@ -1,4 +1,4 @@
-"""The ids and states of the ``candidates`` component: a candidate's id, origin, and why a verdict isn't the rule's."""
+"""The ids and states of the ``candidates`` component: a candidate's id and its origin."""
 
 from enum import StrEnum
 from typing import Final, NewType
@@ -11,26 +11,14 @@ CANDIDATE: Final = TargetKind('candidate')
 CandidateId = NewType('CandidateId', int)
 
 
-class Cause(StrEnum):
-    """Why an ``interesting`` verdict is not the verdict rule's own.
-
-    ``note``: an agent marked a regressed result as a lead (``piloop candidate note``, the ``Piloop-Note`` trailer).
-    ``moved``: it kept against its own bar, but the head moved on, so it was merged onto the head.
-    """
-
-    NOTE = 'note'
-    MOVED = 'moved'
-
-
 class Origin(StrEnum):
-    """Where a candidate comes from. The daemon judges only a candidate from the ``baseline`` or a ``run``.
+    """Where a candidate comes from.
 
     ``baseline``: the repo's HEAD when the campaign was registered. ``run``: an implementer's commit. ``reference``: a
-    starting point imported with ``piloop candidate import``, measured but never judged by the daemon; kept by hand,
-    it can be the head. ``recovered``: the daemon's commit of what an implementer left uncommitted when it stopped, or
+    starting point imported with ``piloop candidate import``, scored like any other. ``recovered``: the daemon's commit of what an implementer left uncommitted when it stopped, or
     where a daemon stop cut its run, never declared ready, so never measured; a new run of the idea starts from it.
     ``skipped``: a commit marked ``Piloop-Eval: skip``, never measured. A ``recovered`` or ``skipped`` tree that a later commit reaches without the
-    mark is measured and judged like a new one, and becomes ``run``.
+    mark is measured like a new one, and becomes ``run``.
     """
 
     BASELINE = 'baseline'
@@ -40,18 +28,5 @@ class Origin(StrEnum):
     SKIPPED = 'skipped'
 
 
-JUDGED: Final = frozenset({Origin.BASELINE, Origin.RUN})
-"""The origins of the candidates that the daemon judges. ``verdict IS NULL`` on one of them means that it is pending."""
-PENDING: Final = 'pending'
-"""How a candidate that waits for its verdict shows (``verdict.label``)."""
-VERDICTED: Final = JUDGED | {Origin.REFERENCE}
-"""The origins of the candidates that may have a verdict: those that the daemon judges, and a reference kept by hand."""
-
-
-class Outcome(StrEnum):
-    """A verdict: what a rule gives, and what ``candidates.verdict`` holds. The column is NULL until a candidate is judged."""
-
-    KEEP = 'keep'
-    INTERESTING = 'interesting'
-    DISCARD = 'discard'
-    CRASH = 'crash'
+SCORED: Final = frozenset({Origin.BASELINE, Origin.RUN})
+"""The origins of the candidates that the daemon scores by itself: the baseline, and what a run submits."""

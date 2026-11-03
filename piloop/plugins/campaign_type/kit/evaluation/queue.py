@@ -2,7 +2,7 @@
 
 The daemon submits each evaluation to its executor when one of the executor's slots is free (``Executor.capacity``),
 in this order (``waiting``), whichever the executor. A free slot goes to the
-campaign with the fewest running evaluations, and in that campaign to its head first, then to the oldest request. So a
+campaign with the fewest running evaluations, and in that campaign to its baseline first, then to the oldest request. So a
 campaign with many requests never holds back the requests of another, and inside a campaign each request waits only
 for the ones before it. The queue is in the database: ``view`` answers it, and ``cancel`` takes from it.
 
@@ -34,11 +34,6 @@ from piloop.plugins.campaign_type.kit.evaluation.wire import (
     RunningSince,
     WaitingSince,
 )
-from piloop.plugins.campaign_type.kit.verdicts.judge import head
-from piloop.plugins.campaign_type.kit.verdicts.verdict import pending
-
-CANCELLED = 'not judged: its evaluation was cancelled by {actor}'
-"""The reason of a run's candidate whose evaluation ``cancel`` cancelled: it is ``skipped``, with no verdict."""
 
 
 def request(s: Session, candidate_id: CandidateId, evaluator_id: EvaluatorId) -> tuple[Evaluation, bool]:
@@ -58,6 +53,12 @@ def request(s: Session, candidate_id: CandidateId, evaluator_id: EvaluatorId) ->
     return evaluation, True
 
 
+def _first(s: Session, campaign_id: CampaignId) -> CandidateId | None:
+    """The id of the campaign's baseline, its first candidate: runs wait for it."""
+    first = select(Candidate.id).where(Candidate.campaign_id == campaign_id).order_by(Candidate.id).limit(1)
+    return s.scalar(first)
+
+
 def waiting(s: Session) -> list[Evaluation]:
     """Return the evaluations that wait for a slot, in the order in which they get one if none ends meanwhile."""
     rows = list(s.scalars(select(Evaluation).where(Evaluation.started_at.is_(None)).order_by(Evaluation.id)))
@@ -69,12 +70,10 @@ def waiting(s: Session) -> list[Evaluation]:
             .where(Evaluation.started_at.is_not(None))
         )
     )
-    heads = {
-        p: trunk.id if (trunk := head(s, s.get_one(Campaign, p))) is not None else None for p in set(campaign.values())
-    }
+    firsts = {p: _first(s, p) for p in set(campaign.values())}
     order: list[Evaluation] = []
     while rows:
-        nxt = min(rows, key=lambda e: (running[campaign[e.id]], e.candidate_id != heads[campaign[e.id]], e.id))
+        nxt = min(rows, key=lambda e: (running[campaign[e.id]], e.candidate_id != firsts[campaign[e.id]], e.id))
         order.append(nxt)
         rows.remove(nxt)
         running[campaign[nxt.id]] += 1
@@ -134,10 +133,9 @@ def cancel(s: Session, candidate_id: CandidateId, actor: Actor) -> int:
 
     Signed by ``actor``. Return how many it cancelled. The caller commits.
 
-    A cancel is not a verdict: it records no measurement. A run's candidate that waits for its verdict becomes
-    ``skipped``, with the reason ``CANCELLED``, so no daemon measures it again unless someone asks
-    (``piloop candidate remeasure``), even after a restart. A head or a bar is asked for again when a
-    run needs it. A pending remeasure request is answered. A waiting evaluation leaves the queue. A running one gets
+    A cancel records no measurement. A run's candidate that has none under the current evaluator becomes ``skipped``,
+    so no daemon measures it again unless someone asks (``piloop candidate remeasure``), even after a restart. The
+    baseline is asked for again when a run needs it. A pending remeasure request is answered. A waiting evaluation leaves the queue. A running one gets
     ``cancelled_by``, and the daemon stops its evaluator and records nothing.
     """
     found = s.scalars(
@@ -149,8 +147,9 @@ def cancel(s: Session, candidate_id: CandidateId, actor: Actor) -> int:
     candidate = s.get_one(Candidate, candidate_id)
     for ask, _ in asked:
         requests.answer(s, ask)
-    if pending(candidate) and candidate.origin is Origin.RUN:
-        candidate.origin, candidate.verdict_reason = Origin.SKIPPED, CANCELLED.format(actor=actor)
+    current = s.get_one(Campaign, candidate.campaign_id).evaluator_id
+    if candidate.origin is Origin.RUN and not any(m.evaluator_id == current for m in candidate.measurements):
+        candidate.origin = Origin.SKIPPED
     for evaluation in found:
         if evaluation.started_at is None:  # its executor finds it gone when a slot comes (``Results.started``)
             s.delete(evaluation)

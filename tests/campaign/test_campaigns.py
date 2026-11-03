@@ -284,7 +284,7 @@ def test_init_refuses_a_config_that_drops_a_track_that_ideas_are_on_and_keeps_th
     db: Database, campaign: Campaign
 ) -> None:
     """The one track is named after its primary. A new primary would strand every idea of the old one: a run that
-    finishes on it fails, and a remeasure of its candidates never judges them. ``track =`` keeps the name."""
+    finishes on it fails, and a remeasure of its candidates never scores them. ``track =`` keeps the name."""
     toml = Path(campaign.path) / 'piloop.toml'
     with db.session() as s:
         s.add_all(

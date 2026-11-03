@@ -13,7 +13,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 from git import Repo
-from git.exc import GitCommandError, InvalidGitRepositoryError, NoSuchPathError
+from git.exc import InvalidGitRepositoryError, NoSuchPathError
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from piloop.plugins.vcs.contract import CloneFailed, VcsError
@@ -217,79 +217,6 @@ def pin_all(repo: Repo, refs: Mapping[str, str]) -> None:
     if refs:
         lines = ''.join(f'update {ref} {sha}\n' for ref, sha in refs.items())
         subprocess.run(['git', 'update-ref', '--stdin'], cwd=repo.common_dir, input=lines.encode(), check=True)
-
-
-def merge(repo: Repo, onto: str, sha: str, message: str, by: Identity) -> str | list[str]:
-    """Merge commit ``sha`` onto ``onto`` without a worktree, as a commit ``by`` its author and committer.
-
-    The merge commit has ``onto`` and ``sha`` as parents. The merge base is by tree before history (``merge_tree``):
-    when the two histories already share commits (an earlier merge of the same run), only the new changes are merged,
-    and so they are when ``sha`` started from a copy of a commit of ``onto`` (a rebase: same tree, another sha).
-
-    Returns:
-        The sha of the merge commit, or the paths that conflict.
-
-    Raises:
-        GitCommandError: Git failed for a reason other than a conflict, for example a commit the repo does not have.
-    """
-    merged = merge_tree(repo, onto, sha)
-    if isinstance(merged, list):
-        return merged
-    return str(repo.git.commit_tree(merged, '-p', onto, '-p', sha, '-m', message, env=commit_env(by, by)))
-
-
-def merge_tree(repo: Repo, onto: str, sha: str) -> str | list[str]:
-    """Return the tree of a merge of commit ``sha`` onto ``onto``, or the paths that conflict (see ``merge``).
-
-    ``git merge-tree --write-tree`` (git 2.40 or later for ``--merge-base``) finds the merge base by history. A commit
-    of ``sha``'s own history with the tree of a commit of ``onto``'s own history is a later common state, so it is the
-    merge base instead (``tree_base``). Otherwise both sides would merge the changes since the older shared commit
-    again, and conflict where they made the same change twice.
-
-    Raises:
-        GitCommandError: Git failed for a reason other than a conflict.
-    """
-    base = tree_base(repo, onto, sha)
-    argv = ('--write-tree', '--name-only', '--no-messages', *([f'--merge-base={base}'] if base else []), onto, sha)
-    status, out, err = repo.git.merge_tree(*argv, with_extended_output=True, with_exceptions=False)
-    lines = out.splitlines()
-    if status == 1 and lines:
-        return [line for line in lines[1:] if line]
-    if status != 0:
-        raise GitCommandError(['git', 'merge-tree', *argv], status, err, out)
-    return lines[0]
-
-
-def tree_base(repo: Repo, onto: str, sha: str) -> str | None:
-    """The newest commit only in ``sha``'s history whose tree is the tree of a commit only in ``onto``'s, or None.
-
-    None also when git cannot list a history, for example of a commit the repo does not have: ``merge_tree`` raises.
-    """
-    status, theirs, _ = repo.git.log('--format=%T', f'^{sha}', onto, with_extended_output=True, with_exceptions=False)
-    if status != 0:
-        return None
-    trees = set(theirs.split())
-    mine = repo.git.log('--format=%H %T', f'^{onto}', sha).splitlines()
-    return next((commit for commit, tree in (line.split() for line in mine) if tree in trees), None)
-
-
-def contains(repo: Repo, sha: str, ancestor: str) -> bool:
-    """Whether commit ``sha`` has all of commit ``ancestor``: it is in its history, or merging it changes nothing.
-
-    The merge test finds what history misses: a commit that cherry-picked or squashed ``ancestor``'s changes. A commit
-    contains itself.
-
-    Raises:
-        GitCommandError: The repo does not have one of the two commits.
-    """
-    argv = ('--is-ancestor', ancestor, sha)
-    status, out, err = repo.git.merge_base(*argv, with_extended_output=True, with_exceptions=False)
-    if status not in (0, 1):
-        raise GitCommandError(['git', 'merge-base', *argv], status, err, out)
-    if status == 0:
-        return True
-    merged = merge_tree(repo, sha, ancestor)
-    return isinstance(merged, str) and merged == tree_sha(repo, sha)
 
 
 def outside(ignore: list[str]) -> list[str]:

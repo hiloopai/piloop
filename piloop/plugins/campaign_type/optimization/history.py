@@ -4,13 +4,14 @@ The history has four parts:
 
 - The ideas: who proposed each one, its outcome, and its links to other ideas. Their hypotheses and the
   implementers' notes on them are a query away (``ideas_fts``, ``comments``), so the table leaves them out.
-- The kept lineage: the gain of each keep over its parent, its idea, its commit, and the tokens that the session
-  that made it used. An agent can run ``git show`` on the commit.
-- The starting points: imported references whose changes a worker can take.
+- The new bests: the baseline, then each candidate that became the best when it was scored, with its gain over its
+  parent, its idea,
+  its commit, and the tokens that the session that made it used. An agent can run ``git show`` on the commit.
+- The starting points: imported references that a run can start from.
 - The latest notes, newest first, by id, author, target and first line.
 
-The caller bounds the size: it picks the ideas, the notes and how many of the newest keeps the lineage shows. An idea
-row is about 250 characters, a note up to about 250, and each kept candidate adds one line of about 200.
+The caller bounds the size: it picks the ideas, the notes and how many of the newest bests it shows. An idea row is
+about 250 characters, a note up to about 250, and each new best adds one line of about 200.
 """
 
 import io
@@ -35,9 +36,9 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.measure import climb, score
+from piloop.plugins.campaign_type.kit.pool.pool import baseline, fallback_track, track_of
+from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.sessions import session_tokens
-from piloop.plugins.campaign_type.kit.verdicts.judge import fallback_track, keeps, track_of
-from piloop.plugins.campaign_type.kit.verdicts.verdict import label
 from piloop.text import NONE, cell, metric
 from piloop.usage import human
 
@@ -93,7 +94,7 @@ def history(
     *,
     ideas: Sequence[Idea],
     notes: Sequence[Comment],
-    keeps: int | None = None,
+    bests: int | None = None,
     chosen: str = '',
 ) -> str:
     """Render the history as markdown for an agent's brief, with markdown tables and no colour."""
@@ -107,7 +108,7 @@ def history(
         heading='### ',
         ideas=ideas,
         notes=notes,
-        newest_keeps=keeps,
+        newest_bests=bests,
         chosen=chosen,
     )
     console.print(Group(*parts))
@@ -124,13 +125,13 @@ def renderables(
     heading: str = '',
     ideas: Sequence[Idea],
     notes: Sequence[Comment],
-    newest_keeps: int | None = None,
+    newest_bests: int | None = None,
     chosen: str = '',
 ) -> list[RenderableType]:
-    """Build the table of ``ideas``, the kept lineage, the starting points and ``notes``.
+    """Build the table of ``ideas``, the new bests, the starting points and ``notes``.
 
     ``ideas`` are in the order to show. ``chosen`` says how they were picked, in the table's title; empty: the newest.
-    The lineage shows the ``newest_keeps`` newest keeps, and its title counts the rest; None: every keep. ``notes``
+    The new bests are the ``newest_bests`` newest, and the title counts the rest; None: every one. ``notes``
     are in the order to show, each by its id, its author, its target and its first line.
 
     The agent brief (``history``, with ``heading='### '``) and ``piloop history`` use the same renderables. The
@@ -139,8 +140,10 @@ def renderables(
     tracks = cfg.all_tracks
     total = count(s, select(Idea).where(Idea.campaign_id == campaign.id))
     evaluator_id = campaign.evaluator_id
-    every = s.scalars(keeps(campaign).order_by(Candidate.id)).all()
-    kept = every if newest_keeps is None else every[len(every) - newest_keeps :]
+    first = baseline(s, campaign)
+    bests = [s.get_one(Candidate, e.target_id) for e, _ in new_bests(s, campaign)]
+    every = [*([first] if first is not None else []), *bests]
+    kept = every if newest_bests is None else every[len(every) - newest_bests :]
     older = chosen or (f'; {total - len(ideas)} older omitted' if total > len(ideas) else '')
     track_column = ['track'] if cfg.multitrack else []
     on = "its track's primary" if cfg.multitrack else tracks[0].primary.name
@@ -171,7 +174,7 @@ def renderables(
         )
     cut = f' (newest {len(kept)} of {len(every)})' if len(kept) < len(every) else ''
     lineage = titled_table(
-        f'{heading}History: kept lineage{cut}',
+        f'{heading}History: new bests{cut}',
         [
             'candidate',
             'parent',
@@ -214,7 +217,7 @@ def _starting_points(
         return []
     deciding = [*(t.primary for t in cfg.all_tracks), *cfg.guardrails]
     table = titled_table(
-        f'{heading}History: starting points (take the change of one onto the head)',
+        f'{heading}History: starting points (start a run from one with --base)',
         ['candidate', 'revision', *(m.name for m in deciding), 'summary'],
         table_box,
     )
@@ -268,7 +271,7 @@ def _delta(c: Candidate, primary: Metric, evaluator_id: EvaluatorId | None) -> s
 
 
 def _outcome(s: Session, idea: Idea, primary: Metric, evaluator_id: EvaluatorId | None) -> str:
-    """Format the best candidate of the idea with its verdict and its delta against the run base."""
+    """Format the best candidate of the idea with its origin and its delta against the run base."""
     produced = [(c, run) for run in idea.runs for c in run.candidates]
     if not produced:
         return NONE
@@ -280,8 +283,9 @@ def _outcome(s: Session, idea: Idea, primary: Metric, evaluator_id: EvaluatorId 
     if best is None:  # Every commit crashed in measurement or was skipped (Piloop-Eval: skip).
         c, _ = produced[-1]
         where = climb(c, evaluator_id)
-        return f'{label(c)}{f", {where}" if where else ""} (candidate#{c.id})'
+        crashed = any(m.evaluator_id == evaluator_id and m.error is not None for m in c.measurements)
+        return f'{"crash" if crashed else c.origin}{f", {where}" if where else ""} (candidate#{c.id})'
     value, c, base_id = best
     base = score(s.get_one(Candidate, base_id), evaluator_id, primary)
     delta = f' ({value - base:+g} vs candidate#{base_id})' if base is not None else ''
-    return f'{label(c)} {metric(value)}{delta} (candidate#{c.id})'
+    return f'{metric(value)}{delta} (candidate#{c.id})'

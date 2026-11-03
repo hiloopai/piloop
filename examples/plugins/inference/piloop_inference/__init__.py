@@ -1,1 +1,1 @@
-"""piloop plugins for inference campaigns: a fact source, a verdict rule and a section."""
+"""piloop plugins for inference campaigns: a fact source, a best rule and a section."""

@@ -79,8 +79,6 @@ class Measurement(Base):
     error: Mapped[str | None]
     """Set when the evaluate command failed. ``metrics`` then has what it printed before it failed."""
     seconds: Mapped[float | None]
-    pair_id: Mapped[MeasurementId | None] = mapped_column(ForeignKey('measurements.id', ondelete='SET NULL'))
-    """The bar's measurement that ran next to this one in a paired evaluation. NULL on any other measurement."""
     rung: Mapped[RungName | None]
     """The rung of the evaluation ladder that it measured (``[[ladder]]``). NULL for the full panel: only a measurement
     of the full panel scores."""
@@ -90,14 +88,13 @@ class Measurement(Base):
 
     candidate: Mapped[Candidate] = relationship(back_populates='measurements')
     evaluator: Mapped[Evaluator] = relationship()
-    pair: Mapped[Measurement | None] = relationship(remote_side=[id])
 
 
 class Evaluation(Base):
     """An evaluation that the daemon needs: it waits for a slot of the executor or runs. The evaluation queue.
 
     The daemon inserts a row when it needs a measurement, and deletes it when the measurement is recorded, so the table
-    holds only what waits or runs. A free slot goes to the campaign with the fewest running rows, and in it to its head
+    holds only what waits or runs. A free slot goes to the campaign with the fewest running rows, and in it to its best
     first, then to the lowest id (``piloop.plugins.campaign_type.kit.evaluation.queue``). The requests for one candidate under one evaluator share
     one row: a tree is evaluated once. An id is never reused, so a request that waits for a row never mistakes a later
     one for it. A daemon that starts deletes the rows that the previous one left, and asks again for what it still

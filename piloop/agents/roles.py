@@ -172,6 +172,6 @@ def tracks_line(cfg: CampaignConfig) -> str:
     """Return the campaign's tracks in one line for a brief. Every idea names one. A worker learns its own at its claim."""
     tracks = '; '.join(f'{t.name} (primary {t.primary.name}, {t.primary.direction} is better)' for t in cfg.all_tracks)
     return (
-        f'- Tracks: {tracks}. Every idea names its track (`--track <name>`); every keep must also hold the'
-        " other tracks' primaries within their margins and floors."
+        f'- Tracks: {tracks}. Every idea names its track (`--track <name>`); the best of a track must also hold'
+        " the other tracks' primaries within their margins and floors of the baseline."
     )

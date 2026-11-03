@@ -12,7 +12,7 @@ from pydantic import BaseModel, SecretStr
 
 from piloop.actor import Agent
 from piloop.api.contract import Revealed
-from piloop.ids import AgentSessionId
+from piloop.ids import AgentSessionId, Revision
 from piloop.proc import PILOOP_ARGV
 from piloop.settings import settings
 
@@ -41,6 +41,9 @@ class Relayed(BaseModel):
     stdout: str = ''
     stderr: str = ''
     exit_code: int
+    checkout: Revision | None = None
+    """A version of the repo of record that the call moves the agent's checkout to, such as the base that a claim
+    chose (``CHECKOUT_ENV``). The worker moves it, and takes the version from the server first if it lacks it."""
 
 
 LOCAL: frozenset[tuple[str, ...]] = frozenset({('agent', 'messages')})

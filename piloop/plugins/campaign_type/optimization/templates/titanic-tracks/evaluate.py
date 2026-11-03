@@ -3,8 +3,7 @@
 Kaggle's test set has no labels, so the holdout is a fixed 80/20 split of ``data/train.csv`` by PassengerId.
 ``cost_seconds`` is the CPU time (user + system) that ``solve.py`` takes to train and predict on one thread. It is the
 lowest of ``REPEATS`` runs, so a busy machine changes it less. Any failure exits non-zero with the reason on stderr,
-and piloop records a crash. The result also has each holdout passenger's share of the accuracy (``units``), so the
-verdict can tell a broad gain from a lucky few rows.
+and piloop records a crash. The result also has each holdout passenger's share of the accuracy (``units``).
 """
 
 import csv

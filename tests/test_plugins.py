@@ -23,17 +23,8 @@ from piloop.daemon.main import Daemon
 from piloop.db.models import Campaign
 from piloop.db.session import Database
 from piloop.plugins import host as plugins
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
-    VERDICT_RULES,
-    Case,
-    Criterion,
-    Judgement,
-    Side,
-    VerdictRule,
-)
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.noise import Noise
+from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Case, Criterion, Scores
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.claude import Claude
@@ -67,7 +58,7 @@ from piloop.plugins.section.contract import SECTIONS
 from piloop.settings import HOME_PLUGINS, Settings
 from tests.conftest import example, package
 from tests.daemon.test_roles import PLUGIN, forget_loaded, installed
-from tests.fixtures.plugin import Checked, Needy, NoUnitRegression, Typed
+from tests.fixtures.plugin import AsMeasured, Checked, Needy, Typed
 from tests.test_docs import BASE_CONFIG
 
 
@@ -323,56 +314,56 @@ def test_activation_goes_in_order_teardown_newest_first_and_a_failure_undoes_onl
 CASE = Case(
     Criterion('score', Direction.HIGHER),
     (),
-    Side('candidate#2', {'score': 13.0}, {}),
-    Side('candidate#1', {'score': 10.0}, {}),
+    Scores('candidate#2', {'score': 13.0}, 1, None),
+    Scores('candidate#1', {'score': 10.0}, 1, None),
+    None,
 )
-"""A case of the verdict rules, the pure capability that these tests install a provider of."""
+"""A case of the best rules, the pure capability that these tests install a provider of."""
 
 
 def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, db: Database, campaign: Campaign
 ) -> None:
-    """The example ``examples/plugins/min-gain`` provides a verdict rule, and ``[plugins.verdict_rule]`` selects it."""
+    """The example ``examples/plugins/min-gain`` provides a best rule, and ``[plugins.best_rule]`` selects it."""
     campaign_path = Path(campaign.path)
     example(tmp_path / 'site', 'min-gain')
     monkeypatch.syspath_prepend(tmp_path / 'site')
-    forget_loaded()  # the campaign's config loaded the verdict rules before the example was installed
-    assert VERDICT_RULES.tier is Tier.PURE and data_errors(VerdictRule) == []
-    cfg = load_campaign_config(campaign_path, plugins={'verdict_rule': {'provider': 'min_gain', 'min_gain': 2}})
-    rule = VERDICT_RULES.selected(cfg.plugins)
+    forget_loaded()  # the campaign's config loaded the best rules before the example was installed
+    assert BEST_RULES.tier is Tier.PURE and data_errors(BestRule) == []
+    cfg = load_campaign_config(campaign_path, plugins={'best_rule': {'provider': 'min_gain', 'min_gain': 2}})
+    rule = BEST_RULES.selected(cfg.plugins)
     assert rule == piloop_min_gain.MinGain(min_gain=2)
-    assert rule.decide(CASE) == Judgement(
-        Outcome.KEEP, 'against candidate#1: score 13 vs 10 (+3; aggregate: no per-unit results)'
-    )
-    assert VERDICT_RULES.sources()['min_gain'].release == 'piloop-min-gain 0.1.0'
+    assert rule.refuse(CASE) is None, 'a gain of 3'
+    assert piloop_min_gain.MinGain(min_gain=5).refuse(CASE) == 'its gain 3 is below min_gain 5'
+    assert BEST_RULES.sources()['min_gain'].release == 'piloop-min-gain 0.1.0'
     home = Settings(home=tmp_path)
-    assert not any(line.startswith('demo: verdict rule min_gain') for line in selections(home)), 'not selected yet'
+    assert not any(line.startswith('demo: best rule min_gain') for line in selections(home)), 'not selected yet'
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = cfg
         s.commit()
     assert (
-        'demo: verdict rule min_gain, from piloop-min-gain 0.1.0 ([plugins.verdict_rule] provider, in the'
+        'demo: best rule min_gain, from piloop-min-gain 0.1.0 ([plugins.best_rule] provider, in the'
         f' config of demo that the last `piloop init` stored from {campaign_path}/piloop.toml)'
     ) in selections(home)
-    plain = load_campaign_config(campaign_path, plugins={'verdict_rule': {'provider': 'bootstrap'}})
-    assert plain.plugins['verdict_rule'] == Bootstrap(), 'a rule without fields, given none'
-    assert VERDICT_RULES.selected({}) == Noise(), 'the default'
+    plain = load_campaign_config(campaign_path, plugins={'best_rule': {'provider': 'baseline'}})
+    assert plain.plugins['best_rule'] == Baseline(), 'a rule without fields, given none'
+    assert BEST_RULES.selected({}) == Baseline(), 'the default'
     for tables, error in [
         (
-            {'verdict_rule': {'provider': 'nope'}},
-            "plugins.verdict_rule: provider = 'nope': unknown verdict rule 'nope'",
+            {'best_rule': {'provider': 'nope'}},
+            "plugins.best_rule: provider = 'nope': unknown best rule 'nope'",
         ),
-        ({'verdict_rule': {'provider': 'min_gain', 'min_gain': 'x'}}, "min_gain = 'x': Input should be a valid number"),
-        ({'verdict_rule': {'provider': 'min_gain'}}, 'min_gain: Field required'),
+        ({'best_rule': {'provider': 'min_gain', 'min_gain': 'x'}}, "min_gain = 'x': Input should be a valid number"),
+        ({'best_rule': {'provider': 'min_gain'}}, 'min_gain: Field required'),
         (
             {'planner': {'provider': 'min_gain'}},
-            'plugins.planner: no capability has that name; there is escalation, fact_source, harness, harness_choice, lineage, mcp_server, memory, notifier, price_list, role, runtime, section, stop_rule, vcs, verdict_rule',
+            'plugins.planner: no capability has that name; there is best_rule, escalation, fact_source, harness, harness_choice, lineage, mcp_server, memory, notifier, price_list, role, runtime, section, stop_rule, vcs',
         ),
         (
-            {'verdict_rule': {'provider': 'bootstrap', 'min_gain': 2}},
-            'plugins.verdict_rule.min_gain = 2: Extra inputs are not permitted',
+            {'best_rule': {'provider': 'baseline', 'min_gain': 2}},
+            'plugins.best_rule.min_gain = 2: Extra inputs are not permitted',
         ),
-        ({'verdict_rule': 1}, 'plugins.verdict_rule = 1: not a table'),
+        ({'best_rule': 1}, 'plugins.best_rule = 1: not a table'),
     ]:
         with pytest.raises(ConfigError, match=re.escape(error)):
             load_campaign_config(campaign_path, plugins=tables)
@@ -383,24 +374,24 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
     [
         (
             f'{PLUGIN}:NOT_A_ROLE',
-            'is not a subclass of piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract.VerdictRule$',
+            'is not a subclass of piloop.plugins.campaign_type.kit.pool.best_rule.contract.BestRule$',
         ),
         (
-            f'{PLUGIN}:Undecided',
-            'does not implement piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract.VerdictRule: it has no decide$',
+            f'{PLUGIN}:Unrefusing',
+            'does not implement piloop.plugins.campaign_type.kit.pool.best_rule.contract.BestRule: it has no refuse$',
         ),
         (
             'piloop.plugins.stop_rule.limits:Limits',
-            'is not a subclass of piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract',
+            'is not a subclass of piloop.plugins.campaign_type.kit.pool.best_rule.contract',
         ),
     ],
 )
 def test_a_provider_is_a_class_that_implements_its_contract(
     monkeypatch: pytest.MonkeyPatch, value: str, error: str
 ) -> None:
-    installed(monkeypatch, [EntryPoint('odd', value, VERDICT_RULES.group)])
-    with pytest.raises(PluginError, match=f'^entry point odd = {value} in piloop.verdict_rules {error}'):
-        VERDICT_RULES.providers()
+    installed(monkeypatch, [EntryPoint('odd', value, BEST_RULES.group)])
+    with pytest.raises(PluginError, match=f'^entry point odd = {value} in piloop.best_rules {error}'):
+        BEST_RULES.providers()
 
 
 @dataclass(frozen=True)
@@ -482,50 +473,40 @@ def test_a_pure_contract_takes_and_returns_data_only() -> None:
 def test_a_plugin_declares_a_capability_calls_its_providers_and_another_package_provides_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, campaign: Campaign
 ) -> None:
-    """A package declares ``verdict_check`` and calls its providers from its verdict rule; another provides one.
+    """A package declares ``best_check`` and calls its providers from its best rule; another provides one.
     piloop lists, loads and checks it as one of its own."""
     campaign_path = Path(campaign.path)
     installed(
         monkeypatch,
         [
-            EntryPoint('verdict_check', f'{PLUGIN}:VERDICT_CHECKS', plugins.CAPABILITIES),
-            EntryPoint('no_unit_regression', f'{PLUGIN}:NoUnitRegression', 'piloop.verdict_checks'),
-            EntryPoint('checked', f'{PLUGIN}:Checked', VERDICT_RULES.group),
+            EntryPoint('best_check', f'{PLUGIN}:BEST_CHECKS', plugins.CAPABILITIES),
+            EntryPoint('as_measured', f'{PLUGIN}:AsMeasured', 'piloop.best_checks'),
+            EntryPoint('checked', f'{PLUGIN}:Checked', BEST_RULES.group),
         ],
     )
-    checks = next(c for c in plugins.declared() if c.name == 'verdict_check')
-    assert (checks.tier, checks.group, checks.table) == (Tier.PURE, 'piloop.verdict_checks', None)
-    with pytest.raises(
-        ConfigError, match=re.escape("unknown verdict check 'none'; registered verdict checks: no_unit")
-    ):
+    checks = next(c for c in plugins.declared() if c.name == 'best_check')
+    assert (checks.tier, checks.group, checks.table) == (Tier.PURE, 'piloop.best_checks', None)
+    with pytest.raises(ConfigError, match=re.escape("unknown best check 'none'; registered best checks: as_measured")):
         none = {'provider': 'checked', 'vetoes': [{'provider': 'none'}]}
-        load_campaign_config(campaign_path, plugins={'verdict_rule': none})
-    table = {'provider': 'checked', 'vetoes': [{'provider': 'no_unit_regression'}]}
-    rule = VERDICT_RULES.selected(load_campaign_config(campaign_path, plugins={'verdict_rule': table}).plugins)
-    assert rule == Checked(vetoes=[NoUnitRegression()])
-    units = {f'u{i}': 1.0 for i in range(30)}
-    better = {**units, **{f'u{i}': 2.0 for i in range(1, 30)}}
-
-    def case(mine: dict[str, float]) -> Case:
-        sides = Side('candidate#2', {'score': sum(mine.values())}, {'score': mine})
-        return Case(Criterion('score', Direction.HIGHER), (), sides, Side('candidate#1', {'score': 30.0}, {}))
-
-    assert rule.decide(case(better)).verdict is Outcome.KEEP, 'no unit got worse'
-    worse = rule.decide(
-        replace(case({**better, 'u0': 0.5}), bar=Side('candidate#1', {'score': 30.0}, {'score': units}))
-    )
-    assert worse.verdict is Outcome.INTERESTING
-    assert worse.reason.endswith('; held by no_unit_regression: 1 units of score got worse: u0')
+        load_campaign_config(campaign_path, plugins={'best_rule': none})
+    table = {'provider': 'checked', 'vetoes': [{'provider': 'as_measured'}]}
+    rule = BEST_RULES.selected(load_campaign_config(campaign_path, plugins={'best_rule': table}).plugins)
+    assert rule == Checked(vetoes=[AsMeasured()])
+    assert rule.refuse(CASE) is None, 'as many evaluations as the baseline'
+    fewer = replace(CASE, baseline=replace(CASE.baseline, measured=3))
+    assert rule.refuse(fewer) == 'as_measured: candidate#2 has 1 evaluations, the baseline 3'
+    floored = replace(fewer, primary=Criterion('score', Direction.HIGHER, floor=20))
+    assert rule.refuse(floored) == 'floor: score 13 past its floor 20', "baseline's reason first"
     monkeypatch.setattr(common, 'settings', Settings(home=tmp_path))
     printed: list[str] = []
     monkeypatch.setattr(common.console, 'print', lambda text, **_: printed.append(text))
     app(['plugins'], result_action='return_value', exit_on_error=False)
     lines = printed[0].splitlines()
-    listed = lines.index('verdict checks (pure tier, piloop.verdict_checks):')
-    assert lines[listed + 1].split()[:3] == ['no_unit_regression', 'an', 'unknown']
+    listed = lines.index('best checks (pure tier, piloop.best_checks):')
+    assert lines[listed + 1].split()[:3] == ['as_measured', 'an', 'unknown']
 
 
-STORES_AGAIN = Capability('odd', VerdictRule, group='piloop.cas')
+STORES_AGAIN = Capability('odd', BestRule, group='piloop.cas')
 """A capability whose provider group the CAS providers have already."""
 
 
@@ -575,7 +556,7 @@ def test_config_toml_refuses_an_instance_that_no_use_names_and_a_use_that_names_
         ('tests.fixtures.no_such_module:X', 'does not load: ModuleNotFoundError'),
         (f'{PLUGIN}:NOT_A_ROLE', 'is not a piloop.plugins.host.Capability$'),
         (f'{__name__}:STORES_AGAIN', 'the CAS providers have the provider group piloop.cas already'),
-        (f'{PLUGIN}:VERDICT_CHECKS', "names the capability 'verdict_check': the names must be the same$"),
+        (f'{PLUGIN}:BEST_CHECKS', "names the capability 'best_check': the names must be the same$"),
     ],
 )
 def test_a_declared_capability_loads_is_a_capability_and_has_a_group_of_its_own(
@@ -587,8 +568,8 @@ def test_a_declared_capability_loads_is_a_capability_and_has_a_group_of_its_own(
         plugins.declared()
 
 
-class Unregistered(Bootstrap):
-    """A verdict rule that no entry point names."""
+class Unregistered(Baseline):
+    """A best rule that no entry point names."""
 
 
 def test_a_capability_selects_the_table_of_its_file_else_its_default_else_nothing() -> None:
@@ -599,8 +580,8 @@ def test_a_capability_selects_the_table_of_its_file_else_its_default_else_nothin
     }, 'a capability of several instances has those of its providers that need no keys, and no use in config.toml'
     with pytest.raises(ValidationError, match=r'\[plugins\] is a table of tables'):
         HOME_PLUGINS.validate_python(1)
-    with pytest.raises(MissingProvider, match=r'^Unregistered is no verdict rule of an entry point$'):
-        VERDICT_RULES.name_of(Unregistered())
+    with pytest.raises(MissingProvider, match=r'^Unregistered is no best rule of an entry point$'):
+        BEST_RULES.name_of(Unregistered())
     chosen = Capability('odd', Parameters, table=One(Scope.CAMPAIGN))
     with pytest.raises(MissingProvider, match=r'^no \[plugins.odd\] chooses a odd, and there is no default$'):
         chosen.selected({})
@@ -679,8 +660,8 @@ def test_the_instances_of_a_capability_of_several_by_name(monkeypatch: pytest.Mo
     assert list(HARNESSES.instances({})) == ['claude', 'codex', 'pi'], 'unvalidated: the providers with their defaults'
     with pytest.raises(ContractBroken, match=r'^the roles have no \[plugins.role\] use$'):
         ROLES.used({})
-    with pytest.raises(ContractBroken, match='^the verdict rules are not of several instances$'):
-        VERDICT_RULES.instances({})
+    with pytest.raises(ContractBroken, match='^the best rules are not of several instances$'):
+        BEST_RULES.instances({})
     with pytest.raises(ValidationError, match='use of the runtimes is not set in this file'):
         HOME_PLUGINS.validate_python({'runtime': {'use': 'subprocess'}})
     installed(monkeypatch, [EntryPoint('needy', f'{PLUGIN}:Needy', RUNTIMES.group)])

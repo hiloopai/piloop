@@ -60,7 +60,7 @@ class OrchestratorRole(StartsItsAgents):
             ('idea', 'link'),
             ('idea', 'unlink'),
             ('idea', 'track'),
-            ('candidate', 'verdict'),
+            ('candidate', 'exclude'),
             ('candidate', 'remeasure'),
             ('candidate', 'note'),
             ('candidate', 'import'),
@@ -89,7 +89,7 @@ class OrchestratorRole(StartsItsAgents):
         'comments(decision) addressed to the human, with a priority',
         'answers to messages via inbox reply',
         'journal lines',
-        'ideas, verdicts and the campaign changes of the piloop commands in this brief',
+        'ideas, exclusions and the campaign changes of the piloop commands in this brief',
     ]
     GUIDES = (*READER, 'priorities', 'links', 'research_commands')
     sections: list[SectionName] | None = [

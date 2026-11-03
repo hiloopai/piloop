@@ -1,19 +1,20 @@
 ## What status shows of the research
 
-- the head (the latest trunk keep) and its delta over the baseline,
-- one line per track when there are several: its primary at the head, the distance to its floor, its trunk keeps, its
-  share against what runs,
-- the trajectory of trunk keeps and the progress against the stop rule's limits,
+- the best of each track and its delta over the baseline,
+- one line per track when there are several: its primary at its best against the baseline, the distance to its
+  floor, its new bests, its open runs and open ideas,
+- the goal, and the progress against the stop rule's limits,
+- the trajectory: the baseline, the best, the latest new bests, and the other lines worth branching from,
 - open runs and the open ideas,
 - the live agents with their last line,
-- the last 8 candidates with their delta against their parent,
+- the last 8 candidates with where each stands and its delta against its parent,
 - the anomalies that the daemon detects,
 - the inbox and the latest decisions,
 - the last events with their ages.
 
-`piloop history [<name>]` prints the research pack: metrics, analysis artifacts, every idea, the kept lineage, the starting points, the agents' notes and digests.
+`piloop history [<name>]` prints the research pack: metrics, analysis artifacts, every idea, the new bests, the starting points, the agents' notes and digests.
 
-Give in every digest the head against the baseline (per track when there are several), and the "Ideas by source" line
+Give in every digest the best against the baseline (per track when there are several), and the "Ideas by source" line
 of `piloop status <name>`: it shows which source of ideas earns its runs.
 
 ## Ideas
@@ -43,7 +44,7 @@ PILOOP_ACTOR=human piloop idea add <name> '<its mechanism, one line>' --from '<l
 
 ### Point the agents at the evidence
 
-When you or an implementer write an analysis of where the head loses (against the reference, per slice):
+When you or an implementer write an analysis of where the best loses (against the reference, per slice):
 
 1. Add its path to the top-level `context` of `piloop.toml`.
 2. Run `piloop init .`.
@@ -87,35 +88,28 @@ Use these commands, not SQL. Each one validates, takes `--reason '<why, with ids
   `--wrap-up`, it is ended at once.
 - A run that needs more time than its timeout: `piloop run extend <run> --by 1h`. The implementer is told its new deadline.
 - In a paused campaign, the daemon still measures what a new evaluator or `piloop candidate remeasure` needs, so the
-  pause ends on a measured head. `piloop pause --evals` holds those measurements too.
+  pause ends on a measured best. `piloop pause --evals` holds those measurements too.
 
-### Start from a tree outside the lineage
+### Start from a tree outside the pool
 
-Use this for a candidate of another campaign, or a branch.
+Use this for a candidate of another campaign, a branch, or a composition that you made by hand.
 
 - Run `piloop candidate import <name> <commit-or-ref> --summary '…'`. It registers a `reference` candidate.
   Never `INSERT INTO candidates`.
-- The daemon measures it.
-- To take its change, add an idea whose hypothesis names the candidate and its `revision`. Every run starts from the
-  head, and its worker merges the change in.
+- The daemon scores it into the pool, as any candidate: it may become the best.
 - A candidate of another campaign is its `revision`. If it is in another repo, fetch it into this repo first.
-- The daemon never judges a reference.
-- A composition that you made by hand on the head: import it, wait for its measurement or add yours
-  (`piloop measurement add`), then `piloop candidate verdict <c> keep --reason '…'`. It is the head then.
+- To build on it, note it with a follow-up (below): the follow-up's run can start from it with `--base`.
 
-Every run starts from the head, so its keeps move the head.
-
-### Keep a failed result as a lead
+### Point the runs at a candidate
 
 ```bash
-piloop candidate note <c> '<why>' --follow-up '<hunch>'
+piloop candidate note <c> '<why it is worth starting from>' --follow-up '<hunch>'
 ```
 
 - `--follow-up` is repeatable.
-- It changes a measured `discard` or `interesting` candidate to `interesting` with the cause `note` and your reason.
-- It adds each follow-up as an open idea about the candidate. Its worker takes the candidate's change onto the head.
-- It is not a keep and not a bar.
-- Implementers note a lead with a `Piloop-Note:` commit trailer, without follow-ups.
+- The note is a comment on the candidate. It changes no score.
+- Each follow-up is an open idea about the candidate, whose run can start from it
+  (`piloop idea claim <id> --base <c>`).
 
 ### An empty board
 

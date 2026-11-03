@@ -24,7 +24,7 @@
           "concepts/how-piloop-is-built",
           "concepts/campaigns",
           "concepts/ideas-and-runs",
-          "concepts/verdict",
+          "concepts/pool",
           "concepts/roles",
           "concepts/orchestrator",
           "concepts/tracks",
@@ -74,6 +74,10 @@
     ]
   },
   "redirects": [
+    {
+      "source": "/concepts/verdict",
+      "destination": "/concepts/pool"
+    },
     {
       "source": "/setup",
       "destination": "/by-hand"

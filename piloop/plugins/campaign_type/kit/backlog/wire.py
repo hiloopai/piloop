@@ -13,6 +13,7 @@ from piloop.api.views import (
 )
 from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 
@@ -51,6 +52,22 @@ class ProposeBody(Params):
     """What prompted the idea, with ids or a URL."""
     track: TrackName | None = None
     """The track it works on. Required when the campaign has more than one track."""
+    base: CandidateId | None = None
+    """The candidate that the run starts from. Default: the best, which it started from."""
+
+
+class ClaimBody(Params):
+    """How a run claims an idea."""
+
+    base: CandidateId | None = None
+    """The candidate that the run starts from. Default: the best, which it started from."""
+
+
+class Base(View):
+    """The candidate that a run starts from: its checkout moves to its revision."""
+
+    candidate: CandidateId
+    revision: str
 
 
 class TrackBody(Reasoned):
@@ -135,7 +152,10 @@ class Claimed(IdeaAnswer):
     hypothesis: str
     plan: str | None
     track: str | None
-    """What the idea's track asks of the run: its keep rule and its addendum. Null when the campaign has one track."""
+    """What the idea's track asks of the run: what its best must hold, and its addendum. Null when the campaign has one
+    track."""
+    base: Base | None = None
+    """The candidate that the run starts from, when the claim chose it. Null: the best, which the checkout is at."""
 
 
 class StatusChanged(IdeaAnswer):
@@ -180,8 +200,8 @@ class BacklogClient(Client):
     def unlink(self, idea: IdeaId, kind: LinkKind, target: IdeaId, body: Reasoned) -> IdeaAnswer:
         return self._send('DELETE', f'/v1/ideas/{idea}/links/{kind}/{target}', body, IdeaAnswer)
 
-    def claim(self, idea: IdeaId) -> Claimed:
-        return self.post(f'/v1/ideas/{idea}/claim', Params(), Claimed)
+    def claim(self, idea: IdeaId, body: ClaimBody) -> Claimed:
+        return self.post(f'/v1/ideas/{idea}/claim', body, Claimed)
 
     def propose(self, body: ProposeBody) -> Claimed:
         return self.post('/v1/proposals', body, Claimed)

@@ -7,7 +7,7 @@ The server is any ``piloop serve --listen`` that this machine reaches with a bea
 ``act`` access. A person registers a toy repository by its URL, files a seed and writes to the orchestrator. piloop
 launches the orchestrator on the server's workers, and it answers the message. The tests also act as an orchestrator from
 the CLI (``PILOOP_SERVER``): they add an idea, develop the seed, pause, resume and stop the campaign, fork it, and reopen
-it. Two implementers run on the server's workers, and their candidates are judged.
+it. Two implementers run on the server's workers, and their candidates are scored.
 
 The toy is published as a secret gist (``gh``, logged in with the ``gist`` scope), which the server clones: the server
 needs to reach github.com. Its ``piloop.toml`` gives the harness each ``--e2e-secret`` from the server's secret of that
@@ -83,8 +83,8 @@ launches on a message or an escalation (and on routine news once), and limits on
 ideas run, so ``max_runs`` never stops it."""
 ORCHESTRATOR = """# This campaign is a test
 
-Answer each message and escalation, and acknowledge it. Change nothing else: add, develop or change no idea, override no
-verdict, and launch, pause or stop nothing. The tests do that themselves.
+Answer each message and escalation, and acknowledge it. Change nothing else: add, develop or change no idea, exclude no
+candidate, and launch, pause or stop nothing. The tests do that themselves.
 """
 BRIEF = """# Make primes.py smaller
 
@@ -139,7 +139,7 @@ WAIT = 25.0
 BASELINE_WAIT = 900
 """Seconds to wait for the baseline: a provisioned evaluation worker can take minutes to start."""
 RUNS_WAIT = 3 * ROLE_TIMEOUT + 600
-"""Seconds to wait for both runs to end and be judged: their workers start, they work, then they are measured."""
+"""Seconds to wait for both runs to end and be scored: their workers start, they work, then they are measured."""
 RETIRE_WAIT = ROLE_TIMEOUT + 300
 """Seconds to wait for a stop to be over before a campaign retires: its closing review and runs end."""
 
@@ -435,7 +435,7 @@ def test_a_message_wakes_the_orchestrator_that_piloop_launches_and_it_answers(se
 
 @needs(test_the_orchestrator_adds_an_idea, test_a_person_adds_an_idea_that_is_open_on_the_board)
 def test_implementers_run_on_the_servers_workers(server: Server) -> None:
-    """Each free slot queues a run from the head. Its implementer names its harness session, runs on a machine of the
+    """Each free slot queues a run from the best. Its implementer names its harness session, runs on a machine of the
     server, and claims an idea of the board or proposes one of its own."""
     for _ in range(MAX_CONCURRENT):
         queued = server.seen(
@@ -464,9 +464,9 @@ def test_implementers_run_on_the_servers_workers(server: Server) -> None:
 
 
 @needs(test_implementers_run_on_the_servers_workers)
-def test_candidates_are_measured_and_judged(server: Server) -> None:
+def test_candidates_are_measured_and_scored(server: Server) -> None:
     """Each run submits a version and ends. A run that asks to end as submitted settles its idea as done; one that gives
-    up, every submission discarded by a head that another run moved, opens its idea again. A submission is judged."""
+    up opens its idea again. A submission is scored into the pool."""
     for run, claim in server.runs.items():
         submitted = server.seen(kind_on('run.submitted', 'run', run), f'run#{run} submits', RUNS_WAIT)
         ending = payload(server.seen(kind_on('run.end_requested', 'run', run), f'run#{run} asks to end', RUNS_WAIT))
@@ -491,11 +491,11 @@ def test_candidates_are_measured_and_judged(server: Server) -> None:
     measured = server.seen(from_runs, 'a measurement of a run', 600)
     candidate = payload(measured)['candidate']
     assert isinstance(candidate, int)
-    judged = payload(server.seen(kind_on('candidate.judged', 'candidate', candidate), 'its verdict', 600))
-    print(f'candidate#{candidate} of run#{payload(measured)["run"]}: {payload(measured)["metrics"]}, {judged}')
+    scored = payload(server.seen(kind_on('candidate.scored', 'candidate', candidate), 'its score', 600))
+    print(f'candidate#{candidate} of run#{payload(measured)["run"]}: {payload(measured)["metrics"]}, {scored["told"]}')
 
 
-@needs(test_candidates_are_measured_and_judged)
+@needs(test_candidates_are_measured_and_scored)
 def test_every_agent_saved_its_session_file(server: Server) -> None:
     """Each agent that named its harness session stored the file in the server's CAS (``agent_session.session_saved``)."""
     identified = {e.subject.id: payload(e)['session_id'] for e in server.of('agent_session.identified')}
@@ -522,7 +522,7 @@ def test_pause_and_resume(server: Server) -> None:
 def test_stop(server: Server) -> None:
     """``piloop campaign stop``: the campaign stops and closes. The stop wakes the orchestrator once, to report; after that
     wake ends, no agent is left and none starts."""
-    # Each free slot starts a run from the head, so the stop rule's max_runs can stop the campaign first.
+    # Each free slot starts a run from the best, so the stop rule's max_runs can stop the campaign first.
     if server.state().status == 'active':
         server.piloop('campaign', 'stop', server.name, '--reason', 'e2e: the scenario ends')
     stopped = server.seen(lambda e: e.kind == 'campaign.status' and payload(e)['new'] == 'stopped', 'the stop', 120)
@@ -549,14 +549,13 @@ def test_stop(server: Server) -> None:
     assert state.agents == [], state.agents
     orchestrator = state.roles[RoleName('orchestrator')]
     assert (orchestrator.requested, orchestrator.live) == (0, 0), orchestrator
-    print(f'{server.name}: head {state.head}; orchestrator#{report} reported the stop')
+    print(f'{server.name}: best {state.best}; orchestrator#{report} reported the stop')
 
 
 @needs(test_stop)
 def test_fork(server: Server) -> None:
-    """``piloop campaign fork``: a new campaign starts from the stopped one's head, under it, with the same repo."""
-    head = server.state().head
-    assert head is not None
+    """``piloop campaign fork``: a new campaign starts from the stopped one's best, under it, with the same repo."""
+    assert server.state().best
     out = server.piloop('campaign', 'fork', server.name)
     print(out.strip())
     [forked] = server.api.status(Selection(campaign=f'{server.name}-2')).campaigns

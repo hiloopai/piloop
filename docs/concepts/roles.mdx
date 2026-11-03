@@ -27,7 +27,7 @@ triggers = ["news", "run_failed"]
 ```
 
 One implementer at a time is the default. More of them spend more to finish sooner, and are no better per dollar:
-they race for the head, and a run often builds on a head that another run has moved past. Raise `max_concurrent`
+a run often starts from a best that another run has passed by the time it submits. Raise `max_concurrent`
 when the time matters more than the spend.
 
 Run `piloop init` after you change it. To ask for one more agent of a role:
@@ -82,7 +82,7 @@ harnesses = ["pi"]
 timeout = 300
 ```
 
-Each role fills its own slots, and its agents claim from the same board. A keep of any role moves the head.
+Each role fills its own slots, and its agents claim from the same board. A candidate of any role can become the best.
 
 ## Sections
 

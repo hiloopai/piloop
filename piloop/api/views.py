@@ -77,23 +77,17 @@ class Batch(View):
     """Events newer than ``next`` exist already: read again without waiting. They may not match the filters."""
 
 
-class TrackScore(View):
-    """The head on one track."""
+class TrackBest(View):
+    """The best of one track: the candidate with the best mean of its primary among those that may be best."""
 
     track: TrackName
+    candidate: CandidateId
     metric: str
     """The primary metric of the track."""
     value: float | None
-    """Null when the current evaluator has not measured the head."""
+    """Null when the current evaluator has not measured the best."""
     delta: float | None
-    """Against the baseline. Null when the head is the baseline, or either is not measured."""
-
-
-class Head(View):
-    """The head of the trunk: the latest keep."""
-
-    candidate: CandidateId
-    tracks: list[TrackScore]
+    """Against the baseline. Null when the best is the baseline, or either is not measured."""
 
 
 class OpenRun(View):
@@ -161,9 +155,10 @@ class CampaignState(View):
     """What ``piloop pause`` holds: ``launches`` or ``all``. Null while the campaign is not paused."""
     paused_reason: str | None
     evaluator: EvaluatorId | None
-    head: Head | None
-    """Null when the campaign has no trunk keep."""
-    kept: int
+    best: list[TrackBest]
+    """The best of each track. Empty before the campaign has a baseline."""
+    new_bests: int
+    """The times that a run's candidate became the best of its track when it was scored."""
     candidates: int
     """The baseline and the commits of runs, not the imported references."""
     ideas: dict[str, int]
@@ -324,7 +319,7 @@ class Figures(View):
     figures: tuple[Figure, ...]
 
     def markdown(self) -> str:
-        """The figures on one line: ``head: candidate#4 · score: 3 · kept: 3``."""
+        """The figures on one line: ``best: candidate#4 · score: 3 · candidates: 3``."""
         return ' · '.join(f.markdown() for f in self.figures)
 
 
@@ -510,20 +505,20 @@ class AnomalyNews(View):
         return f'anomaly, {self.role}#{self.agent_session} requested: {self.line}'
 
 
-class VerdictNews(View):
-    """The daemon's verdict on a measured candidate."""
+class ScoreNews(View):
+    """The daemon scored a candidate into the pool: where it stands."""
 
-    kind: Literal['verdict'] = 'verdict'
+    kind: Literal['score'] = 'score'
     candidate: CandidateId
-    verdict: str
-    reason: str
+    told: str
+    """Where it stands, as its worker hears it."""
 
     def text(self) -> str:
         """The item as ``piloop inbox wait`` prints it."""
-        return f'candidate#{self.candidate} {self.verdict}: {cell(self.reason)}'
+        return f'candidate#{self.candidate}: {cell(self.told)}'
 
 
-type NewsItem = Annotated[CommentNews | StoppedNews | AnomalyNews | VerdictNews, Field(discriminator='kind')]
+type NewsItem = Annotated[CommentNews | StoppedNews | AnomalyNews | ScoreNews, Field(discriminator='kind')]
 
 
 class News(View):

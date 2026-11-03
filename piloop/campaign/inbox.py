@@ -27,9 +27,9 @@ from piloop.api.views import (
     News,
     NewsItem,
     Relation,
+    ScoreNews,
     StoppedNews,
     Thread,
-    VerdictNews,
 )
 from piloop.db import feed as db_feed
 from piloop.db.events import AnomalyReported
@@ -42,9 +42,9 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.settings import settings
 from piloop.text import iso
@@ -99,7 +99,7 @@ def waiting_for(
 
 
 WAKES: Final = tuple(
-    db_feed.Topic(m) for m in (Commented, CommentEdited, CampaignStatusChanged, AnomalyReported, CandidateJudged)
+    db_feed.Topic(m) for m in (Commented, CommentEdited, CampaignStatusChanged, AnomalyReported, CandidateScored)
 )
 """The events that ``news`` reports: what ends ``piloop inbox wait``."""
 
@@ -113,7 +113,7 @@ def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party
       decisions are for the human.
     - campaigns that the daemon stopped.
     - anomalies that the daemon gave to an agent.
-    - the verdicts that another party gave: the daemon's, or a person's.
+    - the daemon's scores of candidates (``CandidateScored``).
 
     It reads the ``WAKES`` events from the feed (``piloop.db.feed``), a page at a time until a page gives a line.
     ``campaign_id`` filters all of them. The returned cursor passes every event that it read, so no event is missed.
@@ -174,12 +174,10 @@ def _news(
                 agent_session = s.get(AgentSession, e.target_id)
                 if agent_session is not None and campaign_id in (None, agent_session.campaign_id):
                     found.append(AnomalyNews(role=agent_session.kind, agent_session=agent_session.id, line=line))
-            case CandidateJudged(verdict=verdict, reason=reason, track=track) if party_of(e.actor) != party:
+            case CandidateScored(told=told) if party_of(e.actor) != party:
                 candidate = s.get(Candidate, e.target_id)
-                # one judgement per track: the news is the one of the candidate's verdict
-                mine = track is None or candidate is None or candidate.track in (None, track)
-                if candidate is not None and mine and campaign_id in (None, candidate.campaign_id):
-                    found.append(VerdictNews(candidate=candidate.id, verdict=str(verdict), reason=str(reason)))
+                if candidate is not None and campaign_id in (None, candidate.campaign_id):
+                    found.append(ScoreNews(candidate=candidate.id, told=told))
     return found
 
 

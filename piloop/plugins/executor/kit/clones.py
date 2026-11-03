@@ -78,6 +78,16 @@ class Clones:
         """The worker's clone of the artifact's repo, opened with the artifact's vcs provider. The caller closes it."""
         return self._opener(artifact.vcs, self.path(artifact))
 
+    def fetch(self, source: Source, revisions: Sequence[Revision]) -> None:
+        """Take those of ``revisions`` of the source's repo that the clone lacks from the server, under its lock.
+
+        A worktree of the clone, such as an agent's checkout, sees them at once.
+        """
+        with self._guard:
+            making = self._making[source.repo]
+        with making, closing(self.repository(source)) as repo:
+            repo.fetch(self._cas, revisions, partial(self._fetch, source.repo))
+
     def checkout(self, source: Source, cwd: Path) -> Materialised:
         """Check ``source`` out at ``cwd``, with its links and workspace.
 

@@ -146,6 +146,33 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     plugins: Annotated[Plugins, PluginTables(Scope.CAMPAIGN)] = Field(default={}, validate_default=True)
     """``[plugins]``: the campaign's plugins, a table for each capability (``PluginTables``)."""
 
+    @model_validator(mode='before')
+    @classmethod
+    @deprecated.until('0.7.0', 'a candidate gets no verdict in 0.6: delete CampaignConfig._verdict_keys')
+    def _verdict_keys(cls, data: object) -> object:
+        """Drop the keys of the verdicts, with a warning for each: a file's, an overlay's or a stored config's.
+
+        ``[plugins.verdict_rule]`` goes (``[plugins.best_rule]`` says which candidate may be best), and so do
+        ``repeats`` of a metric (no evaluation runs next to a bar) and ``follow_head`` of a role (there is no head).
+        The section ``judging`` of a role's ``sections`` is ``scoring``. A stored config's null ``repeats`` goes
+        without a word.
+        """
+        if not isinstance(data, dict):
+            return data
+        found = dict(data)
+        if isinstance(plugins := found.get('plugins'), dict) and ('verdict_rule' in plugins or 'role' in plugins):
+            kept = {k: v for k, v in plugins.items() if k != 'verdict_rule'}
+            if 'verdict_rule' in plugins:
+                deprecated.dropped(
+                    'a candidate gets no verdict now, so [plugins.verdict_rule] is removed', removed_in='0.7.0'
+                )
+            if isinstance(roles := plugins.get('role'), dict):
+                kept['role'] = {n: _without_head(n, r) for n, r in roles.items()}
+            found['plugins'] = kept
+        if isinstance(metrics := found.get('metrics'), list):
+            found['metrics'] = [_without_repeats(m) for m in metrics]
+        return found
+
     # Pydantic runs the 'before' validators in the reverse order of their definitions: these run last.
     @model_validator(mode='before')
     @classmethod
@@ -649,14 +676,13 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
 
     @property
     def evaluator_definition(self) -> dict[str, object]:
-        """What decides a verdict's numbers: the evaluate command, the linked inputs and the judging metrics.
+        """What decides a score: the evaluate command, the linked inputs and the metrics that decide.
 
         ``judging`` has the name and direction of each primary and guardrail, by name, and the parts of a ratio. ``ladder``, only when there is
         one, has each rung's name and command: a rung's values compare only under the same rungs. Its ``stop`` is the
-        policy of the climb, as a margin is of the verdict. A watch metric never decides a verdict, so adding, removing or redirecting one measures nothing again: the
+        policy of the climb, as a margin is of the best rule. A watch metric never decides, so adding, removing or redirecting one measures nothing again: the
         older measurements just lack it. Promoting a watch metric to a guardrail, or demoting a guardrail, does. Roles
-        among the judging metrics, margins, floors and the verdict rule are the policy of the verdict, not part of the
-        score.
+        among the judging metrics, margins, floors and the best rule are the policy of the best, not part of the score.
         """
         judging = sorted((m for m in self.metrics if m.role is not MetricRole.WATCH), key=attrgetter('name'))
         rungs = [{'name': rung.name, 'evaluate': rung.evaluate} for rung in self.ladder]
@@ -723,6 +749,37 @@ def merged(base: object, over: object) -> object:
 def _has_table(plugins: object, capability: str, name: str) -> bool:
     """Whether ``plugins``, a file's raw ``[plugins]``, has the table ``[plugins.<capability>.<name>]``."""
     return isinstance(plugins, dict) and isinstance(of := plugins.get(capability), dict) and name in of
+
+
+@deprecated.until('0.7.0', 'a role has no follow_head in 0.6: delete _without_head with _verdict_keys')
+def _without_head(name: str, role: object) -> object:
+    """``role`` without ``follow_head``, and with ``scoring`` for ``judging`` in its ``sections``."""
+    if not isinstance(role, dict):
+        return role
+    kept = {k: v for k, v in role.items() if k != 'follow_head'}
+    if 'follow_head' in role:
+        deprecated.dropped(
+            f'there is no head to follow now: delete follow_head of [plugins.role.{name}]', removed_in='0.7.0'
+        )
+    if isinstance(sections := role.get('sections'), list) and 'judging' in sections:
+        deprecated.dropped(
+            f'the section judging is scoring now: rename it in [plugins.role.{name}] sections', removed_in='0.7.0'
+        )
+        kept['sections'] = ['scoring' if s == 'judging' else s for s in sections]
+    return kept
+
+
+@deprecated.until('0.7.0', 'a metric has no repeats in 0.6: delete _without_repeats with _verdict_keys')
+def _without_repeats(metric: object) -> object:
+    """``metric`` without ``repeats``: an evaluation runs next to no bar. A null one goes without a word."""
+    if not isinstance(metric, dict) or 'repeats' not in metric:
+        return metric
+    if metric['repeats'] is not None:
+        deprecated.dropped(
+            f'an evaluation runs next to no bar now: delete repeats of metric {metric.get("name")!r}',
+            removed_in='0.7.0',
+        )
+    return {k: v for k, v in metric.items() if k != 'repeats'}
 
 
 def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:

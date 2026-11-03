@@ -17,7 +17,7 @@ from piloop.config import CampaignConfig
 from piloop.db.models import Campaign
 from piloop.plugins.contribution import Contribution
 from piloop.plugins.fact_source.contract import FactSource
-from piloop.plugins.fact_source.facts import COMPUTE_USD, KEEPS, MODELS_USD, SPEND, Fact, FactValue, reading
+from piloop.plugins.fact_source.facts import COMPUTE_USD, MODELS_USD, NEW_BESTS, SPEND, Fact, FactValue, reading
 
 
 class SpendPart(View):
@@ -36,9 +36,9 @@ class Spend(View):
     usd: float | None
     """The sum of the parts. None while one is unknown."""
     parts: list[SpendPart]
-    per_keep_usd: float | None
-    """``usd`` per keep (``keeps``). None while ``usd`` is unknown, before the first keep, and without a source of
-    ``keeps``."""
+    per_best_usd: float | None
+    """``usd`` per new best (``new_bests``). None while ``usd`` is unknown, before the first new best, and without a
+    source of ``new_bests``."""
 
 
 class SpendFacts(FactSource):
@@ -77,13 +77,13 @@ def spend_of(s: Session, campaign: Campaign, cfg: CampaignConfig, now: datetime)
     if mine is None:
         return None
     of = {fact: source for source in sources for fact in source.supplies()}
-    facts = gather(s, campaign, cfg, [*mine.reads(), KEEPS], now)
+    facts = gather(s, campaign, cfg, [*mine.reads(), NEW_BESTS], now)
     parts = [
         SpendPart(fact=fact.name, usd=facts.get(fact), as_of=of[fact].as_of(s, campaign, fact, now))
         for fact in mine.reads()
     ]
-    usd, keeps = total(part.usd for part in parts), facts.get(KEEPS)
-    return Spend(usd=usd, parts=parts, per_keep_usd=None if usd is None or not keeps else usd / keeps)
+    usd, bests = total(part.usd for part in parts), facts.get(NEW_BESTS)
+    return Spend(usd=usd, parts=parts, per_best_usd=None if usd is None or not bests else usd / bests)
 
 
 def total(values: Iterable[float | None]) -> float | None:

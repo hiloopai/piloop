@@ -61,7 +61,7 @@ class Status(StrEnum):
 
     ``ok``: it measured the candidate. ``crash`` and ``timeout``: the candidate failed, which is a measurement of it.
     ``infra_error``: something that is not the candidate failed (a rate limit, a missing input, a lost GPU), so it
-    measured nothing: piloop runs it again later, and never judges the candidate on it.
+    measured nothing: piloop runs it again later, and never scores the candidate on it.
     """
 
     OK = 'ok'
@@ -109,8 +109,7 @@ class Result(BaseModel):
     """Optional. One line on what the run saw, which piloop keeps with the measurement. A worker never gets it."""
     units: dict[str, dict[str, Number]] = {}
     """Optional. Each metric's contribution per unit (one record, example or test case), by unit id, the score's by
-    the primary's name. The contributions of a metric sum to its value. The ``bootstrap`` verdict rule then tests a
-    gain with a paired bootstrap over the units."""
+    the primary's name. The contributions of a metric sum to its value."""
     evidence: dict[Label, str] = {}
     """Optional. Files of the worktree that explain the result, by a label: piloop keeps them with the evaluation's
     logs, as ``evidence/<label><suffix>``."""

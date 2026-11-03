@@ -3,10 +3,9 @@ from statistics import median
 from sqlalchemy import select
 
 from piloop.api.views import Figure, Figures, Rendered
-from piloop.db.models import count
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.submissions import waiting
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.verdicts.verdict import pending_clause
 from piloop.plugins.section.contract import Rendering, Section, Surface
 
 EVALS_IN_TREND = 5
@@ -14,7 +13,7 @@ EVALS_IN_TREND = 5
 
 
 class Evaluations(Section):
-    """The evaluations under the current evaluator: how many crashed, their minutes, and the candidates without a verdict.
+    """The evaluations under the current evaluator: how many crashed, their minutes, and the submissions to score.
 
     The minutes of the latest evaluations against the first show whether evaluations got slower.
     """
@@ -46,6 +45,5 @@ class Evaluations(Section):
                 ),
                 Figure(label='in all', value=round(sum(seconds) / 60, 1), unit='min'),
             ]
-        waiting = count(s, select(Candidate).where(Candidate.campaign_id == campaign.id, pending_clause()))
-        figures.append(Figure(label='waiting for a verdict', value=waiting, unit='candidates'))
+        figures.append(Figure(label='waiting for a score', value=len(waiting(s, campaign)), unit='submissions'))
         return Rendered(title='Evaluations', blocks=(Figures(figures=tuple(figures)),))

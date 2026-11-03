@@ -71,8 +71,8 @@ A read of events:
 `piloop status --json` has `cursor`, `daemon` (`pid`, `started`, and `listen`, the URL that other machines reach it on,
 or null) and `campaigns`. Each campaign has its `id`, `name`, `path`, `parent` (`id` and `name`, or null),
 `status` and `stopped_reason`, `paused` (`launches`, `all` or null) and
-`paused_reason`, the current `evaluator`, the `head` (its candidate, and for each track the primary metric, its value
-and its delta against the baseline; null when there is no keep yet), the `kept` and `candidates` counts, the number of
+`paused_reason`, the current `evaluator`, the `best` of each track (its `track`, `candidate`, primary `metric`, `value`
+and `delta` against the baseline; empty before the campaign has a baseline), the `new_bests` and `candidates` counts, the number of
 `ideas` in each status, the `runnable` ideas, the open `runs`, the live `agents` and the unacknowledged `inbox` items.
 The `tokens` fact has what its agents spent. It covers the campaigns that `piloop status` would show.
 
@@ -84,7 +84,7 @@ A program can also call the daemon's HTTP API, which answers the same documents 
 ## The lineage
 
 `GET /v1/campaigns/<campaign>/lineage` answers the campaign as a graph, for a UI that draws its history. This is a
-campaign with a baseline, a keep and a discard:
+campaign with a baseline, a new best and a worse candidate:
 
 ```bash
 curl --unix-socket ~/.piloop/piloop.sock http://piloop/v1/campaigns/demo/lineage
@@ -103,12 +103,13 @@ curl --unix-socket ~/.piloop/piloop.sock http://piloop/v1/campaigns/demo/lineage
       {"name": "skipped", "label": "Skipped"}
     ],
     "statuses": [
-      {"name": "kept", "label": "Kept", "tone": "success"},
-      {"name": "interesting", "label": "Interesting", "tone": "attention"},
-      {"name": "discarded", "label": "Discarded", "tone": "neutral"},
+      {"name": "best", "label": "Best", "tone": "success"},
+      {"name": "ranked", "label": "May be best", "tone": "accent"},
+      {"name": "scored", "label": "Scored", "tone": "neutral"},
+      {"name": "excluded", "label": "Excluded", "tone": "attention"},
       {"name": "crashed", "label": "Crashed", "tone": "danger"},
       {"name": "pending", "label": "Pending", "tone": "accent"},
-      {"name": "unjudged", "label": "Not judged", "tone": "neutral"}
+      {"name": "unscored", "label": "Not scored", "tone": "neutral"}
     ],
     "tracks": [
       {"name": "lines", "metric": "lines", "direction": "higher"}
@@ -118,11 +119,11 @@ curl --unix-socket ~/.piloop/piloop.sock http://piloop/v1/campaigns/demo/lineage
       {
         "id": "candidate#1",
         "kind": "baseline",
-        "status": "kept",
+        "status": "ranked",
         "label": "piloop init: .gitignore",
         "parents": [],
         "created": "2026-10-27T19:23:07.195095Z",
-        "judged": {"by": "daemon", "reason": null},
+        "judged": null,
         "scores": {"lines": 1.0},
         "links": [
           {"kind": "candidate", "id": 1, "label": null}
@@ -132,11 +133,11 @@ curl --unix-socket ~/.piloop/piloop.sock http://piloop/v1/campaigns/demo/lineage
       {
         "id": "candidate#2",
         "kind": "candidate",
-        "status": "kept",
+        "status": "best",
         "label": "Add a line",
         "parents": ["candidate#1"],
         "created": "2026-10-27T19:23:13.307221Z",
-        "judged": {"by": "daemon", "reason": "against candidate#1: lines 2 vs 1 (+1; aggregate: no per-unit results)"},
+        "judged": null,
         "scores": {"lines": 2.0},
         "links": [
           {"kind": "candidate", "id": 2, "label": null},
@@ -149,11 +150,11 @@ curl --unix-socket ~/.piloop/piloop.sock http://piloop/v1/campaigns/demo/lineage
       {
         "id": "candidate#3",
         "kind": "candidate",
-        "status": "discarded",
+        "status": "ranked",
         "label": "Start from an empty file",
         "parents": ["candidate#2"],
         "created": "2026-10-27T19:23:18.636943Z",
-        "judged": {"by": "daemon", "reason": "against candidate#2: lines 0 vs 2 (-2; aggregate: no per-unit results)"},
+        "judged": null,
         "scores": {"lines": 0.0},
         "links": [
           {"kind": "candidate", "id": 3, "label": null},
@@ -166,7 +167,6 @@ curl --unix-socket ~/.piloop/piloop.sock http://piloop/v1/campaigns/demo/lineage
     ],
     "spine": ["candidate#1", "candidate#2"],
     "series": [
-      {"node": "candidate#1", "at": "2026-10-27T19:23:07.195095Z"},
       {"node": "candidate#2", "at": "2026-10-27T19:23:13.903374Z"}
     ]
   }
@@ -181,7 +181,8 @@ curl --unix-socket ~/.piloop/piloop.sock http://piloop/v1/campaigns/demo/lineage
 | `evaluator` | What measured every score. A new one means that the scores were measured again. |
 | `nodes` | Each parent before its children. A node with no `parents` is a root. A tree takes the first parent. |
 | `links` | What to open from a node: a row by its `kind` and `id`, or an `agent_session` with its `harness` and `session_id`. |
-| `spine` | The path from a root to the node that the campaign builds on now: the head. |
+| `spine` | The path from a root to the node that the campaign builds on now: the best. |
+| `judged` | Who excluded the node and why, or null. |
 | `series` | The nodes of the spine that moved it forward, and when: a chart of the scores over time. |
 
 The shape is the same for every provider: [Lineage](/plugins/agents#lineage) shows how a plugin draws its own. The
@@ -194,7 +195,7 @@ Every event has the same fields, whatever its kind.
 | Field | Meaning |
 |---|---|
 | `id` | The cursor. Ids grow in the order in which the events were committed: events are append-only, and a new event always takes the next id. |
-| `kind` | `<subject>.<what>`, for example `idea.status`, `candidate.judged` or `comment.escalation`. |
+| `kind` | `<subject>.<what>`, for example `idea.status`, `candidate.scored` or `comment.escalation`. |
 | `subject` | The row that the event is about: its `kind` (`campaign`, `idea`, `run`, `candidate`, `measurement`, `agent_session` or `comment`), its `id` and its `campaign`. An event about the whole home, such as `limit.set`, is on `home` 1, with no campaign. |
 | `actor` | Who wrote it: `daemon`, `human`, `orchestrator`, or an agent such as `implementer#12`. |
 | `time` | When it was written, in UTC. |

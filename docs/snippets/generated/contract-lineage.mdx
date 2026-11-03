@@ -22,8 +22,8 @@
 | `LineageNode.scores: dict[TrackKey, float]` | Its score on each track that has one. A track without a score is left out. |
 | `LineageNode.links: list[NodeLink]` | What a client opens from it: rows of piloop, and agent sessions. |
 | `LineageNode.summary: str \| None` | More than the label, such as the first line of its commit. |
-| `NodeStatus.name: StatusName` | What a node's `status` says, such as `kept`. |
-| `NodeStatus.label: str` | How a legend names it, such as `Kept`. |
+| `NodeStatus.name: StatusName` | What a node's `status` says, such as `best`. |
+| `NodeStatus.label: str` | How a legend names it, such as `Best`. |
 | `NodeStatus.tone: Tone` | How a client colours it. |
 | `SessionLink.kind: Literal['agent_session']` | Always `agent_session`. |
 | `SessionLink.id: AgentSessionId` | The agent session's id (`agent_sessions.id`). |

@@ -53,7 +53,7 @@ Every view answers with a `cursor`: the id of the newest event that it includes.
 
 | Route | What it answers |
 |---|---|
-| `GET /v1/status` | The main facts of each campaign: its state, head, ideas, open runs, live agents, inbox count and tokens. |
+| `GET /v1/status` | The main facts of each campaign: its state, the best of each track, ideas, open runs, live agents, inbox count and tokens. |
 | `GET /v1/overview` | The sections of each campaign's `[plugins.section] use`, as blocks of text, lines, figures and tables. |
 | `GET /v1/inbox` | The inbox items that wait for you. |
 | `GET /v1/inbox/{comment}` | A comment's thread. |
@@ -87,7 +87,7 @@ A write answers with the row that it changed, at a cursor. Its effects arrive on
 | `POST /v1/agents/{agent}/prompt` | Send a running agent a message for its next turn. |
 | `POST /v1/ideas/{idea}/status` | Open, drop or settle an idea, with a reason. |
 | `POST /v1/ideas/{idea}/priority` | Set an idea's priority. |
-| `POST /v1/candidates/{candidate}/verdict` | Overrule a candidate's verdict, with a reason. |
+| `POST /v1/candidates/{candidate}/exclude` | Take a candidate out of the race for the best, with a reason. |
 
 A refused write answers 404 or 409 with a `ProblemDetail`: its `error` names the problem, and its `detail` says what to
 do. Show the detail.

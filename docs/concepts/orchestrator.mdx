@@ -13,12 +13,12 @@ PILOOP_ACTOR=orchestrator piloop inbox wait enwik8 --timeout 1800
 ```
 
 ```text
-candidate#2 keep: against candidate#1: bytes 2720458 vs 3688775 (-968317; 95% worst case -968317 over 3 pairs); guardrails…
+candidate#2: bytes 2720458 over 1 eval: the best of the bytes track now, rank 1 of 2; vs parent +968317
 campaign enwik8 stopped: max_runs: 1 runs
 next: piloop inbox wait enwik8 --after 17
 ```
 
-The wait returns on a new inbox item, verdict, anomaly or stop, or at the timeout. Its last line is the next
+The wait returns on a new inbox item, score, anomaly or stop, or at the timeout. Its last line is the next
 wait, with a cursor, so nothing is lost between two waits. The orchestrator uses no tokens while it waits. The daemon
 runs without one. Run one orchestrator for each campaign: two would answer an escalation twice.
 
@@ -33,7 +33,7 @@ triggers = ["news", "run_failed"]
 ```
 
 - An escalation, or what a person writes to it, launches it within `quiet_seconds` (30); `run_failed`, a failed run.
-  Nothing else does: no timer, no short board, no verdict, no stop. The rest of the news comes with the next wake.
+  Nothing else does: no timer, no short board, no score, no stop. The rest of the news comes with the next wake.
 - It decides what the workers cannot, and leaves the work to them: it never plans a run, caps one, or stops the
   campaign. Only a stop rule or a person stops a campaign.
 - While an orchestrator works, new news goes to it as a note, at once. Claude Code reads it after its current tool

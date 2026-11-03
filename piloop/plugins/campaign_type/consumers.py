@@ -63,6 +63,7 @@ from piloop.db.triggers.changelog import (
     CampaignPausedChanged,
     CampaignStatusChanged,
     CandidateDeleted,
+    ExclusionChanged,
     IdeaCreated,
     IdeaDeleted,
     IdeaLinked,
@@ -70,7 +71,6 @@ from piloop.db.triggers.changelog import (
     IdeaStatusChanged,
     IdeaTrackChanged,
     OriginChanged,
-    VerdictChanged,
 )
 from piloop.ids import AgentSessionId, CampaignStatus, CommentId, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CAMPAIGNS, CannotLaunch, Planner, Take
@@ -78,6 +78,7 @@ from piloop.plugins.campaign_type.kit.candidates.references import CandidateImpo
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded, RemeasureRequested
 from piloop.plugins.campaign_type.kit.evaluation.submissions import Submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
+from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import (
     RUNS,
     RunFinished,
@@ -85,11 +86,6 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId
 from piloop.plugins.campaign_type.kit.runs.stop import settled
 from piloop.plugins.campaign_type.kit.runs.tables import run_of
-from piloop.plugins.campaign_type.kit.verdicts.judge import (
-    CandidateJudged,
-    Rebased,
-    RejudgeRequested,
-)
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, closers
 from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.executor.consumers import LIMITS
@@ -146,14 +142,12 @@ CAMPAIGN_STATE: Kinds = frozenset(
         IdeaTrackChanged,
         IdeaLinked,
         IdeaDeleted,
-        CandidateJudged,
-        VerdictChanged,
+        CandidateScored,
+        ExclusionChanged,
         OriginChanged,
         CandidateDeleted,
         CandidateImported,
-        Rebased,
         RemeasureRequested,
-        RejudgeRequested,
         MeasurementRecorded,
         Submitted,
         *LIMITS,
@@ -234,7 +228,7 @@ class Campaigns:
         agent without a run). Both an in-place restart (``hand_over``) and a crash leave agents for this. An agent that it does not
         adopt is killed, and its row and its run fail. A closed run whose commits were not all scored
         (``runs.scoring``) is scored now (``RunController.resume``), whatever its idea's status. An idea that stayed
-        ``scheduled`` does not run again, and no dependent idea takes it before its keeps are known. The worktrees of
+        ``scheduled`` does not run again, and no dependent idea takes it before its scores are known. The worktrees of
         failed runs and of the agents without a run are removed. The evaluation queue starts empty: its jobs were the previous daemon's, and
         what still needs a measurement asks again.
         """
@@ -408,7 +402,7 @@ class Campaigns:
     def _close_campaign(self, s: Session, campaign: Campaign, cfg: CampaignConfig) -> None:
         """Close a stopped campaign: each provider that ``Closes`` does its share.
 
-        The pass closes a campaign that the daemon stopped once it ``settled``, so a closer sees its final head. Nothing
+        The pass closes a campaign that the daemon stopped once it ``settled``, so a closer sees its final best. Nothing
         reviews the campaign, and nothing writes its lessons. The stop and the close are events (``unclosed``), so a
         daemon that restarts in between still closes it, once.
         """

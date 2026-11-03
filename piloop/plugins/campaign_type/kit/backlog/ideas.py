@@ -4,7 +4,7 @@ Links (``idea_links``) are *after* links. The rule is on ``Idea`` in the models.
 text: which open ideas a worker can claim (``claimable``), and the cell that shows an idea's links.
 
 ``ops`` holds the changes to an idea.
-``yields`` measures each source by its keeps, not by the number of ideas it inserted. The overview and the research
+``yields`` measures each source by its new bests, not by the number of ideas it inserted. The overview and the research
 pack show it.
 """
 
@@ -22,9 +22,9 @@ from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.backlog.ids import SETTLED, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
 from piloop.plugins.campaign_type.kit.backlog.wire import IdeaRow, IdeaView
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 
 
@@ -52,8 +52,8 @@ def claimable() -> ColumnElement[bool]:
 def check_tracks(s: Session, campaign: Campaign) -> None:
     """Refuse the campaign's new config when it drops a track that ideas of the campaign are on.
 
-    An idea's runs are judged on its track, so an idea on a track that is gone fails a run that finishes, and a
-    remeasure of its candidates cannot judge them. A track is named after its primary unless the primary says
+    An idea's runs are scored on its track, so an idea on a track that is gone fails a run that finishes, and a
+    remeasure of its candidates cannot score them. A track is named after its primary unless the primary says
     ``track``, so a new primary drops the old one's track.
 
     Raises:
@@ -108,41 +108,38 @@ class Yield:
     source: str
     ideas: int
     ran: int
-    keeps: int
-    interesting: int
+    bests: int
+    """Its runs' candidates that became the best when they were scored."""
 
     def line(self) -> str:
-        return f'{self.source} {self.ideas} ideas, {self.ran} ran → {self.keeps} keep, {self.interesting} interesting'
+        return f'{self.source} {self.ideas} ideas, {self.ran} ran → {self.bests} new bests'
 
 
 def yields(s: Session, campaign_id: CampaignId) -> list[Yield]:
-    """Count, for each source, the ideas, the ideas with a run, and their ``keep`` and ``interesting`` candidates.
+    """Count, for each source, the ideas, the ideas with a run, and their candidates that became the best.
 
-    The result is sorted by keeps, then interesting candidates, then ideas, most first. A verdict counts as it is
-    now, including overrides.
+    The result is sorted by new bests, then ideas, most first.
     """
-    verdict = Candidate.verdict
+    bests = {e.target_id for e, _ in new_bests(s, s.get_one(Campaign, campaign_id))}
     rows = s.execute(
         select(
             Idea.created_by,
             func.count(distinct(Run.id)),
-            func.count(distinct(case((verdict == Outcome.KEEP, Candidate.id)))),
-            func.count(distinct(case((verdict == Outcome.INTERESTING, Candidate.id)))),
+            func.count(distinct(case((Candidate.id.in_(bests), Candidate.id)))),
         )
         .outerjoin(Run, Run.idea_id == Idea.id)
         .outerjoin(Candidate, Candidate.run_id == Run.id)
         .where(Idea.campaign_id == campaign_id)
         .group_by(Idea.id)
     )
-    tally: defaultdict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0])
-    for created_by, runs, keeps, interesting in rows:
+    tally: defaultdict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
+    for created_by, runs, best in rows:
         counts = tally[source(created_by)]
         counts[0] += 1
         counts[1] += runs > 0
-        counts[2] += keeps
-        counts[3] += interesting
+        counts[2] += best
     found = [Yield(name, *counts) for name, counts in tally.items()]
-    return sorted(found, key=lambda y: (-y.keeps, -y.interesting, -y.ideas, y.source))
+    return sorted(found, key=lambda y: (-y.bests, -y.ideas, y.source))
 
 
 def idea_row(idea: Idea) -> IdeaRow:

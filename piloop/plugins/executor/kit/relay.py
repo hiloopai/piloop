@@ -12,13 +12,16 @@ it only when the token is the lease's agent's: one agent of a worker cannot call
 
 Only the commands of the agent's role run (``RoleConfig.RELAYED``), the ones that its prompt names: a test keeps the
 two in step. The call runs
-in the campaign's checkout on the server, so a command that finds its campaign from the cwd finds it there.
+in the campaign's checkout on the server, so a command that finds its campaign from the cwd finds it there. A command
+that moves the agent's checkout, such as a claim with a base, writes the revision to ``CHECKOUT_ENV``'s file there
+instead: the worker takes the version from the server and moves the checkout (``Land``).
 
 Retirement: deleted when agents call typed operations over HTTP, if they ever do.
 """
 
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -45,7 +48,7 @@ from piloop.plugins.executor.kit.door import RELAY_SECONDS, AgentCall, Call, Rel
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.role.contract import RELAYED, Verb
 from piloop.plugins.vcs.contract import VcsError
-from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, PILOOP_ARGV, child_env
+from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, CHECKOUT_ENV, PILOOP_ARGV, child_env
 from piloop.settings import socket_dir
 
 RELAY_ARGV = (sys.executable, '-P', '-m', agent_end.__name__)
@@ -95,23 +98,32 @@ class Runner:
                 return Relayed(
                     stderr=f'piloop: the token is not the one of agent_session#{job.agent_session}\n', exit_code=1
                 )
-        env = child_env() | {'PILOOP_HOME': str(self.home), ACTOR_ENV: agent.signature, AGENT_TOKEN_ENV: token}
-        try:
-            done = subprocess.run(
-                [*PILOOP_ARGV, *call.argv],
-                cwd=self.repos(job.artifact.repo),
-                env=env,
-                input=call.stdin,
-                stdin=None if call.stdin is not None else subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=RELAY_SECONDS,
-            )
-        except subprocess.TimeoutExpired:
-            return Relayed(
-                stderr=f'piloop: the call ran for {RELAY_SECONDS:g} s on the server and was stopped\n', exit_code=124
-            )
-        return Relayed(stdout=done.stdout, stderr=done.stderr, exit_code=done.returncode)
+        with tempfile.TemporaryDirectory(prefix='piloop-relay-') as scratch:
+            moved = Path(scratch) / 'checkout'
+            env = child_env() | {
+                'PILOOP_HOME': str(self.home),
+                ACTOR_ENV: agent.signature,
+                AGENT_TOKEN_ENV: token,
+                CHECKOUT_ENV: str(moved),
+            }
+            try:
+                done = subprocess.run(
+                    [*PILOOP_ARGV, *call.argv],
+                    cwd=self.repos(job.artifact.repo),
+                    env=env,
+                    input=call.stdin,
+                    stdin=None if call.stdin is not None else subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    timeout=RELAY_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                return Relayed(
+                    stderr=f'piloop: the call ran for {RELAY_SECONDS:g} s on the server and was stopped\n',
+                    exit_code=124,
+                )
+            checkout = Revision(moved.read_text().strip()) if moved.is_file() else None
+        return Relayed(stdout=done.stdout, stderr=done.stderr, exit_code=done.returncode, checkout=checkout)
 
 
 @dataclass(frozen=True)
@@ -137,6 +149,9 @@ def shipped_commands() -> frozenset[Verb]:
     return frozenset(tuple(ep.name.split('.')) for ep in entry_points(group=SHIPPED_GROUP))
 
 
+type Land = Callable[[AgentJob, Revision], None]
+"""Move the job's checkout to ``revision``, a version of the repo of record, which the worker's clone takes from the
+server first if it lacks it (``jobs.land``). Raises ``VcsError``."""
 type Run = Callable[[AgentJob, Call], Relayed]
 """Run an agent's relayed call on the server (``Runner``)."""
 type Send = Callable[[int, Call], Relayed]
@@ -150,11 +165,12 @@ class Relay:
     and the worker imports no web framework for it.
     """
 
-    def __init__(self, path: Path, send: Send, ship: Ship) -> None:
+    def __init__(self, path: Path, send: Send, ship: Ship, land: Land) -> None:
         self.path = path
         """The socket: ``Settings.relay_file``."""
         self._send = send
         self._ship = ship
+        self._land = land
         self._shipped = shipped_commands()
         self._lock = threading.Lock()
         self._leases: dict[AgentSessionId, tuple[int, AgentJob]] = {}
@@ -205,7 +221,7 @@ class Relay:
         """What a call gets: what the server's run printed, or why there is none.
 
         A command of ``SHIPPED_GROUP`` first sends the version of the agent's checkout that it names through the CAS
-        (``shipped``).
+        (``shipped``). A call that moves the agent's checkout (``Relayed.checkout``) moves it after it ran (``Land``).
         """
         try:
             call = AgentCall.model_validate_json(body)
@@ -221,7 +237,7 @@ class Relay:
         except VcsError as e:
             return HTTPStatus.OK, Relayed(stderr=f'piloop: the version did not leave this worker: {e}\n', exit_code=1)
         try:
-            return HTTPStatus.OK, self._send(lease, Call(argv=argv, stdin=call.stdin, token=call.token))
+            relayed = self._send(lease, Call(argv=argv, stdin=call.stdin, token=call.token))
         except StaleLease as e:
             return HTTPStatus.OK, Relayed(stderr=f'piloop: the lease of this agent ended: {e}\n', exit_code=1)
         except (httpx.ConnectError, Dismissed) as e:  # it never reached the command: running it again is safe
@@ -231,6 +247,15 @@ class Relay:
         ) as e:  # the answer was lost, so the command may have run: the agent must look before it retries
             stderr = f'piloop: the answer of the server was lost, and the call may have run there: {e}\n'
             return HTTPStatus.OK, Relayed(stderr=stderr, exit_code=1)
+        if relayed.checkout is None:
+            return HTTPStatus.OK, relayed
+        try:
+            self._land(job, relayed.checkout)
+        except VcsError as e:
+            why = f'piloop: the call ran, but your checkout did not move to {relayed.checkout}: {e}\n'
+            return HTTPStatus.OK, relayed.model_copy(update={'stderr': relayed.stderr + why, 'exit_code': 1})
+        moved = f'your checkout is at {relayed.checkout[:12]}\n'
+        return HTTPStatus.OK, relayed.model_copy(update={'stdout': relayed.stdout + moved})
 
 
 def _handler(relay: Relay) -> type[BaseHTTPRequestHandler]:

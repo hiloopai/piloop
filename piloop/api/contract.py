@@ -399,7 +399,7 @@ class Fork(Params):
     fork: str
     """The source campaign, in any state: its name, or its id."""
     at: str | None = None
-    """The version to start from, as the source's vcs names one: a revision, a branch, a tag. None: its head."""
+    """The version to start from, as the source's vcs names one: a revision, a branch, a tag. None: its best."""
     name: CampaignName | None = None
     """The new campaign's name. None: ``<source>-<n>``, with the lowest ``n`` from 2 that is free."""
 

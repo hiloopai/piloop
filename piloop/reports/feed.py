@@ -31,7 +31,6 @@ from piloop.api.views import (
     CampaignEntry,
     CampaignState,
     Envelope,
-    Head,
     Inbox,
     InvalidConfig,
     Item,
@@ -41,7 +40,7 @@ from piloop.api.views import (
     RoleView,
     Subject,
     Target,
-    TrackScore,
+    TrackBest,
 )
 from piloop.campaign import inbox
 from piloop.campaign.inbox import campaign_of
@@ -55,9 +54,10 @@ from piloop.plugins.campaign_type.kit.backlog.ideas import open_ideas
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.tables import produced
+from piloop.plugins.campaign_type.kit.pool.pool import best_scores
+from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs, run_of
-from piloop.plugins.campaign_type.kit.verdicts.judge import head_scores, keeps
 from piloop.reports.overview import live_agent_sessions
 from piloop.text import iso
 
@@ -150,7 +150,6 @@ def configured(s: Session, campaign: Campaign) -> CampaignConfig | InvalidConfig
 
 
 def _state(s: Session, campaign: Campaign, cfg: CampaignConfig, me: Actor) -> CampaignState:
-    at = head_scores(s, campaign, cfg)
     by_status = select(Idea.status, func.count()).where(Idea.campaign_id == campaign.id).group_by(Idea.status)
     counts: dict[IdeaStatus, int] = {status: n for status, n in s.execute(by_status)}
     open_runs = s.scalars(campaign_runs(campaign.id).where(Run.status.in_(OPEN_RUNS)).order_by(Run.id)).all()
@@ -164,16 +163,14 @@ def _state(s: Session, campaign: Campaign, cfg: CampaignConfig, me: Actor) -> Ca
         paused=None if campaign.paused is None else str(campaign.paused),
         paused_reason=campaign.paused_reason,
         evaluator=campaign.evaluator_id,
-        head=None
-        if at is None
-        else Head(
-            candidate=at[0].id,
-            tracks=[
-                TrackScore(track=track.name, metric=track.primary.name, value=value, delta=delta)
-                for track, value, delta in at[1]
-            ],
-        ),
-        kept=count(s, keeps(campaign)),
+        best=[
+            TrackBest(
+                track=b.track.name, candidate=b.candidate, metric=b.track.primary.name, value=b.value, delta=b.delta
+            )
+            for b in best_scores(s, campaign)
+            if b.candidate is not None
+        ],
+        new_bests=len(new_bests(s, campaign)),
         candidates=count(s, produced(campaign)),
         ideas={str(status): counts.get(status, 0) for status in IdeaStatus},
         runnable=len(open_ideas(s, campaign)[1]),

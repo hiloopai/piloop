@@ -17,13 +17,13 @@ from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import get_type_hints
 
+import piloop_best_cost
 import piloop_inference.min_speedup
 import piloop_inline
-import piloop_keep_cost
 import piloop_min_gain
 import piloop_nice
 import piloop_sqlite_cas
-import piloop_stop_after_keeps
+import piloop_stop_after_bests
 from sqlalchemy.orm import Session
 
 from piloop import capabilities
@@ -109,7 +109,6 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.EvaluationJob,  # the evaluation job kind's, which an executor of 0.3.1 named
     capabilities.EvaluationReport,
     capabilities.Sample,
-    capabilities.Bar,
     capabilities.Rung,
     capabilities.Tolerance,
     capabilities.Gate,
@@ -144,13 +143,13 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.Applying,
     capabilities.Owner,  # a type alias
     capabilities.FactSource,  # what a provider that supplies facts implements, which no signature names
-    capabilities.HEAD,  # the facts that a rule reads, and the ratios over them
+    capabilities.BEST,  # the facts that a rule reads, and the ratios over them
     capabilities.RUNS,
     capabilities.UNSETTLED,
     capabilities.HOURS,
     capabilities.TOKENS,
-    capabilities.WITHOUT_KEEP,
-    capabilities.KEEPS,
+    capabilities.WITHOUT_BEST,
+    capabilities.NEW_BESTS,
     capabilities.EVALUATIONS,
     capabilities.METRIC_SUMS,
     capabilities.ATTEMPTS,
@@ -161,8 +160,8 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.CAMPAIGN,  # the facts of each built-in source
     capabilities.OPTIMIZATION,
     capabilities.reading,
-    capabilities.since_keep,
-    capabilities.per_keep,
+    capabilities.since_best,
+    capabilities.per_best,
     capabilities.per_evaluation,
     capabilities.worker_spend,
     capabilities.per_run,
@@ -302,7 +301,7 @@ def test_each_capability_is_a_package_of_its_contract_its_built_in_providers_and
     providers' resources (``role/prompts/``).
 
     A campaign type's package, and each component of the campaign type kit, has the same layout for what only the
-    campaigns that use it read, in ``<package>/<capability>/``: a capability that it declares (``verdict_rule``), and
+    campaigns that use it read, in ``<package>/<capability>/``: a capability that it declares (``best_rule``), and
     its own providers of the others."""
     plugins = Path(capabilities.__file__).parent / 'plugins'
     kit = plugins / 'campaign_type' / 'kit'
@@ -395,8 +394,8 @@ def test_the_example_plugins_import_piloop_only_from_the_module() -> None:
         piloop_inline,
         piloop_min_gain,
         piloop_nice,
-        piloop_stop_after_keeps,
-        piloop_keep_cost,
+        piloop_stop_after_bests,
+        piloop_best_cost,
         piloop_inference.min_speedup,
         route_plugin,
     ]
@@ -415,16 +414,8 @@ def test_a_pure_example_plugin_uses_only_pure_contracts_and_pure_providers() -> 
     metric types, the facts, or a pure built-in provider."""
     pure = [c for c in _declared() if c.tier is Tier.PURE]
     modules = {c.contract.__module__ for c in pure} | {p.__module__ for c in pure for p in c.builtins().values()}
-    # a pure contract re-exports data of the component that holds it, such as the verdict rule's Outcome
-    contracts = [sys.modules[c.contract.__module__] for c in pure]
-    modules |= {
-        v.__module__
-        for m in contracts
-        for v in vars(m).values()
-        if isinstance(v, type) and v.__module__.startswith('piloop.plugins.campaign_type.kit.')
-    }
     modules |= {Capability.__module__, metric.__name__, facts.__name__}
-    plugins = [piloop_min_gain, piloop_stop_after_keeps, piloop_keep_cost, piloop_inference.min_speedup]
+    plugins = [piloop_min_gain, piloop_stop_after_bests, piloop_best_cost, piloop_inference.min_speedup]
     for plugin in plugins:
         tree = ast.parse(Path(plugin.__file__ or '').read_text())
         imports = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == 'piloop.capabilities']

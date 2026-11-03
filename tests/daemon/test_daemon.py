@@ -9,19 +9,23 @@ from inline_snapshot import snapshot
 from pytest_mock import MockerFixture
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from piloop.actor import System
 from piloop.agents.results import CampaignResults
 from piloop.config import load_campaign_config
 from piloop.daemon.main import ACTOR, Daemon
 from piloop.daemon.serve import RESTART_SIGNAL, SERVE_ARGV
-from piloop.db.models import AgentSession, AgentSessionState, Campaign
+from piloop.db.events import latest
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event
 from piloop.db.session import Database, migrate
-from piloop.ids import RoleName
+from piloop.ids import RoleName, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.pool.pool import best_of
+from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.proc import Inherited, alive, started
@@ -50,6 +54,11 @@ from tests.conftest import (
     write_script,
     write_toml,
 )
+
+
+def scored(s: Session, candidate: CandidateId) -> bool:
+    """Whether the daemon scored ``candidate`` into the pool."""
+    return latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, candidate)) is not None
 
 
 def test_daemon_end_to_end(
@@ -100,8 +109,7 @@ def test_daemon_end_to_end(
                 'run.finished run',
                 'lease.queued candidate',
                 'measurement.recorded measurement',
-                'candidate.judged candidate',
-                'candidate.verdict candidate',
+                'candidate.scored candidate',
                 'idea.status idea',
                 'subject.settled idea',
                 'agent_session.requested agent_session',
@@ -316,7 +324,9 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
             AgentSessionState.EXITED,
         )
         made = s.scalars(select(Candidate).where(Candidate.run_id == 1).order_by(Candidate.id)).all()
-        assert [(c.summary, c.verdict) for c in made] == [('first', Outcome.KEEP), ('second', Outcome.KEEP)]
+        assert [(c.summary, scored(s, c.id)) for c in made] == [('first', True), ('second', True)]
+        best = best_of(s, s.get_one(Campaign, campaign.id))
+        assert best is not None and best.summary == 'second'
         assert s.get_one(Idea, 1).status is IdeaStatus.DONE
         assert s.scalar(select(func.count()).select_from(Run)) == 1, 'the idea never ran again'
     wait_until(lambda: not (cfg.home / 'runs' / '1' / 'worktree').exists())  # once the agent's result is in
@@ -326,10 +336,10 @@ def test_an_in_place_restart_leaves_the_agents_running_and_the_new_daemon_finish
 
 
 @pytest.mark.parametrize(
-    ('ended', 'run_end', 'idea_status', 'verdict'),
+    ('ended', 'run_end', 'idea_status', 'is_scored'),
     [
-        (False, (RunStatus.FAILED, RunEnd.DAEMON_STOPPED), IdeaStatus.OPEN, None),
-        (True, (RunStatus.SUCCEEDED, RunEnd.FINISHED), IdeaStatus.DONE, Outcome.KEEP),
+        (False, (RunStatus.FAILED, RunEnd.DAEMON_STOPPED), IdeaStatus.OPEN, False),
+        (True, (RunStatus.SUCCEEDED, RunEnd.FINISHED), IdeaStatus.DONE, True),
     ],
     ids=['cut', 'handed off'],
 )
@@ -340,7 +350,7 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
     ended: bool,
     run_end: tuple[RunStatus, RunEnd],
     idea_status: IdeaStatus,
-    verdict: Outcome | None,
+    is_scored: bool,
 ) -> None:
     """The stop is on the agent's row before its kill, so the next daemon reads the report as the stop's.
 
@@ -384,7 +394,7 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
         )
         assert s.get_one(Idea, 1).status is idea_status, 'a cut run is not an attempt'
         [kept] = s.scalars(select(Candidate).where(Candidate.run_id == 1)).all()
-        assert (kept.summary, kept.verdict) == ('first', verdict)
+        assert (kept.summary, scored(s, kept.id)) == ('first', is_scored)
     second.shutdown(timeout=5)
 
 

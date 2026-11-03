@@ -14,10 +14,12 @@ from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import CommentKind, Revision, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.pool.pool import Pool, track_of
+from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
 from piloop.plugins.campaign_type.optimization.history import (
@@ -66,10 +68,10 @@ def scored(
     s: Session,
     row: Idea,
     base: int,
-    *outcomes: tuple[Outcome, dict[str, float], str | None],
+    *outcomes: tuple[dict[str, float], str | None],
     tokens: int | None = None,
 ) -> Candidate:
-    """Add one run of ``row`` from candidate ``base`` with one measured candidate per outcome. Return the last."""
+    """Add one run of ``row`` from candidate ``base`` with one candidate per measurement, each scored. Return the last."""
     run = Run(
         campaign_id=row.campaign_id, idea=row, attempt=len(row.runs) + 1, base_candidate_id=base, harness='h', model='m'
     )
@@ -81,7 +83,7 @@ def scored(
     evaluator_id = row.campaign.evaluator_id
     assert evaluator_id is not None
     parent = base
-    for n, (verdict, metrics, error) in enumerate(outcomes):
+    for n, (metrics, error) in enumerate(outcomes):
         c = Candidate(
             campaign_id=row.campaign_id,
             run_id=run.id,
@@ -89,11 +91,12 @@ def scored(
             tree_sha=f'{row.id}-{run.id}-{n}',
             revision=f'{row.id}{run.id}{n}0000deadbeef',
             summary=f'{row.title} commit' if error is None else None,
-            verdict=verdict,
         )
         s.add(c)
         s.flush()
         s.add(Measurement(candidate_id=c.id, evaluator_id=evaluator_id, metrics=metrics, error=error))
+        s.flush()
+        record_scored(s, Pool.of(s, row.campaign, track_of(row.campaign.config, c)), c.id)
         parent = c.id
     return c
 
@@ -136,18 +139,18 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
             s,
             kept,
             1,
-            (Outcome.KEEP, {'score': 3, 'size': 12}, None),
+            ({'score': 3, 'size': 12}, None),
             tokens=234_444,
         )
         comment(s, IDEA, kept.id, 'appending works | keep appending\nsecond line is not shown')
         worse = idea(s, campaign, 'fewer lines', created_by='implementer#4')
-        scored(s, worse, e2.id, (Outcome.DISCARD, {'score': 2, 'size': 8}, None))
+        scored(s, worse, e2.id, ({'score': 2, 'size': 8}, None))
         crashed = idea(s, campaign, 'delete solve.txt', IdeaStatus.DROPPED, priority=3)
-        scored(s, crashed, e2.id, (Outcome.CRASH, {}, 'no such file'))
+        scored(s, crashed, e2.id, ({}, 'no such file'))
         comment(s, IDEA, crashed.id, 'first attempt: evaluate needs the file')
         comment(s, IDEA, crashed.id, 'second attempt agrees; rejected', author='orchestrator#2')
         mixed = idea(s, campaign, 'two commits', after=(kept.id,))
-        scored(s, mixed, e2.id, (Outcome.CRASH, {}, 'syntax'), (Outcome.KEEP, {'score': 4, 'size': 16}, None))
+        scored(s, mixed, e2.id, ({}, 'syntax'), ({'score': 4, 'size': 16}, None))
         idea(s, campaign, 'a' * 200, IdeaStatus.OPEN, 'h' * 200, priority=0, after=(crashed.id, kept.id))
         idea(s, campaign, 'human should look', IdeaStatus.OPEN, 'the metric | is wrong\nsecond line')
         idea(s, campaign, 'fewer but longer lines', IdeaStatus.OPEN, after=(mixed.id, kept.id))
@@ -164,16 +167,15 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
     has_lines(
         text,
         '### History: ideas (8 of 8)',
-        '| 1 | done | research#9 | — | 1 | more lines | keep 3 (+2 vs candidate#1) (candidate#2) |',
-        '| 2 | done | implementer#4 | — | 2 | fewer lines | discard 2 (-1 vs candidate#2) (candidate#3) |',
+        '| 1 | done | research#9 | — | 1 | more lines | 3 (+2 vs candidate#1) (candidate#2) |',
+        '| 2 | done | implementer#4 | — | 2 | fewer lines | 2 (-1 vs candidate#2) (candidate#3) |',
         '| 3 | dropped | t | — | 3 | delete solve.txt | crash (candidate#4) |',
-        '| 4 | done | t | after idea#1 | 2 | two commits | keep 4 (+1 vs candidate#2) (candidate#6) |',
+        '| 4 | done | t | after idea#1 | 2 | two commits | 4 (+1 vs candidate#2) (candidate#6) |',
         f'| 5 | open | t | after idea#1, idea#3 | 0 | {"a" * 99}… | — |',
         '| 6 | open | t | — | 2 | human should look | — |',
         '| 7 | open | t | after idea#1, idea#4 | 2 | fewer but longer lines | — |',
         '| 8 | open | t | — | 2 | no lines at all | — |',
-        '### History: kept lineage',
-        '| #1 | — | 1 | — | — | ba5e11a | — | baseline |',
+        '### History: new bests',
         '| #2 | #1 | 3 | +2 | idea#1 (research#9) | 1100000 | 234k | more lines commit |',
         '| #6 | #5 | 4 | — | idea#4 (t) | 4410000 | — | two commits commit |',
         '### History: latest notes (newest first)',
@@ -208,7 +210,7 @@ def test_history_worst_case_stays_under_the_documented_size(db: Database, campai
         for n in range(SHOWN.ideas):
             links = (previous.id,) if previous is not None else ()
             row = idea(s, campaign, f'{n} ' + 't' * 200, IdeaStatus.DROPPED, 'h' * 200, after=links)
-            scored(s, row, 1, (Outcome.DISCARD, {'score': 0.123456, 'size': 1}, None))
+            scored(s, row, 1, ({'score': 0.123456, 'size': 1}, None))
             comment(s, IDEA, row.id, 'f' * 200)
             previous = row
         for _ in range(SHOWN.campaign_findings):
@@ -220,23 +222,18 @@ def test_history_worst_case_stays_under_the_documented_size(db: Database, campai
     assert len(rendered) < 18_000
 
 
-def test_history_when_a_human_kept_an_unscored_commit_and_an_idea_builds_on_it(
-    db: Database, campaign: Campaign
-) -> None:
+def test_history_of_an_idea_that_builds_on_an_unscored_candidate(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
-        unscored = Candidate(
-            campaign_id=campaign.id, tree_sha='y', revision='y', verdict=Outcome.KEEP, verdict_by='human:t'
-        )
+        unscored = Candidate(campaign_id=campaign.id, tree_sha='y', revision='y', origin=Origin.RECOVERED)
         s.add(unscored)
         s.flush()
         row = idea(s, campaign, 'from an unscored base')
-        scored(s, row, unscored.id, (Outcome.KEEP, {'score': 5, 'size': 1}, None))
+        scored(s, row, unscored.id, ({'score': 5, 'size': 1}, None))
         s.commit()
     rendered = render(db, campaign)
-    assert '| 1 | done | t | — | 2 | from an unscored base | keep 5 (candidate#3) |' in rendered, (
+    assert '| 1 | done | t | — | 2 | from an unscored base | 5 (candidate#3) |' in rendered, (
         'no delta without a base score'
     )
-    assert '| #2 | — | — | — | — | y | — | — |' in rendered, 'the unscored base is in the lineage without a value'
     assert '| #3 | #2 | 5 | — | idea#1 (t) |' in rendered, 'no gain over a parent without a score'
 
 
@@ -256,21 +253,21 @@ def test_a_comment_is_its_id_and_first_line_and_counts_the_rest() -> None:
     assert line('x' * 500) == f'- comment#7 research#1: {"x" * (FIRST_LINE_CHARS - 1)}…'
 
 
-def test_an_implementers_history_shows_the_keeps_then_the_newest_within_its_budget(
+def test_an_implementers_history_shows_the_new_bests_then_the_newest_within_its_budget(
     db: Database, campaign: Campaign
 ) -> None:
     with db.session() as s:
         idea(s, campaign, 'older')
         kept = idea(s, campaign, 'kept')
-        scored(s, kept, 1, (Outcome.KEEP, {'score': 0.9, 'size': 1}, None))
+        scored(s, kept, 1, ({'score': 1.5, 'size': 1}, None))
         for n in range(30):
             idea(s, campaign, f'filler {n}')
         mine = idea(s, campaign, 'mine', IdeaStatus.CLAIMED)
-        scored(s, mine, 1, (Outcome.DISCARD, {'score': 0.1, 'size': 1}, None))
+        scored(s, mine, 1, ({'score': 0.1, 'size': 1}, None))
         reader = s.scalars(select(AgentSession.id).where(working_on(mine.runs[0].id))).one()
         s.commit()
         p = s.get_one(Campaign, campaign.id)
-        section = History(budget=900, findings=0)
+        section = History(budget=500, findings=0)
         text = markdown(
             [section],
             Rendering(
@@ -284,21 +281,21 @@ def test_an_implementers_history_shows_the_keeps_then_the_newest_within_its_budg
         )
         everything = markdown([History(budget=100_000)], Rendering(s, utcnow(), p, Path('/no/workspace'), cas_of(s)))
     shown = [int(line.split('|')[1]) for line in text.splitlines() if re.match(r'\| \d+ ', line)]
-    assert shown[:1] == [kept.id] and len(shown) < 31, 'the keeps first, then what fits'
+    assert shown[:1] == [kept.id] and len(shown) < 31, 'the ideas that made a new best first, then what fits'
     assert shown[1:] == list(range(mine.id - len(shown) + 1, mine.id)), 'then the newest, oldest first'
-    assert f'of 33; besides idea#{mine.id}, the keeps, then the newest)' in text
+    assert f'of 33; besides idea#{mine.id}, those that made a new best, then the newest)' in text
     assert cost(text.split('\n', 2)[2].splitlines()) <= section.budget
     assert '| mine ' in everything and '(33 of 33)' in everything, 'a reader without a run sees every idea'
 
 
 def test_an_idea_whose_candidate_stopped_at_a_rung_says_where_and_why(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
-        c = scored(s, idea(s, campaign, 'a cheaper screen'), 1, (Outcome.DISCARD, {'score': 0.5}, None))
+        c = scored(s, idea(s, campaign, 'a cheaper screen'), 1, ({'score': 0.5}, None))
         [m] = c.measurements
         m.rung, m.stopped = RungName('screen'), 'score 0.5 vs 1 (-0.5; margin 0.1)'
         s.commit()
     rendered = render(db, campaign)
-    assert '| a cheaper screen | discard, stopped at screen: score 0.5 vs 1 (-0.5; margin 0.1) (candidate#2) |' in (
+    assert '| a cheaper screen | run, stopped at screen: score 0.5 vs 1 (-0.5; margin 0.1) (candidate#2) |' in (
         rendered
     ), rendered
 
@@ -310,9 +307,9 @@ def test_a_brief_shows_the_latest_notes_on_ideas_and_runs_and_its_ideas_within_i
         first = idea(s, campaign, 'a long kept chain')
         base = 1
         for n in range(40):  # a lineage that alone is past the budget
-            base = scored(s, first, base, (Outcome.KEEP, {'score': 2 + n, 'size': 1}, None)).id
+            base = scored(s, first, base, ({'score': 2 + n, 'size': 1}, None)).id
         later = idea(s, campaign, 'a later idea')
-        scored(s, later, base, (Outcome.DISCARD, {'score': 1, 'size': 1}, None))
+        scored(s, later, base, ({'score': 1, 'size': 1}, None))
         comment(s, IDEA, first.id, 'on the idea: the 120 s floor is tight')
         comment(s, RUN, later.runs[0].id, 'on the run: merged the head first', author='implementer#2')
         comment(s, IDEA, later.id, 'open: run#41 gave the idea back', author=DAEMON_ACTOR)
@@ -328,5 +325,5 @@ def test_a_brief_shows_the_latest_notes_on_ideas_and_runs_and_its_ideas_within_i
         f'- comment#1 implementer#1 on idea#{first.id}: on the idea: the 120 s floor is tight',
     ], 'the notes on ideas and runs, newest first, and the run ends that the daemon notes'
     assert '| a later idea |' in text and '| a long kept chain |' in text, 'the ideas fit beside a long lineage'
-    assert 'of 41)' in text, 'the lineage says how many keeps it leaves out'
+    assert 'of 41)' in text, 'the baseline and the new bests say how many they leave out'
     assert cost(text.split('\n', 2)[2].splitlines()) <= section.budget

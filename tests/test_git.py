@@ -16,79 +16,20 @@ from typing import ClassVar
 import psutil
 import pytest
 from git import Repo
-from git.exc import GitCommandError
 from pydantic import SecretStr
 
 from piloop.actor import Agent
 from piloop.api.client import CLONE_WAIT
 from piloop.ids import AgentSessionId, Revision, TargetRef
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN
-from piloop.plugins.vcs.contract import CloneFailed, Transfer, UnknownRevision, VcsError, Version
+from piloop.plugins.vcs.contract import CloneFailed, Transfer, UnknownRevision, VcsError
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, Git, GitRepository, commands as git
 from tests.conftest import disk, git_processes
 
 
-def test_merge_contains_and_pin_all_raise_on_a_commit_the_repo_does_not_have(campaign_path: Path) -> None:
-    """A conflict and "not an ancestor" are answers; an unknown commit is an error, never read as either."""
-    repo = Repo(campaign_path)
-    head = repo.head.commit.hexsha
-    assert git.contains(repo, head, head)
-    with pytest.raises(GitCommandError, match='merge-tree'):
-        git.merge(repo, head, '0' * 40, 'm', PILOOP)
-    with pytest.raises(GitCommandError, match='merge-base'):
-        git.contains(repo, head, '0' * 40)
+def test_pin_all_raises_on_a_commit_the_repo_does_not_have(campaign_path: Path) -> None:
     with pytest.raises(subprocess.CalledProcessError, match='update-ref'):
-        git.pin_all(repo, {'refs/piloop/gone': 'f' * 40})
-
-
-def test_a_commit_contains_another_by_history_or_by_having_all_its_changes(campaign_path: Path) -> None:
-    """A commit that cherry-picked the head has the head's changes, though not its history."""
-    repo = Repo(campaign_path)
-    base = repo.head.commit.hexsha
-    (campaign_path / 'other.txt').write_text('x\n')
-    repo.git.add('-A')
-    repo.git.commit('-qm', 'the head')
-    head = repo.head.commit.hexsha
-    repo.git.checkout('-q', '--detach', base)
-    (campaign_path / 'solve.txt').write_text('base\nb\n')
-    repo.git.commit('-qam', 'a lead')
-    lead = repo.head.commit.hexsha
-    repo.git.cherry_pick(head)
-    picked = repo.head.commit.hexsha
-    repo.git.merge('-q', '--no-edit', head)
-    merged = repo.head.commit.hexsha
-    assert (git.contains(repo, merged, head), git.contains(repo, picked, head)) == (True, True)
-    assert (git.contains(repo, lead, head), git.contains(repo, head, picked)) == (False, False), 'a change is missing'
-
-
-def test_a_merge_starts_from_a_copy_of_the_head_in_the_commits_history(tmp_path: Path) -> None:
-    """A run that started from a copy of the head (same tree, another sha) merges cleanly.
-
-    By history, the merge base is the commit before the head, so both sides add ``f.txt`` and conflict. By tree, the
-    copy is the head: only the run's change and the head's later change are merged.
-    """
-    repo = Repo.init(tmp_path / 'r', initial_branch='main')
-    root = Path(repo.working_dir)
-
-    def commit(name: str, text: str, message: str = 'change') -> str:
-        (root / name).write_text(text)
-        repo.git.add('-A')
-        repo.git.commit('-qm', message)
-        return repo.head.commit.hexsha
-
-    base = commit('a.txt', 'a\n')
-    head = commit('f.txt', 'x\n')
-    later = commit('g.txt', 'g\n')
-    repo.git.checkout('-q', '--detach', base)
-    copy = commit('f.txt', 'x\n', 'a rebased copy of the head')
-    assert copy != head and git.tree_sha(repo, copy) == git.tree_sha(repo, head)
-    run = commit('f.txt', 'y\n')
-    for onto in (head, later):
-        merged = git.merge(repo, onto, run, 'rebased', PILOOP)
-        assert isinstance(merged, str), f'onto {onto}: conflicts in {merged}'
-        files = {name: repo.git.show(f'{merged}:{name}') for name in repo.git.ls_tree('--name-only', merged).split()}
-        assert files == {'a.txt': 'a', 'f.txt': 'y'} | ({'g.txt': 'g'} if onto == later else {})
-        assert [p.hexsha for p in repo.commit(merged).parents] == [onto, run]
+        git.pin_all(Repo(campaign_path), {'refs/piloop/gone': 'f' * 40})
 
 
 def test_worktree_changes_hold_the_process_lock(
@@ -170,6 +111,30 @@ def test_a_checkout_changed_by_an_edit_a_new_file_or_a_commit_not_by_what_was_li
     assert not git.changed(tmp_path / 'gone', []), 'no checkout'
 
 
+def test_switch_moves_the_checkout_in_place_and_refuses_to_lose_a_change_or_reach_an_unknown_revision(
+    campaign_path: Path,
+) -> None:
+    """An agent's checkout moves to a base it chose: the directory stays, and git refuses a move that loses work."""
+    repo = Repo(campaign_path)
+    base = Revision(repo.head.commit.hexsha)
+    (campaign_path / 'solve.txt').write_text('base\nbranch\n')
+    repo.git.commit('-qam', 'a branch')
+    branch = Revision(repo.head.commit.hexsha)
+    with closing(Git().open(campaign_path)) as checkout:
+        checkout.switch(base)
+        assert (repo.head.commit.hexsha, repo.head.is_detached) == (base, True)
+        assert (campaign_path / 'solve.txt').read_text() == 'base\n'
+        (campaign_path / 'solve.txt').write_text('unsaved\n')
+        with pytest.raises(VcsError, match=f'^the checkout cannot move to {branch}: .*Your local changes'):
+            checkout.switch(branch)
+        assert (campaign_path / 'solve.txt').read_text() == 'unsaved\n', 'nothing is lost'
+        with pytest.raises(VcsError, match=f'^the checkout cannot move to {"0" * 40}: '):
+            checkout.switch(Revision('0' * 40))
+        (campaign_path / 'solve.txt').write_text('base\n')
+        checkout.switch(branch)
+    assert repo.head.commit.hexsha == branch
+
+
 def test_a_closed_repository_leaves_no_git_process_running(campaign_path: Path) -> None:
     repo = Git().open(campaign_path)
     repo.head()
@@ -187,7 +152,7 @@ def by(repo: Repo, sha: str) -> tuple[str, str]:
 def test_piloops_own_commits_carry_its_identity_on_a_machine_that_has_none(
     campaign_path: Path, tmp_path: Path, no_git_identity: None
 ) -> None:
-    """A fresh worker has no ``user.*``: the save of an agent's unsaved work, a merge and ``piloop init`` commit anyway.
+    """A fresh worker has no ``user.*``: the save of an agent's unsaved work and ``piloop init`` commit anyway.
 
     The save is by the run that left the work, committed by piloop.
     """
@@ -202,8 +167,6 @@ def test_piloops_own_commits_carry_its_identity_on_a_machine_that_has_none(
     assert (saved.summary, saved.recovered) == (UNCOMMITTED, True)
     repo = Repo(campaign_path)
     assert by(repo, saved.revision) == ('run#5 <piloop@localhost>', 'piloop <piloop@localhost>')
-    merged = record.merge(base, saved.revision, 'a merge')
-    assert isinstance(merged, Version) and by(repo, merged.revision) == ('piloop <piloop@localhost>',) * 2
     (tmp_path / 'new').mkdir()
     vcs.init(tmp_path / 'new', 'baseline', [], [])
     assert by(Repo(tmp_path / 'new'), 'HEAD') == ('piloop <piloop@localhost>',) * 2

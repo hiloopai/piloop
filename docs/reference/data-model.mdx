@@ -21,9 +21,10 @@ The `optimization` campaign type's tables hold the research:
 
 - An **idea** is something to try. `idea_links` relates two ideas of one campaign: one runs `after` the other.
   `ideas.track` is the name of a track in `piloop.toml`.
-- A **run** is one implementer session of a campaign, from the head. Its `idea_id` is the idea that it claimed, null
+- A **run** is one implementer session of a campaign, from its base: the best, or the candidate of `--base`. Its `idea_id` is the idea that it claimed, null
   until it claims one. Its agent session has the run as its subject.
-- A **candidate** is a distinct state of the code. Its git tree identifies it, and `parent_id` is its lineage.
+- A **candidate** is a distinct state of the code. Its git tree identifies it, and `parent_id` is its line.
+  `excluded_reason` is set on a candidate that someone took out of the race for the best.
 - An **evaluator** is one version of the evaluate command and the metrics. `piloop init` adds one when they change.
   A **measurement** is one run of an evaluator on a candidate.
 - A **technique** is an outside technique that a scout sweep of piloop 0.5 or earlier found. Nothing writes them now.
@@ -40,7 +41,7 @@ full DDL with the indexes, by the plugin that owns each table.
 ## Statuses
 
 A CHECK constraint fixes the values of each status column. The daemon and the CLI move a row from one value to the
-next, as [ideas and runs](/concepts/ideas-and-runs), [the verdict](/concepts/verdict) and
+next, as [ideas and runs](/concepts/ideas-and-runs), [the pool](/concepts/pool) and
 [agents](/concepts/roles#watch-and-steer-an-agent) show. Anyone with `piloop sql` can set any value, for example to drop an
 idea.
 

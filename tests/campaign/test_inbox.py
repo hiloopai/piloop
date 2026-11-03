@@ -20,13 +20,12 @@ from piloop.db.triggers.changelog import CommentAcked, Commented, IdeaCreated
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Outcome
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT, TrackName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.settings import DaemonSettings
 from tests.conftest import elsewhere
@@ -181,43 +180,25 @@ def test_every_agent_of_a_role_and_the_outside_orchestrator_are_one_party_for_wh
         s.flush()
         emit(
             s,
-            CandidateJudged(verdict=Outcome.INTERESTING, score=1.0, reason='mine'),
+            scored('mine'),
             TargetRef(CANDIDATE, 1),
             earlier,
         )
         emit(
             s,
-            CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='the daemon'),
+            scored('the daemon'),
             TargetRef(CANDIDATE, 1),
             System.DAEMON,
         )
         s.commit()
         for me in (later, System.ORCHESTRATOR, Orchestrating(by=Person(name='ana'))):
             assert inbox.waiting_for(s, me.party) == [], f'{me} wrote it, as one party'
-            assert news_lines(s, cursor, me=me)[1] == ['candidate#1 keep: the daemon'], 'its own verdict is no news'
+            assert news_lines(s, cursor, me=me)[1] == ['candidate#1: the daemon'], 'its own event is no news'
             assert [r.outcome for r in inbox.ack(s, [decided.id], me)] == [AckOutcome.OWN]
         assert [c.id for c, _ in inbox.waiting_for(s, Agent(role='implementer', session=41).party)] == [decided.id]
         assert party_of('not an actor') == 'not an actor'
         assert Service(name='ci').party == Service(name='ci').signature, 'a service writes for itself'
         assert party_of('orchestrator via human:ana') == party_of('orchestrator#7') == 'orchestrator'
-
-
-def test_a_candidate_judged_on_every_track_is_news_once_with_the_verdict_that_it_has(
-    db: Database, campaign: Campaign
-) -> None:
-    with db.session() as s:
-        cursor = db_feed.newest(s)
-        s.get_one(Candidate, 1).track = TrackName('cost')
-        on = TargetRef(CANDIDATE, 1)
-        emit(
-            s,
-            CandidateJudged(verdict=Outcome.DISCARD, score=1.0, reason='no gain', track='accuracy'),
-            on,
-            System.DAEMON,
-        )
-        emit(s, CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='on cost', track='cost'), on, System.DAEMON)
-        s.commit()
-        assert news_lines(s, cursor, me=System.ORCHESTRATOR)[1] == ['candidate#1 keep: on cost']
 
 
 def test_thread_follows_citations_both_ways_and_the_replies_not_the_rest_of_the_target(
@@ -344,9 +325,8 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
         run3 = TargetRef(RUN, 3)
         reported = AnomalyReported(subject=run3, trigger='run_failed', line='run#3 failed: boom')
         emit(s, reported, TargetRef(TargetKind.AGENT_SESSION, worker.id), System.DAEMON)
-        judged = CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='score +1 over candidate#1\nmore')
         candidate = TargetRef(CANDIDATE, 1)
-        emit(s, judged, candidate, System.DAEMON)
+        emit(s, scored('score 2 over 1 eval: the best of the score track now, rank 1 of 1'), candidate, System.DAEMON)
         s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
         s.get_one(Campaign, campaign.id).stopped_reason = 'max_tokens 100 reached'
         s.commit()
@@ -356,7 +336,7 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
                 'comment#6 escalation p0 on campaign#2 (other) by implementer#5: theirs',
                 'comment#2 escalation p1 on campaign#1 (demo) by implementer#1: SSO',
                 'anomaly, implementer#1 requested: run#3 failed: boom',
-                'candidate#1 keep: score +1 over candidate#1',
+                'candidate#1: score 2 over 1 eval: the best of the score track now, rank 1 of 1',
                 'campaign demo stopped: max_tokens 100 reached',
             ]
         )
@@ -461,18 +441,13 @@ def test_an_escalation_left_unacknowledged_comes_back_with_its_age_on_each_wait_
         ]
         assert first.reminder(now) is None, 'news already'
 
-        def verdict() -> News:
-            emit(
-                s,
-                CandidateJudged(verdict=Outcome.KEEP, score=2.0, reason='+1'),
-                TargetRef(CANDIDATE, 1),
-                System.DAEMON,
-            )
+        def score() -> News:
+            emit(s, scored('score 2 over 1 eval'), TargetRef(CANDIDATE, 1), System.DAEMON)
             s.commit()
             return inbox.news(s, db_feed.newest(s) - 1, campaign_id=campaign.id, party=System.ORCHESTRATOR.party)
 
         s.add(Comment(target=TargetRef(TargetKind.COMMENT, 1), author='implementer#3', body='still stuck'))
-        assert verdict().reminder(now) == '2 escalations wait unacknowledged: comment#1 (2h old), comment#2 (5m old)', (
+        assert score().reminder(now) == '2 escalations wait unacknowledged: comment#1 (2h old), comment#2 (5m old)', (
             'its own follow-up answers nothing'
         )
         inbox.ack(s, [CommentId(1)], System.ORCHESTRATOR)
@@ -481,7 +456,12 @@ def test_an_escalation_left_unacknowledged_comes_back_with_its_age_on_each_wait_
             'a timeout says it too, but it ends no wait'
         )
         inbox.reply(s, CommentId(2), 'the old one', author=System.ORCHESTRATOR, priority=2)
-        assert verdict().reminder(now) is None, 'answered: the human acknowledges the answer'
+        assert score().reminder(now) is None, 'answered: the human acknowledges the answer'
+
+
+def scored(told: str) -> CandidateScored:
+    """The daemon's score of the baseline, the best, as its worker hears ``told``."""
+    return CandidateScored(track=TrackName('score'), score=2.0, measured=1, best=CandidateId(1), rank=1, told=told)
 
 
 def news_lines(s: Session, after: int, *, campaign_id: CampaignId | None = None, me: Actor) -> tuple[int, list[str]]:

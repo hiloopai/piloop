@@ -17,6 +17,7 @@ from piloop.db.models import Campaign
 from piloop.net import Refusal
 from piloop.plugins.campaign_type.kit.candidates.api import AddressedCandidate, ViewedCandidate
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.candidates.views import candidate_view
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer
 from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, queue, submissions
 from piloop.plugins.campaign_type.kit.evaluation.measure import metrics, remeasure_asked, rung_results
@@ -28,8 +29,8 @@ from piloop.plugins.campaign_type.kit.evaluation.wire import (
     Submission,
     SubmitBody,
 )
+from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, track_of
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, candidate_view, label
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.vcs.contract import Repository, Transfer, UnknownRevision, VcsError, Version
 from piloop.store.tree import Missing
@@ -40,9 +41,15 @@ router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUS
 
 @router.get('/candidates/{candidate}', operation_id='candidate')
 def candidate(s: Reading, candidate: ViewedCandidate) -> CandidateDetail:
-    """A candidate: its verdict, its metrics beside its parent's, and each rung of the ladder that it measured."""
-    evaluator_id = s.get_one(Campaign, candidate.campaign_id).evaluator_id
+    """A candidate: where it stands, its metrics beside its parent's, and each rung of the ladder that it measured."""
+    campaign = s.get_one(Campaign, candidate.campaign_id)
+    evaluator_id = campaign.evaluator_id
     parent = candidate.parent
+    standing = (
+        None
+        if candidate.origin in UNSCORED
+        else Pool.of(s, campaign, track_of(campaign.config, candidate)).standing(candidate.id).told()
+    )
     return CandidateDetail(
         candidate=candidate_view(candidate),
         revision=candidate.revision,
@@ -52,6 +59,7 @@ def candidate(s: Reading, candidate: ViewedCandidate) -> CandidateDetail:
         metrics=metrics(candidate, evaluator_id),
         parent_metrics=metrics(parent, evaluator_id) if parent is not None else {},
         rungs=rung_results(candidate, evaluator_id),
+        standing=standing,
     )
 
 
@@ -59,13 +67,11 @@ def candidate(s: Reading, candidate: ViewedCandidate) -> CandidateDetail:
     '/candidates/{candidate}/measurements', operation_id='add_measurement', dependencies=[Depends(actor_access)]
 )
 def add_measurement(s: Writing, me: Acting, candidate: AddressedCandidate, body: Report) -> MeasurementAdded:
-    """Record a measurement of a candidate under the campaign's current evaluator, and have its verdict judged again."""
+    """Record a measurement of a candidate under the campaign's current evaluator: its mean includes it."""
     added = evaluation_ops.add_measurement(s, candidate.id, body, actor=me)
     s.commit()
     with db_feed.snapshot(s) as cursor:
-        return MeasurementAdded(
-            cursor=cursor, measurement=added.measurement.id, rejudged=added.rejudged, effect=added.effect
-        )
+        return MeasurementAdded(cursor=cursor, measurement=added.measurement.id, standing=added.standing)
 
 
 @router.get('/evaluations', operation_id='evaluations')
@@ -80,9 +86,9 @@ def evaluations(s: Reading) -> EvaluationQueue:
     dependencies=[Depends(actor_access)],
 )
 def cancel_evaluation(s: Writing, me: Acting, candidate: AddressedCandidate) -> CandidateAnswer:
-    """Cancel a candidate's evaluation, waiting or running, or its requested remeasure. A cancel is not a verdict.
+    """Cancel a candidate's evaluation, waiting or running, or its requested remeasure. A cancel records nothing.
 
-    A run's candidate that waits for its verdict is ``skipped``. A baseline that never measured pauses every
+    A run's candidate that has no measurement is ``skipped``. A baseline that never measured pauses every
     measurement of its campaign (``ops.hold_on_cancelled_baseline``).
     """
     if not queue.cancel(s, candidate.id, me):
@@ -99,18 +105,17 @@ def cancel_evaluation(s: Writing, me: Acting, candidate: AddressedCandidate) -> 
 
 @router.post('/submissions', operation_id='submit', dependencies=[Depends(actor_access)])
 def submit(s: Writing, me: Acting, api: Api, body: SubmitBody) -> Submission:
-    """Submit a version of the caller's run, an implementer's: the daemon scores and judges it, and the answer comes now.
+    """Submit a version of the caller's run, an implementer's: the daemon scores it into the pool.
 
-    The verdict reaches the implementer as a message (``submissions.tell_verdicts``). A version that the run submitted
-    already answers as it is, also after the run ended: a retry. One whose verdict a limit gave is measured again
-    (``submissions.remeasure``). Any other is refused before its ``blob``, from a worker elsewhere, is taken into the
-    repo of record.
+    Where it stands reaches the implementer as a message (``submissions.tell_scores``). A version that the run submitted
+    already answers as it is, also after the run ended: a retry (``submissions.retried``). Any other is refused before
+    its ``blob``, from a worker elsewhere, is taken into the repo of record.
     """
     run = submissions.run_of_agent(s, me)
     with closing(repository(run.campaign)) as repo:
         version = _version(repo, body.revision)
         if version is not None and (own := submissions.resubmitted(s, run, version)) is not None:
-            submissions.remeasure(s, own, me)
+            submissions.retried(s, own, me)
             s.commit()
             return _submission(s, own)
         submissions.refuse(s, run)
@@ -150,11 +155,13 @@ def _received(repo: Repository, cas: Cas, run: Run, body: SubmitBody) -> Version
 
 
 def _submission(s: Session, candidate: Candidate) -> Submission:
-    """What its implementer reads of a submission: the verdict, and the primary of the campaign's first track.
+    """What its implementer reads of a submission: where it stands once scored, else None: the message comes then.
 
-    A candidate that is to be measured again is ``pending``: its new verdict comes as a message.
+    One that is to be measured again (``submissions.retried``) is not scored yet either.
     """
+    waiting = {c.id for c in submissions.waiting(s, s.get_one(Campaign, candidate.campaign_id))}
+    if candidate.id in waiting or remeasure_asked(s, candidate) is not None:
+        return Submission(candidate=candidate.id, told=None)
     campaign = s.get_one(Campaign, candidate.campaign_id)
-    value = metrics(candidate, campaign.evaluator_id).get(campaign.config.all_tracks[0].primary.name)
-    verdict = PENDING if remeasure_asked(s, candidate) is not None else label(candidate)
-    return Submission(candidate=candidate.id, verdict=verdict, score=value)
+    standing = Pool.of(s, campaign, track_of(campaign.config, candidate)).standing(candidate.id)
+    return Submission(candidate=candidate.id, told=standing.told())

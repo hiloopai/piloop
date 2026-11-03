@@ -5,14 +5,11 @@
   since its insert.
 - The same triggers keep a change log in `events`, signed by the same actor. Each payload has its `kind`, and these have
   `old` and `new`:
-  `idea.status`, `idea.priority`, `idea.track`, `candidate.verdict` (with `verdict_by` and
-  `verdict_reason`), `candidate.origin`, `run.brief_cid` (the old and new brief's CID), `campaign.status` (with `stopped_reason`), `campaign.paused` (with
+  `idea.status`, `idea.priority`, `idea.track`, `candidate.excluded_reason` (with `excluded_by`), `candidate.origin`, `run.brief_cid` (the old and new brief's CID), `campaign.status` (with `stopped_reason`), `campaign.paused` (with
   `paused_reason`). An inserted or deleted `idea_links` row is `idea.linked` or `idea.unlinked` on its idea, with the
   target and the kind.
 - A DELETE of an idea, comment or candidate leaves a `<kind>.deleted` event with the row's key columns.
 - So `SELECT at, actor, kind, payload FROM events WHERE target_kind = 'idea' AND target_id = 12 ORDER BY id` is the full
   history of an idea.
-- The daemon's own `candidate.judged` event is next to `candidate.verdict`. It has the score that the verdict was made
-  from.
-- A note on a candidate is a `candidate.noted` event, signed by its author, with its reason. `verdict_by` changes only
-  with the verdict.
+- The daemon's own `candidate.scored` event says where a candidate stood when it was scored: its score, its rank and
+  the best then.

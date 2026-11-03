@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from piloop_keep_cost import KeepCost
-from piloop_stop_after_keeps import AfterKeeps
+from piloop_best_cost import BestCost
+from piloop_stop_after_bests import AfterBests
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
@@ -41,12 +41,15 @@ from piloop.otel import Tracer
 from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.controller import SKIPPED_REASON, RunFinished
+from piloop.plugins.campaign_type.kit.pool.ops import exclude
+from piloop.plugins.campaign_type.kit.pool.pool import Pool
+from piloop.plugins.campaign_type.kit.pool.scored import record_scored
+from piloop.plugins.campaign_type.kit.runs.controller import RunFinished
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunId, RunStatus
-from piloop.plugins.campaign_type.kit.runs.stop import runs, runs_without_keep
+from piloop.plugins.campaign_type.kit.runs.stop import runs, runs_without_best
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.fact_source.contract import FactReadError
@@ -56,8 +59,8 @@ from piloop.plugins.fact_source.facts import (
     EVALUATIONS,
     FUNNEL,
     HOURS,
-    KEEPS,
     METRIC_SUMS,
+    NEW_BESTS,
     OPTIMIZATION,
     RUNS,
     TOKENS,
@@ -65,11 +68,11 @@ from piloop.plugins.fact_source.facts import (
     Facts,
     FactValue,
     Funnel,
+    per_best,
     per_evaluation,
-    per_keep,
     per_run,
     reading,
-    since_keep,
+    since_best,
     worker_spend,
 )
 from piloop.plugins.fact_source.kit.readings import FactRead, Readings
@@ -130,10 +133,11 @@ def add_run(
     error: str | None = None,
     measured: bool = True,
 ) -> RunId:
-    """Add a run, finished by default, with a measured candidate: a discard, or a keep that scores ``keep_score``.
+    """Add a run, finished by default, with a candidate scored when the run finished: 0, or ``keep_score``.
 
-    With ``measured=False`` the run has no candidate. Add one with ``add_candidate``. A run in flight has none.
-    ``started_at`` and ``finished_at`` are how long ago.
+    A score above the best's makes the candidate the new best (``new_bests``). With ``measured=False`` the run has no
+    candidate. Add one with ``add_candidate``. A run in flight has none. ``started_at`` and ``finished_at`` are how
+    long ago.
     """
     with db.session() as s:
         n = s.scalar(select(func.count(Idea.id))) or 0
@@ -164,24 +168,24 @@ def add_run(
         s.add(run)
         s.commit()
     if keep_score is not None or (measured and not in_flight):
-        verdict = Outcome.DISCARD if keep_score is None else Outcome.KEEP
-        candidate_id = add_candidate(db, campaign, run.id, verdict)
+        candidate_id = add_candidate(db, campaign, run.id, Origin.RUN)
         with db.session() as s:
-            evaluator_id = s.get_one(Campaign, campaign.id).evaluator_id or 0
-            s.add(Measurement(candidate_id=candidate_id, evaluator_id=evaluator_id, metrics={'score': keep_score or 0}))
+            row = s.get_one(Campaign, campaign.id)
+            s.add(
+                Measurement(
+                    candidate_id=candidate_id, evaluator_id=row.evaluator_id, metrics={'score': keep_score or 0}
+                )
+            )
+            s.flush()
+            record_scored(s, Pool.of(s, row, row.config.all_tracks[0]), candidate_id)
+            [scored] = [e for e in s.new if isinstance(e, Event)]
+            scored.at = s.get_one(Run, run.id).finished_at
             s.commit()
     return run.id
 
 
-def add_candidate(
-    db: Database, campaign: Campaign, run_id: RunId, state: Outcome | Origin, why: str | None = None
-) -> CandidateId:
-    """Add an unmeasured candidate of run ``run_id``, a child of the baseline: with a verdict, or of an origin."""
-    match state:
-        case Outcome():
-            origin, verdict = Origin.RUN, state
-        case Origin():
-            origin, verdict = state, None
+def add_candidate(db: Database, campaign: Campaign, run_id: RunId, origin: Origin) -> CandidateId:
+    """Add an unmeasured candidate of run ``run_id``, of ``origin``, a child of the baseline."""
     with db.session() as s:
         candidate = Candidate(
             campaign_id=campaign.id,
@@ -190,8 +194,6 @@ def add_candidate(
             tree_sha=f'tree{run_id}',
             revision=f'commit{run_id}',
             origin=origin,
-            verdict=verdict,
-            verdict_reason=why,
         )
         s.add(candidate)
         s.commit()
@@ -227,39 +229,29 @@ def test_no_stop_table_means_open_ended(db: Database, campaign: Campaign) -> Non
     assert reason(db, campaign) is None
 
 
-def test_target_on_the_best_kept_candidate_in_the_metric_direction(db: Database, campaign: Campaign) -> None:
+def test_target_on_the_best_in_the_metric_direction(db: Database, campaign: Campaign) -> None:
     configure(db, campaign, target=3.0)
-    with db.session() as s:
-        s.get_one(Candidate, 1).verdict = Outcome.DISCARD
-        s.commit()
-    assert reason(db, campaign) is None, 'nothing kept'
-    with db.session() as s:
-        s.get_one(Candidate, 1).verdict = Outcome.KEEP
-        s.commit()
-    assert reason(db, campaign) is None, 'the baseline scores 1'
+    assert reason(db, campaign) is None, 'the baseline scores 1, and is the best'
     add_run(db, campaign, keep_score=2.9)
     assert reason(db, campaign) is None
-    with db.session() as s:
-        s.get_one(Candidate, 2).verdict = Outcome.DISCARD
-        s.commit()
     add_run(db, campaign, keep_score=3.0)
     assert reason(db, campaign) == 'target: score 3 ≥ 3'
     with db.session() as s:
-        s.get_one(Candidate, 3).verdict = Outcome.INTERESTING
+        exclude(s, CandidateId(3), 'gamed the evaluation', actor=System.HUMAN)
         s.commit()
-    assert reason(db, campaign) is None, 'only a keep counts'
+    assert reason(db, campaign) is None, 'an excluded candidate is never the best'
     with db.session() as s:
         c = s.get_one(Candidate, 3)
-        c.verdict, c.origin = None, Origin.REFERENCE
+        c.excluded_reason, c.excluded_by, c.origin = None, None, Origin.SKIPPED
         s.commit()
-    assert reason(db, campaign) is None, 'a reference is never the best'
+    assert reason(db, campaign) is None, 'a skipped candidate is not in the pool'
     with db.session() as s:
         c = s.get_one(Candidate, 3)
-        c.verdict, c.origin = Outcome.KEEP, Origin.RUN
+        c.origin = Origin.RUN
         for m in s.scalars(select(Measurement).where(Measurement.candidate_id == 3)):
             m.metrics = {'score': 3.4}
         s.commit()
-    assert reason(db, campaign) == 'target: score 3.4 ≥ 3'
+    assert reason(db, campaign) == 'target: score 3.4 ≥ 3', 'the best is a query of the measurements'
 
 
 def test_target_lower_is_better(db: Database, campaign: Campaign) -> None:
@@ -308,7 +300,7 @@ def test_max_runs_waits_for_a_finished_run_whose_commits_are_scored(db: Database
 
     assert scoring(True, IdeaStatus.CLAIMED) == (None, 1), 'its candidates do not exist yet, but it keeps its place'
     assert scoring(True, IdeaStatus.DROPPED) == (None, 1), 'parked meanwhile: it still keeps its place'
-    add_candidate(db, campaign, run_id, Origin.SKIPPED, SKIPPED_REASON)
+    add_candidate(db, campaign, run_id, Origin.SKIPPED)
     assert scoring(False, IdeaStatus.DONE) == (None, 0), 'only skip commits: it does not count, and another run starts'
     assert scoring(False, IdeaStatus.CLAIMED) == (None, 0), 'scored: the status of its idea does not matter'
 
@@ -432,23 +424,23 @@ def test_max_tokens_sums_the_usage_of_every_ended_agent_of_the_campaign(db: Data
     assert reason(db, campaign) == 'max_tokens: 100000 tokens spent'
 
 
-def test_plateau_counts_finished_runs_since_the_last_keep(db: Database, campaign: Campaign) -> None:
+def test_plateau_counts_finished_runs_since_the_last_new_best(db: Database, campaign: Campaign) -> None:
     configure(db, campaign, plateau=2)
     add_run(db, campaign, status=RunStatus.FAILED)
     add_run(db, campaign, status=RunStatus.RUNNING)
-    assert reason(db, campaign) is None, 'a run in flight has not failed to keep yet'
+    assert reason(db, campaign) is None, 'a run in flight has not failed to find a new best yet'
     add_run(db, campaign, status=RunStatus.TIMED_OUT)
-    assert reason(db, campaign) == 'plateau: 2 runs without a keep'
+    assert reason(db, campaign) == 'plateau: 2 runs without a new best'
     add_run(db, campaign, keep_score=5.0)
-    assert reason(db, campaign) is None, 'a keep resets the count'
+    assert reason(db, campaign) is None, 'a new best resets the count'
     add_run(db, campaign, status=RunStatus.SUCCEEDED)
     assert reason(db, campaign) is None
     add_run(db, campaign, status=RunStatus.SUCCEEDED)
-    assert reason(db, campaign) == 'plateau: 2 runs without a keep'
+    assert reason(db, campaign) == 'plateau: 2 runs without a new best'
     with db.session() as s:
         s.add(Candidate(campaign_id=campaign.id, tree_sha='imported', revision='c', origin=Origin.REFERENCE))
         s.commit()
-    assert reason(db, campaign) == 'plateau: 2 runs without a keep', 'an imported reference resets nothing'
+    assert reason(db, campaign) == 'plateau: 2 runs without a new best', 'an imported reference resets nothing'
 
 
 def test_only_runs_that_produced_a_measured_candidate_count_toward_max_runs(db: Database, campaign: Campaign) -> None:
@@ -459,10 +451,10 @@ def test_only_runs_that_produced_a_measured_candidate_count_toward_max_runs(db: 
     """
     configure(db, campaign, max_runs=3)
     add_run(db, campaign, status=RunStatus.FAILED, end=RunEnd.GAVE_UP, measured=False)
-    add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.SKIPPED, SKIPPED_REASON)
+    add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.SKIPPED)
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        assert (runs(s, row), runs_without_keep(s, row)) == (0, 2), 'plateau counts them'
+        assert (runs(s, row), runs_without_best(s, row)) == (0, 2), 'plateau counts them'
     add_run(db, campaign)
     assert reason(db, campaign) is None, 'one measured run'
     add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.RUN)
@@ -475,17 +467,17 @@ def test_only_runs_that_produced_a_measured_candidate_count_toward_max_runs(db: 
 def test_plateau_counts_every_finished_attempt_also_one_that_never_reached_the_evaluator(
     db: Database, campaign: Campaign
 ) -> None:
-    """A run without a keep counts toward ``plateau``, whether it scored or not: a campaign whose runs never submit
+    """A run without a new best counts toward ``plateau``, whether it scored or not: a campaign whose runs never submit
     plateaus too. ``max_runs`` counts only the runs that reached the evaluator.
     """
     configure(db, campaign, plateau=4)
     add_run(db, campaign, keep_score=5.0)
     add_run(db, campaign, status=RunStatus.FAILED, end=RunEnd.GAVE_UP, measured=False)
-    add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.SKIPPED, SKIPPED_REASON)
+    add_candidate(db, campaign, add_run(db, campaign, measured=False), Origin.SKIPPED)
     add_run(db, campaign, status=RunStatus.SUCCEEDED, measured=False)
-    assert reason(db, campaign) is None, 'three runs without a keep'
+    assert reason(db, campaign) is None, 'three runs without a new best'
     add_run(db, campaign, status=RunStatus.FAILED, error='agent exit 1', measured=False)
-    assert reason(db, campaign) == 'plateau: 4 runs without a keep', 'none of them scored'
+    assert reason(db, campaign) == 'plateau: 4 runs without a new best', 'none of them scored'
 
 
 def test_a_run_whose_worker_gave_up_is_an_attempt_for_plateau_and_holds_no_place_under_max_runs(
@@ -495,9 +487,9 @@ def test_a_run_whose_worker_gave_up_is_an_attempt_for_plateau_and_holds_no_place
     configure(db, campaign, plateau=2)
     add_run(db, campaign, keep_score=5.0)
     add_run(db, campaign, status=RunStatus.FAILED, end=RunEnd.GAVE_UP, error='the window does not fit', measured=False)
-    assert reason(db, campaign) is None, 'one attempt without a keep'
+    assert reason(db, campaign) is None, 'one attempt without a new best'
     add_run(db, campaign, status=RunStatus.FAILED, end=RunEnd.GAVE_UP, error='no speedup', measured=False)
-    assert reason(db, campaign) == 'plateau: 2 runs without a keep'
+    assert reason(db, campaign) == 'plateau: 2 runs without a new best'
     with db.session() as s:
         assert runs(s, s.get_one(Campaign, campaign.id)) == 1, 'only the measured run holds a place under max_runs'
 
@@ -505,7 +497,7 @@ def test_a_run_whose_worker_gave_up_is_an_attempt_for_plateau_and_holds_no_place
 def test_reactivating_a_stopped_campaign_starts_a_fresh_plateau_window(db: Database, campaign: Campaign) -> None:
     """A campaign reactivated after a plateau stop must not stop again on the next tick.
 
-    ``plateau`` counts the runs that finished after the later of the last keep and the last reactivation (a
+    ``plateau`` counts the runs that finished after the later of the last new best and the last reactivation (a
     ``campaign.status`` event to ``active``, by ``piloop init`` or by SQL). An evaluator change alone resets nothing:
     the campaign still has made no progress.
     """
@@ -513,8 +505,8 @@ def test_reactivating_a_stopped_campaign_starts_a_fresh_plateau_window(db: Datab
     add_run(db, campaign, keep_score=5.0, finished_at=timedelta(minutes=11))
     add_run(db, campaign, finished_at=timedelta(minutes=10))
     add_run(db, campaign, finished_at=timedelta(minutes=9))
-    assert reason(db, campaign) == 'plateau: 2 runs without a keep'
-    stop_campaign(db, campaign, 'plateau: 2 runs without a keep')
+    assert reason(db, campaign) == 'plateau: 2 runs without a new best'
+    stop_campaign(db, campaign, 'plateau: 2 runs without a new best')
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
         row.status, row.stopped_reason = CampaignStatus.ACTIVE, None
@@ -523,7 +515,7 @@ def test_reactivating_a_stopped_campaign_starts_a_fresh_plateau_window(db: Datab
     add_run(db, campaign)
     assert reason(db, campaign) is None
     add_run(db, campaign)
-    assert reason(db, campaign) == 'plateau: 2 runs without a keep'
+    assert reason(db, campaign) == 'plateau: 2 runs without a new best'
 
 
 def test_runs_that_the_daemon_stopped_count_toward_no_budget(db: Database, campaign: Campaign) -> None:
@@ -532,7 +524,7 @@ def test_runs_that_the_daemon_stopped_count_toward_no_budget(db: Database, campa
         add_run(db, campaign, status=RunStatus.FAILED, end=end)
     assert reason(db, campaign) is None, 'a stop, a crash or a campaign stop is not an attempt'
     add_run(db, campaign, status=RunStatus.FAILED, error='evaluate timed out')
-    assert reason(db, campaign) == 'plateau: 1 runs without a keep'
+    assert reason(db, campaign) == 'plateau: 1 runs without a new best'
     add_run(db, campaign)
     assert reason(db, campaign) == 'max_runs: 2 runs'
 
@@ -541,16 +533,16 @@ def test_plateau_counts_in_completion_order(db: Database, campaign: Campaign) ->
     configure(db, campaign, plateau=1)
     add_run(db, campaign)
     add_run(db, campaign, keep_score=5.0, finished_at=timedelta(hours=1))
-    assert reason(db, campaign) == 'plateau: 1 runs without a keep', (
-        'the earlier-created run finished after the keep, so it counts'
+    assert reason(db, campaign) == 'plateau: 1 runs without a new best', (
+        'the earlier-created run finished after the new best, so it counts'
     )
 
 
-def test_plateau_ignores_runs_that_finished_before_a_later_keep(db: Database, campaign: Campaign) -> None:
+def test_plateau_ignores_runs_that_finished_before_a_later_new_best(db: Database, campaign: Campaign) -> None:
     configure(db, campaign, plateau=1)
     add_run(db, campaign, keep_score=5.0)
     add_run(db, campaign, finished_at=timedelta(hours=1))
-    assert reason(db, campaign) is None, 'the later-created run finished before the keep, so it does not count'
+    assert reason(db, campaign) is None, 'the later-created run finished before the new best, so it does not count'
 
 
 def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
@@ -708,10 +700,10 @@ def test_a_requested_stop_ends_a_held_campaign_and_closes_it(
     sched.stop(timeout=5)
 
 
-def test_the_close_waits_until_the_stopped_campaigns_runs_are_judged_and_comes_once_per_stop(
+def test_the_close_waits_until_the_stopped_campaigns_runs_are_scored_and_comes_once_per_stop(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """The wrap-up's last commits are judged first, so the close sees the final head.
+    """The wrap-up's last commits are scored first, so the close sees the final best.
 
     The stop is on the feed, so a daemon that restarts in between still closes the campaign, once.
     """
@@ -729,7 +721,7 @@ def test_the_close_waits_until_the_stopped_campaigns_runs_are_judged_and_comes_o
         run.status, run.end, run.finished_at, run.scoring = RunStatus.SUCCEEDED, RunEnd.FINISHED, utcnow(), True
         s.commit()
     run_all(sched)
-    assert closes(db, campaign) == 0, 'its commits are still judged'
+    assert closes(db, campaign) == 0, 'its commits are still scored'
     sched.stop(timeout=5)
     with db.session() as s:
         s.get_one(Run, running).scoring = False
@@ -919,35 +911,37 @@ def test_limits_holds_while_a_fact_is_unknown_or_at_its_hold_at_and_a_hold_comes
 def test_limits_leaves_each_limit_less_its_value_and_refuses_a_target_on_several_tracks() -> None:
     """``Go.left`` is what piloop starts within: the runs, the hours. A target is reached, not used up."""
     rule = Limits(max_runs=10, max_hours=12, max_tokens=1000, plateau=5, target=0.9)
-    known = facts(runs=3, unsettled=1, hours=None, tokens=250, without_keep=2, head=0.5)
+    known = facts(runs=3, unsettled=1, hours=None, tokens=250, without_best=2, best=0.5)
     assert rule.check(StopCase('score', Direction.HIGHER, known)) == Go(
-        Facts({'runs': 7, 'hours': 12.0, 'tokens': 750, 'without_keep': 3})
+        Facts({'runs': 7, 'hours': 12.0, 'tokens': 750, 'without_best': 3})
     ), 'no run started yet: every hour is left'
     assert Limits().check(StopCase('score', Direction.HIGHER, facts(runs=3, hours=1.0))) == GO, 'open-ended: no bound'
     assert rule.check_config(Shape(tracks=1)) is None
-    assert rule.check_config(Shape(tracks=2)) == 'limits the head, which needs a campaign of one track'
+    assert rule.check_config(Shape(tracks=2)) == 'limits the best, which needs a campaign of one track'
     assert Limits(max_runs=10).check_config(Shape(tracks=2)) is None, 'no target: any number of tracks'
 
 
-def test_the_example_stop_rule_ends_after_its_keeps_or_at_a_limit_of_limits() -> None:
-    """``examples/plugins/stop-after-keeps``: ``limits`` with one more limit, so it reads the facts that it limits and
+def test_the_example_stop_rule_ends_after_its_new_bests_or_at_a_limit_of_limits() -> None:
+    """``examples/plugins/stop-after-bests``: ``limits`` with one more limit, so it reads the facts that it limits and
     that ``limits`` shows, and every limit of ``limits`` still applies."""
-    rule = AfterKeeps(keeps=3, max_hours=12, max_tokens=1000, hold_at={'spend': 300})
-    assert AfterKeeps(keeps=3).reads() == [RUNS, HOURS, KEEPS]
-    assert rule.limits() == {HOURS: 12, TOKENS: 1000, reading('spend'): 300, KEEPS: 3}
+    rule = AfterBests(bests=3, max_hours=12, max_tokens=1000, hold_at={'spend': 300})
+    assert AfterBests(bests=3).reads() == [RUNS, HOURS, NEW_BESTS]
+    assert rule.limits() == {HOURS: 12, TOKENS: 1000, reading('spend'): 300, NEW_BESTS: 3}
 
     def check(known: Facts) -> object:
         return rule.check(StopCase('score', Direction.HIGHER, known))
 
-    assert check(facts(keeps=2, hours=1, tokens=10, spend=12)) == Go(Facts({'hours': 11.0, 'tokens': 990, 'keeps': 1}))
-    assert check(facts(keeps=3, hours=1, tokens=10, spend=12)) == Stop('after_keeps: 3 keeps')
-    assert check(facts(keeps=0, hours=12.5, tokens=10, spend=12)) == Stop('max_hours: 12.5h since the first run')
-    assert check(facts(keeps=0, hours=1, tokens=1000, spend=12)) == Stop('max_tokens: 1000 tokens spent')
-    assert isinstance(answer := check(facts(keeps=3, hours=1, tokens=10, spend=300)), Escalate)
+    assert check(facts(new_bests=2, hours=1, tokens=10, spend=12)) == Go(
+        Facts({'hours': 11.0, 'tokens': 990, 'new_bests': 1})
+    )
+    assert check(facts(new_bests=3, hours=1, tokens=10, spend=12)) == Stop('after_bests: 3 new bests')
+    assert check(facts(new_bests=0, hours=12.5, tokens=10, spend=12)) == Stop('max_hours: 12.5h since the first run')
+    assert check(facts(new_bests=0, hours=1, tokens=1000, spend=12)) == Stop('max_tokens: 1000 tokens spent')
+    assert isinstance(answer := check(facts(new_bests=3, hours=1, tokens=10, spend=300)), Escalate)
     assert answer.then == Hold('spend at its limit')
-    assert check(facts(keeps=0, hours=1, tokens=10)) == Hold('spend not known')
-    shown = rule.describe(StopCase('score', Direction.HIGHER, facts(keeps=2, hours=1, tokens=10, spend=12)))
-    assert '2/3 keeps' in shown, 'its own limit, in the progress line of status and of the briefs'
+    assert check(facts(new_bests=0, hours=1, tokens=10)) == Hold('spend not known')
+    shown = rule.describe(StopCase('score', Direction.HIGHER, facts(new_bests=2, hours=1, tokens=10, spend=12)))
+    assert '2/3 new bests' in shown, 'its own limit, in the progress line of status and of the briefs'
 
 
 def test_a_rule_that_reads_a_fact_needs_a_source_of_it_and_a_source_alone_only_posts_notices(
@@ -970,28 +964,28 @@ def test_a_rule_that_reads_a_fact_needs_a_source_of_it_and_a_source_alone_only_p
 def test_a_stop_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The example plugin ``examples/plugins/stop-after-keeps``, installed, is selected by ``[plugins.stop_rule]``.
+    """The example plugin ``examples/plugins/stop-after-bests``, installed, is selected by ``[plugins.stop_rule]``.
 
-    Without a limit, ``limits`` never ends the campaign; ``after_keeps`` ends it once its first run keeps.
+    Without a limit, ``limits`` never ends the campaign; ``after_bests`` ends it once a run's candidate first becomes the best.
     """
-    example(tmp_path / 'site', 'stop-after-keeps')
+    example(tmp_path / 'site', 'stop-after-bests')
     monkeypatch.syspath_prepend(tmp_path / 'site')
     host.close()
     try:
         write_toml(Path(campaign.path), HARNESS_APPEND)
         for table, error in [
             ({'provider': 'never'}, "plugins.stop_rule: provider = 'never': unknown stop rule 'never'"),
-            ({'provider': 'after_keeps'}, 'keeps: Field required'),
+            ({'provider': 'after_bests'}, 'bests: Field required'),
             (
-                {'provider': 'limits', 'keeps': 1},
-                'plugins.stop_rule.keeps = 1: Extra inputs are not permitted',
+                {'provider': 'limits', 'bests': 1},
+                'plugins.stop_rule.bests = 1: Extra inputs are not permitted',
             ),
         ]:
             with pytest.raises(ConfigError, match=re.escape(error)):
                 load_campaign_config(Path(campaign.path), plugins={'stop_rule': table})
         with db.session() as s:
             cfg = load_campaign_config(
-                Path(campaign.path), plugins={'stop_rule': {'provider': 'after_keeps', 'keeps': 1}}
+                Path(campaign.path), plugins={'stop_rule': {'provider': 'after_bests', 'bests': 1}}
             )
             s.get_one(Campaign, campaign.id).config = cfg
             s.commit()
@@ -1000,9 +994,9 @@ def test_a_stop_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml
         assert run_all(sched) == [1]
         sched.wait(SETTLE)
         run_all(sched)
-        assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'after_keeps: 1 keeps')
+        assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'after_bests: 1 new bests')
         sched.stop(timeout=5)
-        assert STOP_RULES.sources()['after_keeps'].release == 'piloop-stop-after-keeps 0.1.0'
+        assert STOP_RULES.sources()['after_bests'].release == 'piloop-stop-after-bests 0.1.0'
     finally:
         host.close()
 
@@ -1053,22 +1047,22 @@ def facts(**values: FactValue) -> Facts:
 
 def test_the_ratios_are_defined_once_and_take_the_facts_a_rule_names() -> None:
     """piloop knows no cost: a rule names the fact of what the campaign spent and the evaluator's cost metric."""
-    known = facts(spend=400, keeps=2, evaluations=10, metric_sums={'usd': 100, 'score': 7}, attempts=6)
+    known = facts(spend=400, new_bests=2, evaluations=10, metric_sums={'usd': 100, 'score': 7}, attempts=6)
     ratios = (
         per_evaluation(known, 'usd'),
         worker_spend(known, 'spend', 'usd'),
         per_run(known, 'spend', 'usd'),
-        per_keep(known, 'spend'),
+        per_best(known, 'spend'),
     )
     assert ratios == (10, 300, 50, 200)
     assert (per_evaluation(known, 'cost'), worker_spend(known, 'spend', 'cost')) == (None, 400), 'no row printed it'
-    assert per_keep(known, 'gpu_hours') is None, 'a fact that the case does not have'
-    unknown = facts(keeps=0, evaluations=0, attempts=0)
+    assert per_best(known, 'gpu_hours') is None, 'a fact that the case does not have'
+    unknown = facts(new_bests=0, evaluations=0, attempts=0)
     ratios = (
         per_evaluation(unknown, 'usd'),
         worker_spend(unknown, 'spend', 'usd'),
         per_run(unknown, 'spend', 'usd'),
-        per_keep(unknown, 'spend'),
+        per_best(unknown, 'spend'),
     )
     assert ratios == (None,) * 4
     assert per_run(facts(spend=10, metric_sums={'usd': 4}, attempts=0), 'spend', 'usd') is None, 'no attempt yet'
@@ -1083,7 +1077,7 @@ def with_spend(**keys: object) -> dict[str, object]:
     return {'use': ['campaign', 'optimization', 'spend'], 'spend': source}
 
 
-def test_the_campaign_facts_sum_every_evaluation_count_the_attempts_and_a_reading_grows_since_the_latest_keep(
+def test_the_campaign_facts_sum_every_evaluation_count_the_attempts_and_a_reading_grows_since_the_latest_best(
     db: Database, campaign: Campaign
 ) -> None:
     metrics = [{'name': 'score', 'direction': 'higher', 'role': 'primary'}, {'name': 'size', 'direction': 'lower'}]
@@ -1098,7 +1092,7 @@ def test_the_campaign_facts_sum_every_evaluation_count_the_attempts_and_a_readin
         failed = {'eval_cost_usd': 1.5}
         s.add(Measurement(candidate_id=candidate.id, evaluator_id=evaluator, metrics=failed, error='evaluate exit 1'))
         s.commit()
-    spend, since = reading('spend'), since_keep('spend')
+    spend, since = reading('spend'), since_best('spend')
     every = [*CAMPAIGN, *OPTIMIZATION, spend, since]
 
     def known() -> Facts:
@@ -1124,24 +1118,24 @@ def test_the_campaign_facts_sum_every_evaluation_count_the_attempts_and_a_readin
         {'score': 1, 'size': 5, COST['name']: 3.5},
         2,
     ), 'every row, a failed one and the baseline among them; a row adds only what it printed; the open attempt too'
-    assert before.get(FUNNEL) == Funnel(ideas=3, attempts=1, reached=1, measured=1, keeps=0, unmeasured={}), (
+    assert before.get(FUNNEL) == Funnel(ideas=3, attempts=1, reached=1, measured=1, bests=0, unmeasured={}), (
         'the funnel waits for the open run, and a cancelled run is no attempt'
     )
-    assert [before.get(f) for f in (spend, KEEPS, since)] == [100, 0, 100], 'no keep yet: all of the spend'
-    add_run(db, campaign, keep_score=1, finished_at=timedelta(minutes=5))
+    assert [before.get(f) for f in (spend, NEW_BESTS, since)] == [100, 0, 100], 'no new best yet: all of the spend'
+    add_run(db, campaign, keep_score=2, finished_at=timedelta(minutes=5))
     read({'spend': 150})
     after = known()
-    assert [after.get(f) for f in (KEEPS, ATTEMPTS, since)] == [1, 3, 50], 'the spend read before the keep'
-    assert (per_evaluation(after, COST['name']), per_keep(after, 'spend')) == (3.5 / 5, 150)
+    assert [after.get(f) for f in (NEW_BESTS, ATTEMPTS, since)] == [1, 3, 50], 'the spend read before the new best'
+    assert (per_evaluation(after, COST['name']), per_best(after, 'spend')) == (3.5 / 5, 150)
     read(FactReadError('billing down'))
     assert (known().get(spend), known().get(since)) == (None, None), 'a failed reading: the value is not known'
     add_run(db, campaign, measured=False)
     assert known().get(FUNNEL) == Funnel(
-        ideas=5, attempts=3, reached=2, measured=2, keeps=1, unmeasured={'finished': 1}
+        ideas=5, attempts=3, reached=2, measured=2, bests=1, unmeasured={'finished': 1}
     ), 'an attempt that left no candidate never reached the evaluator'
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        assert gather(s, row, row.config, [KEEPS], utcnow()) == facts(keeps=1), 'only the facts a rule reads'
+        assert gather(s, row, row.config, [NEW_BESTS], utcnow()) == facts(new_bests=1), 'only the facts a rule reads'
 
 
 def test_a_rule_that_escalates_lets_the_campaign_go_on_and_tells_a_human_once_per_reason(
@@ -1149,13 +1143,17 @@ def test_a_rule_that_escalates_lets_the_campaign_go_on_and_tells_a_human_once_pe
 ) -> None:
     installed(monkeypatch, [EntryPoint('escalates', f'{PLUGIN}:Escalates', STOP_RULES.group)])
     try:
-        set_config(db, campaign, plugins={'stop_rule': {'provider': 'escalates', 'reason': '$900 since the last keep'}})
+        set_config(
+            db, campaign, plugins={'stop_rule': {'provider': 'escalates', 'reason': '$900 since the last new best'}}
+        )
         add_ideas(db, campaign, 'a', 'b')
         sched = make_scheduler(db, runtime, tmp_path)
         assert run_all(sched) == [1], 'the campaign goes on'
         sched.wait(SETTLE)
         run_all(sched)
-        set_config(db, campaign, plugins={'stop_rule': {'provider': 'escalates', 'reason': '$1,800 since the keep'}})
+        set_config(
+            db, campaign, plugins={'stop_rule': {'provider': 'escalates', 'reason': '$1,800 since the new best'}}
+        )
         run_all(sched)
         sched.wait(SETTLE)
         sched.stop(timeout=5)
@@ -1163,41 +1161,42 @@ def test_a_rule_that_escalates_lets_the_campaign_go_on_and_tells_a_human_once_pe
             said = s.scalars(select(Comment).where(Comment.kind == ESCALATION).order_by(Comment.id))
             assert [(c.target, c.author, c.priority, details(c)) for c in said] == [
                 (TargetRef(TargetKind.CAMPAIGN, campaign.id), 'daemon', 0, f'Stop rule escalates: {reason}')
-                for reason in ('$900 since the last keep', '$1,800 since the keep')
+                for reason in ('$900 since the last new best', '$1,800 since the new best')
             ], 'one escalation for each distinct reason: the comment is the record'
     finally:
         host.close()
 
 
-def test_the_example_keep_cost_rule_escalates_once_per_keep_then_stops_at_its_harder_line() -> None:
-    """``examples/plugins/keep-cost``: the spend since the latest keep against the spend per keep, over ``limits``."""
-    rule = KeepCost(escalate_at=2, stop_at=4, max_hours=12)
-    assert rule.reads() == [RUNS, HOURS, reading('spend'), KEEPS, since_keep('spend')]
+def test_the_example_best_cost_rule_escalates_once_per_new_best_then_stops_at_its_harder_line() -> None:
+    """``examples/plugins/best-cost``: the spend since the latest new best against the spend per new best, over
+    ``limits``."""
+    rule = BestCost(escalate_at=2, stop_at=4, max_hours=12)
+    assert rule.reads() == [RUNS, HOURS, reading('spend'), NEW_BESTS, since_best('spend')]
 
-    def check(since: float, *, keeps: int = 2, spend: float = 400, hours: float = 1) -> object:
-        known = facts(hours=hours, spend=spend, keeps=keeps, spend_since_keep=since)
+    def check(since: float, *, bests: int = 2, spend: float = 400, hours: float = 1) -> object:
+        known = facts(hours=hours, spend=spend, new_bests=bests, spend_since_best=since)
         return rule.check(StopCase('score', Direction.HIGHER, known))
 
-    assert check(399) == Go(Facts({'hours': 11.0})), 'below 2 × $200 per keep'
-    escalation = 'keep_cost: since keep 2, spend passed 2 × its value per keep; it stops at 4 ×'
-    assert check(400) == check(700) == Escalate(escalation), 'one reason for the keep, whatever the amount'
-    assert check(800) == Stop('keep_cost: spend 800 since the latest keep, 4 × the 200 per keep')
-    assert check(5000, keeps=0) == Go(Facts({'hours': 11.0})), 'no keep yet: no spend per keep'
-    other = KeepCost(spend='gpu_hours')
-    assert since_keep('gpu_hours') in other.reads(), 'the rule reads the fact that it names'
+    assert check(399) == Go(Facts({'hours': 11.0})), 'below 2 × $200 per new best'
+    escalation = 'best_cost: since new best 2, spend passed 2 × its value per new best; it stops at 4 ×'
+    assert check(400) == check(700) == Escalate(escalation), 'one reason for the new best, whatever the amount'
+    assert check(800) == Stop('best_cost: spend 800 since the latest new best, 4 × the 200 per new best')
+    assert check(5000, bests=0) == Go(Facts({'hours': 11.0})), 'no new best yet: no spend per new best'
+    other = BestCost(spend='gpu_hours')
+    assert since_best('gpu_hours') in other.reads(), 'the rule reads the fact that it names'
     assert check(800, hours=13) == Stop('max_hours: 13.0h since the first run'), 'the limits of limits come first'
 
 
-def test_a_rule_that_reads_the_spend_since_a_keep_needs_a_source_of_it(
+def test_a_rule_that_reads_the_spend_since_a_new_best_needs_a_source_of_it(
     campaign: Campaign, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    installed(monkeypatch, [EntryPoint('keep_cost', 'piloop_keep_cost:KeepCost', STOP_RULES.group)])
+    installed(monkeypatch, [EntryPoint('best_cost', 'piloop_best_cost:BestCost', STOP_RULES.group)])
     try:
-        refused = "the stop rule 'keep_cost' reads spend, spend_since_keep, which no fact source of this campaign"
+        refused = "the stop rule 'best_cost' reads spend, spend_since_best, which no fact source of this campaign"
         with pytest.raises(ConfigError, match=re.escape(refused)):
-            load_campaign_config(Path(campaign.path), plugins={'stop_rule': {'provider': 'keep_cost'}})
+            load_campaign_config(Path(campaign.path), plugins={'stop_rule': {'provider': 'best_cost'}})
         load_campaign_config(
-            Path(campaign.path), plugins={'stop_rule': {'provider': 'keep_cost'}, 'fact_source': with_spend()}
+            Path(campaign.path), plugins={'stop_rule': {'provider': 'best_cost'}, 'fact_source': with_spend()}
         )
     finally:
         host.close()

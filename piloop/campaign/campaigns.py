@@ -20,7 +20,7 @@ from rich.console import Console
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from piloop.actor import Actor, System
+from piloop.actor import Actor
 from piloop.config import BRIEF_FILE, CONFIG_FILE, CampaignConfig, ConfigMissing, load_campaign_config
 from piloop.db.events import emit, latest
 from piloop.db.models import NOT_RETIRED, Campaign, Event, EventModel
@@ -37,7 +37,7 @@ from piloop.ids import (
 )
 from piloop.plugins.archive.contract import CampaignFilesFreed, PackedCheckout
 from piloop.plugins.campaign_type.contract import CAMPAIGN_TYPES
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator
@@ -330,7 +330,6 @@ def register(
     s.flush()
     current_evaluator(s, campaign, cfg)
     baseline, _ = resolve(s, campaign.id, version, parent=None, run_id=None, origin=Origin.BASELINE)
-    baseline.verdict, baseline.verdict_by = Outcome.KEEP, System.DAEMON.signature
     emit(s, CampaignAdded(baseline=baseline.id), TargetRef(TargetKind.CAMPAIGN, campaign.id), actor)
     return campaign, baseline
 

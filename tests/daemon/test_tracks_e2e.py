@@ -1,4 +1,4 @@
-"""A campaign with two tracks, run through the real daemon: claims by title, rebase on keep, and a floor on another track.
+"""A campaign with two tracks, run through the real daemon: claims by title, a best per track, and another track's floor.
 
 The harness is a script that edits files by idea title, so the whole loop runs in CI without a real agent.
 """
@@ -7,16 +7,20 @@ import time
 from pathlib import Path
 
 from git import Repo
+from inline_snapshot import snapshot
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from piloop.agents.roles import PILOOP_HINT
 from piloop.daemon.main import Daemon
-from piloop.db.events import in_order
-from piloop.db.models import Campaign
+from piloop.db.events import in_order, latest
+from piloop.db.models import Campaign, Event
+from piloop.ids import TargetRef
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.verdicts.judge import Rebased, head
+from piloop.plugins.campaign_type.kit.pool.pool import best_of
+from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.settings import Settings
 from tests.conftest import (
     SETTLE,
@@ -65,9 +69,6 @@ floor = 5
 scoring = "run_end"
 noise_runs = 1
 
-[plugins.verdict_rule]
-provider = "bootstrap"
-
 [plugins.harness.script]
 model = "test-model"
 executable = "{script}"
@@ -87,12 +88,10 @@ esac
 {piloop} run end submitted
 """
 """Edits by the title of the idea that its run claimed: ``slow accuracy`` waits for the test's go file, so the cost
-keep lands first. A run that claimed nothing saves nothing. Each ends its run as submitted."""
+candidate is scored first. A run that claimed nothing saves nothing. Each ends its run as submitted."""
 
 
-def test_two_tracks_rebase_a_keep_that_lost_the_race_and_refuse_one_past_the_other_tracks_floor(
-    tmp_path: Path,
-) -> None:
+def test_two_tracks_each_get_a_best_and_one_past_the_other_tracks_floor_is_never_best(tmp_path: Path) -> None:
     path, go = tmp_path / 'tracks', tmp_path / 'go'
     path.mkdir()
     (path / 'acc.txt').write_text('a\n')
@@ -121,37 +120,37 @@ def test_two_tracks_rebase_a_keep_that_lost_the_race_and_refuse_one_past_the_oth
         daemon.scheduler.reap()
         assert queued(daemon.db, daemon.scheduler, campaign.id, slow, trim) == [1, 2], 'two slots, one idea each'
         assert len(run_all(daemon.scheduler)) == 2
-        deadline = time.monotonic() + 120  # four evaluations and a rebase; a macOS runner is slow
-        while _verdicts(daemon) != [Outcome.KEEP, Outcome.KEEP]:
-            assert time.monotonic() < deadline, 'the cost keep never landed'
+        deadline = time.monotonic() + 120  # a macOS runner is slow
+        while not _scored(daemon):
+            assert time.monotonic() < deadline, 'the cost candidate was never scored'
             time.sleep(0.05)
         go.touch()
         daemon.scheduler.wait(SETTLE)
 
         with daemon.db.session() as s:
+            p = s.get_one(Campaign, campaign.id)
             rows = s.scalars(select(Candidate).order_by(Candidate.id)).all()
-            assert [(c.summary, c.verdict, c.parent_id) for c in rows] == [
-                ('baseline', Outcome.KEEP, None),
-                ('trim cost', Outcome.KEEP, 1),
-                ('slow accuracy', Outcome.INTERESTING, 1),
-                ('slow accuracy (rebased onto candidate#2)', Outcome.KEEP, 2),
-            ]
-            _, trimmed, raced, merged = rows
-            assert raced.verdict_reason == (
-                'keeps against its own bar, but the head moved on to candidate#2: against candidate#1: accuracy 2 vs 1'
-                ' (+1; aggregate: no per-unit results); guardrails: cost 3 vs 3 (+0; aggregate: no per-unit results)'
-                ' within its margin 1; rebased onto the head as candidate#4'
+            assert [(c.summary, c.parent_id) for c in rows] == [
+                ('baseline', None),
+                ('trim cost', 1),
+                ('slow accuracy', 1),
+            ], 'nothing is merged: each run scores what it made'
+            _, trimmed, accurate = rows
+            accuracy, cost = p.config.all_tracks
+            assert [best_of(s, p, t) for t in (accuracy, cost)] == [accurate, trimmed], 'a best on each track'
+            assert [(e.target_id, scored.track, scored.told) for e, scored in in_order(s, CandidateScored)] == (
+                snapshot(
+                    [
+                        (2, 'cost', 'cost 2 over 1 eval: the best of the cost track now, rank 1 of 2; vs parent +1'),
+                        (
+                            3,
+                            'accuracy',
+                            'accuracy 2 over 1 eval: the best of the accuracy track now, rank 1 of 3; vs parent +1',
+                        ),
+                    ]
+                )
             )
-            assert merged.verdict_reason == (
-                'against candidate#2: accuracy 2 vs 1 (+1; aggregate: no per-unit results); guardrails: cost 2 vs 2'
-                ' (+0; aggregate: no per-unit results) within its margin 1'
-            ), 'judged on the head, where both tracks gained'
-            assert [p.hexsha for p in repo.commit(merged.revision).parents] == [trimmed.revision, raced.revision]
-            [(rebased, payload)] = in_order(s, Rebased)
-            assert (rebased.target_id, payload) == (raced.id, Rebased(head=trimmed.id, rebased=merged.id))
             assert sorted(s.get_one(Idea, i).track for i in (slow, trim)) == ['accuracy', 'cost']
-            trunk = head(s, s.get_one(Campaign, campaign.id))
-            assert trunk is not None and trunk.id == merged.id
             heavy_idea = Idea(
                 campaign_id=campaign.id, track='accuracy', title='heavy accuracy', hypothesis='h', created_by='t'
             )
@@ -163,18 +162,21 @@ def test_two_tracks_rebase_a_keep_that_lost_the_race_and_refuse_one_past_the_oth
         assert len(run_all(daemon.scheduler)) == 2
         daemon.scheduler.wait(SETTLE)
         with daemon.db.session() as s:
+            p = s.get_one(Campaign, campaign.id)
             heavy = s.scalars(select(Candidate).order_by(Candidate.id.desc()).limit(1)).one()
-            assert (heavy.summary, heavy.verdict, heavy.verdict_reason, heavy.parent_id) == (
-                'heavy accuracy',
-                Outcome.DISCARD,
-                'floor: cost 6 past its floor 5',
-                merged.id,
-            ), 'accuracy 3 beats the head, but the cost track holds its floor'
-            trunk = head(s, s.get_one(Campaign, campaign.id))
-            assert trunk is not None and trunk.id == merged.id, 'the head stays'
+            assert (heavy.summary, heavy.parent_id) == ('heavy accuracy', accurate.id), 'it starts from the best'
+            assert told(s, heavy.id) == snapshot(
+                'accuracy 3 over 1 eval: it may not be best: floor: cost 7 past its floor 5; vs parent +1, vs best candidate#3 +1'
+            ), 'accuracy 3 beats the best, but the cost track holds its floor'
+            assert best_of(s, p, accuracy) == s.get_one(Candidate, accurate.id), 'the best stays'
         daemon.shutdown(timeout=5)
 
 
-def _verdicts(daemon: Daemon) -> list[Outcome | None]:
+def _scored(daemon: Daemon) -> int:
     with daemon.db.session() as s:
-        return list(s.scalars(select(Candidate.verdict).where(Candidate.verdict == Outcome.KEEP)))
+        return len(in_order(s, CandidateScored))
+
+
+def told(s: Session, candidate: CandidateId) -> str | None:
+    found = latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, candidate))
+    return found[1].told if found is not None else None

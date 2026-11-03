@@ -31,7 +31,7 @@ from piloop.agents.results import (
 from piloop.db.events import in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event, utcnow
 from piloop.db.session import Database
-from piloop.ids import AgentSessionId, TargetRef
+from piloop.ids import AgentSessionId, Revision, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -516,7 +516,7 @@ def test_the_blobs_of_a_report_are_its_files_and_its_bundle(tmp_path: Path) -> N
     notes = cas.put(b'notes')
     finished = AgentFinished(
         process=AgentExit(ExitStatus.EXITED, 1),
-        work=Transfer(blob=bundle, head='h'),
+        work=Transfer(blob=bundle, head=Revision('h')),
         files={'brief.md': brief},
         workspace={'NOTES.md': notes},
     )

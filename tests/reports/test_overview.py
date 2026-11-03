@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from inline_snapshot import snapshot
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.agents.results import StartupAnomaly
@@ -15,10 +16,11 @@ from piloop.ids import CampaignStatus, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.section.queue import Queue
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
-from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.pool.pool import Pool, track_of
+from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
@@ -98,16 +100,13 @@ def agent(
     return row
 
 
-def candidate(
-    s: Session, campaign: Campaign, parent: int, verdict: Outcome, value: float, when: float, **kw: object
-) -> Candidate:
+def candidate(s: Session, campaign: Campaign, parent: int, value: float, when: float, **kw: object) -> Candidate:
     row = Candidate(
         campaign_id=campaign.id,
         parent_id=parent,
         tree_sha=f'tree{when}',
         revision=f'{when:07.0f}abcdef',
         summary=f'score {value:g}',
-        verdict=verdict,
         **kw,
     )
     s.add(row)
@@ -124,6 +123,14 @@ def candidate(
     return row
 
 
+def score_at(s: Session, campaign: Campaign, c: Candidate, when: float) -> None:
+    """Record where ``c`` stands, as the daemon does once it scored it, at minute ``when``."""
+    s.flush()
+    record_scored(s, Pool.of(s, campaign, track_of(campaign.config, c)), c.id)
+    s.flush()
+    s.scalars(select(Event).order_by(Event.id.desc()).limit(1)).one().at = at(when)
+
+
 def live_campaign(db: Database, campaign: Campaign) -> None:
     """Add two hours of a small campaign that has one example of each anomaly."""
     with db.session() as s:
@@ -134,8 +141,9 @@ def live_campaign(db: Database, campaign: Campaign) -> None:
         good = idea(s, p, 'longer lines', IdeaStatus.DONE)
         first = run(s, good, RunStatus.SUCCEEDED, 1, 5, 20)
         agent(s, p, IMPLEMENTER, 5, 600, run_id=first.id, usage=spent(1000))
-        kept = candidate(s, p, 1, Outcome.KEEP, 3, 18, run_id=first.id)
-        candidate(s, p, kept.id, Outcome.DISCARD, 3, 19, run_id=first.id)
+        kept = candidate(s, p, 1, 3, 18, run_id=first.id)
+        score_at(s, p, kept, 20)  # run_end scoring: when the run ended
+        score_at(s, p, candidate(s, p, kept.id, 3, 19, run_id=first.id), 20)
         bad = idea(s, p, 'crash it', IdeaStatus.DROPPED)
         failed = run(s, bad, RunStatus.FAILED, 1, 30, 40, error='boom\nand the rest')
         dead = agent(s, p, IMPLEMENTER, 30, 5, run_id=failed.id, state=AgentSessionState.KILLED, error='dialog')
@@ -211,8 +219,8 @@ def test_the_overview_of_a_campaign(db: Database, campaign: Campaign) -> None:
         '- Primary metric: score, higher is better; also measured: size (lower, watch)',
         '- Campaign: active. Progress: run 2 · 1.9h · no limit stops it: open-ended.',
         '## Trajectory',
-        '- Start candidate#1, head candidate#2: score 1 → 3 (+2, +200.0%); 1 trunk keeps.',
-        '  - 10-01 12:18 candidate#2 3 (+2) idea#1: score 3',
+        '- Baseline candidate#1, best candidate#2: score 1 → 3 (+2, +200.0%); 1 new bests.',
+        '  - 10-01 12:20 candidate#2 3 (+2) idea#1: score 3',
         '## Runs',
         '  - run#3 idea#3 "build on longer lines" (script): running 1h, agent_session#3 ended 1h ago',
         '## Queue',
@@ -220,11 +228,12 @@ def test_the_overview_of_a_campaign(db: Database, campaign: Campaign) -> None:
         '- Agents live: none',
         '## Evaluations',
         '## Funnel',
-        'ideas: 4 · attempts: 2 · reached the evaluator: 1 · measured: 1 · keeps: 1',
+        'ideas: 4 · attempts: 2 · reached the evaluator: 1 · measured: 1 · new bests: 1',
         '| failed | 1 |',
         '## Recent candidates (3 of 3; score)',
-        '| candidate#2 | keep | 3 | 2 | run#1 | 0s | score 3 |',
-        '| candidate#3 | discard | 3 | 0 | run#1 | 0s | score 3 |',
+        '| candidate#1 | #3 of 3 | 1 | — | no run | 0s | baseline |',
+        '| candidate#2 | best | 3 | 2 | run#1 | 0s | score 3 |',
+        '| candidate#3 | #2 of 3 | 3 | 0 | run#1 | 0s | score 3 |',
         '## Candidates that scored exactly their parent',
         '- candidate#3, 1h ago: scored what candidate#2 did on score and on 1 of 1 other metrics; 3.0 min of evaluation',
         '## Incidents given to agents',
@@ -233,7 +242,10 @@ def test_the_overview_of_a_campaign(db: Database, campaign: Campaign) -> None:
         '## Recent events',
         '- comment.note comment#3 0s ago',
     )
-    assert 'head: candidate#2 · score: 3 · score vs baseline: 2 · kept: 2 · candidates: 3 · tokens: 3500' in lay
+    assert (
+        'best: candidate#2 · score: 3 · score vs baseline: 2 · may be best on score: 3 · candidates: 3 · tokens: 3500'
+        in lay
+    )
     assert '- Ideas: 1 open, 0 held; ' in lay, 'idea#4 is after idea#2, which is dropped: it is free'
     assert '- Agents so far: 3 implementer (1 killed),' in lay
     assert 'evaluations: 3 · crashed: 0 · median: 3 min' in lay
@@ -250,30 +262,32 @@ def test_stop_conditions_say_how_far_each_one_is(db: Database, campaign: Campaig
     cfg = load_campaign_config(Path(campaign.path), plugins={'stop_rule': stop})
     [line] = [x for x in render(db, campaign, cfg).splitlines() if x.startswith('- Campaign:')]
     assert line == snapshot(
-        '- Campaign: active. Progress: run 2/10 · 1.9h/4h · 4k/1.0M tok · 1/3 runs without a keep · target ≥ 5 (head 3).'
+        '- Campaign: active. Progress: run 2/10 · 1.9h/4h · 4k/1.0M tok · 1/3 runs without a new best · target ≥ 5 (best 3).'
     ), 'run#2 failed before it committed: plateau counts it, max_runs does not'
     with db.session() as s:
         s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
-        s.get_one(Campaign, campaign.id).stopped_reason = 'plateau: 3 runs without a keep'
+        s.get_one(Campaign, campaign.id).stopped_reason = 'plateau: 3 runs without a new best'
         s.commit()
     text = render(db, campaign, cfg)
-    assert text.count('plateau: 3 runs without a keep') == 1, 'the reason is in the headline only'
+    assert text.count('plateau: 3 runs without a new best') == 1, 'the reason is in the headline only'
     assert '- Campaign: stopped. Progress:' in text
 
 
 def test_a_fresh_campaign_has_little_to_say(db: Database, campaign: Campaign) -> None:
-    """A campaign with no run, no comment and no trunk keep shows no trajectory."""
+    """A campaign with no run, no comment and no new best: its baseline is the best."""
     stop = {'max_hours': 4, 'plateau': 2}
     cfg = load_campaign_config(Path(campaign.path), plugins={'stop_rule': stop})
     with db.session() as s:
         s.get_one(Campaign, campaign.id).created_at = T
-        s.get_one(Candidate, 1).verdict = None
         s.commit()
     text = render(db, campaign, cfg)
-    assert '- Campaign: active. Progress: run 0 · 0.0h/4h · 0/2 runs without a keep.' in text
-    assert "- No trunk keep: the baseline's verdict was overridden and nothing was kept since." in text
+    assert '- Campaign: active. Progress: run 0 · 0.0h/4h · 0/2 runs without a new best.' in text
+    assert (
+        '## Trajectory\n\n- Baseline candidate#1, best candidate#1: score 1 → 1 (+0, +0.0%); 0 new bests.\n\n## Runs'
+        in text
+    )
     assert 'median:' not in text, 'the baseline has no recorded seconds'
-    assert 'evaluations: 1 · crashed: 0 · waiting for a verdict: 1 candidates' in text
+    assert 'evaluations: 1 · crashed: 0 · waiting for a score: 0 submissions' in text
     assert '## Inbox (0 unacknowledged), decisions and escalations\n\n- None.' in text
 
 
@@ -281,21 +295,20 @@ def test_recent_candidates_say_how_far_each_climbed_the_ladder(db: Database, cam
     cfg = load_campaign_config(Path(campaign.path), ladder=[{'name': 'screen', 'stop': {'score': {'margin': 0.1}}}])
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        stopped = candidate(s, p, 1, Outcome.DISCARD, 0.5, 18)
+        stopped = candidate(s, p, 1, 0.5, 18)
         stopped.measurements[0].rung = RungName('screen')
         stopped.measurements[0].stopped = 'score 0.5 vs 1 (-0.5; margin 0.1)'
-        climbing = candidate(s, p, 1, Outcome.KEEP, 2, 19)
-        climbing.verdict = None
+        climbing = candidate(s, p, 1, 2, 19)
         climbing.measurements[0].rung = RungName('screen')
         s.commit()
     text = render(db, campaign, cfg)
     table = text[text.index('## Recent candidates') :].split('\n\n')[1]
     assert table == snapshot("""\
-| candidate | verdict | score | vs parent | ladder | run | age | summary |
+| candidate | standing | score | vs parent | ladder | run | age | summary |
 |---|---|---|---|---|---|---|---|
-| candidate#1 | keep | 1 | — | — | no run | 0s | baseline |
-| candidate#2 | discard | — | — | stopped at screen: score 0.5 vs 1 (-0.5; margin 0.1) | no run | 0s | score 0.5 |
-| candidate#3 | pending | — | — | reached screen | no run | 0s | score 2 |\
+| candidate#1 | best | 1 | — | — | no run | 0s | baseline |
+| candidate#2 | stopped | — | — | stopped at screen: score 0.5 vs 1 (-0.5; margin 0.1) | no run | 0s | score 0.5 |
+| candidate#3 | not scored | — | — | reached screen | no run | 0s | score 2 |\
 """)
 
 
@@ -330,25 +343,23 @@ def test_open_runs_say_how_far_they_got(db: Database, campaign: Campaign) -> Non
     ]
 
 
-def test_notes_say_where_else_a_run_may_take_a_change_from(db: Database, campaign: Campaign) -> None:
-    """A note shows a candidate that regressed."""
+def test_the_trajectory_names_the_other_lines_worth_branching_from(db: Database, campaign: Campaign) -> None:
+    """A candidate off the best's line that may be best is a line a run may start from (``--base``)."""
     live_campaign(db, campaign)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         explore = idea(s, p, 'from the baseline', IdeaStatus.DONE)
         tried = run(s, explore, RunStatus.SUCCEEDED, 1, 60, 70)
-        noted = candidate(s, p, 1, Outcome.INTERESTING, 0.5, 66, run_id=tried.id, verdict_by=f'run#{tried.id}')
-        noted.cause, noted.verdict_reason = Cause.NOTE, 'halves the eval time; against candidate#1: score 0.5 vs 1'
+        score_at(s, p, candidate(s, p, 1, 2, 66, run_id=tried.id), 70)
         s.commit()
     trajectory = render(db, campaign).split('## Trajectory\n\n')[1].split('## Runs')[0]
     assert trajectory == snapshot("""\
-- Start candidate#1, head candidate#2: score 1 → 3 (+2, +200.0%); 1 trunk keeps.
-- Last trunk keep 1h ago; 3 runs finished since.
-- Trunk keeps (latest 8; when first measured, the gain on its track over the head before it):
-  - 10-01 12:00 candidate#1 1 (start): baseline
-  - 10-01 12:18 candidate#2 3 (+2) idea#1: score 3
-- Notes (regressed, kept in view as leads; a worker takes the change of one):
-  - candidate#4 0.5 by run#4: halves the eval time; against candidate#1: score 0.5 vs 1
+- Baseline candidate#1, best candidate#2: score 1 → 3 (+2, +200.0%); 1 new bests.
+- Last new best 1h ago; 2 runs finished since.
+- New bests (latest 8; the gain over the one before):
+  - 10-01 12:20 candidate#2 3 (+2) idea#1: score 3
+- Other lines (their best, against the best):
+  - candidate#4 2 (-1): score 2
 
 """)
 
@@ -493,11 +504,12 @@ def test_progress_lists_only_the_configured_conditions(db: Database, campaign: C
         p = s.get_one(Campaign, campaign.id)
         assert (
             overview_module.progress(s, p, config({'target': 0.5}, 'lower'), NOW)
-            == 'run 0 · 0.0h · target ≤ 0.5 (head 1)'
+            == 'run 0 · 0.0h · target ≤ 0.5 (best 1)'
         )
         assert overview_module.progress(s, p, config({}), NOW) == 'run 0 · 0.0h · no limit stops it: open-ended'
-        s.get_one(Candidate, 1).verdict = None
-        assert overview_module.progress(s, p, config({'target': 0.5}), NOW) == 'run 0 · 0.0h · target ≥ 0.5 (head —)'
+        s.delete(s.get_one(Measurement, 1))
+        s.flush()
+        assert overview_module.progress(s, p, config({'target': 0.5}), NOW) == 'run 0 · 0.0h · target ≥ 0.5 (best —)'
 
 
 def test_block_keeps_whole_lines_and_counts_the_rest() -> None:

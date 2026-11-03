@@ -1,20 +1,20 @@
-"""Ratio metrics: piloop computes ``numerator / denominator`` from what the evaluate command reports, and resamples it."""
+"""Ratio metrics: piloop computes ``numerator / denominator`` from the means of what the evaluate command reports."""
 
 import re
 from pathlib import Path
-from statistics import fmean
 
 import pytest
-from inline_snapshot import snapshot
 
 from piloop.config import ConfigError, load_campaign_config
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.db.models import Campaign
+from piloop.db.session import Database
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Ratio
-from piloop.plugins.campaign_type.kit.evaluation.measure import derive
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule import bootstrap
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap, ratio_bound
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Case, Criterion, Ratio as Parts, Side
-from piloop.plugins.metric import Direction
+from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, derive
+from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.pool.pool import Pool
+from tests.conftest import baseline
 
 SOLVED = {'name': 'solved', 'direction': 'higher', 'role': 'primary'}
 COST = {'name': 'cost_usd', 'direction': 'lower'}
@@ -73,81 +73,29 @@ def test_a_ratio_is_the_ratio_of_the_means_and_needs_a_denominator() -> None:
     assert derive({'cost_usd': 3.0}, found) == {'cost_usd': 3.0}
 
 
-CRITERION = Criterion('cost_per_solved', Direction.LOWER, fraction=0.05, ratio=Parts('cost_usd', 'solved'))
-
-
-def side(name: str, cost: list[float], solved: list[float]) -> Side:
-    """A side with per-task units: each task's cost, and whether it was solved."""
-    units = {'cost_usd': {f't{i}': c for i, c in enumerate(cost)}, 'solved': {f't{i}': s for i, s in enumerate(solved)}}
-    means = derive(
-        {'cost_usd': sum(cost), 'solved': sum(solved)},
-        {'cost_per_solved': Ratio(numerator='cost_usd', denominator='solved')},
-    )
-    return Side(name, means, units)
-
-
-def test_a_ratio_is_resampled_over_the_units_of_its_parts() -> None:
-    bar = side('bar', [1.0] * 40, [1.0] * 20 + [0.0] * 20)
-    cheaper = side('candidate', [0.8] * 40, [1.0] * 20 + [0.0] * 20)
-    c = ratio_bound(CRITERION, Parts('cost_usd', 'solved'), cheaper, bar, 0.95)
-    assert c is not None and (c.mine, c.theirs, c.count) == (1.6, 2.0, 40) and c.worst > 0
-    pricier = side('candidate', [1.0] * 40, [1.0] * 18 + [0.0] * 22)
-    c = ratio_bound(CRITERION, Parts('cost_usd', 'solved'), pricier, bar, 0.95)
-    assert c is not None and c.worst < 0
-
-
-def test_a_ratio_without_units_of_both_parts_falls_back_to_the_aggregates() -> None:
-    bar = side('bar', [1.0] * 4, [1.0] * 4)
-    bare = Side('candidate', bar.means, {'cost_usd': bar.units['cost_usd']})
-    assert ratio_bound(CRITERION, Parts('cost_usd', 'solved'), bare, bar, 0.95) is None
-    shifted = Side('candidate', bar.means, {**bar.units, 'solved': {'other': 4.0}})
-    assert ratio_bound(CRITERION, Parts('cost_usd', 'solved'), shifted, bar, 0.95) is None
-
-
-def test_a_resample_with_nothing_solved_counts_as_the_worst_gain(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bootstrap, 'RESAMPLES', 20)
-    bar = side('bar', [1.0, 1.0], [1.0, 1.0])
-    rare = side('candidate', [1.0, 1.0], [1.0, 0.0])
-    c = ratio_bound(CRITERION, Parts('cost_usd', 'solved'), rare, bar, 0.95)
-    assert c is not None and c.worst == float('-inf')
-
-
-def test_a_ratio_guardrail_holds_a_keep_back_on_its_resampled_worst_case() -> None:
-    primary = Criterion('solved', Direction.HIGHER)
-    bar = side('candidate#1', [1.0] * 40, [1.0] * 20 + [0.0] * 20)
-    more = side('candidate#2', [1.8] * 40, [1.0] * 30 + [0.0] * 10)
-    judged = Bootstrap().decide(Case(primary, (CRITERION,), more, bar))
-    assert (judged.verdict, judged.reason) == snapshot(
-        (
-            Outcome.INTERESTING,
-            'against candidate#1: solved 30 vs 20 (+10; 95% worst case +6 over 40 units); guardrails: cost_per_solved 2.4 vs 2 (+0.4; 95% worst case +0.7692 over 40 units) beyond its fraction 0.05',
+def test_the_pool_reads_a_ratio_guardrail_as_the_ratio_of_the_means_against_the_baseline_s(
+    db: Database, campaign: Campaign
+) -> None:
+    """Two evaluations of 2/4 and 7/8 cost 4.5 per 6 solved: 0.75, not the mean of the ratios, 0.6875. The baseline's
+    ratio is 0.5, and 5% of it allows 0.025."""
+    first = baseline(db, campaign.id)
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        p.config = load_campaign_config(Path(campaign.path), metrics=[SOLVED, COST, PER_SOLVED])
+        evaluator = current_evaluator(s, p, p.config).id
+        pricier = Candidate(campaign_id=p.id, parent_id=first.id, tree_sha='t', revision='r', origin=Origin.RUN)
+        s.add(pricier)
+        s.flush()
+        runs = {first.id: [(4.0, 2.0)], pricier.id: [(4.0, 2.0), (8.0, 7.0)]}
+        s.add_all(
+            Measurement(candidate_id=c, evaluator_id=evaluator, metrics={'solved': solved, 'cost_usd': cost})
+            for c, values in runs.items()
+            for solved, cost in values
         )
-    )
-
-
-THROUGHPUT = Criterion('tokens_per_s', Direction.HIGHER, ratio=Parts('tokens', 'seconds'))
-
-
-def paired(name: str, seconds: list[float]) -> Side:
-    """A side of 512 tokens per sample, whose samples ran in pairs, and no per-unit results."""
-    tokens = [512.0] * len(seconds)
-    found = {'tokens_per_s': Ratio(numerator='tokens', denominator='seconds')}
-    means = derive({'tokens': fmean(tokens), 'seconds': fmean(seconds)}, found)
-    return Side(name, means, {}, {'tokens': tokens, 'seconds': seconds})
-
-
-def test_a_ratio_over_pairs_is_the_ratio_of_the_means_that_status_shows() -> None:
-    candidate, bar = paired('candidate#2', [0.1331, 0.2333, 0.8164]), paired('candidate#1', [1.7, 1.8, 1.8])
-    c = ratio_bound(THROUGHPUT, Parts('tokens', 'seconds'), candidate, bar, 0.95)
-    assert c is not None
-    assert (c.mine, c.theirs, c.count, c.over) == (
-        candidate.means['tokens_per_s'],
-        bar.means['tokens_per_s'],
-        3,
-        bootstrap.Over.PAIRS,
-    )
-    assert c.worst > 0
-    judged = Bootstrap().decide(Case(THROUGHPUT, (), candidate, bar))
-    assert judged.reason == snapshot(
-        'against candidate#1: tokens_per_s 1299 vs 289.8 (+1009; 95% worst case +538.7 over 3 pairs)'
-    )
+        s.flush()
+        pool = Pool.of(s, p, p.config.all_tracks[0])
+        assert pool.entries[pricier.id].means == {'solved': 6.0, 'cost_usd': 4.5, 'cost_per_solved': 0.75}
+        assert (
+            pool.refusal(pricier.id) == 'guardrails: cost_per_solved 0.75 vs the baseline 0.5 beyond its fraction 0.05'
+        )
+        assert pool.best() == first.id

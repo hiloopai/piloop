@@ -25,6 +25,9 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment,
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CampaignId, Revision
 from piloop.net.tokens import mint_agent
+from piloop.plugins.campaign_type.kit.backlog.cli import land
+from piloop.plugins.campaign_type.kit.backlog.wire import Base
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.section import measure
 from piloop.plugins.executor.contract import AgentJob, RepoId, Source
 from piloop.plugins.executor.kit import door as door_module, jobs, relay as relay_module
@@ -36,11 +39,11 @@ from piloop.plugins.role.contract import RELAYED, RoleConfig
 from piloop.plugins.role.orchestrator import OrchestratorRole
 from piloop.plugins.runtime.contract import MESSAGES_ENV, QUEUE, put
 from piloop.plugins.section.contract import SECTIONS, Guide
-from piloop.plugins.vcs.contract import Repository, UnknownRevision
+from piloop.plugins.vcs.contract import Repository, UnknownRevision, VcsError
 from piloop.plugins.vcs.git import Git
-from piloop.proc import ACTOR_ENV
+from piloop.proc import ACTOR_ENV, CHECKOUT_ENV
 from piloop.settings import Settings
-from tests.conftest import disk, no_ship
+from tests.conftest import disk, no_land, no_ship
 from tests.test_lease import agent_job
 
 AGENT = AgentSessionId(7)
@@ -208,7 +211,7 @@ def call(agent: int = AGENT, argv: list[str] | None = None) -> str:
 
 def test_the_relay_takes_an_agents_calls_on_its_lease_while_its_job_runs_on_this_worker(tmp_path: Path) -> None:
     server = Server()
-    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship)
+    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land)
     relay.start()
     assert relay.path.parent.stat().st_mode & 0o077 == 0, "only the worker's user reaches its socket"
     assert post(relay, call()).status_code == 404, 'no job of this agent runs here'
@@ -238,20 +241,20 @@ def test_the_relay_takes_an_agents_calls_on_its_lease_while_its_job_runs_on_this
     assert post(relay, call()).status_code == 404, 'its job ended'
     relay.stop()
     assert not relay.path.exists()
-    restarted = Relay(Settings(home=tmp_path).relay_file, server, no_ship)
+    restarted = Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land)
     restarted.path.touch()  # what a worker that was killed leaves
     restarted.start()
     restarted.open(4, JOB)
     assert post(restarted, call()).status_code == 200, 'a re-attached agent relays again, on the same path'
     restarted.stop()
-    Relay(Settings(home=tmp_path).relay_file, server, no_ship).stop()
+    Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land).stop()
 
 
 def test_the_piloop_of_an_agent_elsewhere_prints_what_the_call_printed_and_exits_with_its_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], mocker: MockerFixture
 ) -> None:
     server = Server()
-    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship)
+    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land)
     relay.start()
     agent = Agent(role='implementer', session=AGENT)
     monkeypatch.setattr(door_module, 'settings', Settings(home=tmp_path, actor=agent))
@@ -318,7 +321,7 @@ def test_a_submit_ships_the_version_of_the_agents_checkout_and_is_called_once(tm
             raise UnknownRevision('no gone')
         return Shipped(Revision('abc'), None)
 
-    relay = Relay(Settings(home=tmp_path).relay_file, server, ship)
+    relay = Relay(Settings(home=tmp_path).relay_file, server, ship, no_land)
     relay.start()
     relay.open(3, JOB)
     answered = Relayed.model_validate_json(post(relay, call(argv=['submit'])).content)
@@ -353,3 +356,68 @@ def test_a_worker_ships_what_the_repo_of_record_lacks_of_a_version_of_its_agents
     head = jobs.ship(site, job, None)
     assert head.revision == Repo(site_cwd).head.commit.hexsha and head.blob is not None, 'its head, and the commit'
     assert jobs.ship(site, job, base) == Shipped(base, None), 'the repo of record has its starting version'
+
+
+def test_a_relayed_call_that_moves_the_agents_checkout_names_the_revision_and_moves_nothing_on_the_server(
+    db: Database, campaign: Campaign, tmp_path: Path, runner: Runner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A claim with a base writes its revision to the file that ``CHECKOUT_ENV`` names: the server's checkout stays."""
+    monkeypatch.setattr(relay_module, 'PILOOP_ARGV', ('sh', '-c', f'printf abc > "${CHECKOUT_ENV}"', 'piloop'))
+    job = agent_job(db, campaign, tmp_path)
+    token = launched(db, job)
+    assert runner(job, Call(argv=['idea', 'claim', '1'], token=token)).checkout == 'abc'
+    monkeypatch.setattr(relay_module, 'PILOOP_ARGV', ('sh', '-c', 'true', 'piloop'))
+    assert runner(job, Call(argv=['idea', 'claim', '1'], token=token)).checkout is None
+
+
+def test_the_relay_moves_the_agents_checkout_after_a_call_that_names_a_revision(tmp_path: Path) -> None:
+    moved: list[tuple[AgentJob, Revision]] = []
+
+    def server(lease: int, relayed: Call) -> Relayed:
+        return Relayed(stdout='idea#1 claimed\n', exit_code=0, checkout=Revision(relayed.argv[-1]))
+
+    def land(job: AgentJob, revision: Revision) -> None:
+        if revision == 'gone':
+            raise VcsError('no gone')
+        moved.append((job, revision))
+
+    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, land)
+    relay.start()
+    relay.open(3, JOB)
+    answered = Relayed.model_validate_json(post(relay, call(argv=['idea', 'claim', '1', '--base', 'a' * 40])).content)
+    assert (answered.stdout, answered.exit_code) == (f'idea#1 claimed\nyour checkout is at {"a" * 12}\n', 0)
+    assert moved == [(JOB, 'a' * 40)]
+    failed = Relayed.model_validate_json(post(relay, call(argv=['idea', 'claim', '1', '--base', 'gone'])).content)
+    assert (failed.exit_code, failed.stderr) == (
+        1,
+        'piloop: the call ran, but your checkout did not move to gone: no gone\n',
+    ), 'the claim ran: the agent moves its checkout itself'
+    relay.stop()
+
+
+def test_a_claim_with_a_base_moves_the_checkout_here_or_names_the_revision_for_the_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """On the daemon's own worker, the agent's checkout is a worktree of the repo of record: the CLI moves it. A call
+    that the server runs for a worker elsewhere writes the revision instead."""
+    repo = Repo.init(tmp_path / 'checkout', initial_branch='main')
+    (tmp_path / 'checkout' / 'a.txt').write_text('a\n')
+    repo.git.add('-A')
+    repo.git.commit('-qm', 'one')
+    first = repo.head.commit.hexsha
+    (tmp_path / 'checkout' / 'a.txt').write_text('b\n')
+    repo.git.commit('-qam', 'two')
+    monkeypatch.chdir(tmp_path / 'checkout')
+    monkeypatch.delenv(CHECKOUT_ENV, raising=False)
+    land(Base(candidate=CandidateId(4), revision=first))
+    assert (
+        repo.head.commit.hexsha == first
+        and f'your checkout is at candidate#4 ({first[:12]})' in capsys.readouterr().out
+    )
+    (tmp_path / 'checkout' / 'a.txt').write_text('dirty\n')
+    with pytest.raises(SystemExit, match='your run starts from candidate#4, but your checkout did not move'):
+        land(Base(candidate=CandidateId(4), revision=repo.commit('main').hexsha))
+    monkeypatch.setenv(CHECKOUT_ENV, str(tmp_path / 'moved'))
+    land(Base(candidate=CandidateId(4), revision=first))
+    assert (tmp_path / 'moved').read_text() == first
+    land(None)

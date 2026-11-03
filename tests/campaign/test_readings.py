@@ -29,7 +29,7 @@ from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.fact_source import command as command_module
 from piloop.plugins.fact_source.command import Command
 from piloop.plugins.fact_source.contract import FactReadError
-from piloop.plugins.fact_source.facts import KEEPS, Facts, reading, since_keep
+from piloop.plugins.fact_source.facts import NEW_BESTS, Facts, reading, since_best
 from piloop.plugins.fact_source.kit.readings import FactRead, Readings
 from piloop.plugins.stop_rule.contract import STOP_RULES, Hold
 from piloop.reports.overview import progress
@@ -124,7 +124,7 @@ def test_each_reading_is_a_fact_read_event_and_the_events_are_the_one_record(db:
         assert isinstance(source, Readings)
         due = source.due(s, p)
         assert due is not None and due <= utcnow(), 'never read: due now'
-        assert source.supplies() == (reading('spend'), since_keep('spend'))
+        assert source.supplies() == (reading('spend'), since_best('spend'))
         for values in ({'spend': 10.0}, FactReadError('down'), {'spend': 12.0}):
             source.record(s, p, values)
             s.flush()
@@ -138,17 +138,20 @@ def test_each_reading_is_a_fact_read_event_and_the_events_are_the_one_record(db:
         assert source.due(s, p) == last + timedelta(seconds=300), 'interval after the latest reading'
 
 
-def test_since_keep_is_the_growth_of_a_value_since_the_latest_keep(db: Database, campaign: Campaign) -> None:
-    """Before the first keep it is all of the value; after it, the value less its reading by the end of the keep's run."""
+def test_since_best_is_the_growth_of_a_value_since_the_latest_new_best(db: Database, campaign: Campaign) -> None:
+    """Before the first new best it is all of the value; after it, the value less its reading by the time a candidate
+    last became the best."""
     set_config(db, campaign, plugins={'fact_source': spending()})
-    wanted = [reading('spend'), since_keep('spend'), KEEPS]
+    wanted = [reading('spend'), since_best('spend'), NEW_BESTS]
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         [_, _, source] = p.config.fact_sources()
         assert isinstance(source, Readings)
         source.record(s, p, {'spend': 40.0})
         s.commit()
-        assert gather(s, p, p.config, wanted, utcnow()) == Facts({'spend': 40.0, 'spend_since_keep': 40.0, 'keeps': 0})
+        assert gather(s, p, p.config, wanted, utcnow()) == Facts(
+            {'spend': 40.0, 'spend_since_best': 40.0, 'new_bests': 0}
+        )
     add_run(db, campaign, keep_score=4)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
@@ -156,7 +159,9 @@ def test_since_keep_is_the_growth_of_a_value_since_the_latest_keep(db: Database,
         assert isinstance(source, Readings)
         source.record(s, p, {'spend': 100.0})
         s.commit()
-        assert gather(s, p, p.config, wanted, utcnow()) == Facts({'spend': 100.0, 'spend_since_keep': 60.0, 'keeps': 1})
+        assert gather(s, p, p.config, wanted, utcnow()) == Facts(
+            {'spend': 100.0, 'spend_since_best': 60.0, 'new_bests': 1}
+        )
 
 
 def daemon_comments(db: Database) -> list[tuple[str, int | None, str]]:
@@ -324,7 +329,7 @@ def test_the_progress_line_is_what_the_stop_rule_describes(
             return progress(s, p, CampaignConfig.model_validate(p.config), p.created_at)
 
     try:
-        assert line('watches') == 'evaluations 1/100 · attempts 0/50 · spend_since_keep —/300 · funnel —/1'
+        assert line('watches') == 'evaluations 1/100 · attempts 0/50 · spend_since_best —/300 · funnel —/1'
         assert line('goes_on') == '—'
     finally:
         host.close()

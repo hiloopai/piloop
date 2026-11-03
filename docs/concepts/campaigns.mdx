@@ -31,7 +31,6 @@ direction = "lower"
 role = "guardrail"
 margin = 60
 floor = 120
-repeats = 3
 ```
 
 `brief.md`, next to it, tells the agents what to improve and what not to touch, in at most 400 words
@@ -84,7 +83,7 @@ uv run python evaluate.py
 line, or a run longer than `evaluate_timeout` seconds makes the commit a `crash`. Print the reason on stderr, or give
 it as `feedback`. Fix the seeds and the data splits, so that the same code gets the same score.
 
-An `infra_error` is never a verdict. Report it for a fault that is not the candidate's: a rate limit, a missing input,
+An `infra_error` is never a score. Report it for a fault that is not the candidate's: a rate limit, a missing input,
 a lost GPU. piloop treats two more faults the same way: a worktree or inputs that it cannot make, and an evaluate that
 another process kills twice. piloop records no measurement and an `evaluation.infra_error` event. The evaluation waits
 in `piloop eval queue` for `[evaluation] infra_retry` in `config.toml`, twice as long after each failure up to
@@ -119,19 +118,19 @@ role = "primary"
 name = "seconds"
 direction = "lower"
 role = "guardrail"
-fraction = 0.10    # at most 10% slower than the bar for each keep
+fraction = 0.10    # at most 10% slower than the baseline
 floor = 120        # and never slower than 120 s
 ```
 
-| `role` | How the [verdict](/concepts/verdict) uses it |
+| `role` | How [the best](/concepts/pool#the-best) uses it |
 |---|---|
 | `primary` | The metric to improve. One per campaign, or one per [track](/concepts/tracks). |
-| `guardrail` | May get worse than the bar by at most its tolerance for each keep, and never past `floor`. |
+| `guardrail` | The best may be worse than the baseline by at most its tolerance, and never past `floor`. |
 | `watch` | Recorded only. |
 
 `direction` is `higher` or `lower`: which way is better. A **tolerance** is `floor`, plus one of `margin` and
-`fraction`. `margin` is in the metric's units: `margin = 60` allows 60 s more. `fraction` is of the bar's value:
-`fraction = 0.10` allows 10% more, whatever the bar's scale. The stops of the [ladder](#the-evaluation-ladder) take the
+`fraction`. `margin` is in the metric's units: `margin = 60` allows 60 s more. `fraction` is of the baseline's value:
+`fraction = 0.10` allows 10% more, whatever the baseline's scale. The stops of the [ladder](#the-evaluation-ladder) take the
 same keys.
 
 ### Ratio metrics
@@ -157,11 +156,10 @@ fraction = 0.05
 ```
 
 The evaluate command reports `solved` and `cost_usd`, with their [per-unit results](#per-unit-results), and never
-`cost_per_solved`. Each side's value is the ratio of its means. The verdict resamples the units of both parts together
-and takes the ratio of their sums in each resample, so the guardrail is tested with confidence:
+`cost_per_solved`. A candidate's value is the ratio of its means:
 
 ```text
-guardrails: cost_per_solved 2.4 vs 2 (+0.4; 95% worst case +0.7692 over 40 units) beyond its fraction 0.05
+guardrails: cost_per_solved 2.4 vs the baseline 2 beyond its fraction 0.05
 ```
 
 `measurements.metrics` holds the parts only. A stop of the ladder names the parts, not the ratio.
@@ -213,7 +211,7 @@ piloop sql "SELECT candidate_id, rung, stopped, metrics FROM measurements"
 └──────────────┴────────┴───────────────────────────────────────┴─────────────────────────────────┘
 ```
 
-The verdict of candidate#2 is `discard`: `stopped at screen: accuracy 0.2 vs 1 (-0.8; margin 0.05)`. The `ladder`
+candidate#2 has no score: `stopped at screen: accuracy 0.2 vs 1 (-0.8; margin 0.05)`. The `ladder`
 column of `piloop status` shows the same, or `reached screen` while a climb goes on. `piloop history` shows it for an
 idea whose candidates have no score.
 
@@ -221,10 +219,10 @@ idea whose candidates have no score.
   cost: piloop sums the rows.
 - `piloop candidate show 2` prints each rung's values and time, and the full panel's beside the parent's.
 - `stop` gives a tolerance for metrics of `[[metrics]]`, with a guardrail's keys: past `floor`, or worse than the
-  [bar](/concepts/verdict#the-words) at the same rung by more than `margin` or `fraction`, the climb stops. Without
-  the bar's value at the rung, only `floor` stops.
-- Only a run's own commit can stop. The baseline, a head, a bar, a reference and `piloop candidate remeasure` climb
-  every rung, so every bar has a value at each rung.
+  [best](/concepts/pool#the-best) at the same rung by more than `margin` or `fraction`, the climb stops. Without
+  the best's value at the rung, only `floor` stops.
+- Only the first evaluation of a run's own commit can stop. The baseline, a confirmation, a reference and
+  `piloop candidate remeasure` climb every rung, so the best has a value at each rung.
 - At a stop, piloop sends the command SIGTERM, then SIGKILL `[evaluation] stop_grace_seconds` later, and reads no
   more lines.
 - A rung with `evaluate` runs that command first, in the same worktree. It writes one line, without `rung`. Such rungs
@@ -233,22 +231,23 @@ idea whose candidates have no score.
 
 ## Per-unit results
 
-A metric that is a sum over units, such as test examples, can report each unit. Then the verdict can tell a broad
-gain from a gain on a few lucky units. Add each unit's part of each metric to the result:
+A metric that is a sum over units, such as test examples, can report each unit. Add each unit's part of each metric
+to the result:
 
 ```json
 {"status": "ok", "score": 0.0112, "direction": "higher", "units": {"accuracy": {"test-0001": 0.0056, "test-0002": 0.0, "test-0003": 0.0056}}}
 ```
 
 The parts of a metric must sum to its value, within 0.1%. The score's units go under the primary's name. Leave out
-metrics that are not sums, such as a latency. The agents never see the units.
+metrics that are not sums, such as a latency. piloop stores them in `~/.piloop/units/`, outside the database, so the
+agents never see them. No score reads them.
 
 ## Evaluators
 
 An **evaluator** is the evaluate command, `link`, and the names and directions of the primaries and guardrails. A
 change to one of them makes a new evaluator at the next `piloop init`. piloop never compares scores of two evaluators:
-it measures the head again, and runs then compare under the new one. A run that is being scored when the evaluator
-changes measures its bar and its next commits under the new one before it judges them. To measure an older keep again:
+it measures the baseline and the best again, and the runs wait until both have a score under the new one. The other
+candidates keep the scores of the old evaluator until they are measured again:
 
 ```bash
 piloop candidate remeasure 2
@@ -270,7 +269,7 @@ piloop campaign retire enwik8 --reason "tried every idea"
 limits count from the reopen, so the campaign gets each of them again. A rule that would stop it at once, a `target`
 that it reached say, refuses the reopen: change the rule in `piloop.toml` and run `piloop init` instead.
 
-**Fork** makes a new campaign that starts from the head of another one, in any state. `--at` names another version.
+**Fork** makes a new campaign that starts from the best of another one, in any state. `--at` names another version.
 The fork takes its source's stored `piloop.toml`, and shares the [memory](/concepts/research-memory) of its repo. It
 starts with no ideas and an empty workspace. Without `--name`, it is `enwik8-2`.
 
@@ -309,7 +308,7 @@ campaign enwik8 #3: config re-read
 ```
 
 The checkout moves forward to the repository's head, and piloop reads its `piloop.toml` again. The campaign's
-candidates and head stay. To try the new code, import it as a candidate (`piloop candidate import enwik8 origin/main`),
+candidates and their scores stay. To try the new code, import it as a candidate (`piloop candidate import enwik8 origin/main`),
 or fork the campaign at it (`piloop campaign fork enwik8 --at origin/main`). A repository whose host asks for a token
 takes it on stdin, for this sync alone (`printf %s "$TOKEN" | piloop campaign sync enwik8 --token-stdin`), or
 `--secret`, the name of the server's secret that holds it.

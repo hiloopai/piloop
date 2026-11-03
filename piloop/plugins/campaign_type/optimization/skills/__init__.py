@@ -9,5 +9,5 @@ SETUP = SkillPart('piloop-setup', 100, _HERE / 'setup.md')
 REVIEW = SkillPart('piloop-review', 100, _HERE / 'review.md')
 OPERATE = SkillPart('piloop-operate', 200, _HERE / 'operate.md')
 """What ``piloop status`` shows of the research, ideas and seeds, steering and runs, and branches."""
-VERDICTS = SkillPart('piloop-operate', 500, _HERE / 'verdicts.md')
-"""Candidates, past research, and how to judge a candidate."""
+POOL = SkillPart('piloop-operate', 500, _HERE / 'pool.md')
+"""Candidates, the pool and its best, past research, and how to exclude a candidate."""

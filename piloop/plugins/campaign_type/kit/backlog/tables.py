@@ -43,7 +43,7 @@ class Idea(Tracked, Base):
 
     Anyone can insert an idea: a human, the lead, or a worker that claims it at once (``piloop idea propose``).
     ``after`` links (``IdeaLink``) hold an idea until every prerequisite is ``done`` or ``dropped``: a held idea cannot
-    be claimed. A prerequisite done without a keep frees it too, and nothing changes its status. Cycles are
+    be claimed. A prerequisite done without a new best frees it too, and nothing changes its status. Cycles are
     refused (``ops.link``).
     """
 
@@ -63,7 +63,7 @@ class Idea(Tracked, Base):
     """Why this idea should improve the primary metric."""
     track: Mapped[TrackName]
     """The track (objective) the idea works on, by its name in ``piloop.toml``: a primary's ``track``, or else the
-    primary's name. Its runs are judged on that track's primary, with the primary of every other track as a guardrail,
+    primary's name. Its runs are scored on that track's primary, with the primary of every other track as a guardrail,
     and their brief has the track's addendum. A claim refuses an idea whose track is not in ``piloop.toml``."""
     plan: Mapped[str | None]
     """Concrete steps for the implementer. They are appended to the brief."""
@@ -71,7 +71,7 @@ class Idea(Tracked, Base):
     priority: Mapped[int] = mapped_column(default=2, server_default=text('2'))
     """0 (urgent) to 4 (someday). The board lists the lowest number first."""
     created_by: Mapped[str]
-    """Who proposed it: ``human``, ``orchestrator``, or the agent's signature (``orchestrator#12``, ``implementer#40``). The part before ``#`` is the idea's source in the count of keeps by source."""
+    """Who proposed it: ``human``, ``orchestrator``, or the agent's signature (``orchestrator#12``, ``implementer#40``). The part before ``#`` is the idea's source in the count of new bests by source."""
     provenance: Mapped[str | None]
     """The finding that led to the idea, with ids or a URL. For example ``note comment#81: timeouts lose the last
     rows``, ``loss table workspace/research/losses.md`` or ``arXiv 2305.11860 via exa``."""

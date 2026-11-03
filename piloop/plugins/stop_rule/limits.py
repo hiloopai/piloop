@@ -11,13 +11,13 @@ from typing import Annotated
 from pydantic import Field
 
 from piloop.plugins.fact_source.facts import (
-    HEAD,
+    BEST,
     HOURS,
-    KEEPS,
+    NEW_BESTS,
     RUNS,
     TOKENS,
     UNSETTLED,
-    WITHOUT_KEEP,
+    WITHOUT_BEST,
     Fact,
     Facts,
     FactValue,
@@ -49,7 +49,8 @@ class Limits(StopRule):
     ``max_runs`` counts the runs that reached the evaluator, with a candidate that is measured or waits for its
     measurement. A run that ended at a cheap check with no version, with only versions that asked to be skipped, or
     before it saved one because of a harness or host fault, says nothing about the metric, so it does not count.
-    ``plateau`` counts every finished attempt without a keep, these too: a campaign whose runs never submit plateaus.
+    ``plateau`` counts every finished attempt without a new best, these too: a campaign whose runs never submit
+    plateaus.
     A run that a daemon stop, a daemon crash or a campaign stop ended counts toward neither. ``hold_at``,
     ``max_tokens`` and ``max_hours`` stay hard limits on what all runs cost.
 
@@ -59,8 +60,8 @@ class Limits(StopRule):
     """
 
     target: float | None = None
-    """Stop when the primary metric at the head (the latest keep on the trunk) reaches this value, in its direction.
-    Only for a campaign with one track."""
+    """Stop when the primary metric at the best reaches this value, in its direction. Only for a campaign with one
+    track."""
     max_runs: int | None = Field(default=None, ge=1)
     """Stop after this many runs that count, once none is queued, running or being scored. A run counts when it reached
     the evaluator, and also while it is queued, running or being scored, so piloop never starts more runs than this. A
@@ -73,9 +74,9 @@ class Limits(StopRule):
     """Stop when all the agents of the campaign together spent this many tokens (the ``total`` of
     ``agent_sessions.usage``), summed over the agents that ended."""
     plateau: int | None = Field(default=None, ge=1)
-    """Stop after this many finished runs without a new ``keep`` candidate, whether they reached the evaluator or not.
-    A run that a stop ended, or whose agent never started, does not count. The count starts
-    again at each keep, and when the campaign is set ``active`` after a stop (``piloop init``, or an UPDATE of
+    """Stop after this many finished runs without a new best, whether they reached the evaluator or not. A run that a
+    stop ended, or whose agent never started, does not count. The count starts again each time a run's candidate
+    becomes the best, and when the campaign is set ``active`` after a stop (``piloop init``, or an UPDATE of
     ``campaigns.status``), so a reactivated campaign gets this many runs again. A new evaluator alone does not reset
     it."""
     hold_at: dict[str, Annotated[float, Field(gt=0)]] = {}
@@ -93,8 +94,8 @@ class Limits(StopRule):
             RUNS: self.max_runs,
             HOURS: self.max_hours,
             TOKENS: self.max_tokens,
-            WITHOUT_KEEP: self.plateau,
-            HEAD: self.target,
+            WITHOUT_BEST: self.plateau,
+            BEST: self.target,
         }
         stops = {fact: limit for fact, limit in found.items() if limit is not None}
         return stops | {reading(name): limit for name, limit in self.hold_at.items()}
@@ -123,13 +124,13 @@ class Limits(StopRule):
         Nor is a value of ``hold_at``, which holds the campaign and never stops it.
         """
         held = {reading(name) for name in self.hold_at}
-        budgets = [(fact, limit) for fact, limit in self.limits().items() if fact not in held and fact != HEAD]
+        budgets = [(fact, limit) for fact, limit in self.limits().items() if fact not in held and fact != BEST]
         return Facts({fact.name: _less(limit, case.facts.get(fact)) for fact, limit in budgets})
 
     def check_config(self, shape: Shape) -> str | None:
-        """A ``target`` is on the head, which is the primary metric of the first track only."""
+        """A ``target`` is on the best, which is the primary metric of the first track only."""
         return (
-            'limits the head, which needs a campaign of one track'
+            'limits the best, which needs a campaign of one track'
             if self.target is not None and shape.tracks > 1
             else None
         )
@@ -176,7 +177,7 @@ def _show_held(facts: Facts, name: str, limit: float) -> str:
 
 
 def _target(case: StopCase, target: float) -> str | None:
-    value = case.facts.get(HEAD)
+    value = case.facts.get(BEST)
     if value is None or (value != target and not case.direction.better(value, target)):
         return None
     sign = '≥' if case.direction is Direction.HIGHER else '≤'
@@ -199,16 +200,16 @@ def _max_tokens(case: StopCase, limit: float) -> str | None:
 
 
 def _plateau(case: StopCase, limit: float) -> str | None:
-    count = case.facts.get(WITHOUT_KEEP)
-    return f'plateau: {count} runs without a keep' if count is not None and count >= limit else None
+    count = case.facts.get(WITHOUT_BEST)
+    return f'plateau: {count} runs without a new best' if count is not None and count >= limit else None
 
 
 STOPS: tuple[tuple[Fact[FactValue], Callable[[StopCase, float], str | None]], ...] = (
-    (HEAD, _target),
+    (BEST, _target),
     (RUNS, _max_runs),
     (HOURS, _max_hours),
     (TOKENS, _max_tokens),
-    (WITHOUT_KEEP, _plateau),
+    (WITHOUT_BEST, _plateau),
 )
 """The stops, in the order that ``Limits`` tries them: the fact that each limits, and the reason when its limit is
 reached."""
@@ -237,27 +238,27 @@ def _show_tokens(case: StopCase, limit: float | None) -> str:
     return f'{_tokens(case.facts.get(TOKENS) or 0)}{"" if limit is None else f"/{_tokens(limit)}"} tok'
 
 
-def _show_without_keep(case: StopCase, limit: float | None) -> str:
-    return f'{case.facts.get(WITHOUT_KEEP) or 0}{_of(limit)} runs without a keep'
+def _show_without_best(case: StopCase, limit: float | None) -> str:
+    return f'{case.facts.get(WITHOUT_BEST) or 0}{_of(limit)} runs without a new best'
 
 
-def _show_keeps(case: StopCase, limit: float | None) -> str:
-    return f'{case.facts.get(KEEPS) or 0}{_of(limit)} keeps'
+def _show_new_bests(case: StopCase, limit: float | None) -> str:
+    return f'{case.facts.get(NEW_BESTS) or 0}{_of(limit)} new bests'
 
 
-def _show_head(case: StopCase, limit: float | None) -> str:
-    value = case.facts.get(HEAD)
-    head = NONE if value is None else number(value)
+def _show_best(case: StopCase, limit: float | None) -> str:
+    value = case.facts.get(BEST)
+    best = NONE if value is None else number(value)
     sign = '≥' if case.direction is Direction.HIGHER else '≤'
-    return f'head {head}' if limit is None else f'target {sign} {number(limit)} (head {head})'
+    return f'best {best}' if limit is None else f'target {sign} {number(limit)} (best {best})'
 
 
 SHOWN: tuple[tuple[Fact[FactValue], Callable[[StopCase, float | None], str]], ...] = (
     (RUNS, _show_runs),
     (HOURS, _show_hours),
     (TOKENS, _show_tokens),
-    (WITHOUT_KEEP, _show_without_keep),
-    (KEEPS, _show_keeps),
-    (HEAD, _show_head),
+    (WITHOUT_BEST, _show_without_best),
+    (NEW_BESTS, _show_new_bests),
+    (BEST, _show_best),
 )
 """How ``describe`` shows each fact, against its limit when it has one, in this order."""

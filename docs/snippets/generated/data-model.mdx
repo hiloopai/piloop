@@ -257,11 +257,8 @@ erDiagram
         varchar revision
         varchar summary
         Origin origin
-        Outcome verdict
-        Cause cause
-        varchar verdict_by
-        varchar verdict_reason
-        varchar track
+        varchar excluded_reason
+        varchar excluded_by
         datetime created_at
         datetime updated_at
         varchar updated_by
@@ -281,7 +278,6 @@ erDiagram
         json metrics
         varchar error
         double seconds
-        integer pair_id FK
         varchar rung
         varchar stopped
         datetime created_at
@@ -315,7 +311,6 @@ erDiagram
     evaluators ||--o{ evaluations : "evaluator_id"
     candidates ||--o{ measurements : "candidate_id"
     evaluators ||--o{ measurements : "evaluator_id"
-    measurements |o--o{ measurements : "pair_id"
 ```
 
 The full-text indexes are not in the diagram: `ideas_fts` (`title`, `hypothesis`, `plan`), `comments_fts` (`body`), `documents_fts` (`title`, `body`).

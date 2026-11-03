@@ -1,13 +1,13 @@
 ---
-title: Verdict rules, stop rules and fact sources
+title: Best rules, stop rules and fact sources
 sidebarTitle: Rules and facts
-description: Plugins that decide which candidates to keep and when a campaign stops, and the facts that they read.
+description: Plugins that decide which candidate may be the best and when a campaign stops, and the facts that they read.
 ---
 
 import ExampleMinGain from '/snippets/generated/example-min-gain.mdx';
-import ExampleStopAfterKeeps from '/snippets/generated/example-stop-after-keeps.mdx';
-import ExampleKeepCost from '/snippets/generated/example-keep-cost.mdx';
-import ContractVerdictRule from '/snippets/generated/contract-verdict-rule.mdx';
+import ExampleStopAfterBests from '/snippets/generated/example-stop-after-bests.mdx';
+import ExampleBestCost from '/snippets/generated/example-best-cost.mdx';
+import ContractBestRule from '/snippets/generated/contract-best-rule.mdx';
 import ContractStopRule from '/snippets/generated/contract-stop-rule.mdx';
 import ContractFactSource from '/snippets/generated/contract-fact-source.mdx';
 import ContractPriceList from '/snippets/generated/contract-price-list.mdx';
@@ -17,51 +17,47 @@ import ContractEscalation from '/snippets/generated/contract-escalation.mdx';
 import StopAnswers from '/snippets/generated/stop-answers.mdx';
 import Facts from '/snippets/generated/facts.mdx';
 
-The verdict rule decides which candidates to keep. The stop rule decides whether a campaign goes on. Both are
+The best rule decides which candidate may be the best. The stop rule decides whether a campaign goes on. Both are
 [pure](/plugins/overview#host-and-pure-contracts): piloop gives them data, and they return data. The fact sources
 supply what a stop rule or a section reads.
 
-## Verdict rules
+## Best rules
 
-After piloop measures a candidate, it asks the verdict rule whether to keep the candidate. piloop gives the rule a
-`Case`: the measurements of the candidate, the measurements of its bar, and the metrics that decide. The bar is the
-candidate that this one must beat. The rule returns a `Judgement`: `keep`, `interesting`, `discard` or `crash`, and
-a reason. piloop stores the verdict and the reason on the candidate.
+The best of a track is the candidate with the best mean of its primary among those that may be best
+([The pool](/concepts/pool#the-best)). For each confirmed candidate, piloop asks the best rule why it may not be best.
+piloop gives the rule a `Case`: the scores of the candidate, the scores of the baseline, and the metrics that decide.
+The rule returns a reason, or None when the candidate may be best. When the rule refuses a candidate that would be
+the best, its worker hears the reason.
 
-The default rule is `noise`. It keeps a candidate whose mean gain on the primary over the bar exceeds `m·σ/√n`: `σ` is
-the noise of the bar's score over its own evaluations and `n` the candidate's evaluations ([the noise](/concepts/verdict#the-noise)).
-`bootstrap` keeps one whose primary beats the bar with confidence. In both, no guardrail may get too much worse. Whatever
-the rule, piloop keeps a version of a campaign with a sealed split only when it holds there: a rule never checks that
-split itself.
+### Example: a gain of a fixed size
 
-### Example: keep only a gain of a fixed size
-
-This rule [calls the built-in rule](/plugins/overview#call-a-built-in-provider) `bootstrap` and changes one thing: a keep whose gain is
-below `min_gain` becomes `interesting`. `min_gain` is in the units of the primary metric:
+This rule [calls the built-in rule](/plugins/overview#call-a-built-in-provider) `baseline` and changes one thing: a
+candidate whose gain over the baseline is below `min_gain` may not be best. `min_gain` is in the units of the primary
+metric:
 
 <ExampleMinGain />
+
+```text
+[plugins.best_rule]
+provider = "min_gain"
+min_gain = 1000
+```
 
 [Write a plugin](/plugins/overview) installs and selects it.
 
 ### The contract
 
-A verdict rule is a [pure](/plugins/overview#host-and-pure-contracts) provider, a subclass of `VerdictRule`. Import the types from
-`piloop.capabilities`.
+A best rule is a [pure](/plugins/overview#host-and-pure-contracts) provider, a subclass of `BestRule`. Import the
+types from `piloop.capabilities`.
 
-<ContractVerdictRule />
+<ContractBestRule />
 
-A rule has no error case: it returns a verdict for every case. Its `samples` says how many measurements the
-candidate needs first: piloop measures it again once to get them.
-
-The rule also decides the lineage: `bar`, `head` and `on_moved` read `Node`s (a candidate's id, verdict, where it was
-made, `Trunk` or `Imported`, and its means), and each has the built-in behaviour as its default.
-
-piloop applies the answers: it moves the head, merges, and applies the `Piloop-Note` of a commit.
+The rule decides only whether a candidate may be best. piloop decides when a candidate is confirmed, and ranks those
+that may be best by their mean.
 
 ### Built in
 
-`noise` is the rule of a campaign without `[plugins.verdict_rule]`, and `bootstrap` is the other.
-[The verdict](/concepts/verdict#the-verdicts) describes both.
+`baseline` is the rule of a campaign without `[plugins.best_rule]`. [The best](/concepts/pool#the-best) describes it.
 
 ## Stop rules
 
@@ -77,31 +73,31 @@ does not stop a paused campaign, but it holds one.
 The built-in rule is `limits`. It holds the campaign while a fact of `hold_at` is unknown or at its limit. Else it
 stops the campaign at the first of its other limits that the campaign reaches.
 
-### Example: end the campaign after a number of keeps
+### Example: end the campaign after a number of new bests
 
-This rule stops the campaign after `keeps` candidates are kept. It [calls the built-in rule](/plugins/overview#call-a-built-in-provider)
+This rule stops the campaign after `bests` new bests. It [calls the built-in rule](/plugins/overview#call-a-built-in-provider)
 `limits` and adds one limit, so the limits of `limits`, such as `max_hours` and `hold_at`, still apply:
 
-<ExampleStopAfterKeeps />
+<ExampleStopAfterBests />
 
 ```text
 [plugins.stop_rule]
-provider = "after_keeps"
-keeps = 3
+provider = "after_bests"
+bests = 3
 max_hours = 12
 ```
 
-### Example: escalate when a keep costs too much
+### Example: escalate when a new best costs too much
 
-This rule compares the fact that `spend` names, since the latest keep, with its value per keep so far. Past
-`escalate_at` times, it answers `Escalate` once for each keep; past `stop_at` times, it stops the campaign:
+This rule compares the fact that `spend` names, since the latest new best, with its value per new best so far. Past
+`escalate_at` times, it answers `Escalate` once for each new best; past `stop_at` times, it stops the campaign:
 
-<ExampleKeepCost />
+<ExampleBestCost />
 
 ```text
 [plugins.stop_rule]
-provider = "keep_cost"
-spend = "billing_usd"   # a fact that a Readings source reads, which has its growth since a keep
+provider = "best_cost"
+spend = "billing_usd"   # a fact that a Readings source reads, which has its growth since a new best
 escalate_at = 2
 stop_at = 4
 ```
@@ -122,7 +118,7 @@ closes its row. `check_config` refuses a campaign that the rule cannot serve whe
 `target` on a campaign of more than one track.
 
 A fact is a typed key, `Fact[T]`, that a [fact source](#fact-sources) of the campaign supplies.
-`case.facts.get(KEEPS)` reads one, and `case.facts.get(reading('spend'))` one that a source reads by name. Every fact
+`case.facts.get(NEW_BESTS)` reads one, and `case.facts.get(reading('spend'))` one that a source reads by name. Every fact
 that a rule reads needs a source in the campaign, or piloop refuses the configuration. The facts of the built-in
 sources `campaign` and `optimization`, from `piloop.capabilities`, and the ratios over facts that a rule names (`spend`, the fact of what the
 campaign spent; `cost`, the evaluator's metric of what one evaluation costs):

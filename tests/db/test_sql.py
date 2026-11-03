@@ -338,7 +338,7 @@ MINE, COMPOSED, REVISED = (
 """Briefs' addresses: a brief's text is in the CAS."""
 
 
-def test_verdict_brief_and_campaign_status_changes_carry_what_the_feed_needs(
+def test_exclusion_brief_and_campaign_status_changes_carry_what_the_feed_needs(
     db: Database, tmp_path: Path, con: sqlite3.Connection
 ) -> None:
     sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
@@ -352,7 +352,7 @@ def test_verdict_brief_and_campaign_status_changes_carry_what_the_feed_needs(
     )
     sql.run(
         con,
-        "UPDATE candidates SET verdict = 'interesting', verdict_by = 'human', verdict_reason = 'not a win, a lead' WHERE id = 1",
+        "UPDATE candidates SET excluded_reason = 'it gamed the evaluation', excluded_by = 'human' WHERE id = 1",
     )
     sql.run(con, f"UPDATE runs SET brief_cid = '{MINE}' WHERE id = 1")
     sql.run(con, "UPDATE campaigns SET status = 'stopped', stopped_reason = 'enough' WHERE id = 1")
@@ -361,11 +361,11 @@ def test_verdict_brief_and_campaign_status_changes_carry_what_the_feed_needs(
         [
             ('idea.created', 'me', 'idea', 1, '{"kind":"idea.created"}'),
             (
-                'candidate.verdict',
+                'candidate.excluded_reason',
                 'human',
                 'candidate',
                 1,
-                '{"kind":"candidate.verdict","old":null,"new":"interesting","verdict_by":"human","verdict_reason":"not a win, a lead"}',
+                '{"kind":"candidate.excluded_reason","old":null,"new":"it gamed the evaluation","excluded_by":"human"}',
             ),
             ('run.brief_cid', 'human', 'run', 1, f'{{"kind":"run.brief_cid","old":null,"new":"{MINE}"}}'),
             (
@@ -402,7 +402,7 @@ def test_deletes_leave_tombstones_and_cascades_too(con: sqlite3.Connection) -> N
     sql.run(
         con, "INSERT INTO ideas (track, campaign_id, title, hypothesis, created_by) VALUES ('score', 1, 't', 'h', 'me')"
     )
-    sql.run(con, "INSERT INTO candidates (campaign_id, tree_sha, revision, verdict) VALUES (1, 'tree', 'sha', 'keep')")
+    sql.run(con, "INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 'tree', 'sha')")
     sql.run(
         con, "INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('idea', 1, 'me', 'note', 'hi')"
     )
@@ -426,18 +426,18 @@ def test_deletes_leave_tombstones_and_cascades_too(con: sqlite3.Connection) -> N
                 '{"kind":"comment.deleted","target_kind":"idea","target_id":1,"author":"me","comment_kind":"note","body":"hi"}',
             ),
             (
+                'candidate.deleted',
+                'human',
+                'candidate',
+                1,
+                '{"kind":"candidate.deleted","tree_sha":"tree","revision":"sha","origin":"run"}',
+            ),
+            (
                 'idea.deleted',
                 'human',
                 'idea',
                 1,
                 '{"kind":"idea.deleted","title":"t","status":"open","hypothesis":"h"}',
-            ),
-            (
-                'candidate.deleted',
-                'human',
-                'candidate',
-                1,
-                '{"kind":"candidate.deleted","tree_sha":"tree","revision":"sha","origin":"run","verdict":"keep"}',
             ),
         ]
     ), 'a cascade deletes the child rows too, and each one leaves a tombstone'

@@ -536,6 +536,19 @@ def secret_env(wanted: Mapping[EnvName, EnvName], found: Mapping[str, SecretStr]
     return env
 
 
+def land(site: Machine, job: AgentJob, revision: Revision) -> None:
+    """Move the job's checkout to ``revision``, a version of the repo of record (``relay.Land``).
+
+    The clone takes it from the server first when it lacks it, as a checkout does (``Clones.fetch``).
+
+    Raises:
+        VcsError: not even the repo of record has the revision, or the checkout has changes that the move would lose.
+    """
+    site.clones.fetch(job.artifact, [revision])
+    with closing(job.artifact.vcs.open(site.cwd(job))) as checkout:
+        checkout.switch(revision)
+
+
 def ship(site: Machine, job: AgentJob, revision: Revision | None) -> Shipped:
     """Send ``revision`` of the job's checkout, else the version that it is at, into the CAS (``relay.Ship``).
 

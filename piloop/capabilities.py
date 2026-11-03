@@ -56,11 +56,11 @@ from piloop.plugins.cas.http import Http
 
 from piloop.plugins.section.contract import SECTIONS, Guide, Section, SectionName, Rendering, Briefing, Surface
 from piloop.api.views import Rendered, Block, Text, Lines, Figures, Figure, Table, Value
-from piloop.plugins.campaign_type.kit.verdicts.section.headline import Headline
+from piloop.plugins.campaign_type.kit.pool.section.headline import Headline
 from piloop.plugins.section.goal import Goal
 from piloop.plugins.section.context import Context
-from piloop.plugins.campaign_type.kit.verdicts.section.tracks import Tracks
-from piloop.plugins.campaign_type.kit.verdicts.section.trajectory import Trajectory
+from piloop.plugins.campaign_type.kit.pool.section.tracks import Tracks
+from piloop.plugins.campaign_type.kit.pool.section.trajectory import Trajectory
 from piloop.plugins.campaign_type.kit.runs.section.runs import Runs
 from piloop.plugins.campaign_type.kit.backlog.section.queue import Queue
 from piloop.plugins.section.agents import Agents
@@ -68,8 +68,8 @@ from piloop.plugins.campaign_type.kit.evaluation.section.measure import Measure
 from piloop.plugins.campaign_type.kit.evaluation.section.evaluations import Evaluations
 from piloop.plugins.campaign_type.kit.evaluation.section.funnel import RunFunnel
 from piloop.plugins.section.cost import Cost
-from piloop.plugins.campaign_type.kit.verdicts.section.candidates import Candidates
-from piloop.plugins.campaign_type.kit.verdicts.section.same_as_parent import SameAsParent
+from piloop.plugins.campaign_type.kit.pool.section.candidates import Candidates
+from piloop.plugins.campaign_type.kit.pool.section.same_as_parent import SameAsParent
 from piloop.plugins.section.reported import Reported
 from piloop.plugins.section.inbox import Inbox
 from piloop.plugins.section.events import Events
@@ -81,7 +81,7 @@ from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.section.database import Database
 from piloop.plugins.campaign_type.optimization.section.concepts import Concepts
 from piloop.plugins.campaign_type.optimization.section.research_commands import ResearchCommands
-from piloop.plugins.campaign_type.kit.verdicts.section.judging import Judging
+from piloop.plugins.campaign_type.kit.pool.section.scoring import Scoring
 from piloop.plugins.section.comments import Comments
 from piloop.plugins.section.priorities import Priorities
 from piloop.plugins.section.search import Search
@@ -99,24 +99,19 @@ from piloop.plugins.role.contract import Continuity, Quiet, Wake
 from piloop.plugins.role.contract import RoleConfig
 from piloop.plugins.role.orchestrator import OrchestratorRole
 
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, VerdictRule, Case
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Criterion, Ratio, Sealed, Side, Stopped
 from piloop.plugins.metric import Direction
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Judgement, Outcome
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Node, Trunk, Imported
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import Moved, Rebase, Leave
 from piloop.plugins.metric import number
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap import Bootstrap
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.noise import Noise
 
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Case, Criterion, Scores
+from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
 from piloop.plugins.stop_rule.contract import STOP_RULES, StopRule, StopCase, Shape
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource, FactReadError
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.fact_source.facts import Fact, Facts, FactValue, Funnel
-from piloop.plugins.fact_source.facts import HEAD, RUNS, UNSETTLED, HOURS, TOKENS, WITHOUT_KEEP, KEEPS, EVALUATIONS
-from piloop.plugins.fact_source.facts import METRIC_SUMS, ATTEMPTS, FUNNEL, CAMPAIGN, OPTIMIZATION, reading, since_keep
+from piloop.plugins.fact_source.facts import BEST, RUNS, UNSETTLED, HOURS, TOKENS, WITHOUT_BEST, NEW_BESTS, EVALUATIONS
+from piloop.plugins.fact_source.facts import METRIC_SUMS, ATTEMPTS, FUNNEL, CAMPAIGN, OPTIMIZATION, reading, since_best
 from piloop.plugins.fact_source.facts import COMPUTE_USD, MODELS_USD, SPEND
-from piloop.plugins.fact_source.facts import per_keep, per_evaluation, worker_spend, per_run
+from piloop.plugins.fact_source.facts import per_best, per_evaluation, worker_spend, per_run
 from piloop.plugins.fact_source.campaign import CampaignFacts
 from piloop.plugins.campaign_type.optimization.fact_source.optimization import OptimizationFacts
 from piloop.plugins.fact_source.command import Command
@@ -164,7 +159,7 @@ from piloop.plugins.executor.contract import EXECUTORS, Executor, ExecutorConfig
 from piloop.plugins.executor.contract import Results, Settled
 from piloop.plugins.executor.contract import Job, AgentJob, LeftJob, Resume
 from piloop.plugins.executor.contract import Report, AgentReport
-from piloop.plugins.campaign_type.kit.evaluation.jobs import EvaluationJob, EvaluationReport, Sample, Bar
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EvaluationJob, EvaluationReport, Sample
 from piloop.plugins.campaign_type.kit.evaluation.jobs import run_evaluation
 from piloop.plugins.campaign_type.kit.evaluation.config import Rung, Tolerance
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
@@ -198,7 +193,7 @@ from piloop.plugins.network.https import Https, HttpsNetwork
 from piloop.plugins.network.proxy import Proxy
 
 from piloop.ids import Revision
-from piloop.plugins.vcs.contract import VCS, Vcs, Repository, Version, Conflicts, Transfer, Fetch, Captured, Unsaved
+from piloop.plugins.vcs.contract import VCS, Vcs, Repository, Version, Transfer, Fetch, Captured, Unsaved
 from piloop.plugins.vcs.contract import Pin
 from piloop.plugins.vcs.contract import VcsError, NotARepository, UnknownRevision, CloneFailed
 from piloop.plugins.vcs.contract import Part

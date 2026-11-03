@@ -16,7 +16,7 @@ from statistics import fmean
 
 from sqlalchemy import select
 
-from piloop.capabilities import Outcome, Rendered, Rendering, Section, Surface, Table
+from piloop.capabilities import Rendered, Rendering, Section, Surface, Table
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 
@@ -34,7 +34,7 @@ class Latency(Section):
 
     def render(self, r: Rendering) -> Rendered | None:
         full = (
-            select(Candidate.id, Candidate.verdict, Measurement.metrics)
+            select(Candidate.id, Measurement.metrics)
             .join(Measurement)
             .where(
                 Candidate.campaign_id == r.campaign.id,
@@ -43,16 +43,16 @@ class Latency(Section):
                 Measurement.error.is_(None),
             )
         )
-        samples: dict[tuple[int, Outcome | None], list[dict[str, float]]] = defaultdict(list)
-        for candidate, verdict, metrics in r.s.execute(full.order_by(Candidate.id.desc())):
-            samples[candidate, verdict].append(metrics)
+        samples: dict[int, list[dict[str, float]]] = defaultdict(list)
+        for candidate, metrics in r.s.execute(full.order_by(Candidate.id.desc())):
+            samples[candidate].append(metrics)
         if not samples:
             return None
         table = Table(
-            columns=('candidate', 'verdict', *self.metrics),
+            columns=('candidate', 'evaluations', *self.metrics),
             rows=tuple(
-                (f'#{candidate}', verdict.value if verdict else 'pending', *(_mean(each, m) for m in self.metrics))
-                for (candidate, verdict), each in list(samples.items())[: self.rows]
+                (f'#{candidate}', len(each), *(_mean(each, m) for m in self.metrics))
+                for candidate, each in list(samples.items())[: self.rows]
             ),
         )
         return Rendered(title='Latency', blocks=(table,))

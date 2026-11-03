@@ -414,7 +414,7 @@ class Campaign(Tracked, Base):
     only that read."""
     evaluator_id: Mapped[EvaluatorId | None]
     """The ``evaluators.id`` that the config describes now. Measurements under older evaluators stay, but no longer
-    decide verdicts. A plain integer, not a foreign key, because evaluators reference campaigns."""
+    rank the pool. A plain integer, not a foreign key, because evaluators reference campaigns."""
     status: Mapped[CampaignStatus] = mapped_column(
         default=CampaignStatus.ACTIVE, server_default=CampaignStatus.ACTIVE.value
     )
@@ -657,7 +657,7 @@ class AgentSession(Tracked, Base):
     __table_args__ = (
         # the launch queue of the pass: the requested and active rows of a campaign for each role, and its latest row
         Index('ix_agent_sessions_campaign_kind_state', 'campaign_id', 'kind', 'state'),
-        # the sessions of a subject: those of a run, behind its candidates (every kept-lineage row)
+        # the sessions of a subject: those of a run, behind its candidates (every new-best row)
         Index('ix_agent_sessions_subject', 'subject_kind', 'subject_id'),
         CheckConstraint('(subject_kind IS NULL) = (subject_id IS NULL)', name='agent_sessions_subject'),
         *text_checks('agent_sessions', 'kind', nullable=('reason', 'harness', 'model')),
@@ -726,7 +726,7 @@ class Event(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
     kind: Mapped[str] = mapped_column(Computed("json_extract(payload, '$.kind')"))
-    """``<subject>.<what>``, for example ``run.started``, ``candidate.judged``, ``idea.status``, ``comment.decision``
+    """``<subject>.<what>``, for example ``run.started``, ``candidate.scored``, ``idea.status``, ``comment.decision``
     or ``idea.deleted``: the payload's ``kind``."""
     actor: Mapped[str]
     target_kind: Mapped[TargetKind] = mapped_column(ForeignKey('target_kinds.id', name='targetkind'))

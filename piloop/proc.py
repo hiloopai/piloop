@@ -28,6 +28,9 @@ starts must not sign as that agent. Nor must it die with the agent: the CLI drop
 AGENT_TOKEN_ENV = 'PILOOP_AGENT_TOKEN'
 """The token of an agent, which its worker sets at its start (``piloop.net.tokens.mint_agent``): it acts as that agent
 with it, and as nobody else. ``child_env`` drops it, as it drops ``ACTOR_ENV``."""
+CHECKOUT_ENV = 'PILOOP_CHECKOUT_FILE'
+"""Set on a call that the server runs for an agent on a worker elsewhere: a command that moves the agent's checkout
+writes the revision here instead, and the worker moves the checkout (``piloop.plugins.executor.kit.relay``)."""
 PILOOP_ARGV = (sys.executable, '-P', '-m', 'piloop')
 """The command that runs this process's piloop, from any cwd. ``-P`` keeps the cwd off ``sys.path``: an agent's cwd is a
 campaign's worktree, and its own ``json.py`` or ``piloop/`` would otherwise shadow piloop's imports."""
@@ -81,7 +84,7 @@ def running(leader: Leader) -> bool:
 def child_env(*drop: str) -> dict[str, str]:
     """The environment for subprocesses: this process's environment without the variables that it must not pass on.
 
-    These are VIRTUAL_ENV, ``RESULT_ENV``, ``ACTOR_ENV``, ``AGENT_TOKEN_ENV`` and ``drop``. Without VIRTUAL_ENV, uv
+    These are VIRTUAL_ENV, ``RESULT_ENV``, ``ACTOR_ENV``, ``AGENT_TOKEN_ENV``, ``CHECKOUT_ENV`` and ``drop``. Without VIRTUAL_ENV, uv
     does not warn about the campaign's own virtual environment. Only the commands that piloop reads get ``RESULT_ENV``,
     so no agent gets a path of it. The launcher signs each agent and its runtime
     tags it, after this.
@@ -89,7 +92,7 @@ def child_env(*drop: str) -> dict[str, str]:
     This is the only place outside ``Settings`` that reads the environment. It passes the values on and does not
     interpret them.
     """
-    dropped = ('VIRTUAL_ENV', RESULT_ENV, ACTOR_ENV, AGENT_TOKEN_ENV, *drop)
+    dropped = ('VIRTUAL_ENV', RESULT_ENV, ACTOR_ENV, AGENT_TOKEN_ENV, CHECKOUT_ENV, *drop)
     return {k: v for k, v in os.environ.items() if k not in dropped}
 
 

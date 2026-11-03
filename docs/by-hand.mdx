@@ -65,29 +65,30 @@ role = "primary"     # the metric to improve
 name = "seconds"     # the CPU time to compress and decompress
 direction = "lower"
 role = "guardrail"   # may get worse
-margin = 60          # by at most 60 s from the head
+margin = 60          # by at most 60 s from the baseline
 floor = 120          # and never past 120 s
-repeats = 3          # a time: measured 3 times next to the head
 ```
 
-A commit with fewer bytes that holds the guardrail is a `keep`, and the next runs start from it. In this run, the
-lzma idea took 2 minutes and 356k tokens:
+The daemon scores each commit into the campaign's **pool**. A commit with fewer bytes than the best, that holds the
+guardrail, becomes the best, and the next runs start from it. In this run, the lzma idea took 2 minutes and 356k tokens:
 
 ```bash
 piloop status enwik8
 ```
 
 ```text
-enwik8 · head bytes 2720458 (candidate#2, -968317 vs baseline) · 2 kept / 2 candidates · 356k tok · evaluator #1, 3m old
+## Campaign
+
+best: candidate#2 · bytes: 2720458 · bytes vs baseline: +968317 · may be best on bytes: 2 · candidates: 2 · tokens: 356214 · evaluator: #1, 3m old
 ```
 
-The verdict says why:
+The implementer heard where its commit stands:
 
 ```text
-against candidate#1: bytes 2720458 vs 3688775 (-968317; 95% worst case -968317 over 3 pairs); guardrails: seconds 10.9 vs 0.8467 (+10.05; 95% worst case +10.28 over 3 pairs) within its margin 60
+[piloop] candidate#2 (3f2c9a1b7d04): bytes 2720458 over 1 eval: the best of the bytes track now, rank 1 of 2; vs parent +968317
 ```
 
-The example stops after 20 scored runs (`[plugins.stop_rule] max_runs`). See [the verdict](/concepts/verdict) for the rules.
+The example stops after 20 scored runs (`[plugins.stop_rule] max_runs`). See [the pool](/concepts/pool) for the rules.
 
 To let an agent answer the escalations, open your coding agent in `~/piloop-enwik8` and ask it to "orchestrate the
 piloop campaign". See [The orchestrator and the inbox](/concepts/orchestrator).
@@ -149,7 +150,7 @@ The second example, `piloop init --example titanic-tracks ~/piloop-titanic`, has
 
 Edit `piloop.toml` and run `piloop init` again. The daemon uses the copy that the last `piloop init` stored, so an
 edit has no effect before that. A change to the evaluate command, or to the name or direction of a metric, makes a new
-[evaluator](/concepts/campaigns#evaluators), and the daemon measures the head again.
+[evaluator](/concepts/campaigns#evaluators), and the daemon measures the baseline and the best again.
 
 ## Next steps
 

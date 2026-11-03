@@ -3,7 +3,7 @@
 from piloop.api.client import Client, segment
 from piloop.api.contract import Params
 from piloop.api.views import View
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 
 
 class ImportBody(Params):
@@ -20,10 +20,9 @@ class CandidateView(View):
 
     id: CandidateId
     summary: str | None
-    label: str
-    """The verdict as a person reads it: the verdict, ``pending``, or the origin of a candidate that is never judged."""
-    cause: Cause | None
-    verdict_reason: str | None
+    origin: Origin
+    excluded_reason: str | None
+    """Why someone excluded it from being best, or None."""
 
 
 class CandidateAnswer(View):

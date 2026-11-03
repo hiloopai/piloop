@@ -100,7 +100,7 @@ def test_every_trigger_writes_an_event_that_loads_as_the_model_that_renders_it(
             'DELETE FROM idea_links',
             "INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 'tree', 'sha')",
             "UPDATE candidates SET origin = 'skipped' WHERE id = 2",
-            "UPDATE candidates SET origin = 'run', verdict = 'interesting', verdict_by = 'human' WHERE id = 2",
+            "UPDATE candidates SET origin = 'run', excluded_reason = 'gamed', excluded_by = 'human' WHERE id = 2",
             "INSERT INTO runs (campaign_id, idea_id, attempt, base_candidate_id, harness, model) VALUES (1, 1, 1, 1, 'pi', 'm')",
             "UPDATE runs SET brief_cid = 'bafkr4idjif4mbxlvnejqvi73n325nycsdssgrqrgzlxeijc4onmshlzc7e' WHERE id = 1",
             "UPDATE ideas SET status = 'done' WHERE id = 1",

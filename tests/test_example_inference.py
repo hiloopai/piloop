@@ -1,4 +1,4 @@
-"""The example plugin ``examples/plugins/inference``: a fact source, a verdict rule and a section for inference work."""
+"""The example plugin ``examples/plugins/inference``: a fact source, a best rule and a section for inference work."""
 
 from collections.abc import Iterator
 from pathlib import Path
@@ -10,19 +10,7 @@ from piloop_inference.min_speedup import MinSpeedup
 from sqlalchemy import update
 
 from piloop.campaign.stop import check, gather
-from piloop.capabilities import (
-    SECTIONS,
-    Case,
-    Criterion,
-    Direction,
-    Escalate,
-    Go,
-    Hold,
-    Judgement,
-    Outcome,
-    Rendering,
-    Side,
-)
+from piloop.capabilities import SECTIONS, Case, Criterion, Direction, Escalate, Go, Hold, Rendering, Scores
 from piloop.db.models import Campaign
 from piloop.db.session import Database
 from piloop.plugins import host
@@ -44,20 +32,22 @@ def inference(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]
     host.close()
 
 
-def against_100(candidate: float) -> Case:
-    throughput = Criterion('tokens_per_s', Direction.HIGHER)
-    mine, bar = Side('candidate#2', {'tokens_per_s': candidate}, {}), Side('candidate#1', {'tokens_per_s': 100}, {})
-    return Case(throughput, (), mine, bar)
+def against_100(candidate: float, match: float = 1.0) -> Case:
+    """A confirmed candidate of ``candidate`` tokens/s against a baseline of 100, with the guardrail ``match``."""
+    throughput, guardrail = Criterion('tokens_per_s', Direction.HIGHER), Criterion('match', Direction.HIGHER, 0.01)
+    mine = Scores('candidate#2', {'tokens_per_s': candidate, 'match': match}, 3, None)
+    baseline = Scores('candidate#1', {'tokens_per_s': 100, 'match': 1.0}, 3, None)
+    return Case(throughput, (guardrail,), mine, baseline, None)
 
 
-def test_min_speedup_keeps_only_a_gain_of_at_least_its_fraction_of_the_bar() -> None:
+def test_min_speedup_lets_be_best_only_a_gain_of_at_least_its_fraction_of_the_baseline() -> None:
     rule = MinSpeedup(min_speedup=0.05)
-    assert rule.decide(against_100(110)).verdict is Outcome.KEEP
-    assert rule.decide(against_100(103)) == Judgement(
-        Outcome.INTERESTING,
-        'against candidate#1: tokens_per_s 103 vs 100 (+3; aggregate: no per-unit results); 3.0% is below min_speedup 5%',
-    )
-    assert rule.decide(against_100(90)).verdict is Outcome.DISCARD, 'what bootstrap does not keep stays'
+    assert rule.refuse(against_100(110)) is None
+    assert rule.refuse(against_100(103)) == '3.0% is below min_speedup 5%'
+    assert rule.refuse(against_100(90)) == '-10.0% is below min_speedup 5%'
+    assert rule.refuse(against_100(110, match=0.9)) == (
+        'guardrails: match 0.9 vs the baseline 1 beyond its margin 0.01'
+    ), 'what baseline refuses stays refused'
 
 
 @pytest.mark.usefixtures('inference')
@@ -102,8 +92,8 @@ def test_latency_shows_the_latest_candidates_full_benchmark_and_nothing_before_o
     assert text == snapshot("""\
 ## Latency
 
-| candidate | verdict | p95_ms | match |
+| candidate | evaluations | p95_ms | match |
 |---|---|---|---|
-| #4 | discard | 15 | — |
-| #3 | discard | 50 | 0.99 |\
+| #4 | 3 | 15 | — |
+| #3 | 2 | 50 | 0.99 |\
 """)

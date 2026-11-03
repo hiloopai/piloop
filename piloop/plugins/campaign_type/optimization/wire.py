@@ -9,7 +9,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 
 
 class NoteBody(Params):
-    """Why a regressed result is worth starting from, and the ideas to pin to it."""
+    """Why a candidate is worth starting from, and the ideas to pin to it."""
 
     reason: str
     follow_ups: tuple[str, ...] = ()
@@ -19,7 +19,7 @@ class NoteBody(Params):
 
 
 class Noted(CandidateAnswer):
-    """A regressed candidate kept in view as a lead."""
+    """A candidate noted as worth starting from."""
 
     ideas: list[IdeaView]
     """The follow-ups: open ideas about the candidate."""

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from covalence import Cid
 from git import Repo
-from git.exc import GitCommandError, GitError, InvalidGitRepositoryError, NoSuchPathError
+from git.exc import GitCommandError, InvalidGitRepositoryError, NoSuchPathError
 from pydantic import SecretStr
 
 from piloop.actor import Agent
@@ -24,7 +24,6 @@ from piloop.plugins.host import Check
 from piloop.plugins.vcs.contract import (
     MAX_HAVE,
     Captured,
-    Conflicts,
     Fetch,
     NotARepository,
     Part,
@@ -134,22 +133,21 @@ class GitRepository(Repository):
         came = git.commits(self.repo, missing)  # the repo of record leaves out a commit that it lacks
         git.pin_all(self.repo, {f'{FETCHED}{sha}': sha for sha in came})
 
-    def merge(self, onto: Revision, other: Revision, message: str) -> Version | Conflicts:
-        merged = git.merge(self.repo, onto, other, message, self.committer)
-        return Conflicts(tuple(merged)) if isinstance(merged, list) else self._version(merged)
-
-    def contains(self, revision: Revision, ancestor: Revision) -> bool:
-        try:
-            return git.contains(self.repo, revision, ancestor)
-        except GitError as e:
-            raise VcsError(str(e)) from e
-
     def keep(self, revision: Revision, why: Pin) -> None:
         git.pin(self.repo, ref(why), revision)
 
     def checkout(self, revision: Revision, path: Path) -> None:
         """A detached worktree."""
         git.add_worktree(self.repo, path, revision, {})
+
+    def switch(self, revision: Revision) -> None:
+        """A detached ``HEAD`` at ``revision``: git refuses a move that would lose a change."""
+        try:
+            self.repo.git.checkout('--detach', revision)
+        except GitCommandError as e:
+            raise VcsError(
+                f'the checkout cannot move to {revision}: {e.stderr.strip().removeprefix("stderr: ").strip("'")}'
+            ) from e
 
     def discard(self, path: Path) -> None:
         git.remove_worktree(self.repo, path)

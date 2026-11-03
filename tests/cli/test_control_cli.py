@@ -5,26 +5,21 @@ import re
 from contextlib import closing
 from pathlib import Path
 
-import cyclopts
 import pytest
-from git import Repo
 from rich.console import Console
 from sqlalchemy import select
 
 from piloop.actor import System
 from piloop.campaign import campaigns as campaign_module
 from piloop.cli import common
-from piloop.db.events import has
 from piloop.db.models import Campaign, Event
 from piloop.db.session import Database
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.verdicts.judge import RejudgeRequested
 from piloop.settings import Settings
 from tests.cli.test_cli import run_cli
 from tests.conftest import at_head, bare_config
@@ -82,136 +77,23 @@ def test_pause_and_resume_hold_the_campaign_say_so_in_status_and_refuse_twice(ca
         run_cli(['pause', 'demo', '--reason', ''])
 
 
-def test_candidate_verdict_overrides_with_the_reason_and_refuses_what_is_not_a_judgement(
-    campaign_path: Path, out
-) -> None:
-    run_cli(['init', str(campaign_path)])
-    out()
-    run_cli(['candidate', 'verdict', '1', 'interesting', '--reason', 'a lucky seed'])
-    assert out().strip() == 'candidate#1 keep → interesting: a lucky seed'
-    with database() as db, db.session() as s:
-        c = s.get_one(Candidate, 1)
-        assert (c.verdict, c.verdict_by, c.verdict_reason) == (Outcome.INTERESTING, 'human', 'a lucky seed')
-    with pytest.raises(cyclopts.CoercionError, match='Choose from: "keep", "interesting", "discard", "crash"'):
-        run_cli(['candidate', 'verdict', '1', 'pending', '--reason', 'why'])
-    with pytest.raises(SystemExit, match='no candidate#9'):
-        run_cli(['candidate', 'verdict', '9', 'keep', '--reason', 'why'])
-
-
-def test_a_hand_keep_off_the_head_says_which_candidate_the_daemon_judges_on_the_head(campaign_path: Path, out) -> None:
-    run_cli(['init', str(campaign_path)])
-    run_cli(['idea', 'add', 'demo', 'tried'])
-    repo = Repo(campaign_path)
-    base, branch = repo.head.commit.hexsha, repo.active_branch.name
-    shas = []
-    for name in ('old.txt', 'head.txt'):
-        repo.git.checkout('-q', '--detach', base)
-        (campaign_path / name).write_text('x\n')
-        repo.git.add(name)
-        repo.git.commit('-qm', name)
-        shas.append(repo.head.commit.hexsha)
-    repo.git.checkout('-q', branch)
-    with database() as db, db.session() as s:
-        run = Run(campaign_id=1, idea_id=1, attempt=1, base_candidate_id=1, harness='script', model='m')
-        s.add(run)
-        s.flush()
-        for sha, verdict in zip(shas, (Outcome.DISCARD, Outcome.KEEP), strict=True):
-            tree = repo.commit(sha).tree.hexsha
-            s.add(Candidate(campaign_id=1, run_id=run.id, parent_id=1, revision=sha, tree_sha=tree, verdict=verdict))
-        s.commit()
-    out()
-    run_cli(['candidate', 'verdict', '2', 'keep', '--reason', 'the score misses it'])
-    assert out().splitlines() == [
-        'candidate#2 discard → interesting: keeps against its own bar, but the head moved on to candidate#3: kept by'
-        ' hand: the score misses it; rebased onto the head as candidate#4',
-        'candidate#4: the daemon measures it and judges it against the head candidate#3',
-    ]
-
-
-def test_a_keep_that_replaces_the_head_says_which_runs_from_the_old_head_it_cancelled(campaign_path: Path, out) -> None:
-    run_cli(['init', str(campaign_path)])
-    run_cli(['idea', 'add', 'demo', 'tried'])
-    run_cli(['idea', 'add', 'demo', 'started from the head'])
-    with database() as db, db.session() as s:
-        made = Run(
-            campaign_id=1,
-            idea_id=1,
-            attempt=1,
-            base_candidate_id=1,
-            harness='script',
-            model='m',
-            status=RunStatus.SUCCEEDED,
-            end=RunEnd.FINISHED,
-        )
-        s.add(made)
-        s.add(
-            Run(
-                campaign_id=1,
-                idea_id=2,
-                attempt=1,
-                base_candidate_id=1,
-                harness='script',
-                model='m',
-                status=RunStatus.RUNNING,
-            )
-        )
-        s.get_one(Idea, 2).status = IdeaStatus.CLAIMED
-        s.flush()
-        s.add(
-            Candidate(campaign_id=1, run_id=made.id, parent_id=1, revision='r', tree_sha='t', verdict=Outcome.DISCARD)
-        )
-        s.commit()
-    out()
-    run_cli(['candidate', 'verdict', '2', 'keep', '--reason', 'the score misses it'])
-    assert out().splitlines() == [
-        'candidate#2 discard → keep: the score misses it',
-        'run#2 of idea#2 started from candidate#1, which is no longer the head: cancelled; the idea runs again from'
-        ' the head once the run ends',
-    ]
-
-
-def test_a_hand_keep_off_the_head_of_a_candidate_that_no_run_made_is_refused(campaign_path: Path) -> None:
-    """No seed can compose a reference onto the head: it has no run, and so no track."""
-    run_cli(['init', str(campaign_path)])
-    repo = Repo(campaign_path)
-    base, branch = repo.head.commit.hexsha, repo.active_branch.name
-    with database() as db, db.session() as s:
-        for name, verdict in (('head.txt', Outcome.KEEP), ('ref.txt', Outcome.DISCARD)):
-            repo.git.checkout('-q', '--detach', base)
-            (campaign_path / name).write_text('x\n')
-            repo.git.add(name)
-            repo.git.commit('-qm', name)
-            sha = repo.head.commit.hexsha
-            s.add(Candidate(campaign_id=1, revision=sha, tree_sha=repo.commit(sha).tree.hexsha, verdict=verdict))
-        s.commit()
-    repo.git.checkout('-q', branch)
-    with pytest.raises(SystemExit, match='candidate#3 does not build on the head candidate#2'):
-        run_cli(['candidate', 'verdict', '3', 'keep', '--reason', 'why'])
-
-
 def crashed(campaign_path: Path) -> int:
-    """A daemon ``crash`` of a run of a new idea, as candidate 2."""
+    """A run's candidate, as candidate 2, whose only evaluation failed."""
     run_cli(['init', str(campaign_path)])
     run_cli(['idea', 'add', 'demo', 'tried'])
     with database() as db, db.session() as s:
         run = Run(campaign_id=1, idea_id=1, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
-        c = Candidate(
-            campaign_id=1,
-            run_id=run.id,
-            parent_id=1,
-            tree_sha='t',
-            revision='c',
-            verdict=Outcome.CRASH,
-            verdict_by='daemon',
-        )
+        c = Candidate(campaign_id=1, run_id=run.id, parent_id=1, tree_sha='t', revision='c')
         s.add(c)
+        s.flush()
+        s.add(Measurement(candidate_id=c.id, evaluator_id=1, metrics={}, error='timed out'))
         s.commit()
         return c.id
 
 
-def test_measurement_add_records_a_report_and_asks_for_a_judgement_again_unless_the_verdict_stays(
+def test_measurement_add_records_a_report_and_says_where_the_candidate_stands_with_it(
     campaign_path: Path, tmp_path: Path, out
 ) -> None:
     c = crashed(campaign_path)
@@ -219,21 +101,32 @@ def test_measurement_add_records_a_report_and_asks_for_a_judgement_again_unless_
     report = tmp_path / 'report.json'
     report.write_text(json.dumps({'metrics': {'score': 3, 'size': 7.5}, 'seconds': 2500}))
     run_cli(['measurement', 'add', str(c), '--report', str(report)])
-    assert out().strip() == f'measurement#2 of candidate#{c}: the daemon judges it again with all its measurements'
-    report.write_text('{"metrics": {"score": 1, "size": 4}}')
+    assert out().strip() == (
+        f'measurement#3 of candidate#{c}: score 3 over 1 eval: the best of the score track now, rank 1 of 2;'
+        ' vs parent +2'
+    ), 'its mean includes it at once'
+    report.write_text('{"metrics": {"score": 5, "size": 4}}')
     run_cli(['measurement', 'add', '1', '--report', str(report)])
-    assert (
-        out().strip()
-        == 'measurement#3 of candidate#1: its keep stays; the runs that start from it must beat its new mean'
-    )
+    assert out().strip() == (
+        'measurement#4 of candidate#1: score 3 over 2 evals: the best of the score track now, rank 1 of 2'
+    ), 'the baseline climbs level, and the older wins a tie'
     with database() as db, db.session() as s:
         rows = s.scalars(select(Measurement).order_by(Measurement.id)).all()
-        assert [(m.candidate_id, m.metrics, m.seconds) for m in rows[1:]] == [
+        assert [(m.candidate_id, m.metrics, m.seconds) for m in rows[2:]] == [
             (c, {'score': 3.0, 'size': 7.5}, 2500.0),
-            (1, {'score': 1.0, 'size': 4.0}, None),
+            (1, {'score': 5.0, 'size': 4.0}, None),
         ]
-        [ask] = s.scalars(select(Event).where(has(RejudgeRequested))).all()
-        assert (ask.actor, ask.target_id) == ('human', c)
+        recorded = s.scalars(select(Event).where(Event.kind == 'measurement.recorded').order_by(Event.id)).all()
+        assert [(e.actor, e.target_kind, e.target_id) for e in recorded[-2:]] == [
+            ('human', 'measurement', 3),
+            ('human', 'measurement', 4),
+        ], 'signed by its actor'
+        s.add(Candidate(campaign_id=1, parent_id=1, tree_sha='s', revision='s', origin=Origin.SKIPPED))
+        s.commit()
+    with pytest.raises(
+        SystemExit, match='candidate#3 is skipped: it never enters the pool; submit its tree to score it'
+    ):
+        run_cli(['measurement', 'add', '3', '--report', str(report)])
     report.write_text('{"metrics": {"score": "high"}}')
     with pytest.raises(SystemExit, match=re.escape('the report is not {"metrics": {…}, "seconds": …, "error": …}')):
         run_cli(['measurement', 'add', str(c), '--report', str(report)])

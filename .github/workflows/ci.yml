@@ -77,10 +77,10 @@ jobs:
         env:
           PILOOP_HOME: /tmp/plugins-home
           PILOOP_CAMPAIGN_PLUGINS__RUNTIME__USE: nice
-          PILOOP_CAMPAIGN_PLUGINS__VERDICT_RULE__PROVIDER: min_gain
-          PILOOP_CAMPAIGN_PLUGINS__VERDICT_RULE__MIN_GAIN: "100"
-          PILOOP_CAMPAIGN_PLUGINS__STOP_RULE__PROVIDER: after_keeps
-          PILOOP_CAMPAIGN_PLUGINS__STOP_RULE__KEEPS: "3"
+          PILOOP_CAMPAIGN_PLUGINS__BEST_RULE__PROVIDER: min_gain
+          PILOOP_CAMPAIGN_PLUGINS__BEST_RULE__MIN_GAIN: "100"
+          PILOOP_CAMPAIGN_PLUGINS__STOP_RULE__PROVIDER: after_bests
+          PILOOP_CAMPAIGN_PLUGINS__STOP_RULE__BESTS: "3"
           COLUMNS: 200
         run: |
           export PATH="$HOME/.local/bin:$PATH"
@@ -93,8 +93,8 @@ jobs:
           grep -q "nice        piloop-nice 0.1.0, entry point nice = piloop_nice:Nice$" /tmp/plugins.txt
           grep -q "enwik8: runtime nice, from piloop-nice 0.1.0" /tmp/plugins.txt
           grep -q "CAS provider sqlite, from piloop-sqlite-cas 0.1.0" /tmp/plugins.txt
-          grep -q "enwik8: verdict rule min_gain, from piloop-min-gain 0.1.0" /tmp/plugins.txt
-          grep -q "enwik8: stop rule after_keeps, from piloop-stop-after-keeps 0.1.0" /tmp/plugins.txt
+          grep -q "enwik8: best rule min_gain, from piloop-min-gain 0.1.0" /tmp/plugins.txt
+          grep -q "enwik8: stop rule after_bests, from piloop-stop-after-bests 0.1.0" /tmp/plugins.txt
       - name: the wheel carries the skills (a stand-in codex on PATH)
         run: |
           export PATH="$HOME/.local/bin:$PATH"

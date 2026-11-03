@@ -1,16 +1,13 @@
 import fcntl
 import json
-import math
 import os
 import py_compile
-import random
 import re
 import sqlite3
 import subprocess
 import sys
 import threading
 from collections.abc import Callable
-from contextlib import closing
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -24,6 +21,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import StatusCode
 from pytest_mock import MockerFixture
 from sqlalchemy import func, insert, select
+from sqlalchemy.orm import Session
 
 from piloop.actor import System
 from piloop.agents.launcher import Launcher
@@ -40,36 +38,37 @@ from piloop.campaign import stop
 from piloop.campaign.campaigns import sync
 from piloop.cli.plugins import selections
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
-from piloop.db.events import has, in_order
+from piloop.db.events import has, in_order, latest
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import OriginChanged
-from piloop.ids import CampaignId, CampaignStatus, Ending, Revision, TargetRef
+from piloop.ids import CampaignId, CampaignStatus, CommentKind, Ending, Revision, TargetRef
 from piloop.otel import Span, Tracer
 from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Cause, Origin, Outcome
-from piloop.plugins.campaign_type.kit.candidates.references import import_reference, resolve
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
+from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import jobs as evaluation_jobs, queue
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import CHANGED_INPUTS
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.jobs import INPUTS_CHANGED
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
-    MeasurementRecorded,
+    Split,
     current_evaluator,
-    pairs as ledger_pairs,
     request_remeasure,
     requested,
     save_units,
     units,
 )
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES
+from piloop.plugins.campaign_type.kit.pool.due import due, unready
+from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, best_of, track_of
+from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs import stop as runs_stop
 from piloop.plugins.campaign_type.kit.runs.controller import (
-    RECOVERED_REASON,
-    SKIPPED_REASON,
     UNSAVED,
     Measuring,
     RunController,
@@ -81,17 +80,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
 from piloop.plugins.campaign_type.kit.runs.section.long_jobs import LongJobs
-from piloop.plugins.campaign_type.kit.runs.stop import runs_without_keep
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, working_on
-from piloop.plugins.campaign_type.kit.verdicts.judge import (
-    CandidateJudged,
-    Rebased,
-    due,
-    head,
-)
-from piloop.plugins.campaign_type.kit.verdicts.ops import Overridden, set_verdict
-from piloop.plugins.campaign_type.kit.verdicts.verdict import PENDING, label, pending
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.contract import Source
 from piloop.plugins.executor.kit import jobs
@@ -132,7 +121,6 @@ from tests.conftest import (
     span_named,
     wait_until,
     workers_of,
-    write_script,
     write_toml,
 )
 from tests.test_git import by
@@ -211,13 +199,13 @@ def controller(
 
 
 WORKED = AgentSettings(startup_seconds=0)
-"""An implementer that ends at once has worked: it is judged by what it left."""
+"""An implementer that ends at once has worked: it is scored by what it left."""
 
 
 def test_an_implementer_whose_launch_the_stop_rule_stops_never_starts_and_its_run_stays_queued(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """The rule answers ``Stop`` (the head reached the target) after the pass took the run: nothing starts. The run
+    """The rule answers ``Stop`` (the best reached the target) after the pass took the run: nothing starts. The run
     stays queued and its implementer is requested again, for the pass that stops the campaign to close both."""
     run_id = make_run(db, campaign)
     with db.session() as s:
@@ -245,12 +233,24 @@ def reload_campaign(db: Database, campaign: Campaign) -> None:
         s.commit()
 
 
-class Scored:
-    """A candidate with its (single) measurement flattened on, for terse assertions."""
+def told_of(s: Session, candidate: CandidateId) -> str | None:
+    """What the candidate's last score told its worker (``CandidateScored.told``), or None before it is scored."""
+    found = latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, candidate))
+    return found[1].told if found is not None else None
 
-    def __init__(self, c: Candidate) -> None:
+
+def is_best(s: Session, c: Candidate) -> bool:
+    """Whether ``c`` is the best of its run's track now."""
+    campaign = s.get_one(Campaign, c.campaign_id)
+    return Pool.of(s, campaign, track_of(campaign.config, c)).best() == c.id
+
+
+class Scored:
+    """A candidate with its (single) measurement and where it stands flattened on, for terse assertions."""
+
+    def __init__(self, s: Session, c: Candidate) -> None:
         self.id, self.parent_id, self.revision, self.summary = c.id, c.parent_id, c.revision, c.summary
-        self.verdict, self.verdict_by = c.verdict, c.verdict_by
+        self.told, self.best = told_of(s, c.id), is_best(s, c)
         [m] = c.measurements
         self.metrics, self.error = m.metrics, m.error
 
@@ -259,14 +259,14 @@ def candidates(db: Database, run_id: RunId) -> list[Scored]:
     """The candidates a run produced (its commits' trees), with their one measurement each."""
     with db.session() as s:
         rows = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
-        return [Scored(c) for c in rows]
+        return [Scored(s, c) for c in rows]
 
 
 def candidates_measured(db: Database, run_id: RunId) -> list[Scored]:
     """``candidates``, without the ones nothing measured (a skip commit, recovered work)."""
     with db.session() as s:
         rows = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
-        return [Scored(c) for c in rows if c.measurements]
+        return [Scored(s, c) for c in rows if c.measurements]
 
 
 def brief_of(db: Database, run_id: RunId) -> str:
@@ -339,7 +339,7 @@ def test_successful_run_scores_the_commit(
         }
     )
     assert dict(candidate.attributes or {}) == snapshot(
-        {'run': 1, 'revision': IsStr(), 'candidate': 2, 'verdict': 'keep', 'summary': 'add a line', 'score': 2.0}
+        {'run': 1, 'revision': IsStr(), 'candidate': 2, 'status': 'measured'}
     )
 
     run = run_row(db, run_id)
@@ -348,7 +348,8 @@ def test_successful_run_scores_the_commit(
     assert brief.startswith('# Implementer') and 'append one line' not in brief, 'the idea comes with the claim'
     assert 'lines are good' not in brief and 'short files lose' not in brief
     [e] = candidates(db, run_id)
-    assert (e.verdict, e.summary, e.metrics) == (Outcome.KEEP, 'add a line', {'score': 2.0, 'size': IsPositive()})
+    assert (e.best, e.summary, e.metrics) == (True, 'add a line', {'score': 2.0, 'size': IsPositive()})
+    assert e.told == snapshot('score 2 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +1')
     assert e.parent_id == baseline(db, campaign.id).id
     with db.session() as s:
         assert s.get_one(Idea, run.idea_id).status is IdeaStatus.DONE
@@ -371,12 +372,11 @@ def test_successful_run_scores_the_commit(
             'run.finished',
             'lease.queued',
             'measurement.recorded',
-            'candidate.judged',
-            'candidate.verdict',
+            'candidate.scored',
             'idea.status',
             'subject.settled',
         ]
-    ), 'the run closes when its implementer ends; the idea settles once the commit is judged'
+    ), 'the run closes when its implementer ends; the idea settles once the commit is scored'
 
     repo = Repo(campaign.path)
     assert [r.path for r in repo.refs if r.path.startswith('refs/piloop/')] == [f'refs/piloop/demo/r{run_id}/0']
@@ -417,7 +417,7 @@ def test_what_an_implementer_writes_in_its_workspace_is_merged_into_the_campaign
     assert c.summary == 'add a line', 'what it wrote in the workspace is not in its commit'
 
 
-def test_every_commit_is_scored_and_lineage_follows_keeps(
+def test_every_commit_is_scored_and_descends_from_the_one_before(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
@@ -425,12 +425,14 @@ def test_every_commit_is_scored_and_lineage_follows_keeps(
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     first, second = candidates(db, run_id)
-    assert (first.summary, first.verdict, first.metrics['score']) == ('first', Outcome.KEEP, 2.0)
-    assert (second.summary, second.verdict, second.metrics['score'], second.parent_id) == (
-        'second',
-        Outcome.KEEP,
-        3.0,
-        first.id,
+    assert (first.summary, first.metrics['score'], first.parent_id) == ('first', 2.0, 1)
+    assert (second.summary, second.metrics['score'], second.parent_id) == ('second', 3.0, first.id)
+    assert (first.best, second.best) == (False, True)
+    assert (first.told, second.told) == snapshot(
+        (
+            'score 2 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +1',
+            'score 3 over 1 eval: the best of the score track now, rank 1 of 3; vs parent +1',
+        )
     )
 
 
@@ -444,7 +446,7 @@ def test_every_commit_of_a_run_is_a_candidate_before_the_first_is_measured(
     run_id = make_run(db, campaign)
     ex = controller(db, runtime, tmp_path)
     measure = ex._measure
-    seen: list[list[tuple[str | None, str, int | None]]] = []
+    seen: list[list[tuple[str | None, int, int | None]]] = []
 
     def watched(
         run: RunId | None,
@@ -455,26 +457,26 @@ def test_every_commit_of_a_run_is_a_candidate_before_the_first_is_measured(
         evaluator_id: EvaluatorId,
         eval_dir: Path,
         *,
-        bar: CandidateId | None,
-        repeats: int,
-        gate: CandidateId | None,
+        repeats: int = 1,
+        gate: CandidateId | None = None,
+        split: Split = Split.VISIBLE,
     ) -> Measuring:
         with db.session() as s:
             rows = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
-            seen.append([(c.summary, label(c), c.parent_id) for c in rows])
+            seen.append([(c.summary, len(c.measurements), c.parent_id) for c in rows])
         return measure(
-            run, campaign_id, cfg, sha, candidate_id, evaluator_id, eval_dir, bar=bar, repeats=repeats, gate=gate
+            run, campaign_id, cfg, sha, candidate_id, evaluator_id, eval_dir, repeats=repeats, gate=gate, split=split
         )
 
     monkeypatch.setattr(ex, '_measure', watched)
     execute(ex, db, run_id)
     first, second = candidates(db, run_id)
-    assert seen[0] == [('first', PENDING, 1), ('second', PENDING, first.id)], 'all at once, in order'
-    assert (first.verdict, second.verdict, second.metrics['score']) == (Outcome.KEEP, Outcome.KEEP, 3.0)
+    assert seen[0] == [('first', 0, 1), ('second', 0, first.id)], 'all at once, in order'
+    assert (first.metrics['score'], second.metrics['score'], second.best) == (2.0, 3.0, True)
 
 
 @pytest.mark.parametrize('moved_to', [None, IdeaStatus.DROPPED, IdeaStatus.DROPPED])
-def test_a_run_counts_toward_max_runs_from_its_close_to_its_verdict(
+def test_a_run_counts_toward_max_runs_from_its_close_to_its_score(
     db: Database,
     campaign: Campaign,
     runtime: ScriptRuntime,
@@ -508,57 +510,56 @@ def test_a_run_counts_toward_max_runs_from_its_close_to_its_verdict(
 
 
 @pytest.mark.usefixtures('daemon_api')
-def test_worse_commit_is_discarded(db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path) -> None:
+def test_a_worse_commit_is_scored_below_the_best(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
     write_toml(Path(campaign.path), HARNESS_WORSE + END_RUN)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     [e] = candidates(db, run_id)
-    assert (e.verdict, e.verdict_by) == (Outcome.DISCARD, System.DAEMON)
+    assert (e.best, e.metrics['score']) == (False, 0.0)
+    assert e.told == snapshot('score 0 over 1 eval: rank 2 of 2; vs parent -1, vs best candidate#1 -1')
     assert run_row(db, run_id).status is RunStatus.SUCCEEDED
 
 
-def test_a_verdict_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml(
+def test_a_best_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_toml(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The example plugin ``examples/plugins/min-gain``, installed, is selected by ``[plugins.verdict_rule]``.
+    """The example plugin ``examples/plugins/min-gain``, installed, is selected by ``[plugins.best_rule]``.
 
-    The daemon judges the run's commit with it: ``bootstrap`` would keep a gain of 1, ``min_gain = 2`` does not.
+    The daemon scores the run's commit with it: ``baseline`` would let a gain of 1 be best, ``min_gain = 2`` does not.
     """
     example(tmp_path / 'site', 'min-gain')
     monkeypatch.syspath_prepend(tmp_path / 'site')
     host.close()
     try:
         for table, error in [
-            ({'provider': 'strict'}, "plugins.verdict_rule: provider = 'strict': unknown verdict rule 'strict'"),
+            ({'provider': 'strict'}, "plugins.best_rule: provider = 'strict': unknown best rule 'strict'"),
             ({'provider': 'min_gain', 'min_gain': 'x'}, "min_gain = 'x': Input should be a valid number"),
             (
-                {'provider': 'bootstrap', 'min_gain': 2},
-                'plugins.verdict_rule.min_gain = 2: Extra inputs are not permitted',
+                {'provider': 'baseline', 'min_gain': 2},
+                'plugins.best_rule.min_gain = 2: Extra inputs are not permitted',
             ),
         ]:
             with pytest.raises(ConfigError, match=re.escape(error)):
-                load_campaign_config(Path(campaign.path), plugins={'verdict_rule': table})
+                load_campaign_config(Path(campaign.path), plugins={'best_rule': table})
         with db.session() as s:
             cfg = load_campaign_config(
-                Path(campaign.path), plugins={'verdict_rule': {'provider': 'min_gain', 'min_gain': 2}}
+                Path(campaign.path), plugins={'best_rule': {'provider': 'min_gain', 'min_gain': 2}}
             )
             s.get_one(Campaign, campaign.id).config = cfg
             s.commit()
         run_id = make_run(db, campaign)
         execute(controller(db, runtime, tmp_path), db, run_id)
         [e] = candidates(db, run_id)
-        with db.session() as s:
-            reason = s.get_one(Candidate, e.id).verdict_reason
-        assert (e.verdict, e.verdict_by, e.metrics['score']) == (Outcome.INTERESTING, System.DAEMON, 2.0)
-        assert reason == snapshot(
-            'against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results); the gain is below min_gain 2'
+        assert (e.best, e.metrics['score']) == (False, 2.0)
+        assert e.told == snapshot(
+            'score 2 over 1 eval: it may not be best: its gain 1 is below min_gain 2; vs parent +1, vs best candidate#1 +1'
         )
-        assert VERDICT_RULES.sources()['min_gain'].release == 'piloop-min-gain 0.1.0'
+        assert BEST_RULES.sources()['min_gain'].release == 'piloop-min-gain 0.1.0'
         stored = f'in the config of demo that the last `piloop init` stored from {campaign.path}/piloop.toml'
-        selected = (
-            f'demo: verdict rule min_gain, from piloop-min-gain 0.1.0 ([plugins.verdict_rule] provider, {stored})'
-        )
+        selected = f'demo: best rule min_gain, from piloop-min-gain 0.1.0 ([plugins.best_rule] provider, {stored})'
         assert selected in selections(Settings(home=tmp_path))
     finally:
         host.close()
@@ -567,43 +568,32 @@ def test_a_verdict_rule_from_a_plugin_replaces_the_built_in_one_through_piloop_t
 def test_work_a_stopped_implementer_left_uncommitted_is_recovered_and_its_idea_is_open_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """A failed implementer's uncommitted tree was scored, and could become the head, never declared ready.
+    """A failed implementer's uncommitted tree was scored, and could become the best, never declared ready.
 
-    It is now ``recovered``: committed, pinned, never measured, never a keep. The run's claim ends: its idea is open
-    for the next worker, which starts from the head.
+    It is now ``recovered``: committed, pinned, never measured, never in the pool. The run's claim ends: its idea is
+    open for the next worker, which starts from the best.
     """
     write_toml(Path(campaign.path), HARNESS_FORGETS_COMMIT)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     assert (run_row(db, run_id).end, run_row(db, run_id).error) == (RunEnd.GAVE_UP, None)
-    [(summary, verdict, reason, measurements, _)] = scored(db, run_id)
-    assert (summary, verdict, reason, measurements) == (
-        UNCOMMITTED,
-        Origin.RECOVERED,
-        RECOVERED_REASON.format(run=run_id),
-        0,
-    )
+    [(summary, status, told, measurements, _)] = scored(db, run_id)
+    assert (summary, status, told, measurements) == (UNCOMMITTED, Origin.RECOVERED, None, 0)
     with db.session() as s:
         recovered = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
         assert s.get_one(Idea, claimed_id(s.get_one(Run, run_id))).status is IdeaStatus.OPEN
         assert [c.body for c in s.scalars(select(Comment).where(Comment.target_kind == IDEA))] == [
             f'open: run#{run_id} gave the idea back; it ended gave_up'
         ], 'the note says why, and nothing is requeued'
-        trunk = head(s, s.get_one(Campaign, campaign.id))
-        assert trunk is not None and trunk.id == 1, 'the head did not move: the baseline is candidate#1'
+        best = best_of(s, s.get_one(Campaign, campaign.id))
+        assert best is not None and best.id == 1, 'the best did not move: the baseline is candidate#1'
         recovered_sha = recovered.revision
     repo = Repo(campaign.path)
     assert 'data' not in repo.git.show('--stat', '--format=', recovered_sha), 'linked paths are never committed'
     assert repo.git.log('-1', '--format=%(trailers:key=Piloop-Recovered,valueonly)', recovered_sha).strip() == (
         f'run#{run_id}'
     )
-
-
-TWO_DISCARDS = (
-    '#!/bin/sh\n: > solve.txt\ngit commit -qam "wipe"\necho x > other.txt\ngit add other.txt\ngit commit -qm "second"\n'
-)
-"""Two commits that score below the baseline: neither moves the head."""
 
 
 @pytest.mark.usefixtures('daemon_api')
@@ -615,7 +605,7 @@ def test_dirt_after_a_commit_is_recovered_on_its_own_and_the_commit_is_scored_as
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     assert [(c[0], c[1], c[3]) for c in scored(db, run_id)] == [
-        ('the idea', Outcome.KEEP, 1),
+        ('the idea', 'best', 1),
         (UNCOMMITTED, Origin.RECOVERED, 0),
     ], 'never amended: the implementer declared its commit, not the dirt after it'
     [e] = [c for c in candidates_measured(db, run_id)]
@@ -693,7 +683,7 @@ def test_a_run_whose_session_the_stop_cut_short_ends_as_cut_by_the_stop_and_is_n
     assert (run.end, run.error) == (RunEnd.CAMPAIGN_STOPPED, None)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        assert runs_without_keep(s, p) == 1, 'the first run only: the cut one is no attempt'
+        assert runs_stop.runs_without_best(s, p) == 1, 'the first run only: the cut one is no attempt'
 
 
 def test_a_role_timeout_that_init_raises_applies_to_the_next_run(
@@ -715,7 +705,7 @@ def test_a_role_timeout_that_init_raises_applies_to_the_next_run(
 
 
 @pytest.mark.usefixtures('submitting')
-def test_evaluate_failure_is_a_crash_verdict(
+def test_an_evaluate_failure_is_a_crash(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
 
@@ -729,86 +719,54 @@ def test_evaluate_failure_is_a_crash_verdict(
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     [e] = candidates(db, run_id)
-    assert (e.verdict, e.metrics) == (Outcome.CRASH, {})
+    assert (e.best, e.told, e.metrics) == (False, 'crash: no evaluation succeeded', {})
     assert e.error is not None and e.error.startswith('evaluate exit 9')
-    assert run_row(db, run_id).status is RunStatus.SUCCEEDED, (
-        'the implementer did its job; the candidate carries the verdict'
-    )
+    assert run_row(db, run_id).status is RunStatus.SUCCEEDED, 'the implementer did its job; the candidate crashed'
 
 
-def test_a_crash_from_a_fault_of_the_host_is_measured_again_on_request_and_judged(
+def test_a_crash_from_a_fault_of_the_host_is_measured_again_on_request_and_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """A crash that the host caused (a full disk) says nothing about the code, and its tree cannot be committed again.
 
-    ``piloop candidate remeasure`` asks the daemon to measure the candidate again with the current evaluator. A crash
-    that the daemon judged is then judged as its run would have judged it: here it keeps against its own bar after the
-    head moved on, so it is rebased onto the head, and the merge is judged there.
+    ``piloop candidate remeasure`` asks the daemon to measure the candidate again with the current evaluator. Once the
+    fault is gone, the candidate is scored into the pool as its run would have scored it.
     """
     fault = tmp_path / 'disk-full'
-    measure = f'test -e {fault} && exit 28; ' + reports(
-        score='$(cat solve.txt other.txt 2>/dev/null | wc -l)', size='$(wc -c < solve.txt)'
-    )
+    measure = f'test -e {fault} && exit 28; ' + reports(score='$(wc -l < solve.txt)', size='$(wc -c < solve.txt)')
     write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=['sh', '-c', measure])
     reload_campaign(db, campaign)
     ex = controller(db, runtime, tmp_path)
-    ex.remeasure(baseline(db, campaign.id).id)  # the new evaluator measures the head first, as the daemon does
+    ex.remeasure(baseline(db, campaign.id).id)  # the new evaluator measures the baseline first, as the daemon does
     run_id = make_run(db, campaign)
     fault.touch()
     execute(ex, db, run_id)
     [crashed] = candidates(db, run_id)
-    assert crashed.verdict is Outcome.CRASH
+    assert (crashed.best, crashed.told) == (False, 'crash: no evaluation succeeded')
     with db.session() as s:
-        request_remeasure(s, s.get_one(Candidate, crashed.id), System.ORCHESTRATOR)
+        request_remeasure(s, s.get_one(Candidate, crashed.id), System.ORCHESTRATOR, repeats=1)
         s.commit()
     ex.remeasure(crashed.id)
-    base = baseline(db, campaign.id).id
     with db.session() as s:
         c = s.get_one(Candidate, crashed.id)
-        assert (c.verdict, len(c.measurements)) == (Outcome.CRASH, 2), 'the fault is still there: a crash again'
-        assert len(s.get_one(Candidate, base).measurements) == 2, 'its first run crashed, so its bar never ran'
+        assert [m.error is None for m in c.measurements] == [False, False], 'the fault is still there: a crash again'
+        assert told_of(s, crashed.id) == 'crash: no evaluation succeeded'
     fault.unlink()
-    write_script(
-        Path(campaign.path).parent / 'harness.sh',
-        '#!/bin/sh\necho x > other.txt\ngit add other.txt\ngit commit -qm other\n',
-    )
-    execute(ex, db, make_run(db, campaign, title='elsewhere'))
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        moved = head(s, p)
-        assert moved is not None and moved.summary == 'other', 'the head moved on meanwhile'
         assert requested(s, p) == [], 'nobody asked'
         request_remeasure(s, s.get_one(Candidate, crashed.id), System.ORCHESTRATOR)
         s.commit()
         assert [c.id for c, _ in requested(s, p)] == [crashed.id]
-
     ex.remeasure(crashed.id)
     with db.session() as s:
         c = s.get_one(Candidate, crashed.id)
-        assert (c.verdict, c.verdict_by) == (Outcome.INTERESTING, System.DAEMON)
-        assert c.verdict_reason is not None and c.verdict_reason.startswith(
-            f'keeps against its own bar, but the head moved on to candidate#{moved.id}: against candidate#1: score 2 vs 1'
-            ' (+1; 95% worst case +1 over 3 pairs)'
-        )
         assert [m.error is None for m in c.measurements] == [False, False, True, True, True]
         p = s.get_one(Campaign, campaign.id)
         assert requested(s, p) == [], 'measured since the request'
-        merged = head(s, p)
-        assert merged is not None and (merged.parent_id, merged.run_id, merged.verdict) == (
-            moved.id,
-            run_id,
-            Outcome.KEEP,
-        )
-
-        request_remeasure(s, merged, System.ORCHESTRATOR)
-        s.commit()
-        merged_id = merged.id
-    ex.remeasure(merged_id)
-    with db.session() as s:
-        c = s.get_one(Candidate, merged_id)
-        assert (len(c.measurements), c.verdict) == (4, Outcome.KEEP), 'a repeat of a keep keeps its verdict'
-        assert {m.pair.candidate_id for m in c.measurements if m.pair} == {moved.id}, (
-            'its bar is the head it merged onto'
+        assert best_of(s, p) == c
+        assert told_of(s, crashed.id) == snapshot(
+            'score 2 over 3 evals: the best of the score track now, rank 1 of 2; vs parent +1'
         )
 
 
@@ -817,7 +775,7 @@ def test_a_crash_on_the_evaluate_timeout_is_measured_again_on_request_once_the_t
 ) -> None:
     """A load that slows the evaluator past ``evaluate_timeout`` crashes good code, and its tree cannot be committed
     again. The timeout is no part of the evaluator, so once it is raised, ``piloop candidate remeasure`` measures the
-    candidate again under the same evaluator, with the new timeout, and judges it again."""
+    candidate again under the same evaluator, with the new timeout, and scores it again."""
     measure = f'test $(wc -l < solve.txt) -gt 1 && sleep 1; {reports(score="$(wc -l < solve.txt)", size="1")}'
     write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=['sh', '-c', measure])
     toml = Path(campaign.path) / 'piloop.toml'
@@ -828,7 +786,7 @@ def test_a_crash_on_the_evaluate_timeout_is_measured_again_on_request_once_the_t
     run_id = make_run(db, campaign)
     execute(ex, db, run_id)
     [crashed] = candidates(db, run_id)
-    assert (crashed.verdict, crashed.error) == (Outcome.CRASH, 'evaluate timeout after 0.2s')
+    assert (crashed.told, crashed.error) == ('crash: no evaluation succeeded', 'evaluate timeout after 0.2s')
     with db.session() as s:
         evaluator_id = s.get_one(Campaign, campaign.id).evaluator_id
     toml.write_text(toml.read_text().replace('evaluate_timeout = 0.2', 'evaluate_timeout = 30'))
@@ -840,140 +798,13 @@ def test_a_crash_on_the_evaluate_timeout_is_measured_again_on_request_once_the_t
     with db.session() as s:
         c = s.get_one(Candidate, crashed.id)
         assert [m.evaluator_id == evaluator_id for m in c.measurements] == [True, True], 'the same evaluator'
-        assert (c.verdict, c.verdict_by, c.verdict_reason) == (
-            Outcome.KEEP,
-            System.DAEMON,
-            'against candidate#1: score 2 vs 1 (+1; 95% worst case +1 over 1 pairs)',
+        assert told_of(s, c.id) == snapshot(
+            'score 2 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +1'
         )
-        assert head(s, s.get_one(Campaign, campaign.id)) == c
+        assert best_of(s, s.get_one(Campaign, campaign.id)) == c
 
 
-LOADED = (
-    'lines=$(wc -l < solve.txt); echo $lines >> {order}; grep -qx $lines {fail} 2>/dev/null && exit 3;'
-    ' printf \'{{"metrics": {{"score": %s, "seconds": %s}}}}\\n\' "$lines" "$((10 * $(cat {load})))"'
-    ' >> "$PILOOP_RESULT_FILE"'
-)
-"""An evaluate whose time is 10 s times the host's load, whatever the tree. It logs the lines of each tree it runs, and
-fails on a tree whose lines are in ``fail``."""
-
-
-def loaded(db: Database, campaign: Campaign, tmp_path: Path) -> tuple[Path, Path, Path]:
-    """Give the campaign the ``LOADED`` evaluate, with ``seconds`` as a guardrail of margin 5. Return its files."""
-    load, order, fail = tmp_path / 'load', tmp_path / 'order', tmp_path / 'fail'
-    load.write_text('1')
-    metrics = [
-        {'name': 'score', 'direction': 'higher', 'role': 'primary'},
-        {'name': 'seconds', 'direction': 'lower', 'role': 'guardrail', 'margin': 5},
-    ]
-    evaluate = ['sh', '-c', LOADED.format(load=load, order=order, fail=fail)]
-    set_config(db, campaign, metrics=metrics, evaluate=evaluate)
-    return load, order, fail
-
-
-def test_a_remeasure_runs_pairs_of_the_candidate_and_its_bar_and_judges_it_again_on_them(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """The bar was measured on a quiet host, the candidate under load, so a guardrail held the keep back. A remeasure
-    runs the candidate and its bar one after the other, so the load hits both, and judges the candidate on the pairs."""
-    load, order, _ = loaded(db, campaign, tmp_path)
-    ex = controller(db, runtime, tmp_path)
-    ex.remeasure(baseline(db, campaign.id).id)  # the new evaluator measures the head first, as the daemon does
-    load.write_text('4')
-    run_id = make_run(db, campaign)
-    execute(ex, db, run_id)
-    [c] = candidates(db, run_id)
-    with db.session() as s:
-        assert s.get_one(Candidate, c.id).verdict_reason == snapshot(
-            'against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results); guardrails: seconds 40 vs 10 (+30; aggregate: no per-unit results) beyond its margin 5'
-        )
-    order.write_text('')
-    with db.session() as s:
-        request_remeasure(s, s.get_one(Candidate, c.id), System.ORCHESTRATOR, repeats=3)
-        s.commit()
-    ex.remeasure(c.id)
-    assert order.read_text().split() == ['2', '1', '1', '2', '2', '1'], 'the candidate first, then in ABBA order'
-    with db.session() as s:
-        candidate = s.get_one(Candidate, c.id)
-        assert (candidate.verdict, candidate.verdict_by, candidate.verdict_reason) == snapshot(
-            (
-                Outcome.KEEP,
-                'daemon',
-                'against candidate#1: score 2 vs 1 (+1; 95% worst case +1 over 3 pairs); guardrails: seconds 40 vs 40 (+0; 95% worst case +0 over 3 pairs) within its margin 5',
-            )
-        )
-        paired = [(m.metrics, m.pair.candidate_id, m.pair.metrics) for m in candidate.measurements if m.pair]
-        assert paired == [({'score': 2.0, 'seconds': 40.0}, 1, {'score': 1.0, 'seconds': 40.0})] * 3
-        assert head(s, s.get_one(Campaign, campaign.id)) == candidate
-        recorded = [p.pair for _, p in in_order(s, MeasurementRecorded)]
-        bars = [m.pair_id for m in candidate.measurements if m.pair]
-        assert recorded[-6:] == [None, None, None, *bars], 'the event names the pair too'
-
-
-def test_a_paired_evaluation_stops_at_the_first_run_that_fails(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A pair needs both sides, so a bar that crashes ends the evaluation. The candidate ran first: it has a sample."""
-    _, order, fail = loaded(db, campaign, tmp_path)
-    ex = controller(db, runtime, tmp_path)
-    ex.remeasure(baseline(db, campaign.id).id)
-    run_id = make_run(db, campaign)
-    execute(ex, db, run_id)
-    [c] = candidates(db, run_id)
-    fail.write_text('1\n')
-    order.write_text('')
-    with db.session() as s:
-        request_remeasure(s, s.get_one(Candidate, c.id), System.ORCHESTRATOR)
-        s.commit()
-    ex.remeasure(c.id)
-    assert order.read_text().split() == ['2', '1'], 'the bar failed: no pair can follow'
-    with db.session() as s:
-        crashed = s.get_one(Candidate, baseline(db, campaign.id).id).measurements[-1]
-        assert crashed.error == IsStr(regex='evaluate exit 3.*')
-        last = s.get_one(Candidate, c.id).measurements[-1]
-        assert (last.error, last.pair) == (None, crashed), 'it names what ran next to it, which is no pair'
-
-
-DRIFTING = (
-    'load=$(head -n 1 {loads}); tail -n +2 {loads} > {loads}.next; mv {loads}.next {loads};'
-    ' printf \'{{"metrics": {{"score": %s, "seconds": %s}}}}\\n\' "$(wc -l < solve.txt)"'
-    ' "$(awk -v l=$load "BEGIN {{ print 10 * l }}")" >> "$PILOOP_RESULT_FILE"'
-)
-"""An evaluate whose time is 10 s times the next load of ``loads``, whatever the tree: one line per run."""
-
-
-def drifting_loads(seed: int) -> list[float]:
-    """The load of each run: 1 for the bar on a quiet host, then a load between 2x and 5x that drifts a little on each
-    run, as a host's load does over seconds."""
-    rng = random.Random(seed)
-    load, loads = rng.uniform(2, 5), [1.0]
-    for _ in range(12):
-        loads.append(round(load, 3))
-        load = min(max(load * math.exp(rng.gauss(0, 0.03)), 1), 5)
-    return loads
-
-
-@pytest.mark.parametrize('seed', range(10))
-@pytest.mark.parametrize('repeats', [None, 3])
-def test_an_a_a_test_under_load_keeps_a_gain_of_the_same_speed_only_when_it_is_paired(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, seed: int, repeats: int | None
-) -> None:
-    """The candidate gains on the primary and has the speed of its bar, which was measured on a quiet host. Unpaired,
-    the load decides its time guardrail. With ``repeats``, the bar runs next to it, so the load hits both alike."""
-    loads = tmp_path / 'loads'
-    loads.write_text(''.join(f'{x}\n' for x in drifting_loads(seed)))
-    seconds = {'name': 'seconds', 'direction': 'lower', 'role': 'guardrail', 'margin': 5, 'repeats': repeats}
-    metrics = [{'name': 'score', 'direction': 'higher', 'role': 'primary'}, seconds]
-    set_config(db, campaign, metrics=metrics, evaluate=['sh', '-c', DRIFTING.format(loads=loads)])
-    ex = controller(db, runtime, tmp_path)
-    ex.remeasure(baseline(db, campaign.id).id)  # the new evaluator measures the head on a quiet host
-    run_id = make_run(db, campaign)
-    execute(ex, db, run_id)
-    with db.session() as s:
-        c = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
-        assert (c.verdict, len(c.measurements)) == ((Outcome.KEEP, 3) if repeats else (Outcome.INTERESTING, 1))
-
-
-def test_a_remeasure_that_a_stop_cancels_records_and_judges_nothing(
+def test_a_remeasure_that_a_stop_cancels_records_and_scores_nothing(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     ex = controller(db, runtime, tmp_path)
@@ -981,7 +812,7 @@ def test_a_remeasure_that_a_stop_cancels_records_and_judges_nothing(
     ex.remeasure(baseline(db, campaign.id).id)
     with db.session() as s:
         c = s.get_one(Candidate, baseline(db, campaign.id).id)
-        assert (len(c.measurements), c.verdict) == (1, Outcome.KEEP), 'the stop owns the rows'
+        assert (len(c.measurements), in_order(s, CandidateScored)) == (1, []), 'the stop owns the rows'
 
 
 def test_brief_carries_history_and_comments(
@@ -1006,7 +837,7 @@ def test_brief_carries_history_and_comments(
         '# Context',
         '## Comments on this idea',
         '## History: ideas',
-        '## History: kept lineage',
+        '## History: new bests',
     ]
     assert [brief.index(s) for s in order] == sorted(brief.index(s) for s in order), 'the fixed brief order'
     assert '## Your idea' not in brief and 'candidate#2' in brief, 'a fresh run reads the board, not one idea'
@@ -1148,125 +979,45 @@ def test_exception_in_run_is_recorded(
     assert span.status.status_code is StatusCode.ERROR and [e.name for e in span.events] == ['exception']
 
 
-def test_the_head_is_the_latest_trunk_keep_whatever_it_scores(db: Database, campaign: Campaign) -> None:
-    with db.session() as s:
-        proj = s.get_one(Campaign, campaign.id)
-        evaluator_id = proj.evaluator_id
-        assert evaluator_id is not None
-        rows = {}
-        for tree, verdict, run_id, score in (
-            ('a', Outcome.KEEP, None, 9.0),
-            ('b', Outcome.KEEP, None, 1.0),
-            ('c', Outcome.INTERESTING, None, 99.0),
-            ('r', None, None, 5.0),
-        ):
-            origin = Origin.RUN if verdict else Origin.REFERENCE
-            rows[tree] = c = Candidate(
-                campaign_id=campaign.id, tree_sha=tree, revision=tree, origin=origin, verdict=verdict, run_id=run_id
-            )
-            s.add(c)
-            s.flush()
-            s.add(Measurement(candidate_id=c.id, evaluator_id=evaluator_id, metrics={'score': score}))
-        s.commit()
-        trunk = head(s, proj)
-        assert trunk is not None and trunk.tree_sha == 'b', (
-            'b is the latest trunk keep: a lower score than a changes nothing, an interesting is no keep and a'
-            ' reference is never one'
-        )
-        assert head(s, proj, excluding=rows['b']) == rows['a'], 'the candidate being judged is never its own bar'
-        unscored = Candidate(campaign_id=campaign.id, tree_sha='u', revision='u', origin=Origin.REFERENCE)
-        s.add(unscored)
-        s.flush()
-        assert [c.tree_sha for c in due(s, proj)] == ['u'], 'a reference that no evaluator measured'
-        proj.evaluator_id = s.scalar(
-            insert(Evaluator).values(campaign_id=campaign.id, key='next', definition={}).returning(Evaluator.id)
-        )
-        assert [c.tree_sha for c in due(s, proj)] == ['b', 'u'], (
-            'under a new evaluator the head, not the older keeps or the measured reference'
-        )
-
-
-def test_a_new_evaluator_measures_what_a_verdict_needs_then_what_someone_asked_for(
+def test_a_new_evaluator_measures_the_baseline_and_the_old_best_then_what_someone_asked_for_then_new_references(
     db: Database, campaign: Campaign
 ) -> None:
-    """After an evaluator change, the daemon measures the head, the bars of open runs, the asks and the bars of pinned
-    ideas, in that order. An ask needs no measured bar: its paired evaluation measures the bar too.
+    """After an evaluator change, the daemon measures the baseline, the best under the old evaluator, the asks and the
+    new references, in that order.
 
-    Every other keep keeps its old scores until someone asks: measuring the whole history again held every evaluation
-    for hours after each change of the evaluator.
+    Every other candidate keeps its old scores until someone asks: measuring the whole history again held every
+    evaluation for hours after each change of the evaluator.
     """
     with db.session() as s:
         proj = s.get_one(Campaign, campaign.id)
         old = proj.evaluator_id
         assert old is not None
-        idea = Idea(track='score', campaign_id=campaign.id, title='t', hypothesis='h', created_by='t')
-        s.add(idea)
-        s.flush()
         rows: dict[str, Candidate] = {}
-
-        def add(tree: str, verdict: Outcome | None, parent: str | None = None, run: Run | None = None) -> Candidate:
+        for tree, origin, score in (('a', Origin.RUN, 9.0), ('b', Origin.RUN, 1.0), ('ref', Origin.REFERENCE, 5.0)):
             rows[tree] = c = Candidate(
-                campaign_id=campaign.id,
-                tree_sha=tree,
-                revision=tree,
-                origin=Origin.RUN if verdict else Origin.REFERENCE,
-                verdict=verdict,
-                verdict_by=System.DAEMON,
-                parent_id=rows[parent].id if parent else None,
-                run_id=run.id if run else None,
+                campaign_id=campaign.id, tree_sha=tree, revision=tree, origin=origin, parent_id=1
             )
             s.add(c)
             s.flush()
-            s.add(Measurement(candidate_id=c.id, evaluator_id=old, metrics={'score': 1.0}))
-            return c
-
-        for tree in ('k1', 'k2', 'k3', 'k4', 'k5'):
-            add(tree, Outcome.KEEP, parent='k1' if tree != 'k1' else None)
-        add('lead', Outcome.INTERESTING, parent='k1')
-        add('ref', None)
-        done = Run(
-            campaign_id=idea.campaign_id,
-            idea_id=idea.id,
-            attempt=1,
-            base_candidate_id=rows['k2'].id,
-            harness='h',
-            model='m',
-        )
-        done.status, done.end = RunStatus.SUCCEEDED, RunEnd.FINISHED
-        s.add_all(
-            [
-                done,
-                Run(
-                    campaign_id=idea.campaign_id,
-                    idea_id=idea.id,
-                    attempt=2,
-                    base_candidate_id=rows['lead'].id,
-                    harness='h',
-                    model='m',
-                ),
-            ]
-        )
-        s.flush()
-        add('crash', Outcome.CRASH, parent='k2', run=done)
-        add('repeat', Outcome.DISCARD, parent='k3', run=done)
-        add('head', Outcome.KEEP, parent='k5')
+            s.add(Measurement(candidate_id=c.id, evaluator_id=old, metrics={'score': score}))
         fresh = Candidate(campaign_id=campaign.id, tree_sha='fresh', revision='fresh', origin=Origin.REFERENCE)
         s.add(fresh)
-        for asked in ('crash', 'repeat'):
-            request_remeasure(s, rows[asked], System.ORCHESTRATOR)
+        request_remeasure(s, rows['b'], System.ORCHESTRATOR)
+        s.flush()
+        assert [c.tree_sha for c in due(s, proj)] == ['b', 'fresh'], 'the ask, and a reference that nothing measured'
         proj.evaluator_id = new = s.scalar(
             insert(Evaluator).values(campaign_id=campaign.id, key='next', definition={}).returning(Evaluator.id)
         )
         s.flush()
-        assert [c.tree_sha for c in due(s, proj)] == ['head', 'k1', 'crash', 'repeat', 'fresh'], (
-            'the head; the bar of the open run (its base is a lead of k1); the asks; the new reference. Not k2, k3,'
-            ' k4, k5, the baseline or ref'
+        first = s.get_one(Candidate, 1)
+        assert [c.tree_sha for c in due(s, proj)] == ['a', first.tree_sha, 'b', 'fresh'], (
+            'the best under the old evaluator; the baseline; the ask; the new reference. Not ref, which scored 5'
         )
-        for tree in ('head', 'k1'):
-            s.add(Measurement(candidate_id=rows[tree].id, evaluator_id=new, metrics={'score': 1.0}))
+        for c in (first, rows['a']):
+            s.add(Measurement(candidate_id=c.id, evaluator_id=new, metrics={'score': 1.0}))
         s.flush()
         s.expire_all()
-        assert [c.tree_sha for c in due(s, proj)] == ['crash', 'repeat', 'fresh'], 'measured: no longer due'
+        assert [c.tree_sha for c in due(s, proj)] == ['b', 'fresh'], 'measured: no longer due'
 
 
 @pytest.mark.usefixtures('submitting')
@@ -1335,8 +1086,8 @@ def test_lineage_follows_the_actual_predecessor(
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     worse, better = candidates(db, run_id)
-    assert (worse.verdict, better.verdict) == (Outcome.DISCARD, Outcome.KEEP)
-    assert better.parent_id == worse.id, 'built on the discarded commit, judged against the last keep'
+    assert (worse.best, better.best) == (False, True)
+    assert better.parent_id == worse.id, 'built on the worse commit'
 
 
 def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_run_fails(
@@ -1501,7 +1252,7 @@ def test_a_cancelled_run_whose_implementer_ends_by_itself_first_closes_as_cancel
     with db.session() as s:
         run = s.get_one(Run, run_id)
         assert (run.status, run.end, idea_of(run).status) == (RunStatus.FAILED, RunEnd.CANCELLED, IdeaStatus.OPEN)
-        assert [c.verdict for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [Outcome.KEEP]
+        assert [is_best(s, c) for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [True]
 
 
 @pytest.mark.usefixtures('daemon_api')
@@ -1588,8 +1339,8 @@ def test_a_fast_implementer_that_left_uncommitted_work_started_and_its_work_is_r
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     assert (run_row(db, run_id).end, run_row(db, run_id).error) == (RunEnd.GAVE_UP, None)
-    [(summary, verdict, *_)] = scored(db, run_id)
-    assert (summary, verdict) == (UNCOMMITTED, Origin.RECOVERED)
+    [(summary, status, *_)] = scored(db, run_id)
+    assert (summary, status) == (UNCOMMITTED, Origin.RECOVERED)
     with db.session() as s:
         assert s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) == 1, 'no relaunch'
         assert not s.scalars(select(Event).where(has(StartupAnomaly))).all()
@@ -1631,9 +1382,9 @@ def test_a_run_ended_as_submitted_without_a_commit_is_a_result(
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
     with db.session() as s:
-        assert s.get_one(Idea, idea_id).status is IdeaStatus.OPEN, 'no real verdict, so not done'
+        assert s.get_one(Idea, idea_id).status is IdeaStatus.OPEN, 'no score, so not done'
         assert [c.body for c in s.scalars(select(Comment).where(Comment.author == 'daemon'))] == [
-            f'open: run#{run_id} gave the idea back; it finished, but nothing that it saved got a verdict'
+            f'open: run#{run_id} gave the idea back; it finished, but nothing that it saved has a score'
         ]
 
 
@@ -1742,13 +1493,13 @@ def test_an_implementer_that_ended_its_run_has_finished_it_however_its_process_t
     run = run_row(db, run_id)
     assert (run.status, run.error) == (RunStatus.SUCCEEDED, None)
     with db.session() as s:
-        assert s.get_one(Idea, idea_id).status is IdeaStatus.DONE, 'not retried: its commit got a verdict'
+        assert s.get_one(Idea, idea_id).status is IdeaStatus.DONE, 'not retried: its commit has a score'
         assert s.get_one(AgentSession, agent_session_id).error == (
             'agent timeout after 0.5s'
             if timed_out
             else f'agent exit 1: 1 row(s) changed, last insert id 1 | run#{run_id} ended as submitted: the daemon ends this session in a moment'
         ), 'an exit says its last output'
-        assert [c.verdict for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [Outcome.KEEP]
+        assert [is_best(s, c) for c in s.scalars(select(Candidate).where(Candidate.run_id == run_id))] == [True]
 
 
 @pytest.mark.usefixtures('daemon_api')
@@ -1784,8 +1535,8 @@ def test_uncommitted_changes_are_saved_on_a_machine_with_no_git_identity(
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     assert (run_row(db, run_id).end, run_row(db, run_id).error) == (RunEnd.GAVE_UP, None)
-    [(summary, verdict, *_)] = scored(db, run_id)
-    assert (summary, verdict) == (UNCOMMITTED, Origin.RECOVERED)
+    [(summary, status, *_)] = scored(db, run_id)
+    assert (summary, status) == (UNCOMMITTED, Origin.RECOVERED)
 
 
 def test_a_save_that_fails_fails_the_run_and_keeps_the_unsaved_changes_in_the_cas(
@@ -1842,8 +1593,8 @@ def test_uncommitted_changes_of_a_run_that_was_not_ended_are_kept_but_not_an_att
     execute(controller(db, runtime, tmp_path), db, run_id)
     run = run_row(db, run_id)
     assert (run.end, run.error) == (RunEnd.GAVE_UP, None)
-    [(summary, verdict, *_)] = scored(db, run_id)
-    assert (summary, verdict) == (UNCOMMITTED, Origin.RECOVERED), 'what it left is kept, not judged'
+    [(summary, status, *_)] = scored(db, run_id)
+    assert (summary, status) == (UNCOMMITTED, Origin.RECOVERED), 'what it left is kept, not scored'
     with db.session() as s:
         assert s.get_one(Idea, run.idea_id).status is IdeaStatus.OPEN
 
@@ -1958,15 +1709,17 @@ def test_a_commit_that_reverts_to_a_known_tree_is_that_candidate_and_is_not_meas
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path, tracer), db, run_id)
     [tried] = candidates(db, run_id)
-    assert (tried.summary, tried.verdict, tried.metrics['score']) == ('try', Outcome.KEEP, 2.0)
+    assert (tried.summary, tried.best, tried.metrics['score']) == ('try', True, 2.0)
     base = baseline(db, campaign.id)
     with db.session() as s:
         assert s.scalar(select(func.count()).select_from(Candidate)) == 2, 'the revert is the baseline, not a third row'
         assert len(s.get_one(Candidate, base.id).measurements) == 1, 'and the baseline was not measured again'
         kinds = [ev.kind for ev in s.scalars(select(Event)).all()]
-    assert kinds.count('measurement.recorded') == 1 and 'candidate.judged' in kinds
+    assert kinds.count('measurement.recorded') == 1 and 'candidate.scored' in kinds
     known = [sp for sp in spans.get_finished_spans() if sp.name == 'piloop.candidate' and sp.attributes]
-    assert [sp.attributes.get('status') for sp in known if sp.attributes] == [None, 'known']
+    assert [sp.attributes.get('status') for sp in known if sp.attributes] == snapshot(
+        [Measuring.MEASURED, Measuring.MEASURED]
+    )
     repo = Repo(campaign.path)
     assert len([r for r in repo.refs if r.path.startswith('refs/piloop/')]) == 2, 'both commits are still pinned'
 
@@ -1986,9 +1739,8 @@ def test_a_changed_evaluator_measures_again_and_old_numbers_do_not_count(
         sync(s, proj)
         s.commit()
         assert proj.evaluator_id != before, 'a new evaluate command is a new evaluator'
-        trunk = head(s, proj)
-        assert trunk is not None and trunk.id == added.id, (
-            'nothing is measured under the new evaluator yet, and the head stays the latest trunk keep'
+        assert [c.id for c in unready(s, proj)] == [1, added.id], (
+            'nothing is measured under the new evaluator yet: runs wait for the baseline and the best under the old one'
         )
     second = make_run(db, campaign, title='again')
     with db.session() as s:
@@ -2001,12 +1753,9 @@ def test_a_changed_evaluator_measures_again_and_old_numbers_do_not_count(
         assert [m.metrics['score'] for m in tried.measurements] == [6.0], 'measured under the doubled evaluator'
         base = s.get_one(Candidate, added.id)
         assert [m.metrics['score'] for m in base.measurements] == [2.0, 4.0], (
-            'the base, the bar of the first commit, measured once more under the new evaluator; the revert to it is known'
+            'the revert to the base is measured under the new evaluator, which had not measured it'
         )
-        assert base.verdict is Outcome.KEEP, 'a known candidate keeps its verdict; the revert says nothing new about it'
-        assert (tried.verdict, tried.verdict_by) == (Outcome.KEEP, System.DAEMON), '6 against a bar of 4'
-        trunk = head(s, proj)
-        assert trunk is not None and trunk.id == tried.id
+        assert best_of(s, proj) == tried, '6 against 4: the old 2 does not count'
 
 
 def test_a_config_change_during_a_run_scores_it_under_the_new_evaluator(
@@ -2038,7 +1787,7 @@ def test_a_config_change_during_a_run_scores_it_under_the_new_evaluator(
 def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_new_evaluator(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``piloop init`` between two commits' evaluations: the second is measured and judged under the new evaluator."""
+    """``piloop init`` between two commits' evaluations: the second is measured and scored under the new evaluator."""
     write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
@@ -2064,22 +1813,18 @@ def test_a_config_change_while_a_run_scores_measures_its_next_commits_under_the_
         assert [(m.evaluator_id == new_evaluator, m.metrics['score']) for m in first.measurements] == [
             (False, 2.0),
             (True, 4.0),
-        ], 'judged under the old evaluator, then measured under the new one as the bar of the second'
+        ], 'the evaluator changed while it was scored: it is measured again under the new one'
         assert [(m.evaluator_id, m.metrics['score']) for m in second.measurements] == [(new_evaluator, 6.0)], (
             'measured under the evaluator of the config it is scored in'
         )
-        assert (second.verdict, second.verdict_by) == (Outcome.KEEP, System.DAEMON)
-        [_, (_, judged)] = in_order(s, CandidateJudged)
-        assert judged.reason == f'against candidate#{first.id}: score 6 vs 4 (+2; aggregate: no per-unit results)', (
-            'judged against its bar under the new evaluator'
-        )
+        assert [scored.score for e, scored in in_order(s, CandidateScored) if e.target_id == second.id] == [6.0]
+        assert best_of(s, s.get_one(Campaign, campaign.id)) == second
 
 
-def test_a_config_change_while_a_commit_is_measured_judges_it_and_its_bar_under_the_new_evaluator(
+def test_a_config_change_while_a_commit_is_measured_scores_it_under_the_new_evaluator(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``piloop init`` while the run's first evaluation runs: no commit is judged on the old evaluator, nor against a
-    bar that the new one has not measured."""
+    """``piloop init`` while the run's first evaluation starts: no commit is scored on the old evaluator."""
     write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
@@ -2101,7 +1846,6 @@ def test_a_config_change_while_a_commit_is_measured_judges_it_and_its_bar_under_
 
     monkeypatch.setattr(ex, '_measure', init_during(ex._measure))
     execute(ex, db, run_id)
-    base = baseline(db, campaign.id).id
     with db.session() as s:
         new = s.get_one(Campaign, campaign.id).evaluator_id
         first, second = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
@@ -2109,35 +1853,11 @@ def test_a_config_change_while_a_commit_is_measured_judges_it_and_its_bar_under_
         def under_new(c: CandidateId) -> list[float]:
             return [m.metrics['score'] for m in s.get_one(Candidate, c).measurements if m.evaluator_id == new]
 
-        assert [under_new(c) for c in (base, first.id, second.id)] == [[2.0], [4.0], [6.0]], (
-            'the bar and both commits are measured under the evaluator that judges them'
+        assert [under_new(c) for c in (first.id, second.id)] == [[4.0], [6.0]], (
+            'both commits are measured under the evaluator that scores them'
         )
-        judged = [(e.target_id, j.score) for e, j in in_order(s, CandidateJudged)]
-        assert judged == [(first.id, 4.0), (second.id, 6.0)], 'each judged on its score under the new evaluator'
-
-
-def test_a_stop_while_a_run_measures_its_bar_judges_nothing(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    write_toml(Path(campaign.path), HARNESS_APPEND, evaluate=['sh', '-c', reports(score='7', size='1')])
-    with db.session() as s:
-        sync(s, s.get_one(Campaign, campaign.id))
-        s.commit()
-    run_id = make_run(db, campaign)
-    ex = controller(db, runtime, tmp_path)
-
-    def stopping(candidate_id: CandidateId) -> None:
-        ex.launcher.cancel()
-        RunController.remeasure(ex, candidate_id)
-
-    monkeypatch.setattr(ex, 'remeasure', stopping)
-    execute(ex, db, run_id)
-    with db.session() as s:
-        bar = s.get_one(Candidate, baseline(db, campaign.id).id)
-        evaluator = s.get_one(Campaign, campaign.id).evaluator_id
-        assert not any(m.evaluator_id == evaluator for m in bar.measurements), 'the stop killed the bar evaluation'
-        [added] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
-        assert (added.verdict, added.measurements) == (None, []), 'left pending for the next daemon'
+        scores = [(e.target_id, scored.score) for e, scored in in_order(s, CandidateScored)]
+        assert scores == [(first.id, 4.0), (second.id, 6.0)], 'each scored under the new evaluator'
 
 
 SPLIT_UNITS = [
@@ -2155,59 +1875,25 @@ def set_config(db: Database, campaign: Campaign, **overrides: object) -> None:
         s.commit()
 
 
-def test_per_unit_results_decide_the_verdict_and_live_outside_the_database(
+def test_per_unit_results_live_outside_the_database(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     units_dir = tmp_path / 'units'
-    base = baseline(db, campaign.id).id
-    with db.session() as s:
-        proj = s.get_one(Campaign, campaign.id)
-        cfg = load_campaign_config(Path(campaign.path), evaluate=SPLIT_UNITS)
-        proj.config = cfg
-        bar = Measurement(
-            candidate_id=base,
-            evaluator_id=current_evaluator(s, proj, cfg).id,
-            metrics={'score': 1.0, 'size': 5.0},
-        )
-        s.add(bar)
-        s.commit()
-        base_measurement = bar.id
-    save_units(units_dir, base_measurement, {'score': {'a': 1.0, 'b': 0.0}})
+    set_config(db, campaign, evaluate=SPLIT_UNITS)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
         c = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
         [m] = c.measurements
-        assert (c.verdict, c.verdict_by) == (Outcome.INTERESTING, System.DAEMON)
-        assert c.verdict_reason == snapshot(
-            'against candidate#1: score 2 vs 1 (+1; 95% worst case -2 over 2 units): the gain is not significant'
-        )
-        [(_, judged)] = in_order(s, CandidateJudged)
-        assert judged.reason == c.verdict_reason
         assert m.metrics.keys() == {'score', 'size'}, 'per-unit results are not a column any agent can SELECT'
     assert json.loads((units_dir / f'{m.id}.json').read_text()) == {'score': {'a': 3, 'b': -1}}
-    assert sorted(p.name for p in units_dir.iterdir()) == [f'{base_measurement}.json', f'{m.id}.json'], (
-        'no pending file is left behind'
-    )
-
-
-def test_without_per_unit_results_the_aggregate_decides_and_the_reason_says_so(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    run_id = make_run(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    with db.session() as s:
-        c = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
-        assert (c.verdict, c.verdict_reason) == snapshot(
-            (Outcome.KEEP, 'against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results)')
-        )
-    assert list((tmp_path / 'units').glob('*')) == []
+    assert sorted(p.name for p in units_dir.iterdir()) == [f'{m.id}.json'], 'no pending file is left behind'
 
 
 def test_guardrails_are_enforced_by_the_daemon_even_after_the_campaign_stopped(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """The daemon enforces a guardrail floor, also on a run still in flight after the campaign stopped."""
+    """The best rule enforces a guardrail floor, also on a run still in flight after the campaign stopped."""
     metrics = [
         {'name': 'score', 'direction': 'higher', 'role': 'primary'},
         {'name': 'size', 'direction': 'lower', 'role': 'guardrail', 'margin': 100, 'floor': 8},
@@ -2221,7 +1907,9 @@ def test_guardrails_are_enforced_by_the_daemon_even_after_the_campaign_stopped(
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
         c = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).one()
-        assert (c.verdict, c.verdict_reason) == snapshot((Outcome.DISCARD, 'floor: size 10 past its floor 8'))
+        assert (is_best(s, c), told_of(s, c.id)) == snapshot(
+            (False, 'score 2 over 1 eval: it may not be best: floor: size 10 past its floor 8')
+        )
 
 
 def test_units_of_a_candidate_are_the_mean_per_unit_over_its_measurements(
@@ -2247,32 +1935,6 @@ def test_units_of_a_candidate_are_the_mean_per_unit_over_its_measurements(
         )
 
 
-def test_pairs_are_the_samples_of_a_candidate_next_to_the_successful_samples_of_that_bar(
-    db: Database, campaign: Campaign
-) -> None:
-    with db.session() as s:
-        evaluator_id = s.get_one(Campaign, campaign.id).evaluator_id
-        assert evaluator_id is not None
-        bar, other, c = (Candidate(campaign_id=campaign.id, tree_sha=t, revision=t) for t in 'boc')
-        s.add_all([bar, other, c])
-        s.flush()
-
-        def sample(
-            on: Candidate, score: float, pair: Measurement | None = None, error: str | None = None
-        ) -> Measurement:
-            m = Measurement(candidate=on, evaluator_id=evaluator_id, metrics={'score': score}, pair=pair, error=error)
-            s.add(m)
-            return m
-
-        sample(c, 5.0, sample(bar, 1.0))
-        sample(c, 6.0, sample(bar, 2.0, error='crashed after its METRIC line'))
-        sample(c, 7.0, sample(other, 3.0))
-        sample(c, 8.0)
-        sample(c, 9.0, sample(bar, 4.0))
-        s.flush()
-        assert ledger_pairs(c, bar, evaluator_id) == ({'score': [5.0, 9.0]}, {'score': [1.0, 4.0]})
-
-
 HARNESS_SCAFFOLD_THEN_WORK = (
     '#!/bin/sh\necho a >> solve.txt\ngit commit -qam scaffold -m "piloop-eval: SKIP"\n'
     'echo b >> solve.txt\ngit commit -qam work\n'
@@ -2280,15 +1942,25 @@ HARNESS_SCAFFOLD_THEN_WORK = (
 
 
 def scored(db: Database, run_id: RunId) -> list[tuple[str | None, str, str | None, int, int | None]]:
-    """``(summary, verdict, reason, measurements, parent)`` of each candidate the run produced, in order.
+    """``(summary, status, told, measurements, parent)`` of each candidate the run produced, in order.
 
-    The verdict is its ``label``: the origin of one that is never judged."""
+    The status is ``best`` for the best of its track now, ``scored`` for another one in the pool, and the origin of one
+    that never enters the pool (``UNSCORED``). ``told`` is what its last score told its worker, or None."""
     with db.session() as s:
         rows = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
-        return [(c.summary, label(c), c.verdict_reason, len(c.measurements), c.parent_id) for c in rows]
+        return [
+            (
+                c.summary,
+                c.origin if c.origin in UNSCORED else 'best' if is_best(s, c) else 'scored',
+                told_of(s, c.id),
+                len(c.measurements),
+                c.parent_id,
+            )
+            for c in rows
+        ]
 
 
-def test_a_commit_marked_skip_is_a_candidate_without_an_evaluation_and_moves_no_bar(
+def test_a_commit_marked_skip_is_a_candidate_without_an_evaluation_that_never_enters_the_pool(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     write_toml(Path(campaign.path), HARNESS_SCAFFOLD_THEN_WORK)
@@ -2299,33 +1971,36 @@ def test_a_commit_marked_skip_is_a_candidate_without_an_evaluation_and_moves_no_
         first = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).first()
         assert first is not None
         skip_id = first.id
-    assert scored(db, run_id) == [
-        ('scaffold', Origin.SKIPPED, SKIPPED_REASON, 0, 1),
-        ('work', Outcome.KEEP, IsStr(regex=r'against candidate#1: score 3 vs 1 .*'), 1, skip_id),
-    ], 'the next commit descends from the scaffold and is judged against the bar, the baseline'
+    assert scored(db, run_id) == snapshot(
+        [
+            ('scaffold', Origin.SKIPPED, None, 0, 1),
+            ('work', 'best', 'score 3 over 1 eval: the best of the score track now, rank 1 of 2', 1, 2),
+        ]
+    ), 'the next commit descends from the scaffold'
     with db.session() as s:
         assert [e for _, e in in_order(s, OriginChanged)] == [OriginChanged(old=Origin.RUN, new=Origin.SKIPPED)]
-        [(_, judged)] = in_order(s, CandidateJudged)
-        assert judged.verdict is Outcome.KEEP, 'a skipped commit is not judged'
+        assert [e.target_id for e, _ in in_order(s, CandidateScored)] == [skip_id + 1], 'a skipped commit is not scored'
 
 
-def test_a_skipped_tree_reached_again_without_the_trailer_is_measured_and_judged(
+def test_a_skipped_tree_reached_again_without_the_trailer_is_measured_and_scored(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """A revert to a skipped tree is measured and judged against the keep before it.
+    """A revert to a skipped tree is measured and scored like a new candidate.
 
-    The run makes a scaffold commit marked skip, then a work commit that keeps, then reverts to the scaffold's tree.
+    The run makes a scaffold commit marked skip, then a work commit that is best, then reverts to the scaffold's tree.
     """
     write_toml(Path(campaign.path), HARNESS_SCAFFOLD_THEN_WORK + 'git revert --no-edit HEAD >/dev/null\n')
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     [scaffold, work] = scored(db, run_id)
-    assert scaffold[1:4] == (Outcome.DISCARD, IsStr(regex=r'against candidate#\d+: score 2 vs 3 .*'), 1)
-    assert work[1] is Outcome.KEEP
+    assert scaffold[1:4] == snapshot(
+        ('scored', 'score 2 over 1 eval: rank 2 of 3; vs parent +1, vs best candidate#3 -1', 1)
+    )
+    assert work[1] == 'best'
 
 
-def test_a_skip_commit_on_a_known_tree_keeps_its_verdict_unmeasured(
+def test_a_skip_commit_on_a_known_tree_leaves_it_unmeasured(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     harness = HARNESS_TRY_AND_REVERT + 'git commit -q --amend -m "back" -m "Piloop-Eval: skip"\n'
@@ -2335,7 +2010,7 @@ def test_a_skip_commit_on_a_known_tree_keeps_its_verdict_unmeasured(
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
         base = s.get_one(Candidate, baseline(db, campaign.id).id)
-        assert (base.verdict, base.verdict_reason, len(base.measurements)) == (Outcome.KEEP, None, 1)
+        assert (base.origin, len(base.measurements)) == (Origin.BASELINE, 1)
 
 
 def test_dirt_after_a_skip_commit_is_committed_on_its_own_and_evaluated(
@@ -2352,74 +2027,23 @@ def test_dirt_after_a_skip_commit_is_committed_on_its_own_and_evaluated(
     ], 'the work after a skip commit is recovered on its own: never amended into the commit'
 
 
-def test_a_commit_that_moves_no_deciding_metric_says_no_op(
+def test_a_commit_that_moves_no_deciding_metric_is_level_with_its_parent(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     write_toml(Path(campaign.path), '#!/bin/sh\necho x > notes.txt\ngit add notes.txt\ngit commit -qm notes\n')
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
-    [(_, verdict, reason, _, _)] = scored(db, run_id)
-    assert (verdict, reason) == (
-        Outcome.DISCARD,
-        snapshot(
-            'no-op: score identical to parent candidate#1; against candidate#1: score 1 vs 1 (+0; aggregate: no per-unit results)'
-        ),
-    )
+    [(_, status, told, _, _)] = scored(db, run_id)
+    assert (status, told) == snapshot(
+        (
+            'scored',
+            'score 1 over 1 eval: rank 2 of 2; vs parent +0 (within noise), vs best candidate#1 +0 (within noise)',
+        )
+    ), 'a tie: the older one is best'
 
 
-def import_empty_solution(db: Database, campaign: Campaign) -> CandidateId:
-    """Import an empty solution from another branch as a reference that scores 0, below the baseline's 1."""
-    repo = Repo(campaign.path)
-    repo.git.checkout('-qb', 'elsewhere')
-    (Path(campaign.path) / 'solve.txt').write_text('')
-    repo.git.commit('-qam', 'an empty solution')
-    repo.git.checkout('-q', 'main')
-    with db.session() as s:
-        proj = s.get_one(Campaign, campaign.id)
-        reference = import_reference(
-            s, proj, GitRepository(repo, PILOOP), 'elsewhere', summary=None, actor=System.ORCHESTRATOR
-        ).id
-        s.commit()
-    return reference
-
-
-def test_a_run_whose_history_holds_the_head_is_judged_against_the_head_itself(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A run whose base descends from the head has nothing to merge, so a keep must beat the head."""
-    reference = import_empty_solution(db, campaign)
-    write_toml(Path(campaign.path), HARNESS_TWO_COMMITS)
-    reload_campaign(db, campaign)
-    ex = controller(db, runtime, tmp_path)
-    ex.remeasure(reference)
-    run_id = make_run(db, campaign)
-    with db.session() as s:
-        s.get_one(Run, run_id).base_candidate_id = reference
-        s.commit()
-    execute(ex, db, run_id)
-    [(_, first, first_reason, _, parent), (_, second, second_reason, _, _)] = scored(db, run_id)
-    assert parent == reference
-    assert (first, first_reason) == (
-        Outcome.DISCARD,
-        snapshot(
-            'the head candidate#1 is in its history: against candidate#1: score 1 vs 1 (+0; aggregate: no per-unit results)'
-        ),
-    ), 'level with the head: a gain over its own base only'
-    assert (second, second_reason) == (
-        Outcome.KEEP,
-        snapshot(
-            'the head candidate#1 is in its history: against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results)'
-        ),
-    ), 'above the head: kept, the new head'
-    with db.session() as s:
-        assert s.get_one(Candidate, reference).verdict is None, 'the starting point is never judged'
-        trunk = head(s, s.get_one(Campaign, campaign.id))
-        assert trunk is not None and trunk.summary == 'second'
-        assert not s.scalars(select(Event).where(has(Rebased))).all(), 'nothing was merged'
-
-
-def keep_elsewhere(
+def scored_elsewhere(
     db: Database,
     campaign: Campaign,
     summary: str,
@@ -2427,14 +2051,12 @@ def keep_elsewhere(
     metrics: dict[str, float],
     *,
     on: int = 1,
-    verdict: Outcome = Outcome.KEEP,
     run_id: RunId | None = None,
 ) -> CandidateId:
-    """Add a trunk keep made outside any run.
+    """Add a candidate made outside any run, scored into the pool.
 
-    The keep writes ``files`` on a commit off candidate ``on`` and is measured as ``metrics``. To a run that started
-    before it, it looks like another run's keep: the head moved on. With another ``verdict``, it is a candidate that
-    the orchestrator judged. With ``run_id``, it is that run's candidate.
+    It writes ``files`` on a commit off candidate ``on`` and is measured once as ``metrics``. To a run that started
+    before it, it looks like another run's candidate. With ``run_id``, it is that run's candidate.
     """
     repo = Repo(campaign.path)
     with db.session() as s:
@@ -2450,145 +2072,11 @@ def keep_elsewhere(
         candidate, _ = resolve(
             s, campaign.id, GitRepository(repo, PILOOP).version(sha), parent=parent, run_id=run_id, origin=Origin.RUN
         )
-        candidate.verdict, candidate.verdict_by = verdict, 'orchestrator'
         evaluator_id = s.get_one(Campaign, campaign.id).evaluator_id
         assert evaluator_id is not None
         s.add(Measurement(candidate_id=candidate.id, evaluator_id=evaluator_id, metrics=metrics))
         s.commit()
         return candidate.id
-
-
-def test_a_run_pinned_to_a_non_keep_is_judged_against_its_nearest_keep_on_every_metric(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A run pinned to a candidate that is not a keep is judged against that candidate's nearest keep.
-
-    A candidate that is not a keep is not a bar. The run starts from its tree and is judged as a trunk run against
-    the head it grew from, so its keep moves the head.
-    """
-    lead = keep_elsewhere(
-        db, campaign, 'lead', {'solve.txt': 'base\nx\n'}, {'score': 9.0, 'size': 1.0}, verdict=Outcome.INTERESTING
-    )
-    run_id = make_run(db, campaign)
-    with db.session() as s:
-        s.get_one(Run, run_id).base_candidate_id = lead
-        s.commit()
-    ex = controller(db, runtime, tmp_path)
-    execute(ex, db, run_id)
-    [(_, verdict, reason, _, parent)] = scored(db, run_id)
-    assert (verdict, reason, parent) == (
-        Outcome.KEEP,
-        'against candidate#1: score 3 vs 1 (+2; aggregate: no per-unit results)',
-        lead,
-    ), "the lead's 9 is no bar: the head's 1 is"
-    brief = brief_of(db, run_id)
-    with db.session() as s:
-        trunk = head(s, s.get_one(Campaign, campaign.id))
-        assert trunk is not None and trunk.parent_id == lead, 'a trunk run: its keep is the new head'
-    assert f'- candidate#{lead} is not your bar: your versions are judged against candidate#1 (' in brief
-
-
-@pytest.mark.usefixtures('submitting')
-def test_a_keep_that_lost_the_race_to_the_head_is_merged_onto_it_and_judged_there_again_and_again(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A keep whose head moved on is merged onto the new head and judged again, as often as the head moves.
-
-    Run X starts from head H1, and H2 is kept meanwhile. X keeps against H1, so it is merged onto H2. While that merge
-    is measured, H3 is kept. The merge keeps against H2, so it is merged onto H3 in turn.
-    """
-    run_id = make_run(db, campaign)
-    h2 = keep_elsewhere(db, campaign, 'notes', {'notes.txt': 'n\n'}, {'score': 1.0, 'size': 5.0})
-    ex = controller(db, runtime, tmp_path)
-    ended: list[None] = []
-    track = evaluation_jobs._track
-
-    def h3_kept_while_the_merge_is_measured(control: jobs.Control, proc: subprocess.Popen[bytes] | None) -> None:
-        track(control, proc)
-        if proc is None:
-            ended.append(None)
-            if len(ended) == 2:
-                keep_elsewhere(db, campaign, 'docs', {'docs.txt': 'd\n'}, {'score': 1.0, 'size': 5.0}, on=h2)
-
-    monkeypatch.setattr(evaluation_jobs, '_track', h3_kept_while_the_merge_is_measured)
-    execute(ex, db, run_id)
-    repo = Repo(campaign.path)
-    with db.session() as s:
-        rows = s.scalars(select(Candidate).order_by(Candidate.id)).all()
-        assert [(c.id, c.summary, c.verdict, c.parent_id, c.run_id) for c in rows] == snapshot(
-            [
-                (1, 'baseline', Outcome.KEEP, None, None),
-                (2, 'notes', Outcome.KEEP, 1, None),
-                (3, 'add a line', Outcome.INTERESTING, 1, 1),
-                (4, 'add a line (rebased onto candidate#2)', Outcome.INTERESTING, 2, 1),
-                (5, 'docs', Outcome.KEEP, 2, None),
-                (6, 'add a line (rebased onto candidate#5)', Outcome.KEEP, 5, 1),
-            ]
-        )
-        x, merged, h3, final = rows[2], rows[3], rows[4], rows[5]
-        assert [x.verdict_reason, merged.verdict_reason, final.verdict_reason] == snapshot(
-            [
-                'keeps against its own bar, but the head moved on to candidate#2: against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results); rebased onto the head as candidate#4',
-                'keeps against its own bar, but the head moved on to candidate#5: against candidate#2: score 2 vs 1 (+1; aggregate: no per-unit results); rebased onto the head as candidate#6',
-                'against candidate#5: score 2 vs 1 (+1; aggregate: no per-unit results)',
-            ]
-        )
-        trunk = head(s, s.get_one(Campaign, campaign.id))
-        assert trunk is not None and trunk.id == final.id, 'the last merge is the head'
-        rebased = s.scalars(select(Event).where(has(Rebased)).order_by(Event.id)).all()
-        assert [(e.target_id, e.payload) for e in rebased] == [
-            (x.id, Rebased(head=h2, rebased=merged.id)),
-            (merged.id, Rebased(head=h3.id, rebased=final.id)),
-        ]
-        assert [p.hexsha for p in repo.commit(final.revision).parents] == [h3.revision, merged.revision]
-        assert sorted((Path(campaign.path) / '.git' / 'refs' / 'piloop' / 'demo' / 'rebase').iterdir()) == [
-            Path(campaign.path) / '.git' / 'refs' / 'piloop' / 'demo' / 'rebase' / str(c)
-            for c in sorted((x.id, merged.id))
-        ], 'every merge commit is pinned'
-        tree = set(repo.git.ls_tree('--name-only', final.revision).splitlines())
-        assert {'notes.txt', 'docs.txt', 'solve.txt'} <= tree, "the head's changes and the run's, together"
-        assert s.get_one(Idea, claimed_id(s.get_one(Run, run_id))).status is IdeaStatus.DONE
-
-
-def test_with_a_noisy_metric_a_run_pairs_its_commit_with_its_bar_and_a_merge_with_the_head_it_merged_onto(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    size = {'name': 'size', 'direction': 'lower', 'role': 'guardrail', 'margin': 100, 'repeats': 2}
-    set_config(db, campaign, metrics=[{'name': 'score', 'direction': 'higher', 'role': 'primary'}, size])
-    ex = controller(db, runtime, tmp_path)
-    ex.remeasure(baseline(db, campaign.id).id)
-    run_id = make_run(db, campaign)
-    h2 = keep_elsewhere(db, campaign, 'notes', {'notes.txt': 'n\n'}, {'score': 1.0, 'size': 5.0})
-    execute(ex, db, run_id)
-    with db.session() as s:
-        x, merged = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).all()
-        assert [m.pair.candidate_id for m in x.measurements if m.pair] == [1, 1], 'paired with its bar'
-        assert [m.pair.candidate_id for m in merged.measurements if m.pair] == [h2, h2], 'paired with the new head'
-        assert merged.verdict_reason == snapshot(
-            'against candidate#2: score 2 vs 1 (+1; 95% worst case +1 over 2 pairs); guardrails: size 10 vs 5 (+5; 95% worst case +5 over 2 pairs) within its margin 100'
-        )
-
-
-def test_a_keep_whose_merge_onto_the_head_conflicts_stays_interesting_and_records_the_conflict(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """piloop files no idea for it: the conflict is on the reason and on the event."""
-    run_id = make_run(db, campaign)
-    h2 = keep_elsewhere(db, campaign, 'other line', {'solve.txt': 'base\nother\n'}, {'score': 2.0, 'size': 11.0})
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    [(_, verdict, reason, _, _)] = scored(db, run_id)
-    assert (verdict, reason) == (
-        Outcome.INTERESTING,
-        'keeps against its own bar, but the head moved on to candidate#2: against candidate#1: score 2 vs 1 (+1;'
-        ' aggregate: no per-unit results); its merge onto the head conflicts in solve.txt',
-    )
-    with db.session() as s:
-        [x] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
-        assert s.scalars(select(Idea).where(Idea.created_by == System.DAEMON)).all() == []
-        [event] = s.scalars(select(Event).where(has(Rebased))).all()
-        assert (event.target_id, event.payload) == (x.id, Rebased(head=h2, conflicts=['solve.txt']))
-        trunk = head(s, s.get_one(Campaign, campaign.id))
-        assert trunk is not None and trunk.id == h2
 
 
 def test_two_sessions_that_register_one_new_tree_share_one_candidate(
@@ -2621,97 +2109,19 @@ def test_two_sessions_that_register_one_new_tree_share_one_candidate(
         assert s.scalar(select(func.count()).select_from(Candidate).where(Candidate.tree_sha == first.tree_sha)) == 1
 
 
-def test_a_keep_whose_merge_onto_the_head_is_the_head_already_changes_nothing(
+def test_a_known_tree_that_another_run_reaches_again_is_not_measured_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    run_id = make_run(db, campaign)
-    files = {'solve.txt': 'base\nline\n', 'notes.txt': 'n\n'}
-    h2 = keep_elsewhere(db, campaign, 'line and notes', files, {'score': 2.0, 'size': 10.0})
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    [(_, verdict, reason, _, _)] = scored(db, run_id)
-    assert (verdict, reason) == (
-        Outcome.INTERESTING,
-        snapshot(
-            'keeps against its own bar, but the head moved on to candidate#2: against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results); its merge onto the head is candidate#2 already (keep)'
-        ),
-    )
-    with db.session() as s:
-        [event] = s.scalars(select(Event).where(has(Rebased))).all()
-        assert event.payload == Rebased(head=h2, known=h2)
-
-
-def test_a_keep_that_lands_while_another_run_measures_its_tree_is_not_judged_again(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A run that reaches a pending tree of another run judges it only while it is pending.
-
-    The other run's keep lands while this run measures the same tree on another track. Judged again on this track's
-    primary, the keep would become a discard and miss the head.
-    """
-    tracks = {
-        'metrics': [
-            {'name': 'score', 'direction': 'higher', 'role': 'primary', 'track': 'accuracy', 'margin': 1},
-            {'name': 'size', 'direction': 'lower', 'role': 'primary', 'track': 'cost', 'margin': 100},
-        ],
-    }
-    set_config(db, campaign, **tracks)
-    ex = controller(db, runtime, tmp_path)
-    first = make_run(db, campaign, track='accuracy')
-    execute(ex, db, first)
-    [kept] = candidates(db, first)
-    assert kept.verdict is Outcome.KEEP
-    with db.session() as s:  # back to while the first run measures its commit
-        candidate = s.get_one(Candidate, kept.id)
-        [measurement] = candidate.measurements
-        evaluator_id = measurement.evaluator_id
-        s.delete(measurement)
-        candidate.verdict = None
-        s.commit()
-    track = evaluation_jobs._track
-
-    def kept_meanwhile(control: jobs.Control, proc: subprocess.Popen[bytes] | None) -> None:
-        track(control, proc)
-        if proc is None:  # the first run's measurement and keep land while the second run measures the same tree
-            with db.session() as s:
-                s.add(Measurement(candidate_id=kept.id, evaluator_id=evaluator_id, metrics=kept.metrics))
-                c = s.get_one(Candidate, kept.id)
-                c.verdict, c.verdict_reason = Outcome.KEEP, 'kept on accuracy'
-                s.commit()
-
-    monkeypatch.setattr(evaluation_jobs, '_track', kept_meanwhile)
-    execute(ex, db, make_run(db, campaign, title='the same line, on the cost track', track='cost'))
-    with db.session() as s:
-        again = s.get_one(Candidate, kept.id)
-        assert (again.verdict, again.verdict_reason) == (Outcome.KEEP, 'kept on accuracy')
-
-
-def test_a_known_non_keep_that_another_run_reaches_again_is_judged_again_on_that_runs_bar(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A tree that another run proposes again is judged again, unless it is a keep.
-
-    The daemon's old verdict judged the tree against another bar, or a merge that conflicted. A compose that reproduces
-    the tree on the head must be able to land.
-    """
+    """The same tree again says nothing new about it: it keeps its score, and stays the best."""
     ex = controller(db, runtime, tmp_path)
     first = make_run(db, campaign)
     execute(ex, db, first)
     [known] = candidates(db, first)
-    with db.session() as s:
-        c = s.get_one(Candidate, known.id)
-        c.verdict, c.verdict_reason = Outcome.INTERESTING, 'its merge onto the head conflicts in solve.txt'
-        s.commit()
     execute(ex, db, make_run(db, campaign, title='a compose that reproduces the tree'))
     with db.session() as s:
         again = s.get_one(Candidate, known.id)
-        assert (again.verdict, again.verdict_by, again.verdict_reason) == (
-            Outcome.KEEP,
-            System.DAEMON,
-            'against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results)',
-        )
-        assert len(again.measurements) == 1, 'judged with the measurement it has'
-        now = head(s, s.get_one(Campaign, campaign.id))
-        assert now is not None and now.id == known.id
+        assert (len(again.measurements), again.run_id) == (1, first), 'scored with the measurement it has'
+        assert best_of(s, s.get_one(Campaign, campaign.id)) == again
 
 
 def test_a_merge_commit_descends_from_its_first_parent_the_runs_base(
@@ -2719,12 +2129,11 @@ def test_a_merge_commit_descends_from_its_first_parent_the_runs_base(
 ) -> None:
     """A run's commits are its first-parent history, so a merge's parent is the run's base.
 
-    The merged-in line is not the run's, and its commits are known candidates already. With the merged line's last
-    candidate as its parent, the merge did not build on the head, and a keep by hand was refused.
+    The merged-in line is not the run's, and its commits are known candidates already.
     """
     metrics = {'score': 1.0, 'size': 5.0}
-    side = keep_elsewhere(db, campaign, 'notes', {'notes.txt': 'n\n'}, metrics, verdict=Outcome.INTERESTING)
-    trunk = keep_elsewhere(db, campaign, 'docs', {'docs.txt': 'd\n'}, metrics)
+    side = scored_elsewhere(db, campaign, 'notes', {'notes.txt': 'n\n'}, metrics)
+    trunk = scored_elsewhere(db, campaign, 'docs', {'docs.txt': 'd\n'}, metrics)
     with db.session() as s:
         side_sha = s.get_one(Candidate, side).revision
     write_toml(Path(campaign.path), f'#!/bin/sh\ngit merge -q --no-ff --no-edit {side_sha}\n')
@@ -2734,110 +2143,10 @@ def test_a_merge_commit_descends_from_its_first_parent_the_runs_base(
         s.get_one(Run, run_id).base_candidate_id = trunk
         s.commit()
     execute(controller(db, runtime, tmp_path), db, run_id)
-    [(_, verdict, _, measurements, parent)] = scored(db, run_id)
-    assert (verdict, measurements, parent) == (Outcome.DISCARD, 1, trunk)
+    [(_, _, _, measurements, parent)] = scored(db, run_id)
+    assert (measurements, parent) == (1, trunk)
     with db.session() as s:
-        [merge] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
-        assert set_verdict(s, merge.id, Outcome.KEEP, reason='the notes are worth it', actor=System.HUMAN) == (
-            Overridden(Outcome.DISCARD)
-        ), 'it builds on the head: a keep, with no merge'
         assert len(s.get_one(Candidate, side).measurements) == 1, 'the merged line is not measured again'
-
-
-def test_a_keep_that_has_the_heads_changes_without_its_history_is_judged_against_the_head(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A commit that cherry-picked the head needs no merge onto it.
-
-    The merge would give the candidate's own tree, a known candidate, so the keep stayed ``interesting`` for good.
-    """
-    run_id = make_run(db, campaign)
-    h2 = keep_elsewhere(db, campaign, 'other', {'other.txt': 'x\n'}, {'score': 1.0, 'size': 5.0})
-    with db.session() as s:
-        h2_sha = s.get_one(Candidate, h2).revision
-    pick = f'#!/bin/sh\ngit cherry-pick -n {h2_sha}\necho line >> solve.txt\ngit commit -qam "the head and a line"\n'
-    write_toml(Path(campaign.path), pick)
-    reload_campaign(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    [(_, verdict, reason, _, _)] = scored(db, run_id)
-    assert (verdict, reason) == (
-        Outcome.KEEP,
-        f'the head candidate#{h2} is in its history: against candidate#{h2}: score 2 vs 1'
-        ' (+1; aggregate: no per-unit results)',
-    )
-    with db.session() as s:
-        now = head(s, s.get_one(Campaign, campaign.id))
-        assert now is not None and now.run_id == run_id
-
-
-def test_a_commit_that_has_the_head_is_judged_against_the_head_whatever_it_scores_against_its_bar(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """A keep by hand moved the head below the run's bar after the run started, and the run took the head in.
-
-    Against its bar, the run's gain was lost in what the head gave up, so it was discarded.
-    """
-    run_id = make_run(db, campaign)
-    with db.session() as s:
-        [start] = s.get_one(Candidate, 1).measurements
-        below = {**start.metrics, 'score': 0.0}
-    h2 = keep_elsewhere(db, campaign, 'below', {'other.txt': 'x\n'}, below)
-    with db.session() as s:
-        h2_sha = s.get_one(Candidate, h2).revision
-    pick = f'#!/bin/sh\ngit cherry-pick -n {h2_sha}\necho mine > mine.txt\ngit add -A\ngit commit -qm "the head and mine"\n'
-    write_toml(Path(campaign.path), pick)
-    reload_campaign(db, campaign)
-    execute(controller(db, runtime, tmp_path), db, run_id)
-    [(_, verdict, reason, _, _)] = scored(db, run_id)
-    assert (verdict, reason) == (
-        Outcome.KEEP,
-        f'the head candidate#{h2} is in its history: no-op: score identical to parent candidate#1; against'
-        f' candidate#{h2}: score 1 vs 0 (+1; aggregate: no per-unit results)',
-    )
-
-
-def test_a_merge_a_stop_left_unjudged_is_measured_and_judged_when_the_run_resumes(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    run_id = make_run(db, campaign)
-    keep_elsewhere(db, campaign, 'notes', {'notes.txt': 'n\n'}, {'score': 1.0, 'size': 5.0})
-    ex = controller(db, runtime, tmp_path)
-    measure = ex._measure
-
-    merged_id = 4
-
-    def stopped_at_the_merge(
-        run: RunId | None,
-        campaign_id: CampaignId,
-        cfg: CampaignConfig,
-        sha: Revision,
-        candidate_id: CandidateId,
-        evaluator_id: EvaluatorId,
-        eval_dir: Path,
-        *,
-        bar: CandidateId | None,
-        repeats: int,
-        gate: CandidateId | None,
-    ) -> Measuring:
-        if candidate_id == merged_id:
-            return Measuring.STOPPED  # what a stop does to an evaluation in flight
-        return measure(
-            run, campaign_id, cfg, sha, candidate_id, evaluator_id, eval_dir, bar=bar, repeats=repeats, gate=gate
-        )
-
-    monkeypatch.setattr(ex, '_measure', stopped_at_the_merge)
-    execute(ex, db, run_id)
-    with db.session() as s:
-        merged = s.get_one(Candidate, merged_id)
-        assert (label(merged), merged.measurements, merged.parent_id) == (PENDING, [], 2)
-    ex.resume(run_id)  # stopped again on the merge
-    with db.session() as s:
-        assert pending(s.get_one(Candidate, merged_id))
-    monkeypatch.setattr(ex, '_measure', measure)
-    ex.resume(run_id)
-    with db.session() as s:
-        merged = s.get_one(Candidate, merged_id)
-        assert (merged.verdict, len(merged.measurements)) == (Outcome.KEEP, 1)
 
 
 def cancelling(db: Database, measure: Callable[..., Measuring], cancelled: CandidateId) -> Callable[..., Measuring]:
@@ -2870,62 +2179,45 @@ def test_a_cancelled_evaluation_leaves_its_candidate_skipped_also_when_the_run_r
     ex.resume(run_id)
     with db.session() as s:
         skipped = s.get_one(Candidate, CandidateId(2))
-        assert (skipped.origin, skipped.verdict, skipped.measurements) == (Origin.SKIPPED, None, [])
+        assert (skipped.origin, told_of(s, skipped.id), skipped.measurements) == (Origin.SKIPPED, None, [])
 
 
-def test_a_merge_whose_evaluation_is_cancelled_is_skipped(
+def test_a_tree_two_runs_reach_is_never_scored_against_itself(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    run_id = make_run(db, campaign)
-    keep_elsewhere(db, campaign, 'notes', {'notes.txt': 'n\n'}, {'score': 1.0, 'size': 5.0})
-    ex = controller(db, runtime, tmp_path)
-    monkeypatch.setattr(ex, '_measure', cancelling(db, ex._measure, CandidateId(4)))
-    execute(ex, db, run_id)
-    with db.session() as s:
-        merged = s.get_one(Candidate, CandidateId(4))
-        assert (merged.origin, merged.verdict, merged.parent_id) == (Origin.SKIPPED, None, 2)
+    """A tree that two runs reach is never compared with itself.
 
-
-def test_a_tree_two_runs_reach_is_never_judged_against_itself(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A tree that two runs reach is judged against the best candidate other than itself.
-
-    The second run reaches the tree while the first run's evaluation is pending. The first keep then makes the tree the
-    head, but the second run must not judge it level with itself.
+    The second run reaches the tree while the first run's evaluation is pending. The first run's score then makes the
+    tree the best, so the second run's evaluation adds to its mean, and its worker hears that it is the best.
     """
     ex = controller(db, runtime, tmp_path)
     first = make_run(db, campaign)
     execute(ex, db, first)
     [kept] = candidates(db, first)
-    assert kept.verdict is Outcome.KEEP
+    assert kept.best
     with db.session() as s:  # rewind to before the first run's measurement landed
         candidate = s.get_one(Candidate, kept.id)
         [measurement] = candidate.measurements
         evaluator_id = measurement.evaluator_id
         s.delete(measurement)
-        candidate.verdict = None
         s.commit()
     track = evaluation_jobs._track
 
     def kept_meanwhile(control: jobs.Control, proc: subprocess.Popen[bytes] | None) -> None:
-        """Land the first run's measurement and keep while the second run evaluates the same tree."""
+        """Land the first run's measurement while the second run evaluates the same tree."""
         track(control, proc)
         if proc is None:
             with db.session() as s:
                 s.add(Measurement(candidate_id=kept.id, evaluator_id=evaluator_id, metrics=kept.metrics))
-                s.get_one(Candidate, kept.id).verdict = Outcome.KEEP
                 s.commit()
 
     monkeypatch.setattr(evaluation_jobs, '_track', kept_meanwhile)
     execute(ex, db, make_run(db, campaign, title='same lines'))
     with db.session() as s:
         again = s.get_one(Candidate, kept.id)
-        assert (len(again.measurements), again.verdict, again.verdict_reason) == (
-            2,
-            Outcome.KEEP,
-            snapshot('against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results)'),
-        ), 'judged against the bar it beat, the best but for itself'
+        assert (len(again.measurements), told_of(s, kept.id)) == snapshot(
+            (2, 'score 2 over 2 evals: the best of the score track now, rank 1 of 2; vs parent +1')
+        ), 'the best, with no delta to itself'
 
 
 HARNESS_NOTED = (
@@ -2936,39 +2228,31 @@ HARNESS_NOTED = (
 )
 
 
-def test_a_piloop_note_keeps_a_regressed_commit_in_view_files_no_follow_up_and_moves_no_bar(
+def test_a_piloop_note_is_a_note_on_its_candidate_that_files_no_follow_up_and_moves_no_score(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     write_toml(Path(campaign.path), HARNESS_NOTED)
     reload_campaign(db, campaign)
     run_id = make_run(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
-    [(_, wipe, wipe_reason, _, _), (_, refill, refill_reason, _, _)] = scored(db, run_id)
-    assert (wipe, wipe_reason) == (
-        Outcome.INTERESTING,
-        snapshot(
-            'faster, though it scores less; against candidate#1: score 0 vs 1 (-1; aggregate: no per-unit results)'
-        ),
-    )
-    assert (refill, refill_reason) == (
-        Outcome.KEEP,
-        snapshot('against candidate#1: score 2 vs 1 (+1; aggregate: no per-unit results)'),
-    ), 'judged against the baseline: the note moved no bar, and a keep keeps its verdict'
+    [(_, wipe, _, _, _), (_, refill, _, _, _)] = scored(db, run_id)
+    assert (wipe, refill) == ('scored', 'best')
     with db.session() as s:
-        noted = s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)).first()
-        assert noted is not None and (noted.cause, noted.verdict_by) == (Cause.NOTE, 'implementer#1'), (
-            "the note is its implementer's: the daemon never judges a noted commit again"
-        )
+        notes = s.scalars(select(Comment).where(Comment.target_kind == CANDIDATE).order_by(Comment.id)).all()
+        assert [(c.target_id, c.author, c.kind, c.body) for c in notes] == [
+            (2, 'implementer#1', CommentKind.NOTE, 'faster, though it scores less'),
+            (3, 'implementer#1', CommentKind.NOTE, 'redundant'),
+        ], "each note is its implementer's, on the candidate of its commit"
         follow_ups = s.scalars(select(Idea).where(Idea.provenance.like('candidate#%'))).all()
         assert follow_ups == [], 'a Piloop-Follow-Up trailer files no seed: an implementer files none'
 
 
-def test_a_keep_on_one_track_must_hold_the_other_track_primaries_and_its_brief_lists_the_tracks(
+def test_the_best_of_one_track_must_hold_the_other_track_primaries_and_the_brief_lists_the_tracks(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """A keep on one track must stay within the floor of the other track's primary metric.
+    """A candidate on one track must stay within the floor of the other track's primary metric to be best.
 
-    An accuracy candidate that adds one line stays within the cost track's floor on size.
+    An accuracy candidate that adds one line goes past the cost track's floor on size.
     """
     path = Path(campaign.path)
     (path / 'briefs').mkdir()
@@ -2984,14 +2268,19 @@ def test_a_keep_on_one_track_must_hold_the_other_track_primaries_and_its_brief_l
         s.get_one(Campaign, campaign.id).config = load_campaign_config(path, **tracks)
         s.commit()
     ex = controller(db, runtime, tmp_path)
-    ex.remeasure(CandidateId(1))  # the bar has a score: on the cost track, size 10 is no gain on 5
+    ex.remeasure(CandidateId(1))  # the baseline has a score under the new evaluator
     run_id = make_run(db, campaign, track='accuracy')
     execute(ex, db, run_id)
-    [(_, verdict, reason, _, _)] = scored(db, run_id)
-    assert (verdict, reason) == (Outcome.DISCARD, 'floor: size 10 past its floor 8'), 'score 2 > 1, but size 10 > 8'
+    [(_, status, told, _, _)] = scored(db, run_id)
+    assert (status, told) == snapshot(
+        (
+            'scored',
+            'score 2 over 1 eval: it may not be best: floor: size 10 past its floor 8; vs parent +1, vs best candidate#1 +1',
+        )
+    ), 'score 2 > 1, but size 10 > 8'
     brief = brief_of(db, run_id)
     assert 'Accuracy track' not in brief and 'Your track is' not in brief, 'a fresh run has no idea, so no track yet'
-    assert '- Starting from candidate#1, the head: score=1.0, size=5.0 — baseline' in brief
+    assert '- Starting from candidate#1, the best: score=1.0, size=5.0 — baseline' in brief
     assert '- Tracks: accuracy (primary score, higher is better); cost (primary size' in brief
 
 
@@ -3004,12 +2293,12 @@ TWO_TRACKS = {
 """Two tracks: accuracy on ``score``, the lines of ``solve.txt``, and cost on ``size``, its bytes."""
 
 
-def test_a_candidate_is_judged_on_every_track_and_a_keep_on_another_track_than_its_runs_moves_the_head(
+def test_a_candidate_is_scored_on_its_runs_track_and_may_be_the_best_of_another(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """An accuracy run that shrinks the file without a new line is no gain on accuracy, and a keep on cost.
+    """An accuracy run that shrinks the file without a new line is no gain on accuracy, and the best on cost.
 
-    Each track's judgement is a ``candidate.judged`` event, and the row has the best verdict with its track.
+    Its worker hears where it stands on its run's track. The best of each track is a query over the whole pool.
     """
     write_toml(Path(campaign.path), "#!/bin/sh\nprintf 'a\\n' > solve.txt\ngit commit -qam 'shorter'\n")
     set_config(db, campaign, **TWO_TRACKS)
@@ -3019,18 +2308,17 @@ def test_a_candidate_is_judged_on_every_track_and_a_keep_on_another_track_than_i
     execute(ex, db, run_id)
     with db.session() as s:
         [c] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
-        assert (c.verdict, c.track) == (Outcome.KEEP, 'cost')
-        assert c.verdict_reason is not None and c.verdict_reason.startswith('on the cost track: against candidate#1:')
-        judged = [(e.track, e.verdict, e.score) for _, e in in_order(s, CandidateJudged, Event.target_id == c.id)]
-        assert judged == [('accuracy', Outcome.DISCARD, 1.0), ('cost', Outcome.KEEP, 2.0)]
-        now = head(s, s.get_one(Campaign, campaign.id))
-        assert now is not None and now.id == c.id
+        scores = [(e.track, e.score, e.best) for _, e in in_order(s, CandidateScored, Event.target_id == c.id)]
+        assert scores == [('accuracy', 1.0, 1)], 'level with the baseline, the older'
+        p = s.get_one(Campaign, campaign.id)
+        accuracy, cost = p.config.all_tracks
+        assert (best_of(s, p, accuracy), best_of(s, p, cost)) == (s.get_one(Candidate, 1), c)
 
 
-def test_recovered_work_whose_tree_is_already_a_candidate_keeps_that_candidate_s_verdict(
+def test_recovered_work_whose_tree_is_already_a_candidate_leaves_that_candidate_as_it_is(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """The recovery commit is that candidate, which keeps its verdict; the claim of the run that left it ends."""
+    """The recovery commit is that candidate, which keeps its score; the claim of the run that left it ends."""
     write_toml(Path(campaign.path), HARNESS_APPEND)
     reload_campaign(db, campaign)
     first = make_run(db, campaign, title='commits the line')
@@ -3043,7 +2331,10 @@ def test_recovered_work_whose_tree_is_already_a_candidate_keeps_that_candidate_s
     with db.session() as s:
         idea = s.get_one(Idea, claimed_id(s.get_one(Run, run_id)))
         assert idea.status is IdeaStatus.OPEN
-        assert s.get_one(Candidate, known.id).verdict is Outcome.KEEP, 'a known tree keeps its verdict'
+        found = s.get_one(Candidate, known.id)
+        assert (found.origin, len(found.measurements), is_best(s, found)) == (Origin.RUN, 1, True), (
+            'a known tree keeps its score'
+        )
 
 
 def test_every_evaluator_has_the_process_runner_and_an_uninstalled_runner_is_refused(
@@ -3173,19 +2464,10 @@ def reflinks(tmp_path: Path) -> bool:
     return True
 
 
-@pytest.mark.parametrize('recorded', [True, False], ids=['received', 'before-0.3.0'])
 def test_a_resumed_run_scores_the_versions_that_it_received(
-    db: Database,
-    campaign: Campaign,
-    runtime: ScriptRuntime,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    recorded: bool,
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A stop during scoring leaves the run's versions recorded: the next daemon scores them, whatever refs say.
-
-    A run that a daemon before 0.3.0 received has no ``RunReceived``: its versions are the ones that the vcs kept.
-    """
+    """A stop during scoring leaves the run's versions recorded: the next daemon scores them, whatever refs say."""
     run_id = make_run(db, campaign)
     ex = controller(db, runtime, tmp_path)
     measure = ex._measure
@@ -3196,19 +2478,15 @@ def test_a_resumed_run_scores_the_versions_that_it_received(
     monkeypatch.setattr(ex, '_measure', stopped)
     execute(ex, db, run_id)
     with db.session() as s:
-        [waiting] = s.scalars(select(Candidate.verdict).where(Candidate.run_id == run_id)).all()
-    assert waiting is None
+        [waiting] = s.scalars(select(Candidate.id).where(Candidate.run_id == run_id)).all()
+        assert told_of(s, waiting) is None
     repo = Repo(campaign.path)
-    if recorded:
-        for ref in repo.git.for_each_ref('--format=%(refname)', f'refs/piloop/demo/r{run_id}/').split():
-            repo.git.update_ref('-d', ref)
-    else:
-        with closing(sqlite3.connect(db.engine.url.database or '')) as con, con:
-            con.execute("DELETE FROM events WHERE kind = 'run.received'")
+    for ref in repo.git.for_each_ref('--format=%(refname)', f'refs/piloop/demo/r{run_id}/').split():
+        repo.git.update_ref('-d', ref)
     monkeypatch.setattr(ex, '_measure', measure)
     ex.resume(run_id)
     [scored] = candidates(db, run_id)
-    assert scored.verdict is Outcome.KEEP
+    assert scored.best
 
 
 def test_a_run_that_starts_near_the_campaigns_stop_is_told_it_ends_with_the_stop(

@@ -19,6 +19,8 @@ from piloop.plugins.campaign_type.kit.backlog.ideas import idea_row, idea_view
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.backlog.wire import (
+    Base,
+    ClaimBody,
     Claimed,
     IdeaAnswer,
     IdeaBody,
@@ -34,6 +36,8 @@ from piloop.plugins.campaign_type.kit.backlog.wire import (
     TrackBody,
     TrackChanged,
 )
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.controller import track_brief
 
 router = APIRouter(prefix='/v1', dependencies=[Depends(reader)], responses=REFUSALS_DOCUMENTED)
@@ -122,9 +126,12 @@ def add_idea(s: Writing, me: Acting, campaign: Addressed, body: IdeaBody) -> Ide
 
 
 @router.post('/ideas/{idea}/claim', operation_id='claim', dependencies=[Depends(actor_access)])
-def claim(s: Writing, me: Acting, idea: AddressedIdea) -> Claimed:
-    """Claim an open idea for the caller's run, which works on it until the run ends, and say what its track asks."""
-    return _claimed(s, backlog_ops.claim(s, idea.id, actor=me))
+def claim(s: Writing, me: Acting, idea: AddressedIdea, body: ClaimBody) -> Claimed:
+    """Claim an open idea for the caller's run, which works on it until the run ends, and say what its track asks.
+
+    With a ``base``, the run starts from that candidate: the answer names its revision, for the checkout.
+    """
+    return _claimed(s, backlog_ops.claim(s, idea.id, actor=me, base=body.base), body.base)
 
 
 @router.post('/proposals', operation_id='propose', dependencies=[Depends(actor_access)])
@@ -138,8 +145,9 @@ def propose(s: Writing, me: Acting, body: ProposeBody) -> Claimed:
         plan=body.plan,
         provenance=body.provenance,
         track=body.track,
+        base=body.base,
     )
-    return _claimed(s, idea)
+    return _claimed(s, idea, body.base)
 
 
 @router.post('/ideas/{idea}/status', operation_id='set_status', dependencies=[Depends(actor_access)])
@@ -174,11 +182,17 @@ def set_track(s: Writing, me: Acting, idea: AddressedIdea, body: TrackBody) -> T
         return TrackChanged(cursor=cursor, idea=idea_view(idea), was=was)
 
 
-def _claimed(s: Session, idea: Idea) -> Claimed:
+def _claimed(s: Session, idea: Idea, base: CandidateId | None) -> Claimed:
     s.commit()
+    chosen = None if base is None else Base(candidate=base, revision=s.get_one(Candidate, base).revision)
     with db_feed.snapshot(s) as cursor:
         return Claimed(
-            cursor=cursor, idea=idea_view(idea), hypothesis=idea.hypothesis, plan=idea.plan, track=track_brief(idea)
+            cursor=cursor,
+            idea=idea_view(idea),
+            hypothesis=idea.hypothesis,
+            plan=idea.plan,
+            track=track_brief(idea),
+            base=chosen,
         )
 
 

@@ -1,4 +1,4 @@
-"""The metric types that the verdict and stop contracts share."""
+"""The metric types that the best rule and stop contracts share."""
 
 from enum import StrEnum
 

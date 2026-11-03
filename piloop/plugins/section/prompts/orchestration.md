@@ -4,7 +4,8 @@ These are for the orchestrator and the human. The agents' briefs leave them out.
 
 - `after` makes idea `new` wait until idea n is `done` or `dropped`.
   - Give one `--after` per prerequisite. All of them must settle.
-  - Then a worker can claim `new`. Its run starts from the head like any other run.
+  - Then a worker can claim `new`. Its run starts from the best like any other run, or from the candidate that its
+    claim names (`--base`).
   - Meanwhile, `new` stays `open`, and `piloop status` shows it as `held by idea#n (<status>)`.
   - To free `new` before its prerequisite settles: `piloop idea unlink <new> after <n> --reason '<why>'`.
 - To link an idea that exists already: `piloop idea link <new> after <n> --reason '<why>'`. The link is written in one
@@ -49,27 +50,25 @@ Each command takes `--reason '<why>'`, signs the change with your actor and reco
 - Kind: `orchestrator`. A role that does runs needs a run, so leave its agents to the scheduler.
 - Optional: `harness` and `model` pin the choice. `reason` says why.
 
-### Override a verdict
+### Exclude a candidate
 
-A candidate can be `interesting` without winning: `piloop candidate verdict <c> interesting --reason '<why>'`. It signs
-the verdict with your actor. A keep off the head is merged onto the head, and the daemon judges the merge there. The
-daemon never overwrites a verdict that is not its own.
+A candidate that gamed the evaluation may not be best: `piloop candidate exclude <c> --reason '<why>'`. It signs the
+exclusion with your actor. Its scores stay in the pool, and a run may still start from it.
 
 ### Note a lead
 
-- To keep a result that regressed but is worth starting from in view:
-  `piloop candidate note <candidate> '<why>' --follow-up '<hunch>'`. `--follow-up` can repeat.
-- The result is an `interesting` with `cause = 'note'`, plus one open idea per follow-up about it. It is not a keep
-  and not a bar.
+- To say why a candidate is worth starting from: `piloop candidate note <candidate> '<why>' --follow-up '<hunch>'`.
+  `--follow-up` can repeat.
+- The note is a comment on the candidate, plus one open idea per follow-up about it.
 
 ### Measure again
 
 - A candidate's score is the mean of its successful measurements under the current evaluator.
 - To estimate noise, ask an implementer, or run the evaluate command yourself, and record it:
   `piloop measurement add <c> --report <file>`, with `{"metrics": {"<name>": <value>}, "seconds": <s>}` in the file.
-  It counts under the current evaluator (`campaigns.evaluator_id`), with the metric names of `piloop.toml`. A `crash`,
-  `discard` or `interesting` that the daemon judged is judged again with every measurement.
-- Never insert into `measurements` by hand: nothing judges it.
+  It counts under the current evaluator (`campaigns.evaluator_id`), with the metric names of `piloop.toml`. The
+  candidate's mean, and so the best, include it at once.
+- Never insert into `measurements` by hand: use `piloop measurement add`.
 
 ### Pause a campaign
 
@@ -89,7 +88,7 @@ daemon never overwrites a verdict that is not its own.
   - drops the requests and queued runs pending at that moment (their ideas go back to `open`);
   - tells each running implementer to save its work and stop, and ends it 10 minutes later (`--kill`: at once); its
     versions are scored;
-  - closes the campaign once those versions are judged: nothing reviews it, and nothing writes its lessons;
+  - closes the campaign once those versions are scored: nothing reviews it, and nothing writes its lessons;
   - starts and files nothing more.
 - An orchestrator or an agent asks for a stop with an escalation: its `piloop campaign stop` is refused. Never
   UPDATE `campaigns.status`: the daemon does not close a campaign that an UPDATE stopped.

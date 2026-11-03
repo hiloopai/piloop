@@ -5,7 +5,7 @@ from piloop.plugins.section.contract import Rendering, Section, Surface
 
 
 class RunFunnel(Section):
-    """The run funnel: ideas → attempts → reached the evaluator → measured → keeps, and how the unmeasured attempts ended.
+    """The run funnel: ideas → attempts → reached the evaluator → measured → new bests, and how the unmeasured attempts ended.
 
     It counts the attempts that ended and whose commits are judged. Many attempts that end before the evaluator point
     at a gate in the brief that runs cannot pass; many that reach it unmeasured point at the evaluator.
@@ -23,7 +23,7 @@ class RunFunnel(Section):
             Figure(label='attempts', value=funnel.attempts),
             Figure(label='reached the evaluator', value=funnel.reached),
             Figure(label='measured', value=funnel.measured),
-            Figure(label='keeps', value=funnel.keeps),
+            Figure(label='new bests', value=funnel.bests),
         )
         unmeasured = Table(columns=('ended', 'unmeasured attempts'), rows=tuple(funnel.unmeasured.items()))
         return Rendered(title='Funnel', blocks=(Figures(figures=stages), *((unmeasured,) if funnel.unmeasured else ())))

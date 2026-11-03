@@ -1,0 +1,174 @@
+---
+title: The pool and the best
+sidebarTitle: The pool
+description: How piloop scores each commit, and which candidate is the best.
+---
+
+piloop scores each commit that an implementer submits into the campaign's **pool**, and nothing leaves it. The
+**best** is the candidate with the best score in the pool. This is what the implementer of the first run of the enwik8
+example hears:
+
+```text
+[piloop] candidate#2 (3f2c9a1b7d04): bytes 2720458 over 1 eval: the best of the bytes track now, rank 1 of 2; vs parent +968317
+```
+
+It came from these metrics in `piloop.toml`:
+
+```toml
+[[metrics]]
+name = "bytes"
+direction = "lower"
+role = "primary"
+
+[[metrics]]
+name = "seconds"
+direction = "lower"
+role = "guardrail"
+margin = 60       # may get 60 s worse than the baseline
+floor = 120       # and never worse than 120 s
+```
+
+## The words
+
+| Word | Meaning |
+|---|---|
+| **candidate** | One state of the code, identified by its git tree. Each submitted commit of a run is one. A commit back to a known tree is that candidate again. |
+| **baseline** | The first candidate: the repo's HEAD when you registered the campaign. It may always be the best. |
+| **confirmed** | A candidate with `[evaluator] noise_runs` successful evaluations, 3 by default. Only a confirmed candidate may be the best. |
+| **best** | The candidate with the best mean of the primary among the baseline and the confirmed candidates that the [best rule](#the-best) allows. |
+| **line** | A candidate's chain of parents. |
+
+## Scoring
+
+1. The daemon evaluates a submission once. With a [ladder](/concepts/campaigns#the-evaluation-ladder), that
+   evaluation can stop at a rung, against the best's values there.
+2. When the score beats the best's mean, the daemon evaluates the submission again until it is confirmed. At the same
+   time, it scores the submission on the [sealed split](#the-sealed-split), if the campaign has one.
+3. The daemon tells the implementer where the submission stands.
+
+The daemon evaluates the baseline `noise_runs` times, and runs wait for its first evaluation. When its evaluations agree
+on each primary, the evaluator is deterministic, and one evaluation confirms. Otherwise the standard deviation of the
+best's evaluations is the noise, **σ**, that a message names.
+
+## The best
+
+The best is a query of the pool, and nothing stores it. So the order of the evaluations never decides it. When a
+remeasure changes a mean, the best follows.
+
+The **best rule** says whether a confirmed candidate may be the best. The default rule, `baseline`, refuses a candidate
+when:
+
+1. A primary or a guardrail is past its `floor`.
+2. A guardrail is worse than the baseline's by more than its `margin`, or than its `fraction` of the baseline's value.
+3. The campaign has a sealed split, and the candidate does not beat the baseline there.
+
+A plugin can replace the rule: see [Best rules](/plugins/rules#best-rules). Each track has its own best:
+see [Tracks](/concepts/tracks).
+
+## The sealed split
+
+`[evaluator] sealed` is a second command that scores a version on data that no implementer can read. Keep its data
+and its scorer in the home or on the evaluator's machines, outside the repo.
+
+```toml
+[evaluator]
+sealed = ["python3", "/srv/sealed/score.py"]
+```
+
+piloop runs it on the baseline and on each candidate that it confirms. Its score is the primary of the first track.
+
+A result of the sealed command that piloop refuses, such as no `score`, is a fault of the setup: no implementer can
+change that command. The evaluation runs again after `[evaluation] infra_retry`, and piloop escalates once. Fix the
+command and run `piloop campaign sync`: the next confirmation uses the new one. `{"status": "infra_error"}` from the
+command is a fault of the machine, and the evaluation runs again later too.
+
+## What a worker hears
+
+An implementer runs `piloop submit` in its checkout. It returns at once, and the implementer works on:
+
+```text
+candidate#12 is queued: where it stands comes as a [piloop] message
+```
+
+The message gives the score, the place among the candidates that may be best, and the gains:
+
+```text
+[piloop] candidate#14 (9b04e1c27a3f): bytes 2370112 over 1 eval: rank 2 of 5; vs parent -8219, vs best candidate#12 -8219
+```
+
+- `vs parent` is the gain over its parent, `vs your line's best` over the best of its line, and `vs best` over the
+  best. A positive gain is better.
+- `(within noise)` marks a gain within 2 standard deviations of the difference, with `(σ …)` at the end.
+- `it may not be best: …` gives the reason of the best rule. `excluded (…)` gives the reason of an
+  [exclusion](#act-on-a-candidate).
+- A harness that reads messages only between turns gets no message. The `candidate.scored` event has the same line
+  (`told`).
+
+A run submits as many commits as it likes, unless `[evaluator] submissions` caps it. A commit that is not submitted is
+never scored: at the end of the run it is `skipped`. A resubmit of a tree that the run submitted is the same
+submission. When all its evaluations failed, such as on a timeout under load, piloop evaluates it once more. A tree
+that is another candidate already is refused. A run that claimed no idea submits nothing.
+
+`[evaluator] scoring = "run_end"` scores every commit after the run ends instead.
+
+## Lines and bases
+
+A run starts from the best. An implementer can start from another candidate when it claims its idea:
+
+```bash
+piloop idea claim 7 --base 14
+```
+
+The checkout moves to that candidate, and the run's submissions are children of it. The brief names up to 3 other
+candidates worth branching from: the best of each line apart from the best's.
+
+These candidates never enter the pool:
+
+| `candidates.origin` | What it is |
+|---|---|
+| `skipped` | A commit with a `Piloop-Eval: skip` trailer, or one that was not submitted. |
+| `recovered` | What an implementer left uncommitted when it stopped. The next attempt at the idea starts from it. |
+
+A `reference` from `piloop candidate import` gets one evaluation. To confirm it, remeasure it.
+
+## Act on a candidate
+
+| Command | What it does |
+|---|---|
+| `piloop candidate show 42` | Print where it stands, its metrics beside its parent's, and its rungs. |
+| `piloop candidate remeasure 42` | Evaluate it 3 more times. Its mean includes the new evaluations. |
+| `piloop candidate exclude 42 --reason "<why>"` | Take it out of the race for the best, such as one that gamed the evaluation. Its scores stay, and a run may still start from it. |
+| `piloop candidate note 42 "<why>" --follow-up "<idea>"` | Note why it is worth starting from. Each follow-up is an open idea about it. |
+| `piloop measurement add 42 --report report.json` | Record an evaluation that you ran, such as `{"metrics": {"bytes": 2720458}, "seconds": 600}`. |
+| `piloop eval queue`, `piloop eval cancel 42` | List the evaluations, or cancel one. A run's cancelled candidate is `skipped`. |
+
+```bash
+piloop candidate remeasure 14
+```
+
+```text
+candidate#14: the daemon evaluates it 3 times
+```
+
+To take an exclusion back, set `excluded_reason` and `excluded_by` to NULL with `piloop sql`. Each worker runs at most
+`evaluations` evaluate commands at a time, a key of its [worker pool](/guides/workers#capacity). A free slot goes to the
+campaign with the fewest running evaluations, then to its baseline, then to the oldest request. To stop an
+evaluation, use `piloop eval cancel`, not `pkill`: the daemon runs a killed evaluation once more.
+
+## The result
+
+The campaign's result is the best of each track. `piloop status` shows it with its gain over the baseline and the
+latest new bests:
+
+```text
+## Campaign
+
+best: candidate#12 · bytes: 2361893 · bytes vs baseline: 1326882 · may be best on bytes: 5 · candidates: 15
+
+## Trajectory
+
+- Baseline candidate#1, best candidate#12: bytes 3688775 → 2361893 (-1326882, -36.0%); 3 new bests.
+```
+
+A **new best** is a score that made its candidate the best when the daemon scored it. The Trajectory section also lists
+the other lines worth branching from, and `piloop history` the metrics of the best beside the baseline's.

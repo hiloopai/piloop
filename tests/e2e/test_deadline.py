@@ -3,7 +3,7 @@
     uv run pytest -m e2e tests/e2e/test_deadline.py -rA [--e2e-harness claude] [--e2e-model <model>]
 
 The role timeout is 8 minutes, so the wrap-up comes 2 minutes before it: room for a commit, a submission and its
-verdict, and the run's end. The idea asks for more half-minute steps than fit, all in one turn. Claude Code refuses a
+score, and the run's end. The idea asks for more half-minute steps than fit, all in one turn. Claude Code refuses a
 long ``sleep``, so a step sleeps in Python. The campaign starts paused, with the idea on its board, so the one worker
 claims it. A Claude agent reads the wrap-up after its next tool call, commits, submits and ends its run, and the daemon
 ends it a minute later. About 9 minutes and 0.15 USD.

@@ -23,7 +23,7 @@ from piloop.plugins.executor.kit.leases import Leases, Timing
 from piloop.plugins.executor.kit.relay import Relay
 from piloop.plugins.executor.workers.worker import Worker
 from piloop.settings import RELAY_SOCKET, socket_at
-from tests.conftest import no_ship
+from tests.conftest import no_land, no_ship
 
 
 def refuse(lease: int, call: Call) -> Relayed:
@@ -42,7 +42,7 @@ def main() -> None:
         Local(Leases(db, results, cas, timing), worker_id),
         Tracer(None),
         site,
-        relay=Relay(socket_at(home / RELAY_SOCKET), refuse, no_ship),
+        relay=Relay(socket_at(home / RELAY_SOCKET), refuse, no_ship, no_land),
     )
     worker.start()
     print('ready', flush=True)

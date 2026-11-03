@@ -3,29 +3,29 @@ title: Write a plugin
 description: A plugin is a Python package that adds providers to piloop's capabilities, with entry points.
 ---
 
-A **plugin** is a Python package that you install next to piloop. This one adds a verdict rule, `min_gain`. It calls
-the built-in rule `bootstrap` and changes one thing: a keep whose gain is below `min_gain` becomes `interesting`.
+A **plugin** is a Python package that you install next to piloop. This one adds a best rule, `min_gain`. It calls
+the built-in rule `baseline` and changes one thing: a candidate whose gain over the baseline is below `min_gain` may
+not be best.
 
 ```toml
-[project.entry-points."piloop.verdict_rules"]
+[project.entry-points."piloop.best_rules"]
 min_gain = "piloop_min_gain:MinGain"
 ```
 
 ```python
-from piloop.capabilities import Bootstrap, Case, Judgement, Outcome
+from piloop.capabilities import Baseline, Case
 
 
-class MinGain(Bootstrap):
+class MinGain(Baseline):
     min_gain: float
 
-    def decide(self, case: Case) -> Judgement:
-        judged = super().decide(case)  # the built-in rule's verdict and reason
-        if judged.verdict is Outcome.KEEP and gain(case) < self.min_gain:
-            return Judgement(Outcome.INTERESTING, judged.reason + '; the gain is below min_gain')
-        return judged
+    def refuse(self, case: Case) -> str | None:
+        if (why := super().refuse(case)) is not None:  # the built-in rule's reason
+            return why
+        return None if gain(case) >= self.min_gain else 'its gain is below min_gain'
 ```
 
-`gain` is a short helper. The full rule is in [Verdict rules](/plugins/rules#verdict-rules). Install the plugin next
+`gain` is a short helper. The full rule is in [Best rules](/plugins/rules#best-rules). Install the plugin next
 to piloop, check that piloop finds it, then select it in `piloop.toml` and run `piloop init .`:
 
 ```bash
@@ -34,7 +34,7 @@ piloop plugins
 ```
 
 ```text
-[plugins.verdict_rule]
+[plugins.best_rule]
 provider = "min_gain"
 min_gain = 100
 ```
@@ -45,7 +45,7 @@ and select it.
 
 ## Providers and capabilities
 
-A **capability** is one kind of decision or service, such as the verdict rule. A **provider** is one implementation
+A **capability** is one kind of decision or service, such as the best rule. A **provider** is one implementation
 of it, with a name. Each capability has a built-in provider. [How piloop is built](/concepts/how-piloop-is-built#capabilities)
 lists every capability, the entry point group of its providers, and its built-in providers.
 
@@ -61,7 +61,7 @@ A provider that needs something on the machine, such as a program on `PATH`, an 
 A table selects a provider: `provider` is its name, and the other keys are its parameters.
 
 - A capability with one provider per file has its own table, `[plugins.<capability>]`. The table is in `piloop.toml`
-  for a campaign's choice, such as the verdict rule, and in `$PILOOP_HOME/config.toml` for the home's, such as the
+  for a campaign's choice, such as the best rule, and in `$PILOOP_HOME/config.toml` for the home's, such as the
   executor.
 - A capability with several instances has a table for each, `[plugins.<capability>.<name>]`: `provider` is the one
   called `<name>` when the table has none. `[plugins.<capability>] use` names the instances in use, and a list of a
@@ -75,7 +75,7 @@ the names that exist.
 
 A **host** provider, such as a runtime, can get live objects of piloop: processes, files, a database session.
 
-A **pure** provider gets data and returns data. The verdict rules and the stop rules are pure. A pure provider
+A **pure** provider gets data and returns data. The best rules and the stop rules are pure. A pure provider
 imports only the standard library and, from `piloop.capabilities`, its contract and the built-in providers that it
 calls. Its methods take and return data only:
 
@@ -103,21 +103,20 @@ A plugin can declare a capability of its own. Other plugins then add providers t
    `{ provider = "<name>", <its parameters> }`, and piloop refuses a name that no provider has when the file loads.
 
 ```python
-class VerdictCheck(Parameters, ABC):
+class BestCheck(Parameters, ABC):
     @abstractmethod
     def check(self, case: Case) -> str | None: ...
 
 
-VERDICT_CHECKS = Capability('verdict_check', VerdictCheck, tier=Tier.PURE)  # providers: piloop.verdict_checks
+BEST_CHECKS = Capability('best_check', BestCheck, tier=Tier.PURE)  # providers: piloop.best_checks
 
 
-class Checked(Bootstrap):  # a verdict rule that calls the checks of its field `vetoes`
-    vetoes: list[Annotated[VerdictCheck, VERDICT_CHECKS.entry]]
+class Checked(Baseline):  # a best rule that calls the checks of its field `vetoes`
+    vetoes: list[Annotated[BestCheck, BEST_CHECKS.entry]]
 
-    def decide(self, case: Case) -> Judgement:
-        judged = super().decide(case)
+    def refuse(self, case: Case) -> str | None:
         held = [why for check in self.vetoes if (why := check.check(case)) is not None]
-        return Judgement(Outcome.INTERESTING, '; '.join(held)) if judged.verdict is Outcome.KEEP and held else judged
+        return super().refuse(case) or ('; '.join(held) if held else None)
 ```
 
 `piloop plugins` and `piloop doctor` list your capability and its providers.

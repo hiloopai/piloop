@@ -1,28 +1,25 @@
-"""``min_speedup``: the built-in verdict, but a keep must beat the bar by at least ``min_speedup`` of its value.
+"""``min_speedup``: the built-in best rule, but the best must beat the baseline by at least ``min_speedup``.
 
-A throughput benchmark is noisy, and a gain of a few percent can be luck that three pairs do not rule out. Each keep
-moves the head, and every later run must beat it, so a lucky keep costs the runs after it. The rule is ``bootstrap``
-with one more test: its confidence, guardrails and reasons stay.
+A throughput benchmark is noisy, and a gain of a few percent can be luck that a few evaluations do not rule out. Every
+run starts from the best by default, so a lucky best costs the runs after it. The rule is ``baseline`` with one more
+test: its guardrails, sealed split and reasons stay.
 """
 
-from piloop.capabilities import Bootstrap, Case, Judgement, Outcome
+from piloop.capabilities import Baseline, Case
 
 
-class MinSpeedup(Bootstrap):
-    """What ``bootstrap`` decides, but a keep that beats the bar by less than ``min_speedup`` is ``interesting``."""
+class MinSpeedup(Baseline):
+    """What ``baseline`` allows, but a candidate that beats the baseline by less than ``min_speedup`` may not be best."""
 
     min_speedup: float
-    """The smallest gain that keeps, as a fraction of the bar: ``0.05`` for 5%."""
+    """The smallest gain over the baseline that may be best, as a fraction of the baseline: ``0.05`` for 5%."""
 
-    def decide(self, case: Case) -> Judgement:
-        judged = super().decide(case)
+    def refuse(self, case: Case) -> str | None:
+        if (why := super().refuse(case)) is not None:
+            return why
         name = case.primary.name
-        bar = case.bar.means.get(name)
-        if judged.verdict is not Outcome.KEEP or not bar:
-            return judged
-        speedup = case.primary.direction.gain(case.candidate.means[name], bar) / abs(bar)
-        if speedup >= self.min_speedup:
-            return judged
-        return Judgement(
-            Outcome.INTERESTING, f'{judged.reason}; {speedup:.1%} is below min_speedup {self.min_speedup:.0%}'
-        )
+        base = case.baseline.means.get(name)
+        if not base:
+            return None
+        speedup = case.primary.direction.gain(case.candidate.means[name], base) / abs(base)
+        return None if speedup >= self.min_speedup else f'{speedup:.1%} is below min_speedup {self.min_speedup:.0%}'

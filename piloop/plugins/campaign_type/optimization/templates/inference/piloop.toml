@@ -24,7 +24,6 @@ name = "tokens_per_s"
 direction = "higher"
 role = "primary"
 ratio = { numerator = "tokens", denominator = "seconds" }
-repeats = 3                        # a time: measure each candidate 3 times next to its bar
 
 [[metrics]]
 name = "tokens"
@@ -45,7 +44,7 @@ floor = 0.98
 name = "p95_ms"
 direction = "lower"
 role = "guardrail"
-fraction = 0.25                    # timing noise: up to 25% slower than the bar still holds
+fraction = 0.25                    # timing noise: up to 25% slower than the baseline still holds
 
 [[metrics]]
 name = "p50_ms"

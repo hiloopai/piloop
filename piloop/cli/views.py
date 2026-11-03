@@ -57,7 +57,7 @@ def status(
 ) -> None:
     """Print the state of the daemon and the live keys that `config.toml` or a limit sets, then each campaign.
 
-    Each campaign shows the sections of its [plugins.section] use: by default the head, the goal and the progress against
+    Each campaign shows the sections of its [plugins.section] use: by default the best, the goal and the progress against
     the stop rule, the tracks, the trajectory, the open runs, the queue, the live agents with their last line, the
     evaluations, the recent candidates, the incidents that agents got, the inbox and the recent events. Without a campaign, it uses
     the campaign that the current directory is in, else the only active campaign, else every campaign but the retired
@@ -167,8 +167,8 @@ def inbox_wait(
     """Wait until something needs the orchestrator, print it one line per item, then print the command to wait again.
 
     These events end the wait: a new unacknowledged inbox item that someone else wrote, a seed that someone else
-    filed, a campaign that the daemon stopped, an anomaly that the daemon gave to an agent, and the daemon's verdict
-    on a measured candidate. Your own decisions, as PILOOP_ACTOR, do not end it. At --timeout it returns with nothing.
+    filed, a campaign that the daemon stopped, an anomaly that the daemon gave to an agent, and the daemon's score
+    of a candidate. Your own decisions, as PILOOP_ACTOR, do not end it. At --timeout it returns with nothing.
     Each return also names the escalations that still wait for you, unacknowledged and unanswered, with their age.
     Set the timeout of your shell tool higher than --timeout. Without a campaign, it waits for every campaign.
     """

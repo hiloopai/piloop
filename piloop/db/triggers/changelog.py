@@ -28,7 +28,7 @@ from piloop.ids import (
     TargetKind,
 )
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.cas.contract import BlobAddress
@@ -75,15 +75,17 @@ class IdeaTrackChanged(Changed[TrackName]):
     kind: Literal['idea.track'] = 'idea.track'
 
 
-EventModel.retire('idea.base_candidate_id')  # 0.5 pinned an idea's base; a run starts from the head now
+EventModel.retire('idea.base_candidate_id')  # 0.5 pinned an idea's base; a run's claim chooses it now
 
 
-class VerdictChanged(Changed[Outcome]):
-    """A candidate's verdict changed, by the daemon or by an override."""
+EventModel.retire('candidate.verdict')  # 0.5 logged a candidate's verdict; 0.6 has none, only scores in a pool
 
-    kind: Literal['candidate.verdict'] = 'candidate.verdict'
-    verdict_by: str | None
-    verdict_reason: str | None
+
+class ExclusionChanged(Changed[str]):
+    """Someone excluded a candidate from the race for the best (``piloop candidate exclude``), or took it back."""
+
+    kind: Literal['candidate.excluded_reason'] = 'candidate.excluded_reason'
+    excluded_by: str | None
 
 
 class OriginChanged(Changed[Origin]):
@@ -181,7 +183,6 @@ class CandidateDeleted(EventModel):
     tree_sha: str
     revision: str
     origin: Origin
-    verdict: Outcome | None
 
 
 class Commented(EventModel):
@@ -533,7 +534,7 @@ CHANGES = (
     changed(IdeaTrackChanged),
     link_event('NEW'),
     link_event('OLD'),
-    changed(VerdictChanged),
+    changed(ExclusionChanged),
     changed(OriginChanged),
     RUN_BRIEF,
     changed(CampaignStatusChanged),

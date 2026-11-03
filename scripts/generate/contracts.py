@@ -15,16 +15,7 @@ from pathlib import Path
 
 from piloop.daemon.loop import Consumer
 from piloop.plugins.archive.contract import ArchiveConfig, Archiver
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
-    Case,
-    Criterion,
-    Judgement,
-    Moved,
-    Node,
-    Rebase,
-    Side,
-    VerdictRule,
-)
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BestRule, Case, Criterion, Scores
 from piloop.plugins.cas.contract import Cas, CasProvider, Evictable, Upkeep
 from piloop.plugins.contribution import Contributes, Contribution
 from piloop.plugins.escalation.contract import EscalationPolicy, EscalationView
@@ -61,9 +52,8 @@ CONTRACTS: dict[str, Contract] = {
     'cas': Contract((CasProvider, Cas, Upkeep, Evictable), '`piloop/plugins/cas/contract.py`'),
     'executor': Contract((ExecutorConfig, Executor), '`piloop/plugins/executor/contract.py`'),
     'network': Contract((NetworkConfig, Network), '`piloop/plugins/network/contract.py`'),
-    'verdict-rule': Contract(
-        (VerdictRule, Case, Criterion, Side, Judgement, Node, Moved, Rebase),
-        '`piloop/plugins/campaign_type/kit/verdicts/verdict_rule/contract.py`',
+    'best-rule': Contract(
+        (BestRule, Case, Criterion, Scores), '`piloop/plugins/campaign_type/kit/pool/best_rule/contract.py`'
     ),
     'section': Contract((Section, Rendering), '`piloop/plugins/section/contract.py`'),
     'stop-rule': Contract((StopRule, StopCase), '`piloop/plugins/stop_rule/contract.py`'),
@@ -197,8 +187,8 @@ def _facts() -> str:
     ratios = ['| Ratio | What it is |', '|---|---|']
     for fn in (
         facts.reading,
-        facts.since_keep,
-        facts.per_keep,
+        facts.since_best,
+        facts.per_best,
         facts.per_evaluation,
         facts.worker_spend,
         facts.per_run,

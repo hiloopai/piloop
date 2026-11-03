@@ -4,7 +4,7 @@ from piloop.plugins.section.contract import Guide
 
 
 class Concepts(Guide):
-    """Campaigns, ideas, runs, candidates, measurements, verdicts, the head and the tracks."""
+    """Campaigns, ideas, runs, candidates, measurements, the pool, its best and the tracks."""
 
     TITLE = 'The model'
     TEXT = files(__package__) / 'prompts' / 'concepts.md'

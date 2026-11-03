@@ -29,9 +29,10 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, TargetKind
 from piloop.net import tokens
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunStatus
 from piloop.plugins.executor.contract import AGENT, AgentKey, Prompt
@@ -437,28 +438,31 @@ HARNESS_SUBMITS_ELSEWHERE = (
 
 
 @pytest.mark.usefixtures('daemon_api')  # the server runs the relayed `piloop submit` against the home's API
-def test_a_remote_implementer_submits_a_commit_that_only_its_worker_has_and_works_on_while_it_is_judged(
+def test_a_remote_implementer_submits_a_commit_that_only_its_worker_has_and_works_on_while_it_is_scored(
     db: Database, net: Net, core: RunController, campaign: Campaign, tmp_path: Path
 ) -> None:
-    """Its worker sends the commit through the CAS, and the submission answers before its verdict."""
+    """Its worker sends the commit through the CAS, and the submission answers before its score."""
     write_toml(Path(campaign.path), HARNESS_SUBMITS_ELSEWHERE)
     set_config(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1})
     net.start_worker()
     run_id = make_run(db, campaign)
 
-    def judge() -> None:
+    def score() -> None:
         wait_until(lambda: waiting_of(db, campaign), 'the submission', timeout=60)
         [submission] = waiting_of(db, campaign)
-        core.judge_submission(submission.id)
+        core.score_submission(submission.id)
 
-    judging = threading.Thread(target=judge)
-    judging.start()
+    scoring = threading.Thread(target=score)
+    scoring.start()
     execute(core, db, run_id)
-    judging.join(60)
-    [kept] = candidates(db, run_id)
-    assert (kept.summary, kept.verdict, kept.metrics['score']) == ('add a line', Outcome.KEEP, 2.0)
+    scoring.join(60)
+    [scored] = candidates(db, run_id)
+    assert (scored.summary, scored.metrics['score']) == ('add a line', 2.0)
+    with db.session() as s:
+        best = best_of(s, s.get_one(Campaign, campaign.id))
+        assert best is not None and best.id == scored.id
     workspace = tmp_path / 'projects' / str(campaign.id) / 'workspace'
-    queued = f'candidate#{kept.id} is queued: its verdict comes as a [piloop] message\n'
+    queued = f'candidate#{scored.id} is queued: where it stands comes as a [piloop] message\n'
     assert (workspace / 'idea1' / 'submitted.txt').read_text() == queued
 
 

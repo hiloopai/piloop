@@ -9,8 +9,8 @@ from piloop.plugins.vcs.contract import VCS, prompted
 
 SUBMIT = (
     '- `piloop submit` scores the version that your checkout is at, on the full evaluation. It returns at once: work on.'
-    ' The verdict and score come as a `[piloop]` message: `keep` makes it the head, `discard` does not beat the head,'
-    ' `crash` did not run.'
+    " Its score comes as a `[piloop]` message, with its gain over its parent, your line's best and the best. A score"
+    ' that beats the best is evaluated again until it is confirmed. Nothing is discarded: every score stays in the pool.'
 )
 """The line that names ``piloop submit``: on a worker elsewhere, the relay lets an agent run it."""
 RUN_END = files(__package__) / 'prompts' / 'run_end.md'
@@ -36,7 +36,7 @@ class Measure(Section):
                     SUBMIT,
                     '- Submit each version that beats your best so far'
                     + ('' if cfg.submissions is None else f': your run has {cfg.submissions} submissions')
-                    + '. Only submitted versions are scored and kept.',
+                    + '. Only submitted versions are scored.',
                 ]
             case Scoring.RUN_END:
                 lines.append(prompted(RUN_END.read_text().strip(), VCS.selected(r.campaign.config.plugins)))

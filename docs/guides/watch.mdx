@@ -13,7 +13,7 @@ It is also an example of a UI built on the API: see [Build a UI on piloop](/guid
 
 The first screen lists every campaign, the active ones first. Press `enter` to open one, and `esc` to come back.
 
-It shows one row per campaign: its status, the head and its gain over the baseline, the live agents, the open ideas, the
+It shows one row per campaign: its status, the best and its gain over the baseline, the live agents, the open ideas, the
 inbox, the tokens and the last event.
 
 A campaign has a header, five panels on the left, and the main pane on the right, which shows the selected row in
@@ -21,16 +21,16 @@ full:
 
 ![A campaign in piloop watch: the inbox, agents, ideas and candidates on the left, the selected row on the right](/images/watch-campaign.svg)
 
-These screens are from the enwik8 example campaign after its 10 runs. The Candidates panel, with the head selected:
+These screens are from the enwik8 example campaign after its 10 runs. The Candidates panel, with the best selected:
 
-![The candidates panel and a kept candidate's verdict](/images/watch-candidates.svg)
+![The candidates panel and the best candidate's scores](/images/watch-candidates.svg)
 
 The Ideas panel, with an idea's hypothesis and plan:
 
 ![The ideas panel and an idea's hypothesis and plan](/images/watch-ideas.svg)
 
-The header shows the campaign's state, then the first section of its `[plugins.section] use`: by default the head, the
-number of keeps and the tokens. The Status panel lists every section, such as the goal and the progress against the
+The header shows the campaign's state, then the first section of its `[plugins.section] use`: by default the best, its
+score against the baseline, the candidates and the tokens. The Status panel lists every section, such as the goal and the progress against the
 stop rule.
 
 ## Panels and keys
@@ -52,7 +52,7 @@ These keys work on the screen of a campaign. `?` and `q` also work on the list o
 | [1] Inbox | The unacknowledged items, most urgent first, without the items that you wrote. | The item and its thread. | `a` acknowledge, `A` acknowledge every item shown, `r` reply |
 | [2] Agents | The starting and running agents. | The agent, its task, and its last 60 lines of output. | `s` steer |
 | [3] Ideas | The open, then the claimed ideas, and by priority within each status. | Hypothesis, plan, links, runs and comments. | `y` open, `x` drop, `+` `-` priority |
-| [4] Candidates | The nodes of the campaign's lineage (`GET /v1/campaigns/{campaign}/lineage`), newest first. The title shows the head after each keep as a sparkline. | Verdict and reason, links, metrics against the parent, summary. | none |
+| [4] Candidates | The nodes of the campaign's lineage (`GET /v1/campaigns/{campaign}/lineage`), newest first. The title shows each new best on the spine as a sparkline. | Its status in the pool, who excluded it and why, its scores against the parent, links, summary. | none |
 | [5] Status | The sections of the campaign's `[plugins.section] use`. | The section. | none |
 
 ## What the keys write

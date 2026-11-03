@@ -1,9 +1,9 @@
 """The research pack: the campaign's history that ``piloop history`` prints, and that a sweep of a new role reads.
 
-Ideas written with broad context produce more keeps. The daemon builds this pack from the database and the campaign
+Ideas written with broad context produce more new bests. The daemon builds this pack from the database and the campaign
 repo when a sweep that proposes work starts. ``piloop history`` prints it too. It contains:
 
-- the metrics with their roles, tracks, margins and floors, and the start and the head on each;
+- the metrics with their roles, tracks, margins and floors, and the start and the best on each;
 - the analysis artifacts (``context``) and the shared workspace, newest first, as file pointers
   with an outline;
 - the history (``piloop.plugins.campaign_type.optimization.history``);
@@ -42,8 +42,8 @@ from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import MetricRole
 from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
-from piloop.plugins.campaign_type.kit.verdicts.judge import head
-from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES
+from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES
+from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.optimization.history import (
     BRIEF_WIDTH,
     campaign_notes,
@@ -140,7 +140,7 @@ def renderables(
 
 
 def _metrics(s: Session, campaign: Campaign, cfg: CampaignConfig, table_box: box.Box, heading: str) -> Table:
-    """Show the definition of each metric, with the value of the start and of the head."""
+    """Show the definition of each metric, with the value of the start and of the best of the first track."""
     evaluator_id = campaign.evaluator_id
     start = s.scalars(
         select(Candidate)
@@ -148,16 +148,16 @@ def _metrics(s: Session, campaign: Campaign, cfg: CampaignConfig, table_box: box
         .order_by(Candidate.id)
         .limit(1)
     ).first()
-    trunk = head(s, campaign)
+    trunk = best_of(s, campaign)
     at_start = metrics(start, evaluator_id) if start is not None else {}
     at_head = metrics(trunk, evaluator_id) if trunk is not None else {}
     start_ref = f'candidate#{start.id}' if start is not None else 'no candidate'
-    head_ref = f'candidate#{trunk.id}' if trunk is not None else 'no trunk keep'
+    best_ref = f'candidate#{trunk.id}' if trunk is not None else 'no baseline yet'
     tracks = {t.primary.name: t.name for t in cfg.all_tracks}
-    rule = VERDICT_RULES.selected(cfg.plugins)
-    judged = ', '.join([VERDICT_RULES.name_of(rule), *(f'{k} = {v}' for k, v in rule.model_dump(mode='json').items())])
+    rule = BEST_RULES.selected(cfg.plugins)
+    judged = ', '.join([BEST_RULES.name_of(rule), *(f'{k} = {v}' for k, v in rule.model_dump(mode='json').items())])
     table = titled_table(
-        f'{heading}Research pack: metrics (verdict rule {judged}; start {start_ref}, head {head_ref})',
+        f'{heading}Research pack: metrics (best rule {judged}; start {start_ref}, best {best_ref})',
         [
             'metric',
             'role',
@@ -166,7 +166,7 @@ def _metrics(s: Session, campaign: Campaign, cfg: CampaignConfig, table_box: box
             'margin',
             'floor',
             'start',
-            'head',
+            'best',
             'gain',
         ],
         table_box,
@@ -183,7 +183,7 @@ def _metrics(s: Session, campaign: Campaign, cfg: CampaignConfig, table_box: box
                 else []
             ),
             str(m.direction),
-            _num(m.margin) if m.fraction is None else f'{m.fraction:.0%} of the bar',
+            _num(m.margin) if m.fraction is None else f'{m.fraction:.0%} of the baseline',
             _num(m.floor),
             _num(a),
             _num(b),

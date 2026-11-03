@@ -3,20 +3,20 @@ from piloop.campaign.stop import gather
 from piloop.plugins.fact_source.facts import (
     ATTEMPTS,
     EVALUATIONS,
-    KEEPS,
     METRIC_SUMS,
+    NEW_BESTS,
+    per_best,
     per_evaluation,
-    per_keep,
     per_run,
     reading,
-    since_keep,
+    since_best,
     worker_spend,
 )
 from piloop.plugins.section.contract import Rendering, Section
 
 
 class Cost(Section):
-    """What the campaign spent: per keep, since the latest keep, and with ``metric`` per evaluation and per attempt.
+    """What the campaign spent: per new best, since the latest new best, and with ``metric`` per evaluation and per attempt.
 
     ``spend`` names the fact of what the campaign spent so far: by default ``spend``, the sum of the ``spend`` source.
     ``metric`` names the metric that the evaluate command prints as what one evaluation costs, for example
@@ -29,7 +29,7 @@ class Cost(Section):
     """The metric that is what one evaluation costs."""
 
     def render(self, r: Rendering) -> Rendered | None:
-        reads = [reading(self.spend), since_keep(self.spend), KEEPS, EVALUATIONS, METRIC_SUMS, ATTEMPTS]
+        reads = [reading(self.spend), since_best(self.spend), NEW_BESTS, EVALUATIONS, METRIC_SUMS, ATTEMPTS]
         facts = gather(r.s, r.campaign, r.campaign.config, reads, r.now)
         spent = facts.get(reading(self.spend))
         if spent is None and self.metric is None:
@@ -38,8 +38,8 @@ class Cost(Section):
             Figures(
                 figures=(
                     Figure(label=self.spend, value=spent),
-                    Figure(label='per keep', value=_cents(per_keep(facts, self.spend))),
-                    Figure(label='since the latest keep', value=_cents(facts.get(since_keep(self.spend)))),
+                    Figure(label='per new best', value=_cents(per_best(facts, self.spend))),
+                    Figure(label='since the latest new best', value=_cents(facts.get(since_best(self.spend)))),
                 )
             )
         ]

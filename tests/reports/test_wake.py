@@ -179,7 +179,7 @@ def test_fitted_makes_room_for_its_notice_inside_the_budget() -> None:
     assert fitted(lines, 2, 'm') == [], 'not even the notice fits'
 
 
-def test_wake_prints_the_journal_newest_lines_in_order_the_inbox_the_active_heads_and_the_lessons(
+def test_wake_prints_the_journal_newest_lines_in_order_the_inbox_the_active_bests_and_the_lessons(
     db: Database, campaign: Campaign
 ) -> None:
     with db.session() as s:
@@ -193,7 +193,7 @@ def test_wake_prints_the_journal_newest_lines_in_order_the_inbox_the_active_head
             '- none',
             '',
             '## Active campaigns (1)',
-            '- demo · head score 1 (candidate#1) · 1 kept / 1 candidates',
+            '- demo · best score 1 (candidate#1) · 0 new bests / 1 candidates',
             '',
             '## Current lessons on their repos (0)',
             '- none',

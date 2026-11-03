@@ -1,7 +1,7 @@
 """``Readings``: a fact source of named values that the daemon reads every ``interval`` seconds.
 
 Each reading is a ``fact.read`` event on the campaign, the one record of its values. The source supplies each name
-that it reads (``reading``), and how much its value grew since the latest keep (``since_keep``), from those events. It
+that it reads (``reading``), and how much its value grew since a candidate last became the best (``since_best``), from those events. It
 posts a note at each of its ``notices``, and an escalation when its readings start to fail.
 """
 
@@ -21,10 +21,10 @@ from piloop.db.events import has, latest, payload_of
 from piloop.db.models import Campaign, Comment, Event, EventModel
 from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import CommentKind, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.verdicts.judge import last_keep_at
+from piloop.plugins.campaign_type.kit.pool.scored import last_best_at
 from piloop.plugins.escalation.contract import Choice, EscalationView
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactReadError, FactSource
-from piloop.plugins.fact_source.facts import Fact, FactValue, reading, since_keep
+from piloop.plugins.fact_source.facts import Fact, FactValue, reading, since_best
 
 NOTICE_PRIORITY = 1
 NEVER_READ = datetime.min.replace(tzinfo=UTC)
@@ -42,8 +42,8 @@ class FactRead(EventModel):
 class Readings(FactSource):
     """A source that the daemon reads every ``interval`` seconds.
 
-    It supplies each name that it reads (``reading``), and how much its value grew since the latest keep
-    (``since_keep``), from its ``fact.read`` events.
+    It supplies each name that it reads (``reading``), and how much its value grew since a candidate last became the best
+    (``since_best``), from its ``fact.read`` events.
     """
 
     CHANGES: ClassVar[frozenset[type[EventModel]]] = frozenset({FactRead})
@@ -74,25 +74,25 @@ class Readings(FactSource):
         """
 
     def supplies(self) -> tuple[Fact[FactValue], ...]:
-        """``reading(name)`` and ``since_keep(name)`` for each name of ``names``."""
-        return tuple(fact for name in self.names() for fact in (reading(name), since_keep(name)))
+        """``reading(name)`` and ``since_best(name)`` for each name of ``names``."""
+        return tuple(fact for name in self.names() for fact in (reading(name), since_best(name)))
 
     def gather(
         self, s: Session, campaign: Campaign, wanted: frozenset[Fact[FactValue]], now: datetime
     ) -> dict[Fact[FactValue], FactValue]:
-        """Each value of the latest reading that has it, None after a failed one, and its growth since the latest keep."""
+        """Each value of the latest reading that has it, None after a failed one, and its growth since the latest new best."""
         found: dict[Fact[FactValue], FactValue] = {}
         for name in self.names():
             value = _latest(s, campaign, name)
             if reading(name) in wanted:
                 found[reading(name)] = value
-            if since_keep(name) in wanted:
-                found[since_keep(name)] = None if value is None else value - _at_keep(s, campaign, name, value)
+            if since_best(name) in wanted:
+                found[since_best(name)] = None if value is None else value - _at_best(s, campaign, name, value)
         return found
 
     def as_of(self, s: Session, campaign: Campaign, fact: Fact[FactValue], now: datetime) -> datetime | None:
         """The time of the latest reading of the name that ``fact`` is of: None before the first."""
-        name = next(n for n in self.names() if fact in (reading(n), since_keep(n)))
+        name = next(n for n in self.names() if fact in (reading(n), since_best(n)))
         last = latest(s, FactRead, _on(campaign), _of(name))
         return None if last is None else last[0].at
 
@@ -173,12 +173,12 @@ def _last_known(s: Session, campaign: Campaign, name: str) -> float | None:
     return None if last is None else last[1].values.get(name)
 
 
-def _at_keep(s: Session, campaign: Campaign, name: str, now: float) -> float:
-    """``name`` at the end of the run of the campaign's latest keep: the latest reading by then, else the first after.
+def _at_best(s: Session, campaign: Campaign, name: str, now: float) -> float:
+    """``name`` when a candidate last became the best: the latest reading by then, else the first after.
 
-    Before the first keep it is 0, so all of the value counts.
+    Before the first new best it is 0, so all of the value counts.
     """
-    at = last_keep_at(s, campaign)
+    at = last_best_at(s, campaign)
     if at is None:
         return 0.0
     readings = select(Event).where(has(FactRead), _on(campaign), _known(name))

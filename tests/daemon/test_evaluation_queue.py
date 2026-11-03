@@ -5,7 +5,6 @@ import threading
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 from git import Repo
@@ -13,16 +12,19 @@ from pytest_mock import MockerFixture
 from sqlalchemy import delete, select
 
 from piloop.actor import System
-from piloop.db.events import in_order
-from piloop.db.models import Campaign, utcnow
+from piloop.db.events import in_order, latest
+from piloop.db.models import Campaign, Event, utcnow
 from piloop.db.session import Database
+from piloop.ids import TargetRef
 from piloop.otel import Tracer
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.jobs import InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, measured, request_remeasure
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
+from piloop.plugins.campaign_type.kit.pool.pool import best_of
+from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -45,11 +47,10 @@ from tests.conftest import (
 from tests.daemon.test_run_controller import execute, make_run, set_config
 from tests.daemon.test_scheduler import add_ideas, make_scheduler
 
-if TYPE_CHECKING:
-    pass
-
 HARNESS_OWN_LINE = '#!/bin/sh\nbasename "$(dirname "$PWD")" >> solve.txt\ngit commit -qam "own line"\n'
 """Each run appends its own id (``runs/<id>/worktree``), so each run makes a tree of its own."""
+TOLD = 'score 2 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +1'
+"""What a run's worker hears of its commit of one line more than the baseline's."""
 SCORE = reports(score='$(wc -l < solve.txt)', size='$(wc -c < solve.txt)')
 
 
@@ -106,10 +107,12 @@ def queued_executor(
     return serving(controller)
 
 
-def errors(db: Database, candidate_id: CandidateId) -> tuple[list[str | None], Outcome | None]:
+def errors(db: Database, candidate_id: CandidateId) -> tuple[list[str | None], str | None]:
+    """The errors of the candidate's measurements, and where its last score told it stands, or None."""
     with db.session() as s:
         c = s.get_one(Candidate, candidate_id)
-        return [m.error for m in c.measurements], c.verdict
+        found = latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, candidate_id))
+        return [m.error for m in c.measurements], found[1].told if found is not None else None
 
 
 def test_two_runs_that_reach_one_tree_share_one_evaluation_and_its_crash(
@@ -130,7 +133,7 @@ def test_two_runs_that_reach_one_tree_share_one_evaluation_and_its_crash(
     two.join(30)
     [candidate] = run_candidates(db, first)
     assert run_candidates(db, second) == [], 'the second run reached the tree of the first'
-    assert errors(db, candidate.id) == (['evaluate exit 7: '], Outcome.CRASH)
+    assert errors(db, candidate.id) == (['evaluate exit 7: '], 'crash: no evaluation succeeded')
     assert len(evaluated(tmp_path)) == 1, 'evaluated once'
     assert rows(db) == [], 'the queue is empty'
 
@@ -160,7 +163,7 @@ def test_a_shared_evaluation_that_cannot_start_is_no_measurement_and_runs_again_
     one.join(30)
     two.join(30)
     [candidate] = run_candidates(db, first)
-    assert errors(db, candidate.id) == ([None], Outcome.KEEP), 'measured once, after the infra error'
+    assert errors(db, candidate.id) == ([None], TOLD), 'measured once, after the infra error'
     with db.session() as s:
         assert [s.get_one(Run, r).status for r in (first, second)] == [RunStatus.SUCCEEDED] * 2
         [infra] = [p for _, p in in_order(s, InfraFailed)]
@@ -168,7 +171,7 @@ def test_a_shared_evaluation_that_cannot_start_is_no_measurement_and_runs_again_
     assert rows(db) == []
 
 
-def test_a_cancelled_evaluation_is_no_verdict_and_its_candidate_is_skipped_at_once(
+def test_a_cancelled_evaluation_is_no_score_and_its_candidate_is_skipped_at_once(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """A cancel skips the candidate itself, so it holds even if no daemon sees it; a running evaluator is stopped."""
@@ -191,18 +194,19 @@ def test_a_cancelled_evaluation_is_no_verdict_and_its_candidate_is_skipped_at_on
     two.join(30)
     ex.stop_cancelled()
     one.join(30)
-    assert skipped(db, running.id) == ([], 'not judged: its evaluation was cancelled by human')
-    assert skipped(db, waiting.id) == ([], 'not judged: its evaluation was cancelled by orchestrator')
+    assert skipped(db, running.id) == []
+    assert skipped(db, waiting.id) == []
+    assert errors(db, running.id)[1] is None and errors(db, waiting.id)[1] is None, 'no score'
     assert len(evaluated(tmp_path)) == 1, 'the waiting evaluation never started'
     assert rows(db) == []
 
 
-def skipped(db: Database, candidate_id: CandidateId) -> tuple[list[Measurement], str | None]:
-    """The measurements of a ``skipped`` candidate, and why it is skipped."""
+def skipped(db: Database, candidate_id: CandidateId) -> list[Measurement]:
+    """The measurements of a ``skipped`` candidate."""
     with db.session() as s:
         c = s.get_one(Candidate, candidate_id)
-        assert (c.origin, c.verdict) == (Origin.SKIPPED, None)
-        return list(c.measurements), c.verdict_reason
+        assert c.origin is Origin.SKIPPED
+        return list(c.measurements)
 
 
 def test_a_cancel_holds_when_the_daemon_restarts_before_it_sees_it(db: Database, campaign: Campaign) -> None:
@@ -222,7 +226,7 @@ def test_a_cancel_holds_when_the_daemon_restarts_before_it_sees_it(db: Database,
         s.execute(delete(Evaluation))  # what the next daemon's reap does
         s.commit()
         assert not measured(s.get_one(Candidate, other.id), evaluator)
-    assert skipped(db, other.id)[1] == 'not judged: its evaluation was cancelled by human', 'no daemon measures it'
+    assert skipped(db, other.id) == [], 'no daemon measures it'
 
 
 def test_a_stop_ends_the_waiting_evaluations_and_records_nothing(
@@ -334,7 +338,7 @@ def test_a_busy_campaign_never_holds_back_another_campaign(db: Database, campaig
         assert [e.id for e in queue.listing(s)] == [quiet.id, newer[0].id, mine.id, newer[1].id, newer[2].id, late.id]
 
 
-def test_a_campaign_takes_its_head_before_its_older_requests(db: Database, campaign: Campaign) -> None:
+def test_a_campaign_takes_its_baseline_before_its_older_requests(db: Database, campaign: Campaign) -> None:
     base = baseline(db, campaign.id).id
     with db.session() as s:
         evaluator = s.get_one(Campaign, campaign.id).evaluator_id
@@ -343,9 +347,9 @@ def test_a_campaign_takes_its_head_before_its_older_requests(db: Database, campa
         s.add(other)
         s.flush()
         older = queue.request(s, other.id, evaluator)[0]
-        trunk, created = queue.request(s, base, evaluator)
-        assert created and queue.request(s, trunk.candidate_id, evaluator) == (trunk, False), 'one row per tree'
-        assert [e.id for e in queue.waiting(s)] == [trunk.id, older.id]
+        first, created = queue.request(s, base, evaluator)
+        assert created and queue.request(s, first.candidate_id, evaluator) == (first, False), 'one row per tree'
+        assert [e.id for e in queue.waiting(s)] == [first.id, older.id]
 
 
 def test_an_evaluation_id_is_never_reused(db: Database, campaign: Campaign) -> None:
@@ -392,9 +396,12 @@ def test_a_remeasure_whose_repo_is_gone_is_a_crash(
     Path(campaign.path).rename(tmp_path / 'moved')
     base = baseline(db, campaign.id).id
     queued_executor(db, runtime, tmp_path, slots=1).remeasure(base)
-    found, verdict = errors(db, base)
+    found, told = errors(db, base)
     assert found[-1] is not None and found[-1].startswith('NotARepository'), 'it cannot start: a crash, asked again'
-    assert verdict is Outcome.KEEP, "a keep's verdict stays"
+    assert told is None, "the baseline is no run's: nobody hears it"
+    with db.session() as s:
+        best = best_of(s, s.get_one(Campaign, campaign.id))
+        assert best is not None and best.id == base, 'the baseline is still the best'
     assert rows(db) == []
 
 

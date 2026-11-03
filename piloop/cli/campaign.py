@@ -154,11 +154,11 @@ def fork(
     *,
     at: Annotated[
         str | None,
-        cyclopts.Parameter(help="The version to start from, as the source's vcs names one. Default: its head."),
+        cyclopts.Parameter(help="The version to start from, as the source's vcs names one. Default: its best."),
     ] = None,
     name: Annotated[str | None, cyclopts.Parameter(help="The new campaign's name. Default: <source>-<n>.")] = None,
 ) -> None:
-    """Make a new campaign that starts from a version of another one, by default its head, in a clone of its checkout.
+    """Make a new campaign that starts from a version of another one, by default its best, in a clone of its checkout.
 
     The source may be in any state, retired too, and goes on as it is. The fork takes its stored config and shares the
     memory of its repo: its lessons, ideas and documents. It starts with no ideas of its own and an empty workspace.

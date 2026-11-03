@@ -1,4 +1,4 @@
-"""The daemon archives a done idea's workspace files once its run is judged, and keeps the local copies."""
+"""The daemon archives a done idea's workspace files once its run is scored, and keeps the local copies."""
 
 import threading
 import time
@@ -45,7 +45,7 @@ def scheduled(db: Database, runtime: ScriptRuntime, home: Path, store: DiskCas) 
 
 
 @pytest.mark.usefixtures('daemon_api')
-def test_the_tick_archives_an_idea_once_its_run_is_judged_and_leaves_its_files_for_later(
+def test_the_tick_archives_an_idea_once_its_run_is_scored_and_leaves_its_files_for_later(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, campaign_path: Path
 ) -> None:
     write_toml(campaign_path, HARNESS_LEAVES_AN_ARRAY + END_RUN)

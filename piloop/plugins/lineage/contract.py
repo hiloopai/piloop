@@ -44,11 +44,11 @@ class Tone(StrEnum):
     """How a client colours a status: the functional colour roles of GitHub's Primer design system."""
 
     NEUTRAL = 'neutral'
-    """Nothing to act on, such as a discarded node."""
+    """Nothing to act on, such as a node that scored below the best."""
     ACCENT = 'accent'
     """In progress, such as a node that waits for its measurement."""
     SUCCESS = 'success'
-    """A gain, such as a kept node."""
+    """A gain, such as the best node."""
     ATTENTION = 'attention'
     """Worth a look, such as a lead that did not reach the spine."""
     DANGER = 'danger'
@@ -68,9 +68,9 @@ class NodeStatus(View):
     """Where a node is, in the provider's words."""
 
     name: StatusName
-    """What a node's ``status`` says, such as ``kept``."""
+    """What a node's ``status`` says, such as ``best``."""
     label: str
-    """How a legend names it, such as ``Kept``."""
+    """How a legend names it, such as ``Best``."""
     tone: Tone
     """How a client colours it."""
 

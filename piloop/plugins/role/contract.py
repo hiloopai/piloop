@@ -178,20 +178,11 @@ class RoleConfig(Parameters):
         return list(dict.fromkeys([*self.GUIDES, *defaults(self.SURFACE)]))
 
 
-class FollowHead(StrEnum):
-    """What a role that does runs does for its running workers when another run's version becomes the head."""
-
-    OFF = 'off'
-    """Nothing: a worker builds on the head that it started from."""
-    MESSAGE = 'message'
-    """Each other running worker gets one message that names the new head's revision, to merge."""
-
-
 class ImplementerRole(RoleConfig):
     """``[plugins.role.implementer]``, and every ``[plugins.role.<name>]`` table with ``runs = true``: a role that does runs.
 
-    The run queue starts its agents. Each agent claims one idea, in a new checkout of the head, and its versions are
-    scored and judged when it ends. A new role of this kind takes the implementer's defaults, its prompt included.
+    The run queue starts its agents. Each agent claims one idea, in a new checkout of the best (or of another
+    candidate, ``--base``), and its versions are scored into the pool. A new role of this kind takes the implementer's defaults, its prompt included.
     """
 
     PROMPT: ClassVar[Traversable | None] = files(__package__) / 'prompts' / 'implementer.md'
@@ -212,12 +203,7 @@ class ImplementerRole(RoleConfig):
     max_concurrent: int = Field(default=1, ge=1)
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
     scored after its implementer ended does not count. More of them spend more to finish sooner, not more per dollar:
-    they race for the head, and a run often builds on a head that another one moved."""
-    follow_head: FollowHead = FollowHead.OFF
-    """``message``: when another run's version becomes the head, each running worker of this role gets one message that
-    names its revision, to merge into its own line. A worktree of the repo of record has the commit at once. A worker on
-    another machine gets the message too, but its checkout lacks the commit. ``off``: a worker builds on the head that
-    it started from."""
+    they often work on the same best."""
     IDEAS: ClassVar[str] = '- A hunch for another run goes in a note, with its numbers.'
     SURFACE: ClassVar[Surface] = Surface.RUN
     GUIDES: ClassVar[tuple[str, ...]] = ()

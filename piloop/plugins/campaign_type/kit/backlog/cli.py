@@ -1,5 +1,8 @@
 """The ``piloop idea`` commands, clients of the API: add, claim or propose an idea, and change it."""
 
+import os
+from contextlib import closing
+from pathlib import Path
 from typing import Annotated
 
 import cyclopts
@@ -8,9 +11,20 @@ from piloop.api.contract import Reasoned
 from piloop.cli import common
 from piloop.cli.client import campaign_name, daemon_http
 from piloop.cli.common import CampaignRef
+from piloop.ids import Revision
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus, LinkKind
-from piloop.plugins.campaign_type.kit.backlog.wire import BacklogClient, IdeaBody, ProposeBody, StatusBody, TrackBody
+from piloop.plugins.campaign_type.kit.backlog.wire import (
+    BacklogClient,
+    Base,
+    ClaimBody,
+    IdeaBody,
+    ProposeBody,
+    StatusBody,
+    TrackBody,
+)
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.proc import CHECKOUT_ENV
 
 app = cyclopts.App(
     name='idea',
@@ -64,16 +78,24 @@ def idea_add(
     common.console.print(f'idea#{idea.id} {idea.status} p{idea.priority}: {idea.title}', markup=False)
 
 
+BASE_HELP = (
+    'The candidate that your run starts from, instead of the best: any candidate of the campaign. Your checkout moves'
+    ' to it, and your submissions build on it.'
+)
+
+
 @app.command(name='claim')
-def idea_claim(idea_id: IdeaArg, /) -> None:
+def idea_claim(
+    idea_id: IdeaArg, /, *, base: Annotated[CandidateId | None, cyclopts.Parameter(help=BASE_HELP)] = None
+) -> None:
     """Claim an open idea for your run: you work on it until your run ends, and no other run takes it.
 
     Only a worker claims, once per run. An idea that an `after` link holds waits until its prerequisites are done.
     It prints the idea's hypothesis and its plan, which the board does not show, and, with several tracks, what the
-    idea's track asks of your run.
+    idea's track asks of your run. With `--base`, your run starts from that candidate: your checkout moves to it.
     """
     with BacklogClient.connect(daemon_http()) as client:
-        claimed = client.claim(idea_id)
+        claimed = client.claim(idea_id, ClaimBody(base=base))
     common.console.print(f'idea#{claimed.idea.id} {claimed.idea.status}: {claimed.idea.title}', markup=False)
     if claimed.hypothesis != claimed.idea.title:
         common.console.print(f'Hypothesis: {claimed.hypothesis}', markup=False, highlight=False)
@@ -81,6 +103,7 @@ def idea_claim(idea_id: IdeaArg, /) -> None:
         common.console.print(f'Plan: {claimed.plan}', markup=False, highlight=False)
     if claimed.track is not None:
         common.console.print(claimed.track, markup=False, highlight=False)
+    land(claimed.base)
 
 
 @app.command(name='propose')
@@ -96,17 +119,47 @@ def idea_propose(
         str | None, cyclopts.Parameter(name='--from', help='What prompted the idea, with ids or a URL.')
     ] = None,
     track: Annotated[TrackName | None, cyclopts.Parameter(help=TRACK_HELP)] = None,
+    base: Annotated[CandidateId | None, cyclopts.Parameter(help=BASE_HELP)] = None,
 ) -> None:
     """Add an idea of your own to the board and claim it for your run, in one step.
 
-    Only a worker proposes, instead of a claim. The idea is signed as PILOOP_ACTOR.
+    Only a worker proposes, instead of a claim. The idea is signed as PILOOP_ACTOR. With `--base`, your run starts
+    from that candidate: your checkout moves to it.
     """
-    body = ProposeBody(title=title, hypothesis=hypothesis, plan=plan, provenance=from_, track=track)
+    body = ProposeBody(title=title, hypothesis=hypothesis, plan=plan, provenance=from_, track=track, base=base)
     with BacklogClient.connect(daemon_http()) as client:
         claimed = client.propose(body)
     common.console.print(f'idea#{claimed.idea.id} {claimed.idea.status}: {claimed.idea.title}', markup=False)
     if claimed.track is not None:
         common.console.print(claimed.track, markup=False, highlight=False)
+    land(claimed.base)
+
+
+def land(base: Base | None) -> None:
+    """Move the caller's checkout to the run's ``base``, if its claim chose one.
+
+    The call of an agent on a worker elsewhere runs on the server: there it writes the revision to ``CHECKOUT_ENV``'s
+    file, and the worker moves the agent's checkout.
+
+    Raises:
+        SystemExit: the checkout cannot move. The run starts from ``base`` all the same.
+    """
+    if base is None:
+        return
+    if (relayed := os.environ.get(CHECKOUT_ENV)) is not None:
+        Path(relayed).write_text(base.revision)
+        return
+    from piloop.plugins.vcs.contract import VCS, VcsError  # here: only a claim with a base loads a vcs
+
+    try:
+        with closing(VCS.selected({}).open(Path.cwd())) as checkout:
+            checkout.switch(Revision(base.revision))
+    except VcsError as e:
+        raise SystemExit(
+            f'your run starts from candidate#{base.candidate}, but your checkout did not move: {e}. Move it to'
+            f' {base.revision} before you commit.'
+        ) from e
+    common.console.print(f'your checkout is at candidate#{base.candidate} ({base.revision[:12]})', markup=False)
 
 
 @app.command(name='status')
@@ -171,7 +224,7 @@ def idea_track(
 ) -> None:
     """Move an idea to another track of its campaign, with a note on the idea that says why.
 
-    Its runs are judged on that track's primary. A scheduled idea keeps its track: its run is judged on it.
+    Its runs are scored on that track's primary. A scheduled idea keeps its track: its run is scored on it.
     """
     with BacklogClient.connect(daemon_http()) as client:
         was = client.set_track(idea_id, TrackBody(track=track, reason=reason)).was

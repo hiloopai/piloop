@@ -119,6 +119,7 @@ class WorkersExecutor:
                 socket_at(host.home / RELAY_SOCKET),
                 lambda lease, call: self._cli(local.relayed(lease), call),
                 partial(jobs.ship, site),
+                partial(jobs.land, site),
             ),
         )
         """The worker inside ``piloop serve``, in the pool ``serve``. Its agents call piloop directly, except those of a
@@ -233,7 +234,7 @@ def remote_worker(
     """
     client = Remote(http, stop, tracer)
     site = jobs.remote_site(home, cas, client.send, reserve)
-    relaying = Relay(relay, client.cli, partial(jobs.ship, site))
+    relaying = Relay(relay, client.cli, partial(jobs.ship, site), partial(jobs.land, site))
     return Worker(client, tracer, site, pool=pool, relay=relaying, once=once, orphan_exit=orphan_exit)
 
 

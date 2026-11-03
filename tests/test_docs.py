@@ -292,8 +292,8 @@ def examples(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
         'nice-runtime',
         'sqlite-cas',
         'min-gain',
-        'stop-after-keeps',
-        'keep-cost',
+        'stop-after-bests',
+        'best-cost',
         'inline-executor',
         'inference',
     ):

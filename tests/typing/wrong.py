@@ -5,13 +5,13 @@ ty models pydantic's lax mode, which turns a string into a float, so the wrong p
 
 from piloop_min_gain import MinGain
 
-from piloop.capabilities import Bootstrap, Case, Limits, VerdictRule
+from piloop.capabilities import Baseline, BestRule, Case, Limits
 
 
-class Late(Bootstrap):
-    def decide(self, case: Case) -> str:  # wrong
-        return 'keep'
+class Late(Baseline):
+    def refuse(self, case: Case) -> bool:  # wrong
+        return True
 
 
 MinGain(min_gain=None)  # wrong
-rule: VerdictRule = Limits()  # wrong
+rule: BestRule = Limits()  # wrong

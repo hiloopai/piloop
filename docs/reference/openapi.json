@@ -3115,7 +3115,7 @@
     "/v1/ideas/{idea}/claim": {
       "post": {
         "summary": "Claim",
-        "description": "Claim an open idea for the caller's run, which works on it until the run ends, and say what its track asks.",
+        "description": "Claim an open idea for the caller's run, which works on it until the run ends, and say what its track asks.\n\nWith a ``base``, the run starts from that candidate: the answer names its revision, for the checkout.",
         "operationId": "claim",
         "parameters": [
           {
@@ -3128,6 +3128,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimBody"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -3688,7 +3698,7 @@
     "/v1/candidates/{candidate}/remeasure": {
       "post": {
         "summary": "Remeasure",
-        "description": "Ask the daemon to measure a candidate again, next to its bar, with the current evaluator.",
+        "description": "Ask the daemon to evaluate a candidate more times, with the current evaluator. Its mean includes them.",
         "operationId": "remeasure",
         "parameters": [
           {
@@ -3765,11 +3775,11 @@
         }
       }
     },
-    "/v1/candidates/{candidate}/verdict": {
+    "/v1/candidates/{candidate}/exclude": {
       "post": {
-        "summary": "Set Verdict",
-        "description": "Override a candidate's judgement, with the reason. The verdict is then the caller's.",
-        "operationId": "set_verdict",
+        "summary": "Exclude",
+        "description": "Take a candidate out of the race for the best, with the reason. Its scores stay in the pool.",
+        "operationId": "exclude",
         "parameters": [
           {
             "name": "candidate",
@@ -3786,7 +3796,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/VerdictBody"
+                "$ref": "#/components/schemas/ExcludeBody"
               }
             }
           }
@@ -3797,7 +3807,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/VerdictChanged"
+                  "$ref": "#/components/schemas/CandidateAnswer"
                 }
               }
             }
@@ -3848,7 +3858,7 @@
     "/v1/candidates/{candidate}/note": {
       "post": {
         "summary": "Note",
-        "description": "Keep a regressed result in view as a lead, with follow-up ideas pinned to it.",
+        "description": "Note why a candidate is worth starting from, with follow-up ideas pinned to it.",
         "operationId": "note",
         "parameters": [
           {
@@ -3928,7 +3938,7 @@
     "/v1/candidates/{candidate}": {
       "get": {
         "summary": "Candidate",
-        "description": "A candidate: its verdict, its metrics beside its parent's, and each rung of the ladder that it measured.",
+        "description": "A candidate: where it stands, its metrics beside its parent's, and each rung of the ladder that it measured.",
         "operationId": "candidate",
         "parameters": [
           {
@@ -3998,7 +4008,7 @@
     "/v1/candidates/{candidate}/measurements": {
       "post": {
         "summary": "Add Measurement",
-        "description": "Record a measurement of a candidate under the campaign's current evaluator, and have its verdict judged again.",
+        "description": "Record a measurement of a candidate under the campaign's current evaluator: its mean includes it.",
         "operationId": "add_measurement",
         "parameters": [
           {
@@ -4127,7 +4137,7 @@
     "/v1/candidates/{candidate}/evaluation/cancel": {
       "post": {
         "summary": "Cancel Evaluation",
-        "description": "Cancel a candidate's evaluation, waiting or running, or its requested remeasure. A cancel is not a verdict.\n\nA run's candidate that waits for its verdict is ``skipped``. A baseline that never measured pauses every\nmeasurement of its campaign (``ops.hold_on_cancelled_baseline``).",
+        "description": "Cancel a candidate's evaluation, waiting or running, or its requested remeasure. A cancel records nothing.\n\nA run's candidate that has no measurement is ``skipped``. A baseline that never measured pauses every\nmeasurement of its campaign (``ops.hold_on_cancelled_baseline``).",
         "operationId": "cancel_evaluation",
         "parameters": [
           {
@@ -4197,7 +4207,7 @@
     "/v1/submissions": {
       "post": {
         "summary": "Submit",
-        "description": "Submit a version of the caller's run, an implementer's: the daemon scores and judges it, and the answer comes now.\n\nThe verdict reaches the implementer as a message (``submissions.tell_verdicts``). A version that the run submitted\nalready answers as it is, also after the run ended: a retry. One whose verdict a limit gave is measured again\n(``submissions.remeasure``). Any other is refused before its ``blob``, from a worker elsewhere, is taken into the\nrepo of record.",
+        "description": "Submit a version of the caller's run, an implementer's: the daemon scores it into the pool.\n\nWhere it stands reaches the implementer as a message (``submissions.tell_scores``). A version that the run submitted\nalready answers as it is, also after the run ended: a retry (``submissions.retried``). Any other is refused before\nits ``blob``, from a worker elsewhere, is taken into the repo of record.",
         "operationId": "submit",
         "requestBody": {
           "content": {
@@ -4897,6 +4907,25 @@
         "title": "AnomalyNews",
         "description": "An anomaly that the daemon gave to an agent."
       },
+      "Base": {
+        "properties": {
+          "candidate": {
+            "type": "integer",
+            "title": "Candidate"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "candidate",
+          "revision"
+        ],
+        "title": "Base",
+        "description": "The candidate that a run starts from: its checkout moves to its revision."
+      },
       "Batch": {
         "properties": {
           "events": {
@@ -5127,20 +5156,18 @@
             ],
             "title": "Evaluator"
           },
-          "head": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Head"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Null when the campaign has no trunk keep."
+          "best": {
+            "items": {
+              "$ref": "#/components/schemas/TrackBest"
+            },
+            "type": "array",
+            "title": "Best",
+            "description": "The best of each track. Empty before the campaign has a baseline."
           },
-          "kept": {
+          "new_bests": {
             "type": "integer",
-            "title": "Kept"
+            "title": "New Bests",
+            "description": "The times that a run's candidate became the best of its track when it was scored."
           },
           "candidates": {
             "type": "integer",
@@ -5204,8 +5231,8 @@
           "paused",
           "paused_reason",
           "evaluator",
-          "head",
-          "kept",
+          "best",
+          "new_bests",
           "candidates",
           "ideas",
           "runnable",
@@ -5287,39 +5314,6 @@
         ],
         "title": "CancelledBy",
         "description": "A running evaluation that someone cancelled: the daemon stops its evaluator."
-      },
-      "CancelledRun": {
-        "properties": {
-          "run": {
-            "type": "integer",
-            "title": "Run"
-          },
-          "idea": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Idea",
-            "description": "The idea that it claimed, if any."
-          },
-          "base": {
-            "type": "integer",
-            "title": "Base",
-            "description": "The head that it started from."
-          }
-        },
-        "type": "object",
-        "required": [
-          "run",
-          "idea",
-          "base"
-        ],
-        "title": "CancelledRun",
-        "description": "An open run from the head that a verdict set by hand replaced: cancelled, and its idea ready again once it ends."
       },
       "CandidateAnswer": {
         "properties": {
@@ -5404,6 +5398,18 @@
             "type": "array",
             "title": "Rungs",
             "description": "Each rung of the ladder that it measured, in the order that it first measured them."
+          },
+          "standing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standing",
+            "description": "Where it stands in the pool of its track, in one line, or None when it never enters the pool (``skipped``,\n``recovered``)."
           }
         },
         "type": "object",
@@ -5415,7 +5421,8 @@
           "evaluator",
           "metrics",
           "parent_metrics",
-          "rungs"
+          "rungs",
+          "standing"
         ],
         "title": "CandidateDetail",
         "description": "A candidate, with what its measurements under its campaign's current evaluator say."
@@ -5437,22 +5444,10 @@
             ],
             "title": "Summary"
           },
-          "label": {
-            "type": "string",
-            "title": "Label",
-            "description": "The verdict as a person reads it: the verdict, ``pending``, or the origin of a candidate that is never judged."
+          "origin": {
+            "$ref": "#/components/schemas/Origin"
           },
-          "cause": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Cause"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "verdict_reason": {
+          "excluded_reason": {
             "anyOf": [
               {
                 "type": "string"
@@ -5461,28 +5456,19 @@
                 "type": "null"
               }
             ],
-            "title": "Verdict Reason"
+            "title": "Excluded Reason",
+            "description": "Why someone excluded it from being best, or None."
           }
         },
         "type": "object",
         "required": [
           "id",
           "summary",
-          "label",
-          "cause",
-          "verdict_reason"
+          "origin",
+          "excluded_reason"
         ],
         "title": "CandidateView",
         "description": "A candidate, as the change that wrote it left it."
-      },
-      "Cause": {
-        "type": "string",
-        "enum": [
-          "note",
-          "moved"
-        ],
-        "title": "Cause",
-        "description": "Why an ``interesting`` verdict is not the verdict rule's own.\n\n``note``: an agent marked a regressed result as a lead (``piloop candidate note``, the ``Piloop-Note`` trailer).\n``moved``: it kept against its own bar, but the head moved on, so it was merged onto the head."
       },
       "Checkout": {
         "properties": {
@@ -5548,6 +5534,25 @@
         "title": "ChooseBody",
         "description": "The answer to an escalation: one of the choices that it offers, by its id."
       },
+      "ClaimBody": {
+        "properties": {
+          "base": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base",
+            "description": "The candidate that the run starts from. Default: the best, which it started from."
+          }
+        },
+        "type": "object",
+        "title": "ClaimBody",
+        "description": "How a run claims an idea."
+      },
       "Claimed": {
         "properties": {
           "cursor": {
@@ -5582,7 +5587,18 @@
               }
             ],
             "title": "Track",
-            "description": "What the idea's track asks of the run: its keep rule and its addendum. Null when the campaign has one track."
+            "description": "What the idea's track asks of the run: what its best must hold, and its addendum. Null when the campaign has one\ntrack."
+          },
+          "base": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Base"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The candidate that the run starts from, when the claim chose it. Null: the best, which the checkout is at."
           }
         },
         "type": "object",
@@ -6056,6 +6072,20 @@
           }
         }
       },
+      "ExcludeBody": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "ExcludeBody",
+        "description": "Why a candidate may not be best, such as an evaluation that it gamed."
+      },
       "ExtendBody": {
         "properties": {
           "by": {
@@ -6191,7 +6221,7 @@
               }
             ],
             "title": "At",
-            "description": "The version to start from, as the source's vcs names one: a revision, a branch, a tag. None: its head."
+            "description": "The version to start from, as the source's vcs names one: a revision, a branch, a tag. None: its best."
           },
           "name": {
             "anyOf": [
@@ -6315,28 +6345,6 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
-      },
-      "Head": {
-        "properties": {
-          "candidate": {
-            "type": "integer",
-            "title": "Candidate"
-          },
-          "tracks": {
-            "items": {
-              "$ref": "#/components/schemas/TrackScore"
-            },
-            "type": "array",
-            "title": "Tracks"
-          }
-        },
-        "type": "object",
-        "required": [
-          "candidate",
-          "tracks"
-        ],
-        "title": "Head",
-        "description": "The head of the trunk: the latest keep."
       },
       "IdeaAnswer": {
         "properties": {
@@ -6599,7 +6607,7 @@
           "dropped"
         ],
         "title": "IdeaStatus",
-        "description": "Where an idea is on the board.\n\nAn ``open`` idea waits for a run, unless an ``after`` link holds it. A ``claimed`` idea has one run that works on\nit. When that run's commits are judged, the idea is ``done``, or ``open`` again for another attempt. A ``dropped``\nidea is off the board until someone opens it again."
+        "description": "Where an idea is on the board.\n\nAn ``open`` idea waits for a run, unless an ``after`` link holds it. A ``claimed`` idea has one run that works on\nit. When that run's commits are scored, the idea is ``done``, or ``open`` again for another attempt. A ``dropped``\nidea is off the board until someone opens it again."
       },
       "IdeaView": {
         "properties": {
@@ -7431,45 +7439,20 @@
             "type": "integer",
             "title": "Measurement"
           },
-          "rejudged": {
-            "type": "boolean",
-            "title": "Rejudged",
-            "description": "Whether the daemon judges the candidate again (``RejudgeRequested``)."
-          },
-          "effect": {
+          "standing": {
             "type": "string",
-            "title": "Effect",
-            "description": "What happens to the verdict, in one line: when the daemon judges it again, or why the verdict stays."
+            "title": "Standing",
+            "description": "Where the candidate stands in the pool now, in one line."
           }
         },
         "type": "object",
         "required": [
           "cursor",
           "measurement",
-          "rejudged",
-          "effect"
+          "standing"
         ],
         "title": "MeasurementAdded",
         "description": "A measurement recorded by hand, read at ``cursor``."
-      },
-      "Merge": {
-        "properties": {
-          "candidate": {
-            "type": "integer",
-            "title": "Candidate"
-          },
-          "head": {
-            "type": "integer",
-            "title": "Head"
-          }
-        },
-        "type": "object",
-        "required": [
-          "candidate",
-          "head"
-        ],
-        "title": "Merge",
-        "description": "A keep off the head, merged onto it: a candidate that the daemon measures and judges against that head."
       },
       "MessageBody": {
         "properties": {
@@ -7570,7 +7553,7 @@
             "$ref": "#/components/schemas/AnomalyNews"
           },
           {
-            "$ref": "#/components/schemas/VerdictNews"
+            "$ref": "#/components/schemas/ScoreNews"
           }
         ],
         "discriminator": {
@@ -7579,7 +7562,7 @@
             "anomaly_requested": "#/components/schemas/AnomalyNews",
             "campaign_stopped": "#/components/schemas/StoppedNews",
             "comment": "#/components/schemas/CommentNews",
-            "verdict": "#/components/schemas/VerdictNews"
+            "score": "#/components/schemas/ScoreNews"
           }
         }
       },
@@ -7630,12 +7613,12 @@
           "name": {
             "type": "string",
             "title": "Name",
-            "description": "What a node's ``status`` says, such as ``kept``."
+            "description": "What a node's ``status`` says, such as ``best``."
           },
           "label": {
             "type": "string",
             "title": "Label",
-            "description": "How a legend names it, such as ``Kept``."
+            "description": "How a legend names it, such as ``Best``."
           },
           "tone": {
             "$ref": "#/components/schemas/Tone",
@@ -7684,7 +7667,7 @@
           "reason"
         ],
         "title": "NoteBody",
-        "description": "Why a regressed result is worth starting from, and the ideas to pin to it."
+        "description": "Why a candidate is worth starting from, and the ideas to pin to it."
       },
       "Noted": {
         "properties": {
@@ -7711,7 +7694,7 @@
           "ideas"
         ],
         "title": "Noted",
-        "description": "A regressed candidate kept in view as a lead."
+        "description": "A candidate noted as worth starting from."
       },
       "OpenRun": {
         "properties": {
@@ -7767,16 +7750,17 @@
         "title": "OpenRun",
         "description": "A run that is queued or running."
       },
-      "Outcome": {
+      "Origin": {
         "type": "string",
         "enum": [
-          "keep",
-          "interesting",
-          "discard",
-          "crash"
+          "baseline",
+          "run",
+          "reference",
+          "recovered",
+          "skipped"
         ],
-        "title": "Outcome",
-        "description": "A verdict: what a rule gives, and what ``candidates.verdict`` holds. The column is NULL until a candidate is judged."
+        "title": "Origin",
+        "description": "Where a candidate comes from.\n\n``baseline``: the repo's HEAD when the campaign was registered. ``run``: an implementer's commit. ``reference``: a\nstarting point imported with ``piloop candidate import``, scored like any other. ``recovered``: the daemon's commit of what an implementer left uncommitted when it stopped, or\nwhere a daemon stop cut its run, never declared ready, so never measured; a new run of the idea starts from it.\n``skipped``: a commit marked ``Piloop-Eval: skip``, never measured. A ``recovered`` or ``skipped`` tree that a later commit reaches without the\nmark is measured like a new one, and becomes ``run``."
       },
       "Overview": {
         "properties": {
@@ -8016,6 +8000,18 @@
             ],
             "title": "Track",
             "description": "The track it works on. Required when the campaign has more than one track."
+          },
+          "base": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base",
+            "description": "The candidate that the run starts from. Default: the best, which it started from."
           }
         },
         "type": "object",
@@ -8134,7 +8130,7 @@
             "type": "integer",
             "minimum": 1.0,
             "title": "Repeats",
-            "description": "How many pairs of the candidate and its bar.",
+            "description": "How many more evaluations of the candidate.",
             "default": 3
           }
         },
@@ -8151,18 +8147,6 @@
           "candidate": {
             "$ref": "#/components/schemas/CandidateView"
           },
-          "bar": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Bar",
-            "description": "The bar that it is measured next to. Null: alone."
-          },
           "held": {
             "anyOf": [
               {
@@ -8174,20 +8158,13 @@
             ],
             "title": "Held",
             "description": "What the daemon waits for before it measures, such as a resume. Null: it measures soon."
-          },
-          "rejudged": {
-            "type": "boolean",
-            "title": "Rejudged",
-            "description": "Whether the daemon judges the candidate again after the measurements. Else its verdict stays."
           }
         },
         "type": "object",
         "required": [
           "cursor",
           "candidate",
-          "bar",
-          "held",
-          "rejudged"
+          "held"
         ],
         "title": "Remeasured",
         "description": "A candidate that the daemon measures again."
@@ -8569,6 +8546,32 @@
         "title": "RunningSince",
         "description": "An evaluation that has a slot of the executor."
       },
+      "ScoreNews": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "score",
+            "title": "Kind",
+            "default": "score"
+          },
+          "candidate": {
+            "type": "integer",
+            "title": "Candidate"
+          },
+          "told": {
+            "type": "string",
+            "title": "Told",
+            "description": "Where it stands, as its worker hears it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "candidate",
+          "told"
+        ],
+        "title": "ScoreNews",
+        "description": "The daemon scored a candidate into the pool: where it stands."
+      },
       "ScoreTrack": {
         "properties": {
           "name": {
@@ -8829,7 +8832,7 @@
             "type": "array",
             "title": "Parts"
           },
-          "per_keep_usd": {
+          "per_best_usd": {
             "anyOf": [
               {
                 "type": "number"
@@ -8838,15 +8841,15 @@
                 "type": "null"
               }
             ],
-            "title": "Per Keep Usd",
-            "description": "``usd`` per keep (``keeps``). None while ``usd`` is unknown, before the first keep, and without a source of\n``keeps``."
+            "title": "Per Best Usd",
+            "description": "``usd`` per new best (``new_bests``). None while ``usd`` is unknown, before the first new best, and without a\nsource of ``new_bests``."
           }
         },
         "type": "object",
         "required": [
           "usd",
           "parts",
-          "per_keep_usd"
+          "per_best_usd"
         ],
         "title": "Spend",
         "description": "What a campaign spent, in USD: the facts that its ``spend`` source names, each a part, and their sum."
@@ -9047,32 +9050,26 @@
             "type": "integer",
             "title": "Candidate"
           },
-          "verdict": {
-            "type": "string",
-            "title": "Verdict",
-            "description": "The verdict, ``pending`` while piloop scores it, or ``skipped`` when someone cancelled its evaluation. A pending\nverdict reaches the implementer as a message."
-          },
-          "score": {
+          "told": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Score",
-            "description": "The primary's value, on the evaluate command's score. None without one."
+            "title": "Told",
+            "description": "Where it stands, as its message says it. None while piloop scores it: the message comes then."
           }
         },
         "type": "object",
         "required": [
           "candidate",
-          "verdict",
-          "score"
+          "told"
         ],
         "title": "Submission",
-        "description": "A submission as its implementer reads it: the verdict and the score, nothing else."
+        "description": "A submission as its implementer reads it: where it stands, once scored."
       },
       "SubmitBody": {
         "properties": {
@@ -9400,6 +9397,57 @@
         "title": "Tone",
         "description": "How a client colours a status: the functional colour roles of GitHub's Primer design system."
       },
+      "TrackBest": {
+        "properties": {
+          "track": {
+            "type": "string",
+            "title": "Track"
+          },
+          "candidate": {
+            "type": "integer",
+            "title": "Candidate"
+          },
+          "metric": {
+            "type": "string",
+            "title": "Metric",
+            "description": "The primary metric of the track."
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value",
+            "description": "Null when the current evaluator has not measured the best."
+          },
+          "delta": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta",
+            "description": "Against the baseline. Null when the best is the baseline, or either is not measured."
+          }
+        },
+        "type": "object",
+        "required": [
+          "track",
+          "candidate",
+          "metric",
+          "value",
+          "delta"
+        ],
+        "title": "TrackBest",
+        "description": "The best of one track: the candidate with the best mean of its primary among those that may be best."
+      },
       "TrackBody": {
         "properties": {
           "reason": {
@@ -9441,52 +9489,6 @@
         ],
         "title": "TrackChanged",
         "description": "An idea that moved to another track."
-      },
-      "TrackScore": {
-        "properties": {
-          "track": {
-            "type": "string",
-            "title": "Track"
-          },
-          "metric": {
-            "type": "string",
-            "title": "Metric",
-            "description": "The primary metric of the track."
-          },
-          "value": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Value",
-            "description": "Null when the current evaluator has not measured the head."
-          },
-          "delta": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Delta",
-            "description": "Against the baseline. Null when the head is the baseline, or either is not measured."
-          }
-        },
-        "type": "object",
-        "required": [
-          "track",
-          "metric",
-          "value",
-          "delta"
-        ],
-        "title": "TrackScore",
-        "description": "The head on one track."
       },
       "Undelivered": {
         "properties": {
@@ -9570,98 +9572,6 @@
             "type": "null"
           }
         ]
-      },
-      "VerdictBody": {
-        "properties": {
-          "reason": {
-            "type": "string",
-            "title": "Reason"
-          },
-          "verdict": {
-            "$ref": "#/components/schemas/Outcome"
-          }
-        },
-        "type": "object",
-        "required": [
-          "reason",
-          "verdict"
-        ],
-        "title": "VerdictBody",
-        "description": "A candidate's verdict, set by hand."
-      },
-      "VerdictChanged": {
-        "properties": {
-          "cursor": {
-            "type": "integer",
-            "title": "Cursor"
-          },
-          "candidate": {
-            "$ref": "#/components/schemas/CandidateView"
-          },
-          "was": {
-            "type": "string",
-            "title": "Was",
-            "description": "The verdict that it had, as ``label`` reads it."
-          },
-          "merge": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Merge"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "cancelled": {
-            "items": {
-              "$ref": "#/components/schemas/CancelledRun"
-            },
-            "type": "array",
-            "title": "Cancelled",
-            "description": "The open runs from the head that it replaced, oldest first.",
-            "default": []
-          }
-        },
-        "type": "object",
-        "required": [
-          "cursor",
-          "candidate",
-          "was",
-          "merge"
-        ],
-        "title": "VerdictChanged",
-        "description": "A candidate whose verdict was set by hand."
-      },
-      "VerdictNews": {
-        "properties": {
-          "kind": {
-            "type": "string",
-            "const": "verdict",
-            "title": "Kind",
-            "default": "verdict"
-          },
-          "candidate": {
-            "type": "integer",
-            "title": "Candidate"
-          },
-          "verdict": {
-            "type": "string",
-            "title": "Verdict"
-          },
-          "reason": {
-            "type": "string",
-            "title": "Reason"
-          }
-        },
-        "type": "object",
-        "required": [
-          "candidate",
-          "verdict",
-          "reason"
-        ],
-        "title": "VerdictNews",
-        "description": "The daemon's verdict on a measured candidate."
       },
       "WaitingSince": {
         "properties": {

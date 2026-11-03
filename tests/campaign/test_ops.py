@@ -1,5 +1,6 @@
 """The control operations: each validates, changes the state and leaves its event, in the caller's transaction."""
 
+import re
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -15,47 +16,37 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
 from piloop.campaign import ops
-from piloop.campaign.stop import CancelRequested
 from piloop.config import load_campaign_config
-from piloop.db.events import emit, in_order
+from piloop.db.events import in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, EventModel, Pause
-from piloop.db.requests import RequestAnswered
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import (
     CampaignParentChanged,
     CampaignPausedChanged,
+    ExclusionChanged,
     IdeaCreated,
     IdeaLinked,
     IdeaTrackChanged,
-    VerdictChanged,
 )
-from piloop.ids import CampaignId, CampaignStatus, CommentKind, Ending, TargetKind, TargetRef
+from piloop.ids import CampaignId, CampaignStatus, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
 from piloop.plugins.campaign_type.kit.backlog.ideas import claimable
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus, LinkKind
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea, IdeaLink
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.references import import_reference
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, wire as evaluation_api
-from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT, MeasurementId, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT, TrackName
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.pool import ops as pool_ops
+from piloop.plugins.campaign_type.kit.pool.pool import Pool, best_of
 from piloop.plugins.campaign_type.kit.runs import ops as runs_ops
-from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunEnding, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
-from piloop.plugins.campaign_type.kit.runs.stop import settle_cancelled
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.campaign_type.kit.verdicts import ops as verdicts_ops
-from piloop.plugins.campaign_type.kit.verdicts.judge import (
-    RejudgeRequested,
-    answer_rejudge,
-    follow_up,
-    head,
-    rejudges,
-    unjudged,
-)
-from piloop.plugins.campaign_type.kit.verdicts.verdict import pending
+from piloop.plugins.campaign_type.optimization.ops import follow_up
 from piloop.plugins.vcs.git import PILOOP, GitRepository
 from tests.conftest import bare_config, end_of, reconfigured
 
@@ -113,39 +104,20 @@ def run_idea(db: Database, status: IdeaStatus, run: RunStatus, *, scoring: bool 
     return idea_id
 
 
-def run_candidate(
-    db: Database,
-    campaign: Campaign,
-    verdict: Outcome | None,
-    *,
-    by: str | None = System.DAEMON,
-    parent: int = 1,
-    commit: str | None = None,
-) -> CandidateId:
-    """A candidate of a run of a new idea from ``parent``, with the daemon's ``verdict`` and one measurement (score 0).
-
-    Its commit is ``commit``, else a sha that the repo does not have.
-    """
-    idea_id = add_idea(db, campaign.id, f'tried {verdict} {parent} {by}')
+def run_candidate(db: Database, campaign: Campaign, *, origin: Origin = Origin.RUN) -> CandidateId:
+    """A candidate of ``origin`` of a run of a new idea from the baseline, with one measurement (score 0)."""
+    idea_id = add_idea(db, campaign.id, f'tried {origin}')
     with db.session() as s:
-        run = Run(
-            campaign_id=campaign.id,
-            idea_id=idea_id,
-            attempt=1,
-            base_candidate_id=parent,
-            harness='script',
-            model='m',
-        )
+        run = Run(campaign_id=campaign.id, idea_id=idea_id, attempt=1, base_candidate_id=1, harness='script', model='m')
         s.add(run)
         s.flush()
         c = Candidate(
             campaign_id=campaign.id,
             run_id=run.id,
-            parent_id=parent,
-            tree_sha=Repo(campaign.path).commit(commit).tree.hexsha if commit else f'tree {idea_id}',
-            revision=commit or f'commit {idea_id}',
-            verdict=verdict,
-            verdict_by=by,
+            parent_id=1,
+            tree_sha=f'tree {idea_id}',
+            revision=f'commit {idea_id}',
+            origin=origin,
         )
         s.add(c)
         s.flush()
@@ -212,203 +184,55 @@ def test_an_agent_whose_role_files_nothing_adds_no_idea_and_the_others_add_open_
             assert (idea.status, idea.created_by) == (IdeaStatus.OPEN, actor.signature)
 
 
-def test_a_verdict_override_is_the_actors_with_the_reason_in_its_event(me: Database, campaign: Campaign) -> None:
-    c = run_candidate(me, campaign, Outcome.DISCARD)
+def test_an_exclusion_is_the_actors_with_the_reason_in_its_event_and_takes_the_candidate_out_of_the_race(
+    me: Database, campaign: Campaign
+) -> None:
+    c = run_candidate(me, campaign)
     with me.session() as s:
-        assert (
-            verdicts_ops.set_verdict(s, c, Outcome.KEEP, reason=' measured by hand: +3 ', actor=ACTOR).old
-            == Outcome.DISCARD
-        )
+        evaluation_ops.add_measurement(s, c, evaluation_api.Report(metrics={'score': 5.0, 'size': 1.0}), actor=ACTOR)
+        s.commit()
+        best = best_of(s, s.get_one(Campaign, 1))
+        assert best is not None and best.id == c, 'its mean, 2.5, beats the baseline'
+        assert pool_ops.exclude(s, c, ' gamed the evaluation ', actor=ACTOR).id == c
         s.commit()
         candidate = s.get_one(Candidate, c)
-        assert (candidate.verdict, candidate.verdict_by, candidate.verdict_reason) == (
-            Outcome.KEEP,
-            ACTOR.signature,
-            'measured by hand: +3',
-        )
-    payload = VerdictChanged(
-        old=Outcome.DISCARD, new=Outcome.KEEP, verdict_by=ACTOR.signature, verdict_reason='measured by hand: +3'
-    )
-    assert kinds(me, CANDIDATE, c) == [('candidate.verdict', ACTOR.signature, payload)]
-    pending = run_candidate(me, campaign, None, by=None)
+        assert (candidate.excluded_reason, candidate.excluded_by) == ('gamed the evaluation', ACTOR.signature)
+        best = best_of(s, s.get_one(Campaign, 1))
+        assert best is not None and best.id == 1, 'excluded: the baseline is the best again'
+        pool = Pool.of(s, s.get_one(Campaign, 1), s.get_one(Campaign, 1).config.all_tracks[0])
+        assert pool.standing(c).told() == (
+            'score 2.5 over 2 evals: excluded (gamed the evaluation); vs parent +1.5, vs best candidate#1 +1.5'
+        ), 'its scores stay in the pool'
+    payload = ExclusionChanged(old=None, new='gamed the evaluation', excluded_by=ACTOR.signature)
+    assert [(k, a, e) for k, a, e in kinds(me, CANDIDATE, c) if k == 'candidate.excluded_reason'] == [
+        ('candidate.excluded_reason', ACTOR.signature, payload)
+    ]
     with me.session() as s:
-        with pytest.raises(ops.Refused, match=r'candidate#\d+ is keep already \(measured by hand: \+3\)'):
-            verdicts_ops.set_verdict(s, c, Outcome.KEEP, reason='again', actor=ACTOR)
-        with pytest.raises(ops.Refused, match=f'candidate#{pending} is pending: the daemon judges it now'):
-            verdicts_ops.set_verdict(s, pending, Outcome.KEEP, reason='why', actor=ACTOR)
-        with pytest.raises(ops.Refused, match='a reason is required'):
-            verdicts_ops.set_verdict(s, c, Outcome.CRASH, reason='', actor=ACTOR)
-        with pytest.raises(ops.Refused, match='no candidate#99'):
-            verdicts_ops.set_verdict(s, CandidateId(99), Outcome.CRASH, reason='why', actor=ACTOR)
-        for origin in (Origin.RECOVERED, Origin.SKIPPED):
-            s.get_one(Candidate, pending).origin = origin
-            with pytest.raises(ops.Refused, match=f'candidate#{pending} is {origin}, which is never judged'):
-                verdicts_ops.set_verdict(s, pending, Outcome.KEEP, reason='why', actor=ACTOR)
+        for target, reason, error in [
+            (CandidateId(99), 'why', 'no candidate#99'),
+            (c, ' ', 'a reason is required'),
+            (CandidateId(1), 'why', 'candidate#1 is the baseline, which may always be best'),
+        ]:
+            with pytest.raises(ops.Refused, match=re.escape(error)):
+                pool_ops.exclude(s, target, reason, actor=ACTOR)
 
 
-def commit_on(campaign: Campaign, on: str, files: dict[str, str], *, merge: str | None = None) -> str:
-    """Commit ``files`` on commit ``on`` of the campaign repo, or a merge of ``merge`` onto it, and return the sha."""
-    repo = Repo(campaign.path)
-    repo.git.checkout('-q', '--detach', on)
-    if merge is not None:
-        repo.git.merge('-q', '--no-edit', merge)
-    for name, body in files.items():
-        (Path(campaign.path) / name).write_text(body)
-    repo.git.add('-A')
-    repo.git.commit('-qm', ', '.join(files) or 'merge', '--allow-empty')
-    sha = repo.head.commit.hexsha
-    repo.git.checkout('-q', 'main')
-    return sha
-
-
-def test_a_hand_keep_off_the_head_is_merged_onto_the_head_for_the_daemon_to_judge(
+def test_a_measurement_by_hand_is_recorded_and_says_where_its_candidate_stands(
     me: Database, campaign: Campaign
 ) -> None:
-    """The head is the newest trunk keep, so a keep from an older bar would drop what the head kept since.
-
-    The keep goes the way of the daemon's own keep against a bar that is no longer the head: the candidate is
-    ``interesting``, and its merge onto the head is a pending candidate that the daemon measures and judges there.
-    """
-    base = Repo(campaign.path).head.commit.hexsha
-    old_sha, trunk_sha = commit_on(campaign, base, {'old.txt': 'o\n'}), commit_on(campaign, base, {'t.txt': 't\n'})
-    old = run_candidate(me, campaign, Outcome.DISCARD, commit=old_sha)
-    trunk = run_candidate(me, campaign, Outcome.KEEP, commit=trunk_sha)
-    on_head = run_candidate(me, campaign, Outcome.DISCARD, parent=trunk)
-    after_it = run_candidate(me, campaign, Outcome.INTERESTING, parent=on_head)
-    with me.session() as s:
-        kept = verdicts_ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
-        assert kept.old == Outcome.DISCARD and kept.rebased is not None and kept.rebased.head == trunk
-        merged = s.get_one(Candidate, kept.rebased.rebased)
-        assert (pending(merged), merged.parent_id, merged.run_id) == (True, trunk, s.get_one(Candidate, old).run_id)
-        c = s.get_one(Candidate, old)
-        assert (c.verdict, c.cause, c.verdict_by) == (Outcome.INTERESTING, Cause.MOVED, ACTOR.signature)
-        assert c.verdict_reason == (
-            f'keeps against its own bar, but the head moved on to candidate#{trunk}: kept by hand: measured by hand;'
-            f' rebased onto the head as candidate#{merged.id}'
-        )
-        assert not unjudged(merged), 'its run is still open: the run judges it'
-        run = s.get_one(Run, merged.run_id)
-        run.status, run.end = RunStatus.SUCCEEDED, RunEnd.FINISHED
-        assert unjudged(merged), 'the run is over: the daemon measures and judges it (ledger.due)'
-        verdicts_ops.set_verdict(s, after_it, Outcome.KEEP, reason='its parent builds on the head', actor=ACTOR)
-        s.commit()
-        now = head(s, s.get_one(Campaign, 1))
-        assert now is not None and now.id == after_it, 'the newest trunk keep'
-
-
-def run_from(db: Database, campaign: Campaign, status: RunStatus, *, base: CandidateId) -> RunId:
-    """An open run of a new idea from ``base``."""
-    idea_id = add_idea(db, campaign.id, f'{status} on {base}', IdeaStatus.CLAIMED)
-    with db.session() as s:
-        run = Run(
-            campaign_id=campaign.id,
-            idea_id=idea_id,
-            attempt=1,
-            base_candidate_id=base,
-            harness='h',
-            model='m',
-            status=status,
-        )
-        s.add(run)
-        s.commit()
-        return run.id
-
-
-def test_an_override_that_replaces_the_head_cancels_the_runs_that_started_from_it_and_their_ideas_run_again(
-    me: Database, campaign: Campaign
-) -> None:
-    """A run from the replaced head builds on a tree that is not the head, and its brief says so: it is cancelled.
-
-    Its idea is open again once the run ends, to start from the new head. A run whose commits are being scored keeps
-    going: what it commits is judged against the head when it has the head.
-    """
-    kept = run_candidate(me, campaign, Outcome.DISCARD)
-    with me.session() as s:
-        made = s.get_one(Run, s.get_one(Candidate, kept).run_id)
-        made.status, made.end = RunStatus.SUCCEEDED, RunEnd.FINISHED
-        s.commit()
-    queued = run_from(me, campaign, RunStatus.QUEUED, base=CandidateId(1))
-    running = run_from(me, campaign, RunStatus.RUNNING, base=CandidateId(1))
-    with me.session() as s:
-        done = verdicts_ops.set_verdict(s, kept, Outcome.KEEP, reason='the score misses it', actor=ACTOR)
-        s.commit()
-        assert [r.id for r in done.cancelled] == [queued, running]
-        for run_id in (queued, running):
-            on_run = select(Event.kind).where(Event.target_kind == RUN, Event.target_id == run_id).order_by(Event.id)
-            assert list(s.scalars(on_run)) == ['run.cancel_requested', 'run.head_replaced']
-            [(event, cancel)] = in_order(s, CancelRequested, Event.target_id == run_id)
-            assert (event.actor, cancel.ending) == (ACTOR.signature, Ending.WRAP_UP)
-        run = s.get_one(Run, running)
-        run.status, run.end = RunStatus.FAILED, RunEnd.CANCELLED
-        assert run.idea is not None
-        settle_cancelled(s, run, run.idea)
-        s.commit()
-        assert run.idea.status is IdeaStatus.OPEN
-        [note] = s.scalars(select(Comment).where(Comment.target_id == run.idea_id)).all()
-        assert note.body == (
-            f'open: run#{running} was cancelled by orchestrator: it started from candidate#1, which a verdict'
-            f' override replaced as the head with candidate#{kept}; the next run starts from the head'
-        )
-    back = run_from(me, campaign, RunStatus.RUNNING, base=kept)
-    with me.session() as s:
-        done = verdicts_ops.set_verdict(s, kept, Outcome.INTERESTING, reason='it overfits', actor=ACTOR)
-        assert [r.id for r in done.cancelled] == [back], 'a head taken back cancels the runs on it too'
-        assert verdicts_ops.set_verdict(s, kept, Outcome.DISCARD, reason='worse', actor=ACTOR).cancelled == (), (
-            'the head stays'
-        )
-
-
-def test_a_hand_keep_off_the_head_whose_merge_conflicts_records_the_conflict_and_files_no_idea(
-    me: Database, campaign: Campaign
-) -> None:
-    base = Repo(campaign.path).head.commit.hexsha
-    old_sha, trunk_sha = commit_on(campaign, base, {'x.txt': 'o\n'}), commit_on(campaign, base, {'x.txt': 't\n'})
-    old = run_candidate(me, campaign, Outcome.DISCARD, commit=old_sha)
-    trunk = run_candidate(me, campaign, Outcome.KEEP, commit=trunk_sha)
-    with me.session() as s:
-        ideas = len(s.scalars(select(Idea)).all())
-        kept = verdicts_ops.set_verdict(s, old, Outcome.KEEP, reason='measured by hand', actor=ACTOR)
-        assert kept.rebased is not None and (kept.rebased.head, kept.rebased.conflicts) == (trunk, ['x.txt'])
-        assert len(s.scalars(select(Idea)).all()) == ideas, 'piloop never files an idea'
-        reason = s.get_one(Candidate, old).verdict_reason
-        assert reason is not None and reason.endswith('its merge onto the head conflicts in x.txt')
-
-
-def test_a_hand_keep_builds_on_the_head_by_git_where_the_parent_links_miss_it(me: Database, campaign: Campaign) -> None:
-    """Git decides what a candidate builds on when piloop's parent links do not reach the head.
-
-    The merge's parent is the merged-in line, as piloop recorded merges before, but its commit merges the head.
-    """
-    base = Repo(campaign.path).head.commit.hexsha
-    side_sha, trunk_sha = commit_on(campaign, base, {'side.txt': 's\n'}), commit_on(campaign, base, {'t.txt': 't\n'})
-    side = run_candidate(me, campaign, Outcome.INTERESTING, commit=side_sha)
-    trunk = run_candidate(me, campaign, Outcome.KEEP, commit=trunk_sha)
-    merge_sha = commit_on(campaign, trunk_sha, {}, merge=side_sha)
-    merged = run_candidate(me, campaign, Outcome.DISCARD, parent=side, commit=merge_sha)
-    lost = run_candidate(me, campaign, Outcome.DISCARD)
-    with me.session() as s:
-        verdicts_ops.set_verdict(s, merged, Outcome.KEEP, reason='its commit merges the head', actor=ACTOR)
-        s.commit()
-        now = head(s, s.get_one(Campaign, 1))
-        assert now is not None and now.id == merged, f'a trunk keep newer than candidate#{trunk}'
-        with pytest.raises(
-            ops.Refused, match=f'the vcs cannot tell if candidate#{lost} builds on the head candidate#{merged}'
-        ):
-            verdicts_ops.set_verdict(s, lost, Outcome.KEEP, reason='its commit is gone', actor=ACTOR)
-
-
-def test_a_measurement_by_hand_is_recorded_and_asks_the_daemon_to_judge_its_candidate_again(
-    me: Database, campaign: Campaign
-) -> None:
-    c = run_candidate(me, campaign, Outcome.CRASH)
+    """Its mean includes the measurement at once, so the pool and its best follow: nothing is judged again."""
+    c = run_candidate(me, campaign)
     report = evaluation_api.Report(metrics={'score': 3.0, 'size': 9.0}, seconds=12.5)
     with me.session() as s:
         added = evaluation_ops.add_measurement(s, c, report, actor=ACTOR)
         s.commit()
         measurement = added.measurement
-        assert (added.rejudged, added.effect) == (True, 'the daemon judges it again with all its measurements')
+        assert added.standing == (
+            'score 1.5 over 2 evals: the best of the score track now, rank 1 of 2; vs parent +0.5'
+        ), 'the mean of 0 and 3 beats the baseline'
         assert (measurement.evaluator_id, measurement.metrics, measurement.seconds) == (1, report.metrics, 12.5)
-        assert [x.id for x in rejudges(s, s.get_one(Campaign, 1))] == [c]
+        best = best_of(s, s.get_one(Campaign, 1))
+        assert best is not None and best.id == c
     assert kinds(me, MEASUREMENT, measurement.id) == [
         (
             'measurement.recorded',
@@ -416,52 +240,35 @@ def test_a_measurement_by_hand_is_recorded_and_asks_the_daemon_to_judge_its_cand
             MeasurementRecorded(candidate=c, metrics={'score': 3.0, 'size': 9.0}, error=None, run=None),
         )
     ], 'shaped like the daemon event'
-    requested = RejudgeRequested(measurement=measurement.id)
-    assert kinds(me, CANDIDATE, c) == [('candidate.rejudge_requested', ACTOR.signature, requested)]
+    assert kinds(me, CANDIDATE, c) == [], 'no request: the best is a query'
     with me.session() as s:
-        answer_rejudge(s, c)
-        s.commit()
-        assert rejudges(s, s.get_one(Campaign, 1)) == [], 'judging it again answers the request'
-        [(asked, _)] = in_order(s, RejudgeRequested)
-        assert [a.ask for _, a in in_order(s, RequestAnswered)] == [asked.id] and asked.actor == ACTOR.signature
-        evaluation_ops.add_measurement(s, c, evaluation_api.Report(metrics={}, error='timeout'), actor=ACTOR)
-        s.commit()
-        assert [x.id for x in rejudges(s, s.get_one(Campaign, 1))] == [c], 'a failed one counts too'
+        failed = evaluation_ops.add_measurement(
+            s, c, evaluation_api.Report(metrics={}, error='timeout'), actor=ACTOR
+        ).standing
+        assert failed.startswith('score 1.5 over 2 evals: '), 'a failed evaluation leaves the mean'
+        for origin in (Origin.RECOVERED, Origin.SKIPPED):
+            s.get_one(Candidate, c).origin = origin
+            with pytest.raises(
+                ops.Refused, match=f'candidate#{c} is {origin}: it never enters the pool; submit its tree to score it'
+            ):
+                evaluation_ops.add_measurement(s, c, report, actor=ACTOR)
 
 
-def test_another_campaigns_rejudge_requests_and_idea_titles_are_not_this_ones(me: Database, campaign: Campaign) -> None:
+def test_a_follow_up_title_is_free_in_its_own_campaign(me: Database, campaign: Campaign) -> None:
     with me.session() as s:
         other = Campaign(name='other', path='/other', config=bare_config('other'))
         s.add(other)
         s.flush()
-        theirs = Candidate(campaign_id=other.id, tree_sha='t', revision='c')
-        s.add_all([theirs, Idea(campaign_id=other.id, track='score', title='try', hypothesis='h', created_by='t')])
+        s.add(Idea(campaign_id=other.id, track='score', title='try', hypothesis='h', created_by='t'))
         s.flush()
-        emit(s, RejudgeRequested(measurement=MeasurementId(1)), TargetRef(CANDIDATE, theirs.id), ACTOR)
-        mine = s.get_one(Campaign, 1)
-        assert rejudges(s, mine) == []
         [seed] = follow_up(s, s.get_one(Candidate, 1), ['try'], 'why', ACTOR, track=TrackName('score'))
-        assert seed.title == 'try', 'the title is free in this campaign'
+        assert seed.title == 'try', "another campaign's idea titles are not this one's"
 
 
-def test_a_measurement_by_hand_of_a_keep_or_of_someones_verdict_leaves_the_verdict(
+def test_a_measurement_by_hand_refuses_a_report_that_does_not_fit_the_campaign(
     me: Database, campaign: Campaign
 ) -> None:
-    mine = run_candidate(me, campaign, Outcome.DISCARD, by='human')
     with me.session() as s:
-        keep = evaluation_ops.add_measurement(
-            s, CandidateId(1), evaluation_api.Report(metrics={'score': 1.0, 'size': 5.0}), actor=ACTOR
-        )
-        assert (keep.rejudged, keep.effect) == (
-            False,
-            'its keep stays; the runs that start from it must beat its new mean',
-        )
-        human = evaluation_ops.add_measurement(
-            s, mine, evaluation_api.Report(metrics={'score': 1.0, 'size': 5.0}), actor=ACTOR
-        )
-        assert (human.rejudged, human.effect) == (False, 'its verdict stays: discard, set by human')
-        s.commit()
-        assert in_order(s, RejudgeRequested) == [], 'nothing to judge again'
         with pytest.raises(ops.Refused, match='the report has no size: give every metric, or the error'):
             evaluation_ops.add_measurement(
                 s, CandidateId(1), evaluation_api.Report(metrics={'score': 1.0}), actor=ACTOR
@@ -497,36 +304,26 @@ def test_a_report_is_validated_at_the_boundary(text: str) -> None:
         evaluation_api.Report.model_validate_json(text)
 
 
-def test_a_measurement_by_hand_says_when_the_daemon_judges_again_and_waits_for_a_pending_judgement(
-    me: Database, campaign: Campaign
-) -> None:
-    crashed = run_candidate(me, campaign, Outcome.CRASH)
-    pending = run_candidate(me, campaign, None, by=None)
-    report = evaluation_api.Report(metrics={'score': 2.0, 'size': 4.0})
+def test_measuring_held_says_when_the_daemon_measures_a_campaign_again(me: Database, campaign: Campaign) -> None:
+    """What a remeasure answers: ``held`` is why the daemon measures it later, and a stopped campaign is measured."""
     with me.session() as s:
-        with pytest.raises(ops.Refused, match=f'candidate#{pending} is pending: the daemon judges it now'):
-            evaluation_ops.add_measurement(s, pending, report, actor=ACTOR)
         p = s.get_one(Campaign, 1)
         p.status, p.stopped_reason = CampaignStatus.STOPPED, 'max_runs: 3 runs'
-        assert evaluation_ops.add_measurement(s, crashed, report, actor=ACTOR).effect == (
-            'the daemon judges it again with all its measurements'
-        ), 'a stopped campaign is still measured and judged on request'
+        assert evaluation_ops.measuring_held(s, p, p.config) == '', 'a stopped campaign is still measured on request'
         p.status, p.stopped_reason = CampaignStatus.ACTIVE, None
         ops.pause(s, CampaignId(1), evals=True, reason='why')
-        assert evaluation_ops.add_measurement(s, crashed, report, actor=ACTOR).effect.endswith(
-            'once campaign demo is resumed (its evaluations are paused)'
+        assert evaluation_ops.measuring_held(s, p, p.config) == (
+            ' once campaign demo is resumed (its evaluations are paused)'
         )
         ops.resume(s, CampaignId(1))
         source = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
         sources = {'use': ['campaign', 'optimization', 'spend'], 'spend': source}
         p.config = reconfigured(p.config, plugins={'stop_rule': {'hold_at': {'spend': 10.0}}, 'fact_source': sources})
-        assert evaluation_ops.add_measurement(s, crashed, report, actor=ACTOR).effect.endswith(
-            'once the stop rule no longer holds it (spend not known)'
+        assert evaluation_ops.measuring_held(s, p, p.config) == (
+            ' once the stop rule no longer holds it (spend not known)'
         )
         p.status = CampaignStatus.STOPPED
-        assert evaluation_ops.add_measurement(s, crashed, report, actor=ACTOR).effect == (
-            'the daemon judges it again with all its measurements'
-        ), 'the stop rule holds an active campaign only'
+        assert evaluation_ops.measuring_held(s, p, p.config) == '', 'the stop rule holds an active campaign only'
 
 
 def worker(db: Database, status: RunStatus = RunStatus.RUNNING) -> tuple[RunId, Agent]:
@@ -699,13 +496,13 @@ def test_an_idea_status_takes_a_reason_in_a_note_and_refuses_what_is_not_set_by_
         assert backlog_ops.set_idea_status(
             s, idea, IdeaStatus.DROPPED, reason='after the v2 evaluator', actor=ACTOR
         ) is (IdeaStatus.OPEN)
-        backlog_ops.set_idea_status(s, done, IdeaStatus.OPEN, reason='try it on the new head', actor=ACTOR)
+        backlog_ops.set_idea_status(s, done, IdeaStatus.OPEN, reason='try it on the new best', actor=ACTOR)
         backlog_ops.set_idea_status(s, running, IdeaStatus.DROPPED, reason='redundant', actor=ACTOR)
         s.commit()
         notes = s.scalars(select(Comment).order_by(Comment.id)).all()
         assert [(n.target_id, n.author, n.kind, n.body) for n in notes] == [
             (idea, ACTOR.signature, CommentKind.NOTE, 'open → dropped: after the v2 evaluator'),
-            (done, ACTOR.signature, CommentKind.NOTE, 'done → open: try it on the new head'),
+            (done, ACTOR.signature, CommentKind.NOTE, 'done → open: try it on the new best'),
             (running, ACTOR.signature, CommentKind.NOTE, 'claimed → dropped: redundant'),
         ]
     assert [e[:2] for e in kinds(me, IDEA, idea)] == [CREATED[:2], ('idea.status', ACTOR.signature)], (
@@ -816,7 +613,7 @@ def test_a_track_must_be_in_the_config_and_its_move_says_why(me: Database, campa
             (
                 running,
                 TrackName('size'),
-                f'idea#{running} is claimed: its run is open: its commits are judged on track score',
+                f'idea#{running} is claimed: its run is open: its commits are scored on track score',
             ),
             (IdeaId(99), TrackName('size'), 'no idea#99'),
         ]:
@@ -892,36 +689,25 @@ def test_the_database_refuses_a_cycle_of_parents(me: Database, tmp_path: Path) -
         ]
 
 
-def test_a_measured_reference_that_builds_on_the_head_is_kept_by_hand_and_is_the_head(
-    me: Database, campaign: Campaign
-) -> None:
-    """A composition made by hand is imported, measured, then kept: no run has to commit it."""
-    base = Repo(campaign.path).head.commit.hexsha
-    on_head = commit_on(campaign, base, {'composed.txt': 'c\n'})
-    elsewhere = commit_on(campaign, base, {'x.txt': 'x\n'})
+def test_a_reference_measured_by_hand_enters_the_pool_and_may_be_the_best(me: Database, campaign: Campaign) -> None:
+    """A composition made by hand is imported, then measured: no run has to commit it, and nothing keeps it."""
+    repo = Repo(campaign.path)
+    repo.git.checkout('-q', '--detach')
+    (Path(campaign.path) / 'composed.txt').write_text('c\n')
+    repo.git.add('-A')
+    repo.git.commit('-qm', 'composed')
+    composed_sha = repo.head.commit.hexsha
+    repo.git.checkout('-q', 'main')
     with me.session() as s:
         proj = s.get_one(Campaign, 1)
-        repo = GitRepository(Repo(campaign.path), PILOOP)
-        composed = import_reference(s, proj, repo, on_head, summary=None, actor=ACTOR).id
-        off = import_reference(s, proj, repo, elsewhere, summary=None, actor=ACTOR).id
+        composed = import_reference(s, proj, GitRepository(repo, PILOOP), composed_sha, summary=None, actor=ACTOR).id
         s.commit()
-        with pytest.raises(ops.Refused, match=f'candidate#{composed} has no score under the current evaluator'):
-            verdicts_ops.set_verdict(s, composed, Outcome.KEEP, reason='composed by hand', actor=ACTOR)
-        with pytest.raises(ops.Refused, match=f'candidate#{composed} is reference, which is never judged'):
-            verdicts_ops.set_verdict(s, composed, Outcome.INTERESTING, reason='a lead', actor=ACTOR)
-        for c in (composed, off):
-            s.add(Measurement(candidate_id=c, evaluator_id=1, metrics={'score': 2.0, 'size': 1.0}))
-        s.flush()
-        assert verdicts_ops.set_verdict(s, composed, Outcome.KEEP, reason='composed by hand', actor=ACTOR).old == (
-            Origin.REFERENCE
+        pool = Pool.of(s, proj, proj.config.all_tracks[0])
+        assert pool.standing(composed).told() == 'not scored', 'imported, not measured yet'
+        added = evaluation_ops.add_measurement(
+            s, composed, evaluation_api.Report(metrics={'score': 2.0, 'size': 1.0}), actor=ACTOR
         )
         s.commit()
-        kept = s.get_one(Candidate, composed)
-        assert (kept.origin, kept.verdict, kept.verdict_by) == (Origin.REFERENCE, Outcome.KEEP, ACTOR.signature)
-        now = head(s, s.get_one(Campaign, 1))
-        assert now is not None and now.id == composed
-        with pytest.raises(ops.Refused, match=f'candidate#{off} does not build on the head candidate#{composed}'):
-            verdicts_ops.set_verdict(s, off, Outcome.KEEP, reason='not on the head', actor=ACTOR)
-        verdicts_ops.set_verdict(s, composed, Outcome.INTERESTING, reason='it overfits', actor=ACTOR)
-        now = head(s, s.get_one(Campaign, 1))
-        assert now is not None and now.id == 1, 'then it is overridden as any judgement'
+        assert added.standing == 'score 2 over 1 eval: the best of the score track now, rank 1 of 2'
+        best = best_of(s, s.get_one(Campaign, 1))
+        assert best is not None and (best.id, best.origin) == (composed, Origin.REFERENCE)

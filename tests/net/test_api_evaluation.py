@@ -23,9 +23,10 @@ from piloop.db.models import (
 from piloop.db.session import Database
 from piloop.ids import RoleName
 from piloop.net import tokens
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
+from piloop.plugins.campaign_type.kit.evaluation.measure import record, remeasure_asked
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import (
     CancelledBy,
@@ -34,11 +35,12 @@ from piloop.plugins.campaign_type.kit.evaluation.wire import (
     Submission,
     SubmitBody,
 )
+from piloop.plugins.campaign_type.kit.pool.pool import Pool, track_of
+from piloop.plugins.campaign_type.kit.pool.scored import record_scored
+from piloop.plugins.campaign_type.kit.pool.wire import RemeasureBody
 from piloop.plugins.campaign_type.kit.runs.controller import close_run
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
-from piloop.plugins.campaign_type.kit.verdicts.verdict import write
-from piloop.plugins.campaign_type.kit.verdicts.wire import RemeasureBody
 from piloop.settings import Settings
 from tests.conftest import EveryClient, serving_api
 from tests.daemon.test_run_controller import set_config
@@ -94,9 +96,9 @@ def test_a_candidate_reads_with_its_metrics_beside_its_parents_and_each_rung_of_
         candidate_id = c.id
     with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         shown = client.candidate(candidate_id)
-        assert (shown.candidate.id, shown.candidate.label, shown.revision, shown.parent, shown.run) == (
+        assert (shown.candidate.id, shown.candidate.excluded_reason, shown.revision, shown.parent, shown.run) == (
             candidate_id,
-            'pending',
+            None,
             'r2',
             1,
             None,
@@ -112,7 +114,12 @@ def test_a_candidate_reads_with_its_metrics_beside_its_parents_and_each_rung_of_
                 rung=RungName('screen'), metrics={'score': 2.5, 'size': 5.0}, seconds=2.0, measurements=2, stopped=stop
             ),
         ], 'the means of the successful measurements of each rung, and why the latest one stopped there'
-        assert client.candidate(CandidateId(1)).rungs == []
+        assert shown.standing == f'stopped at a rung of the ladder: {stop}'
+        baseline = client.candidate(CandidateId(1))
+        assert (baseline.rungs, baseline.standing) == (
+            [],
+            'score 1 over 1 eval: the best of the score track now, rank 1 of 1',
+        )
         with pytest.raises(Refused, match='^no candidate#9$') as unknown:
             client.candidate(CandidateId(9))
         assert unknown.value.error == Problem.UNKNOWN_CANDIDATE
@@ -130,11 +137,11 @@ def test_a_cancelled_evaluation_of_a_baseline_that_never_measured_pauses_its_mea
         assert (held.paused, held.paused_reason) == (
             Pause.ALL,
             'human cancelled the evaluation of the baseline; `piloop resume demo` measures it again',
-        ), 'a cancel records nothing: the pause holds the measurement that a head without a score asks for'
+        ), 'a cancel records nothing: the pause holds the measurement that a baseline without a score asks for'
         assert s.get_one(Candidate, added.baseline).measurements == []
 
 
-def test_an_implementer_submits_a_commit_of_its_run_and_reads_only_its_verdict_and_score(
+def test_an_implementer_submits_a_commit_of_its_run_and_reads_only_where_it_stands(
     db: Database, campaign: Campaign, cfg: Settings, tmp_path: Path
 ) -> None:
     set_config(db, campaign, evaluator={'scoring': 'submit'})
@@ -149,7 +156,7 @@ def test_an_implementer_submits_a_commit_of_its_run_and_reads_only_its_verdict_a
     with serving_api(cfg):
         with EveryClient.on(cfg.socket_file, me, token) as client:
             answer = client.submit(SubmitBody(revision=revision))
-            assert (answer.verdict, answer.score) == ('pending', None)
+            assert answer.told is None, 'the message says where it stands once scored'
             with pytest.raises(Refused, match='^the campaign repo has no f00: submit a commit of your checkout'):
                 client.submit(SubmitBody(revision='f00'))
             with pytest.raises(Refused, match='^nope is no blob address'):
@@ -158,39 +165,53 @@ def test_an_implementer_submits_a_commit_of_its_run_and_reads_only_its_verdict_a
             with pytest.raises(Refused, match=f'^f00 did not come: the bundle {absent} is not in the CAS$'):
                 client.submit(SubmitBody(revision='f00', blob=absent))
             again = client.submit(SubmitBody(revision=revision))
-            assert again.candidate == answer.candidate, 'its own tree again, while it waits'
-            with pytest.raises(Refused, match=r'^its tree is candidate#1 already \(keep\): change something first$'):
+            assert again == answer, 'its own tree again, while it waits'
+            with pytest.raises(
+                Refused, match=r'^its tree is candidate#1 already \(baseline\): change something first$'
+            ):
                 client.submit(SubmitBody(revision=base_revision(db, campaign)))
+        scored(db, campaign, answer.candidate, error='evaluate timeout after 9s')
+        with EveryClient.on(cfg.socket_file, me, token) as client:
+            assert client.submit(SubmitBody(revision=revision)) == Submission(candidate=answer.candidate, told=None), (
+                'a crash at the timeout is measured again: where it stands then comes as a message'
+            )
         with db.session() as s:
-            candidate = s.get_one(Candidate, answer.candidate)
-            s.add(Measurement(candidate_id=candidate.id, evaluator_id=campaign.evaluator_id, metrics={'score': 2.0}))
-            write(candidate, Outcome.KEEP, cause=None, reason='+1', by=System.DAEMON)
-            s.commit()
-            run = s.get_one(Run, run_id)
-            close_run(s, run, RunEnd.FINISHED, None)
+            assert remeasure_asked(s, s.get_one(Candidate, answer.candidate)) is not None
+        told = scored(db, campaign, answer.candidate, metrics={'score': 2.0})
+        with db.session() as s:
+            close_run(s, s.get_one(Run, run_id), RunEnd.FINISHED, None)
             s.commit()
         with EveryClient.on(cfg.socket_file, me, token) as client:
-            assert client.submit(SubmitBody(revision=revision)).verdict == 'keep', 'a retry after its run ended'
+            assert client.submit(SubmitBody(revision=revision)) == Submission(candidate=answer.candidate, told=told), (
+                'a retry after its run ended'
+            )
+            assert told == 'score 2 over 1 eval: the best of the score track now, rank 1 of 2; vs parent +1'
             with pytest.raises(Refused, match=rf'^run#{run_id} is succeeded, not running$'):
                 client.submit(SubmitBody(revision='f00', blob='nope'))  # refused before its blob is read
-        with db.session() as s:
-            candidate = s.get_one(Candidate, answer.candidate)
-            s.add(
-                Measurement(
-                    candidate_id=candidate.id, evaluator_id=campaign.evaluator_id, error='evaluate timeout after 9s'
-                )
-            )
-            write(candidate, Outcome.CRASH, cause=None, reason='no successful measurement', by=System.DAEMON)
-            s.commit()
-        with EveryClient.on(cfg.socket_file, me, token) as client:
-            assert client.submit(SubmitBody(revision=revision)) == Submission(
-                candidate=answer.candidate, verdict='pending', score=2.0
-            ), 'a crash at the timeout is measured again: its new verdict comes as a message'
         with (
             EveryClient.on(cfg.socket_file, System.HUMAN) as client,
             pytest.raises(Refused, match='^human has no run: only a worker submits$'),
         ):
             client.submit(SubmitBody(revision=revision))
+
+
+def scored(
+    db: Database,
+    campaign: Campaign,
+    candidate: CandidateId,
+    *,
+    metrics: dict[str, float] | None = None,
+    error: str | None = None,
+) -> str:
+    """Record an evaluation of ``candidate`` as the daemon does, then its score: the line its worker hears."""
+    with db.session() as s:
+        row, here = s.get_one(Candidate, candidate), s.get_one(Campaign, campaign.id)
+        assert here.evaluator_id is not None  # a registered campaign has its evaluator
+        record(s, row, here.evaluator_id, System.DAEMON, metrics=metrics or {}, error=error, seconds=1.0)
+        s.flush()
+        told = record_scored(s, Pool.of(s, here, track_of(here.config, row)), candidate).told
+        s.commit()
+        return told
 
 
 def base_revision(db: Database, campaign: Campaign) -> str:

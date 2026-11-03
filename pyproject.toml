@@ -98,7 +98,7 @@ runtime = "piloop.plugins.runtime.contract:RUNTIMES"
 cas = "piloop.plugins.cas.contract:CAS"
 provisioner = "piloop.plugins.provisioner.contract:PROVISIONERS"
 role = "piloop.plugins.role.contract:ROLES"
-verdict_rule = "piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract:VERDICT_RULES"
+best_rule = "piloop.plugins.campaign_type.kit.pool.best_rule.contract:BEST_RULES"
 stop_rule = "piloop.plugins.stop_rule.contract:STOP_RULES"
 executor = "piloop.plugins.executor.contract:EXECUTORS"
 network = "piloop.plugins.network.contract:NETWORKS"
@@ -144,9 +144,8 @@ s3 = "piloop.plugins.cas.s3:S3"
 gcs = "piloop.plugins.cas.gcs:Gcs"
 http = "piloop.plugins.cas.http:Http"
 
-[project.entry-points."piloop.verdict_rules"]
-bootstrap = "piloop.plugins.campaign_type.kit.verdicts.verdict_rule.bootstrap:Bootstrap"
-noise = "piloop.plugins.campaign_type.kit.verdicts.verdict_rule.noise:Noise"
+[project.entry-points."piloop.best_rules"]
+baseline = "piloop.plugins.campaign_type.kit.pool.best_rule.baseline:Baseline"
 
 [project.entry-points."piloop.stop_rules"]
 limits = "piloop.plugins.stop_rule.limits:Limits"
@@ -175,11 +174,11 @@ slack = "piloop.plugins.notifier.slack:Slack"
 slack_app = "piloop.plugins.notifier.slack_app:SlackApp"
 
 [project.entry-points."piloop.sections"]
-headline = "piloop.plugins.campaign_type.kit.verdicts.section.headline:Headline"
+headline = "piloop.plugins.campaign_type.kit.pool.section.headline:Headline"
 goal = "piloop.plugins.section.goal:Goal"
 context = "piloop.plugins.section.context:Context"
-tracks = "piloop.plugins.campaign_type.kit.verdicts.section.tracks:Tracks"
-trajectory = "piloop.plugins.campaign_type.kit.verdicts.section.trajectory:Trajectory"
+tracks = "piloop.plugins.campaign_type.kit.pool.section.tracks:Tracks"
+trajectory = "piloop.plugins.campaign_type.kit.pool.section.trajectory:Trajectory"
 runs = "piloop.plugins.campaign_type.kit.runs.section.runs:Runs"
 idea_comments = "piloop.plugins.campaign_type.kit.runs.section.idea_comments:IdeaComments"
 queue = "piloop.plugins.campaign_type.kit.backlog.section.queue:Queue"
@@ -188,8 +187,8 @@ evaluations = "piloop.plugins.campaign_type.kit.evaluation.section.evaluations:E
 measure = "piloop.plugins.campaign_type.kit.evaluation.section.measure:Measure"
 funnel = "piloop.plugins.campaign_type.kit.evaluation.section.funnel:RunFunnel"
 cost = "piloop.plugins.section.cost:Cost"
-candidates = "piloop.plugins.campaign_type.kit.verdicts.section.candidates:Candidates"
-same_as_parent = "piloop.plugins.campaign_type.kit.verdicts.section.same_as_parent:SameAsParent"
+candidates = "piloop.plugins.campaign_type.kit.pool.section.candidates:Candidates"
+same_as_parent = "piloop.plugins.campaign_type.kit.pool.section.same_as_parent:SameAsParent"
 reported = "piloop.plugins.section.reported:Reported"
 inbox = "piloop.plugins.section.inbox:Inbox"
 events = "piloop.plugins.section.events:Events"
@@ -201,7 +200,7 @@ lessons = "piloop.plugins.section.lessons:Lessons"
 database = "piloop.plugins.section.database:Database"
 concepts = "piloop.plugins.campaign_type.optimization.section.concepts:Concepts"
 research_commands = "piloop.plugins.campaign_type.optimization.section.research_commands:ResearchCommands"
-judging = "piloop.plugins.campaign_type.kit.verdicts.section.judging:Judging"
+scoring = "piloop.plugins.campaign_type.kit.pool.section.scoring:Scoring"
 comments = "piloop.plugins.section.comments:Comments"
 priorities = "piloop.plugins.section.priorities:Priorities"
 search = "piloop.plugins.section.search:Search"
@@ -299,7 +298,7 @@ optimization-operate = "piloop.plugins.campaign_type.optimization.skills:OPERATE
 control = "piloop.cli.skills:CONTROL"
 escalations = "piloop.cli.skills:ESCALATIONS"
 decisions = "piloop.cli.skills:DECISIONS"
-optimization-verdicts = "piloop.plugins.campaign_type.optimization.skills:VERDICTS"
+optimization-pool = "piloop.plugins.campaign_type.optimization.skills:POOL"
 rules = "piloop.cli.skills:RULES"
 setup = "piloop.plugins.campaign_type.optimization.skills:SETUP"
 review = "piloop.plugins.campaign_type.optimization.skills:REVIEW"
@@ -377,7 +376,7 @@ quote-style = "single"
 
 [tool.ty.environment]
 python-version = "3.14"
-extra-paths = ["examples/plugins/nice-runtime", "examples/plugins/sqlite-cas", "examples/plugins/min-gain", "examples/plugins/stop-after-keeps", "examples/plugins/keep-cost", "examples/plugins/inline-executor", "examples/plugins/inference"]
+extra-paths = ["examples/plugins/nice-runtime", "examples/plugins/sqlite-cas", "examples/plugins/min-gain", "examples/plugins/stop-after-bests", "examples/plugins/best-cost", "examples/plugins/inline-executor", "examples/plugins/inference"]
 
 [tool.ty.src]
 include = ["piloop", "tests", "scripts", "examples", "evals"]
@@ -392,7 +391,7 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # The example plugins import as packages; their entry points register only where a test installs them.
-pythonpath = ["examples/plugins/nice-runtime", "examples/plugins/sqlite-cas", "examples/plugins/min-gain", "examples/plugins/stop-after-keeps", "examples/plugins/keep-cost", "examples/plugins/inline-executor", "examples/plugins/inference"]
+pythonpath = ["examples/plugins/nice-runtime", "examples/plugins/sqlite-cas", "examples/plugins/min-gain", "examples/plugins/stop-after-bests", "examples/plugins/best-cost", "examples/plugins/inline-executor", "examples/plugins/inference"]
 # The e2e tests run real agents and cost money: only `make e2e` (`-m e2e`, which overrides this) selects them.
 # A quarantined test runs only in `make quarantine` (`-m quarantine`), until its issue is fixed.
 addopts = ["-m", "not e2e and not quarantine", "-p", "tests.shard"]

@@ -1,6 +1,6 @@
 # Implementer
 
-You are a piloop implementer, in {vcs:checkout} of the campaign at its head. The campaign's brief and your context
+You are a piloop implementer, in {vcs:checkout} of the campaign at its best candidate. The campaign's brief and your context
 follow.
 
 ## Work

@@ -66,7 +66,7 @@ The subagents:
 1. **Database numbers.** Trajectory with the global best so far, funnel, run outcomes and wall-clock time, tokens and
    cost per role, escalations, goalpost changes, statistical checks. This subagent owns the numbers that the others
    cite.
-2. **Implementers, one subagent per campaign.** Read the transcripts and diffs of the kept lineage. Run the integrity checks
+2. **Implementers, one subagent per campaign.** Read the transcripts and diffs of the new bests. Run the integrity checks
    below.
 3. **Orchestrator.** Its session: decisions it took for the human, briefs, status reports compared with the database,
    spend.
@@ -77,7 +77,7 @@ The subagents:
 
 Then combine the results yourself:
 
-- a verdict first,
+- the conclusion first,
 - a timeline,
 - what worked (specific and fair) and what did not,
 - an efficiency table,
@@ -87,7 +87,7 @@ Then combine the results yourself:
 
 Before you trust the results:
 
-- Check again every subagent number that the verdict depends on.
+- Check again every subagent number that the conclusion depends on.
 - Send deep-dive subagents on the two or three findings that matter most. Record their corrections.
 - Read 20–30 traces yourself before you trust any failure category that a subagent reports.
 - In each trace, note the *first* thing that went wrong. Later errors usually follow from it.
@@ -97,13 +97,13 @@ Before you trust the results:
 `<p>` is the campaign id. `<m>` is the primary metric: `SELECT config->'$.metrics' FROM campaigns WHERE id = <p>`.
 
 ```sql
--- Trajectory: every measured candidate and the global best so far (MIN for a lower-is-better metric).
--- `keep` is relative to the bar of its run; this is the campaign-level view. Only the current evaluator's scores
--- count. References are left out: the daemon never judges one.
-WITH s AS (SELECT c.id, c.run_id, c.parent_id, c.verdict, c.created_at,
+-- Trajectory: every measured candidate and the highest mean so far (MIN for a lower-is-better metric). Only the
+-- current evaluator's scores count. The pool's best is not always this: it must be confirmed (n >= noise_runs),
+-- not excluded, and allowed by the best rule; `piloop status` shows it.
+WITH s AS (SELECT c.id, c.run_id, c.parent_id, c.origin, c.excluded_reason, c.created_at,
                   AVG(json_extract(m.metrics, '$.<m>')) AS score, COUNT(*) AS n
            FROM candidates c JOIN measurements m ON m.candidate_id = c.id
-           WHERE c.campaign_id = <p> AND c.origin != 'reference' AND m.error IS NULL AND m.rung IS NULL
+           WHERE c.campaign_id = <p> AND m.error IS NULL AND m.rung IS NULL
              AND m.evaluator_id = (SELECT evaluator_id FROM campaigns WHERE id = <p>)
            GROUP BY c.id)
 SELECT *, MAX(score) OVER (ORDER BY created_at ROWS UNBOUNDED PRECEDING) AS best FROM s ORDER BY created_at;
@@ -112,13 +112,22 @@ SELECT *, MAX(score) OVER (ORDER BY created_at ROWS UNBOUNDED PRECEDING) AS best
 SELECT 'idea', status, COUNT(*) FROM ideas WHERE campaign_id = <p> GROUP BY status
 UNION ALL SELECT 'run', r.status, COUNT(*) FROM runs r JOIN ideas i ON i.id = r.idea_id
           WHERE i.campaign_id = <p> GROUP BY r.status
-UNION ALL SELECT 'candidate', coalesce(verdict, origin), COUNT(*) FROM candidates WHERE campaign_id = <p>
-          GROUP BY coalesce(verdict, origin);
+UNION ALL SELECT 'candidate', origin, COUNT(*) FROM candidates WHERE campaign_id = <p> GROUP BY origin;
 
--- Keeps that break a guardrail (floor from the config or the brief)
-SELECT c.id, c.verdict_by, json_extract(m.metrics, '$.<guard>') AS guard
+-- New bests: each time that a score made its candidate the best of its track
+SELECT e.at, e.target_id candidate, e.payload->>'$.track' track, e.payload->>'$.score' score,
+       e.payload->>'$.measured' n
+FROM events e JOIN candidates c ON c.id = e.target_id
+WHERE e.kind = 'candidate.scored' AND e.target_kind = 'candidate' AND c.campaign_id = <p>
+  AND e.payload->>'$.best' = e.target_id ORDER BY e.id;
+
+-- Candidates past a guardrail's floor (from the config or the brief): the best must not be one
+SELECT c.id, json_extract(m.metrics, '$.<guard>') AS guard
 FROM candidates c JOIN measurements m ON m.candidate_id = c.id
-WHERE c.campaign_id = <p> AND c.verdict = 'keep' AND json_extract(m.metrics, '$.<guard>') < <floor>;
+WHERE c.campaign_id = <p> AND m.error IS NULL AND json_extract(m.metrics, '$.<guard>') < <floor>;
+
+-- Exclusions: who took a candidate out of the race for the best, and why
+SELECT id, excluded_by, excluded_reason FROM candidates WHERE campaign_id = <p> AND excluded_reason IS NOT NULL;
 
 -- Selection noise: spread among the candidates of one run (SQLite has no STDEV)
 SELECT run_id, COUNT(*) n, AVG(s) mean, SQRT(AVG(s*s) - AVG(s)*AVG(s)) sd, MIN(s), MAX(s)
@@ -165,8 +174,8 @@ WHERE ideas_fts MATCH '<mechanism>' AND p.repo = (SELECT repo FROM campaigns WHE
 -- The orchestrator's journal: what it decided and planned, in its own words
 SELECT created_at, author, line FROM journal WHERE campaign_id = <p> ORDER BY id;
 
--- Goalposts: verdict overrides, status changes, evaluator versions
-SELECT at, actor, kind, payload FROM events WHERE kind IN ('candidate.verdict', 'campaign.status')
+-- Goalposts: exclusions, status changes, evaluator versions
+SELECT at, actor, kind, payload FROM events WHERE kind IN ('candidate.excluded_reason', 'campaign.status')
   AND at BETWEEN '<start>' AND '<end>' AND actor != 'daemon';
 SELECT id, key, created_at FROM evaluators WHERE campaign_id = <p>;
 ```
@@ -181,17 +190,17 @@ Orchestrator spend and cache churn:
 
 ## Integrity checks
 
-Run all of them on every kept candidate. Cheating and honest overfitting both show here. Say which one it is.
+Run all of them on the best and on every new best. Cheating and honest overfitting both show here. Say which one it is.
 
 - **Diffs of frozen files.**
-  - For each keep: `git -C <repo> diff --stat <baseline_sha> <revision> -- <evaluate> <scorer> <references> <data>`.
+  - For each new best: `git -C <repo> diff --stat <baseline_sha> <revision> -- <evaluate> <scorer> <references> <data>`.
   - Over `refs/piloop/`: `git log --all -- <frozen paths>`.
   - The evaluator key hashes the evaluate command, the `link` list, and the name and direction of each metric. It
     does not hash the contents of `evaluate.py` or of its data. An edited evaluator scores without any warning.
 - **Reads of labels and references.**
   - Run `rg -l '<label file>|<references dir>|<per-unit ledger>'` over the session file of every agent. Read the hits.
   - In the diffs, look for record-id literals and lookup tables keyed on inputs:
-    `git diff <base> <keep> | rg '<unit ids>'`.
+    `git diff <base> <best> | rg '<unit ids>'`.
   - Reading the per-unit correct flags of the scoring panel is oracle use, even without a training step.
 - **Tuning against the evaluation.**
   - Count the evaluate calls per implementer transcript: `rg -c '<evaluate command>'`.
@@ -222,7 +231,7 @@ Statistics to apply:
   number of clusters.
 - **Compare two candidates** with a paired sign test (exact McNemar test) on the units where they disagree. With 5 or
   fewer disagreements, no result is significant. With 10, you need a net gain of 8.
-- **Keeping the best inflates the score by itself.** K candidates with the same true score produce a winner several
+- **Picking the best inflates the score by itself.** K candidates with the same true score produce a winner several
   points above the baseline. Compare the step of a new best with the spread among sibling candidates (query above).
 - **Transfer is the proof.** For every promoted candidate, compute the gap Δ between the development set and the
   holdout. A step that moves the development set and not the holdout is overfitting, whatever the transcript says.
@@ -242,7 +251,7 @@ Make one table, measured where possible:
   - polling loops,
   - agents blocked on credentials.
 
-Judge spend against value. Tokens that produced the kept ideas are not waste. Deriving the schema again in
+Judge spend against value. Tokens that produced the new bests are not waste. Deriving the schema again in
 every sweep is.
 
 ## Attribution
@@ -260,7 +269,7 @@ Separate harness faults and environment faults before you blame a model.
 
 ## Output
 
-1. **Report.** Verdict, timeline, what worked and what did not, efficiency, attribution, suggestions, open items,
+1. **Report.** Conclusion, timeline, what worked and what did not, efficiency, attribution, suggestions, open items,
    measured and inferred lists. Use short sentences. Put the numbers first.
 2. **Bug reports and PRs.** One for each harness fault.
    - Include the evidence (row ids, transcript lines) and a minimal reproduction where possible.
@@ -268,7 +277,7 @@ Separate harness faults and environment faults before you blame a model.
    - In the PR body, cite the review evidence and say what you verified and what you did not.
    - Do not merge.
 3. **Inbox items for the human.** Decisions that only the human can make: goalposts, reverting an agent's config or
-   memory writes, pausing a campaign whose evaluation is broken, keeps below a floor.
+   memory writes, pausing a campaign whose evaluation is broken, a best below a floor.
    - One item for each decision, with a recommendation and a priority.
    - Post each one as an `escalation` comment on the campaign, with a `priority`: pipe the INSERT into
      `piloop sql -` from a quoted heredoc (`<<'EOF'`), never in a double-quoted argument.

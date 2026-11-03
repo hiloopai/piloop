@@ -1,6 +1,6 @@
 ---
 name: piloop-operate
-description: Operate a running piloop autoresearch campaign as its orchestrator, from any harness with a shell (Claude Code, Codex, pi, Gemini CLI, Cursor), by looping on piloop inbox wait to decide escalations, manage ideas, launch sweeps, steer implementers and judge candidates. Use when the human asks you to orchestrate, watch, run or report on a campaign, when an escalation arrives, or when you take a decision for the human; do not use it in an agent that piloop launched (PILOOP_ACTOR is an implementer or orchestrator id).
+description: Operate a running piloop autoresearch campaign as its orchestrator, from any harness with a shell (Claude Code, Codex, pi, Gemini CLI, Cursor), by looping on piloop inbox wait to decide escalations, manage ideas, launch sweeps, steer implementers and read the pool. Use when the human asks you to orchestrate, watch, run or report on a campaign, when an escalation arrives, or when you take a decision for the human; do not use it in an agent that piloop launched (PILOOP_ACTOR is an implementer or orchestrator id).
 ---
 
 # Operate a piloop campaign
@@ -34,7 +34,7 @@ It returns, one line each, as soon as something needs you:
 - a new unacknowledged inbox item that someone else wrote,
 - a campaign that the daemon stopped,
 - an anomaly that the daemon gave to an agent,
-- the daemon's verdict on a measured candidate.
+- the daemon's score of a candidate.
 
 Otherwise it returns `nothing new` at the timeout.
 Its last line, after `next: `, is the command to wait again, with the cursor (`--after <event-id>`), so you miss
@@ -52,7 +52,7 @@ Steps:
 
 1. **Start.** Run `PILOOP_ACTOR=orchestrator piloop wake <name>` first, for each campaign. In a fixed budget
    (`--budget <tokens>`), it prints the campaign's journal (what earlier sessions decided, planned and found), its open
-   inbox, its head and the current lessons. Then run `piloop status` and `piloop inbox`. Items that already wait are yours too: the
+   inbox, its best and the current lessons. Then run `piloop status` and `piloop inbox`. Items that already wait are yours too: the
    wait reports only new items.
    Then run `piloop doctor`, and again once a day. Run the commands that it names exactly as it names them: a second
    install, such as `piloop-canary`, names its own command, so that you never restart or upgrade the other install.

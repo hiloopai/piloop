@@ -13,7 +13,7 @@ from rich.text import Text
 from piloop import deprecated
 from piloop.cli import common
 from piloop.cli.client import daemon_http
-from piloop.plugins.campaign_type.kit.candidates.ids import PENDING, CandidateId
+from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.wire import (
     CancelledBy,
     EvaluationClient,
@@ -23,7 +23,7 @@ from piloop.plugins.campaign_type.kit.evaluation.wire import (
     SubmitBody,
     WaitingSince,
 )
-from piloop.text import age, cell, metric
+from piloop.text import age, cell
 
 eval_app = cyclopts.App(
     name='eval', help='List or cancel the evaluations that the daemon runs or that wait for a slot.'
@@ -35,7 +35,7 @@ def eval_queue() -> None:
     """List the running evaluations, then the waiting ones in the order in which they get a slot.
 
     The last line counts them. A free slot of the executor goes to the campaign with the fewest running evaluations,
-    and in that campaign to its head first, then to the oldest request. A requested remeasure shows as waiting at once.
+    and in that campaign to its baseline first, then to the oldest request. A requested remeasure shows as waiting at once.
     """
     with EvaluationClient.connect(daemon_http()) as client:
         evaluations = client.evaluations().evaluations
@@ -71,8 +71,8 @@ def eval_cancel(
 ) -> None:
     """Cancel the evaluation of a candidate: a waiting one never starts, and the daemon stops a running one.
 
-    It also cancels a requested remeasure. A cancel is not a verdict: it records no measurement. A run's candidate that
-    waits for its verdict is `skipped` at once, and a daemon restart does not run it again. It is evaluated again only
+    It also cancels a requested remeasure. A cancel records no measurement. A run's candidate that has no measurement is
+    `skipped` at once, and a daemon restart does not run it again. It is evaluated again only
     when someone asks (`piloop candidate remeasure`). A baseline that never measured pauses its campaign's measurements
     until you resume it.
     """
@@ -94,14 +94,12 @@ def measurement_add(
         cyclopts.Parameter(help='A JSON file: {"metrics": {"<name>": <value>}, "seconds": <s>, "error": "<why>"}.'),
     ],
 ) -> None:
-    """Record a measurement of a candidate under the campaign's current evaluator, and have its verdict judged again.
+    """Record a measurement of a candidate under the campaign's current evaluator. Its mean includes it at once.
 
     Use it for an evaluation that you ran yourself, for example the evaluate command on the candidate's commit after
     the daemon's run timed out. `metrics` takes the metrics of piloop.toml, all of them unless `error` says why the
-    evaluation failed. `seconds` and `error` are optional. A pending candidate is refused. When the verdict is the
-    daemon's crash, discard or interesting, the daemon judges the candidate again with every measurement under the
-    current evaluator, the next time it measures the campaign. A keep, and a verdict that someone set, stay. The output
-    says which. The measurement is signed as PILOOP_ACTOR.
+    evaluation failed. `seconds` and `error` are optional. The output says where the candidate stands now. The
+    measurement is signed as PILOOP_ACTOR.
     """
     try:
         parsed = Report.model_validate_json(report.read_text())
@@ -109,7 +107,7 @@ def measurement_add(
         raise SystemExit(f'the report is not {{"metrics": {{…}}, "seconds": …, "error": …}}: {e}') from e
     with EvaluationClient.connect(daemon_http()) as client:
         added = client.add_measurement(candidate_id, parsed)
-    common.console.print(f'measurement#{added.measurement} of candidate#{candidate_id}: {added.effect}', markup=False)
+    common.console.print(f'measurement#{added.measurement} of candidate#{candidate_id}: {added.standing}', markup=False)
 
 
 def submit(
@@ -123,11 +121,12 @@ def submit(
     ] = None,
     wait: Annotated[float | None, cyclopts.Parameter(help='Ignored.', show=False)] = None,
 ) -> None:
-    """Score a commit of your run. It returns at once: the verdict comes to you as a `[piloop]` message.
+    """Score a commit of your run. It returns at once: where it stands comes to you as a `[piloop]` message.
 
-    piloop runs the campaign's evaluate command on the commit, and judges it against the head. Keep working meanwhile.
-    The message gives the verdict and the score, such as `keep 0.8312`: `keep` makes it the head, `discard` does not,
-    `crash` failed to run. A campaign can cap the submissions of a run (`[evaluator] submissions`).
+    piloop runs the campaign's evaluate command on the commit, and scores it into the campaign's pool. Keep working
+    meanwhile. The message gives its score and its gain over its parent, your line's best and the campaign's best. A
+    commit whose first score beats the best is evaluated again until it is confirmed, then it can be the best. A
+    campaign can cap the submissions of a run (`[evaluator] submissions`).
     """
     if wait is not None:
         deprecated.until('0.7.0', 'the relay of a worker before 0.6 passes submit --wait: delete the parameter')
@@ -138,8 +137,9 @@ def submit(
             revision = checkout.head().revision
     with EvaluationClient.connect(daemon_http()) as client:
         answer = client.submit(SubmitBody(revision=revision, blob=blob))
-    if answer.verdict == PENDING:
-        line = f'candidate#{answer.candidate} is queued: its verdict comes as a [piloop] message'
-    else:
-        line = f'{answer.verdict}{"" if answer.score is None else f" {metric(answer.score)}"}'
+    match answer.told:
+        case None:
+            line = f'candidate#{answer.candidate} is queued: where it stands comes as a [piloop] message'
+        case told:
+            line = f'candidate#{answer.candidate}: {told}'
     common.console.print(line, markup=False, highlight=False)

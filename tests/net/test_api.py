@@ -73,10 +73,10 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidatesClient
 from piloop.plugins.campaign_type.kit.evaluation import api as evaluation_api
 from piloop.plugins.campaign_type.kit.evaluation.wire import EvaluationClient
+from piloop.plugins.campaign_type.kit.pool import api as pool_api
+from piloop.plugins.campaign_type.kit.pool.wire import PoolClient, RemeasureBody
 from piloop.plugins.campaign_type.kit.runs import api as runs_api
 from piloop.plugins.campaign_type.kit.runs.wire import RunsClient
-from piloop.plugins.campaign_type.kit.verdicts import api as verdicts_api
-from piloop.plugins.campaign_type.kit.verdicts.wire import RemeasureBody, VerdictsClient
 from piloop.plugins.campaign_type.optimization import api as optimization_api
 from piloop.plugins.campaign_type.optimization.wire import OptimizationClient
 from piloop.plugins.contribution import collect, contributions_of, installed
@@ -255,7 +255,7 @@ def test_each_method_of_the_client_calls_its_route_with_the_route_s_models() -> 
         (ROUTERS[0], Client),
         (backlog_api.router, BacklogClient),
         (candidates_api.router, CandidatesClient),
-        (verdicts_api.router, VerdictsClient),
+        (pool_api.router, PoolClient),
         (optimization_api.router, OptimizationClient),
         (evaluation_api.router, EvaluationClient),
         (runs_api.router, RunsClient),

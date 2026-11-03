@@ -13,7 +13,6 @@ from piloop.ids import CampaignId, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
-from piloop.plugins.campaign_type.kit.verdicts.verdict import label
 from piloop.plugins.vcs.contract import (
     Pin,
     Repository,
@@ -89,7 +88,7 @@ def import_reference(
     """Register the tree of ``ref`` (a version of the campaign's repo, in its vcs's terms) as a ``reference`` candidate.
 
     Like the baseline, it has no run and no parent. The version is kept (``reference/<id>``), so it outlives what named it.
-    The daemon measures it under the current evaluator (``due``).
+    The daemon scores it into the pool under the current evaluator (``due``).
 
     Raises:
         ImportRefused: ``ref`` names no version, or its tree is already a candidate of the campaign.
@@ -101,9 +100,8 @@ def import_reference(
     revision = version.revision
     candidate, created = resolve(s, campaign.id, version, parent=None, run_id=None, origin=Origin.REFERENCE)
     if not created:
-        raise ImportRefused(f'the tree of {ref!r} already is candidate#{candidate.id} ({label(candidate)})')
+        raise ImportRefused(f'the tree of {ref!r} already is candidate#{candidate.id} ({candidate.origin})')
     candidate.summary = summary or candidate.summary
-    candidate.verdict_reason = f'imported from {ref} ({revision[:7]})'
     repo.keep(revision, Pin(campaign.name, f'reference/{candidate.id}'))
     imported = CandidateImported(ref=ref, revision=revision)
     emit(s, imported, TargetRef(CANDIDATE, candidate.id), actor)

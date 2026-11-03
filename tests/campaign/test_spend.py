@@ -29,7 +29,7 @@ from piloop.plugins.executor.kit.capacity import Pool
 from piloop.plugins.executor.kit.leases import LeaseQueued
 from piloop.plugins.executor.kit.tables import LeaseWorker, WorkerInstance
 from piloop.plugins.fact_source.command import Command
-from piloop.plugins.fact_source.facts import COMPUTE_USD, MODELS_USD, SPEND, since_keep
+from piloop.plugins.fact_source.facts import COMPUTE_USD, MODELS_USD, SPEND, since_best
 from piloop.plugins.fact_source.leases import LeaseFacts, compute_usd
 from piloop.plugins.fact_source.models import ModelFacts
 from piloop.plugins.harness.contract import ModelId, Usage
@@ -193,7 +193,7 @@ def test_models_prices_the_tokens_of_the_agents_that_ended_and_an_unpriced_model
 LISTED = (('anthropic', 'claude-sonnet-4-5'), (None, 'claude-haiku-4-5'))
 
 
-def test_spend_sums_its_facts_and_its_route_serves_each_part_and_the_spend_per_keep(
+def test_spend_sums_its_facts_and_its_route_serves_each_part_and_the_spend_per_new_best(
     db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``spend`` is a fact that ``hold_at`` and the ``cost`` section read. Its route has the parts, as of their reading."""
@@ -214,7 +214,7 @@ def test_spend_sums_its_facts_and_its_route_serves_each_part_and_the_spend_per_k
     with serving_api(Settings(home=tmp_path)), httpx.Client(transport=uds, base_url='http://piloop') as http:
         answer = http.get(f'/v1/campaigns/{campaign.name}/spend').json()
         assert answer['usd'] == pytest.approx(16.0)
-        assert answer['per_keep_usd'] == pytest.approx(8.0), 'two keeps: the baseline is none'
+        assert answer['per_best_usd'] == pytest.approx(8.0), 'two new bests: the baseline is none'
         assert [(p['fact'], p['usd']) for p in answer['parts']] == [
             ('compute_usd', pytest.approx(1.0)),
             ('models_usd', pytest.approx(15.0)),
@@ -236,7 +236,7 @@ def test_an_unknown_part_makes_the_spend_unknown_and_a_campaign_without_the_sour
     uds = httpx.HTTPTransport(uds=str(Settings(home=tmp_path).socket_file))
     with serving_api(Settings(home=tmp_path)), httpx.Client(transport=uds, base_url='http://piloop') as http:
         answer = http.get(f'/v1/campaigns/{campaign.name}/spend').json()
-        assert (answer['usd'], answer['per_keep_usd']) == (None, None)
+        assert (answer['usd'], answer['per_best_usd']) == (None, None)
         assert [(p['fact'], p['usd']) for p in answer['parts']] == [('compute_usd', 0.0), ('models_usd', None)]
         assert http.get(f'/v1/campaigns/{them.name}/spend').json() is None, 'no spend source: no spend'
         store_config(db, them.id, {'name': 'other'})
@@ -256,14 +256,14 @@ def test_a_part_that_a_source_reads_is_as_of_its_reading_and_unknown_before_the_
         assert http.get(f'/v1/campaigns/{campaign.name}/spend').json() == {
             'usd': None,
             'parts': [{'fact': 'gpu_usd', 'usd': None, 'as_of': None}],
-            'per_keep_usd': None,
+            'per_best_usd': None,
         }
         with db.session() as s:
             [source] = [found for found in cfg.fact_sources() if isinstance(found, Command)]
             source.record(s, s.get_one(Campaign, campaign.id), {'gpu_usd': 12.5})
             s.commit()
-            read_at = source.as_of(s, s.get_one(Campaign, campaign.id), since_keep('gpu_usd'), utcnow())
-        assert read_at is not None, 'and of its growth since the latest keep'
+            read_at = source.as_of(s, s.get_one(Campaign, campaign.id), since_best('gpu_usd'), utcnow())
+        assert read_at is not None, 'and of its growth since the latest new best'
         [part] = http.get(f'/v1/campaigns/{campaign.name}/spend').json()['parts']
         assert (part['usd'], datetime.fromisoformat(part['as_of'])) == (12.5, read_at)
 

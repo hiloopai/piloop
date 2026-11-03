@@ -4,13 +4,14 @@
   `failed` and `timed_out` count as attempts. A worker ends its own run, as submitted or given up.
 - {vcs:versions}
 - The daemon scores each new candidate with the campaign's **evaluator** (the evaluate command, its linked inputs and
-  the judging metrics) into a **measurement**. A changed config makes a new evaluator row.
-- A candidate's **verdict** (`keep`, `interesting`, `discard`, `crash`) judges its mean score against its bar: the
-  run's last keep, starting at its base. `verdict IS NULL` until it is judged. Its **origin** is `baseline`, `run`,
-  `reference`, `recovered` or `skipped`, and only the first two are judged. {vcs:skip}
-- The **head** is the latest *trunk keep*. A run that pins no base starts from it. A keep against a bar that the head
-  has passed is `interesting`, and the daemon merges it onto the head and judges the merge there (*rebase-on-keep*).
-- A `reference` (`piloop candidate import`) is measured, never judged.
-- A campaign can have several **tracks**, each with its own primary metric (`ideas.track`, `candidates.track`). On a
+  the metrics that decide) into a **measurement**. A changed config makes a new evaluator row.
+- Every scored candidate is in the campaign's **pool**: nothing is kept or discarded. A candidate whose first score
+  beats the best's is evaluated until it has `[evaluator] noise_runs` evaluations: it is **confirmed**. The **best**
+  of a track is the confirmed candidate with the best mean that the best rule allows, else the baseline. Its
+  **origin** is `baseline`, `run`, `reference`, `recovered` or `skipped`; the last two are never scored. {vcs:skip}
+- A candidate's **line** is its chain of parents. A run starts from the best, or from the candidate that its claim
+  names (`--base <c>`).
+- A `reference` (`piloop candidate import`) is scored like any other candidate.
+- A campaign can have several **tracks**, each with its own primary metric (`ideas.track`) and its own best. On a
   track, every other track's primary is one more guardrail.
 - **Comments** attach to any row. **Events** are the append-only log of what happened.

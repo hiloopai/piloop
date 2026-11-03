@@ -10,7 +10,6 @@ from piloop.db.models import Campaign, Event
 from piloop.db.session import Database
 from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
-from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunStatus
@@ -97,8 +96,8 @@ def test_candidates_that_scored_exactly_their_parent_share_a_line(db: Database, 
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         for n in range(9):
-            candidate(s, p, 2, Outcome.DISCARD, 3, 30 + n, run_id=1)
-        orphan = Candidate(campaign_id=p.id, parent_id=1, tree_sha='x', revision='x', verdict=Outcome.CRASH)
+            candidate(s, p, 2, 3, 30 + n, run_id=1)
+        orphan = Candidate(campaign_id=p.id, parent_id=1, tree_sha='x', revision='x')
         s.add(orphan)
         s.flush()
         s.add(Measurement(candidate_id=orphan.id, evaluator_id=p.evaluator_id, metrics={}, error='died'))

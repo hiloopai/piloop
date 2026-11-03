@@ -7,12 +7,12 @@ from sqlalchemy import Enum
 from piloop.db.models import AgentSessionState
 from piloop.db.schema import tables
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
-from piloop.plugins.campaign_type.kit.candidates.ids import Cause, Origin, Outcome
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from scripts.generate import SNIPPETS, header
 
 PATH = SNIPPETS / 'states.mdx'
-STATE_ENUMS: tuple[type[StrEnum], ...] = (IdeaStatus, RunStatus, RunEnd, AgentSessionState, Outcome, Origin, Cause)
+STATE_ENUMS: tuple[type[StrEnum], ...] = (IdeaStatus, RunStatus, RunEnd, AgentSessionState, Origin)
 
 
 def generate() -> str:

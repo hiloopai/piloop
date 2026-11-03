@@ -7,7 +7,7 @@ section names the facts it reads and gets ``Facts``: those values, and None for 
 This module imports only the Python standard library, so a pure provider can import it. It also has the keys of
 piloop's own sources, so that a rule names them once: those of ``campaign`` (``CAMPAIGN``) and of ``optimization``
 (``OPTIMIZATION``), those of the spend sources (``COMPUTE_USD``, ``MODELS_USD``, ``SPEND``), and ``reading`` and
-``since_keep`` for the values that a source such as ``command`` reads.
+``since_best`` for the values that a source such as ``command`` reads.
 """
 
 from dataclasses import dataclass, field
@@ -16,17 +16,17 @@ from typing import cast
 
 @dataclass(frozen=True)
 class Funnel:
-    """ideas → attempts → reached the evaluator → measured → keeps: each stage a part of the one before, but the ideas."""
+    """ideas → attempts → reached the evaluator → measured → new bests: each stage a part of the one before, but ideas."""
 
     ideas: int
     attempts: int
-    """The attempts that ended, with their commits judged."""
+    """The attempts that ended, with their commits scored."""
     reached: int
-    """Those that left a candidate that is measured or waits for its verdict."""
+    """Those that left a candidate that is measured or waits for its score."""
     measured: int
     """Those with a candidate that has a measurement without an error."""
-    keeps: int
-    """Those with a kept candidate."""
+    bests: int
+    """Those with a candidate that became the best when it was scored."""
     unmeasured: dict[str, int]
     """The attempts that were not measured, by how their run ended (``runs.end``), the most first."""
 
@@ -56,7 +56,7 @@ class Facts:
         return cast(T | None, self.values.get(fact.name))
 
 
-HEAD = Fact[float]('head', 'The primary metric of the first track at the head, under the current evaluator.')
+BEST = Fact[float]('best', 'The primary metric of the first track at its best, under the current evaluator.')
 RUNS = Fact[int](
     'runs',
     'The runs that hold a place under a limit on runs: those that count, and the attempts that may still count. A'
@@ -73,16 +73,15 @@ TOKENS = Fact[int](
     'The tokens that the agents of the campaign spent, summed over the agents that ended. A reopened campaign counts'
     ' the agents since the latest reopen.',
 )
-WITHOUT_KEEP = Fact[int](
-    'without_keep',
-    'The finished attempts since the latest keep, or since the campaign was last set active again: scored or not.',
+WITHOUT_BEST = Fact[int](
+    'without_best',
+    'The finished attempts since a candidate last became the best, or since the campaign was last set active again:'
+    ' scored or not.',
 )
-KEEPS = Fact[int](
-    'keeps', 'The candidates of runs that are kept, on the trunk or on a branch. The baseline is not one.'
-)
+NEW_BESTS = Fact[int]('new_bests', "The times that a run's candidate became the best of its track when it was scored.")
 EVALUATIONS = Fact[int](
     'evaluations',
-    'The runs of the evaluate command under every evaluator: each measurement, failed ones and bar samples among them.',
+    'The runs of the evaluate command under every evaluator: each measurement, failed ones among them.',
 )
 METRIC_SUMS = Fact[dict[str, float]](
     'metric_sums', 'Each metric summed over every measurement. A rule that reads a cost metric names it.'
@@ -90,15 +89,15 @@ METRIC_SUMS = Fact[dict[str, float]](
 ATTEMPTS = Fact[int](
     'attempts', 'The runs that are an attempt at their idea: the open ones, and those whose end is one.'
 )
-FUNNEL = Fact[Funnel]('funnel', 'How far the attempts that ended and are judged got (``Funnel``).')
+FUNNEL = Fact[Funnel]('funnel', 'How far the attempts that ended and are scored got (``Funnel``).')
 CAMPAIGN: tuple[Fact[FactValue], ...] = (HOURS, TOKENS)
 """The facts that the ``campaign`` source supplies: those of any campaign."""
 OPTIMIZATION: tuple[Fact[FactValue], ...] = (
-    HEAD,
+    BEST,
     RUNS,
     UNSETTLED,
-    WITHOUT_KEEP,
-    KEEPS,
+    WITHOUT_BEST,
+    NEW_BESTS,
     EVALUATIONS,
     METRIC_SUMS,
     ATTEMPTS,
@@ -125,18 +124,18 @@ def reading(name: str) -> Fact[float]:
     )
 
 
-def since_keep(name: str) -> Fact[float]:
-    """How much the value of ``reading(name)`` grew since the latest keep: ``<name>_since_keep``."""
+def since_best(name: str) -> Fact[float]:
+    """How much the value of ``reading(name)`` grew since a candidate last became the best: ``<name>_since_best``."""
     return Fact[float](
-        f'{name}_since_keep',
-        f'{name} now, less the latest reading by the end of the run of the latest keep (else the first after it).'
-        f' All of {name} before the first keep.',
+        f'{name}_since_best',
+        f'{name} now, less the latest reading by the time a candidate last became the best (else the first after it).'
+        f' All of {name} before the first new best.',
     )
 
 
-def per_keep(facts: Facts, spend: str) -> float | None:
-    """The fact ``spend`` per keep. Reads ``reading(spend)`` and ``KEEPS``."""
-    return _ratio(facts.get(reading(spend)), facts.get(KEEPS))
+def per_best(facts: Facts, spend: str) -> float | None:
+    """The fact ``spend`` per new best. Reads ``reading(spend)`` and ``NEW_BESTS``."""
+    return _ratio(facts.get(reading(spend)), facts.get(NEW_BESTS))
 
 
 def per_evaluation(facts: Facts, cost: str) -> float | None:

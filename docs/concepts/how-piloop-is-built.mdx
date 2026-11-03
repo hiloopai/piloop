@@ -5,7 +5,7 @@ description: piloop is a small core and a set of plugins. A plugin owns its tabl
 
 import Capabilities from '/snippets/generated/capabilities.mdx';
 
-piloop is a small **core** and a set of **plugins**. Core runs things. The plugins decide what to run, how to judge
+piloop is a small **core** and a set of **plugins**. Core runs things. The plugins decide what to run, how to score
 it and where it runs. A plugin owns its own tables and migrations. Core owns every other table. It works like a
 Django project: each app has its own models and migrations, and core is one more app.
 
@@ -41,13 +41,13 @@ that owns it.
 
 ## The research model is a plugin
 
-Ideas, runs, candidates, evaluations and the head are the **campaign type** `optimization`. Its tables are
+Ideas, runs, candidates, evaluations and the pool are the **campaign type** `optimization`. Its tables are
 `ideas`, `idea_links`, `runs`, `candidates`, `evaluators`, `evaluations`, `measurements` and `techniques`. Every
 campaign is of this type: it is what the rest of these docs describe.
 
 ## Capabilities
 
-A **capability** is one kind of decision or service, such as the verdict, the stop condition or where jobs run. Each
+A **capability** is one kind of decision or service, such as the best rule, the stop condition or where jobs run. Each
 capability has at least one **built-in provider**, which is a plugin of piloop itself. Your configuration selects a
 provider by its name. A plugin package adds more providers.
 
@@ -60,7 +60,7 @@ A plugin is a Python package that you install next to piloop. It declares what i
 
 | Slot | Entry point group | What it adds |
 |---|---|---|
-| Providers | the capability's group, for example `piloop.verdict_rules` | an implementation of a capability |
+| Providers | the capability's group, for example `piloop.best_rules` | an implementation of a capability |
 | Tables | `piloop.schemas` | its tables and its own chain of migrations |
 | Commands | `piloop.commands` | a command or a group of commands of `piloop` |
 | Skill parts | `piloop.skills` | a part of an orchestrator skill, such as `piloop-operate` |

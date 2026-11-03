@@ -15,7 +15,7 @@ class IdeaStatus(StrEnum):
     """Where an idea is on the board.
 
     An ``open`` idea waits for a run, unless an ``after`` link holds it. A ``claimed`` idea has one run that works on
-    it. When that run's commits are judged, the idea is ``done``, or ``open`` again for another attempt. A ``dropped``
+    it. When that run's commits are scored, the idea is ``done``, or ``open`` again for another attempt. A ``dropped``
     idea is off the board until someone opens it again.
     """
 

@@ -1,7 +1,7 @@
 """``news``: what ``piloop inbox wait`` would return to the role since its last agent took the news.
 
 One of the orchestrator's two wake-ups (``triggers``). Only what needs a decision wakes it (``wakes``): an escalation, or what a person
-wrote. The rest of the news, a verdict, an anomaly, the stop or an agent's note, comes with the next wake. The news
+wrote. The rest of the news, a score, an anomaly, the stop or an agent's note, comes with the next wake. The news
 goes to the role's agent in notes (``Steer``): in its brief when the note is written before it starts, else as it
 works. Each note takes the news up to a cursor (``NewsTaken``), and the next one
 takes what came after it. A row that failed did not take its news, and an agent that ended did not take a note that it
@@ -101,7 +101,7 @@ WAKES: frozenset[type[EventModel]] = frozenset(topic.model for topic in inbox.WA
 
 
 def news(p: RolePass, quiet_seconds: float) -> tuple[Steer | None, datetime | None]:
-    """New inbox items for the role's party, anomalies, verdicts and the stop: ``piloop inbox wait``'s news.
+    """New inbox items for the role's party, anomalies, scores and the stop: ``piloop inbox wait``'s news.
 
     An escalation or what a person wrote wakes the role ``quiet_seconds`` after the first news, also while the campaign
     is paused, held or stopped, and the rest of the news comes with it. Nothing else wakes it. An agent of the role that
