@@ -53,10 +53,6 @@ from piloop.plugins.cas.s3 import S3
 from piloop.plugins.cas.gcs import Gcs
 from piloop.plugins.cas.http import Http
 
-from piloop.plugins.trigger.contract import TRIGGERS, Trigger, TriggerName, Pass, Fire, Steer, Quiet
-from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
-from piloop.plugins.trigger.sql import SqlTrigger
-from piloop.plugins.trigger.news import NewsTrigger
 
 from piloop.plugins.section.contract import SECTIONS, Guide, Section, SectionName, Rendering, Briefing, Surface
 from piloop.api.views import Rendered, Block, Text, Lines, Figures, Figure, Table, Value
@@ -98,9 +94,9 @@ from piloop.plugins.section.provenance import Provenance
 from piloop.plugins.campaign_type.optimization.section.queries import Queries
 from piloop.plugins.section.orchestration import Orchestration
 
-from piloop.plugins.role.contract import ROLES, ImplementerRole, SweepRole
-from piloop.plugins.role.contract import Files, Continuity
-from piloop.plugins.role.contract import RoleConfig, Sweep
+from piloop.plugins.role.contract import ROLES, ImplementerRole, StartsItsAgents
+from piloop.plugins.role.contract import Continuity, Quiet, Wake
+from piloop.plugins.role.contract import RoleConfig
 from piloop.plugins.role.orchestrator import OrchestratorRole
 
 from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import VERDICT_RULES, VerdictRule, Case

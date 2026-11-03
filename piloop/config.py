@@ -46,11 +46,10 @@ from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource
 from piloop.plugins.harness.contract import HARNESSES, Harness
 from piloop.plugins.host import Plugins, PluginTables, Scope, Unreached, refs, unknown, unreached
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer, env_names
-from piloop.plugins.role.contract import ROLES, ImplementerRole, RoleConfig, SweepRole
+from piloop.plugins.role.contract import ROLES, ImplementerRole, RoleConfig, StartsItsAgents
 from piloop.plugins.runtime.contract import RUNTIMES
 from piloop.plugins.section.contract import SECTIONS, Section
 from piloop.plugins.stop_rule.contract import STOP_RULES, Shape
-from piloop.plugins.trigger.contract import TRIGGERS, Trigger
 from piloop.settings import AgentSettings, MovedEnv, settings
 
 CONFIG_FILE = 'piloop.toml'
@@ -79,9 +78,9 @@ class CampaignAgents(BaseModel):
 class Roles:
     """The campaign's roles: one instance of ``ROLES`` for each, by its name (``[plugins.role.<name>]``).
 
-    Every role is a provider: piloop's (implementer, orchestrator) and those that packages add, each with
-    its table over its defaults, then the roles that the file defines. A table with a new name defines a new role: a
-    role that does runs (``ImplementerRole``) with ``runs = true``, else a sweeping role (``SweepRole``).
+    Every role is a provider: piloop's (implementer, orchestrator) and those that packages add, each with its table over
+    its defaults, then the roles that the file defines. A table with a new name and ``runs = true`` defines a new role
+    that does runs (``ImplementerRole``).
     """
 
     by_name: dict[str, RoleConfig]
@@ -93,9 +92,9 @@ class Roles:
         """
         return {RoleName(name): role for name, role in self.by_name.items()}
 
-    def sweeping(self) -> dict[RoleName, SweepRole]:
-        """The sweeping roles by name, in the order of ``all``."""
-        return {name: role for name, role in self.all().items() if isinstance(role, SweepRole)}
+    def starting(self) -> dict[RoleName, StartsItsAgents]:
+        """The roles whose providers start their agents (``StartsItsAgents``) by name, in the order of ``all``."""
+        return {name: role for name, role in self.all().items() if isinstance(role, StartsItsAgents)}
 
     def doing_runs(self) -> dict[RoleName, ImplementerRole]:
         """The roles that do runs by name, in the order in which they fill their slots: the implementer last."""
@@ -147,7 +146,78 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     plugins: Annotated[Plugins, PluginTables(Scope.CAMPAIGN)] = Field(default={}, validate_default=True)
     """``[plugins]``: the campaign's plugins, a table for each capability (``PluginTables``)."""
 
-    # Defined first, so pydantic runs it last of the 'before' validators: after the removed roles are dropped.
+    # Pydantic runs the 'before' validators in the reverse order of their definitions: these run last.
+    @model_validator(mode='before')
+    @classmethod
+    @deprecated.until('0.7.0', 'the trigger tables are removed in 0.6: delete CampaignConfig._trigger_tables')
+    def _trigger_tables(cls, data: object) -> object:
+        """Drop ``[plugins.trigger]``: the orchestrator's triggers are its own now, with no table.
+
+        ``[plugins.trigger.news] quiet_seconds`` moves to ``[plugins.role.orchestrator]``, and its ``routine_every`` goes,
+        each with a warning. Any other table that sets a key warns too; a stored config's empty ones go without a word.
+        """
+        plugins = data.get('plugins') if isinstance(data, dict) else None
+        if not isinstance(data, dict) or not isinstance(plugins, dict) or 'trigger' not in plugins:
+            return data
+        kept = {k: v for k, v in plugins.items() if k != 'trigger'}
+        tables = plugins['trigger'] if isinstance(plugins['trigger'], dict) else {}
+        news = dict(t) if isinstance(t := tables.get('news'), dict) else {}
+        if news.pop('routine_every', None) is not None:
+            deprecated.dropped(
+                'nothing routine wakes the orchestrator now, so routine_every is removed; delete it from its news table',
+                removed_in='0.7.0',
+            )
+        if 'quiet_seconds' in news:
+            deprecated.dropped(
+                "the news trigger is the orchestrator's own now: write quiet_seconds in [plugins.role.orchestrator],"
+                ' not in [plugins.trigger.news]',
+                removed_in='0.7.0',
+            )
+            roles = dict(r) if isinstance(r := kept.get('role'), dict) else {}
+            lead = dict(t) if isinstance(t := roles.get('orchestrator'), dict) else {}
+            roles['orchestrator'] = {'quiet_seconds': news.pop('quiet_seconds'), **lead}
+            kept['role'] = roles
+        for name, table in tables.items():
+            if name != 'news' and table:
+                deprecated.dropped(
+                    f"the triggers are the orchestrator's own now, with no table: delete [plugins.trigger.{name}]",
+                    removed_in='0.7.0',
+                )
+        return {**data, 'plugins': kept}
+
+    @model_validator(mode='before')
+    @classmethod
+    @deprecated.until('0.7.0', 'own sweeps are removed in 0.6: delete CampaignConfig._own_sweeps')
+    def _own_sweeps(cls, data: object) -> object:
+        """Drop each role of the file's own that does no runs, and each ``sql`` trigger, with a warning for each.
+
+        Only the orchestrator sweeps: a role of your own does runs (``runs = true``). It runs after the validators of
+        the removed roles (research, the watchdog), whose own warnings say where their work went.
+        """
+        plugins = data.get('plugins') if isinstance(data, dict) else None
+        if not isinstance(data, dict) or not isinstance(plugins, dict):
+            return data
+        kept = dict(plugins)
+        if isinstance(roles := plugins.get('role'), dict):
+            providers = ROLES.providers()
+            own = [n for n, t in roles.items() if n not in providers and isinstance(t, dict) and not t.get('runs')]
+            for name in own:
+                deprecated.dropped(
+                    f'a sweep of your own is removed: delete [plugins.role.{name}]; only the orchestrator sweeps, and'
+                    ' a role of your own does runs (runs = true)',
+                    removed_in='0.7.0',
+                )
+            kept['role'] = {n: t for n, t in roles.items() if n not in own}
+        if isinstance(triggers := plugins.get('trigger'), dict):
+            queries = [n for n, t in triggers.items() if isinstance(t, dict) and t.get('provider', n) == 'sql']
+            for name in queries:
+                deprecated.dropped(
+                    f'the sql trigger is removed with the sweeps of your own: delete [plugins.trigger.{name}]',
+                    removed_in='0.7.0',
+                )
+            kept['trigger'] = {n: t for n, t in triggers.items() if n not in queries}
+        return {**data, 'plugins': kept}
+
     @model_validator(mode='before')
     @classmethod
     @deprecated.until(
@@ -411,15 +481,6 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
         """What the briefs of a role show, in order: the sections of its ``shown``."""
         found = SECTIONS.instances(self.plugins)
         return [found[section] for section in self.role(name).shown()]
-
-    def triggers_of(self, name: str) -> list[Trigger]:
-        """The triggers of a sweeping role, in order: those that its ``triggers`` names. None for a role of runs."""
-        match self.roles.all().get(RoleName(name)):
-            case SweepRole(triggers=names):
-                found = TRIGGERS.instances(self.plugins)
-                return [found[trigger] for trigger in names]
-            case _:
-                return []
 
     def _check_tracks(self) -> None:
         """Check that each track has one primary.

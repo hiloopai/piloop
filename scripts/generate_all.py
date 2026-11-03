@@ -35,7 +35,6 @@ from scripts.generate import (
     settings,
     states,
     stop,
-    triggers,
 )
 
 GENERATORS = (
@@ -44,7 +43,6 @@ GENERATORS = (
     data_model,
     states,
     roles,
-    triggers,
     sections,
     runtimes,
     runtime_protocol,

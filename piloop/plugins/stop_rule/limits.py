@@ -39,7 +39,7 @@ class Limits(StopRule):
     are ended 10 minutes later. What they saved is scored. Most harnesses read the message only when the turn ends: an
     implementer that is ended before it left its finding ends its run ``campaign_stopped``, which does not count toward
     ``max_runs`` or ``plateau``. Pending requests and queued runs are dropped (``campaign_stopped``). Once the last
-    commits are scored, the ``stopped`` triggers fire once, and the triggers request nothing more. The daemon files no seeds for the campaign either. An agent that you request with ``piloop launch`` after
+    commits are scored, the daemon closes the campaign, and its roles request nothing more. An agent that you request with ``piloop launch`` after
     the stop still starts.
 
     ``piloop campaign stop`` stops a campaign the same way at once, whatever the limits are. With ``--kill``,

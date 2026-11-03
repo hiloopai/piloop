@@ -5,7 +5,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from piloop.agents.roles import files_of
+from piloop.agents.roles import files_ideas
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.db.models import Campaign, Comment
 from piloop.db.session import Database
@@ -15,7 +15,6 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin, Outcome
 from piloop.plugins.campaign_type.optimization.pack import OUTLINE_CHARS, pack
 from piloop.plugins.escalation.contract import DECISION
-from piloop.plugins.role.contract import Files
 from tests.conftest import has_lines
 from tests.reports.test_history import SHOWN, comment, compact, idea, scored
 from tests.test_actor import ACTORS
@@ -70,9 +69,9 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Path:
         scored(s, worse, e2.id, (Outcome.DISCARD, {'score': 2, 'size': 8}, None))
         odd = idea(s, campaign, 'odd lines', created_by='research#4')
         scored(s, odd, e2.id, (Outcome.INTERESTING, {'score': 3, 'size': 9}, None))
-        idea(s, campaign, 'pad lines', IdeaStatus.OPEN, created_by='sweeper#7', provenance='run#1')
+        idea(s, campaign, 'pad lines', IdeaStatus.OPEN, created_by='implementer#7', provenance='run#1')
         idea(s, campaign, 'ask the human', IdeaStatus.OPEN, created_by='human')
-        idea(s, campaign, 'dropped lines', IdeaStatus.DROPPED, created_by='sweeper#3')
+        idea(s, campaign, 'dropped lines', IdeaStatus.DROPPED, created_by='implementer#3')
         comment(s, IDEA, worse.id, 'NEGATIVE: fewer lines lose score\nbecause score counts lines')
         note(s, campaign, 'orchestrator', CommentKind.NOTE, 'digest: best #2 +2 over the start\nby slice: …')
         note(s, campaign, 'human', DECISION, 'no external data')
@@ -186,12 +185,12 @@ def test_where_an_idea_comes_from_and_which_roles_file_ideas(campaign_path: Path
         'human',
         'implementer',
     ]
-    actors = ('implementer#3', 'sweeper#4', 'research#5', 'orchestrator', 'human')
+    actors = ('implementer#3', 'orchestrator#4', 'research#5', 'orchestrator', 'human')
     cfg = load_campaign_config(campaign_path)
-    assert [files_of(cfg, ACTORS.validate_python(a)) for a in actors] == [
-        Files.NOTHING,
-        Files.NOTHING,
-        Files.NOTHING,
-        None,
-        None,
+    assert [files_ideas(cfg, ACTORS.validate_python(a)) for a in actors] == [
+        False,
+        True,
+        False,
+        True,
+        True,
     ], 'an agent of a role that piloop.toml no longer has, such as research, files nothing'

@@ -1,7 +1,6 @@
 """The incident triggers (a failed run, an agent dead at startup) find what wakes an agent; the cost sections show what the progress review weighs."""
 
 from pathlib import Path
-from typing import Never
 
 from inline_snapshot import snapshot
 from sqlalchemy.orm import Session
@@ -10,35 +9,24 @@ from piloop.db.events import AnomalyReported
 from piloop.db.models import Campaign, Event
 from piloop.db.session import Database
 from piloop.ids import TargetKind, TargetRef
-from piloop.plugins.campaign_type.consumers import RolePass
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunStatus
-from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
+from piloop.plugins.role.orchestrator.passes import Fire, RolePass
+from piloop.plugins.role.orchestrator.run_failed import run_failed
 from piloop.plugins.section.contract import SECTIONS, Rendering, markdown
 from piloop.plugins.section.reported import REPORTED_SHOWN
-from piloop.plugins.trigger.contract import Fire
-from tests.conftest import SWEEPER, cas_of
+from tests.conftest import LEAD, cas_of
 from tests.reports.test_overview import NOW, agent, candidate, idea, live_campaign, run
 
 
-def fired(s: Session, campaign: Campaign, trigger: RunFailed) -> Fire | None:
-    """What ``trigger`` of the sweeper fires on a pass now."""
-
-    def unread(_: object) -> Never:
-        raise AssertionError('an incident trigger reads no backlog and no stall')
-
-    p = RolePass(
-        s=s,
-        now=NOW,
-        campaign=s.get_one(Campaign, campaign.id),
-        role=SWEEPER,
-        last=None,
-        quiet=None,
+def fired(s: Session, campaign: Campaign) -> Fire | None:
+    """What ``run_failed`` asks for the orchestrator on a pass now."""
+    return run_failed(
+        RolePass(s=s, now=NOW, campaign=s.get_one(Campaign, campaign.id), role=LEAD, last=None, quiet=None)
     )
-    return trigger.fire(p)
 
 
 def subjects(fire: Fire | None) -> list[str]:
@@ -63,8 +51,8 @@ def test_a_failed_or_timed_out_run_is_an_incident_and_a_stopped_or_given_up_one_
         given_up = run(s, idea(s, p, 'given up', IdeaStatus.OPEN), RunStatus.FAILED, 1, 60, 70, error='too slow')
         given_up.end = RunEnd.GAVE_UP
         s.commit()
-        fire = fired(s, campaign, RunFailed())
-    assert fire is not None and fire.alone
+        fire = fired(s, campaign)
+    assert fire is not None
     assert subjects(fire) == ['run#2', 'run#4'], 'oldest first'
     assert fire.reason == 'run_failed: run#2 failed, run#4 failed'
     [first, _] = fire.events
@@ -76,18 +64,18 @@ def test_a_failed_or_timed_out_run_is_an_incident_and_a_stopped_or_given_up_one_
 def test_an_incident_wakes_an_agent_once(db: Database, campaign: Campaign) -> None:
     live_campaign(db, campaign)
     with db.session() as s:
-        fire = fired(s, campaign, RunFailed())
+        fire = fired(s, campaign)
         assert fire is not None
         for event in fire.events:
             s.add(Event(actor='daemon', target=TargetRef(TargetKind.AGENT_SESSION, 1), payload=event))
         s.commit()
-        assert fired(s, campaign, RunFailed()) is None, 'an agent of the campaign got it'
+        assert fired(s, campaign) is None, 'an agent of the campaign got it'
 
 
 def test_the_incidents_given_to_agents_are_listed_newest_first(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
         assert shown(s, campaign, 'reported') == '## Incidents given to agents\n\n- None.'
-        sweeper = agent(s, s.get_one(Campaign, campaign.id), SWEEPER, 0, 5)
+        sweeper = agent(s, s.get_one(Campaign, campaign.id), LEAD, 0, 5)
         for run_id in range(3, 3 + REPORTED_SHOWN + 1):
             subject = TargetRef(RUN, run_id)
             reported = AnomalyReported(subject=subject, trigger='run_failed', line=f'- {subject}')

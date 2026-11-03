@@ -900,7 +900,7 @@ def test_0074_drops_the_keys_of_the_removed_features_from_each_stored_config(tmp
     roles = {
         'scout': {'interval': 60.0, 'seeds': 2},
         'research': {'max_ideas': 2, 'files': 'ideas', 'plan_words': 90},
-        'sweeper': {'triggers': ['run_failed', 'leaking_funnel', 'leaks', 'cron']},
+        'orchestrator': {'triggers': ['run_failed', 'leaking_funnel', 'leaks', 'cron']},
         'implementer': {'files': 'nothing', 'timeout': 60.0},
         'quick': {'runs': True, 'plan_words': 80},
     }
@@ -918,7 +918,7 @@ def test_0074_drops_the_keys_of_the_removed_features_from_each_stored_config(tmp
                 'plugins': {
                     'role': {
                         'research': {'max_ideas': 2, 'files': 'ideas', 'plan_words': 90},
-                        'sweeper': {'triggers': ['run_failed', 'cron']},
+                        'orchestrator': {'triggers': ['run_failed', 'cron']},
                         'implementer': {'timeout': 60.0},
                         'quick': {'runs': True},
                     },
@@ -1049,7 +1049,7 @@ def test_0075_drops_the_keys_of_seeds_and_reviews_from_each_stored_config(tmp_pa
     command.upgrade(cfg, '0074')
     roles = {
         'research': {'triggers': ['low_water', 'seed', 'stalled', 'fresh'], 'files': 'ideas'},
-        'sweeper': {'files': 'seeds', 'triggers': ['cron']},
+        'orchestrator': {'files': 'seeds', 'triggers': ['cron']},
         'implementer': {'idle_alert': 'PT30M', 'timeout': 60.0},
     }
     triggers = {'seed': {}, 'fresh': {'provider': 'seed'}, 'cron': {'max_interval': 60.0}}
@@ -1068,7 +1068,7 @@ def test_0075_drops_the_keys_of_seeds_and_reviews_from_each_stored_config(tmp_pa
                 'plugins': {
                     'role': {
                         'research': {'triggers': ['low_water', 'stalled'], 'files': 'ideas'},
-                        'sweeper': {'files': 'nothing', 'triggers': ['cron']},
+                        'orchestrator': {'files': 'nothing', 'triggers': ['cron']},
                         'implementer': {'timeout': 60.0},
                     },
                     'trigger': {'cron': {'max_interval': 60.0}},

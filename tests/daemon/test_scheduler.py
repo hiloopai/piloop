@@ -83,7 +83,6 @@ from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, 
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_run
 from piloop.plugins.campaign_type.kit.runs.stop import release, runs
 from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session, run_of
-from piloop.plugins.campaign_type.kit.runs.trigger.run_failed import RunFailed
 from piloop.plugins.campaign_type.kit.verdicts.judge import due, head
 from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanner, RunQueued
 from piloop.plugins.executor.contract import AGENT, AgentKey, Capacity, Prompt
@@ -94,9 +93,8 @@ from piloop.plugins.fact_source.facts import HOURS, Facts
 from piloop.plugins.host import Plugins
 from piloop.plugins.launch_policy.fewest_live import FewestLive
 from piloop.plugins.role.consumers import Agents
-from piloop.plugins.role.contract import ImplementerRole, SweepRole
+from piloop.plugins.role.contract import ImplementerRole
 from piloop.plugins.runtime.contract import Handle
-from piloop.plugins.trigger.sql import SqlTrigger
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, GitRepository, commands as git
 from piloop.settings import AgentSettings, DaemonSettings
 from tests.conftest import (
@@ -105,8 +103,8 @@ from tests.conftest import (
     HARNESS_APPEND,
     HARNESS_SLEEPS,
     HARNESS_TWO_COMMITS,
+    LEAD,
     SETTLE,
-    SWEEPER,
     Gate,
     ScriptRuntime,
     active,
@@ -122,7 +120,6 @@ from tests.conftest import (
     reconfigured,
     register,
     reports,
-    role_of,
     run_all,
     serving,
     span_named,
@@ -186,9 +183,9 @@ def claim_for_queued(s: Session, campaign: Campaign) -> list[tuple[RunId, int]]:
     return claimed
 
 
-def request_sweeper(db: Database, campaign: Campaign) -> AgentSessionId:
+def request_lead(db: Database, campaign: Campaign) -> AgentSessionId:
     with db.session() as s:
-        agent_session = AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand')
+        agent_session = AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand')
         s.add(agent_session)
         s.commit()
         return agent_session.id
@@ -530,7 +527,7 @@ def test_a_sweep_checks_out_the_head(db: Database, campaign: Campaign, runtime: 
         best_sha = best.revision
     write_toml(Path(campaign.path), '#!/bin/sh\ngit rev-parse HEAD > workspace/head.txt\n')
     set_config(db, campaign)
-    agent_session_id = request_sweeper(db, campaign)
+    agent_session_id = request_lead(db, campaign)
     assert agent_session_id in run_all(scheduler), 'beside a fresh run in the free implementer slot'
     scheduler.wait(SETTLE)
     head = tmp_path / 'projects' / str(campaign.id) / 'workspace' / 'head.txt'
@@ -549,7 +546,7 @@ def test_a_sweep_checks_out_the_head(db: Database, campaign: Campaign, runtime: 
         s.get_one(Campaign, campaign.id).config = cfg
         current_evaluator(s, s.get_one(Campaign, campaign.id), cfg)
         s.commit()
-    again = request_sweeper(db, campaign)
+    again = request_lead(db, campaign)
     assert again in run_all(scheduler)
     brief = tmp_path / 'agent_sessions' / str(again) / 'brief.md'
     wait_until(brief.exists)
@@ -666,7 +663,7 @@ def test_a_requested_worker_whose_harness_reached_its_cap_since_its_run_was_queu
     scheduler = make_scheduler(db, runtime, tmp_path, claims=False)
     (run,) = queued_runs(db, scheduler, campaign)
     with db.session() as s:
-        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, harness='script', state=AgentSessionState.RUNNING))
+        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, harness='script', state=AgentSessionState.RUNNING))
         s.commit()
     assert run_all(scheduler) == [], 'the sweeper took the last script slot first'
     with db.session() as s:
@@ -684,27 +681,33 @@ def test_a_sweep_passes_over_a_harness_at_its_cap_and_a_pinned_one_stays_request
         campaign,
         plugins={
             'harness': {'use': ['script', 'pi'], 'script': {'model': 'm', 'max_concurrent': 1}, 'pi': {'model': 'p'}},
-            'role': {'sweeper': {'harnesses': ['script', 'pi'], 'max_concurrent': 4}},
+            'role': {'orchestrator': {'harnesses': ['script', 'pi']}},
         },
     )
     with db.session() as s:
-        rows = [AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand') for _ in range(3)]
-        rows.append(AgentSession(kind=SWEEPER, campaign_id=campaign.id, harness='script', reason='pinned'))
-        s.add_all(rows)
+        busy = AgentSession(
+            kind=IMPLEMENTER, campaign_id=campaign.id, harness='script', state=AgentSessionState.RUNNING
+        )
+        s.add_all([busy, AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand')])
         s.commit()
     scheduler = make_scheduler(db, runtime, tmp_path)
+
+    def take() -> list[AgentSessionId]:
+        with db.session() as s:
+            p = s.get_one(Campaign, campaign.id)
+            taken = campaigns_of(scheduler)._take(s, p, CampaignConfig.model_validate(p.config), utcnow())
+            s.commit()
+        return [w for w, _ in taken]
+
+    assert take() == [2]
     with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        taken = campaigns_of(scheduler)._take(s, p, CampaignConfig.model_validate(p.config), utcnow())
+        assert s.get_one(AgentSession, 2).harness == 'pi', 'script is at its cap: the sweep takes pi'
+        s.get_one(AgentSession, 2).state = AgentSessionState.EXITED
+        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, harness='script', reason='pinned'))
         s.commit()
-    assert [w for w, _ in taken] == [1, 2, 3]
+    assert take() == [], 'a sweep pinned to a harness at its cap waits'
     with db.session() as s:
-        assert [(w.harness, w.state) for w in s.scalars(select(AgentSession).order_by(AgentSession.id))] == [
-            ('script', AgentSessionState.STARTING),
-            ('pi', AgentSessionState.STARTING),
-            ('pi', AgentSessionState.STARTING),
-            ('script', AgentSessionState.REQUESTED),
-        ], "the third sweep's turn was script's, at its cap"
+        assert s.get_one(AgentSession, 3).state is AgentSessionState.REQUESTED
 
 
 def test_a_run_starts_from_the_best_as_of_its_start_not_as_of_the_idea(
@@ -837,7 +840,7 @@ def test_reap(
         s.commit()
         s.add(
             AgentSession(
-                kind='sweeper',
+                kind='orchestrator',
                 campaign_id=campaign.id,
                 harness='pi',
                 model='m',
@@ -850,7 +853,7 @@ def test_reap(
         )
         s.add(
             AgentSession(
-                kind='sweeper',
+                kind='orchestrator',
                 campaign_id=campaign.id,
                 harness='pi',
                 model='m',
@@ -902,7 +905,7 @@ def test_reap_tolerates_a_runtime_that_cannot_kill(
     with db.session() as s:
         s.add(
             AgentSession(
-                kind='sweeper',
+                kind='orchestrator',
                 harness='pi',
                 model='m',
                 runtime='subprocess',
@@ -1290,7 +1293,7 @@ def test_a_hand_over_leaves_a_sweep_running_and_the_next_scheduler_re_attaches_t
     hold.touch()
     write_toml(Path(campaign.path), f'#!/bin/sh\necho $$ > ../agent.pid\nwhile [ -f {hold} ]; do sleep 0.05; done\n')
     set_config(db, campaign)
-    agent_session_id = request_sweeper(db, campaign)
+    agent_session_id = request_lead(db, campaign)
     first = make_scheduler(db, runtime, tmp_path)
     assert agent_session_id in run_all(first)
     sweep_dir = tmp_path / 'agent_sessions' / str(agent_session_id)
@@ -1787,10 +1790,10 @@ def test_stop_before_a_sweep_starts_never_starts_it(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     gate = Gate()
-    monkeypatch.setattr('piloop.plugins.campaign_type.consumers.compose_brief', gate.wrap(compose_brief))
+    monkeypatch.setattr('piloop.plugins.role.orchestrator.wake.compose_brief', gate.wrap(compose_brief))
     occupy_the_run_slot(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
-    agent_session_id = request_sweeper(db, campaign)
+    agent_session_id = request_lead(db, campaign)
     assert run_all(scheduler) == [agent_session_id]
     assert gate.entered.wait(10)
     started = time.monotonic()
@@ -1819,7 +1822,7 @@ def test_stop_waits_for_a_sweep_start_in_flight_then_kills_it(
     monkeypatch.setattr(runtime, 'start', gate.wrap(runtime.start))
     occupy_the_run_slot(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
-    agent_session_id = request_sweeper(db, campaign)
+    agent_session_id = request_lead(db, campaign)
     assert run_all(scheduler) == [agent_session_id]
     assert gate.entered.wait(10)
     stopper = threading.Thread(target=scheduler.stop, args=(10,))
@@ -2180,7 +2183,7 @@ def test_implementers_of_a_stopped_campaign_are_told_to_wrap_up_then_ended_after
     with db.session() as s:
         s.add(
             AgentSession(
-                kind=SWEEPER,
+                kind=LEAD,
                 campaign_id=campaign.id,
                 runtime='subprocess',
                 handle={'agent': 'research-2', 'pid': 4243},
@@ -2296,7 +2299,7 @@ def test_a_cancelled_run_is_told_to_wrap_up_and_ended_after_the_grace(
     running_agent_session(db, campaign, 'useful')
     with db.session() as s:
         sweep = AgentSession(
-            kind=SWEEPER,
+            kind=LEAD,
             campaign_id=campaign.id,
             runtime='subprocess',
             handle={'agent': 'research-3', 'pid': 4243},
@@ -2342,7 +2345,7 @@ def test_an_agent_of_no_campaign_winds_down_on_the_home_s_grace(
 ) -> None:
     with db.session() as s:
         orphan = AgentSession(
-            kind=SWEEPER,
+            kind=LEAD,
             runtime='subprocess',
             handle={'agent': 'research-1', 'pid': 4243},
             state=AgentSessionState.RUNNING,
@@ -2470,13 +2473,13 @@ def test_a_cancelled_request_never_launches_and_a_cancelled_sweep_is_ended(
             kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), harness='script', model='m'
         )
         sweep = AgentSession(
-            kind=SWEEPER,
+            kind=LEAD,
             campaign_id=campaign.id,
             runtime='subprocess',
             handle={'agent': 'research-2', 'pid': 4243},
             state=AgentSessionState.RUNNING,
         )
-        requested = AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='low_water')
+        requested = AgentSession(kind=LEAD, campaign_id=campaign.id, reason='low_water')
         s.add_all([queued, sweep, requested])
         s.flush()
         request_cancel(s, queued, System.HUMAN, ending=Ending.WRAP_UP)
@@ -2545,21 +2548,21 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
     """
     died_at_startup(db, campaign, IMPLEMENTER, minutes_ago=11)
     for _ in range(2):
-        died_at_startup(db, campaign, SWEEPER)
-    wanted = request_sweeper(db, campaign)
+        died_at_startup(db, campaign, LEAD)
+    wanted = request_lead(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
     assert wanted in run_all(scheduler), 'two recent deaths: launches go on'
     scheduler.wait(SETTLE)
 
-    died = [died_at_startup(db, campaign, SWEEPER) for _ in range(2)]
-    request_sweeper(db, campaign)
+    died = [died_at_startup(db, campaign, LEAD) for _ in range(2)]
+    request_lead(db, campaign)
     assert run_all(scheduler) == []
     [escalation] = pause_escalations(db)
     assert (escalation.target_kind, escalation.author, escalation.priority) == (TargetKind.CAMPAIGN, 'daemon', 1)
     assert details(escalation) == IsStr(
         regex=r'Launches paused: 4 agents died at startup in the last 10 minutes\. Load average [\d.]+ / [\d.]+ / [\d.]+'
-        rf' on \d+ CPUs when launches paused\..*\n- agent_session#\d+ \(sweeper on script\): .*\n- agent_session#{died[0]} \(sweeper on script\):'
-        rf' FileNotFoundError: sweeper-{died[0]}: no such harness\n'
+        rf' on \d+ CPUs when launches paused\..*\n- agent_session#\d+ \(orchestrator on script\): .*\n- agent_session#{died[0]} \(orchestrator on script\):'
+        rf' FileNotFoundError: orchestrator-{died[0]}: no such harness\n'
         rf'- agent_session#{died[1]} .*',
         regex_flags=re.DOTALL,
     )
@@ -2570,13 +2573,13 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
         s.commit()
     assert run_all(scheduler) == [] and len(pause_escalations(db)) == 1, 'acknowledged means seen: not posted again'
 
-    latest = died_at_startup(db, campaign, SWEEPER)
+    latest = died_at_startup(db, campaign, LEAD)
     assert run_all(scheduler) == []
     [extended] = pause_escalations(db)
     assert extended.id == escalation.id and extended.acked_at is not None, 'the same pause: updated in place'
     assert details(extended).startswith(
         'Launches paused: 5 agents'
-    ) and f'- agent_session#{latest} (sweeper' in details(extended)
+    ) and f'- agent_session#{latest} (orchestrator' in details(extended)
 
     with db.session() as s:
         for event in s.scalars(select(Event).where(has(StartupAnomaly))):
@@ -2586,28 +2589,12 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
     scheduler.wait(SETTLE)
 
     for _ in range(FewestLive().startup_breaker):
-        died_at_startup(db, campaign, SWEEPER)
-    request_sweeper(db, campaign)
+        died_at_startup(db, campaign, LEAD)
+    request_lead(db, campaign)
     assert run_all(scheduler) == [] and len(pause_escalations(db)) == 2, 'a new pause: a new escalation'
     with db.session() as s:
         kinds = s.scalars(select(Event.kind).where(Event.kind.like('launch.%')).order_by(Event.id)).all()
     assert kinds == ['launch.paused', 'launch.resumed', 'launch.paused']
-
-
-def test_the_triggers_that_read_no_time_ask_for_no_pass_of_their_own(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    """No built-in trigger compares a time: each waits for the campaign's next event."""
-    scheduler = make_scheduler(db, runtime, tmp_path)
-    with db.session() as s:
-        p = s.get_one(Campaign, campaign.id)
-        cfg = CampaignConfig.model_validate(p.config)
-        on = campaigns_of(scheduler)._pass(s, p, cfg, SWEEPER, role_of(cfg, SweepRole), utcnow())
-        for trigger in (
-            RunFailed(),
-            SqlTrigger(when='SELECT 1'),
-        ):
-            assert trigger.due_in(on) is None, trigger
 
 
 def test_an_implementer_is_told_once_to_wrap_up_before_its_timeout(

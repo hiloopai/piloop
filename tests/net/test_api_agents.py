@@ -36,17 +36,22 @@ from tests.daemon.test_run_controller import set_config
 from tests.net.test_api import outcome
 
 
-def test_an_agent_is_requested_of_a_sweeping_role_only(db: Database, campaign: Campaign, cfg: Settings) -> None:
+def test_an_agent_is_requested_of_a_role_that_starts_its_agents_only(
+    db: Database, campaign: Campaign, cfg: Settings
+) -> None:
     with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
-        asked = client.launch('demo', LaunchBody(role=RoleName('sweeper'), model='opus', reason='look again'))
-        with pytest.raises(
-            Refused, match="^demo has no sweeping role 'janitor'; it has orchestrator, sweeper"
-        ) as refused:
+        asked = client.launch('demo', LaunchBody(role=RoleName('orchestrator'), model='opus', reason='look again'))
+        with pytest.raises(Refused, match=r"^demo has no role 'janitor' to launch; it has orchestrator\.") as refused:
             client.launch('demo', LaunchBody(role=RoleName('janitor'), reason='sweep'))
     assert refused.value.error == Problem.REFUSED
     with db.session() as s:
         agent = s.get_one(AgentSession, asked.agent)
-        assert (asked.role, agent.kind, agent.model, agent.reason) == ('sweeper', 'sweeper', 'opus', 'look again')
+        assert (asked.role, agent.kind, agent.model, agent.reason) == (
+            'orchestrator',
+            'orchestrator',
+            'opus',
+            'look again',
+        )
 
 
 def test_a_prompt_waits_for_what_came_of_its_note_and_refuses_an_agent_that_does_not_run(
@@ -55,8 +60,8 @@ def test_a_prompt_waits_for_what_came_of_its_note_and_refuses_an_agent_that_does
     with db.session() as s:
         s.add_all(
             [
-                AgentSession(kind='sweeper', campaign_id=1, state=AgentSessionState.RUNNING),
-                AgentSession(kind='sweeper', campaign_id=1, state=AgentSessionState.EXITED),
+                AgentSession(kind='orchestrator', campaign_id=1, state=AgentSessionState.RUNNING),
+                AgentSession(kind='orchestrator', campaign_id=1, state=AgentSessionState.EXITED),
             ]
         )
         s.commit()
@@ -82,7 +87,11 @@ def test_a_prompt_to_a_running_agent_whose_harness_reads_messages_only_between_t
 ) -> None:
     set_config(db, campaign, plugins={'harness': {'script': {'steers_mid_turn': False}}})
     with db.session() as s:
-        s.add(AgentSession(kind='sweeper', campaign_id=campaign.id, harness='script', state=AgentSessionState.RUNNING))
+        s.add(
+            AgentSession(
+                kind='orchestrator', campaign_id=campaign.id, harness='script', state=AgentSessionState.RUNNING
+            )
+        )
         s.commit()
     with (
         serving_api(cfg),
@@ -105,15 +114,15 @@ def test_a_cancel_asks_the_daemon_to_end_an_open_run_or_a_live_agent_and_refuses
     with db.session() as s:
         s.add_all(
             [
-                AgentSession(kind='sweeper', campaign_id=1, state=AgentSessionState.REQUESTED),
-                AgentSession(kind='sweeper', campaign_id=1, state=AgentSessionState.EXITED),
+                AgentSession(kind='orchestrator', campaign_id=1, state=AgentSessionState.REQUESTED),
+                AgentSession(kind='orchestrator', campaign_id=1, state=AgentSessionState.EXITED),
             ]
         )
         s.commit()
     with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:
         agent = client.cancel_agent(AgentSessionId(1), CancelBody())
         run = client.cancel_run(RunId(1), CancelBody(ending=Ending.WRAP_UP))
-        assert (agent.agent, agent.role, run.run) == (1, 'sweeper', 1)
+        assert (agent.agent, agent.role, run.run) == (1, 'orchestrator', 1)
         with pytest.raises(Refused, match='^agent_session#2 is not requested, starting or running$') as ended:
             client.cancel_agent(AgentSessionId(2), CancelBody())
         with pytest.raises(Refused, match='^run#2 is not queued or running$') as closed:

@@ -30,7 +30,7 @@ from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanne
 from piloop.plugins.vcs.git import PILOOP, GitRepository
 from tests.conftest import HARNESS_WORSE, SETTLE, Gate, ScriptRuntime, run_all, write_script
 from tests.daemon.test_run_controller import candidates, controller, execute, keep_elsewhere, make_run
-from tests.daemon.test_scheduler import add_ideas, make_scheduler, measured_by, request_sweeper, statuses
+from tests.daemon.test_scheduler import add_ideas, make_scheduler, measured_by, request_lead, statuses
 
 
 def pause(db: Database, *, evals: bool) -> None:
@@ -44,7 +44,7 @@ def test_a_paused_campaign_launches_nothing_requests_nothing_and_escalates_nothi
 ) -> None:
     sched = make_scheduler(db, runtime, tmp_path)
     add_ideas(db, campaign, 'more lines')
-    sweeper = request_sweeper(db, campaign)
+    sweeper = request_lead(db, campaign)
     pause(db, evals=False)
     assert run_all(sched) == [] and run_all(sched) == []
     assert statuses(db) == [IdeaStatus.OPEN], 'no run is queued'
@@ -250,7 +250,7 @@ def test_an_agent_requested_while_a_retire_checks_either_stops_the_retire_or_nev
         """The daemon's pass commits a request on its own connection, between the retire's check and its change."""
         with closing(sqlite3.connect(path, timeout=0.2, isolation_level=None)) as con:
             try:
-                con.execute("INSERT INTO agent_sessions (kind, campaign_id) VALUES ('sweeper', ?)", (campaign.id,))
+                con.execute("INSERT INTO agent_sessions (kind, campaign_id) VALUES ('orchestrator', ?)", (campaign.id,))
                 landed.append(True)
             except sqlite3.OperationalError as e:
                 assert 'database is locked' in str(e), e
@@ -277,7 +277,7 @@ def test_a_campaign_retired_while_the_daemon_takes_its_request_launches_nothing(
     with db.session() as s:
         s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
         s.commit()
-    asked = request_sweeper(db, campaign)
+    asked = request_lead(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
     path = db.engine.url.database
     assert path is not None
@@ -303,7 +303,7 @@ def test_a_campaign_that_a_feed_read_finds_retired_during_the_pass_drops_out_of_
     with db.session() as s:
         s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
         s.commit()
-    asked = request_sweeper(db, campaign)
+    asked = request_lead(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
     path = db.engine.url.database
     assert path is not None

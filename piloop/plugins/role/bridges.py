@@ -69,21 +69,6 @@ def idle_alert(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
         )
 
 
-@deprecated.bridge('0.7.0', 'files = "seeds" is removed: delete seed_files')
-def seed_files(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """``files = "seeds"`` is ``files = "nothing"``: there are no seeds. An idea is open on the board from the start."""
-    roles = deprecated.table_at(raw, 'plugins', 'role') or {}
-    for name, table in [(n, t) for n, t in roles.items() if isinstance(t, dict) and t.get('files') == 'seeds']:
-        table['files'] = 'nothing'
-        deprecated.warn(
-            toml,
-            f'plugins.role.{name}.files',
-            'a seed is an open idea now, so files = "seeds" files nothing; write "nothing" or "ideas"',
-            removed_in=removed_in,
-            nth=deprecated.nth(toml, f'plugins.role.{name}', 'files'),
-        )
-
-
 ASSIGNMENT_KEYS = ('takes', 'explore_every', 'recovery_requeues')
 """The keys of a role that does runs that steered which idea the scheduler gave its runs, and from where."""
 
@@ -128,3 +113,61 @@ def end_grace(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
 def home_end_grace(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """In ``config.toml``, a role's ``finding_grace`` is its ``end_grace``, as in ``piloop.toml``."""
     deprecated.move_keys(toml, raw, END_GRACE, removed_in)
+
+
+LEAKING_FUNNEL = 'leaking_funnel'
+"""The removed trigger, which found the runs that reach no measurement."""
+SEED = 'seed'
+"""The removed trigger: it started research on new seeds, and an idea is never a seed now."""
+
+
+@deprecated.bridge('0.7.0', 'the leaking_funnel trigger is removed: delete leaking_funnel and LEAKING_FUNNEL')
+def leaking_funnel(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """The ``leaking_funnel`` trigger is removed: stop rules and escalations cover a stuck campaign.
+
+    piloop drops it from each role's ``triggers``, and drops each ``[plugins.trigger.<name>]`` of it.
+    """
+    _drop(toml, raw, LEAKING_FUNNEL, _REMOVED, removed_in)
+
+
+@deprecated.bridge('0.7.0', 'the seed trigger is removed: delete seed_trigger and SEED')
+def seed_trigger(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """The ``seed`` trigger is removed: an idea is open on the board from the start, so there is no seed to develop.
+
+    piloop drops it from each role's ``triggers``, and drops each ``[plugins.trigger.<name>]`` of it.
+    """
+    _drop(toml, raw, SEED, 'the seed trigger is removed, as an idea is open from the start: delete it', removed_in)
+
+
+def _drop(toml: Path, raw: dict[str, object], provider: str, message: str, removed_in: Version) -> None:
+    """Drop each ``[plugins.trigger.<name>]`` of ``provider``, and each of their names from each role's ``triggers``."""
+    tables = deprecated.table_at(raw, 'plugins', 'trigger') or {}
+    names = {name for name, table in tables.items() if _provider(name, table) == provider}
+    if provider not in tables:
+        names.add(provider)
+    for name in names & tables.keys():
+        del tables[name]
+        deprecated.warn(toml, f'plugins.trigger.{name}', message, removed_in=removed_in)
+    for role, table in (deprecated.table_at(raw, 'plugins', 'role') or {}).items():
+        triggers = table.get('triggers') if isinstance(table, dict) else None
+        if not isinstance(table, dict) or not isinstance(triggers, list):
+            continue  # not a table or not a list: the validation refuses it
+        kept = [t for t in triggers if not (isinstance(t, str) and t in names)]
+        if kept == triggers:
+            continue
+        table['triggers'] = kept
+        deprecated.warn(
+            toml,
+            f'plugins.role.{role}.triggers',
+            message,
+            removed_in=removed_in,
+            nth=deprecated.nth(toml, f'plugins.role.{role}', 'triggers'),
+        )
+
+
+def _provider(name: str, table: object) -> object:
+    """The provider of ``[plugins.trigger.<name>]``: its ``provider``, else the built-in of its name."""
+    return table.get('provider', name) if isinstance(table, dict) else name
+
+
+_REMOVED = 'the leaking_funnel trigger is removed; stop rules and escalations cover a stuck campaign: delete it'

@@ -77,7 +77,7 @@ class Planner(Protocol):
         ...
 
     def queue(self, s: Session, campaign: Campaign, left: Facts) -> None:
-        """Request the agents of its own work, within what the stop rule ``left``, before the triggers fire."""
+        """Request the agents of its own work, within what the stop rule ``left``, before its roles are asked for theirs."""
         ...
 
     def drain(self, s: Session, campaign: Campaign) -> None:

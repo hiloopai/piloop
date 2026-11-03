@@ -11,7 +11,7 @@ REPORTED_SHOWN = 12
 
 
 class Reported(Section):
-    """The latest incidents that the triggers gave to agents, newest first, each with the agent that got it."""
+    """The latest incidents that the daemon gave to agents, newest first, each with the agent that got it."""
 
     SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
     ORDER = 190

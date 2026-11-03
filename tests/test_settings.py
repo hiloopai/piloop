@@ -112,9 +112,9 @@ def test_a_runtime_value_that_is_no_table_of_tables_is_refused(tmp_path: Path, m
 def test_the_actor_is_read_from_its_signature(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('PILOOP_ACTOR', 'implementer#12')
     assert Settings(home=tmp_path).actor == Agent(role='implementer', session=12)
-    monkeypatch.setenv('PILOOP_ACTOR', 'sweeper#3')
-    assert Settings(home=tmp_path).actor == Agent(role='sweeper', session=3)
-    monkeypatch.setenv('PILOOP_ACTOR', 'sweeper#')
+    monkeypatch.setenv('PILOOP_ACTOR', 'orchestrator#3')
+    assert Settings(home=tmp_path).actor == Agent(role='orchestrator', session=3)
+    monkeypatch.setenv('PILOOP_ACTOR', 'orchestrator#')
     with pytest.raises(ValidationError, match=r'actor\.Agent\.session'):
         Settings(home=tmp_path)
     monkeypatch.delenv('PILOOP_ACTOR')

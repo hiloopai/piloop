@@ -1,7 +1,7 @@
 """Generate ``docs/snippets/generated/roles.mdx``: the built-in roles."""
 
-from piloop.agents.roles import filed
-from piloop.plugins.role.contract import ROLES, ImplementerRole, SweepRole
+from piloop.plugins.role.contract import ROLES, ImplementerRole
+from piloop.plugins.role.orchestrator import OrchestratorRole
 from scripts.generate import SNIPPETS, header
 from scripts.generate.markdown import cell, lead
 
@@ -9,17 +9,15 @@ PATH = SNIPPETS / 'roles.mdx'
 
 
 def generate() -> str:
-    """Return a table of the built-in roles: whether each does runs, its triggers, what it files, what it is."""
-    rows = ['| Role | Does runs | Triggers | Files | What it is |', '|---|---|---|---|---|']
+    """Return a table of the built-in roles: whether each does runs, its triggers, what it is."""
+    rows = ['| Role | Does runs | Triggers | What it is |', '|---|---|---|---|']
     for name, provider in ROLES.builtins().items():
         role = provider()
-        fired = role.triggers if isinstance(role, SweepRole) else []
+        fired = role.triggers if isinstance(role, OrchestratorRole) else []
         triggers = ', '.join(f'`{t}`' for t in fired) or 'the run queue'
         what = cell(lead(type(role), type(role).__name__)).split(': ', 1)[-1]
         what = what[:1].upper() + what[1:]
-        rows.append(
-            f'| `{name}` | {"yes" if isinstance(role, ImplementerRole) else "no"} | {triggers} | `{filed(role)}` | {what} |'
-        )
+        rows.append(f'| `{name}` | {"yes" if isinstance(role, ImplementerRole) else "no"} | {triggers} | {what} |')
     return (
         header('the defaults and docstrings of the built-in roles in `piloop/plugins/role/`')
         + '\n'

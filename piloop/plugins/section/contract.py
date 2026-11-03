@@ -79,7 +79,7 @@ class Surface(StrEnum):
     STATUS = 'status'
     """``piloop status``, the API's overview and a UI: ``[plugins.section] use``."""
     SWEEP = 'sweep'
-    """The brief of a sweeping role: ``[plugins.role.<name>] sections``."""
+    """The brief of a role that does no runs, the orchestrator: ``[plugins.role.<name>] sections``."""
     RUN = 'run'
     """The brief of a role that does runs: ``[plugins.role.<name>] sections``."""
 

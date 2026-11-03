@@ -48,7 +48,7 @@ from piloop.reports.feed import files_of
 from piloop.settings import INPUTS_DIR
 from piloop.store import tree as tree_module
 from piloop.store.tree import Manifest, Materialised, Removed, Stored, Walk
-from tests.conftest import SWEEPER, bare_config, end_of
+from tests.conftest import LEAD, bare_config, end_of
 
 LIVE = frozenset({'NOTES.md', 'research'})
 LOST = Cid.of(b'lost')
@@ -211,7 +211,7 @@ def test_a_stopped_campaign_is_due_once_its_ideas_are_and_nothing_of_it_runs(db:
     agent_session = add_run(db, idea)
     with db.session() as s:
         s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
-        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='campaign stopped'))
+        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='campaign stopped'))
         s.commit()
         assert due(s) == Job(campaign.id, ref(idea)), 'its settled ideas first'
         assert summary(s) == Summary((), subjects_due=1, campaigns_due=0, latest=None), (
@@ -233,7 +233,7 @@ def test_a_stopped_campaign_is_due_once_its_ideas_are_and_nothing_of_it_runs(db:
         assert done.latest is not None
     time.sleep(0.01)
     with db.session() as s:
-        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=utcnow()))
+        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=utcnow()))
         s.commit()
         assert due(s) == Job(campaign.id, None), 'resumed and stopped again: what it wrote since is archived'
 
@@ -493,9 +493,7 @@ def test_a_newer_archiving_displaces_an_older_file_or_directory_at_the_same_path
         [row] = archive_job(db, store, home, Job(campaign.id, None)).rows
         prune(db, store, home, row.id)
         with db.session() as s:  # the next stop of the campaign
-            s.add(
-                AgentSession(kind=SWEEPER, campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=utcnow())
-            )
+            s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=utcnow()))
             s.commit()
         time.sleep(0.01)
     with db.session() as s:

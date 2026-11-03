@@ -11,7 +11,7 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.session import Database
 from piloop.plugins.runtime.contract import RUNTIMES
 from piloop.settings import Settings
-from tests.conftest import SWEEPER, reconfigured
+from tests.conftest import LEAD, reconfigured
 from tests.daemon.test_roles import PLUGIN, forget_loaded, installed
 from tests.reports.test_overview import overview
 
@@ -32,7 +32,7 @@ def test_attach_and_status_read_the_output_through_a_runtime_that_a_package_adds
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = reconfigured(campaign.config, plugins={'runtime': {'use': 'shown'}})
         agent_session = AgentSession(
-            kind=SWEEPER,
+            kind=LEAD,
             campaign_id=campaign.id,
             harness='script',
             model='m',

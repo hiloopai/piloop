@@ -19,14 +19,12 @@ from pydantic_settings import BaseSettings
 from piloop.plugins.harness.contract import HARNESSES
 from piloop.plugins.runtime.contract import RUNTIMES
 from piloop.plugins.section.contract import SECTIONS
-from piloop.plugins.trigger.contract import TRIGGERS
 
 BUILT_IN: dict[tuple[str, str], Iterable[str]] = {
     ('CampaignConfig', 'runtime'): RUNTIMES.builtins(),
     ('RoleConfig', 'runtime'): RUNTIMES.builtins(),
     ('CampaignConfig', 'harnesses'): HARNESSES.builtins(),
     ('CampaignConfig', 'harness'): HARNESSES.builtins(),
-    ('SweepRole', 'triggers'): TRIGGERS.builtins(),
     ('RoleConfig', 'sections'): SECTIONS.builtins(),
     ('StatusConfig', 'sections'): SECTIONS.builtins(),
 }

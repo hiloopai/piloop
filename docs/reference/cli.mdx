@@ -581,9 +581,8 @@ ids. Without `--campaign`, it uses the campaign of the current directory, else t
 piloop launch REF ROLE [--harness NAME] [--model MODEL] [--reason TEXT]
 ```
 
-Asks the daemon for one more agent of `ROLE`, a sweeping role: `orchestrator` or a
-[role that you defined](/concepts/roles#define-a-role). The daemon starts it at once, within the role's
-`max_concurrent`.
+Asks the daemon for one more agent of `ROLE`, a role that does no runs: `orchestrator`. The daemon starts it at once,
+within the role's `max_concurrent`.
 Only the daemon starts implementers, because an implementer needs a run.
 
 ### piloop attach
@@ -664,7 +663,7 @@ run#12 ended as submitted: the daemon ends this session in a moment
 piloop agent cancel AGENT_SESSION_ID [--wrap-up]
 ```
 
-Cancels an agent of any role at once: a sweep, or an implementer, whose run it cancels as
+Cancels an agent of any role at once: an orchestrator, or an implementer, whose run it cancels as
 `piloop run cancel` does. A requested agent never starts. A running one is ended with every process that it started,
 at once or, with `--wrap-up`, after it was told to save its work and stop.
 

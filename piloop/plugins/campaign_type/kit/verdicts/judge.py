@@ -341,7 +341,7 @@ def _first(campaign: Campaign) -> Select[Candidate]:
 
 
 def checkout_candidate(s: Session, campaign: Campaign) -> Candidate:
-    """Return what a sweeping agent gets checked out: the head, or the baseline when its verdict was overridden.
+    """Return what an agent without a run gets checked out: the head, or the baseline when its verdict was overridden.
 
     Raises:
         NoResultFound: The campaign has no candidate yet (``baseline``).

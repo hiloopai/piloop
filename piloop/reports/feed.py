@@ -217,7 +217,7 @@ def files_of(s: Session, campaign: Campaign) -> CampaignFiles:
 
 
 def roles_of(s: Session, campaign: Campaign) -> dict[RoleName, RoleView]:
-    """Each sweeping role of ``campaign``: its triggers, and how many of its agents wait or run."""
+    """Each role of ``campaign`` that starts its agents: whether by itself, and how many of its agents wait or run."""
     mine = (AgentSession.campaign_id == campaign.id,)
     states = Counter(
         (kind, state)
@@ -233,10 +233,10 @@ def roles_of(s: Session, campaign: Campaign) -> dict[RoleName, RoleView]:
         ).all()
     )
     views = {}
-    for name, role in campaign.config.roles.sweeping().items():
+    for name, role in campaign.config.roles.starting().items():
         last = ended.get(name)
         views[name] = RoleView(
-            triggered=bool(role.triggers),
+            triggered=role.starts_by_itself(),
             requested=states[(name, AgentSessionState.REQUESTED)],
             live=sum(states[(name, state)] for state in LIVE),
             last_ended=None if last is None else iso(last),

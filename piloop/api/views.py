@@ -122,14 +122,15 @@ class LiveAgent(View):
     runtime: str | None
     """The ``[plugins.runtime]`` instance that runs it. Null until one does."""
     reason: str | None
-    """Why the daemon launched it, such as the trigger that fired."""
+    """Why the daemon launched it, such as what woke its role."""
 
 
 class RoleView(View):
-    """A sweeping role of a campaign, as a console shows it: off, idle, starting or running."""
+    """A role of a campaign that starts its agents (``StartsItsAgents``): off, idle, starting or running."""
 
     triggered: bool
-    """Whether it has triggers: false, and the daemon launches its agents only on request (``piloop launch``)."""
+    """Whether it requests agents of its own accord: false, and the daemon launches its agents only on request
+    (``piloop launch``)."""
     requested: int
     """Its agents that wait for a slot."""
     live: int
@@ -173,7 +174,7 @@ class CampaignState(View):
     agents: list[LiveAgent]
     """The agents that are starting or running."""
     roles: dict[RoleName, RoleView]
-    """Each sweeping role, by name."""
+    """Each role that starts its agents (``StartsItsAgents``), by name."""
     inbox: int
     """The unacknowledged inbox items that wait for the caller: those that it did not write."""
     files: CampaignFiles

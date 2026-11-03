@@ -3,7 +3,6 @@ title: Agents and roles
 description: Every agent that piloop starts has a role, which says what it does and when it starts.
 ---
 
-import Triggers from '/snippets/generated/triggers.mdx';
 import Sections from '/snippets/generated/sections.mdx';
 import Runtimes from '/snippets/generated/runtimes.mdx';
 import Harnesses from '/snippets/generated/harnesses.mdx';
@@ -52,46 +51,29 @@ key of a role.
 | **implementer** | Claims an idea from the board, or proposes its own, implements it, submits, and leaves a `note` on it. Its submissions are scored. | A free slot. |
 | **orchestrator** | Answers messages and escalations, decides what the workers cannot, and records its decisions. Each one resumes the session of the one before. | An escalation or a person's message (`news`), a failed run (`run_failed`). Off until you set it: by default, you run your own [orchestrator](/concepts/orchestrator). |
 
-The implementer **does runs**: each run claims one idea from the board. The others are **sweeps**: their triggers start them,
-and nothing that they commit is scored.
+The implementer **does runs**: each run claims one idea from the board. The orchestrator does none: its triggers start
+its agents, and nothing that they commit is scored.
 
 ## Triggers
 
-A **trigger** is a condition that starts one more agent of a sweep. This orchestrator wakes for news and for a failed
-run:
+A **trigger** is a condition that starts one more orchestrator. This one wakes for news and for a failed run:
 
 ```toml
 [plugins.role.orchestrator]
 triggers = ["news", "run_failed"]
 ```
 
-A role names its triggers. A trigger with parameters has a table, `[plugins.trigger.<name>]`: a built-in name, such as
-`news`, changes that trigger for every role that names it, and a new name needs its `provider`. An empty list
-turns a role's triggers off. These are built in:
+An empty list turns them off, and an orchestrator then starts only by hand (`piloop launch`). There are two:
 
-<Triggers />
+| Trigger | Wakes the orchestrator when |
+|---|---|
+| `news` | An agent escalates, or a person writes to the campaign, `quiet_seconds` (30) after the first such news, also while the campaign is paused, held or stopped. The rest of the news comes with it. |
+| `run_failed` | A run failed or timed out, and no orchestrator got it yet. Its brief lists the failures. |
 
 ## Define a role
 
-A table with a new name defines a sweep. It needs `prompt`, the file that starts its brief, and `triggers`. This
-reviewer reads each new keep:
-
-```toml
-[plugins.role.reviewer]
-prompt = "briefs/reviewer.md"
-triggers = ["new_keep"]
-max_concurrent = 1
-timeout = 900
-writes = ["comments(note) on a candidate"]
-
-[plugins.trigger.new_keep]
-provider = "sql"
-when = "SELECT id FROM candidates WHERE campaign_id = :campaign AND verdict = 'keep' AND created_at > :since"
-```
-
-`:campaign` is the campaign's id, and `:since` is when the role's last agent started.
-
-With `runs = true`, a new role does runs. It has the implementer's defaults. This one runs short sessions on `pi`:
+A table with a new name and `runs = true` defines a role that does runs. It has the implementer's defaults. This one
+runs short sessions on `pi`:
 
 ```toml
 [plugins.role.quick]
@@ -211,9 +193,10 @@ To run each agent in a container that sees only its own files, see [Run agents i
 | `piloop attach 12` | Prints the last 40 lines that agent 12 wrote. |
 | `piloop prompt 12 "<text>"` | Sends text to the agent's next turn. |
 
-A message to a sweep that has not started yet goes into its brief, under `# Notes`, and reaches it only there.
+A message to an orchestrator that has not started yet goes into its brief, under `# Notes`, and reaches it only there.
 
-A run's brief, log and transcript are in `~/.piloop/runs/<run>/`, and a sweep's in `~/.piloop/agent_sessions/<id>/`.
+A run's brief, log and transcript are in `~/.piloop/runs/<run>/`, and an orchestrator's in
+`~/.piloop/agent_sessions/<id>/`.
 When an agent ends, piloop ends every process that it started, such as a build server.
 
 `agent_sessions.state` is where an agent is:

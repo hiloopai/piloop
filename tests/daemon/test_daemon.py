@@ -30,8 +30,8 @@ from tests.conftest import (
     END_RUN,
     HARNESS_APPEND,
     HARNESS_FAILS,
+    LEAD,
     SETTLE,
-    SWEEPER,
     WRITE_PID,
     ScriptRuntime,
     bare_config,
@@ -125,7 +125,7 @@ def test_daemon_end_to_end(
         with daemon.db.session() as s:
             sweeper = s.get_one(AgentSession, 4)
             assert (sweeper.kind, sweeper.reason, sweeper.state, sweeper.harness) == (
-                SWEEPER,
+                LEAD,
                 'run_failed: run#2 failed',
                 AgentSessionState.EXITED,
                 'script',

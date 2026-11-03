@@ -24,14 +24,14 @@ class SubjectSettled(EventModel):
 class AnomalyReported(EventModel):
     """An incident that an agent was requested for, on the agent's row: one event for each incident.
 
-    The incident triggers write it (``piloop.plugins.trigger.kit.incidents``), and the inbox reports it.
+    The orchestrator's ``run_failed`` writes it (``piloop.plugins.role.orchestrator.run_failed``), and the inbox reports it.
     """
 
     kind: Literal['anomaly.reported'] = 'anomaly.reported'
     subject: Ref
     """The row that the incident is about."""
     trigger: str
-    """The trigger that found it, by name: ``run_failed``."""
+    """What found it, by name: ``run_failed``. The name of a stored field."""
     line: str
     """The incident as the agent's brief shows it."""
 

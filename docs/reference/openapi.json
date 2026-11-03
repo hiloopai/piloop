@@ -2239,7 +2239,7 @@
     "/v1/campaigns/{campaign}/agents": {
       "post": {
         "summary": "Launch",
-        "description": "Ask the daemon for one more agent of a sweeping role: it launches it at once, within ``max_concurrent``.",
+        "description": "Ask the daemon for one more agent of a role that starts its agents: it launches it at once, within ``max_concurrent``.",
         "operationId": "launch",
         "parameters": [
           {
@@ -5181,7 +5181,7 @@
             },
             "type": "object",
             "title": "Roles",
-            "description": "Each sweeping role, by name."
+            "description": "Each role that starts its agents (``StartsItsAgents``), by name."
           },
           "inbox": {
             "type": "integer",
@@ -6995,7 +6995,7 @@
           "role"
         ],
         "title": "LaunchBody",
-        "description": "One more agent of a sweeping role (``[plugins.role.<name>]``). The agent's brief includes the reason."
+        "description": "One more agent of a role that starts its agents, the orchestrator. The agent's brief includes the reason."
       },
       "LimitBody": {
         "properties": {
@@ -7334,7 +7334,7 @@
               }
             ],
             "title": "Reason",
-            "description": "Why the daemon launched it, such as the trigger that fired."
+            "description": "Why the daemon launched it, such as what woke its role."
           }
         },
         "type": "object",
@@ -8360,7 +8360,7 @@
           "triggered": {
             "type": "boolean",
             "title": "Triggered",
-            "description": "Whether it has triggers: false, and the daemon launches its agents only on request (``piloop launch``)."
+            "description": "Whether it requests agents of its own accord: false, and the daemon launches its agents only on request\n(``piloop launch``)."
           },
           "requested": {
             "type": "integer",
@@ -8393,7 +8393,7 @@
           "last_ended"
         ],
         "title": "RoleView",
-        "description": "A sweeping role of a campaign, as a console shows it: off, idle, starting or running."
+        "description": "A role of a campaign that starts its agents (``StartsItsAgents``): off, idle, starting or running."
       },
       "RowLink": {
         "properties": {

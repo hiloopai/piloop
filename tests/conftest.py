@@ -159,12 +159,11 @@ use = ["script"]
 timeout = {implementer_timeout}
 max_concurrent = {max_implementers}
 
-[plugins.role.sweeper]
-prompt = "{sweeper}/sweeper.md"
+[plugins.role.orchestrator]
 triggers = ["run_failed"]
-writes = ["comments(escalation, note)", "lessons on the campaign once it stopped"]
+continuity = "fresh"
 harnesses = ["script"]
-model = {{ script = "sweeper-model" }}
+model = {{ script = "lead-model" }}
 timeout = {sweep_timeout}
 
 [[metrics]]
@@ -190,12 +189,11 @@ headless = ["{{prompt}}"]
 steers_mid_turn = true
 """
 
-SWEEPER_TRIGGERS = 'triggers = ["run_failed"]'
-"""The line of ``TOML`` that lists the triggers of ``SWEEPER``: a test replaces it to set its own."""
-SWEEPER = RoleName('sweeper')
-"""The tests' sweeping role, a role that ``piloop.toml`` defines: piloop has none that is on by default."""
-SWEEPER_PROMPTS = Path(__file__).parent / 'fixtures' / 'sweeper'
-"""The directory of the prompt of ``SWEEPER``."""
+LEAD_TRIGGERS = 'triggers = ["run_failed"]'
+"""The line of ``TOML`` that lists the triggers of ``LEAD``: a test replaces it to set its own."""
+LEAD = RoleName('orchestrator')
+"""The orchestrator, the only role whose agents start without a run. The tests turn it on for failed runs, and each of
+its agents starts a fresh session."""
 
 
 def spent(total: int, turns: int = 1) -> Usage:
@@ -241,7 +239,6 @@ def write_toml(
             evaluate=json.dumps(evaluate),
             implementer_timeout=implementer_timeout,
             sweep_timeout=AGENT_TIMEOUT,
-            sweeper=SWEEPER_PROMPTS,
             max_implementers=max_implementers,
             script=script,
         )

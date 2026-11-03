@@ -410,7 +410,7 @@ class Campaign(Tracked, Base):
     """The absolute path of the repository. ``piloop.toml`` is at its root."""
     config: Mapped[CampaignConfig] = mapped_column(deferred=True)
     """The ``piloop.toml`` as the last ``piloop init`` stored it: the config that the daemon schedules from. It loads
-    when it is first read, so a copy that no longer validates (a trigger of a package that is not installed) fails
+    when it is first read, so a copy that no longer validates (a role of a package that is not installed) fails
     only that read."""
     evaluator_id: Mapped[EvaluatorId | None]
     """The ``evaluators.id`` that the config describes now. Measurements under older evaluators stay, but no longer
@@ -684,7 +684,7 @@ class AgentSession(Tracked, Base):
         default=AgentSessionState.REQUESTED, server_default=AgentSessionState.REQUESTED.value
     )
     reason: Mapped[str | None]
-    """Why it was requested: the trigger that fired, or what the requester wrote."""
+    """Why it was requested: what woke its role, or what the requester wrote."""
     log_dir: Mapped[str | None]
     started_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
     """The time of the request until the launch, then the time of the launch."""

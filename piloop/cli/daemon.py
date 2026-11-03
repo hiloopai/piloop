@@ -42,7 +42,7 @@ def serve(
         ),
     ] = None,
 ) -> None:
-    """Run the daemon, which fires the triggers, launches the agents and reaps the agents that end.
+    """Run the daemon, which launches the agents and reaps the agents that end.
 
     Only one daemon runs per PILOOP_HOME. The file serve.pid holds its lock.
     """

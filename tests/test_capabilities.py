@@ -122,7 +122,6 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.StaleLease,
     capabilities.WorkersExecutor,  # what a built-in provider's open makes, which a plugin's may wrap
     capabilities.SubprocessRuntime,
-    capabilities.TriggerName,  # the type of a role's triggers, which a plugin's role declares
     capabilities.SectionName,  # the type of a list of sections, which a plugin's role declares
     capabilities.Block,  # type aliases of the blocks that a section returns
     capabilities.Value,

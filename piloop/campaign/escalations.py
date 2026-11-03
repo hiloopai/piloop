@@ -92,7 +92,7 @@ def orchestrated(s: Session, campaign: CampaignId | None) -> bool:
     """
     row = s.get(Campaign, campaign) if campaign is not None else None
     try:
-        roles = row.config.roles.sweeping().values() if row is not None else ()
+        roles = row.config.roles.starting().values() if row is not None else ()
     except ValidationError:  # the campaigns' pass records this error for the campaign
         return False
     return any(isinstance(role, OrchestratorRole) and role.takes_escalations for role in roles)

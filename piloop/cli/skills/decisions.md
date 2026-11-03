@@ -55,8 +55,7 @@ without a priority), out of the inbox.
   message for it. A Claude agent reads it after its next tool call. Any other reads it when its turn ends, when
   piloop resumes its session with the message.
 - `piloop attach <agent_session_id>` prints the last 40 lines that an agent wrote.
-- To request one more sweep, run `piloop launch <name> <role> [--harness pi --model …] [--reason '…']`: `orchestrator`, or a
-  role that `piloop.toml` defines.
+- To request one more orchestrator, run `piloop launch <name> orchestrator [--harness pi --model …] [--reason '…']`.
   Or insert a request:
   `INSERT INTO agent_sessions (kind, campaign_id, state, reason) VALUES ('orchestrator', <p>, 'requested', '…')`.
   The daemon launches it at once, within the `max_concurrent` of the role.

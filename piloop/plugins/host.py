@@ -860,7 +860,7 @@ class Entry[P: Parameters]:
 
     The table is validated as a ``[plugins.<name>]`` table is (``Capability.validated``: without ``provider``, the
     default), and dumped back with its ``provider``. ``P`` may be narrower than the contract: a provider that is not a
-    ``P`` is refused. A trigger of a role, the remote of the ``cached`` CAS and the vcs provider of a job are entries.
+    ``P`` is refused. A role's runtime, the remote of the ``cached`` CAS and the vcs provider of a job are entries.
     """
 
     capability: Capability[P]

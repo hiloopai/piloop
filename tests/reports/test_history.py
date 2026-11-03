@@ -145,7 +145,7 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
         crashed = idea(s, campaign, 'delete solve.txt', IdeaStatus.DROPPED, priority=3)
         scored(s, crashed, e2.id, (Outcome.CRASH, {}, 'no such file'))
         comment(s, IDEA, crashed.id, 'first attempt: evaluate needs the file')
-        comment(s, IDEA, crashed.id, 'second attempt agrees; rejected', author='sweeper#2')
+        comment(s, IDEA, crashed.id, 'second attempt agrees; rejected', author='orchestrator#2')
         mixed = idea(s, campaign, 'two commits', after=(kept.id,))
         scored(s, mixed, e2.id, (Outcome.CRASH, {}, 'syntax'), (Outcome.KEEP, {'score': 4, 'size': 16}, None))
         idea(s, campaign, 'a' * 200, IdeaStatus.OPEN, 'h' * 200, priority=0, after=(crashed.id, kept.id))
@@ -155,7 +155,7 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
         comment(
             s, TargetKind.CAMPAIGN, campaign.id, 'batch 1: extend appending\nrejected: deleting', author='research#1'
         )
-        comment(s, TargetKind.CAMPAIGN, campaign.id, 'idle: best is #2; try longer lines', author='sweeper#2')
+        comment(s, TargetKind.CAMPAIGN, campaign.id, 'idle: best is #2; try longer lines', author='orchestrator#2')
         comment(s, TargetKind.CAMPAIGN, campaign.id, 'batch 2: nothing new worth proposing', author='research#3')
         comment(s, TargetKind.CAMPAIGN, campaign.id, 'the cache keep holds on fresh data', author='reviewer#7')
         comment(s, TargetKind.CAMPAIGN, campaign.id, 'digest: on track', author='orchestrator')
@@ -179,7 +179,7 @@ def test_history_lists_every_idea_with_its_outcome_the_lineage_and_the_findings(
         '### History: latest notes (newest first)',
         '- comment#7 reviewer#7 on campaign#1: the cache keep holds on fresh data',
         '- comment#6 research#3 on campaign#1: batch 2: nothing new worth proposing',
-        '- comment#5 sweeper#2 on campaign#1: idle: best is #2; try longer lines',
+        '- comment#5 orchestrator#2 on campaign#1: idle: best is #2; try longer lines',
         '- comment#4 research#1 on campaign#1: batch 1: extend appending (+1 lines)',
     )
     assert 'digest: on track' not in text, "the orchestrator's findings are in the pack's digests"

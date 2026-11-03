@@ -16,7 +16,8 @@ from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunStatus
 from piloop.plugins.campaign_type.kit.runs.section.idea_comments import IdeaComments
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.host import Scope
-from piloop.plugins.role.contract import ROLES, ImplementerRole, SweepRole
+from piloop.plugins.role.contract import ROLES, ImplementerRole
+from piloop.plugins.role.orchestrator import OrchestratorRole
 from piloop.plugins.section.contract import SECTIONS, Guide, Rendering, Section, Surface, defaults, guides, markdown
 from piloop.plugins.stop_rule.contract import STOP_RULES
 from tests.campaign.test_stop import add_run
@@ -252,14 +253,10 @@ def test_each_role_has_guides_of_its_own_that_extend_a_shared_list() -> None:
 
 @pytest.mark.usefixtures('units')
 def test_a_packages_guide_shows_in_every_role_of_its_surface_after_the_roles_own() -> None:
-    sweeps = {name: p.model().shown() for name, p in ROLES.providers().items() if p.model.SURFACE is Surface.SWEEP}
-    sweeps['new'] = SweepRole(prompt='new.md', triggers=[]).shown()
-    assert {name: 'units' in shown for name, shown in sweeps.items()} == {
-        'orchestrator': False,
-        'new': True,
-    }, 'the orchestrator lists its sections'
-    assert all(shown.index('units') < shown.index('context') for shown in sweeps.values() if 'units' in shown), (
-        'a guide goes before the other sections of a default list'
+    assert 'units' not in OrchestratorRole().shown(), 'the orchestrator lists its sections'
+    shown = OrchestratorRole(sections=None).shown()
+    assert shown.index('research_commands') < shown.index('units') < shown.index('context'), (
+        "a guide goes after the role's own and before the other sections of a default list"
     )
     assert 'units' not in ImplementerRole().shown()
 

@@ -101,11 +101,6 @@ def source(created_by: str) -> str:
     return created_by.partition('#')[0]
 
 
-def added_by(s: Session, campaign_id: CampaignId) -> set[str]:
-    """Return the signatures that added an idea to the campaign."""
-    return set(s.scalars(select(Idea.created_by).where(Idea.campaign_id == campaign_id)))
-
-
 @dataclass(frozen=True)
 class Yield:
     """What one source's ideas produced: how many it filed, how many ran, and their candidates."""

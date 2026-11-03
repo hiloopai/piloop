@@ -37,7 +37,7 @@ from piloop.plugins.vcs.contract import Repository
 from piloop.store.chunks import read as read_chunks
 from tests.agents.test_launcher import agent_session, checkout, controller, request, use_harness
 from tests.conftest import (
-    SWEEPER,
+    LEAD,
     ScriptRuntime,
     events,
     home_cas,
@@ -86,7 +86,7 @@ def resuming(db: Database, campaign: Campaign) -> None:
     """Make the sweeper a role that resumes its sessions."""
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        row.config = reconfigured(row.config, plugins={'role': {SWEEPER: {'continuity': Continuity.RESUME.value}}})
+        row.config = reconfigured(row.config, plugins={'role': {LEAD: {'continuity': Continuity.RESUME.value}}})
         s.commit()
 
 
@@ -103,10 +103,10 @@ def launch(db: Database, ctl: RunController, campaign: Campaign, agent_session_i
     """Launch the sweeper ``agent_session_id`` on ``ctl``, and wait for its end."""
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        agent = Agent(role=SWEEPER, session=agent_session_id)
-        sweeper = role(row.config, SWEEPER, Path(row.path))
+        agent = Agent(role=LEAD, session=agent_session_id)
+        sweeper = role(row.config, LEAD, Path(row.path))
         brief = compose_brief(sweeper, row, '- the whole brief')
-        resumed = compose_resumed(row.config.role(SWEEPER), agent, f'- news for {agent}')
+        resumed = compose_resumed(row.config.role(LEAD), agent, f'- news for {agent}')
     ctl.launcher.launch(
         agent_session_id,
         brief=ctl.cas.put(brief.encode()),
@@ -148,7 +148,7 @@ def test_each_agent_resumes_the_last_session_with_only_the_new_brief_and_counts_
     resuming(db, campaign)
     first = wake(db, runtime, tmp_path, campaign)
     assert not_resumed(db, first) == [
-        SessionNotResumed(reason=Unresumed.NO_SESSION, detail='no earlier sweeper left a session on script')
+        SessionNotResumed(reason=Unresumed.NO_SESSION, detail='no earlier orchestrator left a session on script')
     ]
     assert '- the whole brief' in (tmp_path / 'brief--session-id.md').read_text()
     one = agent_session(db, first)
@@ -164,8 +164,8 @@ def test_each_agent_resumes_the_last_session_with_only_the_new_brief_and_counts_
     assert started(db, second).resumes == first
     assert two.session_id == one.session_id, 'the same harness session'
     brief = (tmp_path / 'brief--resume.md').read_text()
-    assert brief.startswith(f'You continue this session as a new agent, sweeper#{second}.')
-    assert f'- news for sweeper#{second}' in brief and '- the whole brief' not in brief
+    assert brief.startswith(f'You continue this session as a new agent, orchestrator#{second}.')
+    assert f'- news for orchestrator#{second}' in brief and '- the whole brief' not in brief
     assert two.usage == Usage(input=2, output=1649, cache_read=52633, cache_write=3969, total=58253, turns=1), (
         'the tokens after the resume: the whole file less what it held'
     )
@@ -225,7 +225,7 @@ def test_a_pi_agent_resumes_the_last_session_on_another_worker_in_its_own_cwd(
     two = agent_session(db, second)
     assert (two.state, two.error, not_resumed(db, second)) == (AgentSessionState.EXITED, None, [])
     assert (started(db, second).resumes, two.session_id) == (first, one.session_id)
-    assert f'- news for sweeper#{second}' in (tmp_path / 'brief-resumed.md').read_text()
+    assert f'- news for orchestrator#{second}' in (tmp_path / 'brief-resumed.md').read_text()
     assert len(list(sessions.glob('*/*.jsonl'))) == 1, 'pi continued the file that piloop wrote back'
     assert two.usage is not None and two.usage.turns == 1, 'the tokens after the resume'
 
@@ -412,7 +412,7 @@ def test_no_session_is_resumed_after_a_resume_that_failed_or_on_a_harness_that_c
         assert not isinstance(found, SessionNotResumed) and found.agent_session == first
         other = s.get_one(AgentSession, others)
         assert resumable(s, other, cfg, Path('w')) == SessionNotResumed(
-            reason=Unresumed.NO_SESSION, detail='no earlier sweeper left a session on other'
+            reason=Unresumed.NO_SESSION, detail='no earlier orchestrator left a session on other'
         )
         harnesses = cfg.plugins['harness']
         assert isinstance(harnesses, Instances)

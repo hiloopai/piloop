@@ -1,7 +1,7 @@
 """The briefs of the roles: the prompt, the context and what the agent may write (https://piloop.autoresearch.inc/concepts/roles).
 
 Every role shares one lifecycle (``piloop.agents.launcher``). A role differs in its ``[plugins.role.<name>]`` table
-(``piloop.plugins.role``), its triggers (``piloop.plugins.trigger``) and the content of its brief, which this module composes.
+(``piloop.plugins.role``) and the content of its brief, which this module composes.
 """
 
 from collections.abc import Sequence
@@ -19,7 +19,7 @@ from piloop.db.models import AgentSession, Campaign
 from piloop.ids import RoleName
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.harness.contract import Harness
-from piloop.plugins.role.contract import Files, RoleConfig, SweepRole
+from piloop.plugins.role.contract import ImplementerRole, RoleConfig
 from piloop.plugins.section.contract import Briefing, Guide, Rendering, Section
 from piloop.plugins.vcs.contract import VCS, prompted
 
@@ -46,18 +46,6 @@ class Role:
     """
 
 
-IDEAS: dict[Files, str] = {
-    Files.NOTHING: (
-        '- A hunch worth a run of its own goes in a note, with pointers (ids, paths, the number). You file no ideas.'
-    ),
-    Files.IDEAS: (
-        "- Add an idea: `{piloop} idea add {campaign} '<title>' --hypothesis '…' --plan '…' --from '<the evidence,"
-        " with ids>'` (`--help` for links, a base, a priority)."
-    ),
-}
-"""The ideas line of the brief for each value of ``files``."""
-
-
 def role(cfg: CampaignConfig, kind: RoleName, repo: Path) -> Role:
     """Return the role of ``[plugins.role.<kind>]`` in a campaign at ``repo``.
 
@@ -67,20 +55,7 @@ def role(cfg: CampaignConfig, kind: RoleName, repo: Path) -> Role:
     table = cfg.role(kind)
     prompt = _prompt(repo, table.prompt, table.PROMPT)
     assert prompt is not None  # RoleConfig refuses a role with neither
-    ideas = table.IDEAS or IDEAS[filed(table)]
-    return Role(kind, prompt, ideas)
-
-
-def filed(table: RoleConfig) -> Files:
-    """What the agents of a role may file with ``piloop idea``: a sweep's ``files``.
-
-    A role that does runs files nothing for others: its agent proposes only its own run's idea (``ImplementerRole.IDEAS``).
-    """
-    match table:
-        case SweepRole(files=files):
-            return files
-        case _:
-            return Files.NOTHING
+    return Role(kind, prompt, table.IDEAS)
 
 
 def _prompt(repo: Path, configured: str | None, own: Traversable | None) -> Traversable | None:
@@ -115,16 +90,17 @@ def steers_mid_turn(s: Session, agent_session: AgentSession) -> bool:
     return (harness := harness_of(s, agent_session)) is None or harness.steers_mid_turn
 
 
-def files_of(cfg: CampaignConfig, actor: Actor) -> Files | None:
-    """Return what ``actor`` may file with ``piloop idea``, by the role in its signature (``orchestrator#4``).
+def files_ideas(cfg: CampaignConfig, actor: Actor) -> bool:
+    """Whether ``actor`` adds ideas for others (``piloop idea add``).
 
-    None for an actor that is not a role, such as ``orchestrator`` or ``human``: it may file anything. An agent of a
-    role that ``piloop.toml`` no longer has files nothing.
+    An actor that is not an agent, such as ``orchestrator`` or ``human``, does, and so does an agent of a role that does
+    no runs, the lead. An agent of a role that does runs proposes only its own run's idea, and an agent of a role that
+    ``piloop.toml`` no longer has adds none.
     """
     if (agent := actor.launched) is None:
-        return None
+        return True
     table = cfg.roles.all().get(agent.role)
-    return Files.NOTHING if table is None else filed(table)
+    return table is not None and not isinstance(table, ImplementerRole)
 
 
 def read_brief(cas: Cas, brief: Cid) -> str:

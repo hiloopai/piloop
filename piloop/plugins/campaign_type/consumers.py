@@ -1,6 +1,6 @@
 """The campaign type capability's machinery: the pass over the campaigns, and the agents that it launches.
 
-The pass has two phases. First, each campaign's type and the triggers of its roles
+The pass has two phases. First, each campaign's type and each role that starts its agents
 (https://piloop.autoresearch.inc/concepts/roles) insert ``agent_sessions`` rows in state ``requested``. Then the
 requested rows launch in id order, as far as the role's ``max_concurrent`` allows, while the executor has a free agent
 slot (``Executor.capacity``). The home's launch policy picks the campaign that each free slot goes to, and a
@@ -18,19 +18,18 @@ from functools import partial
 from typing import ClassVar, Literal, assert_never
 
 from pydantic import ValidationError
-from sqlalchemy import Select, delete, select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from piloop.actor import Agent, System
+from piloop.actor import System
 from piloop.agents.results import (
     AgentSessionFinished,
     AgentSessionRunning,
     AgentSessionStarted,
     StartupAnomaly,
 )
-from piloop.agents.roles import briefing, compose_brief, compose_resumed, render_sections, role_of
 from piloop.campaign import escalations
-from piloop.campaign.campaigns import WORKSPACE, CampaignAdded, workspace_dir
+from piloop.campaign.campaigns import CampaignAdded
 from piloop.campaign.launches import choose_harness, close, earlier, full_harnesses, remove_checkouts, resumed_on
 from piloop.campaign.stop import (
     CampaignClosed,
@@ -40,7 +39,6 @@ from piloop.campaign.stop import (
     escalated,
     hours_due,
     requested,
-    timeout as agent_timeout,
     unclosed,
 )
 from piloop.config import CampaignConfig
@@ -49,7 +47,6 @@ from piloop.db.events import emit, has, in_order
 from piloop.db.models import (
     LIVE,
     NOT_RETIRED,
-    OPEN,
     AgentSession,
     AgentSessionState,
     Campaign,
@@ -59,9 +56,7 @@ from piloop.db.models import (
     Pause,
     ReadBy,
     count,
-    utcnow,
 )
-from piloop.db.triggers import DAEMON_ACTOR
 from piloop.db.triggers.changelog import (
     AgentSessionRequested,
     CampaignConfigChanged,
@@ -77,10 +72,10 @@ from piloop.db.triggers.changelog import (
     OriginChanged,
     VerdictChanged,
 )
-from piloop.ids import AgentSessionId, CampaignStatus, CommentId, CommentKind, RoleName, TargetKind, TargetRef
+from piloop.ids import AgentSessionId, CampaignStatus, CommentId, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CAMPAIGNS, CannotLaunch, Planner, Take
 from piloop.plugins.campaign_type.kit.candidates.references import CandidateImported
-from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded, RemeasureRequested, score
+from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded, RemeasureRequested
 from piloop.plugins.campaign_type.kit.evaluation.submissions import Submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from piloop.plugins.campaign_type.kit.runs.controller import (
@@ -94,7 +89,6 @@ from piloop.plugins.campaign_type.kit.verdicts.judge import (
     CandidateJudged,
     Rebased,
     RejudgeRequested,
-    checkout_candidate,
 )
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, closers
 from piloop.plugins.escalation.contract import Choice, EscalationView
@@ -103,15 +97,12 @@ from piloop.plugins.executor.contract import AgentKey, LeftJob
 from piloop.plugins.fact_source.contract import FACT_SOURCES
 from piloop.plugins.host import ContractBroken
 from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchCase, LaunchPolicy, Share
-from piloop.plugins.role.contract import PUSHED, Continuity, ImplementerRole, SweepRole
+from piloop.plugins.role.contract import ROLES, ImplementerRole, Quiet, StartsItsAgents, Wake
 from piloop.plugins.runtime.contract import handle_for, runtime_for
-from piloop.plugins.section.contract import Rendering
 from piloop.plugins.stop_rule.contract import GO, Go, Hold, Stop
-from piloop.plugins.trigger.contract import TRIGGERS, Fire, Quiet, Steer
-from piloop.plugins.trigger.kit.incidents import assigned
 
 AGENT_SESSIONS = 'agent_sessions'
-"""The directory under the home of each sweep's place: ``agent_sessions/<id>``."""
+"""The directory under the home of the place of each agent without a run: ``agent_sessions/<id>``."""
 EventModel.retire('agent_session.jobs_left')  # 0.2.0 listed the jobs of an idle implementer; its finding ends it now
 
 
@@ -176,11 +167,11 @@ source that reads has its own due."""
 def campaign_kinds() -> Kinds:
     """What wakes the pass over the campaigns.
 
-    Their state, what each trigger reads beyond it (``WAKES_ON``), and what a fact source writes when it reads
-    (``CHANGES``).
+    Their state, what each role that starts its agents reads beyond it (``StartsItsAgents.wakes_on``), and what a fact
+    source writes when it reads (``CHANGES``).
     """
     return CAMPAIGN_STATE.union(
-        *(p.model.WAKES_ON for p in TRIGGERS.providers().values()),
+        *(p.model.wakes_on() for p in ROLES.providers().values() if issubclass(p.model, StartsItsAgents)),
         *(p.model.CHANGES for p in FACT_SOURCES.providers().values()),
     )
 
@@ -239,12 +230,12 @@ class Campaigns:
         The executor takes over what it can find: ``workers`` gives every live lease a full period, so nothing is queued
         again only because of the restart, and its worker re-attaches to each agent that still has its worktree, and
         reports the rest gone, which ends their runs ``worker_lost``, not as attempts. For each agent it adopts,
-        the daemon waits for its end as if no daemon had stopped (``RunController.reattach``, or ``_reattach_sweep`` for
-        a sweep). Both an in-place restart (``hand_over``) and a crash leave agents for this. An agent that it does not
+        the daemon waits for its end as if no daemon had stopped (``RunController.reattach``, or ``_reattach`` for an
+        agent without a run). Both an in-place restart (``hand_over``) and a crash leave agents for this. An agent that it does not
         adopt is killed, and its row and its run fail. A closed run whose commits were not all scored
         (``runs.scoring``) is scored now (``RunController.resume``), whatever its idea's status. An idea that stayed
         ``scheduled`` does not run again, and no dependent idea takes it before its keeps are known. The worktrees of
-        failed runs and sweeps are removed. The evaluation queue starts empty: its jobs were the previous daemon's, and
+        failed runs and of the agents without a run are removed. The evaluation queue starts empty: its jobs were the previous daemon's, and
         what still needs a measurement asks again.
         """
         with self._tracer.span('piloop.reap'):
@@ -266,7 +257,7 @@ class Campaigns:
                 run_id = runs[agent_session_id]
                 self._tracer.event('agent_session.reattached', agent_session=agent_session_id, run=run_id)
                 body = (
-                    partial(self._reattach_sweep, agent_session_id)
+                    partial(self._reattach, agent_session_id)
                     if run_id is None
                     else partial(self._controller.reattach, run_id, agent_session_id)
                 )
@@ -309,14 +300,14 @@ class Campaigns:
             self._tracer.event('agent_session.kill_failed', agent_session=agent_session.id, error=str(e))
 
     def run(self, turn: Turn) -> datetime | None:
-        """Pass over every campaign: its stop rule, its remeasures, its triggers, and the launches.
+        """Pass over every campaign: its stop rule, its remeasures, the requests of its roles, and the launches.
 
-        Returns when a pass must come for time alone: the earliest ``due_in`` of a trigger, the end of the hours that the
+        Returns when a pass must come for time alone: the earliest due of a role (``StartsItsAgents.request``), the end of the hours that the
         stop rule leaves or of a startup pause, or the next reading of a fact source.
 
         A stopped campaign requests nothing and is measured again only on request (``ledger.due``). The pass asks the
         stop rule (``piloop.campaign.stop.check``) of each active campaign. A campaign that it holds gets only the first
-        step. A paused campaign (``piloop pause``) gets no triggers, does not stop at a limit of its stop rule, and
+        step. A paused campaign (``piloop pause``) asks no role for requests, does not stop at a limit of its stop rule, and
         launches nothing, and with ``all`` it is not measured again either. A stop request stops a held or paused
         campaign too. A stopped campaign launches what a human requests, whatever the pause (``launches``).
         """
@@ -345,9 +336,9 @@ class Campaigns:
                 if campaign.status is CampaignStatus.ACTIVE:
                     # A stop request wins over a hold and a pause.
                     if (stop := requested(s, campaign)) is not None:
-                        self._triggers(s, campaign, cfg, stop, turn.now)
+                        self._go_or_stop(s, campaign, cfg, stop, turn.now)
                     elif not isinstance(answer, Hold) and campaign.paused is None:
-                        self._triggers(s, campaign, cfg, answer, turn.now)
+                        self._go_or_stop(s, campaign, cfg, answer, turn.now)
                 s.flush()
                 if campaign.status is CampaignStatus.STOPPED and unclosed(s, campaign) and settled(s, campaign):
                     self._close_campaign(s, campaign, cfg)
@@ -358,8 +349,7 @@ class Campaigns:
                 phase = quiet_phase(s, campaign, held)
                 awake = awake_roles(cfg, phase)
                 if phase is not None and awake:
-                    for name in awake:
-                        self._request(s, campaign, cfg, name, cfg.roles.sweeping()[name], turn.now, quiet=phase)
+                    self._wake(s, campaign, cfg, turn.now, phase, awake)
                 if launches(campaign, held):
                     launching.append(Launching(campaign, cfg, None))
                 elif awake:
@@ -372,7 +362,7 @@ class Campaigns:
             body = (
                 partial(self._controller.execute, run_id, agent_session_id)
                 if run_id
-                else partial(self._sweep, agent_session_id)
+                else partial(self._start, agent_session_id)
             )
             future = self._futures[agent_session_id] = self._host.thread(body)
             # a body that ends before it submits (a run that fails first) must not hold the slot
@@ -389,22 +379,24 @@ class Campaigns:
         """A thread of an agent or of scoring ended: the next turn forgets it and fills its slot."""
         self._host.wake(CAMPAIGNS)
 
-    def _triggers(self, s: Session, campaign: Campaign, cfg: CampaignConfig, answer: Go | Stop, now: datetime) -> None:
-        """Stop the campaign if the answer is a stop. Otherwise queue runs and check every role's triggers.
+    def _go_or_stop(
+        self, s: Session, campaign: Campaign, cfg: CampaignConfig, answer: Go | Stop, now: datetime
+    ) -> None:
+        """Stop the campaign if the answer is a stop. Otherwise queue runs and ask each role for its requests.
 
         A held campaign gets here only for a stop request.
 
-        Triggers requested everything that is pending when the campaign stops, so it is all cancelled. Requested rows
+        The roles requested everything that is pending when the campaign stops, so it is all cancelled. Requested rows
         are closed and queued runs end ``RunEnd.CAMPAIGN_STOPPED``. Their ideas go back to ``ready``. Implementers in
         flight are told to stop (``_wind_down``), and their commits are scored. Then the daemon closes the campaign
-        (``_close_campaign``). A stopped campaign gets nothing more from the triggers. Rows that a human inserts after
+        (``_close_campaign``). A stopped campaign gets nothing more from its roles but in a quiet phase that wakes them
+        (``awake_roles``). Rows that a human inserts after
         the stop still launch.
         """
         if isinstance(answer, Go):
             self._planner(campaign).queue(s, campaign, answer.left)
             s.flush()
-            for name, role in cfg.roles.sweeping().items():
-                self._request(s, campaign, cfg, name, role, now)
+            self._wake(s, campaign, cfg, now)
             return
         reason = answer.reason
         campaign.status, campaign.stopped_reason = CampaignStatus.STOPPED, reason
@@ -426,6 +418,31 @@ class Campaigns:
         s.flush()  # the status change's event first: the close comes after the stop
         emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)
 
+    def _wake(
+        self,
+        s: Session,
+        campaign: Campaign,
+        cfg: CampaignConfig,
+        now: datetime,
+        quiet: Quiet | None = None,
+        roles: Collection[RoleName] | None = None,
+    ) -> None:
+        """Ask each role that starts its agents for its requests (``StartsItsAgents.request``), or only ``roles``."""
+        starting = cfg.roles.starting()
+        for name in starting if roles is None else roles:
+            self._soonest.add(starting[name].request(Wake(s, now, campaign, name, quiet, self._tracer)))
+
+    def _start(self, agent_session_id: AgentSessionId) -> None:
+        """Run the requested row of a role that starts its agents: its provider launches it (``StartsItsAgents``)."""
+        with self._db.session() as s:
+            row = s.get_one(AgentSession, agent_session_id)
+            role = s.get_one(Campaign, row.campaign_id).config.roles.starting()[row.kind]
+        role.launch(self._host, agent_session_id)
+
+    def _reattach(self, agent_session_id: AgentSessionId) -> None:
+        """Wait for an agent without a run that a previous daemon process started, until it ends."""
+        self._controller.launcher.reattach(agent_session_id)
+
     def _drain(self, s: Session, campaign: Campaign) -> None:
         self._planner(campaign).drain(s, campaign)
         for agent_session in s.scalars(
@@ -434,124 +451,6 @@ class Campaigns:
             )
         ):
             close(s, agent_session, RunEnd.CAMPAIGN_STOPPED, self._tracer)
-
-    def _request(
-        self,
-        s: Session,
-        campaign: Campaign,
-        cfg: CampaignConfig,
-        name: RoleName,
-        role: SweepRole,
-        now: datetime,
-        *,
-        quiet: Quiet | None = None,
-    ) -> None:
-        """Insert requested rows when the role's triggers fire, and write the notes of those that steer.
-
-        The triggers fire in the order of the role's list (``piloop.plugins.trigger``), and in a ``quiet`` phase only
-        those that name it (``Trigger.WHILE``). While a request of the role waits, a fire requests nothing more. A fire that needs a row of
-        its own (``Fire.alone``) shares its row only with the other such fires, when one comes first, and otherwise
-        waits for a later pass. The others share one batch: the largest count of rows, with every reason. The first row
-        gets the events of the fires. Then each note of a trigger that steers goes on the role's open row
-        (``_steer``). A trigger that raises is traced and does not fire. The ``due_in`` of each trigger that did not
-        fire goes into the pass's due.
-        """
-        latest = s.scalars(
-            select(AgentSession)
-            .where(AgentSession.campaign_id == campaign.id, AgentSession.kind == name)
-            .order_by(AgentSession.id.desc())
-            .limit(1)
-        ).first()
-        waits = latest is not None and latest.state is AgentSessionState.REQUESTED
-        p = self._pass(s, campaign, cfg, name, role, now, quiet)
-        fires: list[Fire] = []
-        steers: list[Steer] = []
-        triggers = cfg.triggers_of(name)
-        for trigger in (t for t in triggers if quiet is None or quiet in t.WHILE):
-            try:
-                fire = trigger.fire(p)
-                due = trigger.due_in(p) if fire is None else None
-            except Exception as e:  # A trigger of a package, or a query that the schema no longer runs.
-                self._tracer.event(
-                    'trigger.failed', campaign=campaign.name, role=name, trigger=TRIGGERS.name_of(trigger), error=str(e)
-                )
-                continue
-            match fire:
-                case Steer():
-                    steers.append(fire)
-                case Fire() if waits:  # one pending request per role is enough
-                    pass
-                case Fire():
-                    fires.append(fire)
-                case None:
-                    self._soonest.add(None if due is None else now + due)
-                case _:
-                    assert_never(fire)
-        if fires:
-            self._fire(s, campaign, name, fires)
-        for steer in steers:
-            self._steer(s, p, steer)
-
-    def _fire(self, s: Session, campaign: Campaign, name: RoleName, fires: list[Fire]) -> None:
-        """Insert the requested rows of ``fires``: those of the first's kind (``Fire.alone``), in one batch."""
-        fires = [f for f in fires if f.alone is fires[0].alone]
-        count = max(f.count for f in fires)
-        reason = '; '.join(f.reason for f in fires)
-        rows = [AgentSession(kind=name, campaign_id=campaign.id, reason=reason) for _ in range(count)]
-        s.add_all(rows)
-        s.flush()
-        for fire in fires:
-            for event in fire.events:
-                emit(s, event, TargetRef(TargetKind.AGENT_SESSION, rows[0].id), System.DAEMON)
-        self._tracer.event('agent_session.requested', campaign=campaign.name, kind=name, reason=reason, count=count)
-
-    def _steer(self, s: Session, p: RolePass, steer: Steer) -> None:
-        """Write ``steer`` as a message to the role's newest open row, or to a row requested for it, and its events on it."""
-        row = s.scalars(p.mine().where(AgentSession.state.in_(OPEN)).order_by(AgentSession.id.desc()).limit(1)).first()
-        if row is None:
-            row = AgentSession(kind=p.role, campaign_id=p.campaign.id, reason=steer.reason)
-            s.add(row)
-            s.flush()
-            self._tracer.event(
-                'agent_session.requested', campaign=p.campaign.name, kind=p.role, reason=steer.reason, count=1
-            )
-        message = Comment(
-            target=TargetRef(TargetKind.AGENT_SESSION, row.id),
-            author=DAEMON_ACTOR,
-            kind=CommentKind.MESSAGE,
-            body=steer.text,
-        )
-        s.add(message)
-        s.flush()
-        for event in steer.events:
-            emit(s, event, TargetRef(TargetKind.COMMENT, message.id), System.DAEMON)
-        self._tracer.event('agent_session.steered', campaign=p.campaign.name, agent_session=row.id, comment=message.id)
-
-    def _pass(
-        self,
-        s: Session,
-        campaign: Campaign,
-        cfg: CampaignConfig,
-        name: RoleName,
-        role: SweepRole,
-        now: datetime,
-        quiet: Quiet | None = None,
-    ) -> RolePass:
-        """Return what the triggers of role ``name`` read in this pass."""
-        last = s.scalars(
-            select(AgentSession)
-            .where(AgentSession.campaign_id == campaign.id, AgentSession.kind == name)
-            .order_by(AgentSession.id.desc())
-            .limit(1)
-        ).first()
-        return RolePass(
-            s=s,
-            now=now,
-            campaign=campaign,
-            role=name,
-            last=last,
-            quiet=quiet,
-        )
 
     def _launch(
         self, s: Session, launching: Sequence[Launching], now: datetime, free: int | None
@@ -629,8 +528,8 @@ class Campaigns:
 
         A run role's row without a run is refused.
 
-        A sweep's harness is chosen here, by the campaign's harness choice (``choose_harness``), never a harness at its
-        cap (``full_harnesses``). A sweep pinned to such a harness stays requested. A run's harness was chosen when it was queued.
+        The harness of an agent without a run is chosen here, by the campaign's harness choice (``choose_harness``), never
+        a harness at its cap (``full_harnesses``). One pinned to such a harness stays requested. A run's harness was chosen when it was queued.
         A request for a role that ``piloop.toml`` no longer has is refused, and its queued run fails
         (``RunEnd.ROLE_REMOVED``), so that its idea goes back to the queue.
 
@@ -742,83 +641,6 @@ class Campaigns:
         emit(s, paused, TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)
         self._tracer.event(paused.kind, campaign=campaign.name, deaths=len(deaths), load=load)
 
-    def _sweep(self, agent_session_id: AgentSessionId) -> None:
-        """Run a sweep, an agent without a run, in a worktree at the head, with a brief made from its row.
-
-        The brief shows the role's sections (``[plugins.role.<name>] sections``). Its ``context`` section ends with the
-        sweep's lines: the checkout, the workspace, the role's own (``SweepRole.context``), then the notes on the row so
-        far, which it gets here and not again. A sweep that got anomalies is an incident sweep: its sections read them
-        (``Rendering.given``). Nothing that a sweep commits is scored. In a worktree at the head, the commits are
-        removed with the worktree when the agent ends.
-        """
-        with self._db.session() as s:
-            agent_session = s.get_one(AgentSession, agent_session_id)
-            campaign = s.get_one(Campaign, agent_session.campaign_id)
-            cfg = campaign.config
-            role = role_of(s, agent_session)
-            table = cfg.roles.sweeping()[agent_session.kind]
-            timeout = agent_timeout(s, campaign, cfg, table.timeout, utcnow())
-            if isinstance(timeout, Stop):  # requested again: the pass that stops the campaign closes it
-                agent_session.state = AgentSessionState.REQUESTED
-                s.commit()
-                self._tracer.event('agent_session.not_started', agent_session=agent_session_id, reason=timeout.reason)
-                return
-            base = checkout_candidate(s, campaign)
-            values = ', '.join(
-                f'{t.primary.name}={"unmeasured" if (v := score(base, campaign.evaluator_id, t.primary)) is None else v}'
-                for t in cfg.all_tracks
-            )
-            now = utcnow()
-            given = tuple(assigned(s, agent_session_id))
-            notes = s.scalars(
-                select(Comment)
-                .where(Comment.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id))
-                .where(Comment.kind == PUSHED)
-                .order_by(Comment.id)
-            ).all()
-            role_pass = self._pass(s, campaign, cfg, agent_session.kind, table, now)
-            sweep = SweepPass(**vars(role_pass), agent_session=agent_session)
-            workspace = workspace_dir(self._home, campaign.id)
-            lines = [
-                f'- Your cwd is a detached checkout of candidate#{base.id}, the head ({values}): read and run the'
-                ' code, try things. Nothing you commit here is scored or kept; it goes with the checkout when you end.',
-                f'- Shared workspace for notes and artifacts to other agents: `./{WORKSPACE}/` (not committed). The files'
-                ' of a done idea are archived, and removed from it after some days or when the disk is short; `piloop'
-                f' restore {campaign.name} <idea id>|<workspace path>` writes them back.',
-                *table.context(sweep),
-                *(['', '# Notes', *(f'{n.body}\n' for n in notes)] if notes else []),
-                f'- Sweep started at: {now:%Y-%m-%d %H:%M:%S} (UTC; the sections below are as of then).',
-            ]
-            agent = Agent(role=agent_session.kind, session=agent_session_id)
-            brief_of = briefing(role, campaign, agent, reason=agent_session.reason or 'requested', lines=lines)
-            rendering = Rendering(s, now, campaign, workspace, self._controller.cas, given, brief=brief_of)
-            sections = render_sections(cfg.sections_of(agent_session.kind), rendering)
-            brief = compose_brief(role, campaign, sections.whole)
-            match table.continuity:
-                case Continuity.RESUME:
-                    resumed = compose_resumed(table, agent, sections.resumed)
-                case Continuity.FRESH:
-                    resumed = None
-                case _:
-                    assert_never(table.continuity)
-        sources = self._controller.sources  # outside the session: it puts the linked inputs into the CAS
-        artifact = sources.agent(campaign, base.revision)
-        place = sweep_place(agent_session_id)
-        cas = self._controller.cas
-        self._controller.launcher.launch(
-            agent_session_id,
-            brief=cas.put(brief.encode()),
-            place=place,
-            artifact=artifact,
-            timeout=timeout,
-            resumed_brief=None if resumed is None else cas.put(resumed.encode()),
-            read=[n.id for n in notes],
-        )
-
-    def _reattach_sweep(self, agent_session_id: AgentSessionId) -> None:
-        """Wait for the agent of a sweep that a previous daemon process started, until it ends."""
-        self._controller.launcher.reattach(agent_session_id)
-
     def _collect(self) -> None:
         """Forget finished threads. If a thread died before its launch recorded anything, close its row here."""
         for agent_session_id, fut in list(self._futures.items()):
@@ -832,37 +654,6 @@ class Campaigns:
         with self._db.session() as s:
             close(s, s.get_one(AgentSession, agent_session_id), error, self._tracer)
             s.commit()
-
-
-@dataclass(frozen=True)
-class RolePass:
-    """The ``Pass`` of one sweeping role of one campaign: what its triggers read in this pass."""
-
-    s: Session
-    now: datetime
-    campaign: Campaign
-    role: RoleName
-    last: AgentSession | None
-    quiet: Quiet | None
-
-    def mine(self) -> Select[AgentSession]:
-        """The role's rows in the campaign."""
-        return select(AgentSession).where(AgentSession.campaign_id == self.campaign.id, AgentSession.kind == self.role)
-
-    def live(self) -> int:
-        return count(self.s, self.mine().where(AgentSession.state.in_(LIVE)))
-
-
-@dataclass(frozen=True)
-class SweepPass(RolePass):
-    """The ``Sweep`` of one agent of a sweeping role: its role's ``Pass``, and its row."""
-
-    agent_session: AgentSession
-
-
-def sweep_place(agent_session_id: AgentSessionId) -> str:
-    """The place of a sweep under the daemon's home: its log directory, with its worktree in it."""
-    return f'{AGENT_SESSIONS}/{agent_session_id}'
 
 
 def pause_body(deaths: Sequence[tuple[Event, StartupAnomaly]], load: str, policy: LaunchPolicy) -> str:
@@ -925,10 +716,10 @@ def quiet_phase(s: Session, campaign: Campaign, held: str | None) -> Quiet | Non
 
 
 def awake_roles(cfg: CampaignConfig, phase: Quiet | None) -> frozenset[RoleName]:
-    """The sweeping roles with a trigger that names ``phase`` (``Trigger.WHILE``). None of them while the campaign runs."""
+    """The roles that start their agents and wake in ``phase`` (``StartsItsAgents.wakes_while``). None while it runs."""
     if phase is None:
         return frozenset()
-    return frozenset(name for name in cfg.roles.sweeping() if any(phase in t.WHILE for t in cfg.triggers_of(name)))
+    return frozenset(name for name, role in cfg.roles.starting().items() if role.wakes_while(phase))
 
 
 def launches(campaign: Campaign, held: str | None) -> bool:

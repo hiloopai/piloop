@@ -29,15 +29,17 @@ from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId, R
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.campaign_type.optimization.planner import NO_RUN_ERROR
 from piloop.plugins.executor.workers import Workers
+from piloop.plugins.role.orchestrator import OrchestratorRole
 from tests.conftest import (
     HARNESS_NOOP,
     HARNESS_PROMPT_TO_FILE,
+    LEAD,
     SETTLE,
-    SWEEPER,
     ScriptRuntime,
     campaigns_of,
     end_of,
     factory,
+    role_of,
     run_all,
     serving,
     write_toml,
@@ -173,7 +175,7 @@ def test_an_anomaly_requests_an_incident_sweep_once_and_collapses_while_one_is_p
     fail_a_run(db, campaign, 'third')
     run_all(sched)
     wait_for(db, AgentSessionId(1), AgentSessionState.RUNNING)
-    assert agent_sessions(db, SWEEPER) == [
+    assert agent_sessions(db, LEAD) == [
         (1, AgentSessionState.RUNNING, 'run_failed: run#1 failed'),
         (2, AgentSessionState.REQUESTED, 'run_failed: run#2 failed'),
     ], 'one pending request absorbs later anomalies'
@@ -193,7 +195,7 @@ def test_an_anomaly_requests_an_incident_sweep_once_and_collapses_while_one_is_p
     again = scheduler(db, runtime, tmp_path)
     assert run_all(again) == [], 'the events are the record: a restarted daemon replays nothing'
     again.stop(timeout=5)
-    assert [w[1] for w in agent_sessions(db, SWEEPER)] == [AgentSessionState.EXITED] * 3
+    assert [w[1] for w in agent_sessions(db, LEAD)] == [AgentSessionState.EXITED] * 3
 
 
 def test_an_incident_sweep_brief_lists_its_incidents(
@@ -206,9 +208,8 @@ def test_an_incident_sweep_brief_lists_its_incidents(
     sched.wait(SETTLE)
     sched.stop(timeout=5)
     incident = (tmp_path / 'agent_sessions' / '1' / 'brief.md').read_text()
-    assert incident.index('# Sweeper') < incident.index('# Demo') < incident.index('## Incidents to investigate')
+    assert incident.index('# Orchestrator') < incident.index('# Demo') < incident.index('## Incidents to investigate')
     assert '## Incidents to investigate\n\n- run#1 failed' in incident
-    assert '## Goal' in incident
 
 
 def test_a_sweep_whose_launch_the_stop_rule_stops_never_starts_and_the_stop_closes_its_row(
@@ -218,11 +219,11 @@ def test_a_sweep_whose_launch_the_stop_rule_stops_never_starts_and_the_stop_clos
     settled. The sweep never starts, so it is not killed after 0 seconds; the pass that stops the campaign closes it,
     as every requested row."""
     cfg = load_campaign_config(
-        Path(campaign.path), plugins={'stop_rule': {'max_runs': 1}, 'role': {'sweeper': {'triggers': []}}}
+        Path(campaign.path), plugins={'stop_rule': {'max_runs': 1}, 'role': {'orchestrator': {'triggers': []}}}
     )
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = cfg
-        row = AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand')
+        row = AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand')
         s.add(row)
         s.flush()
         requested = (row.id, AgentSessionState.REQUESTED, 'by hand')
@@ -230,8 +231,8 @@ def test_a_sweep_whose_launch_the_stop_rule_stops_never_starts_and_the_stop_clos
         s.commit()
     finish_a_run(db, campaign, 'one')
     sched = scheduler(db, runtime, tmp_path)
-    campaigns_of(sched)._sweep(AgentSessionId(requested[0]))
-    assert agent_sessions(db, SWEEPER) == [requested], 'never started: requested again'
+    role_of(cfg, OrchestratorRole).launch(campaigns_of(sched)._host, AgentSessionId(requested[0]))
+    assert agent_sessions(db, LEAD) == [requested], 'never started: requested again'
     run_all(sched)
     sched.wait(SETTLE)
     sched.stop(timeout=5)
@@ -292,18 +293,18 @@ def test_manual_requests_are_launched_under_max_concurrent(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     release = tmp_path / 'release'
-    configure(db, campaign, BLOCKING.format(release=release), sweeper={'triggers': []})
+    configure(db, campaign, BLOCKING.format(release=release), orchestrator={'triggers': []})
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
         for _ in range(2):
             sql.run(
                 con,
-                f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('sweeper', {campaign.id}, 'requested')",
+                f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('orchestrator', {campaign.id}, 'requested')",
             )
     sched = scheduler(db, runtime, tmp_path)
     assert run_all(sched) == [1]
     assert run_all(sched) == []
     wait_for(db, AgentSessionId(1), AgentSessionState.RUNNING)
-    assert agent_sessions(db, SWEEPER) == [
+    assert agent_sessions(db, LEAD) == [
         (1, AgentSessionState.RUNNING, None),
         (2, AgentSessionState.REQUESTED, None),
     ]
@@ -314,7 +315,7 @@ def test_manual_requests_are_launched_under_max_concurrent(
     sched.stop(timeout=5)
     with db.session() as s:
         second = s.get_one(AgentSession, 2)
-    assert (second.state, second.harness, second.model) == (AgentSessionState.EXITED, 'script', 'sweeper-model')
+    assert (second.state, second.harness, second.model) == (AgentSessionState.EXITED, 'script', 'lead-model')
     assert (
         'Why this agent started (context, not a scope): requested'
         in (tmp_path / 'agent_sessions' / '2' / 'brief.md').read_text()
@@ -340,11 +341,11 @@ def test_requests_go_through_the_agent_sql_path(db: Database, campaign: Campaign
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
         result = sql.run(
             con,
-            f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('sweeper', {campaign.id}, 'requested')",
+            f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('orchestrator', {campaign.id}, 'requested')",
         )
         assert result.last_insert_rowid == 1
         row = sql.run(con, 'SELECT kind, state, harness, reason FROM agent_sessions').rows
-    assert row == [('sweeper', 'requested', None, None)]
+    assert row == [('orchestrator', 'requested', None, None)]
     with (
         closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con,
         pytest.raises(sqlite3.IntegrityError),

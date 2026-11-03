@@ -3,8 +3,6 @@ its own with a provider and a verdict rule that calls it, and objects of the wro
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from datetime import timedelta
-from importlib.resources import files
 from typing import Annotated
 
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Outcome
@@ -20,42 +18,10 @@ from piloop.plugins.campaign_type.kit.verdicts.verdict_rule.contract import (
 )
 from piloop.plugins.fact_source.facts import ATTEMPTS, EVALUATIONS, FUNNEL, Fact, FactValue, since_keep
 from piloop.plugins.host import Capability, Parameters, Tier
-from piloop.plugins.role.contract import ImplementerRole, SweepRole
+from piloop.plugins.role.contract import ImplementerRole
 from piloop.plugins.runtime.contract import Handle, RuntimeName
 from piloop.plugins.runtime.subprocess import Subprocess, SubprocessRuntime
 from piloop.plugins.stop_rule.contract import GO, Escalate, Go, Hold, Stop, StopCase, StopRule
-from piloop.plugins.trigger.contract import Fire, Pass, Quiet, Trigger, TriggerName
-
-
-class EveryPass(Trigger):
-    """``every_pass``: fires on every pass, with ``label`` as the reason."""
-
-    label: str = 'every pass'
-
-    def fire(self, p: Pass) -> Fire | None:
-        return Fire(f'{self.label} for {p.role}')
-
-    def due_in(self, p: Pass) -> timedelta | None:
-        return None
-
-
-class Awake(EveryPass):
-    """``awake``: fires on every pass, also while its campaign is paused, held or stopped."""
-
-    WHILE = frozenset({Quiet.PAUSED, Quiet.HELD, Quiet.STOPPED})
-
-    def fire(self, p: Pass) -> Fire | None:
-        return Fire(f'{self.label} for {p.role} ({p.quiet or "running"})')
-
-
-class Broken(Trigger):
-    """``broken``: a trigger whose check always fails."""
-
-    def fire(self, p: Pass) -> Fire | None:
-        raise RuntimeError('the probe is down')
-
-    def due_in(self, p: Pass) -> timedelta | None:
-        return None
 
 
 class Typed(Subprocess):
@@ -116,14 +82,6 @@ class Escalates(StopRule):
         return Escalate(self.reason)
 
 
-class Auditor(SweepRole):
-    """``auditor``: a sweep on every pass."""
-
-    PROMPT = files(__package__) / 'auditor.md'
-    triggers: list[TriggerName] = ['every_pass']
-    timeout: float = 5
-
-
 class Quick(ImplementerRole):
     """``quick``: an implementer with a short timeout and one slot."""
 
@@ -175,7 +133,6 @@ class Undecided(VerdictRule):
     """A verdict rule without ``decide``."""
 
 
-NOT_A_TRIGGER = 'every_pass'
 NOT_A_ROLE = 'auditor'
 NOT_A_RUNTIME = 'typed'
 

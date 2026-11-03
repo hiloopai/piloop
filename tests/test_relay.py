@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 import piloop
 from piloop.actor import Agent, System
-from piloop.agents.roles import IDEAS, PILOOP_HINT
+from piloop.agents.roles import PILOOP_HINT
 from piloop.campaign.campaigns import checkout_of
 from piloop.cli.main import app
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
@@ -32,7 +32,7 @@ from piloop.plugins.executor.kit.client import Dismissed
 from piloop.plugins.executor.kit.door import AgentCall, Call, Relayed, main
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.executor.kit.relay import Relay, Runner, Shipped
-from piloop.plugins.role.contract import RELAYED, Files
+from piloop.plugins.role.contract import RELAYED, RoleConfig
 from piloop.plugins.role.orchestrator import OrchestratorRole
 from piloop.plugins.runtime.contract import MESSAGES_ENV, QUEUE, put
 from piloop.plugins.section.contract import SECTIONS, Guide
@@ -83,7 +83,7 @@ def test_an_agent_on_another_machine_may_run_the_commands_that_the_role_prompts_
     briefs = [
         f'`{PILOOP_HINT} sql -`',
         f'`{PILOOP_HINT} schema <guide>`',
-        *(line.format(piloop='piloop', campaign='demo') for line in IDEAS.values()),
+        RoleConfig.IDEAS,
         measure.SUBMIT,
     ]
     named = set().union(*(commands(text) for text in [*prompts, *briefs]))
@@ -97,7 +97,7 @@ def test_an_orchestrator_on_another_machine_may_run_the_commands_that_its_brief_
         *(guide.TEXT.read_text() for name, guide in GUIDES.items() if name != 'orchestration'),
         f'`{PILOOP_HINT} schema <guide>`',
         f'`{PILOOP_HINT} sql -`',
-        IDEAS[Files.IDEAS].format(piloop='piloop', campaign='demo'),
+        OrchestratorRole.IDEAS.format(piloop='piloop', campaign='demo'),
     ]
     assert set().union(*(commands(text) for text in texts)) == OrchestratorRole.RELAYED
 
@@ -105,13 +105,13 @@ def test_an_orchestrator_on_another_machine_may_run_the_commands_that_its_brief_
 def test_the_commands_that_run_are_those_of_the_agents_role(
     db: Database, campaign: Campaign, tmp_path: Path, runner: Runner
 ) -> None:
-    sweeper = agent_job(db, campaign, tmp_path)
+    worker = agent_job(db, campaign, tmp_path)
     with db.session() as s:
         orchestrator = AgentSession(kind='orchestrator', campaign_id=campaign.id)
         s.add(orchestrator)
         s.commit()
-        job = sweeper.model_copy(update={'agent_session': orchestrator.id})
-    refused = runner(sweeper, Call(argv=['inbox', 'show', '1'], token=launched(db, sweeper)))
+        job = worker.model_copy(update={'agent_session': orchestrator.id})
+    refused = runner(worker, Call(argv=['inbox', 'show', '1'], token=launched(db, worker)))
     assert refused.exit_code == 2, 'not in the default list'
     shown = runner(job, Call(argv=['inbox', 'show', '1'], token=launched(db, job)))
     assert 'an agent on another machine runs only' not in shown.stderr, shown.stderr
@@ -137,7 +137,7 @@ def test_a_relayed_call_runs_on_the_server_as_the_agent_in_its_campaigns_checkou
 ) -> None:
     job = agent_job(db, campaign, tmp_path)
     token = launched(db, job)
-    actor = Agent(role='sweeper', session=job.agent_session).signature
+    actor = Agent(role='implementer', session=job.agent_session).signature
     note = f"INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES ('campaign', 1, '{actor}', 'note', 'hi')"
     done = runner(job, Call(argv=['sql', '-'], stdin=note, token=token))
     assert done.exit_code == 0, done.stderr

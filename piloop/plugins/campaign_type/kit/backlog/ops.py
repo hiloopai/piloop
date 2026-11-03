@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
-from piloop.agents.roles import files_of
+from piloop.agents.roles import files_ideas
 from piloop.campaign.ops import Refused, existing, required_reason
 from piloop.db.models import Campaign, Comment
 from piloop.db.session import write_lock
@@ -18,37 +18,17 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS
 from piloop.plugins.campaign_type.kit.runs.ops import run_of_actor
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.role.contract import Files
 
 
 def files(campaign: Campaign, actor: Actor) -> None:
-    """Refuse an idea from ``actor`` when its role files none (``[plugins.role.<name>] files``).
+    """Refuse an idea from ``actor`` when it adds none for others (``files_ideas``): a worker proposes its own.
 
     Raises:
-        Refused: the actor's role files nothing.
+        Refused: the actor is an agent of a role that does runs, or of a role that ``piloop.toml`` no longer has.
     """
-    if files_of(campaign.config, actor) is Files.NOTHING:
+    if not files_ideas(campaign.config, actor):
         raise Refused(
             f"{actor} files no ideas for others: a worker tries one of its own with `piloop idea propose '<title>'`"
-        )
-
-
-def check_plan(campaign: Campaign, actor: Actor, plan: str | None) -> None:
-    """Refuse a plan longer than ``plan_words`` of the actor's role. An actor that is not a sweep has no limit.
-
-    Raises:
-        Refused: the plan is too long.
-    """
-    if (
-        plan is None
-        or (agent := actor.launched) is None
-        or (table := campaign.config.roles.sweeping().get(agent.role)) is None
-    ):
-        return
-    if (words := len(plan.split())) > table.plan_words:
-        raise Refused(
-            f'the plan has {words} words, and a plan of a {agent.role} has at most {table.plan_words}'
-            ' (`plan_words`): give the steps of one run, and let the evaluator judge the result'
         )
 
 
@@ -75,7 +55,6 @@ def add_idea(
     """
     campaign = existing(s, Campaign, campaign_id, 'campaign')
     files(campaign, actor)
-    check_plan(campaign, actor, plan)
     return _added(s, campaign, title, actor, hypothesis, plan, provenance, priority, track, after)
 
 

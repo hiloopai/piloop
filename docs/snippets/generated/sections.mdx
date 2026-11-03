@@ -32,7 +32,7 @@
 | `funnel` | The run funnel: ideas → attempts → reached the evaluator → measured → keeps, and how the unmeasured attempts ended. | status, sweep | 175 | none |
 | `candidates` | The latest candidates, oldest first, each with its verdict and its primary score against its parent's. | status, sweep | 180 | none |
 | `same_as_parent` | The candidates whose primary score is exactly their parent's: a cost, since the evaluation saw no change. | status, sweep | 185 | none |
-| `reported` | The latest incidents that the triggers gave to agents, newest first, each with the agent that got it. | status, sweep | 190 | none |
+| `reported` | The latest incidents that the daemon gave to agents, newest first, each with the agent that got it. | status, sweep | 190 | none |
 | `inbox` | The unacknowledged inbox items and the latest decisions and escalations, newest first. | status, sweep | 200 | none |
 | `events` | The latest events of the campaign, newest first. | status, sweep | 210 | none |
 | `cost` | What the campaign spent: per keep, since the latest keep, and with `metric` per evaluation and per attempt. | none | 500 | `spend`, `metric` |

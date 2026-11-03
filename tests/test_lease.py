@@ -27,6 +27,7 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
 from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, EvaluationJob, EvaluationReport, Sample
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.executor.contract import (
     JOB,
     AgentFinished,
@@ -77,7 +78,7 @@ from piloop.plugins.executor.workers import Workers
 from piloop.plugins.metric import Direction
 from piloop.plugins.runtime.contract import AgentExit, AgentStart, ExitStatus
 from piloop.plugins.vcs.git import Git
-from tests.conftest import SWEEPER, baseline, home_cas
+from tests.conftest import baseline, home_cas
 
 HANDLE = AgentHandle(runtime='subprocess', data={})
 TIMING = Timing(renew=10, grace=50, toleration=300)
@@ -172,7 +173,7 @@ START = AgentStart(executable='true', args=[])
 
 def agent_job(db: Database, campaign: Campaign, tmp_path: Path) -> AgentJob:
     with db.session() as s:
-        w = AgentSession(kind=SWEEPER, campaign_id=campaign.id)
+        w = AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id)
         s.add(w)
         s.commit()
         agent_session_id = w.id

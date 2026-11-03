@@ -34,9 +34,9 @@ from piloop.plugins.fact_source.kit.readings import FactRead, Readings
 from piloop.plugins.stop_rule.contract import STOP_RULES, Hold
 from piloop.reports.overview import progress
 from tests.campaign.test_stop import add_run
-from tests.conftest import END_RUN, SETTLE, SWEEPER, ScriptRuntime, run_all, write_toml
+from tests.conftest import END_RUN, LEAD, SETTLE, ScriptRuntime, run_all, write_toml
 from tests.daemon.test_roles import PLUGIN, installed
-from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_sweeper, set_config
+from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_lead, set_config
 
 COMMAND = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
 
@@ -205,7 +205,7 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
     assert len(daemon_comments(db)) == 1, 'each notice once'
 
     bill(db, campaign, file, '1012')
-    request_sweeper(db, campaign)
+    request_lead(db, campaign)
     assert run_all(scheduler) == [], 'at the limit nothing launches, not even a row inserted by hand'
     note, (kind, priority, body) = daemon_comments(db)[1:]
     assert note == ('note', 1, 'Notice: spend is 1012, past the 200 notice.')
@@ -338,6 +338,6 @@ def test_a_stopped_campaign_is_never_held(db: Database, campaign: Campaign) -> N
         cfg = CampaignConfig.model_validate(p.config)
         assert check(s, p, cfg) == Hold('spend not known')
         p.status = CampaignStatus.STOPPED
-        s.add(AgentSession(kind=SWEEPER, campaign_id=p.id, reason='by hand'))
+        s.add(AgentSession(kind=LEAD, campaign_id=p.id, reason='by hand'))
         s.flush()
         assert progress(s, p, cfg, p.created_at).endswith(' · spend —/10 · no limit stops it: open-ended')

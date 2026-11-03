@@ -63,7 +63,7 @@ from piloop.plugins.metric import Direction
 from piloop.plugins.role.contract import ROLES
 from piloop.plugins.runtime.contract import RUNTIMES, RuntimeName, make_runtime, runtimes
 from piloop.plugins.runtime.subprocess import Subprocess
-from piloop.plugins.trigger.contract import TRIGGERS
+from piloop.plugins.section.contract import SECTIONS
 from piloop.settings import HOME_PLUGINS, Settings
 from tests.conftest import example, package
 from tests.daemon.test_roles import PLUGIN, forget_loaded, installed
@@ -201,16 +201,16 @@ def test_an_entry_point_that_does_not_load_fails_with_its_name_and_the_cause(mon
 def test_a_failed_composition_unregisters_what_it_activated_and_keeps_what_was_active(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A broken role unwinds the runtimes and the triggers of the same call, and leaves the remotes, active before."""
+    """A broken role unwinds the runtimes and the sections of the same call, and leaves the remotes, active before."""
     typed = EntryPoint('typed', f'{PLUGIN}:Typed', RUNTIMES.group)
     installed(monkeypatch, [typed, EntryPoint('auditor', f'{PLUGIN}:NOT_A_ROLE', ROLES.group)])
     CAS.providers()
     with pytest.raises(PluginError, match='is not a subclass of piloop.plugins.role.contract.RoleConfig'):
-        compose(*declared('runtime', 'trigger', 'role'))
-    assert [c.active for c in (RUNTIMES, TRIGGERS, ROLES, CAS)] == [False, False, False, True]
+        compose(*declared('runtime', 'section', 'role'))
+    assert [c.active for c in (RUNTIMES, SECTIONS, ROLES, CAS)] == [False, False, False, True]
     installed(monkeypatch, [typed])
-    compose(*declared('runtime', 'trigger', 'role'))
-    assert [c.active for c in (RUNTIMES, TRIGGERS, ROLES)] == [True, True, True]
+    compose(*declared('runtime', 'section', 'role'))
+    assert [c.active for c in (RUNTIMES, SECTIONS, ROLES)] == [True, True, True]
     assert RUNTIMES.get('typed').model is Typed
     plugins.close()
     plugins.close()
@@ -263,20 +263,20 @@ def test_a_name_that_no_provider_has_lists_the_ones_there_are() -> None:
 
 
 class Reentrant(EntryPoint):
-    """An entry point whose import needs the triggers that it is one of."""
+    """An entry point whose import needs the sections that it is one of."""
 
     def load(self) -> object:
-        return TRIGGERS.providers()
+        return SECTIONS.providers()
 
 
 def test_an_entry_point_that_needs_its_own_capability_while_it_loads_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    installed(monkeypatch, [Reentrant('loop', f'{PLUGIN}:EveryPass', TRIGGERS.group)])
+    installed(monkeypatch, [Reentrant('loop', f'{PLUGIN}:Typed', SECTIONS.group)])
     with pytest.raises(
         PluginError,
-        match=r'^the triggers are needed while they load: an entry point of piloop.triggers uses its own capability,'
-        r' or one that uses it, when it is imported$',
+        match=rf'^the sections are needed while they load: an entry point of {re.escape(SECTIONS.group)} uses its own'
+        r' capability, or one that uses it, when it is imported$',
     ):
-        TRIGGERS.providers()
+        SECTIONS.providers()
     assert not any(c.active for c in plugins.declared())
 
 
@@ -366,7 +366,7 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
         ({'verdict_rule': {'provider': 'min_gain'}}, 'min_gain: Field required'),
         (
             {'planner': {'provider': 'min_gain'}},
-            'plugins.planner: no capability has that name; there is escalation, fact_source, harness, harness_choice, lineage, mcp_server, memory, notifier, price_list, role, runtime, section, stop_rule, trigger, vcs, verdict_rule',
+            'plugins.planner: no capability has that name; there is escalation, fact_source, harness, harness_choice, lineage, mcp_server, memory, notifier, price_list, role, runtime, section, stop_rule, vcs, verdict_rule',
         ),
         (
             {'verdict_rule': {'provider': 'bootstrap', 'min_gain': 2}},

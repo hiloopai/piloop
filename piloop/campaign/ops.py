@@ -198,21 +198,21 @@ def reopen(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str) ->
 def request_agent(
     s: Session, campaign_id: CampaignId, role: RoleName, *, harness: str | None, model: str | None, reason: str
 ) -> AgentSession:
-    """Ask the daemon for one more agent of a sweeping role: it launches it at once, within ``max_concurrent``.
+    """Ask the daemon for one more agent of a role that starts its agents: it launches it at once, within ``max_concurrent``.
 
     Raises:
-        Refused: the campaign has no sweeping role ``role``.
+        Refused: the campaign has no such role ``role`` (``StartsItsAgents``).
     """
     campaign = existing(s, Campaign, campaign_id, 'campaign')
     roles = campaign.config.roles
-    sweeping = roles.sweeping()
-    if role not in sweeping:
+    starting = roles.starting()
+    if role not in starting:
         by_itself = (
             ' The daemon launches implementers by itself, one for each queued run.'
             if role in roles.doing_runs()
             else ''
         )
-        raise Refused(f'{campaign.name} has no sweeping role {role!r}; it has {", ".join(sweeping)}.{by_itself}')
+        raise Refused(f'{campaign.name} has no role {role!r} to launch; it has {", ".join(starting)}.{by_itself}')
     agent = AgentSession(kind=role, campaign_id=campaign.id, harness=harness, model=model, reason=reason)
     s.add(agent)
     s.flush()

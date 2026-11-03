@@ -23,7 +23,6 @@ from piloop.db.models import LIVE, AgentSession, Campaign, Event, Pause
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of
 from piloop.plugins.cas.contract import Cas
 from piloop.plugins.harness.contract import UsageReader
-from piloop.plugins.role.contract import Files
 from piloop.plugins.runtime.contract import handle_for, runtime_for
 from piloop.store import chunks
 from piloop.store.tree import Missing
@@ -124,11 +123,6 @@ def latest_events(s: Session, campaign: Campaign, limit: int) -> Sequence[Event]
     """Return the last ``limit`` events of the campaign, newest first."""
     mine = select(Event).where(campaign_of(Event.target_kind, Event.target_id) == campaign.id)
     return s.scalars(mine.order_by(Event.id.desc()).limit(limit)).all()
-
-
-def defining(cfg: CampaignConfig) -> list[str]:
-    """Return the sweeping roles that define ideas (``files = "ideas"``) and have triggers: the ones that fill the queue."""
-    return [name for name, role in cfg.roles.sweeping().items() if role.files is Files.IDEAS and role.triggers]
 
 
 def minutes(seconds: float) -> str:

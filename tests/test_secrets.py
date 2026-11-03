@@ -20,8 +20,8 @@ def test_an_agent_gets_its_campaigns_secret_over_the_homes_and_a_listing_says_wh
         set_secret(s, local, System.ORCHESTRATOR, None, 'KEY', SecretStr('home, again'))
         set_secret(s, local, System.HUMAN, campaign.id, 'KEY', SecretStr('campaign'))
         local.put(s, None, 'ELSEWHERE', SecretStr('not through piloop'))
-        session = AgentSession(kind='sweeper', campaign_id=campaign.id)
-        orphan = AgentSession(kind='sweeper', campaign_id=None)
+        session = AgentSession(kind='orchestrator', campaign_id=campaign.id)
+        orphan = AgentSession(kind='orchestrator', campaign_id=None)
         s.add_all([session, orphan])
         s.commit()
         assert {k: v.get_secret_value() for k, v in values(s, local, session.id, ['KEY', 'NONE']).items()} == {

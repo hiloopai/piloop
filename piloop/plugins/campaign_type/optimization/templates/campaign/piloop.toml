@@ -57,7 +57,7 @@ model = "gpt-6.1-sol"
 # app_token = { secret = "SLACK_APP_TOKEN" }  # one Socket Mode connection for each app token, however many campaigns use it
 
 [plugins.role.implementer]                # an implementer claims one idea and tries it in a new worktree of the head; its commits are scored
-runs = true                               # its agents do runs; a sweeping role has runs = false
+runs = true                               # its agents do runs; the orchestrator has runs = false
 # harnesses = ["pi", "claude", "codex"]   # if not set: [plugins.harness] use
 # model = { pi = "..." }                  # over the model of each [plugins.harness.<name>]
 # effort = "high"                         # how hard its agents think, as the harness names it
@@ -84,21 +84,14 @@ max_concurrent = 1                        # the most runs at once; more finish s
 # prompt = "briefs/my-orchestrator.md"    # a file that replaces the built-in start of this role's brief
 # runtime = "subprocess"                  # if not set: [plugins.runtime] use
 # writes = ["decisions"]                  # what the brief says the role may write; default: what piloop expects of it
-# files = "ideas"                         # what its agents may file with `piloop idea`: nothing or ideas
-# plan_words = 150                        # the most words in the plan of an idea that its agents file
-runs = false                              # a sweeping role
+runs = false                              # it does no runs: piloop starts its agents on its triggers
 triggers = []                             # off: you run your own; ["news", "run_failed"] turns it on
+# quiet_seconds = 30                      # seconds after the first news before it wakes, so one agent takes a burst
 # continuity = "resume"                   # each agent resumes the last one's session; "fresh" starts each anew
 # sections = ["inbox", …]                # if not set: a lean status after the news
 # resume_message = "You continue … {agent}. …"  # what starts the brief of an agent that resumes the session
-# max_ideas = 1                           # new ideas of your own per wake, as a direction each
 timeout = 900
 max_concurrent = 1                        # at most 1: two orchestrators would answer the same news twice
-
-# [plugins.role.reviewer]                 # a role of your own: any new name; it needs a prompt and triggers
-# prompt = "briefs/reviewer.md"           # the file that starts its brief
-# triggers = ["new_keep"]                # names of [plugins.trigger.<name>], such as the one below
-# max_concurrent = 1                      # it takes every key of a sweeping role, as [plugins.role.orchestrator] shows them
 
 # [plugins.role.quick]                    # a role of your own that does runs: any new name with runs = true
 # runs = true                             # it takes every key and default of [plugins.role.implementer], its prompt included
@@ -115,13 +108,6 @@ noise_runs = 3                            # evaluations of each bar; the stdev o
 # [agents]                                # the agents' wrap-up and the brief's budget; if not set: the home's [agents]
 # wrap_up_grace = 600                     # seconds to save their work after a stop or a cancel with --wrap-up
 # brief_words = 400                       # init and doctor warn when brief.md is longer
-
-# [plugins.trigger.new_keep]             # a trigger with parameters, which a role names in its triggers
-# provider = "sql"                        # a new name needs its provider; a built-in name, such as news, is that one
-# when = "SELECT 1 FROM candidates WHERE campaign_id = :campaign AND verdict = 'keep' AND created_at > :since"
-
-# [plugins.trigger.news]                  # a built-in trigger's table changes its parameters for every role that names it
-# quiet_seconds = 30                      # seconds after the first news before the role wakes, so one agent takes a burst
 
 # [plugins.section]                       # what `piloop status`, the API and a UI show
 # use = ["headline", "goal", …]           # if not set: the installed sections of status; see the sections

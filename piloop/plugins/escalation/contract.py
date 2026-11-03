@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from piloop.ids import CampaignId, CommentId, CommentKind
 from piloop.plugins.host import Capability, One, Parameters, Scope
 
-# TODO: core still special-cases these kinds: the inbox, the news trigger, the notifiers, the inbox section, the API's
+# TODO: core still special-cases these kinds: the inbox, the orchestrator's news, the notifiers, the inbox section, the API's
 # thread view, and the comments CHECK that an escalation has a priority. Those special cases are deleted when the
 # escalation plugin owns its event models and its inbox rules.
 ESCALATION: Final = CommentKind('escalation')

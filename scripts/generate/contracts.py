@@ -44,7 +44,6 @@ from piloop.plugins.provisioner.contract import ProvisionerConfig, Provisioning
 from piloop.plugins.secrets.contract import SecretsProvider
 from piloop.plugins.section.contract import Rendering, Section
 from piloop.plugins.stop_rule.contract import Escalate, Go, Hold, Stop, StopCase, StopRule
-from piloop.plugins.trigger.contract import Fire, Pass, Trigger
 from piloop.plugins.vcs.contract import Repository, Vcs
 from scripts.generate import SNIPPETS, header
 from scripts.generate.markdown import cell, lead
@@ -66,7 +65,6 @@ CONTRACTS: dict[str, Contract] = {
         (VerdictRule, Case, Criterion, Side, Judgement, Node, Moved, Rebase),
         '`piloop/plugins/campaign_type/kit/verdicts/verdict_rule/contract.py`',
     ),
-    'trigger': Contract((Trigger, Pass, Fire), '`piloop/plugins/trigger/contract.py`'),
     'section': Contract((Section, Rendering), '`piloop/plugins/section/contract.py`'),
     'stop-rule': Contract((StopRule, StopCase), '`piloop/plugins/stop_rule/contract.py`'),
     'fact-source': Contract((FactSource, Readings), '`piloop/plugins/fact_source/`'),

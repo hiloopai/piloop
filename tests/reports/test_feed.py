@@ -254,7 +254,7 @@ def test_a_reply_event_is_in_the_tail_of_its_campaign_alone(db: Database, campai
         other = Campaign(name='other', path=str(tmp_path / 'other'), config=campaign.config)
         s.add(other)
         item = Comment(
-            target=TargetRef(TargetKind.CAMPAIGN, campaign.id), author='sweeper#1', priority=1, body='SSO expired'
+            target=TargetRef(TargetKind.CAMPAIGN, campaign.id), author='orchestrator#1', priority=1, body='SSO expired'
         )
         s.add(item)
         s.commit()
@@ -293,7 +293,7 @@ def emitted(db: Database, kind: str) -> None:
 def escalation(campaign_id: CampaignId, body: str) -> Comment:
     return Comment(
         target=TargetRef(TargetKind.CAMPAIGN, campaign_id),
-        author='sweeper#2',
+        author='orchestrator#2',
         kind=ESCALATION,
         priority=1,
         body=body,
@@ -328,7 +328,9 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
         s.add_all(
             [
                 agent_session,
-                AgentSession(kind='sweeper', campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=ended),
+                AgentSession(
+                    kind='orchestrator', campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=ended
+                ),
                 AgentSession(kind='orchestrator', campaign_id=campaign.id),
             ]
         )
@@ -380,8 +382,12 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
             }
         ],
         'roles': {
-            'orchestrator': {'triggered': False, 'requested': 1, 'live': 0, 'last_ended': None},
-            'sweeper': {'triggered': True, 'requested': 0, 'live': 0, 'last_ended': '2026-10-26T07:00:00.000000Z'},
+            'orchestrator': {
+                'triggered': True,
+                'requested': 1,
+                'live': 0,
+                'last_ended': '2026-10-26T07:00:00.000000Z',
+            },
         },
         'inbox': 1,
         'files': 'kept',

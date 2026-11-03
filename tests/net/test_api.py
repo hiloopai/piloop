@@ -174,7 +174,7 @@ def test_a_long_poll_answers_its_moved_cursor_at_once_when_the_server_closes(
     db: Database, campaign: Campaign, cfg: Settings, poll: str
 ) -> None:
     with db.session() as s:
-        s.add(AgentSession(kind='sweeper', campaign_id=1, state=AgentSessionState.RUNNING))
+        s.add(AgentSession(kind='implementer', campaign_id=1, state=AgentSessionState.RUNNING))
         s.commit()
     with serving_api(cfg) as [server], Client.on(cfg.socket_file, System.HUMAN) as client:
         threading.Timer(0.3, server.close).start()
@@ -336,11 +336,11 @@ def test_the_news_long_poll_wakes_on_what_someone_else_writes_and_skips_what_the
         assert mine.items == [] and mine.next > start, (
             'its own writes are not news to it, and the cursor moves past them'
         )
-        threading.Timer(0.2, comment, [db, 'sweeper#2', 'look at this']).start()
+        threading.Timer(0.2, comment, [db, 'implementer#2', 'look at this']).start()
         [item] = orchestrator.news(NewsQuery(after=mine.next, wait=20)).items
-        assert item.text() == 'comment#2 decision p2 on campaign#1 (demo) by sweeper#2: look at this'
+        assert item.text() == 'comment#2 decision p2 on campaign#1 (demo) by implementer#2: look at this'
         title, lines = thread_lines(orchestrator.thread(CommentId(2)), datetime.now(UTC))
-        assert title.startswith('comment#2 decision on campaign#1 by sweeper#2, ') and lines == ['look at this']
+        assert title.startswith('comment#2 decision on campaign#1 by implementer#2, ') and lines == ['look at this']
         with pytest.raises(Refused, match='^no comment#99$') as unknown:
             orchestrator.thread(CommentId(99))
         assert unknown.value.error == Problem.UNKNOWN_COMMENT

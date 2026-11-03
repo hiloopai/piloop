@@ -340,7 +340,7 @@ def give_sweeper(
             plugins={
                 'harness': {'script': script},
                 'mcp_server': dict(servers),
-                'role': {'sweeper': {'mcp': list(servers)}},
+                'role': {'orchestrator': {'mcp': list(servers)}},
             },
         )
         s.commit()

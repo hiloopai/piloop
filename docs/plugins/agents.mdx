@@ -7,7 +7,6 @@ description: Plugins that start the agents, define what they do and when, and sh
 import ExampleNiceRuntime from '/snippets/generated/example-nice-runtime.mdx';
 import RuntimeProtocol from '/snippets/generated/runtime-protocol.mdx';
 import Roles from '/snippets/generated/roles.mdx';
-import ContractTrigger from '/snippets/generated/contract-trigger.mdx';
 import ContractSection from '/snippets/generated/contract-section.mdx';
 import ContractLineage from '/snippets/generated/contract-lineage.mdx';
 import ContractHarness from '/snippets/generated/contract-harness.mdx';
@@ -111,71 +110,40 @@ says what a runtime does for you.
 
 ## Roles
 
-[Agents and roles](/concepts/roles#define-a-role) defines a role in `piloop.toml`. A plugin can ship one too.
+[Agents and roles](/concepts/roles#define-a-role) defines a role that does runs in `piloop.toml`. A plugin can ship
+one too.
 
-### Example: a role and a trigger from a plugin
+### Example: a role from a plugin
 
-This plugin adds a trigger, `no_keep`, that starts an agent when no candidate
-was kept for some hours. It also adds a role, `auditor`, that uses this trigger:
+This plugin adds `quick`, a role that does runs with short sessions:
 
 ```python
-from datetime import datetime, timedelta
-from importlib.resources import files
-
-from sqlalchemy import func, select
-
-from piloop.capabilities import Fire, Outcome, Pass, SweepRole, Trigger, TriggerName
-from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.capabilities import ImplementerRole
 
 
-class NoKeep(Trigger):
-    """``no_keep``: no new keep for ``hours`` hours, once per agent of the role."""
+class Quick(ImplementerRole):
+    """``quick``: the role's defaults are its fields' defaults."""
 
-    hours: float = 6
-
-    def fire(self, p: Pass) -> Fire | None:
-        return Fire(f'no keep for {self.hours:g} hours') if p.now >= self._due(p) else None
-
-    def due_in(self, p: Pass) -> timedelta | None:
-        return max(self._due(p) - p.now, timedelta(0))
-
-    def _due(self, p: Pass) -> datetime:
-        keeps = select(func.max(Candidate.created_at)).where(
-            Candidate.campaign_id == p.campaign.id, Candidate.verdict == Outcome.KEEP
-        )
-        latest = p.s.scalar(keeps) or p.campaign.created_at
-        started = p.last.started_at if p.last is not None else latest
-        return max(latest, started) + timedelta(hours=self.hours)
-
-
-class Auditor(SweepRole):
-    """``auditor``: the role's defaults are its fields' defaults."""
-
-    PROMPT = files(__package__) / 'auditor.md'  # ships in the package
-    triggers: list[TriggerName] = ["no_keep"]
-    timeout: float = 1800
+    timeout: float = 300
+    max_concurrent: int = 2
 ```
 
 ```toml
-[project.entry-points."piloop.triggers"]
-no_keep = "my_package:NoKeep"
-
 [project.entry-points."piloop.roles"]
-auditor = "my_package:Auditor"
+quick = "my_package:Quick"
 ```
 
-Any campaign can then name `no_keep` in the triggers of a role, with `[plugins.trigger.no_keep] hours = 12` to change
-its parameter, and gets the `auditor` role, with its table in `piloop.toml` over the package's defaults, at its next
+Any campaign then gets the `quick` role, with its table in `piloop.toml` over the package's defaults, at its next
 `piloop init`.
 
 ### The contract
 
-A role is a table in `piloop.toml`: its prompt, when it starts (the run queue, or its triggers), where it works, how
-(harnesses, models, MCP servers, timeout, concurrency) and what it may file. A role that does runs (`runs = true`)
-starts one run per free slot, whose agent claims an idea from the board, and its commits are scored and judged. A sweeping role starts on its triggers, and
-nothing it commits is scored. A plugin's role is a subclass of `SweepRole` or of `ImplementerRole` whose fields have
+A role is a table in `piloop.toml`: its prompt, where it works, how (harnesses, models, MCP servers, timeout,
+concurrency) and what it may file. A role that does runs starts one run per free slot, whose agent claims an idea from
+the board, and its commits are scored and judged. A plugin's role is a subclass of `ImplementerRole` whose fields have
 the role's defaults, and whose `PROMPT` is the prompt that starts its brief: a file of its package. `prompt` in the
-table overrides it. [Roles](/concepts/roles) describes each key.
+table overrides it. The orchestrator is the one role that does no runs: piloop starts its agents itself. [Roles](/concepts/roles)
+describes each key.
 
 ### Built in
 
@@ -185,24 +153,7 @@ The built-in roles are the same tables with defaults, so a campaign can change a
 
 ## Triggers
 
-A `sql` trigger needs no code: its query fires the role when it returns a row, as in
-[Define a role](/concepts/roles#define-a-role). A trigger with code of its own comes from a plugin, as `no_keep` above.
-
-### The contract
-
-A trigger is an instance that a role names in `[plugins.role.<name>] triggers`, with its parameters in
-`[plugins.trigger.<name>]`. A plugin's trigger is a subclass of `Trigger`: its fields are its parameters. On each pass, for each sweeping role
-without a pending request, the daemon calls `fire(p)` of each trigger of the role in order. A pass comes when
-something changes in the campaign, or in what a trigger names in `WAKES_ON`, and when the time that a trigger's
-`due_in` returns comes. A trigger that compares a time returns when the comparison turns: there is no pass on a timer.
-The rows that it reads are the models of `piloop.db.models`, and a component's in its `tables.py`, such as
-`piloop.plugins.campaign_type.kit.candidates.tables`: the [data model](/reference/data-model).
-
-<ContractTrigger />
-
-### Built in
-
-[Triggers](/concepts/roles#triggers) lists the built-in triggers.
+The orchestrator wakes on its two triggers: [`news` and `run_failed`](/concepts/roles#triggers). A plugin adds none.
 
 ## Sections
 

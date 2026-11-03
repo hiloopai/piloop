@@ -694,7 +694,7 @@ def _whose(s: Session, owner: secrets.Owner) -> str:
 
 @router.post('/campaigns/{campaign}/agents', operation_id='launch', dependencies=[Depends(actor_access)])
 def launch(s: Writing, campaign: Addressed, body: LaunchBody) -> AgentAnswer:
-    """Ask the daemon for one more agent of a sweeping role: it launches it at once, within ``max_concurrent``."""
+    """Ask the daemon for one more agent of a role that starts its agents: it launches it at once, within ``max_concurrent``."""
     agent = ops.request_agent(s, campaign.id, body.role, harness=body.harness, model=body.model, reason=body.reason)
     s.commit()
     with db_feed.snapshot(s) as cursor:

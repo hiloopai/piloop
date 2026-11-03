@@ -178,7 +178,7 @@ def test_a_stopped_campaign_retires_once_its_stop_is_over_and_its_name_registers
         assert e.value.error == Problem.REFUSED
         with db.session() as s:
             s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
-            s.add(AgentSession(kind='sweeper', campaign_id=campaign.id, state=AgentSessionState.RUNNING))
+            s.add(AgentSession(kind='orchestrator', campaign_id=campaign.id, state=AgentSessionState.RUNNING))
             s.add(
                 Comment(
                     target=TargetRef(TargetKind.CAMPAIGN, campaign.id),

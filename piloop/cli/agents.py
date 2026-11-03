@@ -21,8 +21,8 @@ def launch(
     role: Annotated[
         RoleName,
         cyclopts.Parameter(
-            help='The role of the agent: a sweeping role of the campaign (`[plugins.role.<name>]`). The daemon launches the'
-            ' agents of a role that does runs by itself, one for each queued run.'
+            help='The role of the agent: `orchestrator`. The daemon launches the agents of a role that does runs by itself,'
+            ' one for each queued run.'
         ),
     ],
     /,

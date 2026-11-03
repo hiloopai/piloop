@@ -16,7 +16,7 @@ from piloop.otel import Tracer
 from piloop.plugins.runtime.contract import handle_for
 from piloop.plugins.vcs.git import commands as git
 from piloop.settings import Settings
-from tests.conftest import SWEEPER, console_lines
+from tests.conftest import LEAD, console_lines
 
 
 def test_settings_derived(tmp_path: Path) -> None:
@@ -114,4 +114,4 @@ def test_stale_directories_do_not_block_worktrees(campaign_path: Path, tmp_path:
 
 def test_handle_for_refuses_a_request() -> None:
     with pytest.raises(ValueError, match='agent_session#3 is requested: not launched yet'):
-        handle_for(AgentSession(id=3, kind=SWEEPER, campaign_id=1, state=AgentSessionState.REQUESTED))
+        handle_for(AgentSession(id=3, kind=LEAD, campaign_id=1, state=AgentSessionState.REQUESTED))

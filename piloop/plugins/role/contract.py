@@ -1,45 +1,42 @@
 """The role capability: what the agents of a role do, and the defaults of its ``[plugins.role.<name>]`` table.
 
 Every role is a provider of ``ROLES``, a built-in one or a package's, and so are its defaults: a subclass of
-``SweepRole`` or of ``ImplementerRole`` whose fields have the role's defaults. Its prompt is a resource of its package
-(``PROMPT``). A table with another name defines a new role (``new_role``).
+``ImplementerRole``, whose agents do runs, or of ``StartsItsAgents``, whose provider starts its agents itself. Its
+fields have the role's defaults, and its prompt is a resource of its package (``PROMPT``). A table with another name and
+``runs = true`` defines a new role that does runs (``new_role``).
 """
 
 import re
+from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from enum import StrEnum
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 from string import Formatter
-from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, Self
+from typing import TYPE_CHECKING, ClassVar, Final, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator
 
-from piloop.ids import ROLE_NAME, CommentKind
+from piloop.ids import ROLE_NAME, AgentSessionId, CommentKind, RoleName
 from piloop.plugins.harness.contract import HarnessKey, HarnessName
 from piloop.plugins.host import Capability, Many, Parameters, Reach, Scope
 from piloop.plugins.mcp_server.contract import McpServerName
 from piloop.plugins.runtime.contract import RuntimeName
 from piloop.plugins.section.contract import SectionName, Surface, defaults
-from piloop.plugins.trigger.contract import Pass, TriggerName
 
 if TYPE_CHECKING:  # piloop.db.models types campaigns.config with the roles: only the annotations name the rows
-    from piloop.db.models import AgentSession
+    from sqlalchemy.orm import Session
+
+    from piloop.db.models import Campaign, EventModel
+    from piloop.otel import Tracer
+    from piloop.plugins.contribution import DaemonHost
 
 
 PUSHED: Final = CommentKind.MESSAGE
 """The comment kind that the daemon sends to a running agent: a message on it, or on its run or its run's idea. Every
 other kind, a note included, is on the board for the agents that read it."""
-
-
-class Files(StrEnum):
-    """What the agents of a role may file with ``piloop idea``. The CLI refuses the rest."""
-
-    NOTHING = 'nothing'
-    """No ideas. A hunch goes in a note."""
-    IDEAS = 'ideas'
-    """Ideas for the board (``piloop idea add``)."""
 
 
 type Verb = tuple[str, ...]
@@ -108,9 +105,11 @@ class RoleConfig(Parameters):
     RELAYED: ClassVar[frozenset[Verb]] = RELAYED
     """The ``piloop`` commands that an agent of the role on a worker elsewhere may run: those that its prompt names. The
     worker relays them to the server (``piloop.plugins.executor.kit.relay``), and refuses the rest."""
-    IDEAS: ClassVar[str] = ''
-    """The ideas line of a built-in role's brief when the line for its ``files`` does not fit it. ``{piloop}`` is the CLI
-    and ``{campaign}`` is the campaign's name. Empty: the line for ``files`` (``piloop.agents.roles.IDEAS``)."""
+    IDEAS: ClassVar[str] = (
+        '- A hunch worth a run of its own goes in a note, with pointers (ids, paths, the number). You file no ideas.'
+    )
+    """The ideas line of the role's brief: how its agents give work to the implementers. ``{piloop}`` is the CLI and
+    ``{campaign}`` is the campaign's name."""
 
     prompt: str | None = None
     """The file that starts the brief of this role: a path relative to the repo root, or an absolute path. When unset,
@@ -136,7 +135,8 @@ class RoleConfig(Parameters):
     """The MCP servers that the agents of this role get, by the name of their ``[plugins.mcp_server.<name>]`` table.
     Every harness in the role's rotation must be able to take them in the invocation of the role's runtime."""
     writes: list[str] = []
-    """What the agents of this role may write, as their brief states it. piloop enforces only a sweep's ``files``."""
+    """What the agents of this role may write, as their brief states it. piloop enforces only that an agent of a role
+    that does runs adds no ideas for others."""
     sections: list[SectionName] | None = None
     """What the briefs of this role show after ``brief.md``: the names of sections, in order, the ``context`` among them.
     When unset, the role's own guides, then every installed section that a brief of this kind of role shows by default,
@@ -197,7 +197,7 @@ class ImplementerRole(RoleConfig):
     PROMPT: ClassVar[Traversable | None] = files(__package__) / 'prompts' / 'implementer.md'
 
     runs: Literal[True] = True
-    """The agents of this role do runs. A table without ``runs = true`` is a sweeping role."""
+    """The agents of this role do runs. A table of a new name needs ``runs = true``."""
     timeout: float = 1800
     """The number of seconds one implementer may run before it is stopped. Its brief states it. A quarter of it before,
     at most ``wrap_up_lead``, the daemon tells the implementer to wrap up."""
@@ -224,76 +224,89 @@ class ImplementerRole(RoleConfig):
     """None: the context says how to run piloop and its SQL, and ``piloop schema database`` prints the rest."""
 
 
-class Sweep(Pass, Protocol):
-    """What a sweeping role reads to give its agent its context: its trigger's ``Pass``, and the agent's row."""
+class Quiet(StrEnum):
+    """A phase in which a campaign launches no agent, but those of a role that wakes in it (``wakes_while``)."""
 
-    @property
-    def agent_session(self) -> AgentSession:
-        """The row of the agent that the brief is for."""
-        ...
+    PAUSED = 'paused'
+    """``piloop pause``."""
+    HELD = 'held'
+    """The stop rule holds the campaign's launches, such as at a spend limit."""
+    STOPPED = 'stopped'
+    """The campaign stopped, and the daemon closed it."""
 
 
-class SweepRole(RoleConfig):
-    """``[plugins.role.<name>]`` of a sweeping role: the orchestrator, or a new role that you define.
+@dataclass(frozen=True)
+class Wake:
+    """What a role that starts its agents reads on a pass over one campaign (``StartsItsAgents.request``)."""
 
-    A sweep is an agent without a run. Its triggers request it, and nothing is scored when it ends. A table with a new
-    name defines a new role, and needs ``prompt`` and ``triggers``.
+    s: Session
+    """The pass's session: the role inserts its requested rows (``agent_sessions``) with it. It does not commit."""
+    now: datetime
+    """The time of the pass. A role that compares a time reads this, not the clock."""
+    campaign: Campaign
+    role: RoleName
+    """The role's name: its ``[plugins.role.<name>]`` table and the ``agent_sessions.kind`` of its rows."""
+    quiet: Quiet | None
+    """The campaign's quiet phase, for a role that wakes in it (``wakes_while``). None while the campaign runs."""
+    tracer: Tracer
+
+
+class StartsItsAgents(RoleConfig, ABC):
+    """``[plugins.role.<name>]`` of a role that does no runs: its provider decides when its agents start, and how.
+
+    On each pass over a campaign the daemon asks it for requests (``request``), and launches the requested rows of the
+    role as it launches every row: as far as its ``max_concurrent`` and the executor's slots allow. Each launch runs in
+    a thread of the daemon (``launch``). Anyone can request a row of the role by hand too (``piloop launch``).
     """
 
     runs: Literal[False] = False
-    """The agents of this role do no runs. Set ``runs = true`` in a new table to define a role that does runs."""
-    triggers: list[TriggerName]
-    """When the daemon requests an agent of this role: the names of triggers (``[plugins.trigger.<name>]``), checked in
-    order on each pass. A package can add triggers. An empty list means that agents start only on request
-    (``piloop launch``)."""
-    files: Files = Files.NOTHING
-    """What the agents of this role may file with ``piloop idea``: ``nothing`` or ``ideas``. The CLI refuses the
-    rest."""
-    plan_words: int = Field(default=150, ge=1)
-    """The most words in the plan of an idea that an agent of this role adds or develops: steps that one run can
-    follow, not a protocol. A longer plan is refused."""
-    max_ideas: int = Field(default=1, ge=0)
-    """The maximum number of new ideas one sweep of a role that files ideas may insert, as its brief states it."""
-    SURFACE: ClassVar[Surface] = Surface.SWEEP
+    """The agents of this role do no runs."""
 
-    def context(self, sweep: Sweep) -> list[str]:
-        """The lines that the role adds to its agent's context, after the daemon's own and before the sections.
+    @classmethod
+    @abstractmethod
+    def wakes_on(cls) -> frozenset[type[EventModel]]:
+        """The event models, beyond the campaign's state, that make the daemon pass over the campaigns for the role."""
 
-        By default, a role that defines ideas (``files = "ideas"``) is told its ``max_ideas`` and its ``plan_words``.
-        Any other role adds nothing.
+    @abstractmethod
+    def request(self, wake: Wake) -> datetime | None:
+        """Insert the requested rows of the role for ``wake``'s campaign, if any, and say when to ask again.
+
+        None: only the next event of the campaign changes the answer.
         """
-        if self.files is Files.IDEAS:
-            return [
-                f'- New ideas of your own in this sweep: at most {self.max_ideas} (`max_ideas`), each with a plan of'
-                f' at most {self.plan_words} words (`plan_words`).'
-            ]
-        return []
 
-    @model_validator(mode='after')
-    def _check(self) -> Self:
-        if self.prompt is None and self.PROMPT is None:
-            raise ValueError('a new role needs a prompt: the file that starts its brief')
-        return self
+    @abstractmethod
+    def wakes_while(self, quiet: Quiet) -> bool:
+        """Whether the role is asked for requests, and its rows launch, while the campaign is ``quiet``."""
+
+    @abstractmethod
+    def starts_by_itself(self) -> bool:
+        """Whether the role requests agents of its own accord. False: its agents start only by hand."""
+
+    @abstractmethod
+    def launch(self, host: DaemonHost, agent_session_id: AgentSessionId) -> None:
+        """Launch the requested row ``agent_session_id`` of the role, in a thread of the daemon, and wait for its end."""
 
 
 RESERVED_NAMES = frozenset({'run', 'orchestrator', 'human', 'daemon'})
 """Names that already sign writes: a run, and the actors that are not roles."""
 
 
-def new_role(name: str, table: Mapping[str, object]) -> type[ImplementerRole] | type[SweepRole]:
-    """The class of a ``[plugins.role.<name>]`` table with a new name: with ``runs = true`` a role that does runs.
+def new_role(name: str, table: Mapping[str, object]) -> type[ImplementerRole]:
+    """The class of a ``[plugins.role.<name>]`` table with a new name: a role that does runs (``runs = true``).
 
     Raises:
-        ValueError: ``name`` is no role name, or one that signs writes already.
+        ValueError: ``name`` is no role name, or one that signs writes already, or the table does no runs.
     """
     if not re.fullmatch(ROLE_NAME, name) or name in RESERVED_NAMES:
         raise ValueError(
             f'{name!r} is not a role name: use lowercase letters, digits, _ and - ({ROLE_NAME}), and none of'
             f' {sorted(RESERVED_NAMES)}'
         )
-    return ImplementerRole if table.get('runs') else SweepRole
+    if not table.get('runs'):
+        raise ValueError(f'a role of your own does runs: set runs = true in [plugins.role.{name}]')
+    return ImplementerRole
 
 
 ROLES = Capability('role', RoleConfig, table=Many(Scope.CAMPAIGN, new=new_role, reach=Reach.EVERY))
 """Every role by name, with its defaults: the built-in ones, then the ones that packages add. Each entry point of the
-group names a subclass of ``SweepRole`` or of ``ImplementerRole``, whose defaults are the role's."""
+group names a subclass of ``ImplementerRole`` or of ``StartsItsAgents``, whose defaults are the role's."""

@@ -1,6 +1,6 @@
 """The daemon's loop: it sleeps until the feed moves or a deadline comes, then runs the consumers that it wakes.
 
-A **consumer** is one job of the daemon, such as pushing comments or checking the triggers. It names the event models
+A **consumer** is one job of the daemon, such as pushing comments or the pass over the campaigns. It names the event models
 that wake it (``wakes_on``). Its ``run`` reads the tables, not the events, so an event says only "look again": running
 it twice costs one more read (level-triggered, as Kubernetes controllers are). It returns when it must run again for
 time alone, a **due** that it computes from the rows each time, so a restart loses none. Nothing else is periodic.

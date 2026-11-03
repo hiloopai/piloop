@@ -48,7 +48,7 @@ def lesson(
         effect=effect,
         metric=metric if effect is not None else None,
         body='why, with ids (evaluator#1)',
-        created_by='sweeper#1',
+        created_by='orchestrator#1',
     )
     s.add(row)
     s.flush()

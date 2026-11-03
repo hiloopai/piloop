@@ -85,8 +85,8 @@ from tests.conftest import (
     HARNESS_APPEND,
     HARNESS_NOOP,
     HARNESS_WORSE,
+    LEAD,
     SETTLE,
-    SWEEPER,
     ScriptRuntime,
     details,
     end_of,
@@ -419,15 +419,15 @@ def test_max_tokens_sums_the_usage_of_every_ended_agent_of_the_campaign(db: Data
         s.add_all(
             [
                 AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, usage=spent(60_000, 9), **ended),
-                AgentSession(kind=SWEEPER, campaign_id=campaign.id, usage=spent(30_000, 2), **ended),
-                AgentSession(kind=SWEEPER, campaign_id=campaign.id, usage=None, **ended),
+                AgentSession(kind=LEAD, campaign_id=campaign.id, usage=spent(30_000, 2), **ended),
+                AgentSession(kind=LEAD, campaign_id=campaign.id, usage=None, **ended),
                 AgentSession(kind=IMPLEMENTER, campaign_id=other.id, usage=spent(50_000, 1), **ended),
             ]
         )
         s.commit()
     assert reason(db, campaign) is None, "90k: every role counts, another campaign's agents do not, unknown usage is 0"
     with db.session() as s:
-        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, usage=spent(10_000, 1), **ended))
+        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, usage=spent(10_000, 1), **ended))
         s.commit()
     assert reason(db, campaign) == 'max_tokens: 100000 tokens spent'
 
@@ -569,7 +569,7 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
                 kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), harness='script', model='m'
             )
         )
-        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='requested before the stop'))
+        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='requested before the stop'))
         s.commit()
     sched = make_scheduler(db, runtime, tmp_path)
 
@@ -577,14 +577,14 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
     with db.session() as s:
         assert [(w.kind, w.state, w.error, w.ended_at is not None) for w in s.scalars(select(AgentSession))] == [
             (IMPLEMENTER, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
-            (SWEEPER, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
+            (LEAD, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
         ]
         run = s.get_one(Run, 2)
         assert (run.status, run.end, run.finished_at is not None) == (RunStatus.FAILED, RunEnd.CAMPAIGN_STOPPED, True)
         assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
         [(event, finished)] = in_order(s, RunFinished)
         assert (event.target_id, finished) == (2, RunFinished(end=RunEnd.CAMPAIGN_STOPPED, error=None))
-        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand, after the stop'))
+        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand, after the stop'))
         s.commit()
     assert run_all(sched) == [3], 'a request made after the stop is explicit and launches'
     sched.wait(SETTLE)
@@ -675,9 +675,7 @@ def due_now(db: Database, campaign: Campaign) -> None:
 
 def sweeps(db: Database, campaign: Campaign) -> list[AgentSessionState]:
     with db.session() as s:
-        rows = s.scalars(
-            select(AgentSession).where(AgentSession.campaign_id == campaign.id, AgentSession.kind == SWEEPER)
-        )
+        rows = s.scalars(select(AgentSession).where(AgentSession.campaign_id == campaign.id, AgentSession.kind == LEAD))
         return [w.state for w in rows]
 
 
@@ -791,7 +789,7 @@ def test_a_stopped_campaign_gets_no_trigger_requests(
     }
 
     with db.session() as s:
-        s.add(AgentSession(kind=SWEEPER, campaign_id=campaign.id, reason='by hand'))
+        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand'))
         s.commit()
     assert run_all(sched) == [2], 'a hand-inserted request is explicit and launches'
     sched.wait(SETTLE)

@@ -13,42 +13,33 @@ from piloop.plugins.harness.contract import HARNESSES
 from piloop.plugins.host import Tier, data_errors, declared
 from piloop.plugins.role.contract import ROLES
 from piloop.plugins.runtime.contract import RUNTIMES
-from piloop.plugins.trigger.contract import TRIGGERS
 
 PACKAGE = Path(__file__).parent.parent / 'piloop'
 NAMES = {
     *HARNESSES.builtins(),
     *RUNTIMES.builtins(),
     *ROLES.builtins(),
-    *TRIGGERS.builtins(),
 }
 LEAVES: dict[str, frozenset[str] | None] = {
     'plugins/harness/*.py': None,
-    'plugins/trigger/*.py': None,
-    'plugins/campaign_type/kit/*/trigger/*.py': None,
     'ids.py': None,
     'db/migrations/versions/*.py': None,
     'plugins/campaign_type/*/migrations/*.py': None,
     'actor.py': frozenset({'orchestrator'}),
-    'daemon/api.py': frozenset({'news'}),
     'deprecated.py': None,
-    'plugins/role/contract.py': frozenset({'sql', 'orchestrator'}),
-    'plugins/role/orchestrator.py': frozenset({'sql', 'news', 'run_failed'}),
+    'plugins/role/contract.py': frozenset({'orchestrator'}),
+    'config.py': frozenset({'orchestrator'}),
     'plugins/runtime/docker.py': frozenset({'docker'}),
 }
 """The files that may name entries, and which ones (None: any). The reasons:
 
-- The harnesses (``plugins/harness/``), the triggers (``plugins/trigger/`` and each component's ``trigger/``) and
-  ``ids.py`` (the built-in roles) define the entries. The migrations, core's and each campaign type's, are history.
+- The harnesses (``plugins/harness/``) and ``ids.py`` (the built-in roles) define the entries. The migrations, core's
+  and each campaign type's, are history.
 - ``actor.py``: the outside orchestrator, ``orchestrator``, one party with the agents of the role.
-- ``daemon/api.py``: ``news``, the operation id of the route that ``piloop inbox wait`` reads.
-- ``plugins/role/`` and each component's ``role/``: the default ``triggers`` of the built-in roles, and the only ones
-  that the orchestrator takes, named by kind as in ``piloop.toml``: a class would load its provider, and with it the
-  database, when the config models load.
-- ``deprecated.py``: the bridges rewrite the keys of earlier releases, which named built-in roles and triggers.
-- the backlog's ``cli.py``, ``plugins/role/contract.py`` and ``plugins/role/orchestrator.py``: the commands ``piloop
-  idea seed`` and ``piloop sql``, and ``orchestrator`` among the names that a new role may not take: the outside
+- ``deprecated.py``: the bridges rewrite the keys of earlier releases, which named built-in roles.
+- ``plugins/role/contract.py``: ``orchestrator`` among the names that a new role may not take: the outside
   orchestrator signs with it.
+- ``config.py``: its 0.7.0 bridge moves ``[plugins.trigger.news] quiet_seconds`` into the ``orchestrator``'s table.
 - ``plugins/runtime/docker.py``: ``docker``, the Docker CLI that the runtime runs, not the runtime's name.
 """
 
@@ -92,7 +83,6 @@ def test_every_leaf_entry_is_still_needed() -> None:
 HOST_CONTRACTS = {
     'runtime': 'starts, watches, steers and stops agent processes',
     'CAS provider': 'opens a store that reads and writes files, a directory or a bucket',
-    'trigger': 'fire(tick) reads the database through the session of a Tick',
     'section': 'render(r) reads the database through the session of a Rendering',
     'role': 'a role holds trigger objects and names a runtime',
     'executor': 'runs jobs on machines, and applies their results to the database through Results',
