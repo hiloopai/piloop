@@ -2,34 +2,45 @@
 
 import threading
 from collections.abc import Callable
+from concurrent.futures import Future
 from contextlib import closing
 from pathlib import Path
 
 import pytest
 from git import Repo
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pytest_mock import MockerFixture
 from sqlalchemy import select
 
 from piloop.actor import Agent, System
 from piloop.campaign.ops import Refused
+from piloop.daemon.loop import Turn
 from piloop.daemon.main import Daemon
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, utcnow
 from piloop.db.session import Database
-from piloop.ids import Revision
+from piloop.ids import CommentKind, Revision, TargetKind, TargetRef
+from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin, Outcome
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.jobs import InfraFailed
+from piloop.plugins.campaign_type.kit.evaluation.jobs import HELD, InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     Split,
     current_evaluator,
     noise,
     request_remeasure,
+    requested,
     sealed_evaluator,
 )
-from piloop.plugins.campaign_type.kit.evaluation.submissions import SubmitRefused, submit, waiting
-from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.evaluation.submissions import (
+    SubmitRefused,
+    submit,
+    submitted as submissions_of,
+    tell_verdicts,
+    waiting,
+)
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import UNSUBMITTED, Measuring, RunController, close_run
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import end_run
@@ -47,12 +58,14 @@ from tests.conftest import (
     reports,
     run_all,
     serving_api,
+    span_named,
     wait_until,
     workers_of,
     write_toml,
 )
 from tests.daemon.test_evaluation_queue import queued_executor
 from tests.daemon.test_run_controller import controller, keep_elsewhere, make_run, run_row, set_config
+from tests.daemon.test_scheduler import make_scheduler
 
 SUBMIT = {'scoring': 'submit', 'noise_runs': 1}
 NOISE = {'verdict_rule': {'provider': 'noise'}}
@@ -332,7 +345,7 @@ HARNESS_SUBMITS = '#!/bin/sh\necho a >> solve.txt\ngit commit -qam more\n"$PILOO
 """Commits one line, submits it, keeps what ``piloop submit`` printed in its log directory, and ends its run."""
 
 
-def test_an_implementer_submits_through_the_daemon_and_reads_its_verdict_while_it_works(
+def test_an_implementer_submits_through_the_daemon_and_works_on_while_it_is_judged(
     campaign_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write_toml(campaign_path, HARNESS_SUBMITS)
@@ -366,7 +379,8 @@ def test_an_implementer_submits_through_the_daemon_and_reads_its_verdict_while_i
             assert judged == [kept.id], 'once'
     finally:
         daemon.shutdown(timeout=5)
-    assert (home.home / 'runs' / str(run_id) / 'submitted.txt').read_text() == 'keep 2\n'
+    queued = f'candidate#{kept.id} is queued: its verdict comes as a [piloop] message\n'
+    assert (home.home / 'runs' / str(run_id) / 'submitted.txt').read_text() == queued, 'it returns before the verdict'
 
 
 def waiting_of(db: Database, campaign: Campaign) -> list[Candidate]:
@@ -763,3 +777,218 @@ def test_a_run_that_submitted_nothing_ends_as_given_up_not_as_submitted(
     ending(
         db, running(db, campaign, 'after the run'), RunEnding.SUBMITTED
     )  # every commit is scored after the run: nothing to submit
+
+
+def agent_running(db: Database, run_id: RunId) -> None:
+    with db.session() as s:
+        s.scalars(select(AgentSession).where(working_on(run_id))).one().state = AgentSessionState.RUNNING
+        s.commit()
+
+
+def told(db: Database, campaign: Campaign, run_id: RunId) -> list[str]:
+    """Tell the verdicts, twice, and return the messages that the run's worker got."""
+    for _ in range(2):
+        with db.session() as s:
+            tell_verdicts(s, s.get_one(Campaign, campaign.id), 200)
+            s.commit()
+    with db.session() as s:
+        agent = s.scalars(select(AgentSession).where(working_on(run_id))).one()
+        found = select(Comment.body).where(
+            Comment.target == TargetRef(TargetKind.AGENT_SESSION, agent.id), Comment.kind == CommentKind.MESSAGE
+        )
+        return list(s.scalars(found.order_by(Comment.id)))
+
+
+def test_the_worker_hears_each_verdict_of_its_submissions_once_as_a_message(
+    db: Database, campaign: Campaign, ex: RunController, tmp_path: Path
+) -> None:
+    """``piloop submit`` returns at once: the verdict reaches the worker in its turn, once per judgement."""
+    run_id, checkout = running(db, campaign), worktree(campaign, tmp_path)
+    agent_running(db, run_id)
+    revision = commit(checkout, 'base\na\n')
+    candidate = submitted(db, campaign, run_id, revision)
+    assert told(db, campaign, run_id) == [], 'no verdict yet'
+    ex.judge_submission(candidate)
+    first = f'[piloop] candidate#{candidate} ({revision[:12]}): keep 2 — '
+    [message] = told(db, campaign, run_id)
+    assert message.startswith(first), message
+    with db.session() as s:
+        request_remeasure(s, s.get_one(Candidate, candidate), System.HUMAN, repeats=1)
+        s.get_one(Candidate, candidate).verdict = Outcome.DISCARD  # rejudgeable: a keep stays a keep
+        s.commit()
+    ex.remeasure(candidate)
+    assert len(told(db, campaign, run_id)) == 2, 'judged again: told again'
+
+
+def test_a_worker_that_is_not_running_hears_nothing(
+    db: Database, campaign: Campaign, ex: RunController, tmp_path: Path
+) -> None:
+    run_id = running(db, campaign)
+    candidate = submitted(db, campaign, run_id, commit(worktree(campaign, tmp_path), 'base\na\n'))
+    ex.judge_submission(candidate)
+    assert told(db, campaign, run_id) == [], 'its worker is not running'
+
+
+FLOORED = [
+    {'name': 'score', 'direction': 'higher', 'role': 'primary'},
+    {'name': 'size', 'direction': 'lower', 'role': 'guardrail', 'margin': 100, 'floor': 8},
+]
+"""A guardrail with a floor, as a CPU-time limit has: a version of more than 8 bytes is past it."""
+TIMES_OUT = [
+    'sh',
+    '-c',
+    'grep -q slow solve.txt && { echo \'{"status": "timeout"}\' >> "$PILOOP_RESULT_FILE"; exit 0; }; '
+    + reports(score='$(wc -l < solve.txt)', size='$(wc -c < solve.txt)'),
+]
+"""An evaluate command that runs out of time on a version that says ``slow``."""
+
+
+@pytest.mark.parametrize(
+    ('lines', 'again'),
+    [('base\nabcdefgh\n', True), ('base\nslow\n', True), ('other\n', False)],
+    ids=['past-a-floor', 'timed-out', 'a-regression'],
+)
+def test_a_resubmit_of_a_tree_that_a_limit_failed_measures_it_again_and_any_other_verdict_stays(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, lines: str, again: bool
+) -> None:
+    """Load can push a version past a limit, a floor or the timeout: that verdict is not final, and a resubmit of the
+    tree measures it again, also from another run. Any other verdict answers as it is, and another run's tree is refused.
+    """
+    set_config(db, campaign, evaluate=TIMES_OUT, evaluator=SUBMIT, plugins=NOISE, metrics=FLOORED)
+    ex = controller(db, runtime, tmp_path)
+    run_id, checkout = running(db, campaign), worktree(campaign, tmp_path)
+    revision = commit(checkout, lines)
+    candidate = submitted(db, campaign, run_id, revision)
+    ex.judge_submission(candidate)
+    found, _ = verdict(db, candidate)
+    assert found in (Outcome.DISCARD, Outcome.CRASH)
+    assert submitted(db, campaign, run_id, revision) == candidate
+    assert submitted(db, campaign, run_id, revision) == candidate
+    with db.session() as s:
+        assert len(requested(s, s.get_one(Campaign, campaign.id))) == int(again), 'asked once, while it waits'
+    other = running(db, campaign, 'other')
+    if not again:
+        with pytest.raises(SubmitRefused, match=rf'its tree is candidate#{candidate} already'):
+            submitted(db, campaign, other, revision)
+        return
+    assert submitted(db, campaign, other, revision) == candidate
+    with db.session() as s:
+        assert submissions_of(s, other) == [candidate], 'the other run submitted it'
+    agent_running(db, other)
+    assert told(db, campaign, other) == [], 'a verdict from before its submission is not news to it'
+    ex.remeasure(candidate)
+    with db.session() as s:
+        assert len(s.get_one(Candidate, candidate).measurements) >= 2, 'measured again'
+    assert len(told(db, campaign, other)) == 1, 'it hears the new verdict'
+
+
+def test_a_submission_is_measured_on_both_splits_at_once(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sealed split does not wait for the visible one: the verdict comes in the time of the slower of the two."""
+    set_config(db, campaign, evaluator={**SUBMIT, 'sealed': SEALED_AGREES}, plugins=NOISE)
+    ex = queued_executor(db, runtime, tmp_path, 2)
+    candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
+    sealing, overlapped, sealed_runs = threading.Event(), [], []
+
+    def both[**P](fn: Callable[P, Measuring]) -> Callable[P, Measuring]:
+        def measured(*args: P.args, **kwargs: P.kwargs) -> Measuring:
+            if kwargs.get('split') is Split.SEALED:
+                sealed_runs.append(args[4])
+                sealing.set()
+            elif args[4] == candidate:
+                overlapped.append(sealing.wait(10))
+            return fn(*args, **kwargs)
+
+        return measured
+
+    monkeypatch.setattr(ex, '_measure', both(ex._measure))
+    ex.judge_submission(candidate)
+    assert overlapped == [True], 'the sealed split started while the visible one ran'
+    assert sealed_runs == [candidate, 1], 'the submission once, what it held recorded; then the head it replaces'
+    assert verdict(db, candidate)[0] is Outcome.KEEP
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        hidden = sealed_evaluator(s, p, p.config)
+        assert hidden is not None
+        sealed = select(Measurement).where(Measurement.evaluator_id == hidden.id, Measurement.candidate_id == candidate)
+        assert len(s.scalars(sealed).all()) == 1, 'scored once on the sealed split, and the keep waited for it'
+
+
+def test_the_daemon_tells_a_worker_its_verdict_on_a_judgement(
+    db: Database,
+    campaign: Campaign,
+    ex: RunController,
+    runtime: ScriptRuntime,
+    tmp_path: Path,
+    tracer: Tracer,
+    spans: InMemorySpanExporter,
+) -> None:
+    run_id = running(db, campaign)
+    agent_running(db, run_id)
+    ex.judge_submission(submitted(db, campaign, run_id, commit(worktree(campaign, tmp_path), 'base\na\n')))
+    [consumer] = [c for c in make_scheduler(db, runtime, tmp_path, tracer).consumers() if c.name == 'verdicts']
+    assert consumer.wakes_on == frozenset({CandidateJudged})
+    consumer.run(Turn(utcnow()))
+    assert dict(span_named(spans, 'campaign.verdicts_told').attributes or {}) == {'campaign': 'demo', 'messages': 1}
+
+
+def sealed_scores(db: Database, campaign: Campaign, candidate: CandidateId) -> list[Measurement]:
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        hidden = sealed_evaluator(s, p, p.config)
+        assert hidden is not None
+        found = select(Measurement).where(Measurement.evaluator_id == hidden.id, Measurement.candidate_id == candidate)
+        return list(s.scalars(found))
+
+
+def test_a_discard_cancels_its_sealed_evaluation_and_records_no_sealed_score(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The sealed split runs beside the visible one, but no worker may read a sealed score of a version that does not
+    keep: the discard stops the sealed evaluator at once."""
+    slow = ['sh', '-c', f'sleep 60; {reports(score="1", size="1")}']
+    set_config(db, campaign, evaluator={**SUBMIT, 'sealed': slow}, plugins=NOISE)
+    ex = queued_executor(db, runtime, tmp_path, 2)
+    candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'other\n'))
+    judging = threading.Thread(target=ex.judge_submission, args=(candidate,))
+    judging.start()
+    judging.join(30)
+    assert not judging.is_alive(), 'the discard did not wait for the sealed split'
+    assert verdict(db, candidate)[0] is Outcome.DISCARD
+    assert sealed_scores(db, campaign, candidate) == []
+    with db.session() as s:
+        assert s.scalars(select(Evaluation)).all() == [], 'nothing waits or runs'
+
+
+def test_a_sealed_score_that_comes_before_the_visible_discard_is_never_recorded(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The sealed evaluation holds its result until the visible split decides: a discard drops it."""
+    slow_visible = ['sh', '-c', 'sleep 1; ' + reports(score='$(wc -l < solve.txt)', size='1')]
+    set_config(db, campaign, evaluate=slow_visible, evaluator={**SUBMIT, 'sealed': SEALED_AGREES}, plugins=NOISE)
+    ex = queued_executor(db, runtime, tmp_path, 2)
+    run_id = running(db, campaign)
+    candidate = submitted(db, campaign, run_id, commit(worktree(campaign, tmp_path), 'other\n'))
+    ex.judge_submission(candidate)
+    assert verdict(db, candidate)[0] is Outcome.DISCARD
+    assert sealed_scores(db, campaign, candidate) == []
+    assert list((tmp_path / 'runs' / str(run_id)).rglob(HELD)) == [], 'what it held is gone'
+
+
+def test_a_sealed_evaluation_that_still_waits_for_a_slot_leaves_the_queue_when_its_submission_does_not_keep(
+    db: Database, campaign: Campaign, ex: RunController, tmp_path: Path
+) -> None:
+    set_config(db, campaign, evaluator={**SUBMIT, 'sealed': SEALED_AGREES}, plugins=NOISE)
+    candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'other\n'))
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        hidden = sealed_evaluator(s, p, p.config)
+        assert hidden is not None
+        s.add(Evaluation(candidate_id=candidate, evaluator_id=hidden.id))
+        s.commit()
+    done: Future[None] = Future()
+    done.set_result(None)
+    ex._unseal(candidate, done)
+    with db.session() as s:
+        assert s.scalars(select(Evaluation)).all() == []

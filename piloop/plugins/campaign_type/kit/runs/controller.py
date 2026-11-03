@@ -9,6 +9,7 @@ import re
 import threading
 from collections import defaultdict
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -71,7 +72,16 @@ from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, Scoring, Track
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import Score
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId
-from piloop.plugins.campaign_type.kit.evaluation.jobs import EVALUATION, Bar, EvaluationJob, InfraFailed, Sample, record
+from piloop.plugins.campaign_type.kit.evaluation.jobs import (
+    EVALUATION,
+    HELD,
+    Bar,
+    EvaluationJob,
+    InfraFailed,
+    Sample,
+    record,
+    take_held,
+)
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     Split,
     current_evaluator,
@@ -835,8 +845,11 @@ class RunController:
         """Measure a submitted candidate and what the verdict rule needs, and judge it against the head. Never raises.
 
         The head is the bar: a submission becomes the head only when it beats the head. One that the head moved past
-        while it was measured is measured against the new head too. A failure is no verdict: the span records it, the
-        candidate stays pending, and the next pass of the daemon judges it again.
+        while it was measured is measured against the new head too. The sealed split scores it meanwhile, not after the
+        visible split (``_seal``): the verdict comes in the time of the slower of the two. Only a would-be keep records
+        that score. Otherwise its sealed evaluation is cancelled, and what it held is dropped (``_unseal``). A failure
+        is no verdict: the span records it, the candidate stays pending, and the next pass of the daemon judges it
+        again.
         """
         with self._tracer.span('piloop.submission', candidate=candidate_id) as span:
             try:
@@ -845,6 +858,75 @@ class RunController:
                 span.error(e)
 
     def _judge_submission(self, candidate_id: CandidateId, span: Span) -> None:
+        with ThreadPoolExecutor(1, thread_name_prefix=f'sealed-{candidate_id}') as pool:
+            sealed = pool.submit(self._seal, candidate_id)
+            try:
+                self._judge_on_head(candidate_id, span, sealed)
+            finally:
+                self._unseal(candidate_id, sealed)
+
+    def _unseal(self, candidate_id: CandidateId, sealed: Future[None]) -> None:
+        """Cancel the held sealed evaluation of a judged submission (``_seal``), and drop what it held.
+
+        A would-be keep recorded its sealed score already (``_gather``): then there is nothing left to cancel or drop.
+        The cancel comes first, so a running evaluator stops now. A held result is dropped only once the evaluation
+        has ended, so none comes after.
+        """
+        with self.launcher.lock, self._db.session() as s:
+            write_transaction(s)  # the evaluation's end records in one write: it ends before this, or sees the cancel
+            candidate = s.get_one(Candidate, candidate_id)
+            run_id, visible = candidate.run_id, s.get_one(Campaign, candidate.campaign_id).evaluator_id
+            held = select(Evaluation).where(  # its visible evaluations ended with its judgement: what is left is sealed
+                Evaluation.candidate_id == candidate_id,
+                Evaluation.evaluator_id != visible,
+                Evaluation.cancelled_by.is_(None),
+            )
+            for evaluation in s.scalars(held):
+                if evaluation.started_at is None:
+                    s.delete(evaluation)
+                else:
+                    evaluation.cancelled_by = System.DAEMON.signature
+            s.commit()
+        self.stop_cancelled()
+        try:
+            sealed.result()  # its error goes into the span too
+        finally:
+            for place in (self._runs_dir / str(run_id) / f'submission-{candidate_id}').glob(f'sealed-e*/*/{HELD}'):
+                place.unlink()
+
+    def _seal(self, candidate_id: CandidateId) -> None:
+        """Score a submitted candidate on the campaign's sealed split, unless it has no sealed split or has a score there.
+
+        The evaluation is held (``EvaluationJob.held``): it records nothing. ``_gather`` waits for it, and records what
+        it held for a would-be keep (``_take_held``). Any other verdict cancels it, and drops what it held (``_unseal``).
+        """
+        with self._db.session() as s:
+            candidate = s.get_one(Candidate, candidate_id)
+            campaign = s.get_one(Campaign, candidate.campaign_id)
+            cfg = campaign.config
+            hidden = sealed_evaluator(s, campaign, cfg)
+            s.commit()
+            if hidden is None or measured(candidate, hidden.id):
+                return
+            run_id, campaign_id, revision, hidden_id = candidate.run_id, campaign.id, candidate.revision, hidden.id
+        eval_dir = self._held_dir(run_id, candidate_id, hidden_id)
+        self._measure(
+            run_id, campaign_id, cfg, revision, candidate_id, hidden_id, eval_dir, split=Split.SEALED, held=True
+        )
+
+    def _held_dir(self, run_id: RunId | None, candidate_id: CandidateId, evaluator_id: EvaluatorId) -> Path:
+        """The place of a submission's held sealed evaluation (``_seal``) under ``evaluator_id``."""
+        return self._runs_dir / str(run_id) / f'submission-{candidate_id}' / f'sealed-e{evaluator_id}'
+
+    def _take_held(self, run_id: RunId | None, candidate_id: CandidateId, evaluator_id: EvaluatorId) -> None:
+        """Record the samples that the submission's held sealed evaluation left, if any (``take_held``)."""
+        samples = take_held(self._held_dir(run_id, candidate_id, evaluator_id))
+        with self._db.session() as s:
+            for sample in samples:
+                record(s, self._units_dir, run_id, candidate_id, evaluator_id, sample)
+            s.commit()
+
+    def _judge_on_head(self, candidate_id: CandidateId, span: Span, sealed: Future[None]) -> None:
         with self._db.session() as s:
             candidate = s.get_one(Candidate, candidate_id)
             run = candidate.run
@@ -861,7 +943,10 @@ class RunController:
                     assert best is not None  # a campaign with a run has a baseline
                     bar_id, judge_now = best.id, pending(candidate)
                     gate = bar_id if judge_now else None
-                match self._ready(run_id, repo, candidate_id, eval_dir, bar=bar_id, gate=gate, judge_now=judge_now):
+                ready = self._ready(
+                    run_id, repo, candidate_id, eval_dir, bar=bar_id, gate=gate, judge_now=judge_now, sealed=sealed
+                )
+                match ready:
                     case Measuring.STOPPED | Measuring.CANCELLED as halted:
                         span.set(status=halted)
                         return
@@ -1166,14 +1251,16 @@ class RunController:
         bar: CandidateId,
         gate: CandidateId | None,
         judge_now: bool,
+        sealed: Future[None] | None = None,
     ) -> Scope | Halted:
         """Measure a run's candidate and its ``bar``, and what the verdict rule needs when it is to be judged now.
 
-        Return the scope to judge it in (``_measure_with_bar``, ``_gather``), or how it halted.
+        Return the scope to judge it in (``_measure_with_bar``, ``_gather``), or how it halted. ``sealed`` scores the
+        candidate on the sealed split meanwhile (``_seal``).
         """
         match measured := self._measure_with_bar(run_id, repo, candidate_id, eval_dir, bar=bar, gate=gate):
             case Scope() if judge_now:
-                return self._gather(measured, candidate_id, bar, eval_dir) or measured
+                return self._gather(measured, candidate_id, bar, eval_dir, sealed=sealed) or measured
             case _:
                 return measured
 
@@ -1206,14 +1293,23 @@ class RunController:
         return Evidence(found, Sealed(score(candidate, hidden.id, primary), score(bar, hidden.id, primary)))
 
     def _gather(
-        self, scope: Scope, candidate_id: CandidateId, bar_id: CandidateId, eval_dir: Path, *, fresh: bool = False
+        self,
+        scope: Scope,
+        candidate_id: CandidateId,
+        bar_id: CandidateId,
+        eval_dir: Path,
+        *,
+        fresh: bool = False,
+        sealed: Future[None] | None = None,
     ) -> Halted | None:
         """Measure what the verdict rule needs before it judges ``candidate_id`` against ``bar_id``. None when done.
 
         First the measurements that it asks for (``VerdictRule.samples``), once. Then, for a would-be keep of a
         campaign with a sealed split, the split's score of the candidate and of the bar that it would replace: the bar
         is scored there once, and once more when that crashed, a fault of the split, not of the candidate. With
-        ``fresh``, a remeasure's, the candidate is scored on the split again, once, even when it was before.
+        ``fresh``, a remeasure's, the candidate is scored on the split again, once, even when it was before. With
+        ``sealed``, the held evaluation that scores the candidate there meanwhile (``_seal``), a would-be keep waits for
+        it first, records what it held, and is not scored there twice.
         """
         rule, resampled, resealed, refreshed = verdict_rule(scope.cfg), False, False, not fresh
         while True:
@@ -1253,6 +1349,11 @@ class RunController:
                 continue
             if not sealing or hidden is None or rule.decide(replace(case, sealed=None)).verdict is not Outcome.KEEP:
                 return None
+            if sealed is not None:
+                sealed.result()
+                sealed = None
+                self._take_held(scope.run_id, candidate_id, hidden.id)
+                continue
             refreshed = True
             for c in sealing:
                 ended = self._measure(
@@ -1282,6 +1383,7 @@ class RunController:
         repeats: int = 1,
         gate: CandidateId | None = None,
         split: Split = Split.VISIBLE,
+        held: bool = False,
     ) -> Measuring:
         """Measure ``revision`` on the executor, and wait until its measurement is recorded. Return how it ended.
 
@@ -1299,7 +1401,18 @@ class RunController:
         failures = 0
         while True:
             match ended := self._request(
-                run_id, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir, bar, repeats, gate, split
+                run_id,
+                campaign_id,
+                cfg,
+                revision,
+                candidate_id,
+                evaluator_id,
+                eval_dir,
+                bar,
+                repeats,
+                gate,
+                split,
+                held,
             ):
                 case InfraFailed(error=error):
                     retry = min(self._evaluation.infra_retry * 2**failures, self._evaluation.infra_retry_max)
@@ -1358,6 +1471,7 @@ class RunController:
         repeats: int,
         gate: CandidateId | None,
         split: Split,
+        held: bool = False,
     ) -> Measuring | InfraFailed:
         """Ask for one evaluation (``_measure``), and wait until it leaves the queue. Return how it ended.
 
@@ -1412,6 +1526,7 @@ class RunController:
                                     'ladder': [],
                                     'gate': None,
                                     'sealed': True,
+                                    'held': held,
                                 }
                             )
                         case _:

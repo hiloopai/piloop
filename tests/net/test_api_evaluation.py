@@ -32,7 +32,6 @@ from piloop.plugins.campaign_type.kit.evaluation.wire import (
     RungResult,
     RunningSince,
     Submission,
-    SubmissionQuery,
     SubmitBody,
 )
 from piloop.plugins.campaign_type.kit.runs.controller import close_run
@@ -158,7 +157,6 @@ def test_an_implementer_submits_a_commit_of_its_run_and_reads_only_its_verdict_a
             absent = str(Cid.of(b'never stored'))
             with pytest.raises(Refused, match=f'^f00 did not come: the bundle {absent} is not in the CAS$'):
                 client.submit(SubmitBody(revision='f00', blob=absent))
-            assert client.submission(answer.candidate, SubmissionQuery(wait=0.2)).verdict == 'pending', 'no verdict yet'
             again = client.submit(SubmitBody(revision=revision))
             assert again.candidate == answer.candidate, 'its own tree again, while it waits'
             with pytest.raises(Refused, match=r'^its tree is candidate#1 already \(keep\): change something first$'):
@@ -175,14 +173,24 @@ def test_an_implementer_submits_a_commit_of_its_run_and_reads_only_its_verdict_a
             assert client.submit(SubmitBody(revision=revision)).verdict == 'keep', 'a retry after its run ended'
             with pytest.raises(Refused, match=rf'^run#{run_id} is succeeded, not running$'):
                 client.submit(SubmitBody(revision='f00', blob='nope'))  # refused before its blob is read
-        with EveryClient.on(cfg.socket_file, System.HUMAN) as client:
-            assert client.submission(answer.candidate, SubmissionQuery(wait=1)) == Submission(
-                candidate=answer.candidate, verdict='keep', score=2.0
+        with db.session() as s:
+            candidate = s.get_one(Candidate, answer.candidate)
+            s.add(
+                Measurement(
+                    candidate_id=candidate.id, evaluator_id=campaign.evaluator_id, error='evaluate timeout after 9s'
+                )
             )
-            with pytest.raises(Refused, match='^human has no run: only a worker submits$'):
-                client.submit(SubmitBody(revision=revision))
-            with pytest.raises(Refused, match='^no candidate#99$'):
-                client.submission(CandidateId(99), SubmissionQuery())
+            write(candidate, Outcome.CRASH, cause=None, reason='no successful measurement', by=System.DAEMON)
+            s.commit()
+        with EveryClient.on(cfg.socket_file, me, token) as client:
+            assert client.submit(SubmitBody(revision=revision)) == Submission(
+                candidate=answer.candidate, verdict='pending', score=2.0
+            ), 'a crash at the timeout is measured again: its new verdict comes as a message'
+        with (
+            EveryClient.on(cfg.socket_file, System.HUMAN) as client,
+            pytest.raises(Refused, match='^human has no run: only a worker submits$'),
+        ):
+            client.submit(SubmitBody(revision=revision))
 
 
 def base_revision(db: Database, campaign: Campaign) -> str:

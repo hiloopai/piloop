@@ -11,7 +11,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import ClassVar, Literal, assert_never
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -131,6 +131,10 @@ class EvaluationJob(Job):
     sealed: bool = False
     """It scores the sealed split (``[evaluator] sealed``): a result of its command that piloop refuses is the setup's
     fault, not the candidate's (``Failed.infra``)."""
+    held: bool = False
+    """Its samples wait in ``HELD`` in its place instead of being recorded, until the daemon records them
+    (``take_held``) or drops them. The sealed split's evaluation of a submission that runs beside the visible one is
+    held: a version that does not keep never records a sealed score."""
 
 
 class Sample(BaseModel):
@@ -219,6 +223,20 @@ KIND = Evaluations()
 """The kind, as its entry point names it."""
 
 
+HELD = 'held.json'
+"""The file in the place of a held evaluation's lease that keeps its samples (``EvaluationJob.held``)."""
+SAMPLES = TypeAdapter(list[Sample])
+
+
+def take_held(place: Path) -> list[Sample]:
+    """The samples that a held evaluation left under ``place``, in the place of its lease, which this removes."""
+    samples: list[Sample] = []
+    for path in sorted(place.glob(f'*/{HELD}')):
+        samples += SAMPLES.validate_json(path.read_bytes())
+        path.unlink()
+    return samples
+
+
 def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: Applying) -> None:
     """Record each sample of an evaluation as one measurement, and take the evaluation out of the queue.
 
@@ -227,7 +245,8 @@ def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: A
 
     A cancelled evaluation records nothing (``queue.cancel``). Nor does one that ends while the daemon stops: its
     evaluator was killed, and the next daemon measures it again. Nor does an infra error: it emits ``InfraFailed``, and
-    its request asks again. A sealed command whose result piloop refuses escalates too, once (``sealed_refused``).
+    its request asks again. A sealed command whose result piloop refuses escalates too, once (``sealed_refused``). A
+    held evaluation leaves its samples in its place, unrecorded (``EvaluationJob.held``).
     """
     evaluation = s.get(Evaluation, job.evaluation)
     if evaluation is None or evaluation.started_at is None:
@@ -240,6 +259,11 @@ def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: A
         emit(s, failed, TargetRef(CANDIDATE, job.candidate), System.DAEMON)
         if infra.why is Infra.SEALED:
             sealed_refused(s, s.get_one(Campaign, s.get_one(Candidate, job.candidate).campaign_id), infra.error)
+        return
+    if job.held:
+        place = daemon.home / job.place
+        place.mkdir(parents=True, exist_ok=True)
+        (place / HELD).write_bytes(SAMPLES.dump_json(report.samples))
         return
     evaluator_id = evaluation.evaluator_id
     bar = job.bar

@@ -1,12 +1,9 @@
 """The evaluation's routes: a candidate, a measurement by hand, the queue, an evaluation's cancel, and submissions."""
 
-import time
 from contextlib import closing
 from http import HTTPStatus
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request
-from fastapi.concurrency import run_in_threadpool
+from fastapi import APIRouter, Depends
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -17,22 +14,18 @@ from piloop.campaign.campaigns import repository
 from piloop.daemon.api import REFUSALS_DOCUMENTED, Acting, Api, Reading, Writing, actor_access, reader
 from piloop.db import feed as db_feed
 from piloop.db.models import Campaign
-from piloop.db.session import Database
 from piloop.net import Refusal
-from piloop.net.server import changed
 from piloop.plugins.campaign_type.kit.candidates.api import AddressedCandidate, ViewedCandidate
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer
 from piloop.plugins.campaign_type.kit.evaluation import ops as evaluation_ops, queue, submissions
-from piloop.plugins.campaign_type.kit.evaluation.measure import metrics, rung_results
+from piloop.plugins.campaign_type.kit.evaluation.measure import metrics, remeasure_asked, rung_results
 from piloop.plugins.campaign_type.kit.evaluation.wire import (
     CandidateDetail,
     EvaluationQueue,
     MeasurementAdded,
     Report,
     Submission,
-    SubmissionQuery,
     SubmitBody,
 )
 from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -106,15 +99,19 @@ def cancel_evaluation(s: Writing, me: Acting, candidate: AddressedCandidate) -> 
 
 @router.post('/submissions', operation_id='submit', dependencies=[Depends(actor_access)])
 def submit(s: Writing, me: Acting, api: Api, body: SubmitBody) -> Submission:
-    """Submit a version of the caller's run, an implementer's: the daemon scores and judges it now.
+    """Submit a version of the caller's run, an implementer's: the daemon scores and judges it, and the answer comes now.
 
-    A version that the run submitted already answers as it is, also after the run ended: a retry. Any other is refused
-    before its ``blob``, from a worker elsewhere, is taken into the repo of record.
+    The verdict reaches the implementer as a message (``submissions.tell_verdicts``). A version that the run submitted
+    already answers as it is, also after the run ended: a retry. One whose verdict a limit gave is measured again
+    (``submissions.remeasure``). Any other is refused before its ``blob``, from a worker elsewhere, is taken into the
+    repo of record.
     """
     run = submissions.run_of_agent(s, me)
     with closing(repository(run.campaign)) as repo:
         version = _version(repo, body.revision)
         if version is not None and (own := submissions.resubmitted(s, run, version)) is not None:
+            submissions.remeasure(s, own, me)
+            s.commit()
             return _submission(s, own)
         submissions.refuse(s, run)
         if version is None:
@@ -152,32 +149,12 @@ def _received(repo: Repository, cas: Cas, run: Run, body: SubmitBody) -> Version
         raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, f'{body.revision} did not come: {e}') from e
 
 
-@router.get('/submissions/{candidate}', operation_id='submission')
-async def submission(
-    request: Request, api: Api, candidate: CandidateId, query: Annotated[SubmissionQuery, Query()]
-) -> Submission:
-    """A submission's verdict and score. With wait, a long-poll that answers once the verdict is in."""
-    deadline, seen = time.monotonic() + query.wait, 0
-    found = await run_in_threadpool(_read, api.db, candidate)
-    while (
-        found.verdict == PENDING
-        and (left := deadline - time.monotonic()) > 0
-        and (woke := await changed(request, api.db.changed, seen, left)) is not None
-    ):
-        seen = woke
-        found = await run_in_threadpool(_read, api.db, candidate)
-    return found
-
-
-def _read(db: Database, candidate: CandidateId) -> Submission:
-    with db.session() as s:
-        if (found := s.get(Candidate, candidate)) is None:
-            raise Refusal(HTTPStatus.NOT_FOUND, Problem.UNKNOWN_CANDIDATE, f'no candidate#{candidate}')
-        return _submission(s, found)
-
-
 def _submission(s: Session, candidate: Candidate) -> Submission:
-    """What its implementer reads of a submission: the verdict, and the primary of the campaign's first track."""
+    """What its implementer reads of a submission: the verdict, and the primary of the campaign's first track.
+
+    A candidate that is to be measured again is ``pending``: its new verdict comes as a message.
+    """
     campaign = s.get_one(Campaign, candidate.campaign_id)
     value = metrics(candidate, campaign.evaluator_id).get(campaign.config.all_tracks[0].primary.name)
-    return Submission(candidate=candidate.id, verdict=label(candidate), score=value)
+    verdict = PENDING if remeasure_asked(s, candidate) is not None else label(candidate)
+    return Submission(candidate=candidate.id, verdict=verdict, score=value)

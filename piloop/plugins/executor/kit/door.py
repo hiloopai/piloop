@@ -68,9 +68,9 @@ def main() -> None:
     stdin = sys.stdin.read() if '-' in argv and not sys.stdin.isatty() else None
     transport = httpx.HTTPTransport(uds=str(socket))
     try:
-        # the relay calls a command that waits, a `piloop submit` say, again until its deadline: wait that long
-        waits = settings.agents.relay_deadline.total_seconds() + RELAY_SECONDS
-        with httpx.Client(transport=transport, timeout=waits) as client:
+        # no bound here: the relay bounds its call to the server (RELAY_SECONDS), and a version that it ships first takes
+        # as long as its size does
+        with httpx.Client(transport=transport, timeout=None) as client:
             response = client.post(
                 'http://worker/v1/cli',
                 content=AgentCall(agent=agent, argv=argv, stdin=stdin, token=token).model_dump_json(),

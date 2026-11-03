@@ -6,7 +6,6 @@ import socket
 import subprocess
 import sys
 import threading
-from datetime import timedelta
 from functools import partial
 from pathlib import Path
 
@@ -30,7 +29,7 @@ from piloop.plugins.campaign_type.kit.evaluation.section import measure
 from piloop.plugins.executor.contract import AgentJob, RepoId, Source
 from piloop.plugins.executor.kit import door as door_module, jobs, relay as relay_module
 from piloop.plugins.executor.kit.client import Dismissed
-from piloop.plugins.executor.kit.door import RELAY_SECONDS, AgentCall, Call, Relayed, main
+from piloop.plugins.executor.kit.door import AgentCall, Call, Relayed, main
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.executor.kit.relay import Relay, Runner, Shipped
 from piloop.plugins.role.contract import RELAYED, Files
@@ -39,8 +38,8 @@ from piloop.plugins.runtime.contract import MESSAGES_ENV, QUEUE, put
 from piloop.plugins.section.contract import SECTIONS, Guide
 from piloop.plugins.vcs.contract import Repository, UnknownRevision
 from piloop.plugins.vcs.git import Git
-from piloop.proc import ACTOR_ENV, TEMPFAIL
-from piloop.settings import AgentSettings, Settings
+from piloop.proc import ACTOR_ENV
+from piloop.settings import Settings
 from tests.conftest import disk, no_ship
 from tests.test_lease import agent_job
 
@@ -303,16 +302,15 @@ def test_the_shim_of_a_worker_elsewhere_relays_a_call_and_reads_the_agents_queue
     assert (taken.returncode, taken.stdout.strip()) == (0, 'try lzma'), 'its queue is on the worker: read here'
 
 
-def test_a_submit_ships_the_version_of_the_agents_checkout_and_waits_across_calls(tmp_path: Path) -> None:
-    """The server's checkout lacks the agent's commit, and a call runs at most RELAY_SECONDS: the relay sends the
-    version through the CAS, and calls again while the verdict is not in."""
-    answers = iter([Relayed(stdout='pending', exit_code=TEMPFAIL)] * 2 + [Relayed(stdout='keep 2', exit_code=0)])
+def test_a_submit_ships_the_version_of_the_agents_checkout_and_is_called_once(tmp_path: Path) -> None:
+    """The server's checkout lacks the agent's commit: the relay sends the version through the CAS, then calls the
+    command once, which answers at once."""
     sent: list[tuple[int, Call]] = []
     shipped: list[str | None] = []
 
     def server(lease: int, relayed: Call) -> Relayed:
         sent.append((lease, relayed))
-        return next(answers)
+        return Relayed(stdout='candidate#2 is queued', exit_code=0)
 
     def ship(job: AgentJob, revision: Revision | None) -> Shipped:
         shipped.append(revision)
@@ -324,8 +322,8 @@ def test_a_submit_ships_the_version_of_the_agents_checkout_and_waits_across_call
     relay.start()
     relay.open(3, JOB)
     answered = Relayed.model_validate_json(post(relay, call(argv=['submit'])).content)
-    assert answered == Relayed(stdout='keep 2', exit_code=0)
-    assert [c.argv for _, c in sent] == [['submit', 'abc', '--wait', f'{RELAY_SECONDS / 2:g}']] * 3, 'shipped once'
+    assert answered == Relayed(stdout='candidate#2 is queued', exit_code=0)
+    assert [c.argv for _, c in sent] == [['submit', 'abc']], 'shipped, and called once'
     assert Relayed.model_validate_json(post(relay, call(argv=['submit', 'gone'])).content) == Relayed(
         stderr='piloop: the version did not leave this worker: no gone\n', exit_code=1
     )
@@ -355,17 +353,3 @@ def test_a_worker_ships_what_the_repo_of_record_lacks_of_a_version_of_its_agents
     head = jobs.ship(site, job, None)
     assert head.revision == Repo(site_cwd).head.commit.hexsha and head.blob is not None, 'its head, and the commit'
     assert jobs.ship(site, job, base) == Shipped(base, None), 'the repo of record has its starting version'
-
-
-def test_the_relay_calls_a_command_that_is_not_done_again_until_its_deadline(tmp_path: Path) -> None:
-    def server(lease: int, relayed: Call) -> Relayed:
-        return Relayed(stdout='pending', exit_code=TEMPFAIL)
-
-    soon = AgentSettings(relay_deadline=timedelta(milliseconds=50))
-    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, soon)
-    relay.start()
-    relay.open(3, JOB)
-    assert Relayed.model_validate_json(post(relay, call(argv=['sql'])).content) == Relayed(
-        stdout='pending', exit_code=TEMPFAIL
-    ), 'the agent gets the last answer: it may call again'
-    relay.stop()

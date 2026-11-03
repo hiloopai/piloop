@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from pydantic import ConfigDict, Field
 
 from piloop.api.client import Client
-from piloop.api.contract import Params, Polled
+from piloop.api.contract import Params
 from piloop.api.views import View
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.wire import CandidateAnswer, CandidateView
@@ -122,16 +122,13 @@ class SubmitBody(Params):
     worker elsewhere. None: the repo of record has the version. Text, so a client loads no CAS."""
 
 
-class SubmissionQuery(Polled):
-    """How long to wait for a submission's verdict."""
-
-
 class Submission(View):
     """A submission as its implementer reads it: the verdict and the score, nothing else."""
 
     candidate: CandidateId
     verdict: str
-    """The verdict, ``pending`` while piloop scores it, or ``skipped`` when someone cancelled its evaluation."""
+    """The verdict, ``pending`` while piloop scores it, or ``skipped`` when someone cancelled its evaluation. A pending
+    verdict reaches the implementer as a message."""
     score: float | None
     """The primary's value, on the evaluate command's score. None without one."""
 
@@ -141,9 +138,6 @@ class EvaluationClient(Client):
 
     def submit(self, body: SubmitBody) -> Submission:
         return self.post('/v1/submissions', body, Submission)
-
-    def submission(self, candidate: CandidateId, query: SubmissionQuery) -> Submission:
-        return self._get(f'/v1/submissions/{candidate}', query, Submission)
 
     def add_measurement(self, candidate: CandidateId, body: Report) -> MeasurementAdded:
         return self.post(f'/v1/candidates/{candidate}/measurements', body, MeasurementAdded)

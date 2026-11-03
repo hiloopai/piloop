@@ -437,3 +437,17 @@ def track_shares(toml: Path, raw: dict[str, object], removed_in: Version) -> Non
             removed_in=removed_in,
             nth=nth(toml, f'tracks.{name}', 'share'),
         )
+
+
+@bridge('0.7.0', '[agents] relay_wait and relay_deadline are removed: delete relay_waits', Scope.HOME)
+def relay_waits(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """``relay_wait`` and ``relay_deadline`` of ``[agents]`` are removed. piloop drops them.
+
+    ``piloop submit`` returns at once, so the relay of a worker elsewhere calls it once.
+    """
+    agents = table_at(raw, 'agents') or {}
+    for key in ('relay_wait', 'relay_deadline'):
+        if key in agents:
+            del agents[key]
+            message = f'`piloop submit` returns at once, so [agents] {key} is removed; delete it'
+            warn(toml, f'agents.{key}', message, removed_in=removed_in)

@@ -73,7 +73,6 @@ from piloop.plugins.executor.kit.capacity import GB, HostSample
 from piloop.plugins.executor.kit.leases import Leases
 from piloop.plugins.executor.kit.tables import InstanceEnd, WorkerInstance, WorkerInstanceState
 from piloop.plugins.runtime.kit import tags
-from piloop.proc import TEMPFAIL
 from piloop.settings import Settings
 from piloop.store.chunks import Chunked
 from piloop.version import direct_url, installed
@@ -2518,7 +2517,7 @@ def test_an_escalation_is_filed_with_its_form_shown_by_its_provider_and_answered
 
 
 @pytest.mark.usefixtures('api')
-def test_submit_scores_the_commit_of_the_checkout_and_prints_its_verdict_and_score(
+def test_submit_queues_the_commit_of_the_checkout_and_returns_before_its_verdict(
     campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_cli(['init', str(campaign_path)])
@@ -2534,28 +2533,16 @@ def test_submit_scores_the_commit_of_the_checkout_and_prints_its_verdict_and_sco
     agent = launched(tmp_path, f'implementer#{session}')
     monkeypatch.setattr(common, 'settings', Settings(home=tmp_path).model_copy(update=agent))
     monkeypatch.chdir(checkout)
-
-    def judge() -> None:
-        with closing(Database(f'sqlite:///{tmp_path / "piloop.db"}', actor=System.DAEMON)) as db:
-            wait_until(lambda: run_candidate(db, run_id) is not None, 'the submission')
-            with db.session() as s:
-                candidate = s.get_one(Candidate, run_candidate(db, run_id))
-                evaluator = s.get_one(Campaign, candidate.campaign_id).evaluator_id
-                s.add(Measurement(candidate_id=candidate.id, evaluator_id=evaluator, metrics={'score': 2.0}))
-                write(candidate, Outcome.KEEP, cause=None, reason='+1', by=System.DAEMON)
-                s.commit()
-
-    judging = threading.Thread(target=judge)
-    judging.start()
     run_cli(['submit'])
-    judging.join(30)
-    assert out().strip() == 'keep 2'
-    run_cli(['submit', revision])
+    assert out().strip() == 'candidate#2 is queued: its verdict comes as a [piloop] message', 'no wait'
+    with closing(Database(f'sqlite:///{tmp_path / "piloop.db"}', actor=System.DAEMON)) as db, db.session() as s:
+        candidate = s.get_one(Candidate, run_candidate(db, run_id))
+        evaluator = s.get_one(Campaign, candidate.campaign_id).evaluator_id
+        s.add(Measurement(candidate_id=candidate.id, evaluator_id=evaluator, metrics={'score': 2.0}))
+        write(candidate, Outcome.KEEP, cause=None, reason='+1', by=System.DAEMON)
+        s.commit()
+    run_cli(['submit', revision, '--wait', '5'])
     assert out().strip() == 'keep 2', 'its own submission again: its verdict, and no submission spent'
-    later = commit(checkout, 'base\na\nb\n')
-    with pytest.raises(SystemExit) as waited:
-        run_cli(['submit', later, '--wait', '0'])
-    assert (waited.value.code, out().strip()) == (TEMPFAIL, 'pending: candidate#3'), 'not judged yet: call again'
 
 
 def db_campaign(db: Database) -> Campaign:

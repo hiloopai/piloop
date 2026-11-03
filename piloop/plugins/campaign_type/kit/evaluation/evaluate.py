@@ -35,6 +35,8 @@ The others, SIGSEGV or SIGABRT, are the evaluate's own fault, and a measurement 
 
 CHANGED_INPUTS = 'evaluate changed its linked inputs'
 """How the error of an evaluation that changed a linked input that it read starts (``InputsChanged``)."""
+TIMED_OUT = ('evaluate timeout after', 'evaluate reported timeout')
+"""How the error of an evaluation that ran out of time starts: piloop killed it (``TimedOut``), or it said so."""
 UNITS_SUM_TOLERANCE = 1e-3
 """The allowed relative difference between a metric's per-unit sum and its value, which can be rounded."""
 RESULT_PIPE = '.result'
@@ -311,7 +313,7 @@ class Failed:
         """The error that the measurement stores."""
         match self.why:
             case TimedOut(timeout=timeout):
-                return f'evaluate timeout after {timeout:g}s'
+                return f'{TIMED_OUT[0]} {timeout:g}s'
             case Exited(code=code, stderr=stderr):
                 return f'evaluate exit {code}: {stderr}'
             case Killed(signal=signum, stderr=stderr):

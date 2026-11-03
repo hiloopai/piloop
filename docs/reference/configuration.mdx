@@ -657,8 +657,6 @@ A campaign's `[agents]` in its `piloop.toml` can set `wrap_up_grace` and `brief_
 | `exit_output_chars` | integer | `500` | How many characters of its last output lines an agent that exits non-zero leaves in its error, which `piloop status` and the escalation of paused launches show, and one that exits 0 early with nothing done in the escalation. The values of its secrets read as their names. 0 leaves none. |
 | `startup_seconds` | number | `120` | An agent that ends this soon after its start and left nothing (no change and no comment) never worked: it failed at startup, a fault of the host or the harness, not an attempt. |
 | `detail_chars` | integer | `160` | How many characters of a comment or an error one line of a brief shows: an inbox item, an incident. |
-| `relay_wait` | duration | `"PT1M"` | On a worker elsewhere, how long one call of a command that waits, such as `piloop submit`, waits on the server before the relay calls it again: under the 2 minutes that a relayed call may run. |
-| `relay_deadline` | duration | `"PT6H"` | On a worker elsewhere, how long the relay calls a command that waits again, in all, before it gives up: longer than the slowest evaluation that an agent waits for. |
 | `attach_lines` | integer | `40` | How many lines of an agent's output `piloop attach` prints. |
 | `wake_budget` | integer | `2000` | The tokens that `piloop wake` prints when `--budget` is not given. |
 
@@ -871,4 +869,5 @@ These keys still work. Each one shows a `PiloopDeprecationWarning` that names th
 - `share` of a `[tracks.<name>]` is removed: workers claim any open idea, so no track has a share of the slots. piloop drops it, and drops a table that it leaves empty.
 - A role's `finding_grace` is its `end_grace`: the daemon ends a worker that grace after it ended its run.
 - In `config.toml`, `[daemon] startup_relaunches`, `[agents] finding_grace` and `wrap_up_lead` are the role's. They are keys of `[plugins.role.implementer]`, the defaults of every campaign's implementer, and their variables move the same way (`moved_env`). A role of your own that does runs gets the role's defaults, not these.
+- `relay_wait` and `relay_deadline` of `[agents]` are removed. piloop drops them. `piloop submit` returns at once, so the relay of a worker elsewhere calls it once.
 - In `config.toml`, a role's `finding_grace` is its `end_grace`, as in `piloop.toml`.

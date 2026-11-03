@@ -8,8 +8,9 @@ from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.plugins.vcs.contract import VCS, prompted
 
 SUBMIT = (
-    '- `piloop submit` scores the version that your checkout is at, on the full evaluation, and waits for its verdict'
-    ' and score: `keep` makes it the head, `discard` does not beat the head, `crash` did not run.'
+    '- `piloop submit` scores the version that your checkout is at, on the full evaluation. It returns at once: work on.'
+    ' The verdict and score come as a `[piloop]` message: `keep` makes it the head, `discard` does not beat the head,'
+    ' `crash` did not run.'
 )
 """The line that names ``piloop submit``: on a worker elsewhere, the relay lets an agent run it."""
 RUN_END = files(__package__) / 'prompts' / 'run_end.md'

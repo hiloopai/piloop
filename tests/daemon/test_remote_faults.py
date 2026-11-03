@@ -437,10 +437,10 @@ HARNESS_SUBMITS_ELSEWHERE = (
 
 
 @pytest.mark.usefixtures('daemon_api')  # the server runs the relayed `piloop submit` against the home's API
-def test_a_remote_implementer_submits_a_commit_that_only_its_worker_has_and_waits_for_its_verdict(
+def test_a_remote_implementer_submits_a_commit_that_only_its_worker_has_and_works_on_while_it_is_judged(
     db: Database, net: Net, core: RunController, campaign: Campaign, tmp_path: Path
 ) -> None:
-    """Its worker sends the commit through the CAS, and calls again while the verdict is not in."""
+    """Its worker sends the commit through the CAS, and the submission answers before its verdict."""
     write_toml(Path(campaign.path), HARNESS_SUBMITS_ELSEWHERE)
     set_config(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1})
     net.start_worker()
@@ -458,7 +458,8 @@ def test_a_remote_implementer_submits_a_commit_that_only_its_worker_has_and_wait
     [kept] = candidates(db, run_id)
     assert (kept.summary, kept.verdict, kept.metrics['score']) == ('add a line', Outcome.KEEP, 2.0)
     workspace = tmp_path / 'projects' / str(campaign.id) / 'workspace'
-    assert (workspace / 'idea1' / 'submitted.txt').read_text() == 'keep 2\n'
+    queued = f'candidate#{kept.id} is queued: its verdict comes as a [piloop] message\n'
+    assert (workspace / 'idea1' / 'submitted.txt').read_text() == queued
 
 
 HARNESS_PROMPTED = (

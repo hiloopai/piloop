@@ -10,7 +10,9 @@ from piloop.db.models import NOT_RETIRED, OPTIMIZATION, Campaign, EventModel
 from piloop.db.triggers.changelog import EvaluationCancelled, VerdictChanged
 from piloop.plugins.campaign_type.consumers import campaign_kinds
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
+from piloop.plugins.campaign_type.kit.evaluation.submissions import tell_verdicts
 from piloop.plugins.campaign_type.kit.runs.follow_head import follow_head
+from piloop.plugins.campaign_type.kit.verdicts.judge import CandidateJudged
 from piloop.plugins.campaign_type.optimization import yields
 from piloop.plugins.campaign_type.optimization.trigger.low_yield import LowYield
 from piloop.plugins.contribution import Contribution, DaemonHost
@@ -25,9 +27,10 @@ EVALUATIONS: Kinds = frozenset({EvaluationCancelled, MeasurementRecorded, *LIMIT
 
 
 def contribution(host: DaemonHost) -> Contribution:
-    """The consumers ``evaluations``, ``follow_head`` and ``yield_alarm``.
+    """The consumers ``evaluations``, ``follow_head``, ``verdicts`` and ``yield_alarm``.
 
     ``evaluations`` stops the evaluations that someone cancelled, and submits those that a slot freed for.
+    ``verdicts`` tells each running worker the verdicts of its submissions, on a judgement (``tell_verdicts``).
     ``follow_head`` tells the running workers of the roles with ``follow_head = "message"`` where the head moved, on a
     verdict (``follow_head``).
     ``yield_alarm`` raises and clears the escalation of a spell of low yield (``yields.watch``). The campaigns' state
@@ -51,6 +54,14 @@ def contribution(host: DaemonHost) -> Contribution:
             s.commit()
         return None
 
+    def verdicts(_turn: Turn) -> datetime | None:
+        with host.db.session() as s:
+            for campaign in s.scalars(select(Campaign).where(NOT_RETIRED, Campaign.type == OPTIMIZATION)).all():
+                if told := tell_verdicts(s, campaign, host.agents.steer_line_chars):
+                    host.tracer.event('campaign.verdicts_told', campaign=campaign.name, messages=len(told))
+            s.commit()
+        return None
+
     def yield_alarm(turn: Turn) -> datetime | None:
         with host.db.session() as s:
             for campaign in s.scalars(select(Campaign).where(NOT_RETIRED, Campaign.type == OPTIMIZATION)).all():
@@ -67,6 +78,7 @@ def contribution(host: DaemonHost) -> Contribution:
         consumers=(
             Consumer('evaluations', wakes, evaluations, Phase.UPKEEP),
             Consumer('follow_head', frozenset({VerdictChanged}), heads, Phase.IN_FLIGHT),
+            Consumer('verdicts', frozenset({CandidateJudged}), verdicts, Phase.IN_FLIGHT),
             Consumer('yield_alarm', campaign_kinds(), yield_alarm, Phase.PLAN),
         )
     )

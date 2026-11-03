@@ -273,6 +273,7 @@ track_shares = "piloop.deprecated:track_shares"
 end_grace = "piloop.plugins.role.bridges:end_grace"
 home_end_grace = "piloop.plugins.role.bridges:home_end_grace"
 pack_seeds = "piloop.plugins.section.bridges:pack_seeds"
+relay_waits = "piloop.deprecated:relay_waits"
 
 # The kinds that events and comments point at, beyond core's, by name: the table of their rows
 # (piloop.db.models.TARGET_KINDS).

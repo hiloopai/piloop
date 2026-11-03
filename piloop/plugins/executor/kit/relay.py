@@ -20,7 +20,6 @@ Retirement: deleted when agents call typed operations over HTTP, if they ever do
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -46,8 +45,8 @@ from piloop.plugins.executor.kit.door import RELAY_SECONDS, AgentCall, Call, Rel
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.role.contract import RELAYED, Verb
 from piloop.plugins.vcs.contract import VcsError
-from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, PILOOP_ARGV, TEMPFAIL, child_env
-from piloop.settings import AgentSettings, settings, socket_dir
+from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, PILOOP_ARGV, child_env
+from piloop.settings import socket_dir
 
 RELAY_ARGV = (sys.executable, '-P', '-m', agent_end.__name__)
 """What an agent's ``piloop`` runs on a worker elsewhere (``jobs.Machine.piloop``): ``door.main``."""
@@ -130,7 +129,7 @@ SHIPPED_GROUP = 'piloop.shipped_commands'
 """The entry points of the commands that name a version of the agent's checkout, which the server's checkout lacks,
 by the words of the command joined with ``.`` (``submit``). The package that declares the command declares it here.
 On a worker elsewhere, the relay first sends that version through the CAS, then calls
-``<command> <revision> --blob <cid> --wait <relay_wait>``, again while it exits ``TEMPFAIL``."""
+``<command> <revision> --blob <cid>``."""
 
 
 def shipped_commands() -> frozenset[Verb]:
@@ -151,13 +150,11 @@ class Relay:
     and the worker imports no web framework for it.
     """
 
-    def __init__(self, path: Path, send: Send, ship: Ship, agents: AgentSettings | None = None) -> None:
+    def __init__(self, path: Path, send: Send, ship: Ship) -> None:
         self.path = path
         """The socket: ``Settings.relay_file``."""
         self._send = send
         self._ship = ship
-        self._agents = agents if agents is not None else settings.agents
-        """Its ``relay_wait`` and ``relay_deadline``: the home's by default."""
         self._shipped = shipped_commands()
         self._lock = threading.Lock()
         self._leases: dict[AgentSessionId, tuple[int, AgentJob]] = {}
@@ -195,7 +192,7 @@ class Relay:
         named = Revision(rest[0]) if rest and not rest[0].startswith('-') else None
         sent = self._ship(job, named)
         blob = [] if sent.blob is None else ['--blob', str(sent.blob)]
-        return [*shipping, sent.revision, *blob, '--wait', f'{self._agents.relay_wait.total_seconds():g}']
+        return [*shipping, sent.revision, *blob]
 
     def stop(self) -> None:
         """Stop serving."""
@@ -208,7 +205,7 @@ class Relay:
         """What a call gets: what the server's run printed, or why there is none.
 
         A command of ``SHIPPED_GROUP`` first sends the version of the agent's checkout that it names through the CAS
-        (``shipped``). A call that exits ``TEMPFAIL`` is not done: the relay sends it again, until ``relay_deadline``.
+        (``shipped``).
         """
         try:
             call = AgentCall.model_validate_json(body)
@@ -223,13 +220,8 @@ class Relay:
             argv = self.shipped(job, call.argv)
         except VcsError as e:
             return HTTPStatus.OK, Relayed(stderr=f'piloop: the version did not leave this worker: {e}\n', exit_code=1)
-        deadline = time.monotonic() + self._agents.relay_deadline.total_seconds()
         try:
-            while (
-                done := self._send(lease, Call(argv=argv, stdin=call.stdin, token=call.token))
-            ).exit_code == TEMPFAIL and time.monotonic() < deadline:
-                pass
-            return HTTPStatus.OK, done
+            return HTTPStatus.OK, self._send(lease, Call(argv=argv, stdin=call.stdin, token=call.token))
         except StaleLease as e:
             return HTTPStatus.OK, Relayed(stderr=f'piloop: the lease of this agent ended: {e}\n', exit_code=1)
         except (httpx.ConnectError, Dismissed) as e:  # it never reached the command: running it again is safe

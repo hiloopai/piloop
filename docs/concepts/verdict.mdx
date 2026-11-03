@@ -58,18 +58,30 @@ Whatever the rule, a keep of a campaign with a [sealed split](#the-sealed-split)
 
 ## Submissions
 
-An implementer runs `piloop submit` in its checkout. piloop scores that commit with the evaluate command at once, judges
-it against the head, and prints the verdict and the score:
+An implementer runs `piloop submit` in its checkout. It returns at once, and the implementer works on:
 
 ```text
-keep 2720458
+candidate#12 is queued: its verdict comes as a [piloop] message
 ```
+
+piloop scores that commit with the evaluate command, judges it against the head, and sends the verdict and the score
+to the implementer as a message on its run:
+
+```text
+[piloop] candidate#12 (3f2c9a1b7d04): keep 2720458 — against candidate#9: …
+```
+
+A harness that reads messages only between turns gets no message: the implementer reads the verdict in
+`candidates.verdict`.
 
 - A run submits as many as it likes, unless `[evaluator] submissions` caps it. A commit that is not submitted is never
   scored: at the end of the run it is `skipped`.
 - A submission that beats only its parent is recorded, nothing more. The `candidate.judged` event has the gain over
   the parent (`parent_delta`) and over the head (`best_delta`).
-- The implementer gets the verdict and the score, never the reason, the feedback or a per-unit result.
+- The message gives the verdict, the score and the reason, never the feedback or a per-unit result.
+- A discard because a metric went past its floor, or a crash because the evaluation ran out of time, can be the
+  machine's load. A resubmit of the same tree measures it again, and judges it on the mean of all its evaluations.
+  Any other verdict stays.
 - A run that claimed no idea submits nothing.
 
 `[evaluator] scoring = "run_end"` scores every commit after the run ends instead, against the run's starting point.
@@ -96,11 +108,12 @@ escalates once.
 
 ## The sealed split
 
-`[evaluator] sealed` is a second command that scores a version on data that no implementer can read: keep its data
-and its scorer in the home or on the evaluator's machines, outside the repo. piloop runs it only on a submission that
-would become the new head, and on that head once. The submission is kept only when it beats the head there too,
-whatever the verdict rule. A remeasure goes through the same gate: a version that would keep is scored on the sealed
-split again, and keeps only when it holds there.
+`[evaluator] sealed` is a second command that scores a version on data that no implementer can read: keep its data and
+its scorer in the home or on the evaluator's machines, outside the repo. piloop starts it on each submission at the same
+time as the evaluate command, and keeps its score only for a submission that would become the new head; any other
+verdict stops it and drops its result. The head is scored there once. The submission is kept only when it beats the head
+there too, whatever the verdict rule. A remeasure goes through the same gate: a version that would keep is scored on the
+sealed split again, and keeps only when it holds there.
 
 ```toml
 [evaluator]

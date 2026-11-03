@@ -308,6 +308,14 @@ With the orchestrator role off (no `news` in its `triggers`), an agent's escalat
 `piloop campaign stop` by an agent, or with `PILOOP_ACTOR=orchestrator`, is refused: the agent escalates a stop
 instead.
 
+### `piloop submit` returns at once
+
+`piloop submit` prints the candidate and returns. The verdict and the score reach the implementer as a `[piloop]`
+message on its run. `--wait` is ignored until 0.7.0, and the route `GET /v1/submissions/{candidate}` is removed: read
+the verdict with `GET /v1/candidates/{candidate}`. `[agents] relay_wait` and `relay_deadline` of `config.toml` are
+dropped with a warning until 0.7.0. The sealed split starts on each submission at the same time as the evaluate command, and records a score only for
+a would-be keep.
+
 ## Upgrading to 0.5.0
 
 ### Upgrade from 0.4

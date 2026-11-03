@@ -1,6 +1,5 @@
 """The evaluation's commands, clients of the API: ``piloop eval``, ``piloop measurement add``, ``piloop submit``."""
 
-import time
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +10,7 @@ from pydantic import ValidationError
 from rich.table import Table
 from rich.text import Text
 
-from piloop.api.contract import MAX_POLL_SECONDS
+from piloop import deprecated
 from piloop.cli import common
 from piloop.cli.client import daemon_http
 from piloop.plugins.campaign_type.kit.candidates.ids import PENDING, CandidateId
@@ -21,11 +20,9 @@ from piloop.plugins.campaign_type.kit.evaluation.wire import (
     EvaluationState,
     Report,
     RunningSince,
-    SubmissionQuery,
     SubmitBody,
     WaitingSince,
 )
-from piloop.proc import TEMPFAIL
 from piloop.text import age, cell, metric
 
 eval_app = cyclopts.App(
@@ -124,29 +121,25 @@ def submit(
     blob: Annotated[
         str | None, cyclopts.Parameter(help='The versions that the repo of record lacks, in the CAS.', show=False)
     ] = None,
-    wait: Annotated[
-        float | None, cyclopts.Parameter(help='Wait this many seconds at most, then exit 75 if no verdict.', show=False)
-    ] = None,
+    wait: Annotated[float | None, cyclopts.Parameter(help='Ignored.', show=False)] = None,
 ) -> None:
-    """Score a commit of your run now, and wait for its verdict.
+    """Score a commit of your run. It returns at once: the verdict comes to you as a `[piloop]` message.
 
-    piloop runs the campaign's evaluate command on the commit, and judges it against the head. It prints the verdict
-    and the score, such as `keep 0.8312`: `keep` makes it the head, `discard` does not, `crash` failed to run. A campaign
-    can cap the submissions of a run (`[evaluator] submissions`).
+    piloop runs the campaign's evaluate command on the commit, and judges it against the head. Keep working meanwhile.
+    The message gives the verdict and the score, such as `keep 0.8312`: `keep` makes it the head, `discard` does not,
+    `crash` failed to run. A campaign can cap the submissions of a run (`[evaluator] submissions`).
     """
+    if wait is not None:
+        deprecated.until('0.7.0', 'the relay of a worker before 0.6 passes submit --wait: delete the parameter')
     if revision is None:
         from piloop.plugins.vcs.contract import VCS  # here: only this command reads a checkout; the others load no vcs
 
         with closing(VCS.selected({}).open(Path.cwd())) as checkout:
             revision = checkout.head().revision
-    deadline = None if wait is None else time.monotonic() + wait
     with EvaluationClient.connect(daemon_http()) as client:
         answer = client.submit(SubmitBody(revision=revision, blob=blob))
-        while answer.verdict == PENDING:
-            left = MAX_POLL_SECONDS if deadline is None else min(MAX_POLL_SECONDS, deadline - time.monotonic())
-            if left <= 0:
-                common.console.print(f'pending: candidate#{answer.candidate}', markup=False, highlight=False)
-                raise SystemExit(TEMPFAIL)
-            answer = client.submission(answer.candidate, SubmissionQuery(wait=left))
-    score = '' if answer.score is None else f' {metric(answer.score)}'
-    common.console.print(f'{answer.verdict}{score}', markup=False, highlight=False)
+    if answer.verdict == PENDING:
+        line = f'candidate#{answer.candidate} is queued: its verdict comes as a [piloop] message'
+    else:
+        line = f'{answer.verdict}{"" if answer.score is None else f" {metric(answer.score)}"}'
+    common.console.print(line, markup=False, highlight=False)

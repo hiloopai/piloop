@@ -142,7 +142,7 @@ def test_an_implementer_is_told_how_its_change_is_measured(db: Database, campaig
 ## Measure a change
 
 - `uv run evaluate.py --n '50 rows'` checks a change fast, in your checkout: piloop never runs it or records it.
-- `piloop submit` scores the version that your checkout is at, on the full evaluation, and waits for its verdict and score: `keep` makes it the head, `discard` does not beat the head, `crash` did not run.
+- `piloop submit` scores the version that your checkout is at, on the full evaluation. It returns at once: work on. The verdict and score come as a `[piloop]` message: `keep` makes it the head, `discard` does not beat the head, `crash` did not run.
 - Submit each version that beats your best so far: your run has 2 submissions. Only submitted versions are scored and kept.\
 """)
     set_config(db, campaign, evaluator={'scoring': 'submit'})

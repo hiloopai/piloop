@@ -13,7 +13,16 @@ from piloop.config import CampaignAgents
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.harness.contract import cleared_env, each_provider
 from piloop.plugins.host import Scope, campaign_defaults
-from piloop.settings import UNDER_TEST_ENV, MovedEnv, Settings, StorageSettings, TracingSettings, env_names, expand_env
+from piloop.settings import (
+    UNDER_TEST_ENV,
+    AgentSettings,
+    MovedEnv,
+    Settings,
+    StorageSettings,
+    TracingSettings,
+    env_names,
+    expand_env,
+)
 
 
 def test_the_test_session_runs_in_a_temporary_home() -> None:
@@ -156,6 +165,18 @@ def test_the_implementer_s_timings_of_config_toml_are_its_role_s_with_a_warning(
     assert campaign_defaults(home.plugins) == {
         'role': {'implementer': {'startup_relaunches': 4, 'end_grace': 'PT30S', 'wrap_up_lead': 120}}
     }
+
+
+def test_the_relay_s_wait_and_deadline_of_config_toml_are_dropped_with_a_warning(tmp_path: Path) -> None:
+    """``piloop submit`` waits for nothing, so the relay calls it once: its two keys have nothing to set."""
+    (tmp_path / 'config.toml').write_text('[agents]\nrelay_wait = "PT30S"\nrelay_deadline = "PT1H"\n')
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        home = Settings(home=tmp_path)
+    assert [str(w.message).split('; removed')[0] for w in warned] == [
+        '`piloop submit` returns at once, so [agents] relay_wait is removed; delete it',
+        '`piloop submit` returns at once, so [agents] relay_deadline is removed; delete it',
+    ]
+    assert home.agents == AgentSettings()
 
 
 def test_a_role_s_finding_grace_of_config_toml_is_its_end_grace_with_a_warning(tmp_path: Path) -> None:
