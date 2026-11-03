@@ -6,19 +6,21 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import warnings
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from pydantic import JsonValue, SecretStr
 
 from evals import meter
-from evals.drive import HALT, Piloop, Plain, piloop_config, price, sample, sandbox
+from evals.drive import HALT, Piloop, Plain, drive, piloop_config, price, sample, sandbox, watch
 from evals.loop import evaluations
 from evals.metrics import at, result
 from evals.model import (
@@ -151,23 +153,98 @@ def test_piloop_config_puts_agents_on_the_gateway():
 
 
 class FakeBox:
-    """A sandbox that records each command, answers each with ``out``, and holds the meter's last count."""
+    """A sandbox that records each command, answers each with ``out``, and holds the meter's last count.
 
-    def __init__(self, meter: object = None, out: str = '') -> None:
-        self.meter, self.out, self.commands = meter, out, []
+    A command that contains a string of ``fail`` exits non-zero, as ``Box.run`` reports it: the first time only when
+    ``fail_once``.
+    """
+
+    def __init__(
+        self, meter: object = None, out: str = '', fail: tuple[str, ...] = (), fail_once: bool = False
+    ) -> None:
+        self.meter, self.out, self.commands, self.fail, self.fail_once = meter, out, [], fail, fail_once
+        self.failed: set[str] = set()
+        self.closed = False
+        self.sandbox = SimpleNamespace(object_id='sb-fake')
 
     def run(self, script: str, timeout: float | None = None) -> str:
         self.commands.append(script)
+        for marker in self.fail:
+            if marker in script and not (self.fail_once and marker in self.failed):
+                self.failed.add(marker)
+                raise RuntimeError(f'{script[:40]!r} exited 137: ')
         return self.out
 
     def start(self, script: str) -> None:
         self.commands.append(script)
 
     def read(self, path: str) -> bytes:
+        if path.endswith('.tgz'):
+            buf = BytesIO()
+            with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+                info = tarfile.TarInfo('out/sessions')
+                info.size = 2
+                tar.addfile(info, BytesIO(b'1\n'))
+            return buf.getvalue()
         return json.dumps(self.meter).encode()
 
     def write(self, path: str, data: bytes) -> None:
         pass
+
+    def ended(self) -> bool:
+        return False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+METER = {'codex': {'gpt-6.1-sol': {'input': 10, 'output': 5, 'cache_read': 100, 'cache_write': 0, 'turns': 1}}}
+
+
+def plain_run(settings: Settings) -> Plain:
+    arm = PlainArm(
+        kind='plain',
+        name='p',
+        agent=Agent(harness='codex', model='gpt-6.1-sol'),
+        resources=Resources(cpu=1, memory_mb=512),
+    )
+    return Plain(Task.load('t5-lpaq'), arm, settings, 0)
+
+
+def test_a_failed_spend_sample_is_tried_again(tmp_path: Path):
+    settings = Settings(poll_seconds=0)
+    box = FakeBox(METER, fail=('meter.py',), fail_once=True)
+    run = plain_run(settings)
+    stopped = watch(
+        box, run, Resources(cpu=1, memory_mb=512), 100, 0, settings, tmp_path / 'spend.jsonl', time.monotonic()
+    )
+    assert stopped == 'hours'
+    assert len((tmp_path / 'spend.jsonl').read_text().splitlines()) == 2
+
+
+def test_a_spend_sample_that_keeps_failing_stops_the_run_and_says_why(tmp_path: Path):
+    settings = Settings(poll_seconds=0, sample_attempts=2)
+    box = FakeBox(METER, fail=('meter.py',))
+    run = plain_run(settings)
+    stopped = watch(
+        box, run, Resources(cpu=1, memory_mb=512), 100, 6, settings, tmp_path / 'spend.jsonl', time.monotonic()
+    )
+    assert stopped.startswith('sample failed:') and 'exited 137' in stopped
+    assert any('pkill' in c for c in box.commands)
+
+
+def test_a_fatal_error_still_exports_the_run_before_its_sandbox_closes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    box = FakeBox(METER, fail=('env -u EVALS_EVAL_LOG',))
+    monkeypatch.setattr('evals.drive.Box.create', lambda *args, **kwargs: box)
+    monkeypatch.setattr('evals.drive.image', lambda *args: None)
+    settings = Settings(gateway='https://gw.example', gateway_token=SecretStr('t'), results=tmp_path)
+    arm = plain_run(settings).arm
+    with pytest.raises(RuntimeError, match='exited 137'):
+        drive(Task.load('t5-lpaq'), arm, 1, 10, 1, settings)
+    out = tmp_path / 't5-lpaq' / 'p-1'
+    assert any('bundle create' in c for c in box.commands) and box.closed
+    assert (out / 'export' / 'out' / 'sessions').exists()
+    assert json.loads((out / 'run.json').read_text())['stopped'].startswith('error: RuntimeError')
 
 
 def test_a_sample_keeps_the_meters_tokens_and_the_sandboxs_compute():

@@ -282,16 +282,16 @@ class Plain:
         prompt = PLAIN_PROMPT.format(dev=shlex.join(self.task.dev), hours=self.hours)
         self.proc = box.start(self.script(f'{prompt}\n\n{self.arm.instruction}' if self.arm.instruction else prompt))
 
-    def ended(self, box: Box) -> str | None:
+    def ended(self, box: Shell) -> str | None:
         """Only when the loop of sessions failed: a session that ends is resumed inside it."""
         if self.proc is not None and self.proc.poll() is not None:
             return f'the sessions ended: {self.proc.stderr.read()[-500:]}'
         return None
 
-    def stop(self, box: Box, reason: str) -> None:
+    def stop(self, box: Shell, reason: str) -> None:
         box.run('pkill -f "[w]hile true; do n=" || true; pkill -f "[c]odex exec|[c]laude -p" || true')
 
-    def export(self, box: Box) -> None:
+    def export(self, box: Shell) -> None:
         box.run(f'ls {OUT}/session-*.jsonl | wc -l > {OUT}/sessions')
 
 
@@ -371,6 +371,7 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
             )
         span.set_attribute('modal.sandbox', box.sandbox.object_id)
         (out / 'sandbox').write_text(box.sandbox.object_id)
+        base, started_at, stopped = '', datetime.now(UTC), 'error: the run failed before its agents started'
         try:
             with tracer.start_as_current_span('evals.prepare'):
                 base = prepare(box, task)
@@ -380,39 +381,44 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
                 run.start(box)
             started_at, started = datetime.now(UTC), time.monotonic()
             stopped = watch(box, run, r, budget, hours, settings, out / 'spend.jsonl', started)
-            span.set_attribute('stopped', stopped)
-            with tracer.start_as_current_span('evals.export'):
-                run.export(box)
-                box.run(
-                    f'git -C {REPO} bundle create {OUT}/repo.bundle --all'
-                    f' && tar czf {WORK}/export.tgz --ignore-failed-read -C {WORK} out'
-                    ' -C /root .claude/projects .codex/sessions',
-                    timeout=900,
-                )
-                (out / 'export.tgz').write_bytes(box.read(f'{WORK}/export.tgz'))
+        except Exception as e:
+            stopped = f'error: {type(e).__name__}: {e}'[:500]
+            raise
         finally:
-            box.close()
-    with tarfile.open(fileobj=BytesIO((out / 'export.tgz').read_bytes())) as tar:
-        tar.extractall(out / 'export', filter='data')
-    meta = {
-        'task': task.name,
-        'arm': arm.name,
-        'repeat': repeat,
-        'piloop': run.version if isinstance(run, Piloop) else None,
-        'base': base,
-        'started_at': started_at.isoformat(),
-        'budget_usd': budget,
-        'max_hours': hours,
-        'stopped': stopped,
-        'supervised': isinstance(run, Piloop),
-    }
-    (out / 'run.json').write_text(json.dumps(meta, indent=2))
-    archive(out, settings)
+            span.set_attribute('stopped', stopped)
+            try:
+                with tracer.start_as_current_span('evals.export'):
+                    run.export(box)
+                    box.run(
+                        f'git -C {REPO} bundle create {OUT}/repo.bundle --all'
+                        f' && tar czf {WORK}/export.tgz --ignore-failed-read -C {WORK} out'
+                        ' -C /root .claude/projects .codex/sessions',
+                        timeout=900,
+                    )
+                    (out / 'export.tgz').write_bytes(box.read(f'{WORK}/export.tgz'))
+            finally:
+                box.close()
+            with tarfile.open(fileobj=BytesIO((out / 'export.tgz').read_bytes())) as tar:
+                tar.extractall(out / 'export', filter='data')
+            meta = {
+                'task': task.name,
+                'arm': arm.name,
+                'repeat': repeat,
+                'piloop': run.version if isinstance(run, Piloop) else None,
+                'base': base,
+                'started_at': started_at.isoformat(),
+                'budget_usd': budget,
+                'max_hours': hours,
+                'stopped': stopped,
+                'supervised': isinstance(run, Piloop),
+            }
+            (out / 'run.json').write_text(json.dumps(meta, indent=2))
+            archive(out, settings)
     return out
 
 
 def watch(
-    box: Box,
+    box: Shell,
     run: Piloop | Plain,
     r: Resources,
     budget: float,
@@ -423,31 +429,41 @@ def watch(
 ) -> str:
     """Sample the spend into ``log`` until a stop, then stop the run. Why it stopped.
 
-    A stop is a ``HALT`` file beside ``log``, the budget, the hours, or the run's own end.
+    A stop is a ``HALT`` file beside ``log``, the budget, the hours, the run's own end, or a spend sample that failed
+    ``sample_attempts`` times: then the run stops with that error, and the driver still exports it.
     """
     stopped = ''
     with log.open('w') as f:
 
-        def record() -> Sample:
+        def record() -> Sample | RuntimeError | ConnectionError:
+            """The spend now, written to ``log``; or the error of the last attempt, when every attempt failed."""
             with tracer.start_as_current_span('evals.spend') as span:
+                failed: RuntimeError | ConnectionError = RuntimeError('no attempt: sample_attempts is 0')
                 for attempt in range(settings.sample_attempts):
                     try:
                         now = sample(box, r, settings, (time.monotonic() - started) / 3600)
-                        break
-                    except ConnectionError as e:  # Modal's link to the sandbox drops now and then: try again
+                    # Modal's link to the sandbox drops now and then, and the meter can be killed (exit 137 when the
+                    # sandbox runs out of memory): try again.
+                    except (ConnectionError, RuntimeError) as e:
                         span.add_event('evals.sample_retry', {'attempt': attempt, 'error': str(e)})
-                        if attempt + 1 == settings.sample_attempts or box.sandbox.poll() is not None:
-                            raise
+                        failed = e
+                        if box.ended():
+                            break
                         time.sleep(settings.poll_seconds / 4)
-                span.set_attributes({'usd': round(now.usd, 3), 'hours': round(now.hours, 3)})
-            f.write(now.model_dump_json() + '\n')
-            f.flush()
-            return now
+                    else:
+                        span.set_attributes({'usd': round(now.usd, 3), 'hours': round(now.hours, 3)})
+                        f.write(now.model_dump_json() + '\n')
+                        f.flush()
+                        return now
+                span.set_attribute('error', str(failed)[:500])
+                return failed
 
         while not stopped:
             now = record()
             halt = log.parent / HALT
-            if halt.exists():
+            if not isinstance(now, Sample):
+                stopped = f'sample failed: {now}'[:500]
+            elif halt.exists():
                 stopped = f'halted: {halt.read_text().strip()}'
             elif now.usd >= budget:
                 stopped = 'budget'

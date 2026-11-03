@@ -79,6 +79,8 @@ class Shell(Protocol):
 
     def write(self, path: str, data: bytes) -> None: ...
 
+    def ended(self) -> bool: ...
+
 
 @dataclass
 class Box:
@@ -145,6 +147,10 @@ class Box:
     def read(self, path: str) -> bytes:
         """The bytes of ``path`` in the sandbox."""
         return self.sandbox.filesystem.read_bytes(path)
+
+    def ended(self) -> bool:
+        """Whether the sandbox has ended."""
+        return self.sandbox.poll() is not None
 
     def close(self) -> None:
         """End the sandbox."""
