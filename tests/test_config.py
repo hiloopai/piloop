@@ -836,6 +836,19 @@ def test_the_verdict_keys_of_0_5_load_without_them_and_warn_from_a_file_and_from
         CampaignConfig.model_validate('not a table')
 
 
+def test_a_stored_config_of_0_5_with_the_judging_section_table_loads_without_it() -> None:
+    """0.5 dumped every section's table, ``judging`` among them: its empty table goes without a word, and one that
+    sets a key goes with a warning."""
+    stored = bare_config('p').model_dump(mode='json')
+    stored['plugins']['section'] = {**stored['plugins'].get('section', {}), 'judging': {}}
+    assert CampaignConfig.model_validate(stored) == bare_config('p')
+    stored['plugins']['section']['judging'] = {'budget': 3}
+    with pytest.warns(
+        PiloopDeprecationWarning, match=r'the section judging is removed; delete \[plugins.section.judging\]'
+    ):
+        assert CampaignConfig.model_validate(stored) == bare_config('p')
+
+
 def test_a_research_table_of_0_6_loads_without_research_and_warns_once(campaign_path: Path) -> None:
     toml = campaign_path / 'piloop.toml'
     toml.write_text(toml.read_text() + '\n[plugins.role.research]\nmax_ideas = 3\n')

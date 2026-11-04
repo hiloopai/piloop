@@ -154,13 +154,13 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
 
         ``[plugins.verdict_rule]`` goes (``[plugins.best_rule]`` says which candidate may be best), and so do
         ``repeats`` of a metric (no evaluation runs next to a bar) and ``follow_head`` of a role (there is no head).
-        The section ``judging`` of a role's ``sections`` is ``scoring``. A stored config's null ``repeats`` goes
-        without a word.
+        The section ``judging`` of a role's ``sections`` is ``scoring``, and its table goes. A stored config's null
+        ``repeats`` and empty ``judging`` table go without a word.
         """
         if not isinstance(data, dict):
             return data
         found = dict(data)
-        if isinstance(plugins := found.get('plugins'), dict) and ('verdict_rule' in plugins or 'role' in plugins):
+        if isinstance(plugins := found.get('plugins'), dict) and {'verdict_rule', 'role', 'section'} & set(plugins):
             kept = {k: v for k, v in plugins.items() if k != 'verdict_rule'}
             if 'verdict_rule' in plugins:
                 deprecated.dropped(
@@ -168,6 +168,12 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
                 )
             if isinstance(roles := plugins.get('role'), dict):
                 kept['role'] = {n: _without_head(n, r) for n, r in roles.items()}
+            if isinstance(sections := plugins.get('section'), dict) and 'judging' in sections:
+                kept['section'] = {k: v for k, v in sections.items() if k != 'judging'}
+                if sections['judging']:
+                    deprecated.dropped(
+                        'the section judging is removed; delete [plugins.section.judging]', removed_in='0.7.0'
+                    )
             found['plugins'] = kept
         if isinstance(metrics := found.get('metrics'), list):
             found['metrics'] = [_without_repeats(m) for m in metrics]
