@@ -4,7 +4,8 @@
 structure only: its keys, tables and value types, with every path, name, command and text replaced. Together, the
 files of a revision hold every key and value type that those homes stored at it. Only a revision that this piloop
 migrates from has files: the head of the previous minor release, or a newer one. The files of 0067 are those that
-real homes stored at 0053, as 0.4's revisions rewrote them.
+real homes stored at 0053, as 0.4's revisions rewrote them. The files of 0073 (0.5.0) and 0078 (the 0.6 pins before
+``optimization 0009``) are the bundled templates' configs as those checkouts stored them, one for each structure.
 """
 
 import sqlite3

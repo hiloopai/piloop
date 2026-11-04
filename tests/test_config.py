@@ -924,12 +924,13 @@ def test_a_watchdog_table_of_0_6_loads_without_a_watchdog_and_warns_once(campaig
     assert len(warned) == 1 and 'watchdog' not in cfg.roles.all()
 
 
-def test_the_idle_queue_section_of_0_6_loads_without_it_and_warns(campaign_path: Path) -> None:
+@pytest.mark.parametrize('gone', ['idle_queue', 'yields'])
+def test_a_section_that_0_6_removed_loads_without_it_and_warns(campaign_path: Path, gone: str) -> None:
     toml = campaign_path / 'piloop.toml'
-    sections = '[plugins.section]\nuse = ["headline", "idle_queue", "runs"]\n\n[plugins.section.idle_queue]\n'
-    implementer = '[plugins.role.implementer]\nsections = ["context", "idle_queue", "history"]\n'
+    sections = f'[plugins.section]\nuse = ["headline", "{gone}", "runs"]\n\n[plugins.section.{gone}]\n'
+    implementer = f'[plugins.role.implementer]\nsections = ["context", "{gone}", "history"]\n'
     toml.write_text(toml.read_text().replace('[plugins.role.implementer]\n', implementer) + f'\n{sections}')
-    with pytest.warns(PiloopDeprecationWarning, match='the idle_queue section is removed') as warned:
+    with pytest.warns(PiloopDeprecationWarning, match=f'the {gone} section is removed') as warned:
         cfg = load_campaign_config(campaign_path)
     assert len(warned) == 3, 'the use list, the table and the role list'
     assert SECTIONS.used(cfg.plugins) == ('headline', 'runs')
@@ -950,6 +951,15 @@ def test_a_campaign_that_0_6_stored_with_a_watchdog_and_the_idle_queue_loads_and
         'the watchdog role is removed',
     ]
     assert 'watchdog' not in cfg.roles.all() and 'idle_queue' not in SECTIONS.used(cfg.plugins)
+
+
+def test_a_campaign_that_0_5_stored_with_the_yields_section_loads_without_it() -> None:
+    """0.5 dumped every section's table and listed ``yields`` in ``use``: #670 deleted the section."""
+    stored = bare_config('p').model_dump(mode='json')
+    section = stored['plugins'].setdefault('section', {})
+    section['use'], section['yields'] = [*SECTIONS.used(bare_config('p').plugins), 'yields'], {}
+    with pytest.warns(PiloopDeprecationWarning, match='the yields section is removed'):
+        assert 'yields' not in SECTIONS.used(CampaignConfig.model_validate(stored).plugins)
 
 
 def test_the_low_water_and_stalled_triggers_of_0_6_load_without_them_and_warn(campaign_path: Path) -> None:

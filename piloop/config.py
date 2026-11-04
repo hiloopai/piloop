@@ -110,6 +110,11 @@ SWEEP_TRIGGERS = frozenset({'cron', 'stopped', 'low_yield', 'dead_at_startup'})
 """The triggers that only a sweep's timer, the closing review and the watchdog's incidents used."""
 SWEEP_KEYS = ('interval', 'incident_prompt', 'routine_prompt')
 """The keys of a role that the timer and the incident and routine prompts read, removed with them."""
+REMOVED_SECTIONS = {
+    'idle_queue': 'every free slot gets a run',
+    'yields': 'the low-yield alarm is removed with it',
+}
+"""The sections that 0.6 removed, and why: a file or a stored config that names one loads without it (``_removed_sections``)."""
 
 
 class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docstrings=True):
@@ -368,39 +373,42 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
 
     @model_validator(mode='before')
     @classmethod
-    @deprecated.until('0.7.0', 'idle_queue is removed in 0.6: delete CampaignConfig._idle_queue')
-    def _idle_queue(cls, data: object) -> object:
-        """Drop the ``idle_queue`` section from ``[plugins.section]`` and from each role's ``sections``, with a warning.
+    @deprecated.until('0.7.0', 'idle_queue and yields are removed in 0.6: delete CampaignConfig._removed_sections')
+    def _removed_sections(cls, data: object) -> object:
+        """Drop each section of ``REMOVED_SECTIONS`` from ``[plugins.section]``, its ``use`` and each role's ``sections``.
 
-        Every free slot gets a fresh run, so a free slot with no open idea is not idle.
+        Each place warns. A stored config of 0.5 holds every section's table and lists them in ``use``.
         """
         plugins = data.get('plugins') if isinstance(data, dict) else None
         if not isinstance(data, dict) or not isinstance(plugins, dict):
             return data
-        gone = 'idle_queue'
 
-        def dropped(where: str) -> None:
+        def dropped(gone: str, where: str) -> None:
             deprecated.dropped(
-                f'the {gone} section is removed: every free slot gets a run; delete it from {where}', removed_in='0.7.0'
+                f'the {gone} section is removed: {REMOVED_SECTIONS[gone]}; delete it from {where}', removed_in='0.7.0'
             )
 
         kept = dict(plugins)
         if isinstance(sections := plugins.get('section'), dict):
             table = dict(sections)
-            if isinstance(use := table.get('use'), list) and gone in use:
-                dropped('[plugins.section] use')
-                table['use'] = [n for n in use if n != gone]
-            if table.pop(gone, None) is not None:
-                dropped(f'[plugins.section.{gone}]')
+            if isinstance(use := table.get('use'), list):
+                for gone in (n for n in use if n in REMOVED_SECTIONS):
+                    dropped(gone, '[plugins.section] use')
+                table['use'] = [n for n in use if n not in REMOVED_SECTIONS]
+            for gone in REMOVED_SECTIONS:
+                if table.pop(gone, None) is not None:
+                    dropped(gone, f'[plugins.section.{gone}]')
             kept['section'] = table
         if isinstance(roles := plugins.get('role'), dict):
-            listed = {n: t for n, t in roles.items() if isinstance(t, dict) and gone in (t.get('sections') or [])}
-            for name in listed:
-                dropped(f'[plugins.role.{name}] sections')
-            kept['role'] = {
-                n: {**t, 'sections': [x for x in t['sections'] if x != gone]} if n in listed else t
-                for n, t in roles.items()
-            }
+            tables = {}
+            for name, role in roles.items():
+                listed = role.get('sections') if isinstance(role, dict) else None
+                if isinstance(role, dict) and isinstance(listed, list):
+                    for gone in (n for n in listed if n in REMOVED_SECTIONS):
+                        dropped(gone, f'[plugins.role.{name}] sections')
+                    role = {**role, 'sections': [n for n in listed if n not in REMOVED_SECTIONS]}
+                tables[name] = role
+            kept['role'] = tables
         return {**data, 'plugins': kept}
 
     @model_validator(mode='after')
