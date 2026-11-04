@@ -560,7 +560,7 @@ def on_team(
     cloud = daytona.client(settings)
     steps = recipe([task], arm)
     labels = {'purpose': 'piloop-evals', 'run': name.replace('/', '_')}
-    control = daytona.control(cloud, steps, {k: v for k, v in env.items() if k != HEADERS}, labels)
+    control = daytona.control(cloud, steps, {k: v for k, v in env.items() if k != HEADERS}, labels, hours)
     try:
         api, cas = control.preview(daytona.API), control.preview(daytona.CAS)
         own: list[JsonValue] = [h for h in (urlsplit(api).hostname, urlsplit(cas).hostname) if h]
@@ -733,10 +733,14 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
             raise
         finally:
             span.set_attribute('stopped', stopped)
+            kept: list[str] = []
             try:
                 with tracer.start_as_current_span('evals.export') as exporting:
                     failed = export(fleet, run, out)
                     exporting.set_attribute('failed', ' | '.join(failed))
+                # The control sandbox holds the repo and the run: one that could not give them waits for inspection,
+                # until its TTL or its platform's timeout, instead of being deleted with them.
+                kept = fleet.ids[:1] if any(f.startswith('control') for f in failed) else []
                 meta = {
                     'task': task.name,
                     'arm': arm.name,
@@ -749,12 +753,14 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
                     'stopped': stopped,
                     'supervised': isinstance(run, Piloop),
                     'export_failed': failed,
+                    'kept': kept,
                     **fleet.described,
                 }
                 (out / 'run.json').write_text(json.dumps(meta, indent=2))
                 archive(out, settings)
             finally:
-                fleet.close()  # after its export, which it gave or gave up
+                if not kept:
+                    fleet.close()  # after its export, which it gave
     return out
 
 

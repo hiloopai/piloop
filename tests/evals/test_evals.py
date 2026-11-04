@@ -291,6 +291,11 @@ def test_a_fatal_error_still_exports_the_run_before_its_sandbox_closes(tmp_path:
     assert json.loads((out / 'run.json').read_text())['stopped'].startswith('error: RuntimeError')
 
 
+def test_a_daytona_sandbox_ends_by_itself_after_its_ttl():
+    params = daytona.params('snap', {}, public=True, labels={}, offline=False, ttl_minutes=480)
+    assert (params.ttl_minutes, params.auto_stop_interval) == (480, 0)
+
+
 def test_a_sample_keeps_the_meters_tokens_and_the_sandboxs_compute():
     count = {'input': 10, 'output': 5, 'cache_read': 100, 'cache_write': 1, 'turns': 1}
     box = FakeBox({'claude': {'claude-opus-5-5': count}, 'codex': {'gpt-6.1-sol': count}})
@@ -1087,7 +1092,7 @@ def test_a_spend_sample_that_times_out_is_tried_again(tmp_path: Path, monkeypatc
     )
 
 
-def test_a_run_whose_export_fails_still_writes_its_record_before_its_sandbox_closes(
+def test_a_run_whose_export_fails_writes_its_record_and_keeps_its_sandbox_for_inspection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     box = FakeBox(METER, fail=('env -u EVALS_EVAL_LOG', 'bundle create'))
@@ -1103,7 +1108,8 @@ def test_a_run_whose_export_fails_still_writes_its_record_before_its_sandbox_clo
     with pytest.raises(RuntimeError, match='exited 137'):
         drive(Task.load('t5-lpaq'), plain_run(settings).arm, 1, 10, 0, settings)
     meta = json.loads((tmp_path / 't5-lpaq' / 'p-1' / 'run.json').read_text())
-    assert meta['export_failed'][0].startswith('control: RuntimeError') and box.closed
+    assert meta['export_failed'][0].startswith('control: RuntimeError') and meta['kept'] == ['sb-fake']
+    assert not box.closed, 'a sandbox that could not give its export waits for inspection, until its TTL'
 
 
 def test_a_pool_run_s_heads_are_its_best_over_time_and_its_line_holds_what_stacked(db: Database) -> None:

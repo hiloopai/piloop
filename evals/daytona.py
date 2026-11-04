@@ -259,6 +259,22 @@ def snapshot(daytona: Daytona, steps: Sequence[Step], size: Resources) -> str:
     return name
 
 
+def params(
+    name: str, env: dict[str, str], *, public: bool, labels: dict[str, str], offline: bool, ttl_minutes: int | None
+) -> CreateSandboxFromSnapshotParams:
+    """How to create a sandbox from the snapshot ``name``: deleted when it stops, and ended after ``ttl_minutes``."""
+    return CreateSandboxFromSnapshotParams(
+        snapshot=name,
+        env_vars=env,
+        public=public,
+        labels=labels,
+        network_block_all=offline or None,
+        auto_stop_interval=0,
+        auto_delete_interval=0,
+        ttl_minutes=ttl_minutes,
+    )
+
+
 def box(
     daytona: Daytona,
     name: str,
@@ -268,26 +284,26 @@ def box(
     public: bool,
     labels: dict[str, str],
     offline: bool = False,
+    ttl_minutes: int | None = None,
 ) -> DaytonaBox:
-    """A sandbox of ``size`` from the snapshot ``name``, deleted when it stops. ``offline``: it reaches nothing."""
-    sandbox = daytona.create(
-        CreateSandboxFromSnapshotParams(
-            snapshot=name,
-            env_vars=env,
-            public=public,
-            labels=labels,
-            network_block_all=offline or None,
-            auto_stop_interval=0,
-            auto_delete_interval=0,
-        ),
-        timeout=600,
-    )
-    return DaytonaBox(daytona, sandbox, size)
+    """A sandbox of ``size`` from the snapshot ``name``, deleted when it stops.
+
+    ``offline``: it reaches nothing. ``ttl_minutes``: Daytona ends it then, so a sandbox kept for inspection after a
+    failed export costs a bounded amount.
+    """
+    made = params(name, env, public=public, labels=labels, offline=offline, ttl_minutes=ttl_minutes)
+    return DaytonaBox(daytona, daytona.create(made, timeout=600), size)
 
 
-def control(daytona: Daytona, steps: Sequence[Step], env: dict[str, str], labels: dict[str, str]) -> DaytonaBox:
-    """The control sandbox of ``steps``: public, so that the team reaches its preview URLs."""
-    return box(daytona, snapshot(daytona, steps, CONTROL), CONTROL, env, public=True, labels=labels)
+def control(
+    daytona: Daytona, steps: Sequence[Step], env: dict[str, str], labels: dict[str, str], hours: float
+) -> DaytonaBox:
+    """The control sandbox of ``steps``: public, so that the team reaches its preview URLs.
+
+    It ends two hours after the run's ``hours`` at the latest.
+    """
+    name = snapshot(daytona, steps, CONTROL)
+    return box(daytona, name, CONTROL, env, public=True, labels=labels, ttl_minutes=int((hours + 2) * 60))
 
 
 def scorer(daytona: Daytona, task: Task, labels: dict[str, str]) -> DaytonaBox:
