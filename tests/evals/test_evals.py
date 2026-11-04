@@ -532,39 +532,46 @@ def test_team_counts_keeps_in_the_final_head_races_and_notes_read_across(tmp_pat
     revs.append(git(repo, 'rev-parse', 'HEAD').strip())
     bundle = tmp_path / 'repo.bundle'
     git(repo, 'bundle', 'create', str(bundle), '--all')
-    db = sqlite3.connect(':memory:')
-    db.executescript(
-        """
-        create table runs (id integer, role text);
-        create table candidates (id integer, revision text, run_id integer, verdict text, updated_at text);
-        create table events (target_kind text, target_id integer, kind text, at text, payload text);
-        create table agent_sessions (id integer, kind text, subject_kind text, subject_id integer, session_id text);
-        create table comments (author text, body text, kind text);
-        insert into runs values (1, 'implementer'), (2, 'implementer_b'), (3, 'implementer');
-        insert into agent_sessions values (10, 'implementer', 'run', 1, 's1'), (20, 'implementer_b', 'run', 2, 's2');
-        insert into comments values ('implementer#10', 'The   mixer weights saturate at 4096.', 'note'),
-            ('implementer_b#20', 'Never read by anyone.', 'note'), ('human', 'Not a worker.', 'note');
-        """
-    )
-    for i, (rev, run) in enumerate(zip(revs, (None, 1, 2, 3), strict=True)):
-        db.execute("insert into candidates values (?, ?, ?, 'keep', ?)", (i, rev, run, f'2026-01-01 00:0{i}'))
-    assert final_keeps(db, bundle) == ({'implementer': 2, 'implementer_b': 1}, {'implementer': 1, 'implementer_b': 0})
-    for i, (verdict, parent, best) in enumerate((('discard', 5, -1), ('discard', -2, -3), ('keep', 4, 4)), start=10):
-        db.execute("insert into candidates values (?, 'x', 1, ?, '2026-01-02')", (i, verdict))
-        judged = json.dumps({'parent_delta': parent, 'best_delta': best})
-        db.execute("insert into events values ('candidate', ?, 'candidate.judged', '2026-01-02', ?)", (i, judged))
-    assert races(db) == 1
-    sessions = tmp_path / 'export' / '.claude' / 'projects' / 'p'
-    sessions.mkdir(parents=True)
-    read = {
-        'type': 'user',
-        'message': {
-            'content': [{'type': 'tool_result', 'content': 'notes: The mixer weights\n saturate at 4096. More.'}]
-        },
-    }
-    (sessions / 's2.jsonl').write_text(json.dumps(read) + '\n')
-    assert notes(db, tmp_path / 'export') == ({'implementer': 1, 'implementer_b': 1}, {'implementer>implementer_b': 1})
-    db.close()
+    with closing(sqlite3.connect(':memory:')) as db:
+        db.executescript(
+            """
+            create table runs (id integer, role text);
+            create table candidates (id integer, revision text, run_id integer, verdict text, updated_at text);
+            create table events (target_kind text, target_id integer, kind text, at text, payload text);
+            create table agent_sessions (id integer, kind text, subject_kind text, subject_id integer, session_id text);
+            create table comments (author text, body text, kind text);
+            insert into runs values (1, 'implementer'), (2, 'implementer_b'), (3, 'implementer');
+            insert into agent_sessions values (10, 'implementer', 'run', 1, 's1'), (20, 'implementer_b', 'run', 2, 's2');
+            insert into comments values ('implementer#10', 'The   mixer weights saturate at 4096.', 'note'),
+                ('implementer_b#20', 'Never read by anyone.', 'note'), ('human', 'Not a worker.', 'note');
+            """
+        )
+        for i, (rev, run) in enumerate(zip(revs, (None, 1, 2, 3), strict=True)):
+            db.execute("insert into candidates values (?, ?, ?, 'keep', ?)", (i, rev, run, f'2026-01-01 00:0{i}'))
+        assert final_keeps(db, bundle) == (
+            {'implementer': 2, 'implementer_b': 1},
+            {'implementer': 1, 'implementer_b': 0},
+        )
+        for i, (verdict, parent, best) in enumerate(
+            (('discard', 5, -1), ('discard', -2, -3), ('keep', 4, 4)), start=10
+        ):
+            db.execute("insert into candidates values (?, 'x', 1, ?, '2026-01-02')", (i, verdict))
+            judged = json.dumps({'parent_delta': parent, 'best_delta': best})
+            db.execute("insert into events values ('candidate', ?, 'candidate.judged', '2026-01-02', ?)", (i, judged))
+        assert races(db) == 1
+        sessions = tmp_path / 'export' / '.claude' / 'projects' / 'p'
+        sessions.mkdir(parents=True)
+        read = {
+            'type': 'user',
+            'message': {
+                'content': [{'type': 'tool_result', 'content': 'notes: The mixer weights\n saturate at 4096. More.'}]
+            },
+        }
+        (sessions / 's2.jsonl').write_text(json.dumps(read) + '\n')
+        assert notes(db, tmp_path / 'export') == (
+            {'implementer': 1, 'implementer_b': 1},
+            {'implementer>implementer_b': 1},
+        )
 
 
 def test_a_score_is_the_mean_of_its_scorings_and_keeps_each_cpu():
@@ -1133,41 +1140,41 @@ def test_a_run_whose_export_fails_writes_its_record_and_keeps_its_sandbox_for_in
 def test_a_pool_run_s_heads_are_its_best_over_time_and_its_line_holds_what_stacked(db: Database) -> None:
     """A piloop with a pool (0.6) has no verdicts: its curve is the best that each score names, and its team counts
     the candidates on the final best's line. A database at piloop's head is one; a verdict run's is not."""
-    with sqlite3.connect(db.engine.url.database or '') as at_head:
+    with closing(sqlite3.connect(db.engine.url.database or '')) as at_head:
         assert pool(at_head)
-    con = sqlite3.connect(':memory:')
-    con.executescript(
-        """
-        create table campaigns (id integer, evaluator_id integer);
-        create table evaluators (id integer, definition text);
-        create table runs (id integer, role text);
-        create table candidates (id integer, revision text, parent_id integer, run_id integer, origin text);
-        create table measurements (candidate_id integer, evaluator_id integer, error text, rung text);
-        create table events (id integer, target_kind text, target_id integer, kind text, at text, payload text);
-        insert into campaigns values (1, 1);
-        insert into evaluators values (1, '{"evaluate": []}'), (2, '{"sealed": ["s"]}');
-        insert into runs values (1, 'implementer'), (2, 'implementer');
-        insert into candidates values (1, 'base', null, null, 'baseline'), (2, 'a', 1, 1, 'run'),
-            (3, 'b', 2, 2, 'run'), (4, 'c', 1, 2, 'run');
-        insert into measurements values (1, 1, null, null), (2, 1, null, null), (2, 1, null, null),
-            (3, 1, null, null), (3, 1, null, null), (4, 1, null, null), (2, 2, null, null), (1, 2, null, null),
-            (3, 2, null, null);
-        """
-    )
-    scored = [(2, 2, '00:30'), (4, 2, '01:00'), (3, 3, '02:00'), (3, 3, '02:30')]
-    for i, (target, best, at_) in enumerate(scored, start=1):
-        payload = json.dumps({'kind': 'candidate.scored', 'best': best})
-        con.execute(
-            "insert into events values (?, 'candidate', ?, 'candidate.scored', ?, ?)",
-            (i, target, f'2026-01-01 {at_}:00', payload),
+    with closing(sqlite3.connect(':memory:')) as con:
+        con.executescript(
+            """
+            create table campaigns (id integer, evaluator_id integer);
+            create table evaluators (id integer, definition text);
+            create table runs (id integer, role text);
+            create table candidates (id integer, revision text, parent_id integer, run_id integer, origin text);
+            create table measurements (candidate_id integer, evaluator_id integer, error text, rung text);
+            create table events (id integer, target_kind text, target_id integer, kind text, at text, payload text);
+            insert into campaigns values (1, 1);
+            insert into evaluators values (1, '{"evaluate": []}'), (2, '{"sealed": ["s"]}');
+            insert into runs values (1, 'implementer'), (2, 'implementer');
+            insert into candidates values (1, 'base', null, null, 'baseline'), (2, 'a', 1, 1, 'run'),
+                (3, 'b', 2, 2, 'run'), (4, 'c', 1, 2, 'run');
+            insert into measurements values (1, 1, null, null), (2, 1, null, null), (2, 1, null, null),
+                (3, 1, null, null), (3, 1, null, null), (4, 1, null, null), (2, 2, null, null), (1, 2, null, null),
+                (3, 2, null, null);
+            """
         )
-    chosen = json.dumps({'kind': 'run.base_chosen', 'candidate': 2, 'was': 1})
-    con.execute("insert into events values (9, 'run', 2, 'run.base_chosen', '2026-01-01 01:30:00', ?)", (chosen,))
-    started = datetime(2026, 1, 1, tzinfo=UTC)
-    heads = pool_heads(con, 'base', started)
-    assert heads == [('a', 0.5), ('b', 2.0)], 'a score of a candidate that is not the best moves nothing'
-    assert final_line(con, heads) == ({'implementer': 2}, {'implementer': 2}), 'b, and a under it; not c'
-    assert pool_counts(con) == PoolCounts(confirmations=2, sealed_scorings=3, based_runs=1)
+        scored = [(2, 2, '00:30'), (4, 2, '01:00'), (3, 3, '02:00'), (3, 3, '02:30')]
+        for i, (target, best, at_) in enumerate(scored, start=1):
+            payload = json.dumps({'kind': 'candidate.scored', 'best': best})
+            con.execute(
+                "insert into events values (?, 'candidate', ?, 'candidate.scored', ?, ?)",
+                (i, target, f'2026-01-01 {at_}:00', payload),
+            )
+        chosen = json.dumps({'kind': 'run.base_chosen', 'candidate': 2, 'was': 1})
+        con.execute("insert into events values (9, 'run', 2, 'run.base_chosen', '2026-01-01 01:30:00', ?)", (chosen,))
+        started = datetime(2026, 1, 1, tzinfo=UTC)
+        heads = pool_heads(con, 'base', started)
+        assert heads == [('a', 0.5), ('b', 2.0)], 'a score of a candidate that is not the best moves nothing'
+        assert final_line(con, heads) == ({'implementer': 2}, {'implementer': 2}), 'b, and a under it; not c'
+        assert pool_counts(con) == PoolCounts(confirmations=2, sealed_scorings=3, based_runs=1)
 
 
 def test_no_test_reads_this_machines_session_ledger(tmp_path: Path):
