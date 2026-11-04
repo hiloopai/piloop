@@ -80,19 +80,28 @@ def tree(work: Path, name: str, sources: list[Path], edits: list[tuple]) -> Path
     return out
 
 
-def sealed_dir(work: Path, split: str, deep: bool) -> Path:
-    """The sealed data scoring ``split``; with ``deep``, with a source scan that matches nothing."""
-    data = work / f'sealed-{split}{"-deep" if deep else ""}'
+def sealed_dir(work: Path, split: str) -> Path:
+    """The sealed data scoring ``split``."""
+    data = work / f'sealed-{split}'
     shutil.rmtree(data, ignore_errors=True)
     shutil.copytree(work / 'sealed', data)
     meta = json.loads((data / 'meta.json').read_text())
     (data / 'meta.json').write_text(json.dumps({**meta, 'split': split}) + '\n')
-    if deep:
-        text = (data / 'evaluate.py').read_text()
-        at = text.index('BANNED = re.compile(')
-        end = text.index('\n)\n', at) + 3
-        (data / 'evaluate.py').write_text(text[:at] + "BANNED = re.compile(r'(?!x)x')\n" + text[end:])
     return data
+
+
+def base_dir(work: Path, deep: bool) -> Path:
+    """The starting repo that ``sealed.py`` takes its evaluator from; with ``deep``, one whose scan matches nothing."""
+    if not deep:
+        return work / 'repo'
+    base = work / 'repo-deep'
+    shutil.rmtree(base, ignore_errors=True)
+    shutil.copytree(work / 'repo', base)
+    text = (base / 'evaluate.py').read_text()
+    at = text.index('BANNED = re.compile(')
+    end = text.index('\n)\n', at) + 3
+    (base / 'evaluate.py').write_text(text[:at] + "BANNED = re.compile(r'(?!x)x')\n" + text[end:])
+    return base
 
 
 def sealed(case: Path, base: Path, data: Path, packages: Path) -> dict:
@@ -119,9 +128,9 @@ def outside(work: Path, case: Path, broken: list[Path]) -> int:
     down = {str(b)[:-5].replace('/', '.') for b in broken}
     while more := {m for m, p in mods.items() if m not in down and down & set(imports(p))}:
         down |= more
-    spec = json.loads((work / 'sealed' / 'targets.json').read_text())
-    targets = spec['targets'] + json.loads((work / 'private' / 'targets.private.json').read_text())['targets']
-    of = spec['modules_of'] | json.loads((work / 'private' / 'targets.private.json').read_text())['modules_of']
+    specs = [json.loads((work / 'sealed' / name).read_text()) for name in ('spec.json', 'spec.private.json')]
+    targets = [t for spec in specs for t in spec['targets']]
+    of = {name: module for spec in specs for module, names in spec['protected'].items() for name in names}
     return sum(1 for t in targets if of[t] not in down)
 
 
@@ -138,8 +147,8 @@ def main() -> None:
         meta_path.write_text(json.dumps(meta) + '\n')
     good = [work / 'solutions' / 'known-good', work / 'solutions' / 'private-known-good']
     stub = [work / 'repo', work / 'private']
-    n_all = len(json.loads((work / 'sealed' / 'targets.json').read_text())['targets'])
-    n_private = len(json.loads((work / 'private' / 'targets.private.json').read_text())['targets'])
+    n_all = len(json.loads((work / 'sealed' / 'spec.json').read_text())['targets'])
+    n_private = len(json.loads((work / 'private' / 'spec.private.json').read_text())['targets'])
     n_all += n_private
     edits = json.loads((work / PRIVATE_EDITS).read_text())
     private_statement = [(OC / path, anchor, inner, new) for path, anchor, inner, new in edits]
@@ -176,7 +185,7 @@ def main() -> None:
         case = tree(work, name, sources, edits)
         if proved == 'outside':
             proved = outside(work, case, [S1Q1, SIGNS])
-        r = sealed(case, work / 'repo', sealed_dir(work, split, deep), packages)
+        r = sealed(case, base_dir(work, deep), sealed_dir(work, split), packages)
         r['expected'] = {'status': status, 'raw': proved}
         if isinstance(proved, str):  # a refusal: its reason must be the edit's, not some other fault
             r['as_expected'] = r['status'] == status and proved in str(r.get('detail'))

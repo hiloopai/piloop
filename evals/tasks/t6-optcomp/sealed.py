@@ -1,8 +1,9 @@
 """The optcomp task's sealed score: the share of the targets proved, checked from a clean build.
 
 Run as ``python sealed.py <tree> <base> <sealed> <out>``, in a sandbox without network. Only the
-``.lean`` files under ``<tree>/Silmaril`` are taken from the version: the project files, the audit,
-``targets.json`` and ``evaluate.py`` come from ``<sealed>``, and Mathlib from the built packages at
+``.lean`` files under ``<tree>/Silmaril`` are taken from the version: ``evaluate.py`` comes from ``<base>``, the
+starting commit, and the project files, the audit and the ``spec*.json`` files from ``<sealed>``, and Mathlib
+from the built packages at
 ``$OPTCOMP_PACKAGES``, whose ``.olean`` digest must match ``<sealed>/meta.json`` before and after the
 build (a build runs the version's code, and must not leave Mathlib changed). Writes one JSON object
 to ``<out>``, ``{"score", "status", "detail", "raw"}``: ``score`` is the share of the targets of
@@ -20,7 +21,7 @@ import tempfile
 from pathlib import Path
 
 PACKAGES = Path(os.environ.get('OPTCOMP_PACKAGES', '/opt/lean/packages'))
-FROZEN = ('lakefile.toml', 'lake-manifest.json', 'lean-toolchain', 'evaluate.py')
+FROZEN = ('lakefile.toml', 'lake-manifest.json', 'lean-toolchain')
 
 
 ARTIFACTS = ('.olean', '.olean.server', '.olean.private')
@@ -44,7 +45,7 @@ def main(tree: Path, base: Path, sealed: Path) -> dict[str, object]:
     meta = json.loads((sealed / 'meta.json').read_text())
     if 'packages_digest' in meta and digest(PACKAGES) != meta['packages_digest']:
         return {'score': None, 'status': 'infra_error', 'detail': 'the packages differ before the build', 'raw': None}
-    spec = importlib.util.spec_from_file_location('evaluate', sealed / 'evaluate.py')
+    spec = importlib.util.spec_from_file_location('evaluate', base / 'evaluate.py')
     assert spec is not None and spec.loader is not None
     evaluate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(evaluate)
@@ -54,8 +55,9 @@ def main(tree: Path, base: Path, sealed: Path) -> dict[str, object]:
             dst = work / path.relative_to(tree)
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, dst)
-        for name in FROZEN + tuple(p.name for p in sealed.glob('targets*.json')):
+        for name in FROZEN + tuple(p.name for p in sealed.glob('spec*.json')):
             shutil.copyfile(sealed / name, work / name)
+        shutil.copyfile(base / 'evaluate.py', work / 'evaluate.py')
         (work / 'check').mkdir()
         shutil.copyfile(sealed / 'Audit.lean', work / 'check' / 'Audit.lean')
         (work / '.lake').mkdir()

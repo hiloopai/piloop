@@ -1,7 +1,8 @@
 """Build the t6-optcomp task from a silmaril-lean checkout: its repo, targets and sealed reference.
 
 Usage:
-    python3 -I make_task.py <silmaril-lean checkout> <work dir> <packages dir> [--variant headline|lemmas]
+    python3 -I make_task.py <silmaril-lean checkout> <work dir> <packages dir> [--variant headline|lemmas|v2]
+        [--courses <module prefix>,...] [--template <task dir>]
         [--private <dir of private exercise files>]
 
 <packages dir> holds Mathlib and its dependencies, built, at the revisions of silmaril-lean's
@@ -10,12 +11,13 @@ manifest. Writes, under <work dir>:
 * ref/:   the course's import closure with its proofs (the known-good solution), built and audited.
 * stub/:  the starting repo's Lean tree: definitions kept, the targets' proofs replaced by `sorry`;
           with `headline`, the lemmas that only serve other proofs are deleted too.
-* targets.json: what the scorer compares against (targets, protected constants and their hashes).
+* spec.json: what the scorer compares against (targets, protected constants and their hashes).
 
 Every step is checked: the stub must build, replay through the kernel, and agree with the reference
 on the hash of every constant it keeps.
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -25,15 +27,25 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-TEMPLATE = HERE.parent / 'repo'
+TEMPLATE = (
+    Path(sys.argv[sys.argv.index('--template') + 1]).resolve() if '--template' in sys.argv else HERE.parent
+) / 'repo'
 """The task's repo: its hand-written files are kept, the rest is generated."""
-KEPT = ('brief.md', 'evaluate.py', '.gitignore', 'check/Audit.lean')
+KEPT = ('brief.md', 'evaluate.py', '.gitignore', 'LICENSE', 'check/Audit.lean')
 AUDIT = TEMPLATE / 'check' / 'Audit.lean'
 PREFIX = 'Silmaril.Courses.Cambridge.OptimisingCompilers'
 TOOLCHAIN = Path.home() / '.elan/toolchains/leanprover--lean4---v4.35.0-rc4/bin'
 PRIVATE = f'{PREFIX}.Private'
 """Where the private split's modules go: copied into a run's repo at its start, never into a repository."""
 STANDARD = {'propext', 'Classical.choice', 'Quot.sound'}
+
+CSLIB = """
+[[require]]
+name = "cslib"
+git = "https://github.com/leanprover/cslib"
+rev = "3c9db6a6a7207770c5a00849f4603ef460202dbf"
+"""
+"""The Apache-2.0 library of computer-science foundations that the semantics courses import; a Lake dependency."""
 
 LAKEFILE = """name = "optcomp"
 defaultTargets = ["Silmaril"]
@@ -70,12 +82,15 @@ def module_file(root: Path, module: str) -> Path:
     return root / (module.replace('.', '/') + '.lean')
 
 
-def extract(src: Path, out: Path) -> dict[str, list[str]]:
-    """Copy the import closure of the course into `out`; return its course and library modules."""
+def extract(src: Path, out: Path, prefixes: list[str]) -> dict[str, list[str]]:
+    """Copy the import closure of the courses into `out`; return their modules and the library's."""
     seeds = sorted(
-        str(p.relative_to(src))[:-5].replace('/', '.') for p in src.glob(PREFIX.replace('.', '/') + '/**/*.lean')
+        str(p.relative_to(src))[:-5].replace('/', '.')
+        for prefix in prefixes
+        for p in src.glob(prefix.replace('.', '/') + '/**/*.lean')
     )
-    seeds.append(PREFIX)
+    tops = [prefix for prefix in prefixes if module_file(src, prefix).exists()]
+    seeds += tops
     seen, stack = set(), list(seeds)
     while stack:
         m = stack.pop()
@@ -86,15 +101,16 @@ def extract(src: Path, out: Path) -> dict[str, list[str]]:
         dst = module_file(out, m)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(module_file(src, m), dst)
-    return {'course': sorted(set(seeds) - {PREFIX}), 'library': sorted(seen - set(seeds) | {PREFIX})}
+    return {'course': sorted(set(seeds) - set(tops)), 'library': sorted(seen - set(seeds) | set(tops))}
 
 
 def project(root: Path, src: Path, packages: Path) -> None:
-    """Write the Lake project files and link the prebuilt packages."""
-    (root / 'lakefile.toml').write_text(LAKEFILE)
+    """Write the Lake project files, with cslib when a module imports it, and link the prebuilt packages."""
+    cslib = any(re.search(r'^\s*(?:public\s+)?import\s+Cslib', p.read_text(), re.M) for p in root.rglob('*.lean'))
+    (root / 'lakefile.toml').write_text(LAKEFILE + (CSLIB if cslib else ''))
     shutil.copy(src / 'lean-toolchain', root / 'lean-toolchain')
     manifest = json.loads((src / 'lake-manifest.json').read_text())
-    manifest['packages'] = [p for p in manifest['packages'] if p['name'] != 'cslib']
+    manifest['packages'] = [p for p in manifest['packages'] if cslib or p['name'] != 'cslib']
     manifest['name'] = 'optcomp'
     (root / 'lake-manifest.json').write_text(json.dumps(manifest, indent=1) + '\n')
     (root / '.lake').mkdir(exist_ok=True)
@@ -250,7 +266,8 @@ def main() -> None:
         if d.exists():
             shutil.rmtree(d)
         d.mkdir(parents=True)
-    mods = extract(src, ref)
+    prefixes = sys.argv[sys.argv.index('--courses') + 1].split(',') if '--courses' in sys.argv else [PREFIX]
+    mods = extract(src, ref, prefixes)
     everything = mods['course'] + mods['library']
     project(ref, src, packages)
     build(ref, packages)
@@ -287,12 +304,19 @@ def main() -> None:
             given.add(n)
             frontier += list(uses(n, set()))
     roots = {n for n in theorems if not used_by[n]} - given
-    if variant == 'headline':
+    # v2 proves the lemmas the definitions need too: they are stated, as targets, and nothing is given
+    stated = roots | given if variant == 'v2' else roots
+    duplicates = twins(R, stated, given)
+    if variant in ('headline', 'v2'):
         action = {
-            (c['module'], c['line']): 'sorry' if n in roots else 'delete' for n, c in theorems.items() if n not in given
+            (c['module'], c['line']): 'sorry' if n in stated - duplicates else 'delete'
+            for n, c in theorems.items()
+            if variant == 'v2' or n not in given
         }
     else:
         action = {(c['module'], c['line']): 'sorry' for n, c in theorems.items() if n not in given}
+    if variant == 'v2':
+        given = set()
 
     shutil.copytree(ref, stub, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.lake'))
     project(stub, src, packages)
@@ -312,10 +336,9 @@ def main() -> None:
         'targets': targets,
         'given': sorted(given & set(consts)),
         'standard_axioms': sorted(STANDARD),
-        'protected': protected,
-        'modules_of': {n: consts[n]['module'] for n in sorted(set(protected) | set(targets))},
+        'protected': by_module(protected, consts),
     }
-    (work / 'targets.json').write_text(json.dumps(out, indent=1) + '\n')
+    (work / 'spec.json').write_text(json.dumps(out, indent=1) + '\n')
     assemble(work, out)
     if '--private' in sys.argv:
         private_split(work, Path(sys.argv[sys.argv.index('--private') + 1]).resolve(), packages, everything)
@@ -323,6 +346,30 @@ def main() -> None:
         f'{variant}: {changed} theorems rewritten, {len(targets)} targets, {len(given)} given, '
         f'{len(protected)} protected constants, stub agrees with the reference'
     )
+
+
+def by_module(protected: dict[str, dict[str, str]], consts: dict) -> dict[str, dict[str, str]]:
+    """The protected constants as ``{module: {name: "kind hash"}}``: the evaluator's format, each name once."""
+    out: dict[str, dict[str, str]] = {}
+    for name in sorted(protected):
+        out.setdefault(consts[name]['module'], {})[name] = f'{protected[name]["kind"]} {protected[name]["hash"]}'
+    return out
+
+
+def twins(R: dict, stated: set[str], given: set[str]) -> set[str]:
+    """The stated theorems whose statement another one has already: each is deleted, so no proof counts twice.
+
+    Of a group with one statement, a lemma a definition needs is kept first, then the first by name; a definition's
+    lemma is never deleted.
+    """
+    groups: dict[str, list[str]] = {}
+    for n in stated:
+        groups.setdefault(R[n]['hash'], []).append(n)
+    out: set[str] = set()
+    for names in groups.values():
+        _, *rest = sorted(names, key=lambda n: (n not in given, n))
+        out |= {n for n in rest if n not in given}
+    return out
 
 
 def check(
@@ -361,8 +408,8 @@ def check(
 def private_split(work: Path, private: Path, packages: Path, public: list[str]) -> None:
     """Add the private exercise files: every theorem in them is a target.
 
-    Writes ``private/`` (the stub files and ``targets.private.json``, copied into a run's repo from sealed storage),
-    the private reference proofs to ``solutions/private-known-good``, and ``targets.private.json`` to ``sealed/``.
+    Writes ``private/`` (the stub files and ``spec.private.json``, copied into a run's repo from sealed storage),
+    the private reference proofs to ``solutions/private-known-good``, and ``spec.private.json`` to ``sealed/``.
     """
     ref, stub = work / 'ref', work / 'stub'
     names = sorted(p.stem for p in private.glob('*.lean'))
@@ -380,18 +427,28 @@ def private_split(work: Path, private: Path, packages: Path, public: list[str]) 
         for n, c in R.items()
         if c['kind'] == 'theorem' and c['module'] in set(mods) and c.get('line') and not internal(n)
     }
-    changed = rewrite(stub, mods, {(c['module'], c['line']): 'sorry' for c in theorems.values()})
+    # a private theorem that a public one already states would carry a public proof: delete it, or, when another
+    # private proof uses it, keep it proved and out of the targets
+    hashes = {c['hash'] for c in R.values() if c['kind'] == 'theorem' and c['module'] in set(public)}
+    used = {u for c in theorems.values() for u in c.get('uses', [])}
+    restated = {n for n, c in theorems.items() if c['hash'] in hashes}
+    action = {
+        (c['module'], c['line']): 'delete' if n in restated else 'sorry'
+        for n, c in theorems.items()
+        if n not in restated & used
+    }
+    changed = rewrite(stub, mods, action)
+    theorems = {n: c for n, c in theorems.items() if n not in restated}
     build(stub, packages)
     S = audit(stub, packages, everything)
-    targets, protected = check(reference, S, theorems, set(mods))
+    targets, protected = check(reference, S, theorems, set(mods), restated & used)
     consts = {c['name']: c for c in S['constants']}
     spec = {
         'split': 'private',
         'modules': mods,
         'targets': targets,
         'standard_axioms': sorted(STANDARD),
-        'protected': protected,
-        'modules_of': {n: consts[n]['module'] for n in sorted(set(protected) | set(targets))},
+        'protected': by_module(protected, consts),
     }
     out, good = work / 'private', work / 'solutions' / 'private-known-good'
     for d in (out, good):
@@ -403,13 +460,22 @@ def private_split(work: Path, private: Path, packages: Path, public: list[str]) 
             (dst / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(root / rel, dst / rel)
     text = json.dumps(spec, indent=1) + '\n'
-    (out / 'targets.private.json').write_text(text)
-    (work / 'sealed' / 'targets.private.json').write_text(text)
+    (out / 'spec.private.json').write_text(text)
+    (work / 'sealed' / 'spec.private.json').write_text(text)
     print(f'private: {changed} theorems rewritten, {len(targets)} targets, {len(protected)} protected constants')
 
 
-SCRUB = [(re.compile(r'Course developments following [^,]+, with'), 'Course developments, with')]
-"""Text of the starting repo's comments that the public evals repo does not carry: people's names."""
+SCRUB = [
+    (re.compile(r'Course developments following [^,]+, with'), 'Course developments, with'),
+    (
+        re.compile(
+            r"A chapter-by-chapter index of [^\n]*'s lecture notes,\nversion of [^\n]*\[\w+\], building on notes by\n[^.]+\."
+        ),
+        "A chapter-by-chapter index of the course's lecture notes.",
+    ),
+    (re.compile(r'`[a-z]+\d{4}lecture` in `references.bib`'), 'the lecture notes'),
+]
+"""Comments that name a course's lecturers: the public evals repo names no one. Citations of papers stay."""
 
 
 def scrub(root: Path) -> None:
@@ -423,6 +489,16 @@ def scrub(root: Path) -> None:
             path.write_text(new)
 
 
+def allowed_commands(root: Path) -> dict[str, dict[str, int]]:
+    """The banned commands (the evaluator's ``BANNED``) that the starting repo's own modules use, and how often."""
+    spec = importlib.util.spec_from_file_location('evaluate', TEMPLATE / 'evaluate.py')
+    assert spec is not None and spec.loader is not None
+    evaluate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(evaluate)
+    found = {name: evaluate.banned(path.read_text()) for name, path in evaluate.sources(root).items()}
+    return {name: dict(counts) for name, counts in found.items() if counts}
+
+
 def assemble(work: Path, spec: dict) -> None:
     """Write the task's starting repo, its sealed data and the known-good solution."""
     repo, sealed, good = work / 'repo', work / 'sealed', work / 'solutions' / 'known-good'
@@ -434,9 +510,11 @@ def assemble(work: Path, spec: dict) -> None:
         (repo / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(TEMPLATE / name, repo / name)
     scrub(repo)
-    shutil.copy(work / 'targets.json', repo / 'targets.json')
+    spec['allowed'] = allowed_commands(repo)
+    (work / 'spec.json').write_text(json.dumps(spec, indent=1) + '\n')
+    shutil.copy(work / 'spec.json', repo / 'spec.json')
     sealed.mkdir(parents=True)
-    for name in ('lakefile.toml', 'lake-manifest.json', 'lean-toolchain', 'targets.json', 'evaluate.py'):
+    for name in ('lakefile.toml', 'lake-manifest.json', 'lean-toolchain', 'spec.json'):
         shutil.copy(repo / name, sealed / name)
     lean = HERE / 'lean'  # the project files the image's build fetches Mathlib's cache with
     lean.mkdir(exist_ok=True)

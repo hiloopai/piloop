@@ -775,14 +775,20 @@ def test_t6_refuses_code_that_runs_or_skips_the_kernel_but_not_a_comment_naming_
 def test_t6_counts_a_private_split_in_proved_and_alone(tmp_path: Path):
     evaluate = module(TASKS / 't6-optcomp' / 'repo' / 'evaluate.py')
     axioms = ['Classical.choice', 'Quot.sound', 'propext']
-    public = {'targets': ['a', 'b'], 'protected': {}, 'modules_of': {}, 'standard_axioms': axioms}
-    (tmp_path / 'targets.json').write_text(json.dumps(public))
+    public = {
+        'targets': ['a', 'b'],
+        'protected': {'M': {'a': 'theorem 1', 'b': 'theorem 2'}},
+        'standard_axioms': axioms,
+    }
+    (tmp_path / 'spec.json').write_text(json.dumps(public))
     assert evaluate.load_spec(tmp_path)['splits'] == {'public': ['a', 'b']}
-    private = {'split': 'private', 'targets': ['c'], 'protected': {}, 'modules_of': {}, 'standard_axioms': axioms}
-    (tmp_path / 'targets.private.json').write_text(json.dumps(private))
+    private = {'split': 'private', 'targets': ['c'], 'protected': {'P': {'c': 'theorem 3'}}, 'standard_axioms': axioms}
+    (tmp_path / 'spec.private.json').write_text(json.dumps(private))
     spec = evaluate.load_spec(tmp_path)
     assert spec['targets'] == ['a', 'b', 'c']
     assert spec['splits'] == {'public': ['a', 'b'], 'private': ['c']}
+    assert spec['modules_of'] == {'a': 'M', 'b': 'M', 'c': 'P'}
+    assert spec['protected']['c'] == {'kind': 'theorem', 'hash': '3'}
 
 
 class FakeControl(FakeBox):
@@ -980,6 +986,7 @@ def test_each_task_names_its_scorer_and_daytona_refuses_a_task_that_needs_a_gpu_
         't4-1brc': 'daytona',
         't5-lpaq': 'daytona',
         't6-optcomp': 'modal',
+        't7-semantics': 'modal',
     }
     t5 = Task.load('t5-lpaq').model_dump()
     for need in ({'gpu': 'L4'}, {'memory_limit_mb': 12288}):
@@ -1143,3 +1150,8 @@ def test_no_test_reads_this_machines_session_ledger(tmp_path: Path):
     ledger = Settings().session_ledger
     assert ledger != Path('/tmp/evals-sessions')
     assert ledger.is_relative_to(tmp_path)
+
+
+def test_the_lean_tasks_share_one_evaluator_scorer_and_audit():
+    for path in ('repo/evaluate.py', 'sealed.py', 'repo/check/Audit.lean', 'repo/LICENSE'):
+        assert (TASKS / 't6-optcomp' / path).read_bytes() == (TASKS / 't7-semantics' / path).read_bytes(), path

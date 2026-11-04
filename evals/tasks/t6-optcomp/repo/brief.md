@@ -5,20 +5,20 @@ undergraduate course on optimising compilers: flowgraphs and their semantics, li
 available-expression analyses, dead-code elimination, common-subexpression elimination, code motion,
 SSA, register allocation, instruction scheduling, abstract interpretation, points-to and strictness
 analyses, decompilation, and the exercises. Its definitions are complete. The proofs of its
-results are not: every theorem in `targets.json` (`targets`) is stated, with `sorry` as its proof.
-A run may add more targets in `targets.private.json`, under `OptimisingCompilers/Private/`; they
+results are not: every theorem in `spec.json` (`targets`) is stated, with `sorry` as its proof.
+A run may add more targets in `spec.private.json`, under `OptimisingCompilers/Private/`; they
 count the same. Prove as many of them as you can.
 
 ## Rules
 
-- Do not change a definition or a statement: every constant in `targets.json` (`protected`) must
+- Do not change a definition or a statement: every constant in `spec.json` (`protected`) must
   keep the hash of its elaborated type and, for a definition, of its value. Add any lemmas,
   definitions, tactics and modules you like under `Silmaril/`.
 - A proof counts when Lean's kernel accepts it and it uses no axiom beyond `propext`,
   `Classical.choice` and `Quot.sound`: no `sorry`, `native_decide`, `axiom` or `implemented_by`.
   Commands that run code while building (`#eval`, `run_cmd`, `elab`, `initialize`, `IO`) are not
   allowed; `evaluate.py` lists them.
-- Do not edit `evaluate.py`, `check/`, `targets.json`, `lakefile.toml`, `lake-manifest.json` or
+- Do not edit `evaluate.py`, `check/`, `spec.json`, `lakefile.toml`, `lake-manifest.json` or
   `lean-toolchain`. The final version is checked again with fresh copies of them.
 
 ## Limits

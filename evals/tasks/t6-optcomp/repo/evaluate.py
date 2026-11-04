@@ -1,17 +1,18 @@
 """Build the library, audit what Lean compiled, and print ``proved``: the share of the targets proved.
 
-A target is proved when its module builds, its statement is the one in ``targets.json`` (the hash of
+A target is proved when its module builds, its statement is the one in ``spec.json`` (the hash of
 the elaborated type), and its proof uses no axiom beyond ``propext``, ``Classical.choice`` and
 ``Quot.sound`` — so no ``sorry``, no ``native_decide``, no axiom of your own. The audit
 (``check/Audit.lean``) reads the compiled ``.olean`` files and replays every constant of the library
 through Lean's kernel.
 
 The whole version is refused, and scores nothing, when the kernel rejects a constant, a definition
-or a statement that ``targets.json`` protects has changed, the library declares an axiom, or a source
-uses a command that runs code or skips the kernel (``BANNED``). The reasons are printed on stderr and
+or a statement that ``spec.json`` protects has changed, the library declares an axiom, or a source
+uses a command that runs code or skips the kernel (``BANNED``) more often than the starting repo does
+(``spec.json``'s ``allowed``). The reasons are printed on stderr and
 written, with every unproved target, to ``build/report.txt``.
 
-A run may also get ``targets.private.json`` and its modules, a private split whose statements are in no
+A run may also get ``spec.private.json`` and its modules, a private split whose statements are in no
 repository: its targets count in ``proved`` too, and alone in ``proved_private``.
 
 Usage: ``python3 evaluate.py`` at the root of the repo, with Mathlib's built packages in
@@ -28,6 +29,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -61,6 +63,11 @@ def code_of(text: str) -> str:
             out.append(text[i])
             i += 1
     return ''.join(out)
+
+
+def banned(text: str) -> Counter[str]:
+    """How many times each ``BANNED`` command occurs in a Lean source, outside its comments."""
+    return Counter(m.group(0).strip() for m in BANNED.finditer(code_of(text)))
 
 
 def sources(root: Path) -> dict[str, Path]:
@@ -129,10 +136,14 @@ def audit(root: Path, modules: list[str]) -> dict:
 
 
 def verdict(root: Path, spec: dict) -> dict:
-    """Build and audit the version at ``root`` against ``spec`` (a ``targets.json``)."""
+    """Build and audit the version at ``root`` against ``spec`` (a ``spec.json``)."""
     mods = sources(root)
+    allowed = spec.get('allowed', {})
     refused = [
-        f'{name}: {m.group(0)!r}' for name, path in mods.items() if (m := BANNED.search(code_of(path.read_text())))
+        f'{name}: {match!r}'
+        for name, path in mods.items()
+        for match, n in banned(path.read_text()).items()
+        if n > allowed.get(name, {}).get(match, 0)
     ]
     if refused:
         return {'status': 'refused', 'reasons': ['banned command in ' + r for r in refused], 'proved': []}
@@ -181,11 +192,9 @@ def verdict(root: Path, spec: dict) -> dict:
 
 
 def load_spec(root: Path) -> dict:
-    """``targets.json`` with ``targets.private.json`` merged in when it is there, and each split's targets."""
+    """``spec.json`` with ``spec.private.json`` merged in when it is there, and each split's targets."""
     specs = [
-        json.loads((root / name).read_text())
-        for name in ('targets.json', 'targets.private.json')
-        if (root / name).exists()
+        json.loads((root / name).read_text()) for name in ('spec.json', 'spec.private.json') if (root / name).exists()
     ]
     merged = {
         'targets': [],
@@ -193,11 +202,16 @@ def load_spec(root: Path) -> dict:
         'modules_of': {},
         'splits': {},
         'standard_axioms': specs[0]['standard_axioms'],
+        'allowed': {},
     }
     for spec in specs:
         merged['targets'] += spec['targets']
-        merged['protected'].update(spec['protected'])
-        merged['modules_of'].update(spec['modules_of'])
+        for module, constants in spec['protected'].items():  # {module: {name: "kind hash"}}: each name once
+            for name, meaning in constants.items():
+                kind, hash_ = meaning.split()
+                merged['protected'][name] = {'kind': kind, 'hash': hash_}
+                merged['modules_of'][name] = module
+        merged['allowed'].update(spec.get('allowed', {}))
         merged['splits'][spec.get('split', 'public')] = spec['targets']
     return merged
 
