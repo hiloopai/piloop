@@ -116,7 +116,9 @@ def scorer_box(task: Task, settings: Settings, cloud: Daytona | None) -> Box | d
         case 'daytona':
             if cloud is None:
                 raise ValueError(f'{task.name} is scored on Daytona: score() opens its client')
-            return daytona.scorer(cloud, task, {'purpose': 'piloop-evals', 'task': task.name})
+            return daytona.scorer(
+                cloud, task, {'purpose': 'piloop-evals', 'task': task.name}, settings.score_timeout_minutes
+            )
         case 'modal':
             return Box.create(
                 settings,

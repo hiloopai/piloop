@@ -313,6 +313,21 @@ def test_a_daytona_sandbox_ends_by_itself_after_its_ttl():
     assert (params.ttl_minutes, params.auto_stop_interval) == (480, 0)
 
 
+def test_a_daytona_scorer_ends_by_itself_after_its_scoring_could_have_finished(monkeypatch: pytest.MonkeyPatch):
+    made: list[object] = []
+
+    class Client:
+        def create(self, params: object, timeout: float) -> Sandbox:
+            made.append(params)
+            return cast(Sandbox, SimpleNamespace(id='sb'))
+
+    monkeypatch.setattr('evals.daytona.snapshot', lambda *args: 'snap')
+    task = Task.load('t5-lpaq')
+    scoring.scorer_box(task, Settings(score_timeout_minutes=30), cast(Daytona, Client()))
+    ttl = cast(daytona.CreateSandboxFromSnapshotParams, made[0]).ttl_minutes
+    assert ttl is not None and 30 < ttl <= 120, 'a scorer whose process died still ends'
+
+
 def test_a_sample_keeps_the_meters_tokens_and_the_sandboxs_compute():
     count = {'input': 10, 'output': 5, 'cache_read': 100, 'cache_write': 1, 'turns': 1}
     box = FakeBox({'claude': {'claude-opus-5-5': count}, 'codex': {'gpt-6.1-sol': count}})

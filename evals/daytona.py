@@ -260,7 +260,7 @@ def snapshot(daytona: Daytona, steps: Sequence[Step], size: Resources) -> str:
 
 
 def params(
-    name: str, env: dict[str, str], *, public: bool, labels: dict[str, str], offline: bool, ttl_minutes: int | None
+    name: str, env: dict[str, str], *, public: bool, labels: dict[str, str], offline: bool, ttl_minutes: int
 ) -> CreateSandboxFromSnapshotParams:
     """How to create a sandbox from the snapshot ``name``: deleted when it stops, and ended after ``ttl_minutes``."""
     return CreateSandboxFromSnapshotParams(
@@ -283,13 +283,13 @@ def box(
     *,
     public: bool,
     labels: dict[str, str],
+    ttl_minutes: int,
     offline: bool = False,
-    ttl_minutes: int | None = None,
 ) -> DaytonaBox:
     """A sandbox of ``size`` from the snapshot ``name``, deleted when it stops.
 
-    ``offline``: it reaches nothing. ``ttl_minutes``: Daytona ends it then, so a sandbox kept for inspection after a
-    failed export costs a bounded amount.
+    ``offline``: it reaches nothing. ``ttl_minutes``: Daytona ends it then, so a sandbox whose process died, or that
+    was kept for inspection after a failed export, costs a bounded amount.
     """
     made = params(name, env, public=public, labels=labels, offline=offline, ttl_minutes=ttl_minutes)
     return DaytonaBox(daytona, daytona.create(made, timeout=600), size)
@@ -306,7 +306,11 @@ def control(
     return box(daytona, name, CONTROL, env, public=True, labels=labels, ttl_minutes=int((hours + 2) * 60))
 
 
-def scorer(daytona: Daytona, task: Task, labels: dict[str, str]) -> DaytonaBox:
-    """A sandbox that scores one version of ``task``: the size of an evaluator, without network."""
+def scorer(daytona: Daytona, task: Task, labels: dict[str, str], minutes: float) -> DaytonaBox:
+    """A sandbox that scores one version of ``task`` within ``minutes``: the size of an evaluator, without network.
+
+    It ends an hour after that at the latest, for its uploads and reads.
+    """
     name = snapshot(daytona, recipe([task], None), EVALUATOR)
-    return box(daytona, name, EVALUATOR, {}, public=False, labels=labels, offline=True)
+    ttl = math.ceil(minutes) + 60
+    return box(daytona, name, EVALUATOR, {}, public=False, labels=labels, offline=True, ttl_minutes=ttl)
