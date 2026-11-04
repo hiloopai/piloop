@@ -28,3 +28,48 @@ role = "watch"
 name = "speed"
 direction = "higher"
 role = "watch"
+
+[[piloop.metrics]]
+name = "no_drop"
+direction = "higher"
+role = "watch"
+
+[[piloop.metrics]]
+name = "once"
+direction = "higher"
+role = "watch"
+
+[[piloop.metrics]]
+name = "order"
+direction = "higher"
+role = "watch"
+
+[[piloop.metrics]]
+name = "fencing"
+direction = "higher"
+role = "watch"
+
+[[piloop.metrics]]
+name = "compaction"
+direction = "higher"
+role = "watch"
+
+[[piloop.metrics]]
+name = "restore"
+direction = "higher"
+role = "watch"
+
+[[piloop.metrics]]
+name = "retries"
+direction = "higher"
+role = "watch"
+
+[[piloop.metrics]]
+name = "safe_share"
+direction = "higher"
+role = "watch"
+
+[[piloop.metrics]]
+name = "drained_share"
+direction = "higher"
+role = "watch"

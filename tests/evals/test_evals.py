@@ -481,6 +481,19 @@ def test_relay_runs_are_deterministic_and_its_audit_refuses_an_import(tmp_path: 
     assert runs[0] == runs[1] and runs[0].drained and len(ref) == len(split.seeds) * len(split.scenarios)
 
 
+def test_relay_declares_every_metric_its_evaluator_prints(tmp_path: Path):
+    """piloop refuses a result with a metric that ``[[metrics]]`` does not name, so the baseline would fail."""
+    tree = tmp_path / 'tree'
+    shutil.copytree(TASKS / 't8-relay' / 'repo', tree)
+    dev = json.loads((tree / 'dev.json').read_text())
+    (tree / 'dev.json').write_text(json.dumps({**dev, 'seeds': dev['seeds'][:2]}))
+    done = subprocess.run([sys.executable, 'evaluate.py'], cwd=tree, capture_output=True, text=True, check=True)
+    printed = json.loads(done.stdout.strip().splitlines()[-1])['metrics']
+    metrics = Task.load('t8-relay').piloop['metrics']
+    assert isinstance(metrics, list)
+    assert set(printed) == {m['name'] for m in metrics if isinstance(m, dict)}
+
+
 def test_campaign_sealed_scores_the_checkout_on_the_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     campaign_sealed = module(ROOT / 'campaign_sealed.py')
     checkout, sealed = tmp_path / 'checkout', tmp_path / 'sealed'
