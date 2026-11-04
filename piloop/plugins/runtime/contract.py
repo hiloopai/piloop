@@ -8,6 +8,7 @@ subclass with an entry point in the group of ``RUNTIMES``. Its fields are its se
 
 import fcntl
 import json
+import sys
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
@@ -177,8 +178,8 @@ class Runtime(Protocol):
 TAG_ENV = 'PILOOP_PROCESS_TAG'
 """The variable that holds an agent's process tag."""
 MESSAGES_ENV = 'PILOOP_MESSAGES'
-"""The variable that names the agent's message queue (``QUEUE``), so that a hook of its harness can take the messages
-during a turn (``piloop agent messages``). A file, because ``prompt`` can run in another
+"""The variable that names the agent's message queue (``QUEUE``), so that each ``piloop`` call of the agent (``deliver``)
+and a hook of its harness (``piloop agent messages``) can take the messages during a turn. A file, because ``prompt`` can run in another
 runtime instance, or another process, than the turn that takes them."""
 QUEUE = 'queued-messages'
 """Under the agent's log directory: the messages queued for its next turn, one JSON string per line."""
@@ -201,6 +202,17 @@ def take(queue: Path) -> list[str]:
                 read.writelines(f'{line}\n' for line in lines)
             queue.unlink()
     return [json.loads(line) for line in lines]
+
+
+def deliver(queue: Path | None) -> None:
+    """Take the messages in the agent's ``queue`` and write them to stderr, one a line. Not an agent (no queue): none.
+
+    Every ``piloop`` call of an agent does it first, so that a harness with no hook in its turn, such as Codex, reads
+    them within one action. stderr, so that the command's own stdout stays parseable (``piloop sql ... | jq``).
+    """
+    if queue is not None and (messages := take(queue)):
+        sys.stderr.write(''.join(f'{m}\n' for m in messages))
+        sys.stderr.flush()
 
 
 def taken(log_dir: Path) -> tuple[int, int]:

@@ -141,8 +141,8 @@ SELECT r.id run, i.title, r.started_at,
 FROM runs r JOIN ideas i ON i.id = r.idea_id WHERE r.campaign_id = <p> ORDER BY r.id;
 ```
 
-**Messages that never reached their agent**, against all the messages, and why. Check this in every review: a harness
-that reads messages only between turns never sees a score.
+**Messages that never reached their agent**, against all the messages, and why. Check this in every review: an agent
+that never sees its scores works blind.
 
 ```sql
 SELECT (SELECT COUNT(*) FROM comments WHERE kind = 'message') messages,

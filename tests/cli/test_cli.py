@@ -1407,7 +1407,7 @@ def test_prompt_is_a_message_to_the_agent_and_says_whether_it_arrived(
     run_cli(['prompt', '1', 'no answer'])
     assert out().strip() == 'comment#1: the daemon queues it for agent_session#1 once it runs'
     run_cli(['prompt', '1', 'try harder'])
-    assert out().strip() == 'queued comment#2 for agent_session#1: it reads it at its next turn'
+    assert out().strip() == 'queued comment#2 for agent_session#1: it reads it at its next piloop command'
     with pytest.raises(SystemExit, match='agent_session#1 did not get comment#3: the agent has ended'):
         run_cli(['prompt', '1', 'x'])
     run_cli(['prompt', '1', 'quick'])
@@ -1428,10 +1428,10 @@ def test_prompt_is_a_message_to_the_agent_and_says_whether_it_arrived(
         run_cli(['prompt', '2', 'x'])
     with pytest.raises(SystemExit, match='^no agent_session#3$'):
         run_cli(['prompt', '3', 'x'])
-    with pytest.raises(
-        SystemExit, match='^agent_session#1 runs codex: this harness reads messages only between turns$'
-    ):
-        run_cli(['prompt', '1', 'end your run now'])
+    run_cli(['prompt', '1', 'end your run now'])
+    assert out().strip() == 'comment#5: the daemon queues it for agent_session#1 once it runs', (
+        'a Codex agent reads it at its next piloop call'
+    )
 
 
 @pytest.mark.usefixtures('api')
@@ -2108,6 +2108,35 @@ def test_main(mocker: MockerFixture) -> None:
     app = mocker.patch.object(cli, 'app')
     cli.main()
     assert app.called
+
+
+def test_an_agents_piloop_call_first_prints_the_messages_that_wait_for_it_on_stderr(
+    tmp_path: Path, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Any call of the agent delivers them, whatever its harness: one a line, oldest first, once. stdout stays the
+    command's, so `piloop sql ... | jq` still parses."""
+    queue = tmp_path / 'logs' / 'queued-messages'
+    queue.parent.mkdir()
+    queue.write_text('"[piloop] candidate#41 (3f2c9a1b7d04): score 0.83, rank 2 of 23"\n"and say so"\n')
+    monkeypatch.setattr(common, 'settings', common.settings.model_copy(update={'messages': queue}))
+    app = mocker.patch.object(cli, 'app', side_effect=lambda: print('1 row(s) changed'))
+    monkeypatch.setattr(sys, 'argv', ['piloop', 'sql', 'INSERT INTO comments ...'])
+    cli.main()
+    assert capsys.readouterr() == (
+        '1 row(s) changed\n',
+        '[piloop] candidate#41 (3f2c9a1b7d04): score 0.83, rank 2 of 23\nand say so\n',
+    )
+    assert not queue.exists() and (queue.parent / 'read-messages').read_text().count('\n') == 2, 'delivered'
+    cli.main()
+    assert capsys.readouterr().err == '', 'once'
+    queue.write_text('"try lzma"\n')
+    monkeypatch.setattr(sys, 'argv', ['piloop', 'agent', 'messages', '--harness', 'claude'])
+    cli.main()
+    assert capsys.readouterr().err == '' and queue.exists(), 'the hook takes them itself, in its own format'
+    monkeypatch.setattr(common, 'settings', common.settings.model_copy(update={'messages': None}))
+    monkeypatch.setattr(sys, 'argv', ['piloop', 'status'])
+    cli.main()
+    assert capsys.readouterr().err == '' and app.call_count == 4, 'not an agent: nothing to deliver'
 
 
 def test_main_turns_a_bad_config_and_any_unexpected_error_into_one_message(

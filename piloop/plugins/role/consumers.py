@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
 from piloop.agents.results import (
-    BETWEEN_TURNS,
     AgentSessionExtended,
     AgentSessionRunning,
     PromptOutcome,
@@ -22,9 +21,7 @@ from piloop.agents.results import (
     end_agent,
     extension,
     queue_prompt,
-    undelivered,
 )
-from piloop.agents.roles import steers_mid_turn
 from piloop.campaign.launches import close
 from piloop.campaign.stop import (
     CancelRequested,
@@ -47,7 +44,6 @@ from piloop.ids import (
     AgentSessionId,
     CampaignId,
     CampaignStatus,
-    CommentId,
     Ending,
     TargetKind,
     TargetRef,
@@ -164,25 +160,13 @@ class Agents:
         A push that sends something makes one span. Returns the comments that the executor did not take, to try again.
         """
         pending: list[tuple[AgentSessionId, Prompt]] = []
-        unread: list[tuple[AgentSessionId, CommentId]] = []
         with self._db.session() as s:
             running = s.scalars(
                 select(AgentSession).where(AgentSession.state == AgentSessionState.RUNNING).order_by(AgentSession.id)
             ).all()
             for w in running:
                 unseen = [c for c in self._unseen(s, w) if c.id not in self._prompted]
-                if steers_mid_turn(s, w):
-                    pending += [(w.id, Prompt(c.id, steer_line(c, self._agents.steer_line_chars))) for c in unseen]
-                    continue
-                for c in unseen:  # it would wait for the end of a turn that can last the whole session
-                    undelivered(s, w.id, c.id, BETWEEN_TURNS)
-                    unread.append((w.id, c.id))
-            if unread:
-                s.commit()
-        for agent_session_id, comment_id in unread:
-            self._tracer.event(
-                'comment.undelivered', comment=comment_id, agent_session=agent_session_id, error=BETWEEN_TURNS
-            )
+                pending += [(w.id, Prompt(c.id, steer_line(c, self._agents.steer_line_chars))) for c in unseen]
         refused: list[int] = []
         if not pending:
             return refused

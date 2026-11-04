@@ -229,10 +229,6 @@ class Harness(Parameters):
     queued for it (comments, ``piloop prompt``), the runtime runs the harness again with these, ``{prompt}`` being the
     messages and ``{session_id}`` the session's id. Must include both. When empty, the agent takes no message while it
     runs."""
-    steers_mid_turn: bool = False
-    """Whether a hook of the harness hands a running agent its messages within its turn (``piloop agent messages``).
-    Without it, the agent reads a message only when its turn ends, and the turn of an agent can last its whole session:
-    piloop refuses a message to a running agent, and leaves it to the agent's next brief."""
     session_id_pattern: str | None = None
     """A regex with one group that finds the session id in the first lines of the process's stdout. Use it in a
     harness that cannot take its id as an argument (``{session_id}``). For example, Codex

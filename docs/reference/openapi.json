@@ -8032,7 +8032,7 @@
         },
         "type": "object",
         "title": "Queued",
-        "description": "The agent's runtime holds the note: the agent reads it at its next turn."
+        "description": "The agent's runtime holds the note: the agent reads it at its next piloop command."
       },
       "QueuedEvaluation": {
         "properties": {

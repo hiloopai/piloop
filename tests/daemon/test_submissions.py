@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
+from piloop.agents.results import PromptOutcome
 from piloop.campaign.ops import Refused
 from piloop.config import CampaignConfig
 from piloop.daemon.loop import Turn
@@ -289,6 +290,57 @@ def test_an_implementer_submits_through_the_daemon_and_works_on_while_it_is_scor
         daemon.shutdown(timeout=5)
     queued = f'candidate#{made.id} is queued: where it stands comes as a [piloop] message\n'
     assert (home.home / 'runs' / str(run_id) / 'submitted.txt').read_text() == queued, 'it returns before its score'
+
+
+HARNESS_HEARS_AT_ITS_NEXT_CALL = (
+    '#!/bin/sh\necho a >> solve.txt\ngit commit -qam more\n"$PILOOP_BIN" submit > /dev/null 2>&1\n'
+    'i=0; while [ ! -s "$PILOOP_MESSAGES" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done\n'
+    '"$PILOOP_BIN" sql "INSERT INTO comments (target_kind, target_id, author, kind, body)'
+    " VALUES ('campaign', 1, '$PILOOP_ACTOR', 'note', 'tried one more line')\" > ../noted.txt 2>&1\n"
+    '"$PILOOP_BIN" run end submitted\n'
+)
+"""A worker whose harness has no hook, as Codex: it submits, and its next ``piloop`` call, a note, is all it does after.
+
+It waits for the score to be queued (30 s at most), so that the note comes after it."""
+
+
+def test_a_worker_without_a_hook_hears_its_score_in_the_output_of_its_next_piloop_call(
+    campaign_path: Path, tmp_path: Path
+) -> None:
+    """Its turn is its whole session, so a message that waits for the turn's end never reaches it: the call delivers it."""
+    write_toml(campaign_path, HARNESS_HEARS_AT_ITS_NEXT_CALL)
+    toml = campaign_path / 'piloop.toml'
+    resumes = 'headless = ["{prompt}"]\nresume = ["{session_id}", "{prompt}"]\n'
+    toml.write_text(toml.read_text().replace('headless = ["{prompt}"]\n', resumes))
+    home = Settings(home=tmp_path / 'home')
+    daemon = Daemon(home)
+    try:
+        workers_of(daemon.controller).worker.runtime_factory = factory(ScriptRuntime())
+        campaign = register(daemon.db, campaign_path)
+        set_config(daemon.db, campaign, evaluator=SUBMIT)
+        run_id = make_run(daemon.db, campaign)
+        with serving_api(home):
+            daemon.scheduler.reap()
+
+            def ended() -> bool:
+                run_all(daemon.scheduler)  # scores it, tells the worker, and pushes the message, as the loop does
+                return run_row(daemon.db, run_id).status is RunStatus.SUCCEEDED
+
+            wait_until(ended, 'the run', timeout=120)
+            daemon.scheduler.wait(SETTLE)
+        with daemon.db.session() as s:
+            [made] = s.scalars(select(Candidate).where(Candidate.run_id == run_id)).all()
+            agent = s.scalars(select(AgentSession).where(working_on(run_id))).one()
+            on_agent = Event.target == TargetRef(TargetKind.AGENT_SESSION, agent.id)
+            told = select(Comment).where(Comment.target == TargetRef(TargetKind.AGENT_SESSION, agent.id))
+            [score] = [c for c in s.scalars(told) if c.body.startswith('[piloop] candidate#')]
+            outcomes = [o.kind for _, o in in_order(s, PromptOutcome, on_agent) if o.comment == score.id]
+    finally:
+        daemon.shutdown(timeout=5)
+    noted = (home.home / 'runs' / str(run_id) / 'noted.txt').read_text()
+    assert noted.startswith(f'[piloop] candidate#{made.id} ({made.revision[:12]}): score '), noted
+    assert noted.count('[piloop]') == 1, 'once'
+    assert outcomes == ['comment.queued', 'comment.delivered']
 
 
 def test_a_submission_whose_evaluation_halts_waits_for_its_score(

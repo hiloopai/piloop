@@ -107,7 +107,6 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
         'model': 'test-model',
         'executable': ANY,
         'headless': ['{prompt}'],
-        'steers_mid_turn': True,
     }
     defaults = CampaignConfig(
         name='bare',

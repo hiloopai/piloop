@@ -35,7 +35,6 @@ model = "gpt-6.1-sol"
 # provider = "claude"                     # that harness over its defaults; without it, the argv only
 # executable = "my-agent"                 # keys: executable, headless, resume, session_id_pattern,
 # headless = ["--model", "{model}", "{prompt}"]  # home, session_env; see the reference
-# steers_mid_turn = true                  # its own hook runs `piloop agent messages`: it takes messages in its turn
 
 # [plugins.mcp_server.exa]                # an MCP server that a role can list in its `mcp` key; see the MCP servers guide
 # provider = "http"                       # a streamable HTTP server (keys: url, headers_env, bearer_token_env)

@@ -303,6 +303,10 @@ def test_the_shim_of_a_worker_elsewhere_relays_a_call_and_reads_the_agents_queue
     env = {'PATH': '/usr/bin:/bin', MESSAGES_ENV: str(log_dir / QUEUE), ACTOR_ENV: 'implementer#1'}
     taken = subprocess.run([site.cli, 'agent', 'messages'], capture_output=True, text=True, env=env)
     assert (taken.returncode, taken.stdout.strip()) == (0, 'try lzma'), 'its queue is on the worker: read here'
+    put(log_dir, 'try zstd')
+    called = subprocess.run([site.cli, 'sql', 'SELECT 1'], capture_output=True, text=True, env=env)
+    assert called.stderr.startswith('try zstd\n'), 'any call delivers them here, before it is relayed'
+    assert 'implementer#1 has no PILOOP_AGENT_TOKEN' in called.stderr and not (log_dir / QUEUE).exists()
 
 
 def test_a_submit_ships_the_version_of_the_agents_checkout_and_is_called_once(tmp_path: Path) -> None:

@@ -627,7 +627,7 @@ class Pending(View):
 
 
 class Queued(View):
-    """The agent's runtime holds the note: the agent reads it at its next turn."""
+    """The agent's runtime holds the note: the agent reads it at its next piloop command."""
 
     kind: Literal['queued'] = 'queued'
 

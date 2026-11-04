@@ -13,6 +13,7 @@ from pydantic import BaseModel, SecretStr
 from piloop.actor import Agent
 from piloop.api.contract import Revealed
 from piloop.ids import AgentSessionId, Revision
+from piloop.plugins.runtime.contract import deliver
 from piloop.proc import PILOOP_ARGV
 from piloop.settings import settings
 
@@ -53,11 +54,13 @@ LOCAL: frozenset[tuple[str, ...]] = frozenset({('agent', 'messages')})
 def main() -> None:
     """The ``piloop`` of an agent on a worker elsewhere: relay the call, print what it printed, exit with its code.
 
-    A command of ``LOCAL`` runs here, with this worker's piloop.
+    A command of ``LOCAL`` runs here, with this worker's piloop. Any other first prints the messages that wait for the
+    agent (``deliver``): its queue is on this worker.
     """
     argv = sys.argv[1:]
     if any(tuple(argv[: len(command)]) == command for command in LOCAL):
         os.execv(PILOOP_ARGV[0], [*PILOOP_ARGV, *argv])
+    deliver(settings.messages)
     match settings.actor, settings.agent_token:
         case Agent(session=session), SecretStr() as token:
             agent = session

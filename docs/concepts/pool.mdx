@@ -101,8 +101,8 @@ The message gives the score, the place among the candidates that may be best, an
 - `(within noise)` marks a gain within 2 standard deviations of the difference, with `(σ …)` at the end.
 - `it may not be best: …` gives the reason of the best rule. `excluded (…)` gives the reason of an
   [exclusion](#act-on-a-candidate).
-- A harness that reads messages only between turns gets no message. The `candidate.scored` event has the same line
-  (`told`).
+- The worker reads it at its next `piloop` command, which prints it first on stderr, and a Claude worker also after its
+  next tool call. The `candidate.scored` event has the same line (`told`).
 
 A run submits as many commits as it likes, unless `[evaluator] submissions` caps it. A commit that is not submitted is
 never scored: at the end of the run it is `skipped`. A resubmit of a tree that the run submitted is the same

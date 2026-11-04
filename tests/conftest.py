@@ -183,7 +183,6 @@ noise_runs = 1
 model = "test-model"
 executable = "{script}"
 headless = ["{{prompt}}"]
-steers_mid_turn = true
 """
 
 LEAD_TRIGGERS = 'triggers = ["run_failed"]'

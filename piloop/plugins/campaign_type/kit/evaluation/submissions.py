@@ -98,8 +98,7 @@ def tell_scores(s: Session, campaign: Campaign, chars: int) -> list[CommentId]:
     """Message each running worker of ``campaign`` where each of its submissions stands, once per score. The caller commits.
 
     A score before the run submitted the candidate is not news to it. The line is cut at ``chars``
-    (``[agents] steer_line_chars``). A worker whose harness reads messages only between turns can read its standing
-    with the SQL tool that its brief names.
+    (``[agents] steer_line_chars``). The worker reads it at its next ``piloop`` call (``deliver``).
     """
     told = []
     running = select(Run).where(Run.campaign_id == campaign.id, Run.status == RunStatus.RUNNING)

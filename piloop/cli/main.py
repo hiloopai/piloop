@@ -16,7 +16,7 @@ from pydantic import TypeAdapter
 from piloop import deprecated
 from piloop.cli import common, views
 from piloop.plugins.host import PluginError, Slot
-from piloop.plugins.runtime.contract import TAG_ENV
+from piloop.plugins.runtime.contract import TAG_ENV, deliver
 from piloop.version import installed
 
 COMMANDS = Slot('commands', TypeAdapter(Callable[..., object]), 'command')
@@ -93,12 +93,17 @@ def answered() -> Generator[None]:
 
 
 def main() -> None:
-    """Run the CLI. An error prints one message. PILOOP_DEBUG=1 shows the traceback of an unexpected error."""
+    """Run the CLI. An error prints one message. PILOOP_DEBUG=1 shows the traceback of an unexpected error.
+
+    An agent's call first prints the messages that wait for it (``deliver``).
+    """
     deprecated.show_in_cli()
     load_for_help(sys.argv[1:])
     # what an agent's piloop command starts, a daemon or an evaluation, must not die with the agent. The command itself
     # does: a process's environment as the OS shows it, which the runtime's kill reads, is the one it started with.
     os.environ.pop(TAG_ENV, None)
+    if sys.argv[1:3] != ['agent', 'messages']:  # that one takes them itself, for its harness's hook
+        deliver(common.settings.messages)
     try:
         with answered():
             app()

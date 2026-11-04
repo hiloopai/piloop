@@ -66,7 +66,9 @@ def prompt(
         case Pending():
             line = f'comment#{comment}: the daemon queues it for agent_session#{agent_session_id} once it runs'
         case Queued():
-            line = f'queued comment#{comment} for agent_session#{agent_session_id}: it reads it at its next turn'
+            line = (
+                f'queued comment#{comment} for agent_session#{agent_session_id}: it reads it at its next piloop command'
+            )
         case Delivered():
             line = f'agent_session#{agent_session_id} read comment#{comment}'
         case Undelivered(error=error):

@@ -533,9 +533,8 @@ def test_s_steers_a_running_agent(db: Database, live_campaign: Campaign) -> None
     ], 'the daemon delivers the note'
 
 
-def test_s_says_why_an_agent_whose_harness_reads_messages_only_between_turns_gets_no_message(
-    db: Database, live_campaign: Campaign
-) -> None:
+def test_s_sends_a_pi_agent_its_message_too(db: Database, live_campaign: Campaign) -> None:
+    """It reads it at its next piloop call."""
     notes: list[str] = []
 
     async def scenario(pilot: Pilot[None], app: Watch) -> None:
@@ -544,9 +543,9 @@ def test_s_says_why_an_agent_whose_harness_reads_messages_only_between_turns_get
         notes.append(campaign_screen(app).note)
 
     drive(db, 'demo', scenario)
-    assert notes == ['agent_session#1 runs pi: this harness reads messages only between turns']
     with db.session() as s:
-        assert s.scalars(select(Comment).where(Comment.target_kind == TargetKind.AGENT_SESSION)).all() == []
+        [steered] = s.scalars(select(Comment).where(Comment.target_kind == TargetKind.AGENT_SESSION)).all()
+    assert notes == [f'comment#{steered.id}: queued for agent_session#1; the daemon delivers it']
 
 
 def test_a_paused_campaign_says_so_in_its_row_and_its_header(db: Database, live_campaign: Campaign) -> None:

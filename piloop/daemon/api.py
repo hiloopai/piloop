@@ -22,8 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import ACTORS, Actor, Agent
-from piloop.agents.results import BETWEEN_TURNS, PromptOutcome, queue_prompt
-from piloop.agents.roles import steers_mid_turn
+from piloop.agents.results import PromptOutcome, queue_prompt
 from piloop.api.contract import (
     GRANTS,
     Access,
@@ -115,7 +114,7 @@ from piloop.campaign.stop import CANCELLABLE, request_cancel
 from piloop.config import ConfigError
 from piloop.db import feed as db_feed
 from piloop.db.events import has, latest
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
+from piloop.db.models import AgentSession, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.ids import (
     AgentSessionId,
@@ -739,13 +738,7 @@ async def prompt(request: Request, api: Api, me: Acting, agent: AgentSessionId, 
 
 def _queue_prompt(db: Database, me: Actor, agent: AgentSessionId, text: str) -> CommentId:
     with db.acting(me) as s:
-        found = _agent(s, agent)
-        if found.state is AgentSessionState.RUNNING and not steers_mid_turn(s, found):
-            raise Refusal(
-                HTTPStatus.CONFLICT,
-                Problem.BETWEEN_TURNS,
-                f'agent_session#{agent} runs {found.harness}: {BETWEEN_TURNS}',
-            )
+        _agent(s, agent)
         if (comment := queue_prompt(s, agent, text, me.signature)) is None:
             raise Refusal(HTTPStatus.CONFLICT, Problem.REFUSED, f'agent_session#{agent} is not running')
         s.commit()
