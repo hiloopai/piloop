@@ -1,0 +1,20 @@
+# pool-1w plus the spec-first instruction to its worker: write the idea as spec sentences before the code, and revise
+# them on surprises. Everything else is pool-1w's.
+kind = "piloop"
+name = "pool-1w-spec"
+piloop = "piloop[modal,daytona] @ git+https://github.com/hiloopai/piloop@084abf641963732f8aabf3a55f1716186d4c8e7e"
+agents = [{ harness = "codex", model = "gpt-6.1-sol" }]
+split = "sealed"
+instruction = """Before you write code, turn the idea into a spec in SPEC.md: one falsifiable sentence for each invariant, precondition and postcondition, and for each thing that must stay true across crashes, retries and reorderings. Implement and test against it. When a result surprises you, fix the spec first, then the code. Commit SPEC.md with each change."""
+
+[overlay.evaluator]
+scoring = "submit"
+noise_runs = 3
+
+[overlay.plugins.role.orchestrator]
+triggers = []
+
+[overlay.plugins.role.implementer]
+max_concurrent = 1
+timeout = 3600
+effort = "high"

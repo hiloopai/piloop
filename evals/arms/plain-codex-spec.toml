@@ -1,0 +1,6 @@
+# plain-codex with the spec-first instruction of pool-1w-spec.
+kind = "plain"
+name = "plain-codex-spec"
+agent = { harness = "codex", model = "gpt-6.1-sol" }
+instruction = "Before you write code, turn the idea into a spec in SPEC.md: one falsifiable sentence for each invariant, precondition and postcondition, and for each thing that must stay true across crashes, retries and reorderings. Implement and test against it. When a result surprises you, fix the spec first, then the code. Commit SPEC.md with each change."
+resources = { cpu = 2, memory_mb = 4096 }
