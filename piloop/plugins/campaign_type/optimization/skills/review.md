@@ -1,294 +1,116 @@
 ---
 name: piloop-review
-description: Review a piloop campaign during or after a run to check if the gains are real, if an agent gamed the evaluation, where time and tokens went, and which failures are piloop bugs, then turn the findings into bug reports, PRs and inbox items. Use when the human asks to review, audit, post-mortem or look back at a campaign, or asks if a result can be trusted.
+description: Explain why a piloop campaign turned out the way it did - why a result is good or bad, why the evaluation or the infra failed, how good ideas were found or why not, why one worker or arm did better, and where time went to waste - and tie each cause to the part of piloop that owns it. Use when the human asks to review, audit, post-mortem or compare campaigns or arms, or asks if a result can be trusted.
 ---
 
 # Review a piloop campaign
 
-A review answers four questions, in this order:
+A review explains why a campaign run turned out the way it did, and names the part of piloop that owns each cause.
+Subagents answer six fixed questions from the database, the agents' session files and the logs. Each number comes with
+the command that produced it, and a verifier runs every command again.
 
-1. **Is the result real?**
-2. **Did an agent cheat?**
-3. **What did it cost?**
-4. **Who is responsible for each failure?**
+The data, and worked queries on it, are in the last part of this skill, "Query a campaign".
 
-Then it files fixes: bug reports, PRs and inbox items.
+## The questions
 
-Rules for the whole review:
+Every review answers these, in this order:
 
-- Do not change the live system until the review ends. Post the inbox items only at the end (see Output).
-- Open the database read-only, with `?mode=ro`. If that fails with "unable to open database file" while the daemon
-  is stopped, use `?immutable=1` instead. Use `immutable=1` only when nothing writes the database.
-- Never prompt a running agent.
-- Never edit the working tree of a campaign repo.
-- Never change config.
-- **Verify before you claim.** Every number comes from a query, a diff or a transcript line that you can cite:
-  `path:line`, `path @ timestamp`, or a database row id. An agent's own report is a claim to check, not evidence. This
-  includes the orchestrator's final status.
-- **Measured or inferred.** Tag each finding **M** (you ran the query or read the line) or **I** (you reasoned to it).
-  Dollar estimates for killed jobs, idle slot-hours and "would have" counterfactuals are I. End the report with both
-  lists.
+1. Why is the result good, or bad?
+2. If the evaluation is bad, why?
+3. If there were infra failures, why?
+4. Were good ideas found? How, or why not?
+5. If another worker or arm did better, why?
+6. Where did time go to waste?
 
-## Where the data is
+## Rules
 
-| What | Where |
-|---|---|
-| Coordination state | `sqlite3 'file:<PILOOP_HOME>/piloop.db?mode=ro'` (default `~/.piloop`); schema at https://piloop.autoresearch.inc/reference/schema (or `piloop schema`) |
-| Daemon log | `<PILOOP_HOME>/serve.log` (OTEL spans on stderr) |
-| Briefs the agents got | `<PILOOP_HOME>/runs/<run>/brief.md`, `<PILOOP_HOME>/agent_sessions/<agent-session>/brief.md` |
-| Agent output | `<PILOOP_HOME>/agent_sessions/<agent-session>/transcript.txt`; `runs.log_dir` |
-| Agent session file | `piloop cas get <agent_sessions.session_file>` prints it, for an agent on any machine |
-| Orchestrator | the harness that ran `piloop-operate`; its writes are signed `orchestrator`. pi: `~/.pi/agent/sessions/--<cwd>--/`, subagents in `~/.pi/agent/pi-subagents/` and `run-history.jsonl`. Claude Code: `$CLAUDE_CONFIG_DIR/projects/<cwd, non-alphanumerics as ->/*.jsonl`, subagents under `<session>/subagents/`. Codex: `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` |
-| What agents left in `./workspace/` | `<PILOOP_HOME>/projects/<id>/workspace`, once each run ends: a running agent writes its own copy, and conflicts are `agent_session.workspace_conflict` events. A settled idea's files (`subject.settled`), and what a stopped campaign left (except `NOTES.md` and `research/`), are archived (`archives`) and removed from the workspace later (`archives.pruned_at`): `piloop restore <campaign> [idea#<id>\|<path>]` writes them back |
-| Candidates | the campaign repo: `refs/piloop/<campaign>/r<run>/<n>`, `git show <revision>` |
-| Side effects outside piloop | `$CLAUDE_CONFIG_DIR/settings.json`, `$CODEX_HOME/config.toml`, `$CLAUDE_CONFIG_DIR/projects/*/memory/` |
+- Read only. Copy a database before you query it (with its `-wal` and `-shm` files), or open it with `?mode=ro`. Never
+  prompt a running agent, edit a campaign repo or change config.
+- **Every number in a claim carries the exact command that produced it**: a SQL statement with the database it ran on,
+  or a shell, `jq` or `git` command line, and the part of its output that holds the number. The claim's own commands
+  print each of its numbers: a number that another claim printed does not count. A number without its command goes,
+  and so does a claim that is left with none.
+- Tag each claim **M** (a command measured it) or **I** (you reasoned to it from measured claims). An agent's own
+  report, in its session or its notes, is a claim to check, not evidence.
+- **Compare like with like.** Before you compare arms, check that they share the piloop pin, the base revision, the
+  task's rules and the platform (an eval run's `run.json`, or each campaign's config and repo). Name arms that differ
+  as different, and do not compare them.
+- **Compare at a fixed time**, such as 1 h, on the sealed score of the best at that time. Give each arm's mean and
+  range and a permutation p, and say when an arm has fewer than 3 runs.
+- Each role writes only under its own `work/<role>/`. Snapshot a live file (a log, a session file of a running agent)
+  into it before a claim reads it.
+- Explore before you trust a recipe: a database of another piloop release, and every session file, may differ from
+  the examples. Look at the schema and at a few records first.
+- Say what the review will cost before it starts. A run's review stays under $10 unless the human allows more.
+- Bug reports are drafts in files. File nothing, post nothing.
 
-Token counts:
+## The roles
 
-- `input` (uncached), `cache_read` and `cache_write` mean the same for every harness, so they compare.
-- `agent_sessions.usage.total` is the harness's own count. Claude Code: input + output + cache read + cache write.
-- Codex records no price.
+Run each role as a read-only subagent, in parallel. Give each one this skill, the paths of the run's data, and its
+share of the questions.
 
-## Structure: fan out, then combine
+| Role | Reads | Answers |
+|---|---|---|
+| **Reader**, one per worker (past 4 workers, one per 2–3 workers) | the worker's runs, candidates and session files: the turns around its biggest gains, its longest waits and its failed evaluations | 1, 4, 6 for its workers |
+| **Comparer** | every worker, and the other runs of an arm or wave, with a lone agent or plain arm beside the piloop arms | 5 |
+| **Eval auditor** | measurements and their errors, rule failures, an outside score if there is one, the diffs of the bests, the integrity checks below | 2, and whether the result is real |
+| **Infra auditor** | infra events, killed agents, the daemon log, any driver log; the provider's record of how each box ended (for Modal, the stored result's status and exception: `poll()` reads 137 for our own terminate too); live probes and memory traces; outcomes counted by box config | 3 |
+| **Verifier** | every claim of the other roles | runs each command again, and checks each number against its output |
+| **Synthesizer** | the verified claims | maps each cause to its owner and a change |
 
-A campaign is too large for one context. Act as an orchestrator over read-only subagents that run in parallel.
+Each role returns its claims as JSON lines, one per claim:
 
-Give each subagent the same rubric:
-
-- Answer the four questions.
-- Cite evidence.
-- Tag findings M or I.
-- Write the full report to a file.
-- Return 500 words or fewer.
-
-The subagents:
-
-1. **Database numbers.** Trajectory with the global best so far, funnel, run outcomes and wall-clock time, tokens and
-   cost per role, escalations, goalpost changes, statistical checks. This subagent owns the numbers that the others
-   cite.
-2. **Implementers, one subagent per campaign.** Read the transcripts and diffs of the new bests. Run the integrity checks
-   below.
-3. **Orchestrator.** Its session: decisions it took for the human, briefs, status reports compared with the database,
-   spend.
-4. **Ideas and sweeps.** For each idea: where it came from and what it produced. Sweeps that produced nothing, and
-   what they caught and missed.
-5. **Evaluation design.** Is the scoring panel held out? How much does a single unit move the score? Could an agent
-   read the labels?
-
-Then combine the results yourself:
-
-- the conclusion first,
-- a timeline,
-- what worked (specific and fair) and what did not,
-- an efficiency table,
-- an attribution table,
-- suggestions in priority order,
-- open items for the human.
-
-Before you trust the results:
-
-- Check again every subagent number that the conclusion depends on.
-- Send deep-dive subagents on the two or three findings that matter most. Record their corrections.
-- Read 20–30 traces yourself before you trust any failure category that a subagent reports.
-- In each trace, note the *first* thing that went wrong. Later errors usually follow from it.
-
-## SQL queries
-
-`<p>` is the campaign id. `<m>` is the primary metric: `SELECT config->'$.metrics' FROM campaigns WHERE id = <p>`.
-
-```sql
--- Trajectory: every measured candidate and the highest mean so far (MIN for a lower-is-better metric). Only the
--- current evaluator's scores count. The pool's best is not always this: it must be confirmed (n >= noise_runs),
--- not excluded, and allowed by the best rule; `piloop status` shows it.
-WITH s AS (SELECT c.id, c.run_id, c.parent_id, c.origin, c.excluded_reason, c.created_at,
-                  AVG(json_extract(m.metrics, '$.<m>')) AS score, COUNT(*) AS n
-           FROM candidates c JOIN measurements m ON m.candidate_id = c.id
-           WHERE c.campaign_id = <p> AND m.error IS NULL AND m.rung IS NULL
-             AND m.evaluator_id = (SELECT evaluator_id FROM campaigns WHERE id = <p>)
-           GROUP BY c.id)
-SELECT *, MAX(score) OVER (ORDER BY created_at ROWS UNBOUNDED PRECEDING) AS best FROM s ORDER BY created_at;
-
--- Funnel
-SELECT 'idea', status, COUNT(*) FROM ideas WHERE campaign_id = <p> GROUP BY status
-UNION ALL SELECT 'run', r.status, COUNT(*) FROM runs r JOIN ideas i ON i.id = r.idea_id
-          WHERE i.campaign_id = <p> GROUP BY r.status
-UNION ALL SELECT 'candidate', origin, COUNT(*) FROM candidates WHERE campaign_id = <p> GROUP BY origin;
-
--- New bests: each time that a score made its candidate the best of its track
-SELECT e.at, e.target_id candidate, e.payload->>'$.track' track, e.payload->>'$.score' score,
-       e.payload->>'$.measured' n
-FROM events e JOIN candidates c ON c.id = e.target_id
-WHERE e.kind = 'candidate.scored' AND e.target_kind = 'candidate' AND c.campaign_id = <p>
-  AND e.payload->>'$.best' = e.target_id ORDER BY e.id;
-
--- Candidates past a guardrail's floor (from the config or the brief): the best must not be one
-SELECT c.id, json_extract(m.metrics, '$.<guard>') AS guard
-FROM candidates c JOIN measurements m ON m.candidate_id = c.id
-WHERE c.campaign_id = <p> AND m.error IS NULL AND json_extract(m.metrics, '$.<guard>') < <floor>;
-
--- Exclusions: who took a candidate out of the race for the best, and why
-SELECT id, excluded_by, excluded_reason FROM candidates WHERE campaign_id = <p> AND excluded_reason IS NOT NULL;
-
--- Selection noise: spread among the candidates of one run (SQLite has no STDEV)
-SELECT run_id, COUNT(*) n, AVG(s) mean, SQRT(AVG(s*s) - AVG(s)*AVG(s)) sd, MIN(s), MAX(s)
-FROM (SELECT c.run_id, json_extract(m.metrics, '$.<m>') s FROM candidates c
-      JOIN measurements m ON m.candidate_id = c.id WHERE c.campaign_id = <p> AND m.error IS NULL AND m.rung IS NULL
-        AND m.evaluator_id = (SELECT evaluator_id FROM campaigns WHERE id = <p>)) GROUP BY run_id HAVING n > 3;
-
--- Repeat measurements of one tree (double evaluation) and their cost
-SELECT candidate_id, COUNT(*), SUM(seconds) FROM measurements m JOIN candidates c ON c.id = m.candidate_id
-WHERE c.campaign_id = <p> GROUP BY candidate_id HAVING COUNT(*) > 1;
-
--- Tokens and wall-clock time per role / harness / model
-SELECT kind, harness, model, COUNT(*) agents, SUM(usage->>'$.total') tokens, SUM(usage->>'$.output') output,
-       ROUND(SUM(julianday(ended_at) - julianday(started_at)) * 1440) minutes,
-       SUM(usage IS NULL) no_usage, SUM(state = 'killed') killed
-FROM agent_sessions WHERE campaign_id = <p> GROUP BY kind, harness, model;
-
--- Runs left open after their implementer exited
-SELECT r.id run, w.id implementer, w.ended_at, r.finished_at,
-       ROUND((julianday(COALESCE(r.finished_at, 'now')) - julianday(w.ended_at)) * 1440) open_min
-FROM runs r JOIN agent_sessions w ON w.subject_kind = 'run' AND w.subject_id = r.id JOIN ideas i ON i.id = r.idea_id
-WHERE i.campaign_id = <p> AND w.ended_at IS NOT NULL ORDER BY open_min DESC LIMIT 10;
-
--- Work after the last stop of the campaign (agents still running, measurements nobody used)
-SELECT r.id, r.started_at, r.finished_at FROM runs r JOIN ideas i ON i.id = r.idea_id
-WHERE i.campaign_id = <p> AND COALESCE(r.finished_at, 'now') > (SELECT MAX(at) FROM events WHERE kind = 'campaign.status'
-      AND target_id = <p> AND payload->>'$.new' = 'stopped');
-
--- Escalations: who decided, how fast (limit to the campaign window; targets can be any kind of row).
--- A decision is on the same row as the escalation, or a reply to the escalation itself (`piloop watch`, inbox reply).
-SELECT e.id, e.author, e.target_kind, e.target_id, e.created_at, d.author decided_by, d.created_at decided_at,
-       substr(e.body, 1, 100)
-FROM comments e LEFT JOIN comments d ON d.id = (SELECT MIN(id) FROM comments WHERE kind = 'decision' AND id > e.id
-       AND ((target_kind = e.target_kind AND target_id = e.target_id)
-            OR (target_kind = 'comment' AND target_id = e.id)))
-WHERE e.kind = 'escalation' AND e.created_at BETWEEN '<start>' AND '<end>';
-
--- Lessons that the campaign left, and what past campaigns on the same code tried (campaigns.repo)
-SELECT id, created_at, family, status, effect, metric, body FROM lessons WHERE campaign_id = <p> ORDER BY id;
-SELECT p.name, i.id, i.status, i.title FROM ideas_fts JOIN ideas i ON i.id = ideas_fts.rowid
-JOIN campaigns p ON p.id = i.campaign_id
-WHERE ideas_fts MATCH '<mechanism>' AND p.repo = (SELECT repo FROM campaigns WHERE id = <p>) ORDER BY bm25(ideas_fts);
-
--- The orchestrator's journal: what it decided and planned, in its own words
-SELECT created_at, author, line FROM journal WHERE campaign_id = <p> ORDER BY id;
-
--- Goalposts: exclusions, status changes, evaluator versions
-SELECT at, actor, kind, payload FROM events WHERE kind IN ('candidate.excluded_reason', 'campaign.status')
-  AND at BETWEEN '<start>' AND '<end>' AND actor != 'daemon';
-SELECT id, key, created_at FROM evaluators WHERE campaign_id = <p>;
+```json
+{"question": 1, "run": "10w", "claim": "451 of 501 discards were races", "owner": "judge/pool", "change": "judge a candidate against its parent", "evidence": [{"command": "sqlite3 10w.db < races.sql", "output": "451|501"}], "tag": "M"}
 ```
 
-Orchestrator spend and cache churn:
+**A reader** whose workers left no session files says so, and reads the database and the repo only. Merge readers
+rather than leave one with nothing to read.
 
-- A pi session records the cost per turn. For Claude Code or Codex, sum the usage the same way that piloop reads an
-  implementer's session into `agent_sessions.usage`.
-- `jq -r 'select(.message.usage) | [.timestamp, .message.usage.cacheWrite, .message.usage.cost.total] | @tsv' <session>.jsonl`
-- Sum the cost.
-- Count the turns with a large `cacheWrite` after an idle gap. Each one is a full re-cache of the prompt.
+**The infra auditor** may run a repro under $3 when it separates two causes, and says what it cost.
 
-## Integrity checks
+**The comparer** always sets a lone-agent or plain arm, when the wave has one, beside the piloop arms, on the same
+measures: the same queries and recipes, run on each arm. A measure that one arm lacks, such as a database, is said, not
+skipped.
 
-Run all of them on the best and on every new best. Cheating and honest overfitting both show here. Say which one it is.
+**The verifier** runs every `command` of every claim again, on the same data. Then it checks each number of `claim`
+against what the commands printed, one by one: the number is printed, or it follows from printed numbers by a step the
+claim names (a sum, a share, a difference, a rounding). A command that runs is not enough. It rejects a claim when a
+command fails, when its output differs from `output`, or when one number of the claim is in no output. It returns the
+claims that pass, and for each rejected one the number or the command, and what was printed. The synthesizer uses
+only claims that passed.
 
-- **Diffs of frozen files.**
-  - For each new best: `git -C <repo> diff --stat <baseline_sha> <revision> -- <evaluate> <scorer> <references> <data>`.
-  - Over `refs/piloop/`: `git log --all -- <frozen paths>`.
-  - The evaluator key hashes the evaluate command, the `link` list, and the name and direction of each metric. It
-    does not hash the contents of `evaluate.py` or of its data. An edited evaluator scores without any warning.
-- **Reads of labels and references.**
-  - Run `rg -l '<label file>|<references dir>|<per-unit ledger>'` over the session file of every agent. Read the hits.
-  - In the diffs, look for record-id literals and lookup tables keyed on inputs:
-    `git diff <base> <best> | rg '<unit ids>'`.
-  - Reading the per-unit correct flags of the scoring panel is oracle use, even without a training step.
-- **Tuning against the evaluation.**
-  - Count the evaluate calls per implementer transcript: `rg -c '<evaluate command>'`.
-  - Look for grid searches, "best of N seeds", and thresholds set from a few named units.
-  - Add the daemon's measurements. The total is the number of looks at the panel.
-  - About 200 looks at a panel of 70 units is a screen, not a judge.
-- **Concentration of the gain per unit.**
-  - Use the per-unit results: the units file of the evaluate command, or its ledgers.
-  - Find the share of the gain on the top 1–3 units, and how many units changed at all.
-  - A large gain that changes only 2 units has an effective sample of 2.
-- **Is the held-out set held out?**
-  - Join its units against everything that any candidate trained on or was tuned against.
-  - Report the trained and the untrained slices separately.
-- **Report against measurement.**
-  - Compare every number that an implementer or the orchestrator reported with the
-    `measurements` row it names.
-  - Query again before you repeat any of them.
-- **Side channels.**
-  - New files under `~/.claude/projects/*/memory/` since the campaign started. They load into every later session in
-    that repo.
-  - Changes to the global config of a harness.
-  - Repo trust prompts that an agent answered.
+## The owners
 
-Statistics to apply:
+The synthesizer gives every cause one owner, by the counterfactual: if this were fixed, would the outcome change?
 
-- **Noise floor.** At n units and accuracy p, the standard error is √(p(1−p)/n). For 70 units at 80%, that is about
-  ±4.8 points. Units from one cluster (one site, one source, one subject) are correlated: the effective n is the
-  number of clusters.
-- **Compare two candidates** with a paired sign test (exact McNemar test) on the units where they disagree. With 5 or
-  fewer disagreements, no result is significant. With 10, you need a net gain of 8.
-- **Picking the best inflates the score by itself.** K candidates with the same true score produce a winner several
-  points above the baseline. Compare the step of a new best with the spread among sibling candidates (query above).
-- **Transfer is the proof.** For every promoted candidate, compute the gap Δ between the development set and the
-  holdout. A step that moves the development set and not the holdout is overfitting, whatever the transcript says.
-
-## Efficiency accounting
-
-Make one table, measured where possible:
-
-- orchestrator spend, and the share that is re-caching,
-- the tokens and dollars of each role,
-- the waste lines:
-  - runs open after their implementer exited,
-  - double evaluation (implementer and daemon),
-  - runs after the stop,
-  - sweeps that produced nothing,
-  - killed agents, and agents that never started,
-  - polling loops,
-  - agents blocked on credentials.
-
-Judge spend against value. Tokens that produced the new bests are not waste. Deriving the schema again in
-every sweep is.
-
-## Attribution
-
-Give every failure one owner. Use the counterfactual: "if this were fixed, would the outcome change?"
-
-| Owner | Typical failures |
+| Owner | Typical causes |
 |---|---|
-| **model** | invented numbers, misread tool output, said one thing and did another, ignored the brief |
-| **harness** (piloop / pi / Codex / Claude Code) | runs left open, wrong base, unenforced guardrails, messages sent into the wrong session, cache churn |
-| **environment** | expired credentials, trust dialogs, quota, a remote job service down |
-| **spec** (brief, eval design, orchestrator decisions) | a brief that bans training but not tuning, a panel that is not held out, an oracle left readable, a goalpost moved after seeing the result |
+| **brief** | what the agents are told: an instruction that makes them wait, start alike, or skip notes |
+| **judge/pool** | how submissions are scored and ranked: races, a bar that moves, a rule that counts noise |
+| **evaluator** | how an evaluation runs: on whose CPUs, how long, how often again |
+| **scheduler** | when runs start, how many at once, on what base |
+| **harness** | the coding-agent CLI: messages it drops, a session that ends early, tokens it rereads |
+| **eval task** | the task's own rules and data: a rule the agents never saw, a split unlike the holdout |
+| **infra** | machines, memory, quotas, gateways |
+| **model** | what the model did with all the above right |
 
-Separate harness faults and environment faults before you blame a model.
+Separate infra and harness faults from the model's before you blame the model.
 
-## Output
+## Integrity checks (eval auditor)
 
-1. **Report.** Conclusion, timeline, what worked and what did not, efficiency, attribution, suggestions, open items,
-   measured and inferred lists. Use short sentences. Put the numbers first.
-2. **Bug reports and PRs.** One for each harness fault.
-   - Include the evidence (row ids, transcript lines) and a minimal reproduction where possible.
-   - Follow the contribution rules of the repo you fix, for example one worktree per change and all checks green.
-   - In the PR body, cite the review evidence and say what you verified and what you did not.
-   - Do not merge.
-3. **Inbox items for the human.** Decisions that only the human can make: goalposts, reverting an agent's config or
-   memory writes, pausing a campaign whose evaluation is broken, a best below a floor.
-   - One item for each decision, with a recommendation and a priority.
-   - Post each one as an `escalation` comment on the campaign, with a `priority`: pipe the INSERT into
-     `piloop sql -` from a quoted heredoc (`<<'EOF'`), never in a double-quoted argument.
+- **Frozen files.** `git diff --stat <baseline> <best> -- <evaluate> <data>` for each best. An edited `evaluate.py`
+  scores with no warning: the evaluator key does not hash its contents.
+- **Labels and references.** Search the session files for reads of the labels, the references or per-unit results.
+- **Tuning against the evaluation.** Count each worker's evaluate calls in its session files, and the daemon's
+  evaluations. Many looks at a small panel is a screen, not a judge.
+- **Transfer.** Compare the campaign's score with an outside one, where there is one. A best that an outside scoring
+  refuses breaks a rule that the campaign did not check.
 
-## Every review: check the surfacing policy of the inbox
+## The output
 
-At the end of every review, check what reached the human and what did not:
-
-- escalations that the orchestrator decided alone,
-- decisions that the human would have changed,
-- items that reached the human but were noise.
-
-Propose changes to what is surfaced, at what priority, and what the orchestrator may decide and log.
-The review judges the surfacing policy along with the result.
+- **A report in markdown**, by default: three lines first (what ran, the result, the main why), then the cause table:
+  question, claim, owner, change, M or I, the command behind each number. Put long evidence in an appendix.
+- **A shared page** instead, when the human asks for one, following their own page skill if they have one.
+- **One report per arm or wave**: a question × run matrix, and the causes counted by owner.
+- **Bug drafts**: one file per cause owned by piloop's own code, with its commands and a minimal reproduction.

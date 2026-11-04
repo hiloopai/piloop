@@ -88,7 +88,9 @@ def test_the_core_parts_name_no_command_of_a_campaign_type() -> None:
 
 TRIAGE = SkillPart('piloop-operate', 350, ROOT / 'tests' / 'fixtures' / 'skills' / 'triage.md')
 """A package's part of the operate skill, right after its escalations."""
-REVIEW = SkillPart('piloop-review', 0, ROOT / 'tests' / 'fixtures' / 'skills' / 'review.md', replaces=('review',))
+REVIEW = SkillPart(
+    'piloop-review', 0, ROOT / 'tests' / 'fixtures' / 'skills' / 'review.md', replaces=('review', 'review-queries')
+)
 """A package's review skill, in place of piloop's."""
 
 

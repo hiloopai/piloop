@@ -1,9 +1,9 @@
 ---
 title: Reviewing a campaign
-description: Check that the gains are real, that no agent gamed the evaluation, and where the time and tokens went.
+description: Find out why a campaign turned out the way it did, and which part of piloop each cause belongs to.
 ---
 
-A campaign can end with a better number that does not hold up. Review a campaign before you trust its result.
+A review explains why a campaign's result is good or bad, and names the part of piloop that owns each cause.
 
 ## With a coding agent
 
@@ -13,18 +13,20 @@ Open Claude Code, Codex or pi in the campaign repo and ask:
 review the piloop campaign
 ```
 
-The agent follows the `piloop-review` skill. While it reviews, it opens the database read-only and changes nothing in
-the running campaign. It answers four questions, in this order:
+The agent follows the `piloop-review` skill. It queries the database, the agents' session files and the logs, and
+answers six questions:
 
-1. **Is the result real?** The trajectory of the best, the noise between sibling candidates, and whether the gains
-   hold on data that no agent tuned against.
-2. **Did any agent game the evaluation?** Edits to frozen files, reads of labels or per-unit results, and tuning
-   against the evaluate command.
-3. **What did it cost?** Tokens and time for each role, and the work that produced nothing.
-4. **Whose fault is each failure?** The model, the harness, the environment, or the setup of the campaign.
+1. Why is the result good, or bad?
+2. If the evaluation is bad, why?
+3. If there were infra failures, why?
+4. Were good ideas found? How, or why not?
+5. If another worker or arm did better, why?
+6. Where did time go to waste?
 
-It tags each claim as measured or inferred. It ends with a report, bug reports for problems in the tools, and inbox
-items for the decisions that only you can take. It posts the inbox items as `escalation` comments on the campaign.
+Every number comes with the SQL or shell command that produced it, and a verifier runs each command again before a
+claim counts. Each claim is tagged as measured or inferred, and each cause gets one owner: the brief, the judge and
+pool, the evaluator, the scheduler, the harness, the evaluation task, the infra or the model. The review ends with a
+page per run and draft bug reports, and it files nothing.
 
 ## By hand
 
