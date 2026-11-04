@@ -460,6 +460,27 @@ def test_a_sealed_split_arm_gets_dev_and_its_own_sealed_command():
     assert get(config, 'evaluator', 'scoring') == 'submit'
 
 
+def test_relay_runs_are_deterministic_and_its_audit_refuses_an_import(tmp_path: Path):
+    repo = TASKS / 't8-relay' / 'repo'
+    given = ('sim', 'store', 'check', 'evaluate')
+    sys.path.insert(0, str(repo))
+    try:
+        evaluate = module(repo / 'evaluate.py')
+        split, ref = evaluate.load_split(repo / 'dev.json')
+        program = evaluate.Program(evaluate.audit(repo))
+        runs = [evaluate.World(program, split, 7, 'mixed').run() for _ in range(2)]
+        shutil.copytree(repo, tmp_path / 'tree')
+        relay = tmp_path / 'tree' / 'relay.py'
+        relay.write_text(relay.read_text() + '\nimport sys\n')
+        with pytest.raises(evaluate.Refused, match='imports sys'):
+            evaluate.audit(tmp_path / 'tree')
+    finally:
+        sys.path.remove(str(repo))
+        for name in given:
+            sys.modules.pop(name, None)
+    assert runs[0] == runs[1] and runs[0].drained and len(ref) == len(split.seeds) * len(split.scenarios)
+
+
 def test_campaign_sealed_scores_the_checkout_on_the_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     campaign_sealed = module(ROOT / 'campaign_sealed.py')
     checkout, sealed = tmp_path / 'checkout', tmp_path / 'sealed'
@@ -1017,6 +1038,7 @@ def test_each_task_names_its_scorer_and_daytona_refuses_a_task_that_needs_a_gpu_
         't5-lpaq': 'daytona',
         't6-optcomp': 'modal',
         't7-semantics': 'modal',
+        't8-relay': 'daytona',
     }
     t5 = Task.load('t5-lpaq').model_dump()
     for need in ({'gpu': 'L4'}, {'memory_limit_mb': 12288}):

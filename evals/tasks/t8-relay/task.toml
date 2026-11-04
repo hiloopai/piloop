@@ -1,0 +1,30 @@
+name = "t8-relay"
+metric = "score"
+direction = "higher"
+dev = ["python3", "evaluate.py"]
+dev_base = 0.5670476190476191             # the starting relay on the 1200 dev schedules
+dev_ref = 1.0                             # the reference relay: every clause on every schedule, speed 1 by definition
+score_repeats = 1                         # the simulator is deterministic: one scoring per version
+network = "gateway"                       # the task is self-contained; nothing on the web would help, and search would add variance
+
+scorer = "daytona"                        # scored on Daytona: CPU only, the holdout in a few minutes on its one CPU
+
+[piloop]
+name = "t8-relay"
+evaluate = ["python3", "evaluate.py"]
+evaluate_timeout = 300                    # dev takes 4 to 8 s of CPU; a relay that stalls runs every schedule to its cap
+
+[[piloop.metrics]]
+name = "score"
+direction = "higher"
+role = "primary"
+
+[[piloop.metrics]]
+name = "safety"
+direction = "higher"
+role = "watch"
+
+[[piloop.metrics]]
+name = "speed"
+direction = "higher"
+role = "watch"
