@@ -34,6 +34,7 @@ from evals.drive import (
     Piloop,
     Plain,
     admitted,
+    agent_box,
     credentials,
     drive,
     export,
@@ -857,11 +858,10 @@ def test_a_piloop_arms_team_is_its_daemons_own_pools_on_modal_and_daytona(
         'image_id': 'im-1',
         'cpu': 2,
         'memory_mb': 8192,
-        'memory_limit_mb': 8192,
         'cloud': 'gcp',
         'timeout_hours': 7,
         'env': None,
-    }
+    }, 'an 8 GiB request with no hard limit: a box over a hard one dies with every session in it'
     assert evaluate['compute'] | {'env': None} == {
         'provider': 'daytona',
         'snapshot': 'snap-1',
@@ -1155,3 +1155,13 @@ def test_no_test_reads_this_machines_session_ledger(tmp_path: Path):
 def test_the_lean_tasks_share_one_evaluator_scorer_and_audit():
     for path in ('repo/evaluate.py', 'sealed.py', 'repo/check/Audit.lean', 'repo/LICENSE'):
         assert (TASKS / 't6-optcomp' / path).read_bytes() == (TASKS / 't7-semantics' / path).read_bytes(), path
+
+
+def test_a_plain_agents_box_asks_for_8_gib_with_no_hard_limit_unless_its_task_has_one(monkeypatch: pytest.MonkeyPatch):
+    made: list[dict[str, object]] = []
+    monkeypatch.setattr('evals.drive.Box.create', lambda *args, **kwargs: made.append(kwargs) or FakeBox())
+    monkeypatch.setattr('evals.drive.image', lambda *args: None)
+    arm = plain_run(Settings()).arm
+    for task in ('t5-lpaq', 't6-optcomp'):
+        agent_box(Task.load(task), arm, Settings(), 6, {}, 'r')
+    assert [(m['memory_mb'], m['memory_limit_mb']) for m in made] == [(8192, None), (12288, 12288)]

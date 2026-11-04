@@ -467,8 +467,9 @@ def on_modal(
 
 AGENT = Resources(cpu=2, memory_mb=8192)
 """The Modal sandbox of each agent of a piloop arm, and of a plain arm on the ``daytona`` platform, whatever the arm
-asks: its memory a hard limit, the brief's 8 GiB, or the task's own limit. Every arm builds and dev-runs on the same
-box."""
+asks: 8 GiB asked for, the brief's, and a hard limit only when the task has one (``memory_limit_mb``). On Modal a box
+over its hard limit dies with every session in it, so the brief's 8 GiB binds where it is measured: the evaluator caps
+each codec's address space. Every arm builds and dev-runs on the same box."""
 
 
 def agent_box(task: Task, arm: PlainArm, settings: Settings, hours: float, env: dict[str, str], run: str) -> Box:
@@ -477,8 +478,8 @@ def agent_box(task: Task, arm: PlainArm, settings: Settings, hours: float, env: 
         settings,
         image([task], arm),
         cpu=AGENT.cpu,
-        memory_mb=AGENT.memory_mb,
-        memory_limit_mb=AGENT.memory_mb,
+        memory_mb=task.memory_limit_mb or AGENT.memory_mb,
+        memory_limit_mb=task.memory_limit_mb,
         hours=hours + 1,
         network=task.network,
         cloud=task.cloud,
@@ -574,14 +575,13 @@ def on_team(
             'app': settings.modal_app,
             'environment': settings.modal_environment,
         }
-        limit = task.memory_limit_mb or AGENT.memory_mb
         agents = present(
             on_modal_
             | {
                 'image_id': built(settings, steps),
                 'cpu': AGENT.cpu,
-                'memory_mb': limit,
-                'memory_limit_mb': limit,
+                'memory_mb': task.memory_limit_mb or AGENT.memory_mb,
+                'memory_limit_mb': task.memory_limit_mb,
                 'gpu': task.gpu,
                 'cloud': task.cloud,
                 'outbound_domains': None if reach is None else [*reach, *own],
