@@ -524,7 +524,9 @@ def stage(cas: Cas, files: Mapping[str, Cid | None], scratch: Path) -> dict[str,
         if blob is None:
             staged[rel] = None
             continue
-        path = Path(tempfile.mkstemp(dir=scratch)[1])
+        fd, name = tempfile.mkstemp(dir=scratch)
+        os.close(fd)  # get_file writes the path itself: a descriptor kept open here leaks one per file
+        path = Path(name)
         if cas.get_file(blob, path) is None:
             raise Missing(f'the blob {blob} of {rel} is not in the CAS')
         staged[rel] = Staged(blob, path)

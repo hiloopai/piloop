@@ -647,3 +647,13 @@ def test_an_eviction_skips_a_copy_that_another_eviction_took_meanwhile(
         patched.setattr(tree_module, 'free', lambda _root: 0)
         assert tree_module.evict_unlinked(root, reserve=1) == 1
     assert list(root.iterdir()) == [root / 'not-a-copy'], 'a directory is no copy'
+
+
+def test_staging_files_leaves_no_descriptor_open(tmp_path: Path) -> None:
+    """A long-lived daemon stages each changed workspace file of every agent's report: a descriptor per file that it
+    kept open exhausted its 1024 after a few hours of remote workers."""
+    cas = disk(tmp_path)
+    files = {f'f{i}.txt': cas.put(f'{i}'.encode()) for i in range(50)}
+    before = len(os.listdir('/dev/fd'))
+    stage(cas, files, tmp_path / 'scratch')
+    assert len(os.listdir('/dev/fd')) <= before
