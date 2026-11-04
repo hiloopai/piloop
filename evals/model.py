@@ -238,6 +238,35 @@ class PoolCounts(Frozen):
     """Runs whose claim chose another candidate than the best they started from (``--base``)."""
 
 
+class Regression(Frozen):
+    """A submission that fails a sealed item that its parent passed, on the holdout."""
+
+    revision: str
+    parent: str
+    lost: list[str]
+    """The items that the parent passed and it fails."""
+
+
+class Regressions(Frozen):
+    """A run's submissions on the holdout, each against its parent: the version it started from.
+
+    A pool run's submissions are its implementers' candidates, a verdict run's too, and a plain run's the commits of
+    ``main``'s first-parent line, each with its first parent.
+    """
+
+    submissions: int
+    scored: int
+    """The submissions scored on the holdout, with their parents. Only the heads, when the task reports no items."""
+    found: list[Regression] | None
+    """The scored submissions that fail an item that their parent passed, in the order they were made. None: the
+    task's sealed scorer reports no items for the base."""
+
+    @property
+    def share(self) -> float | None:
+        """Regressions over scored submissions. None: the task reports no items, or nothing was scored."""
+        return None if self.found is None or not self.scored else len(self.found) / self.scored
+
+
 class Loop(Frozen):
     """A run's feedback loop."""
 
@@ -334,6 +363,8 @@ class Result(Frozen):
     """The notes that the workers of each role wrote."""
     notes_read: dict[str, int] = {}
     """The notes that a worker of another run read, by ``author role>reader role``."""
+    regressions: Regressions | None = None
+    """Every submission scored on the holdout against its parent. None: a result written before they were."""
 
     @property
     def first_keep(self) -> Point | None:

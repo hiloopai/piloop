@@ -173,6 +173,12 @@ DIAGNOSTICS: list[Row] = [
     ('kept (pool: new bests)', lambda r: r.funnel.kept, 0, statistics.median),
     ('keep rate (kept / submissions)', rate, 2, statistics.median),
     (
+        'regression share (submissions that fail a sealed item their parent passed)',
+        lambda r: r.regressions.share if r.regressions else None,
+        2,
+        statistics.median,
+    ),
+    (
         '$ per keep',
         lambda r: r.spend[-1].usd / r.funnel.kept if r.spend and r.funnel.kept else None,
         2,

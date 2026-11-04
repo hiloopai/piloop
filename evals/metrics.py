@@ -4,6 +4,9 @@ A piloop arm's heads are its keeps, at the time of their verdict, for a piloop w
 a pool (``pool``), they are its best over time: each candidate that a score made the best, at the time of that score.
 A plain arm's heads are the commits of ``main``'s first-parent line, at their commit time: it was told to commit only
 what beats its best.
+
+A run's submissions are every version it handed in, each with its parent: a piloop arm's implementers' candidates, and
+a plain arm's commits of ``main``'s first-parent line, as the session commits whatever it likes there.
 """
 
 import json
@@ -11,11 +14,12 @@ import sqlite3
 import subprocess
 import tempfile
 from bisect import bisect_right
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from evals.loop import loop
-from evals.model import Funnel, Point, PoolCounts, Result, Sample, SelfTest, Tokens
+from evals.model import Funnel, Point, PoolCounts, Regression, Regressions, Result, Sample, SelfTest, Tokens
 from evals.score import Score
 from evals.team import final_keeps, final_line, notes, races
 
@@ -71,6 +75,33 @@ def plain_heads(bundle: Path, base: str, started: datetime) -> tuple[list[tuple[
         ).stdout
     heads = [(rev, hours_since(started, stamp)) for rev, stamp in zip(log[::2], log[1::2], strict=True)]
     return heads, int(count)
+
+
+def plain_submissions(bundle: Path, base: str) -> list[tuple[str, str]]:
+    """The commits of ``main`` after ``base``, oldest first, each with its first parent."""
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(['git', 'clone', '-q', '--bare', str(bundle), tmp], check=True)
+        log = subprocess.run(
+            ['git', '-C', tmp, 'log', '--first-parent', '--reverse', '--format=%H %P', f'{base}..main'],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    return [(rev, parents[0]) for rev, *parents in map(str.split, log.splitlines())]
+
+
+def piloop_submissions(db: sqlite3.Connection) -> list[tuple[str, str]]:
+    """The candidates that the implementers submitted, in order, each with the revision of the candidate it came from.
+
+    The same before and after 0.6: ``origin = 'run'``, never the baseline, a reference, or a tree that was recovered or
+    skipped and so never measured.
+    """
+    return db.execute(
+        """
+        select c.revision, p.revision from candidates c join candidates p on p.id = c.parent_id
+        where c.origin = 'run' order by c.id
+        """
+    ).fetchall()
 
 
 def pool(db: sqlite3.Connection) -> bool:
@@ -180,12 +211,47 @@ def heads_of(run: Path) -> list[tuple[str, float]]:
     export = run / 'export' / 'out'
     if meta['piloop'] is None:
         return plain_heads(export / 'repo.bundle', meta['base'], started)[0]
-    with sqlite3.connect(export / 'piloop.db') as db:
+    with closing(sqlite3.connect(export / 'piloop.db')) as db:
         return piloop_heads(db, meta['base'], started)
 
 
+def submissions_of(run: Path) -> list[tuple[str, str]]:
+    """The submissions of a run, each with its parent."""
+    meta = json.loads((run / 'run.json').read_text())
+    export = run / 'export' / 'out'
+    if meta['piloop'] is None:
+        return plain_submissions(export / 'repo.bundle', meta['base'])
+    with closing(sqlite3.connect(export / 'piloop.db')) as db:
+        return piloop_submissions(db)
+
+
+def lost(parent: Score, child: Score) -> list[str]:
+    """The sealed items that ``parent`` passed and ``child`` fails.
+
+    A scorer that crashed reports no items: it fails every one.
+    """
+    kept = {name for name, ok in (child.items or {}).items() if ok}
+    return [name for name, ok in (parent.items or {}).items() if ok and name not in kept]
+
+
+def regressions(submissions: list[tuple[str, str]], scores: dict[str, Score], base: str) -> Regressions:
+    """The ``submissions`` that fail a sealed item that their parent passed, among those scored with their parent.
+
+    A task reports items when its base's score has them: one whose scorer has none reports no regressions.
+    """
+    scored = [(rev, parent) for rev, parent in submissions if rev in scores and parent in scores]
+    found = [
+        Regression(revision=rev, parent=parent, lost=names)
+        for rev, parent in scored
+        if (names := lost(scores[parent], scores[rev]))
+    ]
+    return Regressions(
+        submissions=len(submissions), scored=len(scored), found=None if scores[base].items is None else found
+    )
+
+
 def result(run: Path, scores: dict[str, Score]) -> Result:
-    """The ``Result`` of a run, from its export and the scores of its base and heads."""
+    """The ``Result`` of a run, from its export and the scores of its base, heads and submissions."""
     meta = json.loads((run / 'run.json').read_text())
     started = datetime.fromisoformat(meta['started_at'])
     spend = [Sample.model_validate_json(line) for line in (run / 'spend.jsonl').read_text().splitlines()]
@@ -193,6 +259,7 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
     base = meta['base']
     if meta['piloop'] is None:
         heads, commits = plain_heads(export / 'repo.bundle', base, started)
+        submitted = plain_submissions(export / 'repo.bundle', base)
         made: list[datetime] | None = [started + timedelta(hours=h) for _, h in heads]
         sessions = int((export / 'sessions').read_text())
         funnel = Funnel(ideas=None, runs=sessions, submissions=commits, kept=len(heads))
@@ -200,8 +267,9 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         escalations, people, lead = 0, 0, None
         kept, held, line, written, read, raced, counted = {}, {}, {}, {}, {}, None, None
     else:
-        with sqlite3.connect(export / 'piloop.db') as db:
+        with closing(sqlite3.connect(export / 'piloop.db')) as db:
             heads = piloop_heads(db, base, started)
+            submitted = piloop_submissions(db)
             funnel, escalations, people, lead = piloop_counts(db, base)
             sent, delivered, refused = messages(db)
             if pool(db):
@@ -257,5 +325,6 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         races=raced,
         notes_written=written,
         notes_read=read,
+        regressions=regressions(submitted, scores, base),
         loop=loop(run / 'export', made, spend[-1].hours if spend else 0.0, spend[-1].usd if spend else 0.0),
     )

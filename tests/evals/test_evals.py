@@ -13,6 +13,7 @@ import time
 import tomllib
 import warnings
 from collections import Counter
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -23,8 +24,9 @@ import modal
 import pytest
 from daytona import Daytona, Sandbox
 from pydantic import JsonValue, SecretStr
+from sqlalchemy import select
 
-from evals import daytona, meter
+from evals import daytona, meter, pilot, score as scoring
 from evals.drive import (
     CREDENTIALS,
     HALT,
@@ -48,7 +50,16 @@ from evals.drive import (
     watch,
 )
 from evals.loop import evaluations
-from evals.metrics import at, pool, pool_counts, pool_heads, result
+from evals.metrics import (
+    at,
+    piloop_submissions,
+    plain_submissions,
+    pool,
+    pool_counts,
+    pool_heads,
+    regressions,
+    result,
+)
 from evals.model import (
     ARMS,
     ROOT,
@@ -59,6 +70,8 @@ from evals.model import (
     PlainArm,
     Point,
     PoolCounts,
+    Regression,
+    Regressions,
     Resources,
     Result,
     Sample,
@@ -70,13 +83,17 @@ from evals.model import (
 from evals.pilot import guard, spent
 from evals.report import plain_bar, write
 from evals.sandbox import WORK, Box, Copy, Egress, Run, Step, memory, network_policy
-from evals.score import Score, Scoring
+from evals.score import Score, Scoring, score
 from evals.team import final_keeps, final_line, notes, races
 from evals.telemetry import exported
 from piloop.config import CampaignConfig
+from piloop.db.models import Campaign
 from piloop.db.session import Database
 from piloop.deprecated import PiloopDeprecationWarning
+from piloop.plugins.campaign_type.kit.candidates.ids import Origin
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.settings import Settings as PiloopSettings
+from tests.conftest import baseline
 
 
 def module(path: Path) -> ModuleType:
@@ -410,7 +427,8 @@ def test_plain_result_and_report(tmp_path: Path):
     )
     [page] = write([r, other], tmp_path / 'site', Settings())
     text = page.read_text()
-    assert page.name == 't2-circles.html' and 'plain-claude' in text and 'plotly' in text
+    assert page.name == 't2-circles.html' and 'plain-claude' in text and 'plotly' in text and 'regression share' in text
+    assert r.regressions == Regressions(submissions=3, scored=3, found=None), 'every commit on main, scored as a head'
     by_arm = {'plain-codex': [r], 'plain-claude': [other]}
     assert plain_bar(by_arm) == pytest.approx(2 / 4)
     assert plain_bar(by_arm, frozenset({'plain-codex'})) == 0
@@ -1171,3 +1189,208 @@ def test_a_plain_agents_box_asks_for_8_gib_with_no_hard_limit_unless_its_task_ha
     for task in ('t5-lpaq', 't6-optcomp'):
         agent_box(Task.load(task), arm, Settings(), 6, {}, 'r')
     assert [(m['memory_mb'], m['memory_limit_mb']) for m in made] == [(8192, None), (12288, 12288)]
+
+
+def commit(repo: Path, name: str, text: str | None = None) -> str:
+    """Commit ``name`` with ``text`` (its name by default) into ``repo``; its revision."""
+    (repo / name).write_text(name if text is None else text)
+    git(repo, 'add', name)
+    git(repo, 'commit', '-qm', name)
+    return git(repo, 'rev-parse', 'HEAD').strip()
+
+
+def candidates(db: Database, campaign: Campaign, made: list[tuple[str, Origin, int | None]]) -> list[int]:
+    """Add ``(revision, origin, index of the parent in made)`` candidates after the baseline; their ids."""
+    with db.session() as s:
+        ids = [s.scalars(select(Candidate.id).where(Candidate.campaign_id == campaign.id)).one()]
+        for i, (revision, origin, parent) in enumerate(made, start=1):
+            c = Candidate(
+                campaign_id=campaign.id,
+                tree_sha=f'tree{i}',
+                revision=revision,
+                origin=origin,
+                parent_id=None if parent is None else ids[parent],
+            )
+            s.add(c)
+            s.flush()
+            ids.append(c.id)
+        s.commit()
+    return ids
+
+
+def test_a_piloop_run_s_submissions_are_its_implementers_candidates_each_with_the_one_it_came_from(
+    db: Database, campaign: Campaign
+) -> None:
+    """A candidate that was recovered, skipped or imported was never submitted, but a submission may come from one."""
+    base = baseline(db, campaign.id).revision
+    candidates(
+        db,
+        campaign,
+        [
+            ('a', Origin.RUN, 0),
+            ('recovered', Origin.RECOVERED, 1),
+            ('skipped', Origin.SKIPPED, 1),
+            ('reference', Origin.REFERENCE, None),
+            ('b', Origin.RUN, 2),
+            ('c', Origin.RUN, 1),
+        ],
+    )
+    with closing(sqlite3.connect(db.engine.url.database or '')) as con:
+        assert pool(con)
+        assert piloop_submissions(con) == [('a', base), ('b', 'recovered'), ('c', 'a')]
+
+
+def test_a_plain_run_s_submissions_are_main_s_first_parent_commits_each_with_its_first_parent(tmp_path: Path):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    git(repo, 'init', '-q', '-b', 'main')
+    base = commit(repo, 'base')
+    one = commit(repo, 'one')
+    git(repo, 'checkout', '-q', '-b', 'side')
+    side = commit(repo, 'side')
+    git(repo, 'checkout', '-q', 'main')
+    two = commit(repo, 'two')
+    git(repo, 'merge', '-q', '--no-ff', '-m', 'merge', 'side')
+    merged = git(repo, 'rev-parse', 'HEAD').strip()
+    git(repo, 'checkout', '-q', '-b', 'elsewhere')
+    commit(repo, 'never on main')
+    bundle = tmp_path / 'repo.bundle'
+    git(repo, 'bundle', 'create', str(bundle), '--all')
+    assert plain_submissions(bundle, base) == [(one, base), (two, one), (merged, two)], f'not {side}, merged in'
+
+
+def scoring_of(passed: dict[str, bool] | None, sealed: float | None = 0.5) -> Scoring:
+    return Scoring(dev=None, sealed=sealed, detail='', cpu='c', items=passed)
+
+
+def test_each_tree_is_scored_once_and_its_score_goes_to_every_revision_of_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    git(repo, 'init', '-q', '-b', 'main')
+    base = commit(repo, 'f', 'base')
+    changed = commit(repo, 'f', 'changed')
+    reverted = commit(repo, 'f', 'base')
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'empty')
+    empty = git(repo, 'rev-parse', 'HEAD').strip()
+    bundle = tmp_path / 'repo.bundle'
+    git(repo, 'bundle', 'create', str(bundle), '--all')
+    scored: list[str] = []
+    lock = threading.Lock()
+
+    def content(tgz: bytes) -> str:
+        with tarfile.open(fileobj=BytesIO(tgz)) as tar:
+            f = tar.extractfile('f')
+            assert f is not None
+            return f.read().decode()
+
+    def fake_one(task: Task, rev: str, base_tar: bytes, tree: bytes, *_: object) -> Scoring:
+        assert content(base_tar) == 'base'
+        with lock:
+            scored.append(content(tree))
+        return scoring_of({content(tree): True})
+
+    monkeypatch.setattr(scoring, 'score_one', fake_one)
+    monkeypatch.setattr(scoring, 'sealed_data', lambda name, settings: b'')
+    task = Task.load('t2-circles').model_copy(update={'score_repeats': 2})
+    found = score(task, bundle, base, [changed, reverted, empty, changed], Settings())
+    assert sorted(scored) == ['base', 'base', 'changed', 'changed'], 'two trees, two repeats each; not the base'
+    assert set(found) == {changed, reverted, empty}
+    assert found[reverted] is found[empty] and found[reverted].items == {'base': True}
+    assert found[changed].items == {'changed': True}
+
+
+def test_a_score_passes_an_item_only_when_every_scoring_did_and_a_crash_passes_none():
+    assert Score.of([scoring_of({'a': True, 'b': True}), scoring_of({'a': True, 'b': False})]).items == {
+        'a': True,
+        'b': False,
+    }
+    crashed = Score.of([scoring_of({'a': True}), scoring_of(None, sealed=None)])
+    assert crashed.items == {'a': False} and crashed.sealed is None
+    assert Score.of([scoring_of(None)]).items is None
+
+
+def test_a_submission_regresses_when_it_fails_an_item_that_its_parent_passed():
+    def of(passed: dict[str, bool] | None, sealed: float | None = 0.5) -> Score:
+        return Score.of([scoring_of(passed, sealed)])
+
+    scores = {
+        'base': of({'a': True, 'b': False, 'c': True}),
+        'gains-b-loses-c': of({'a': True, 'b': True, 'c': False}),
+        'crash': of(None, sealed=None),
+        'after-crash': of({'a': True, 'b': False, 'c': False}),
+        'same': of({'a': True, 'b': False, 'c': True}),
+    }
+    made = [('gains-b-loses-c', 'base'), ('crash', 'gains-b-loses-c'), ('after-crash', 'crash'), ('same', 'base')]
+    found = regressions([*made, ('unscored', 'base')], scores, 'base')
+    assert found.found == [
+        Regression(revision='gains-b-loses-c', parent='base', lost=['c']),
+        Regression(revision='crash', parent='gains-b-loses-c', lost=['a', 'b']),
+    ], 'a gained item does not make up for a lost one; a crash fails every item; nothing is lost from a crash'
+    assert (found.submissions, found.scored, found.share) == (5, 4, 0.5)
+    bare = {rev: Score(dev=None, sealed=0.5, detail='') for rev in scores}
+    assert regressions(made, bare, 'base') == Regressions(submissions=4, scored=4, found=None)
+    assert Regressions(submissions=4, scored=4, found=None).share is None
+
+
+def pool_run(tmp_path: Path, db: Database, campaign: Campaign) -> tuple[Path, str, str, str]:
+    """A pool run's directory as an older driver left it: its base and head scored without items, and no result.
+
+    Its candidates: ``a`` from the base, the best; ``b`` from ``a``, never the best. Its base, ``a`` and ``b``.
+    """
+    repo = Path(campaign.path)
+    base = baseline(db, campaign.id).revision
+    a = commit(repo, 'solve.txt', 'a\n')
+    b = commit(repo, 'solve.txt', 'b\n')
+    run = tmp_path / 'run'
+    out = run / 'export' / 'out'
+    out.mkdir(parents=True)
+    git(repo, 'bundle', 'create', str(out / 'repo.bundle'), '--all')
+    ids = candidates(db, campaign, [(a, Origin.RUN, 0), (b, Origin.RUN, 1)])
+    with db.session() as s:
+        payload = json.dumps({'kind': 'candidate.scored', 'best': ids[1]})
+        s.connection().exec_driver_sql(
+            "insert into events (at, actor, target_kind, target_id, payload) values (?, 'test', 'candidate', ?, ?)",
+            ('2026-01-01 00:30:00', ids[1], payload),
+        )
+        s.commit()
+    with (
+        closing(sqlite3.connect(db.engine.url.database or '')) as live,
+        closing(sqlite3.connect(out / 'piloop.db')) as kept,
+    ):
+        live.backup(kept)  # a copy of the file would miss what is still in the write-ahead log
+    meta = {'task': 't2-circles', 'arm': 'pool-1w', 'repeat': 1, 'piloop': 'piloop 0.6', 'base': base}
+    meta |= {'started_at': '2026-01-01T00:00:00+00:00', 'budget_usd': 20, 'max_hours': 4, 'stopped': 'hours'}
+    (run / 'run.json').write_text(json.dumps(meta))
+    (run / 'spend.jsonl').write_text(Sample(hours=1, models_usd=1, compute_usd=0).model_dump_json())
+    old = {'dev': 0.1, 'sealed': 0.1, 'detail': ''}
+    (run / 'scores.json').write_text(json.dumps({base: old, a: old}))
+    return run, base, a, b
+
+
+def test_rescoring_an_old_run_scores_its_submissions_only_when_the_task_reports_items(
+    tmp_path: Path, db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, base, a, b = pool_run(tmp_path, db, campaign)
+    asked: list[list[str]] = []
+    items = {base: {'x': True, 'y': False}, a: {'x': True, 'y': True}, b: {'x': False, 'y': True}}
+
+    def fake_score(
+        task: Task, bundle: Path, base_rev: str, revisions: list[str], settings: Settings
+    ) -> dict[str, Score]:
+        asked.append(revisions)
+        return {rev: Score.of([scoring_of(items[rev])]) for rev in revisions}
+
+    monkeypatch.setattr(pilot, 'score', fake_score)
+    pilot.scored(run, Settings())
+    assert asked == [], 'the base and the head were scored, and the base has no items'
+    r = Result.model_validate_json((run / 'result.json').read_text())
+    assert r.regressions == Regressions(submissions=2, scored=1, found=None)
+    assert [p.revision for p in r.curve] == [base, a]
+    (run / 'scores.json').unlink()
+    pilot.scored(run, Settings())
+    assert asked == [[base, a], [b]], 'the base and the head first; then the submission that is not a head'
+    r = Result.model_validate_json((run / 'result.json').read_text())
+    assert r.regressions == Regressions(submissions=2, scored=2, found=[Regression(revision=b, parent=a, lost=['x'])])
+    assert r.regressions.share == 0.5

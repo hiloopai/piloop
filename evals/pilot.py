@@ -12,21 +12,32 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from evals.drive import HALT, drive
-from evals.metrics import heads_of, result
+from evals.metrics import heads_of, result, submissions_of
 from evals.model import PiloopArm, PlainArm, Sample, Settings, Task
 from evals.score import Score, score
 
 
 def scored(run: Path, settings: Settings) -> None:
-    """Score what ``run`` has not scored yet, and write its ``result.json``."""
+    """Score what ``run`` has not scored yet, and write its ``result.json``.
+
+    The base and the heads first; then, for a task whose scorer reports items for the base, every submission and its
+    parent, so that ``result.json`` can count regressions. A task without items would pay for scorings that count
+    nothing.
+    """
     meta = json.loads((run / 'run.json').read_text())
-    task = Task.load(meta['task'])
+    task, base = Task.load(meta['task']), meta['base']
     known = run / 'scores.json'
     scores = {k: Score.model_validate(v) for k, v in json.loads(known.read_text()).items()} if known.exists() else {}
-    wanted = [rev for rev, _ in heads_of(run) if rev not in scores]
-    if wanted or meta['base'] not in scores:
-        scores |= score(task, run / 'export' / 'out' / 'repo.bundle', meta['base'], wanted, settings)
-        known.write_text(json.dumps({k: v.model_dump() for k, v in scores.items()}, indent=2))
+
+    def add(revisions: list[str]) -> None:
+        """Score the ``revisions`` not scored yet, and keep their scores in ``scores.json``."""
+        if wanted := [rev for rev in dict.fromkeys(revisions) if rev not in scores]:
+            scores.update(score(task, run / 'export' / 'out' / 'repo.bundle', base, wanted, settings))
+            known.write_text(json.dumps({k: v.model_dump() for k, v in scores.items()}, indent=2))
+
+    add([base, *(rev for rev, _ in heads_of(run))])
+    if scores[base].items is not None:
+        add([rev for submission in submissions_of(run) for rev in submission])
     (run / 'result.json').write_text(result(run, scores).model_dump_json(indent=2))
 
 

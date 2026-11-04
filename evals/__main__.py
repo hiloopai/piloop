@@ -33,7 +33,7 @@ def run(task: str, arm: str, *, repeat: int = 1, budget: float = 60, hours: floa
 
 @app.command
 def rescore(run: Path) -> None:
-    """Score the base and the heads of a finished run, and write its ``result.json``.
+    """Score what a finished run lacks, its submissions too for a task with items, and write its ``result.json``.
 
     Args:
         run: The run's directory.

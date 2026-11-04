@@ -10,6 +10,7 @@ import json
 import re
 import sqlite3
 import statistics
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -87,24 +88,24 @@ def submissions(db: Path) -> tuple[list[datetime], list[float], list[float], lis
 
     A pool run's verdict is its first score.
     """
-    con = sqlite3.connect(db)
-    submitted = {
-        json.loads(p)['candidate']: when(at)
-        for at, p in con.execute("select at, payload from events where kind = 'run.submitted'")
-    }
-    if not submitted:  # a campaign that scores every commit: a version is submitted when it is made
-        submitted = {cid: when(at) for cid, at in con.execute('select id, created_at from candidates where id > 1')}
-    judged = dict(  # a verdict, or a pool's first score
-        con.execute(
-            "select target_id, min(at) from events where kind in ('candidate.judged', 'candidate.scored')"
-            ' group by target_id'
+    with closing(sqlite3.connect(db)) as con:
+        submitted = {
+            json.loads(p)['candidate']: when(at)
+            for at, p in con.execute("select at, payload from events where kind = 'run.submitted'")
+        }
+        if not submitted:  # a campaign that scores every commit: a version is submitted when it is made
+            submitted = {cid: when(at) for cid, at in con.execute('select id, created_at from candidates where id > 1')}
+        judged = dict(  # a verdict, or a pool's first score
+            con.execute(
+                "select target_id, min(at) from events where kind in ('candidate.judged', 'candidate.scored')"
+                ' group by target_id'
+            )
         )
-    )
-    measured: dict[tuple[int, int], str] = {}
-    for cid, evaluator, at in con.execute(
-        'select candidate_id, evaluator_id, min(created_at) from measurements group by 1, 2'
-    ):
-        measured[(cid, evaluator)] = at
+        measured: dict[tuple[int, int], str] = {}
+        for cid, evaluator, at in con.execute(
+            'select candidate_id, evaluator_id, min(created_at) from measurements group by 1, 2'
+        ):
+            measured[(cid, evaluator)] = at
     verdict, visible, sealed = [], [], []
     for cid, at in submitted.items():
         if cid in judged:

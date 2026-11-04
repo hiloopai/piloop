@@ -34,6 +34,9 @@ class Scoring(Frozen):
     detail: str
     cpu: str
     """The vendor, family and model of the sandbox's CPU, and its AVX-512: ``AuthenticAMD 25/17 avx512``."""
+    items: dict[str, bool] | None = None
+    """Whether the version passed each item of the sealed scorer, by name. None: the scorer reports no items, or it
+    crashed."""
 
 
 class Score(Frozen):
@@ -46,6 +49,9 @@ class Score(Frozen):
     detail: str
     scorings: list[Scoring] = []
     """Each sandbox's scores, with its CPU. Empty in a score written before they were kept."""
+    items: dict[str, bool] | None = None
+    """Whether the version passed each sealed item in every one of its scorings: a scoring without items passed none.
+    None: no scoring reported items."""
 
     @classmethod
     def of(cls, scorings: list[Scoring]) -> Score:
@@ -56,23 +62,34 @@ class Score(Frozen):
             return statistics.fmean(known) if known and len(known) == len(values) else None
 
         detail = '; '.join(dict.fromkeys(f'{s.cpu}: {s.detail}' for s in scorings))
+        names = dict.fromkeys(name for s in scorings for name in s.items or {})
+        items = {name: all((s.items or {}).get(name, False) for s in scorings) for name in names}
         return cls(
             dev=mean([s.dev for s in scorings]),
             sealed=mean([s.sealed for s in scorings]),
             detail=detail if len(scorings) == 1 else f'mean of {len(scorings)}: {detail}',
             scorings=scorings,
+            items=items if any(s.items is not None for s in scorings) else None,
         )
 
 
-def archives(bundle: Path, revisions: list[str]) -> dict[str, bytes]:
-    """The tree of each revision of ``bundle``, as a gzipped tar."""
+def archives(bundle: Path, revisions: list[str]) -> tuple[dict[str, str], dict[str, bytes]]:
+    """The tree of each revision of ``bundle``; and one revision of each of those trees, as a gzipped tar, by tree."""
+    revisions = list(dict.fromkeys(revisions))
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(['git', 'clone', '-q', '--bare', str(bundle), tmp], check=True)
-        return {
-            rev: subprocess.run(
+        found = subprocess.run(
+            ['git', '-C', tmp, 'rev-parse', *(f'{rev}^{{tree}}' for rev in revisions)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+        trees = dict(zip(revisions, found, strict=True))
+        return trees, {
+            tree: subprocess.run(
                 ['git', '-C', tmp, 'archive', '--format=tar.gz', rev], check=True, capture_output=True
             ).stdout
-            for rev in dict.fromkeys(revisions)
+            for tree, rev in {tree: rev for rev, tree in trees.items()}.items()
         }
 
 
@@ -141,27 +158,31 @@ def score_one(
         if dev is None:
             detail = f'dev: {out["dev_error"].strip()[-300:]}; {detail}'
         normalised = None if dev is None else task.normalised(dev['metrics'][task.metric])
-        found = Scoring(dev=normalised, sealed=verdict['score'], detail=detail, cpu=out['cpu'])
-        span.set_attributes({k: v for k, v in found.model_dump().items() if v is not None})
+        found = Scoring(
+            dev=normalised, sealed=verdict['score'], detail=detail, cpu=out['cpu'], items=verdict.get('items')
+        )
+        span.set_attributes({k: v for k, v in found.model_dump(exclude={'items'}).items() if v is not None})
         return found
 
 
 def score(task: Task, bundle: Path, base: str, revisions: list[str], settings: Settings) -> dict[str, Score]:
     """Score ``revisions`` of ``bundle`` against ``base``, ``score_concurrency`` sandboxes at a time.
 
-    Each version gets ``task.score_repeats`` sandboxes.
+    Each tree gets ``task.score_repeats`` sandboxes, and its score goes to every revision of it.
     """
     with tracer.start_as_current_span('evals.score', attributes={'task': task.name, 'revisions': len(revisions)}):
-        trees = archives(bundle, [base, *revisions])
+        trees, tars = archives(bundle, [base, *revisions])
         sealed = sealed_data(task.name, settings)
         parent = context.get_current()
         cloud = daytona.client(settings) if task.scorer == 'daytona' else None
+        wanted = {trees[rev]: rev for rev in revisions}
         with ThreadPoolExecutor(settings.score_concurrency) as pool:
             futures = {
-                rev: [
-                    pool.submit(score_one, task, rev, trees[base], trees[rev], sealed, settings, parent, cloud)
+                tree: [
+                    pool.submit(score_one, task, rev, tars[trees[base]], tars[tree], sealed, settings, parent, cloud)
                     for _ in range(task.score_repeats)
                 ]
-                for rev in trees
+                for tree, rev in wanted.items()
             }
-            return {rev: Score.of([f.result() for f in fs]) for rev, fs in futures.items()}
+            done = {tree: Score.of([f.result() for f in fs]) for tree, fs in futures.items()}
+        return {rev: done[trees[rev]] for rev in revisions}

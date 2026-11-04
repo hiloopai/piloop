@@ -5,7 +5,8 @@ what each hands in on data that no agent saw.
 
 - `tasks/<name>/`: `repo/` is the starting commit, with its brief and its dev evaluator. `task.toml` names the dev
   metric, the dev scores that count as 0 and 1, the dev data and the task's own `piloop.toml` keys. `sealed.py` is
-  the sealed scorer; the data it reads lives outside this repo.
+  the sealed scorer; the data it reads lives outside this repo. It writes `score`, `status`, `detail` and `raw`, and
+  may add `items`, `{name: bool}`: whether the version passed each item of the holdout, such as a hidden test.
 - `arms/<name>.toml`: a piloop install with its agents and extra `piloop.toml` keys, or one plain agent session.
 - `python -m evals run <task> <arm>` runs one repeat, then scores it. `rescore <run dir>` scores a run again, and
   `report` writes one HTML page per task.
@@ -57,11 +58,21 @@ the best), and a plain arm's commits on `main`. The driver tells the two piloop 
 `score_repeats` sandboxes and takes the means; `scores.json` keeps each scoring with its CPU. A task's `cloud` pins
 the CPU type of its sandboxes, the agents' and the scorers'.
 
+When the sealed scorer reports `items` for the base, scoring goes on to every submission and its parent: a piloop
+arm's candidates from its implementers (both schemas), with the candidate each came from, and a plain arm's commits on
+`main`'s first-parent line, with their first parent, as the session commits whatever it likes there. Each tree is
+scored once, so a head or a revert costs nothing more. This costs a sandbox per submission and repeat, at
+`score_concurrency` at a time: the 1-worker runs so far handed in 16 to 60 submissions, a 10-worker run over 600,
+which takes hours. `rescore` scores only what `scores.json` lacks: to count the regressions of a run scored before its task's
+scorer had items, remove its `scores.json` first.
+
 ## Metrics
 
 `result.json` holds, per run: the sealed and dev score of each head against hours, $, the models' $ and the tokens, $ and hours to the first
 keep, the funnel (ideas, runs, submissions, kept), escalations, comments by people, the lead's share of the tokens,
-and the gap between the dev and sealed score of the final head. Spend is split into models and compute. Before the agents
+the gap between the dev and sealed score of the final head, and the regressions: the submissions, those scored, and
+each scored submission that fails an item that its parent passed, with the items it lost (`regressions.found`; null for
+a task without items). A crash fails every item. The report gives their share of the scored submissions. Spend is split into models and compute. Before the agents
 start, the driver evaluates the starting repo 5 times with the dev command and records the CPU (`selftest`): how much
 the evaluator varies on that machine. Dev evaluations are counted where they run: `wrap/sitecustomize.py`, on the
 sandbox's `PYTHONPATH`, logs each run of `evaluate.py`, however it was started. A piloop arm also records each role's
@@ -73,7 +84,7 @@ the band from its lowest to its highest repeat, with plotly, as static pages.
 ## Telemetry
 
 Each step of the driver is a span: the run, its sandbox, each spend sample, the stop, the export, and the scoring of
-each head. A span prints one line on the console when it ends. With `OTEL_EXPORTER_OTLP_ENDPOINT` (and
+each version. A span prints one line on the console when it ends. With `OTEL_EXPORTER_OTLP_ENDPOINT` (and
 `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_RESOURCE_ATTRIBUTES`) set, the spans go to that collector too, and a piloop arm's
 daemon gets the same variables, with `evals.run` in its resource.
 
