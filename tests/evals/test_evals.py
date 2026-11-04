@@ -1137,3 +1137,9 @@ def test_a_pool_run_s_heads_are_its_best_over_time_and_its_line_holds_what_stack
     assert heads == [('a', 0.5), ('b', 2.0)], 'a score of a candidate that is not the best moves nothing'
     assert final_line(con, heads) == ({'implementer': 2}, {'implementer': 2}), 'b, and a under it; not c'
     assert pool_counts(con) == PoolCounts(confirmations=2, sealed_scorings=3, based_runs=1)
+
+
+def test_no_test_reads_this_machines_session_ledger(tmp_path: Path):
+    ledger = Settings().session_ledger
+    assert ledger != Path('/tmp/evals-sessions')
+    assert ledger.is_relative_to(tmp_path)
