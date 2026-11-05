@@ -1033,7 +1033,7 @@ class RunController:
         event. It ends once it measures, someone cancels it, the daemon stops, or a new evaluator of its split replaces
         ``evaluator_id`` (``queue.withdraw``): the caller then asks the current one (``Measuring.REPLACED``).
         """
-        failures = 0
+        failures, retry = 0, min(self._evaluation.infra_retry, self._evaluation.infra_retry_max)
         while True:
             match ended := self._request(
                 run_id,
@@ -1048,7 +1048,6 @@ class RunController:
                 split,
             ):
                 case InfraFailed(error=error):
-                    retry = min(self._evaluation.infra_retry * 2**failures, self._evaluation.infra_retry_max)
                     failures += 1
                     self._tracer.event(
                         ended.kind, candidate=candidate_id, error=error, failures=failures, retry=retry.total_seconds()
@@ -1065,6 +1064,8 @@ class RunController:
                         give_up=self.launcher.cancelled.is_set,
                         timeout=retry.total_seconds(),
                     )
+                    # double the last wait: ``infra_retry * 2**failures`` overflows ``timedelta`` at the 42nd failure
+                    retry = min(retry * 2, self._evaluation.infra_retry_max)
                     if self.launcher.cancelled.is_set():
                         return Measuring.STOPPED
                     if gone:  # another request ran it meanwhile, someone cancelled it, or a new evaluator took it
