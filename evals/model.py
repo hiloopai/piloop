@@ -127,9 +127,6 @@ class PiloopArm(Frozen):
     command as ``[evaluator] dev``, and a sealed split of its own as ``[evaluator] sealed``, kept in its home."""
     instruction: str = ''
     """A paragraph added to what each worker reads: a piloop arm's implementer brief, a plain session's prompt."""
-    charters: dict[str, dict[str, str]] = {}
-    """For each task, for each role that does runs: what its workers own, appended to that role's brief. An arm with
-    charters runs only on the tasks that it names."""
     env: dict[str, str] = {}
     """Variables of the arm's sandboxes, which a task's evaluator may read: ``EVALS_DEV_LOOP = "slow"`` turns a warm
     dev loop off."""

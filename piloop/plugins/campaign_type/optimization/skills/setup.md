@@ -61,8 +61,15 @@ Topics to cover:
   with its direction.
 - **Editable surface and forbidden moves.** The files an implementer may change. The frozen files (data preparation, the
   evaluator, the tokenizer). Forbidden dependencies and techniques (no external data, no pretrained model X).
-- **Budget and concurrency.** Wall-clock time per run. Compute (GPUs, cores). The total budget of the campaign (runs,
-  hours or dollars). How many implementers the machine can run at the same time.
+- **Hours and money.** Always ask the campaign's hours (suggest 6) and its cap in USD of model tokens.
+- **Width.** Ask it in budget terms, and check that the machine fits it. Offer 2 (the default) or 10 or more. A 6-hour
+  benchmark measured (holdout score, median of 3):
+
+  | Implementers | Score | Model USD per campaign |
+  |---|---|---|
+  | 1 | .461 | 13 |
+  | 2 | .542 | 30 |
+  | 10 | .660 | 140 |
 - **Prior art and beliefs.** What the human tried, what they believe works, what result would surprise them.
 - **Harnesses and models.** Which ones are installed and logged in (from step 1), and which ones run implementers.
 - **Escalation policy.** What the human wants to be asked about (a new dependency, data changes, a cost above X), and
@@ -122,7 +129,7 @@ Map each answer to its keys:
     idea of the track.
   - piloop refuses a `target` in `[plugins.stop_rule]` when there are several tracks.
 - **Measurement → `evaluate`, `evaluate_timeout`.**
-- **Budget → `[plugins.role.implementer]` `timeout` and `max_concurrent`.**
+- **Width → `[plugins.role.implementer] max_concurrent`.** Keep `timeout` at 3600 unless evaluations are slow.
 - **Compute on other machines (a GPU box) → a pool in `config.toml`, and `piloop worker` there:**
   https://piloop.autoresearch.inc/guides/workers.
 - **Prior art → `context`** (a top-level key). List the error analyses and evaluation reports of the repo (where the
@@ -130,9 +137,8 @@ Map each answer to its keys:
 - **Harnesses → `[plugins.harness] use`, and `model` in each `[plugins.harness.<name>]`.** Remove the harnesses that the human does
   not have.
 - **`link`:** gitignored data or virtualenvs that the evaluate command needs inside a worktree.
-- **Objective target and budget → `[plugins.stop_rule]`:** `target`, `max_runs`, `max_hours`, `max_tokens`, and
-  `plateau` when the human wants the campaign to end by itself. Leave them out only if the human explicitly wants an
-  open-ended campaign. Never write `[stop]`: it is deprecated.
+- **Hours and money → `[plugins.stop_rule]` `max_hours` and `hold_at = { models_usd = <usd> }`**, with `"models"`
+  in `[plugins.fact_source] use`. Add `target` when the human names one. Never write `[stop]`: it is deprecated.
 - **Money spent outside piloop (a GPU cloud, a paid API) → a `[plugins.fact_source.billing]` table with
   `provider = "command"`, `[plugins.fact_source.spend] facts = ["billing_usd"]`, and
   `[plugins.fact_source] use = ["campaign", "optimization", "billing", "spend"]`:**

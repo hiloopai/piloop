@@ -81,11 +81,9 @@ ends at its provisioner's TTL."""
 HEADERS = 'OTEL_EXPORTER_OTLP_HEADERS'
 """The collector's credentials, which only the control sandbox gets (``CREDENTIALS``)."""
 HALT = 'halt'
+"""A file in a run's directory that stops it at the next sample, with its text as the reason."""
 INSTRUCTION = 'worker-instruction.md'
 """The file of an arm's instruction in the campaign's checkout, out of git: the implementer's ``addendum``."""
-CHARTER = 'charter-{role}.md'
-"""The file of a role's charter in the campaign's checkout, out of git: that role's ``addendum``."""
-"""A file in a run's directory that stops it at the next sample, with its text as the reason."""
 BASE_DATE = '2026-01-01T00:00:00Z'
 """The date of the starting commit, so that every arm starts from the same commit id."""
 PLAIN_PROMPT = """You work alone in this repository, and no one will answer questions. Read brief.md and do the task.
@@ -120,13 +118,6 @@ def codex_gateway(settings: Settings) -> dict[str, JsonValue]:
     }
 
 
-def charters(task: Task, arm: PiloopArm) -> dict[str, str]:
-    """The charter of each role of ``arm`` on ``task``. An arm with charters for other tasks only cannot run it."""
-    if arm.charters and task.name not in arm.charters:
-        raise ValueError(f'{arm.name} has charters for {", ".join(arm.charters)}, not for {task.name}')
-    return arm.charters.get(task.name, {})
-
-
 def piloop_config(task: Task, arm: PiloopArm, settings: Settings, hours: float) -> dict[str, JsonValue]:
     """The campaign's ``piloop.toml``: the task's keys, the arm's agents on the gateway, the time cap, the overlay."""
     harness: dict[str, JsonValue] = {'use': [a.harness for a in arm.agents]}
@@ -157,8 +148,6 @@ def piloop_config(task: Task, arm: PiloopArm, settings: Settings, hours: float) 
         own['evaluate'] = [*nice, *evaluate]
     if arm.instruction:
         own = merge(own, {'plugins': {'role': {'implementer': {'addendum': INSTRUCTION}}}})
-    for role in charters(task, arm):
-        own = merge(own, {'plugins': {'role': {role: {'addendum': CHARTER.format(role=role)}}}})
     match arm.split:
         case 'sealed':
             script = f'{OPT}/campaign_sealed.py'
@@ -221,9 +210,6 @@ class Piloop:
         if self.arm.instruction:
             box.write(f'{REPO}/{INSTRUCTION}', self.arm.instruction.encode())
             box.run(f'cd {REPO} && echo {INSTRUCTION} >> .git/info/exclude')
-        for role, text in charters(self.task, self.arm).items():
-            box.write(f'{REPO}/{CHARTER.format(role=role)}', text.encode())
-            box.run(f'cd {REPO} && echo {CHARTER.format(role=role)} >> .git/info/exclude')
         box.write(f'{REPO}/piloop.toml', tomli_w.dumps(config).encode())
         box.run(f'cd {REPO} && echo piloop.toml >> .git/info/exclude')
         box.start(SUPERVISE.format(listen=f'0.0.0.0:{daytona.API}'))
