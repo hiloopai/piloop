@@ -32,8 +32,7 @@ it when something needs a decision, and nobody needs to keep a session open:
 triggers = ["news", "run_failed"]
 ```
 
-- An escalation, what a person writes to it, or an evaluation retry launches it within `quiet_seconds` (30);
-  `run_failed`, a failed run.
+- An escalation, or what a person writes to it, launches it within `quiet_seconds` (30); `run_failed`, a failed run.
   Nothing else does: no timer, no short board, no score, no stop. The rest of the news comes with the next wake.
 - It decides what the workers cannot, and leaves the work to them: it never plans a run, caps one, or stops the
   campaign. Only a stop rule or a person stops a campaign.

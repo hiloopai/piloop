@@ -5,8 +5,6 @@ import sys
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import replace
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -27,13 +25,11 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, CommentKind, Ending, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
-from piloop.plugins.campaign_type.kit.evaluation.jobs import InfraFailed
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.optimization.section.research_commands import ResearchCommands
 from piloop.plugins.escalation.contract import DECISION, ESCALATION
 from piloop.plugins.role.orchestrator import OrchestratorRole
-from piloop.plugins.role.orchestrator.news import NewsTaken, news, wakes
-from piloop.plugins.role.orchestrator.passes import role_pass
+from piloop.plugins.role.orchestrator.news import NewsTaken, wakes
 from tests.agents.test_resume import HARNESS, SESSION
 from tests.cli.test_skills import CAMPAIGN_TYPES, COMMAND
 from tests.conftest import SETTLE, ScriptRuntime, run_all, wait_until, write_toml
@@ -177,59 +173,6 @@ def test_an_escalation_that_a_wake_left_unacknowledged_comes_back_in_the_next_wa
     news, reminder = note.splitlines()[1:]
     assert news == f'- comment#{asked_again} message p1 on campaign#1 (demo) by human:ana: and now?'
     assert re.fullmatch(rf'- 1 escalation waits unacknowledged: comment#{escalation} \(\d+s old\)', reminder)
-
-
-def test_an_evaluation_retry_wakes_the_orchestrator_once_and_a_later_retry_wakes_it_again(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, on: None
-) -> None:
-    with db.session() as s:
-        emit(s, InfraFailed(evaluation=11, error='worker unavailable'), TargetRef(CANDIDATE, 1), System.DAEMON)
-        second = emit(s, InfraFailed(evaluation=12, error='GPU unavailable'), TargetRef(CANDIDATE, 1), System.DAEMON)
-        s.commit()
-        upto = second.id
-    [agent] = wake(db, runtime, tmp_path)
-    text = brief(tmp_path, agent)
-    assert 'candidate#1: evaluation#11 retry after infrastructure failure: worker unavailable' in text
-    assert 'candidate#1: evaluation#12 retry after infrastructure failure: GPU unavailable' in text
-    assert taken(db, agent).upto >= upto
-    assert wake(db, runtime, tmp_path) == [], 'delivered retries do not wake it twice'
-
-    with db.session() as s:
-        emit(s, InfraFailed(evaluation=13, error='worker unavailable again'), TargetRef(CANDIDATE, 1), System.DAEMON)
-        s.commit()
-    [later] = wake(db, runtime, tmp_path)
-    assert 'evaluation#13 retry' in brief(tmp_path, later)
-    assert 'evaluation#11 retry' not in brief(tmp_path, later)
-
-
-def test_an_evaluation_retry_does_not_launch_an_orchestrator_without_the_news_trigger(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
-) -> None:
-    configure(db, campaign, harness(tmp_path))
-    with db.session() as s:
-        emit(s, InfraFailed(evaluation=11, error='worker unavailable'), TargetRef(CANDIDATE, 1), System.DAEMON)
-        s.commit()
-    assert wake(db, runtime, tmp_path) == []
-
-
-@pytest.mark.parametrize('running', [False, True])
-def test_evaluation_retries_respect_the_quiet_window_but_reach_an_open_orchestrator_at_once(
-    db: Database, campaign: Campaign, running: bool
-) -> None:
-    with db.session() as s:
-        event = emit(s, InfraFailed(evaluation=11, error='worker unavailable'), TargetRef(CANDIDATE, 1), System.DAEMON)
-        if running:
-            s.add(AgentSession(kind=ORCHESTRATOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING))
-        s.commit()
-        p = role_pass(s, campaign, RoleName(ORCHESTRATOR), event.at, None)
-        steer, due = news(p, 30)
-        if running:
-            assert steer is not None and due is None
-        else:
-            assert steer is None and due == event.at + timedelta(seconds=30)
-            steer, due = news(replace(p, now=due), 30)
-            assert steer is not None and due is None
-        assert 'evaluation#11 retry' in steer.text
 
 
 HOOK = (

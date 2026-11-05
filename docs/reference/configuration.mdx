@@ -528,7 +528,7 @@ piloop starts its agents itself (`StartsItsAgents`): when one of its triggers wa
 | `writes` | list\[string\] | `["comments(decision) addressed to the human, with a priority", "answers to messages via inbox reply", "journal lines", "ideas, exclusions and the campaign changes of the piloop commands in this brief"]` |  |
 | `sections` | list\[string\] \| null | `["database", "concepts", "scoring", "comments", "priorities", "links", "research_commands", "context", "incidents", "headline", "trajectory", "runs", "queue", "agents", "candidates"]` | The guides, the failed runs that woke it (`incidents`), and the status that each brief shows after the news: lean, because each one stays in the resumed session. |
 | `continuity` | `fresh` \| `resume` | `"resume"` |  |
-| `triggers` | list\[`news` \| `run_failed`\] | `[]` | Off by default. `news`: an escalation, what a person writes, or an evaluation retry. `run_failed`: a failed run. An empty list means that its agents start only on request (`piloop launch`). |
+| `triggers` | list\[`news` \| `run_failed`\] | `[]` | Off by default. `news`: an escalation, or what a person writes. `run_failed`: a failed run. No other. An empty list means that its agents start only on request (`piloop launch`). |
 | `quiet_seconds` | number | `30` | How long the role waits after the first news to launch an agent, so that one agent takes a burst of it. An open agent gets the news at once. |
 
 ## Global settings: `config.toml`
