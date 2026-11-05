@@ -497,7 +497,9 @@ def test_an_evaluation_that_waits_after_an_infra_error_is_listed_and_a_cancel_en
 ) -> None:
     """The wait doubles after each failure, and the evaluation waits in the queue, where a cancel finds it."""
     set_config(db, campaign, evaluate=infra_first(tmp_path, times=99))
-    wait = EvaluationSettings(infra_retry=timedelta(milliseconds=50), infra_retry_max=timedelta(minutes=10))
+    wait = EvaluationSettings(
+        infra_retry=timedelta(milliseconds=50), infra_retry_max=timedelta(minutes=10), infra_tries=5
+    )
     ex = queued_executor(db, runtime, tmp_path, 1, wait)
     base = baseline(db, campaign.id).id
     remeasured = in_thread(lambda: ex.remeasure(base))
@@ -621,21 +623,23 @@ def test_a_sealed_split_s_evaluator_is_retired_only_by_a_new_sealed_command(db: 
         assert retired(s, hidden.id)
 
 
+@pytest.mark.parametrize('limit', [None, 1, 5])
 def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_and_escalates_once(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, limit: int | None
 ) -> None:
     """After ``infra_tries`` failures in a row, nothing is recorded, the evaluation leaves the queue, the campaign's
     measurements pause, and one escalation names the candidate, the evaluation, the evaluator and the last error."""
     set_config(db, campaign, evaluate=infra_first(tmp_path, times=99))
-    three = EvaluationSettings(
-        infra_retry=timedelta(milliseconds=10), infra_retry_max=timedelta(milliseconds=20), infra_tries=3
-    )
+    settings = EvaluationSettings(infra_retry=timedelta(milliseconds=10), infra_retry_max=timedelta(milliseconds=20))
+    if limit is not None:
+        settings = settings.model_copy(update={'infra_tries': limit})
+    expected = 3 if limit is None else limit
     base = baseline(db, campaign.id).id
     with db.session() as s:
         before = len(s.get_one(Candidate, base).measurements)
-    ex = queued_executor(db, runtime, tmp_path, 1, three)
+    ex = queued_executor(db, runtime, tmp_path, 1, settings)
     ex.remeasure(base)
-    assert tries(tmp_path) == 3
+    assert tries(tmp_path) == expected
     assert rows(db) == [], 'its slot is free, and nothing waits'
     with db.session() as s:
         assert len(s.get_one(Candidate, base).measurements) == before, 'an infra error is never a verdict'
@@ -649,7 +653,7 @@ def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_
         why = proj.paused_reason
     run_id = make_run(db, campaign)
     execute(ex, db, run_id)
-    assert tries(tmp_path) == 6, "a run's version stops after its tries too"
+    assert tries(tmp_path) == expected * 2, "a run's version stops after its tries too"
     [version] = run_candidates(db, run_id)
     with db.session() as s:
         assert s.get_one(Candidate, version.id).measurements == []
