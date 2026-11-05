@@ -13,7 +13,7 @@ from sqlalchemy import delete, select
 
 from piloop.actor import System
 from piloop.db.events import in_order, latest
-from piloop.db.models import Campaign, Event, utcnow
+from piloop.db.models import PROCESS, Campaign, Event, utcnow
 from piloop.db.session import Database
 from piloop.ids import TargetRef
 from piloop.otel import Tracer
@@ -21,7 +21,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Candidate
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.jobs import InfraFailed
+from piloop.plugins.campaign_type.kit.evaluation.jobs import KIND, InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     current_evaluator,
     measured,
@@ -568,6 +568,37 @@ def test_an_infra_retry_ends_once_a_new_evaluator_replaces_its_own_and_the_new_o
     with db.session() as s:
         after = s.get_one(Candidate, base).measurements[before:]
         assert {(m.evaluator_id, m.error) for m in after} == {(new, None)}, 'none under the old one'
+
+
+def test_the_queue_names_each_evaluation_s_evaluator_and_one_of_a_retired_evaluator_is_no_backlog(
+    db: Database, campaign: Campaign
+) -> None:
+    """A waiting evaluation of a retired evaluator gets no slot, counts for no worker, and leaves the queue
+    (``withdraw``). A running one finishes under its own evaluator, and the queue marks it retired."""
+    old = new_evaluator(db, campaign, evaluate=['echo', 'old'])
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        waiting, _ = queue.request(s, base, old)
+        s.commit()
+        assert [e.id for e in queue.waiting(s)] == [waiting.id]
+        assert KIND.waiting(s, [PROCESS])
+        [listed] = queue.view(s).evaluations
+        assert (listed.candidate, listed.evaluator, listed.retired) == (base, old, False)
+    new = new_evaluator(db, campaign, evaluate=['echo', 'new'])
+    with db.session() as s:
+        assert queue.waiting(s) == [], 'no slot for it'
+        assert not KIND.waiting(s, [PROCESS]), 'no worker counts it as waiting work'
+        assert queue.withdraw(s) == 1
+        s.commit()
+    assert rows(db) == []
+    with db.session() as s:
+        running, _ = queue.request(s, base, old)
+        running.started_at = utcnow()
+        queue.request(s, base, new)
+        s.commit()
+        assert queue.withdraw(s) == 0, 'a running evaluation finishes under its own evaluator'
+        shown = [(e.evaluator, e.retired, e.state.kind) for e in queue.view(s).evaluations]
+    assert shown == [(old, True, 'running'), (new, False, 'waiting')]
 
 
 def test_a_sealed_split_s_evaluator_is_retired_only_by_a_new_sealed_command(db: Database, campaign: Campaign) -> None:

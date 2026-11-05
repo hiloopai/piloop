@@ -248,8 +248,9 @@ agents never see them. No score reads them.
 An **evaluator** is the evaluate command, `link`, and the names and directions of the primaries and guardrails. A
 change to one of them makes a new evaluator at the next `piloop init`. piloop never compares scores of two evaluators:
 it measures the baseline and the best again, and the runs wait until both have a score under the new one. An
-evaluation that waits under the old evaluator moves to the new one, and one that runs finishes under the old one. The
-other candidates keep the scores of the old evaluator until they are measured again:
+evaluation that waits under the old evaluator moves to the new one, and one that runs finishes under the old one.
+`piloop eval queue` names the evaluator of each evaluation, and marks an old one `(retired)`. The other candidates keep
+the scores of the old evaluator until they are measured again:
 
 ```bash
 piloop candidate remeasure 2

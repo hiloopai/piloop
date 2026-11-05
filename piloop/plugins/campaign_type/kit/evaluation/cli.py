@@ -36,13 +36,17 @@ def eval_queue() -> None:
 
     The last line counts them. A free slot of the executor goes to the campaign with the fewest running evaluations,
     and in that campaign to its baseline first, then to the oldest request. A requested remeasure shows as waiting at once.
+    Each row names its evaluator. One that the campaign replaced since is ``retired``: what runs finishes under it.
     """
     with EvaluationClient.connect(daemon_http()) as client:
         evaluations = client.evaluations().evaluations
     now = datetime.now(UTC)
-    table = Table('candidate', 'campaign', 'state', 'summary', box=None)
+    table = Table('candidate', 'campaign', 'evaluator', 'state', 'summary', box=None)
     for e in evaluations:
-        table.add_row(f'candidate#{e.candidate}', e.campaign, _state(e.state, now), Text(cell(e.summary or '')))
+        evaluator = f'evaluator#{e.evaluator}' + (' (retired)' if e.retired else '')
+        table.add_row(
+            f'candidate#{e.candidate}', e.campaign, evaluator, _state(e.state, now), Text(cell(e.summary or ''))
+        )
     waiting = sum(isinstance(e.state, WaitingSince) for e in evaluations)
     if evaluations:
         common.console.print(table)

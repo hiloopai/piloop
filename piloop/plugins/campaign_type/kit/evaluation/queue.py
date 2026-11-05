@@ -59,6 +59,14 @@ def _first(s: Session, campaign_id: CampaignId) -> CandidateId | None:
     return s.scalar(first)
 
 
+def backlog(s: Session) -> list[Evaluation]:
+    """Return the evaluations that wait for a slot under an evaluator that their campaign still measures with, by id.
+
+    One of a retired evaluator (``ledger.retired``) is no backlog: ``withdraw`` takes it from the queue.
+    """
+    return [e for e in _unstarted(s) if not ledger.retired(s, e.evaluator_id)]
+
+
 def withdraw(s: Session) -> int:
     """Take each evaluation that waits under a retired evaluator (``ledger.retired``) from the queue.
 
@@ -76,8 +84,11 @@ def _unstarted(s: Session) -> list[Evaluation]:
 
 
 def waiting(s: Session) -> list[Evaluation]:
-    """Return the evaluations that wait for a slot, in the order in which they get one if none ends meanwhile."""
-    rows = _unstarted(s)
+    """Return the evaluations that wait for a slot, in the order in which they get one if none ends meanwhile.
+
+    Only the ``backlog``: a retired evaluator's never gets one.
+    """
+    rows = backlog(s)
     campaign = {e.id: e.candidate.campaign_id for e in rows}
     running = Counter(
         s.scalars(
@@ -122,14 +133,28 @@ def requested(s: Session) -> list[tuple[Candidate, datetime]]:
 
 
 def view(s: Session) -> EvaluationQueue:
-    """``listing``, then each remeasure of ``requested`` as waiting, as the API answers them."""
-    names: dict[CampaignId, str] = {i: n for i, n in s.execute(select(Campaign.id, Campaign.name))}
-    rows = [(e.candidate, _state(e)) for e in listing(s)]
-    rows += [(c, WaitingSince(since=asked)) for c, asked in requested(s)]
+    """``listing``, then each remeasure of ``requested`` as waiting, as the API answers them.
+
+    Each names its evaluator, and whether that is retired (``ledger.retired``): what runs finishes under its own. A
+    requested remeasure gets its campaign's current one.
+    """
+    campaigns = {c.id: c for c in s.scalars(select(Campaign))}
+    rows = [(e.candidate, e.evaluator_id, _state(e)) for e in listing(s)]
+    for c, asked in requested(s):
+        current = campaigns[c.campaign_id].evaluator_id
+        assert current is not None  # a campaign has an evaluator from its ``piloop init``
+        rows.append((c, current, WaitingSince(since=asked)))
     return EvaluationQueue(
         evaluations=[
-            QueuedEvaluation(candidate=c.id, campaign=names[c.campaign_id], summary=c.summary, state=state)
-            for c, state in rows
+            QueuedEvaluation(
+                candidate=c.id,
+                campaign=campaigns[c.campaign_id].name,
+                summary=c.summary,
+                evaluator=evaluator,
+                retired=ledger.retired(s, evaluator),
+                state=state,
+            )
+            for c, evaluator, state in rows
         ]
     )
 
