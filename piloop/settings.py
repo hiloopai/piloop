@@ -83,10 +83,15 @@ class EvaluationSettings(BaseModel):
     """How long an evaluation that failed for a cause that is not its candidate's waits before it runs again: an
     ``infra_error`` that the evaluate command reported, a worktree or inputs that piloop could not make, or an evaluate
     that another process killed twice. The wait doubles after each failure, up to ``infra_retry_max``. It runs again
-    until it measures, or someone cancels it (``piloop eval cancel``). Seconds, or an ISO 8601 duration."""
+    until it measures, someone cancels it (``piloop eval cancel``), a new evaluator replaces its own (the new one
+    measures it then), or it failed ``infra_tries`` times. Seconds, or an ISO 8601 duration."""
     infra_retry_max: timedelta = Field(default=timedelta(minutes=30), gt=timedelta(0))
     """The longest wait between two runs of an evaluation that keeps failing for a cause that is not its candidate's
     (``infra_retry``)."""
+    infra_tries: int = Field(default=5, ge=1)
+    """How many times in a row an evaluation may fail for a cause that is not its candidate's. After the last, piloop
+    records no measurement, pauses the measurements of the campaign, and escalates with the candidate, the evaluation,
+    the evaluator and the last error. Fix the cause, then ``piloop resume``: the daemon evaluates it again."""
 
     @property
     def max_evidence_bytes(self) -> int:

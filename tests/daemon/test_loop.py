@@ -140,7 +140,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'campaign.closed': [],
             'campaign.files_freed': [],
             'campaign.reopened': [],
-            'campaign.config': ['listeners', 'facts', 'campaigns'],
+            'campaign.config': ['listeners', 'evaluations', 'facts', 'campaigns'],
             'campaign.parent_id': [],
             'campaign.paused': ['campaigns'],
             'campaign.status': [

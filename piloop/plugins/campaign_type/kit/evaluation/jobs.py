@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import ClassVar, Literal, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import System
@@ -21,7 +20,7 @@ from piloop.ids import TargetRef
 from piloop.otel import Span
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation import measure as ledger
+from piloop.plugins.campaign_type.kit.evaluation import measure as ledger, queue
 from piloop.plugins.campaign_type.kit.evaluation.config import Rung
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import (
     EvalResult,
@@ -184,13 +183,11 @@ class Evaluations(JobKind):
         evaluation.started_at = None
 
     def waiting(self, s: Session, runners: Sequence[str]) -> bool:
-        """Whether an evaluation of one of ``runners`` waits in the queue for a slot."""
-        query = (
-            select(Evaluation.id)
-            .join(Evaluator, Evaluator.id == Evaluation.evaluator_id)
-            .where(Evaluation.started_at.is_(None), Evaluator.runner.in_(runners))
-        )
-        return s.scalar(query.limit(1)) is not None
+        """Whether an evaluation of one of ``runners`` waits in the queue for a slot (``queue.backlog``).
+
+        One of a retired evaluator does not: it never gets a slot.
+        """
+        return any(s.get_one(Evaluator, e.evaluator_id).runner in runners for e in queue.backlog(s))
 
 
 def _own(job: Job) -> EvaluationJob:

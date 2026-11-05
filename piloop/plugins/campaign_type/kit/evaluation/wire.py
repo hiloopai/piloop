@@ -72,6 +72,10 @@ class QueuedEvaluation(View):
     campaign: str
     """The name of the candidate's campaign."""
     summary: str | None
+    evaluator: EvaluatorId
+    """The evaluator that measures it."""
+    retired: bool
+    """Its campaign measures with another evaluator now: a running evaluation finishes under this one."""
     state: EvaluationState
 
 

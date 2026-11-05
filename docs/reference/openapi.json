@@ -8056,6 +8056,16 @@
             ],
             "title": "Summary"
           },
+          "evaluator": {
+            "type": "integer",
+            "title": "Evaluator",
+            "description": "The evaluator that measures it."
+          },
+          "retired": {
+            "type": "boolean",
+            "title": "Retired",
+            "description": "Its campaign measures with another evaluator now: a running evaluation finishes under this one."
+          },
           "state": {
             "$ref": "#/components/schemas/EvaluationState"
           }
@@ -8065,6 +8075,8 @@
           "candidate",
           "campaign",
           "summary",
+          "evaluator",
+          "retired",
           "state"
         ],
         "title": "QueuedEvaluation",

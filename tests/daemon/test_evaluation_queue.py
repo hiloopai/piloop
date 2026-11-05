@@ -13,21 +13,30 @@ from sqlalchemy import delete, select
 
 from piloop.actor import System
 from piloop.db.events import in_order, latest
-from piloop.db.models import Campaign, Event, utcnow
+from piloop.db.models import PROCESS, Campaign, Comment, Event, Pause, utcnow
 from piloop.db.session import Database
 from piloop.ids import TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
-from piloop.plugins.campaign_type.kit.evaluation.jobs import InfraFailed
-from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, measured, request_remeasure
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
+from piloop.plugins.campaign_type.kit.evaluation.jobs import KIND, InfraFailed
+from piloop.plugins.campaign_type.kit.evaluation.measure import (
+    current_evaluator,
+    measured,
+    request_remeasure,
+    retired,
+    sealed_evaluator,
+)
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
+from piloop.plugins.campaign_type.kit.pool.due import due
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import commands as git
 from piloop.settings import EvaluationSettings
@@ -40,6 +49,7 @@ from tests.conftest import (
     reports,
     run_all,
     serving,
+    store_config,
     wait_until,
     workers_of,
     write_script,
@@ -499,6 +509,153 @@ def test_an_evaluation_that_waits_after_an_infra_error_is_listed_and_a_cancel_en
     remeasured.join(30)
     assert not remeasured.is_alive(), 'the cancel ends the wait'
     assert rows(db) == []
+
+
+INFRA = "printf '%s\\n' '{}' >> \"$PILOOP_RESULT_FILE\"; exit 1".format(
+    json.dumps({'status': 'infra_error', 'feedback': 'this evaluator is retired'})
+)
+"""What an evaluator that its campaign replaced reports, as its adapter refuses to run: an infra error."""
+
+
+def logged(tmp_path: Path, name: str, then: str) -> list[str]:
+    """An evaluate command that logs each try in ``name``, then runs ``then``."""
+    return ['sh', '-c', f'echo x >> {tmp_path / name}; {then}']
+
+
+def logged_tries(tmp_path: Path, name: str) -> int:
+    path = tmp_path / name
+    return len(path.read_text().split()) if path.exists() else 0
+
+
+def new_evaluator(db: Database, campaign: Campaign, **overrides: object) -> EvaluatorId:
+    """Change the config as ``piloop campaign sync`` does: the config, then the evaluator that it describes is the
+    current one."""
+    set_config(db, campaign, **overrides)
+    with db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        evaluator = current_evaluator(s, proj, proj.config).id
+        s.commit()
+        return evaluator
+
+
+SHORT_RETRY = EvaluationSettings(infra_retry=timedelta(milliseconds=50), infra_retry_max=timedelta(milliseconds=100))
+
+
+def test_an_infra_retry_ends_once_a_new_evaluator_replaces_its_own_and_the_new_one_measures_next(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The daemon takes the evaluation that waits to run again from the queue at once, not after its wait, and never
+    runs the old evaluator again. The new one then measures the baseline (``due``), and the runs start."""
+    new_evaluator(db, campaign, evaluate=logged(tmp_path, 'old', INFRA))
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        before = len(s.get_one(Candidate, base).measurements)
+    scheduler = make_scheduler(db, runtime, tmp_path)  # an infra error waits a minute: longer than any wait here
+    run_all(scheduler)
+    wait_until(lambda: rows(db) == [(base, False, None)] and logged_tries(tmp_path, 'old') == 1, 'the wait to retry')
+    new = new_evaluator(db, campaign, evaluate=logged(tmp_path, 'new', SCORE))
+
+    def settled_by_new() -> bool:
+        run_all(scheduler)
+        with db.session() as s:
+            done = any(m.evaluator_id == new for m in s.get_one(Candidate, base).measurements)
+            settled = done and not due(s, s.get_one(Campaign, campaign.id))
+        return settled and rows(db) == []
+
+    wait_until(settled_by_new, 'the new evaluator to measure the baseline')
+    scheduler.wait(SETTLE)
+    scheduler.stop(timeout=5)
+    assert logged_tries(tmp_path, 'old') == 1, 'the old evaluator never ran again'
+    with db.session() as s:
+        after = s.get_one(Candidate, base).measurements[before:]
+        assert {(m.evaluator_id, m.error) for m in after} == {(new, None)}, 'none under the old one'
+
+
+def test_the_queue_names_each_evaluation_s_evaluator_and_one_of_a_retired_evaluator_is_no_backlog(
+    db: Database, campaign: Campaign
+) -> None:
+    """A waiting evaluation of a retired evaluator gets no slot, counts for no worker, and leaves the queue
+    (``withdraw``). A running one finishes under its own evaluator, and the queue marks it retired."""
+    old = new_evaluator(db, campaign, evaluate=['echo', 'old'])
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        waiting, _ = queue.request(s, base, old)
+        s.commit()
+        assert [e.id for e in queue.waiting(s)] == [waiting.id]
+        assert KIND.waiting(s, [PROCESS])
+        [listed] = queue.view(s).evaluations
+        assert (listed.candidate, listed.evaluator, listed.retired) == (base, old, False)
+    new = new_evaluator(db, campaign, evaluate=['echo', 'new'])
+    with db.session() as s:
+        assert queue.waiting(s) == [], 'no slot for it'
+        assert not KIND.waiting(s, [PROCESS]), 'no worker counts it as waiting work'
+        assert queue.withdraw(s) == 1
+        s.commit()
+    assert rows(db) == []
+    with db.session() as s:
+        running, _ = queue.request(s, base, old)
+        running.started_at = utcnow()
+        queue.request(s, base, new)
+        s.commit()
+        assert queue.withdraw(s) == 0, 'a running evaluation finishes under its own evaluator'
+        shown = [(e.evaluator, e.retired, e.state.kind) for e in queue.view(s).evaluations]
+    assert shown == [(old, True, 'running'), (new, False, 'waiting')]
+
+
+def test_a_sealed_split_s_evaluator_is_retired_only_by_a_new_sealed_command(db: Database, campaign: Campaign) -> None:
+    new_evaluator(db, campaign, evaluator={'sealed': ['echo', 'sealed']})
+    with db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        hidden = sealed_evaluator(s, proj, proj.config)
+        assert hidden is not None
+        s.commit()
+        assert not retired(s, hidden.id)
+    new_evaluator(db, campaign, evaluate=['echo', 'visible'], evaluator={'sealed': ['echo', 'sealed']})
+    with db.session() as s:
+        assert not retired(s, hidden.id), 'a new visible evaluator leaves the sealed split as it is'
+    store_config(db, campaign.id, {})
+    with db.session() as s:
+        assert not retired(s, hidden.id), 'a stored config that does not validate names no command that replaced it'
+    new_evaluator(db, campaign, evaluator={'sealed': ['echo', 'sealed', 'again']})
+    with db.session() as s:
+        assert retired(s, hidden.id)
+
+
+def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_and_escalates_once(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """After ``infra_tries`` failures in a row, nothing is recorded, the evaluation leaves the queue, the campaign's
+    measurements pause, and one escalation names the candidate, the evaluation, the evaluator and the last error."""
+    set_config(db, campaign, evaluate=infra_first(tmp_path, times=99))
+    three = EvaluationSettings(
+        infra_retry=timedelta(milliseconds=10), infra_retry_max=timedelta(milliseconds=20), infra_tries=3
+    )
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        before = len(s.get_one(Candidate, base).measurements)
+    ex = queued_executor(db, runtime, tmp_path, 1, three)
+    ex.remeasure(base)
+    assert tries(tmp_path) == 3
+    assert rows(db) == [], 'its slot is free, and nothing waits'
+    with db.session() as s:
+        assert len(s.get_one(Candidate, base).measurements) == before, 'an infra error is never a verdict'
+        proj = s.get_one(Campaign, campaign.id)
+        [*_, last] = [e for _, e in in_order(s, InfraFailed)]
+        [escalation] = s.scalars(select(Comment).where(Comment.kind == ESCALATION)).all()
+        assert (proj.paused, escalation.target) == (Pause.ALL, TargetRef(CANDIDATE, base))
+        assert f'candidate#{base}, evaluation#{last.evaluation}, evaluator#{proj.evaluator_id}: {last.error}' in (
+            escalation.body
+        )
+        why = proj.paused_reason
+    run_id = make_run(db, campaign)
+    execute(ex, db, run_id)
+    assert tries(tmp_path) == 6, "a run's version stops after its tries too"
+    [version] = run_candidates(db, run_id)
+    with db.session() as s:
+        assert s.get_one(Candidate, version.id).measurements == []
+        on = [c.target for c in s.scalars(select(Comment).where(Comment.kind == ESCALATION).order_by(Comment.id))]
+        assert on == [TargetRef(CANDIDATE, base), TargetRef(CANDIDATE, version.id)], 'one escalation for each'
+        assert s.get_one(Campaign, campaign.id).paused_reason == why, 'the first pause holds'
 
 
 def test_an_evaluate_that_crashes_on_a_signal_of_its_own_is_not_run_again(
