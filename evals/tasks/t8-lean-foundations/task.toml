@@ -1,0 +1,42 @@
+name = "t8-lean-foundations"
+metric = "proved"
+direction = "higher"
+dev = ["python3", "evaluate.py"]
+dev_base = 0.0                            # every target is `sorry`
+dev_ref = 1.0                             # every target proved: the public silmaril-lean proofs score this
+cloud = "gcp"                             # one CPU type for agents and scorers; the score itself is deterministic
+score_repeats = 1                         # Lean checking is deterministic: one scoring per version
+solve = 1.0                               # solvable: the headline is the time, $ and tokens to every target proved
+network = "gateway"                       # the reference proofs are public upstream: agents reach the gateway alone
+memory_limit_mb = 12288                   # the audit peaks at 7.9 GB on Modal; the brief states the cap
+private = true                            # <sealed_uri>/t8-lean-foundations.private/: 34 more targets, in no repository
+setup = [
+    "curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none",
+    "ln -sf /root/.elan/bin/* /usr/local/bin/",
+]
+data = [
+    # Mathlib and its dependencies at the manifest's revisions, from Mathlib's published build cache, into
+    # /opt/lean/packages: the scorers read the same tree and check its digest. Only the link is copied into the repo.
+    "cp /opt/evals/build/t8-lean-foundations/lean/* . && elan toolchain install $(cat lean-toolchain) && lake exe cache get",
+    "lake build cslib/Cslib",                # cslib publishes no build cache: built once, in the image
+    "mkdir -p /opt/lean && mv .lake/packages /opt/lean/packages && ln -s /opt/lean/packages .lake/packages",
+    "rm -f lakefile.toml lake-manifest.json lean-toolchain",
+]
+
+scorer = "modal"                          # scored on Modal: it needs 12 GiB, over a Daytona sandbox
+
+[piloop]
+name = "t8-lean-foundations"
+evaluate = ["python3", "evaluate.py"]
+evaluate_timeout = 2400
+link = [".lake/packages"]
+
+[[piloop.metrics]]
+name = "proved"
+direction = "higher"
+role = "primary"
+
+[[piloop.metrics]]
+name = "build_seconds"
+direction = "lower"
+role = "watch"

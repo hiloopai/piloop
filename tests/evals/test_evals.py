@@ -816,6 +816,31 @@ def test_t6_refuses_code_that_runs_or_skips_the_kernel_but_not_a_comment_naming_
     assert not evaluate.BANNED.search(
         evaluate.code_of('/-- In general it is unsafe: no `native_decide`. -/\n-- #eval\n')
     )
+    assert evaluate.BANNED.search('elab "go" : tactic => pure ()\n')
+    assert evaluate.BANNED.search('  scoped elab_rules : tactic | `(tactic| go) => pure ()\n')
+    assert not evaluate.BANNED.search('theorem t : («elab» h).x = y := by simp [«elab», h.elab_eq]\n')
+    assert evaluate.BANNED.search('@[tactic go] def goImpl : Lean.Elab.Tactic.Tactic := fun _ => pure ()\n')
+    assert not evaluate.BANNED.search(
+        'def Environment := String → Int\ntheorem e : (fun _ => 0 : Environment) = 0 := rfl\n'
+    )
+    for runs_code in (
+        'attribute [command_elab Lean.Parser.Command.foo] f\n',
+        'attribute [local tactic Lean.Parser.Tactic.foo] g\n',
+        'private initialize x : IO.Ref Nat ← IO.mkRef 0\n',
+        '@[delab app.foo] def delabFoo : Lean.PrettyPrinter.Delaborator.Delab := failure\n',
+        '@[builtin_command_elab foo] def f : Lean.Elab.Command.CommandElab := fun _ => pure ()\n',
+        'attribute [csimp] fast_eq\n',
+        'register_option foo.bar : Bool := { defValue := false }\n',
+        'private axiom cheat : False\n',
+        'scoped simproc reduceFoo (foo _) := fun _ => pure .continue\n',
+    ):
+        assert evaluate.BANNED.search(runs_code), runs_code
+    for runs_nothing in (
+        'attribute [simp] foo_bar\n',
+        '@[simp, grind] theorem tactic_free : True := trivial\n',
+        'macro "go" : tactic => `(tactic| simp)\n',
+    ):
+        assert not evaluate.BANNED.search(runs_nothing), runs_nothing
 
 
 def test_t6_counts_a_private_split_in_proved_and_alone(tmp_path: Path):
@@ -1032,6 +1057,7 @@ def test_each_task_names_its_scorer_and_daytona_refuses_a_task_that_needs_a_gpu_
         't5-lpaq': 'daytona',
         't6-optcomp': 'modal',
         't7-semantics': 'modal',
+        't8-lean-foundations': 'modal',
     }
     t5 = Task.load('t5-lpaq').model_dump()
     for need in ({'gpu': 'L4'}, {'memory_limit_mb': 12288}):
@@ -1200,7 +1226,8 @@ def test_no_test_reads_this_machines_session_ledger(tmp_path: Path):
 
 def test_the_lean_tasks_share_one_evaluator_scorer_and_audit():
     for path in ('repo/evaluate.py', 'sealed.py', 'repo/check/Audit.lean', 'repo/LICENSE'):
-        assert (TASKS / 't6-optcomp' / path).read_bytes() == (TASKS / 't7-semantics' / path).read_bytes(), path
+        for task in ('t7-semantics', 't8-lean-foundations'):
+            assert (TASKS / 't6-optcomp' / path).read_bytes() == (TASKS / task / path).read_bytes(), (task, path)
 
 
 def test_a_plain_agents_box_asks_for_8_gib_with_no_hard_limit_unless_its_task_has_one(monkeypatch: pytest.MonkeyPatch):

@@ -36,14 +36,24 @@ ROOT = Path(__file__).resolve().parent
 BUILD_TIMEOUT = 3600
 """Wall seconds for ``lake build``; the reference builds in about five minutes on four cores."""
 AUDIT_TIMEOUT = 1800
+MODIFIERS = r'(?:(?:private|local|scoped|protected|public|noncomputable|unsafe|partial|meta)\s+)*'
+"""Declaration modifiers, which may stand before any banned command."""
+CODE_ATTRIBUTES = (
+    'command_elab|term_elab|tactic|delab|simproc|dsimproc|init|csimp|env_linter|implemented_by|extern|builtin_\\w+'
+)
+"""Attributes that register code to run while elaborating, or that change what the compiler runs."""
 BANNED = re.compile(
-    r'debug\.skipKernelTC|implemented_by|@\[\s*extern|\bextern\s+"|\binitialize\b|builtin_initialize|'
-    r'run_cmd|run_elab|run_meta|#eval|#exit|\bIO\.|\bunsafe\b|native_decide|ofReduceBool|trustCompiler|'
-    r'^\s*axiom\b|\belab\b|elab_rules|addDecl|Environment',
+    r'debug\.skipKernelTC|native_decide|ofReduceBool|trustCompiler|\bextern\s+"|'
+    r'#eval|#exit|run_cmd|run_elab|run_meta|'
+    rf'^\s*{MODIFIERS}(?:axiom|elab|elab_rules|initialize|builtin_initialize|simproc|dsimproc|simproc_decl|'
+    r'dsimproc_decl|register_option|register_builtin_option|register_simp_attr|register_linter_set)\b|'
+    rf'(?:@|^\s*attribute\s*)\[[^\]]*\b(?:{CODE_ATTRIBUTES})\b',
     re.M,
 )
-"""Commands that run code while building, or that trust something other than the kernel. A proof of
-these targets needs none of them."""
+"""What runs code while building, or trusts something other than the kernel: the commands that run or register
+code (``#eval``, ``elab``, ``initialize``, ``register_option``), the attributes that do (``@[tactic …]`` or
+``attribute [tactic …]``), and the compiler and kernel bypasses. A name such as ``«elab»`` or ``Environment`` runs
+nothing by itself, and nor does a macro (``MacroM`` has no IO). A proof of these targets needs none of them."""
 
 
 def code_of(text: str) -> str:

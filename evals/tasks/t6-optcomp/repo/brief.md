@@ -16,7 +16,7 @@ count the same. Prove as many of them as you can.
   definitions, tactics and modules you like under `Silmaril/`.
 - A proof counts when Lean's kernel accepts it and it uses no axiom beyond `propext`,
   `Classical.choice` and `Quot.sound`: no `sorry`, `native_decide`, `axiom` or `implemented_by`.
-  Commands that run code while building (`#eval`, `run_cmd`, `elab`, `initialize`, `IO`) are not
+  Commands that run code while building (`#eval`, `run_cmd`, `elab`, `initialize`, elaborator attributes) are not
   allowed; `evaluate.py` lists them.
 - Do not edit `evaluate.py`, `check/`, `spec.json`, `lakefile.toml`, `lake-manifest.json` or
   `lean-toolchain`. The final version is checked again with fresh copies of them.
