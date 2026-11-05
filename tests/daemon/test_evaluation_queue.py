@@ -20,9 +20,17 @@ from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.jobs import InfraFailed
-from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, measured, request_remeasure
+from piloop.plugins.campaign_type.kit.evaluation.measure import (
+    current_evaluator,
+    measured,
+    request_remeasure,
+    retired,
+    sealed_evaluator,
+)
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
+from piloop.plugins.campaign_type.kit.pool.due import due
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
@@ -40,6 +48,7 @@ from tests.conftest import (
     reports,
     run_all,
     serving,
+    store_config,
     wait_until,
     workers_of,
     write_script,
@@ -499,6 +508,85 @@ def test_an_evaluation_that_waits_after_an_infra_error_is_listed_and_a_cancel_en
     remeasured.join(30)
     assert not remeasured.is_alive(), 'the cancel ends the wait'
     assert rows(db) == []
+
+
+INFRA = "printf '%s\\n' '{}' >> \"$PILOOP_RESULT_FILE\"; exit 1".format(
+    json.dumps({'status': 'infra_error', 'feedback': 'this evaluator is retired'})
+)
+"""What an evaluator that its campaign replaced reports, as its adapter refuses to run: an infra error."""
+
+
+def logged(tmp_path: Path, name: str, then: str) -> list[str]:
+    """An evaluate command that logs each try in ``name``, then runs ``then``."""
+    return ['sh', '-c', f'echo x >> {tmp_path / name}; {then}']
+
+
+def logged_tries(tmp_path: Path, name: str) -> int:
+    path = tmp_path / name
+    return len(path.read_text().split()) if path.exists() else 0
+
+
+def new_evaluator(db: Database, campaign: Campaign, **overrides: object) -> EvaluatorId:
+    """Change the config as ``piloop campaign sync`` does: the config, then the evaluator that it describes is the
+    current one."""
+    set_config(db, campaign, **overrides)
+    with db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        evaluator = current_evaluator(s, proj, proj.config).id
+        s.commit()
+        return evaluator
+
+
+SHORT_RETRY = EvaluationSettings(infra_retry=timedelta(milliseconds=50), infra_retry_max=timedelta(milliseconds=100))
+
+
+def test_an_infra_retry_ends_once_a_new_evaluator_replaces_its_own_and_the_new_one_measures_next(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The daemon takes the evaluation that waits to run again from the queue at once, not after its wait, and never
+    runs the old evaluator again. The new one then measures the baseline (``due``), and the runs start."""
+    new_evaluator(db, campaign, evaluate=logged(tmp_path, 'old', INFRA))
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        before = len(s.get_one(Candidate, base).measurements)
+    scheduler = make_scheduler(db, runtime, tmp_path)  # an infra error waits a minute: longer than any wait here
+    run_all(scheduler)
+    wait_until(lambda: rows(db) == [(base, False, None)] and logged_tries(tmp_path, 'old') == 1, 'the wait to retry')
+    new = new_evaluator(db, campaign, evaluate=logged(tmp_path, 'new', SCORE))
+
+    def settled_by_new() -> bool:
+        run_all(scheduler)
+        with db.session() as s:
+            done = any(m.evaluator_id == new for m in s.get_one(Candidate, base).measurements)
+            settled = done and not due(s, s.get_one(Campaign, campaign.id))
+        return settled and rows(db) == []
+
+    wait_until(settled_by_new, 'the new evaluator to measure the baseline')
+    scheduler.wait(SETTLE)
+    scheduler.stop(timeout=5)
+    assert logged_tries(tmp_path, 'old') == 1, 'the old evaluator never ran again'
+    with db.session() as s:
+        after = s.get_one(Candidate, base).measurements[before:]
+        assert {(m.evaluator_id, m.error) for m in after} == {(new, None)}, 'none under the old one'
+
+
+def test_a_sealed_split_s_evaluator_is_retired_only_by_a_new_sealed_command(db: Database, campaign: Campaign) -> None:
+    new_evaluator(db, campaign, evaluator={'sealed': ['echo', 'sealed']})
+    with db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        hidden = sealed_evaluator(s, proj, proj.config)
+        assert hidden is not None
+        s.commit()
+        assert not retired(s, hidden.id)
+    new_evaluator(db, campaign, evaluate=['echo', 'visible'], evaluator={'sealed': ['echo', 'sealed']})
+    with db.session() as s:
+        assert not retired(s, hidden.id), 'a new visible evaluator leaves the sealed split as it is'
+    store_config(db, campaign.id, {})
+    with db.session() as s:
+        assert not retired(s, hidden.id), 'a stored config that does not validate names no command that replaced it'
+    new_evaluator(db, campaign, evaluator={'sealed': ['echo', 'sealed', 'again']})
+    with db.session() as s:
+        assert retired(s, hidden.id)
 
 
 def test_an_evaluate_that_crashes_on_a_signal_of_its_own_is_not_run_again(

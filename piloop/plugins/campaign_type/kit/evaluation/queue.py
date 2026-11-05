@@ -59,9 +59,25 @@ def _first(s: Session, campaign_id: CampaignId) -> CandidateId | None:
     return s.scalar(first)
 
 
+def withdraw(s: Session) -> int:
+    """Take each evaluation that waits under a retired evaluator (``ledger.retired``) from the queue.
+
+    The caller commits. Return how many. Each of its requests finds it gone with no measurement, and asks the current
+    evaluator. One that runs finishes under its own evaluator, and its measurement keeps it.
+    """
+    gone = [e for e in _unstarted(s) if ledger.retired(s, e.evaluator_id)]
+    for evaluation in gone:
+        s.delete(evaluation)
+    return len(gone)
+
+
+def _unstarted(s: Session) -> list[Evaluation]:
+    return list(s.scalars(select(Evaluation).where(Evaluation.started_at.is_(None)).order_by(Evaluation.id)))
+
+
 def waiting(s: Session) -> list[Evaluation]:
     """Return the evaluations that wait for a slot, in the order in which they get one if none ends meanwhile."""
-    rows = list(s.scalars(select(Evaluation).where(Evaluation.started_at.is_(None)).order_by(Evaluation.id)))
+    rows = _unstarted(s)
     campaign = {e.id: e.candidate.campaign_id for e in rows}
     running = Counter(
         s.scalars(
