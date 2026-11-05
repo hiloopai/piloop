@@ -700,7 +700,6 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
     if not settings.gateway or not settings.gateway_token.get_secret_value():
         raise ValueError('set EVALS_GATEWAY and EVALS_GATEWAY_TOKEN: the agents need a model gateway')
     out = settings.results / task.name / f'{arm.name}-{repeat}'
-    out.mkdir(parents=True, exist_ok=False)
     name = f'{task.name}/{arm.name}-{repeat}'
     env = (exported(settings, name) if isinstance(arm, PiloopArm) else {}) | arm.env
     env['EVALS_EVAL_LOG'] = f'{OUT}/{EVALUATIONS}'
@@ -709,6 +708,7 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
         admitted(settings, name, sessions(task, arm, settings, hours)),
         tracer.start_as_current_span('evals.run', attributes={'evals.run': name, 'budget_usd': budget}) as span,
     ):
+        out.mkdir(parents=True, exist_ok=False)  # once admitted: a refused run leaves nothing behind
         with tracer.start_as_current_span('evals.sandbox'):
             match arm:
                 case PiloopArm():

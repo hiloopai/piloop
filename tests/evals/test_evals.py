@@ -22,7 +22,8 @@ from typing import cast
 
 import modal
 import pytest
-from daytona import Daytona, Sandbox
+from daytona import Daytona, DaytonaBadRequestError, DaytonaNotFoundError, Sandbox
+from daytona_api_client.models.snapshot_state import SnapshotState
 from pydantic import JsonValue, SecretStr
 from sqlalchemy import select
 
@@ -1033,6 +1034,41 @@ def test_a_snapshots_name_changes_with_the_files_it_copies(tmp_path: Path):
     assert daytona.fingerprint(steps) != first
 
 
+class Snapshots:
+    """Daytona's snapshots, where another caller's build of the one asked for goes through ``states``, if any.
+
+    That build starts just before ours, so our create gets the quota error that its pending build causes. A sleep moves
+    the build to its next state.
+    """
+
+    def __init__(self, *states: SnapshotState) -> None:
+        self.states, self.started = list(states), False
+
+    def get(self, name: str) -> SimpleNamespace:
+        if not (self.started and self.states):
+            raise DaytonaNotFoundError(f'{name} not found')
+        return SimpleNamespace(state=self.states[0], error_reason=None)
+
+    def create(self, params: object, timeout: float) -> None:
+        self.started = True
+        raise DaytonaBadRequestError('Snapshot quota exceeded. Maximum allowed: 30', status_code=400)
+
+
+@pytest.mark.parametrize('other', [True, False])
+def test_a_snapshot_create_that_fails_waits_for_another_callers_build_and_else_raises_its_error(
+    other: bool, monkeypatch: pytest.MonkeyPatch
+):
+    snapshots = Snapshots(SnapshotState.PENDING, SnapshotState.BUILDING, SnapshotState.ACTIVE) if other else Snapshots()
+    monkeypatch.setattr('evals.daytona.time.sleep', lambda seconds: snapshots.states.pop(0))
+    cloud = cast(Daytona, SimpleNamespace(snapshot=snapshots))
+    if other:
+        assert daytona.snapshot(cloud, [Run(('true',))], daytona.EVALUATOR).endswith('-1c8g')
+        assert snapshots.states == [SnapshotState.ACTIVE], 'it waited for the build to end'
+    else:
+        with pytest.raises(DaytonaBadRequestError, match='quota exceeded'):
+            daytona.snapshot(cloud, [Run(('true',))], daytona.EVALUATOR)
+
+
 def test_the_driver_refuses_a_run_that_would_take_the_gateways_sessions_over_the_cap(tmp_path: Path):
     settings = Settings(max_sessions=20, session_ledger=tmp_path / 'ledger')
     (tmp_path / 'ledger').mkdir()
@@ -1045,6 +1081,34 @@ def test_the_driver_refuses_a_run_that_would_take_the_gateways_sessions_over_the
         with admitted(settings, 'c', 7):
             assert len(list((tmp_path / 'ledger').glob('*.json'))) == 4
     assert sorted(p.name for p in (tmp_path / 'ledger').glob('*.json')) == ['gone.json', 'lean.json']
+
+
+def test_a_run_the_ledger_refuses_leaves_no_directory_and_its_retry_is_admitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    box = FakeBox(METER, fail=('env -u EVALS_EVAL_LOG',))
+    monkeypatch.setattr('evals.drive.Box.create', lambda *args, **kwargs: box)
+    monkeypatch.setattr('evals.drive.image', lambda *args: None)
+    settings = Settings(
+        gateway='https://gw.example',
+        gateway_token=SecretStr('t'),
+        results=tmp_path / 'results',
+        session_ledger=tmp_path / 'ledger',
+        max_sessions=20,
+    )
+    (tmp_path / 'ledger').mkdir()
+    later = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    full = tmp_path / 'ledger' / 'full.json'
+    full.write_text(json.dumps({'run': 'other', 'sessions': 20, 'until': later}))
+    arm = plain_run(settings).arm
+    with pytest.raises(ValueError, match='needs 1 sessions'):
+        drive(Task.load('t5-lpaq'), arm, 1, 10, 1, settings)
+    out = tmp_path / 'results' / 't5-lpaq' / 'p-1'
+    assert not out.exists(), 'a refused run leaves nothing behind'
+    full.unlink()
+    with pytest.raises(RuntimeError, match='exited 137'):
+        drive(Task.load('t5-lpaq'), arm, 1, 10, 1, settings)
+    assert (out / 'run.json').exists(), 'the retry was admitted and ran'
 
 
 def test_each_task_names_its_scorer_and_daytona_refuses_a_task_that_needs_a_gpu_or_more_than_8_gib():

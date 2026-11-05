@@ -13,7 +13,6 @@ Workers and evaluators dial the control sandbox through Daytona's preview proxy,
 memory is a hard limit, and so is that of a sandbox on Modal here. This module goes with ``evals/``.
 """
 
-import contextlib
 import hashlib
 import json
 import math
@@ -29,7 +28,7 @@ from daytona import (
     CreateSnapshotParams,
     Daytona,
     DaytonaConfig,
-    DaytonaConflictError,
+    DaytonaError,
     DaytonaNotFoundError,
     Image,
     Resources as Size,
@@ -235,6 +234,7 @@ def snapshot(daytona: Daytona, steps: Sequence[Step], size: Resources) -> str:
     sandbox from a snapshot that still builds is refused.
 
     Raises:
+        DaytonaError: It could not be created, and no other caller builds it.
         RuntimeError: Its build failed.
         TimeoutError: It is not ready after ``SNAPSHOT_SECONDS``.
     """
@@ -243,11 +243,19 @@ def snapshot(daytona: Daytona, steps: Sequence[Step], size: Resources) -> str:
         found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
     except DaytonaNotFoundError:
         sized = Size(cpu=int(size.cpu), memory=size.memory_mb // 1024, disk=10)
-        with contextlib.suppress(DaytonaConflictError):  # another caller started its build first: wait for it below
+        try:
             daytona.snapshot.create(
                 CreateSnapshotParams(name=name, image=image(steps), resources=sized), timeout=SNAPSHOT_SECONDS
             )
-        found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
+        except DaytonaError as failed:
+            # Another caller may have started its build first: Daytona then answers a conflict, or a quota that the
+            # pending build already fills. That build is ours to wait for below; the failure stands only without it.
+            try:
+                found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
+            except DaytonaNotFoundError:
+                raise failed from None
+        else:
+            found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
     deadline = time.monotonic() + SNAPSHOT_SECONDS
     while found.state != SnapshotState.ACTIVE:
         if found.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED):
