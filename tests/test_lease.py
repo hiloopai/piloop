@@ -786,6 +786,20 @@ def test_a_worker_whose_slots_count_again_says_so_on_the_home(
     leases.expire()
     Local(leases, 'w1').heartbeat({}, HOST)
     assert len(events(db, LeaseWorkerJoined)) == 2, 'heard again'
+    with db.session() as s:
+        s.get_one(LeaseWorker, 'w1').seen_at = utcnow() - timedelta(seconds=TIMING.grace + 1)
+        s.commit()
+    assert leases.capacity().free(EVALUATION) == 0, 'silent past the grace: its slots count zero'
+    Local(leases, 'w1').heartbeat({}, HOST)
+    assert len(events(db, LeaseWorkerJoined)) == 3, 'heard again before any expire marked it unreachable'
+    assert leases.capacity().free(EVALUATION) == 99
+    with db.session() as s:
+        s.get_one(LeaseWorker, 'w1').seen_at = utcnow() - timedelta(seconds=TIMING.grace + 1)
+        s.commit()
+    join(leases, 'w1', [])
+    assert len(events(db, LeaseWorkerJoined)) == 4, 'a worker that registers again after its silence: once'
+    Local(leases, 'w1').heartbeat({}, HOST)
+    assert len(events(db, LeaseWorkerJoined)) == 4, 'heard within the grace: its slots counted all along'
     Local(leases, 'w1').heartbeat({}, HOST.model_copy(update={'load1': 9.0}))
     assert events(db, LeaseWorkerRelieved) == [], 'pressed: nothing counts again'
     Local(leases, 'w1').heartbeat({}, HOST)

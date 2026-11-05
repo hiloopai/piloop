@@ -205,7 +205,7 @@ class WorkerDrained(EventModel):
 
 
 class LeaseWorkerJoined(EventModel):
-    """On the home: a worker registered, or was heard again after it was unreachable. Its slots count again."""
+    """On the home: a worker registered, or was heard after it was unreachable or silent. Its slots count again."""
 
     kind: Literal['lease_worker.joined'] = 'lease_worker.joined'
     worker: str
@@ -557,9 +557,9 @@ class Leases:
             row = s.get(LeaseWorker, worker) or LeaseWorker(id=worker, cursor=newest)
             row.pool, row.version, row.runners, row.no_lease = pool, version, list(runners), None
             row.cursor = min(row.cursor, newest)
-            self._heard(s, row, host)
             s.add(row)
-            emit(s, LeaseWorkerJoined(worker=worker, pool=pool), HOME, System.DAEMON)
+            if not self._heard(s, row, host):
+                emit(s, LeaseWorkerJoined(worker=worker, pool=pool), HOME, System.DAEMON)
             rows = s.scalars(
                 select(Lease).where(Lease.worker == worker, Lease.state.in_(LIVE_LEASES)).order_by(Lease.id)
             ).all()
@@ -567,16 +567,25 @@ class Leases:
             s.commit()
         return held, cursor
 
-    def _heard(self, s: Session, row: LeaseWorker, host: HostSample) -> None:
-        """Record a call of the worker: its host sample and the time. Emit what makes its slots count again."""
+    def _heard(self, s: Session, row: LeaseWorker, host: HostSample) -> bool:
+        """Record a call of the worker: its host sample and the time. Emit what makes its slots count again.
+
+        Return whether it emitted ``LeaseWorkerJoined``: the worker was unreachable, or silent past the grace, which
+        ``capacity`` counts as unreachable before any ``expire`` marks it. A waiter that read no free slot then wakes.
+        """
         pool = self.pools.get(row.pool)
         was = pressure(pool, HostSample.model_validate(row.sample)) if pool is not None and row.sample else None
-        row.sample, row.seen_at = host.model_dump(mode='json'), utcnow()
+        now = utcnow()
+        silent = row.seen_at is not None and row.seen_at <= now - timedelta(seconds=self.timing.grace)
+        row.sample, row.seen_at = host.model_dump(mode='json'), now
         if row.no_lease == NoLease.UNREACHABLE:
-            row.no_lease = None
+            row.no_lease, silent = None, True
+        if silent:
             emit(s, LeaseWorkerJoined(worker=row.id, pool=row.pool), HOME, System.DAEMON)
-        elif was is not None and pool is not None and pressure(pool, host) is None:
+            return True
+        if was is not None and pool is not None and pressure(pool, host) is None:
             emit(s, LeaseWorkerRelieved(worker=row.id, was=was), HOME, System.DAEMON)
+        return False
 
     def acquire(self, worker: str, request_id: str, host: HostSample) -> Grant | NoLease:
         """Take the oldest queued job that ``worker`` can run and that its pool admits, or say why there is none.
