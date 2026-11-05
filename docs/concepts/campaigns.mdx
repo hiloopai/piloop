@@ -88,7 +88,9 @@ a lost GPU. piloop treats two more faults the same way: a worktree or inputs tha
 another process kills twice. piloop records no measurement and an `evaluation.infra_error` event. The evaluation waits
 in `piloop eval queue` for `[evaluation] infra_retry` in `config.toml`, twice as long after each failure up to
 `infra_retry_max`, then runs again, until it measures or you cancel it. When a new evaluator replaces its own, the new
-evaluator measures it instead. A version that the repo lacks is a `crash`.
+evaluator measures it instead. After `infra_tries` failures in a row, 5 by default, piloop stops: it pauses the
+measurements of the campaign and escalates. Fix the cause, then `piloop resume`. A version that the repo lacks is a
+`crash`.
 
 `[evaluator] dev` names a fast command that checks a change. Each implementer's brief names it. The implementers run
 it in their own checkouts as often as they like, and piloop never runs it:

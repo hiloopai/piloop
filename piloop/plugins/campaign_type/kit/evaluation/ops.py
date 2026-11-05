@@ -12,8 +12,9 @@ from piloop.campaign.stop import held
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign, Pause
 from piloop.ids import TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.measure import record
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import Report
@@ -49,6 +50,52 @@ def hold_on_cancelled_baseline(s: Session, candidate: Candidate, actor: Actor) -
         return
     why = f'{actor} cancelled the evaluation of the baseline; `piloop resume {campaign.name}` measures it again'
     pause(s, campaign.id, evals=True, reason=why)
+
+
+def hold_on_infra_errors(
+    s: Session, candidate_id: CandidateId, evaluation: int, evaluator_id: EvaluatorId, error: str, tries: int
+) -> None:
+    """Pause the measurements of the candidate's campaign, and escalate: its evaluation failed for the machine.
+
+    It failed ``tries`` times in a row for a cause that is not the candidate's (``[evaluation] infra_tries``). That
+    cause is the machine's or the evaluator's: the next evaluations would fail too, and the daemon would ask for this
+    one again. Nothing is recorded, so the candidate waits as it was, and a resume evaluates it again. The escalation
+    names the candidate, the evaluation, the evaluator and the last error. The caller commits.
+    """
+    candidate = s.get_one(Candidate, candidate_id)
+    campaign = s.get_one(Campaign, candidate.campaign_id)
+    failed = f'evaluation#{evaluation} of candidate#{candidate_id} under evaluator#{evaluator_id} failed {tries} times'
+    resume = f'`piloop resume {campaign.name}`'
+    if campaign.paused is not Pause.ALL:
+        pause(
+            s,
+            campaign.id,
+            evals=True,
+            reason=f'{failed} for a cause that is not its own: {error}; fix it, then {resume}',
+        )
+    asked = EscalationView(
+        headline=f"Evaluations of {campaign.name} fail for a cause that is not their candidate's: fix it, then resume.",
+        why=(
+            f"{failed} in a row for a cause that is not the candidate's, such as a lost machine or a retired"
+            f' evaluator. piloop recorded no measurement, does not retry it, and paused the measurements of'
+            f' {campaign.name}.'
+        ),
+        choices=(
+            Choice(
+                id='A',
+                label=f'Fix the cause, then {resume}.',
+                result=f'piloop evaluates candidate#{candidate_id} again.',
+            ),
+            Choice(
+                id='B',
+                label=f'Change the evaluator in piloop.toml, then `piloop campaign sync` and {resume}.',
+                result=f'The new evaluator measures candidate#{candidate_id}.',
+            ),
+        ),
+        recommended='A',
+        details=f'candidate#{candidate_id}, evaluation#{evaluation}, evaluator#{evaluator_id}: {error}',
+    )
+    escalations.escalate_once(s, TargetRef(CANDIDATE, candidate_id), asked, priority=1)
 
 
 def sealed_refused(s: Session, campaign: Campaign, error: str) -> None:

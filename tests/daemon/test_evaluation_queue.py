@@ -13,7 +13,7 @@ from sqlalchemy import delete, select
 
 from piloop.actor import System
 from piloop.db.events import in_order, latest
-from piloop.db.models import PROCESS, Campaign, Event, utcnow
+from piloop.db.models import PROCESS, Campaign, Comment, Event, Pause, utcnow
 from piloop.db.session import Database
 from piloop.ids import TargetRef
 from piloop.otel import Tracer
@@ -36,6 +36,7 @@ from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import commands as git
 from piloop.settings import EvaluationSettings
@@ -618,6 +619,43 @@ def test_a_sealed_split_s_evaluator_is_retired_only_by_a_new_sealed_command(db: 
     new_evaluator(db, campaign, evaluator={'sealed': ['echo', 'sealed', 'again']})
     with db.session() as s:
         assert retired(s, hidden.id)
+
+
+def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_and_escalates_once(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """After ``infra_tries`` failures in a row, nothing is recorded, the evaluation leaves the queue, the campaign's
+    measurements pause, and one escalation names the candidate, the evaluation, the evaluator and the last error."""
+    set_config(db, campaign, evaluate=infra_first(tmp_path, times=99))
+    three = EvaluationSettings(
+        infra_retry=timedelta(milliseconds=10), infra_retry_max=timedelta(milliseconds=20), infra_tries=3
+    )
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        before = len(s.get_one(Candidate, base).measurements)
+    ex = queued_executor(db, runtime, tmp_path, 1, three)
+    ex.remeasure(base)
+    assert tries(tmp_path) == 3
+    assert rows(db) == [], 'its slot is free, and nothing waits'
+    with db.session() as s:
+        assert len(s.get_one(Candidate, base).measurements) == before, 'an infra error is never a verdict'
+        proj = s.get_one(Campaign, campaign.id)
+        [*_, last] = [e for _, e in in_order(s, InfraFailed)]
+        [escalation] = s.scalars(select(Comment).where(Comment.kind == ESCALATION)).all()
+        assert (proj.paused, escalation.target) == (Pause.ALL, TargetRef(CANDIDATE, base))
+        assert f'candidate#{base}, evaluation#{last.evaluation}, evaluator#{proj.evaluator_id}: {last.error}' in (
+            escalation.body
+        )
+        why = proj.paused_reason
+    run_id = make_run(db, campaign)
+    execute(ex, db, run_id)
+    assert tries(tmp_path) == 6, "a run's version stops after its tries too"
+    [version] = run_candidates(db, run_id)
+    with db.session() as s:
+        assert s.get_one(Candidate, version.id).measurements == []
+        on = [c.target for c in s.scalars(select(Comment).where(Comment.kind == ESCALATION).order_by(Comment.id))]
+        assert on == [TargetRef(CANDIDATE, base), TargetRef(CANDIDATE, version.id)], 'one escalation for each'
+        assert s.get_one(Campaign, campaign.id).paused_reason == why, 'the first pause holds'
 
 
 def test_an_evaluate_that_crashes_on_a_signal_of_its_own_is_not_run_again(
