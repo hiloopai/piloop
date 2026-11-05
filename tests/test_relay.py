@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 import threading
+from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from piloop.net.tokens import mint_agent
 from piloop.plugins.campaign_type.kit.backlog.cli import land
 from piloop.plugins.campaign_type.kit.backlog.wire import Base
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.section import measure
 from piloop.plugins.executor.contract import AgentJob, RepoId, Source
 from piloop.plugins.executor.kit import door as door_module, jobs, relay as relay_module
@@ -43,7 +45,8 @@ from piloop.plugins.vcs.contract import Repository, UnknownRevision, VcsError
 from piloop.plugins.vcs.git import Git
 from piloop.proc import ACTOR_ENV, CHECKOUT_ENV
 from piloop.settings import Settings
-from tests.conftest import disk, no_land, no_ship
+from tests.conftest import baseline, disk, no_land, no_ship, no_take
+from tests.test_clones import REPO, commit, fetch_from
 from tests.test_lease import agent_job
 
 AGENT = AgentSessionId(7)
@@ -211,7 +214,7 @@ def call(agent: int = AGENT, argv: list[str] | None = None) -> str:
 
 def test_the_relay_takes_an_agents_calls_on_its_lease_while_its_job_runs_on_this_worker(tmp_path: Path) -> None:
     server = Server()
-    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land)
+    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land, no_take)
     relay.start()
     assert relay.path.parent.stat().st_mode & 0o077 == 0, "only the worker's user reaches its socket"
     assert post(relay, call()).status_code == 404, 'no job of this agent runs here'
@@ -241,20 +244,20 @@ def test_the_relay_takes_an_agents_calls_on_its_lease_while_its_job_runs_on_this
     assert post(relay, call()).status_code == 404, 'its job ended'
     relay.stop()
     assert not relay.path.exists()
-    restarted = Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land)
+    restarted = Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land, no_take)
     restarted.path.touch()  # what a worker that was killed leaves
     restarted.start()
     restarted.open(4, JOB)
     assert post(restarted, call()).status_code == 200, 'a re-attached agent relays again, on the same path'
     restarted.stop()
-    Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land).stop()
+    Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land, no_take).stop()
 
 
 def test_the_piloop_of_an_agent_elsewhere_prints_what_the_call_printed_and_exits_with_its_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], mocker: MockerFixture
 ) -> None:
     server = Server()
-    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land)
+    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land, no_take)
     relay.start()
     agent = Agent(role='implementer', session=AGENT)
     monkeypatch.setattr(door_module, 'settings', Settings(home=tmp_path, actor=agent))
@@ -325,7 +328,7 @@ def test_a_submit_ships_the_version_of_the_agents_checkout_and_is_called_once(tm
             raise UnknownRevision('no gone')
         return Shipped(Revision('abc'), None)
 
-    relay = Relay(Settings(home=tmp_path).relay_file, server, ship, no_land)
+    relay = Relay(Settings(home=tmp_path).relay_file, server, ship, no_land, no_take)
     relay.start()
     relay.open(3, JOB)
     answered = Relayed.model_validate_json(post(relay, call(argv=['submit'])).content)
@@ -362,6 +365,63 @@ def test_a_worker_ships_what_the_repo_of_record_lacks_of_a_version_of_its_agents
     assert jobs.ship(site, job, base) == Shipped(base, None), 'the repo of record has its starting version'
 
 
+def test_a_relayed_answer_names_the_candidates_that_the_agents_checkout_started_without(
+    db: Database, campaign: Campaign, tmp_path: Path, runner: Runner
+) -> None:
+    job = agent_job(db, campaign, tmp_path)
+    token = launched(db, job)
+    assert runner(job, Call(argv=['sql', 'SELECT 1'], token=token)).history == [], 'its checkout is of the baseline'
+    later = Revision('b' * 40)
+    with db.session() as s:
+        s.add(Candidate(campaign_id=campaign.id, parent_id=baseline(db, campaign.id).id, tree_sha='t', revision=later))
+        s.commit()
+    assert runner(job, Call(argv=['sql', 'SELECT 1'], token=token)).history == [later], 'another run submitted it since'
+    held = job.model_copy(update={'artifact': job.artifact.model_copy(update={'history': [later]})})
+    assert runner(held, Call(argv=['sql', 'SELECT 1'], token=token)).history == [], 'its checkout started with it'
+
+
+def test_a_worker_elsewhere_takes_the_candidates_that_an_answer_names_so_that_git_show_finds_them(
+    tmp_path: Path,
+) -> None:
+    """Another worker's candidate came after this agent's checkout was made: the answer of its next call brings it."""
+    origin = tmp_path / 'origin'
+    origin.mkdir()
+    subprocess.run(['git', 'init', '-q', '-b', 'main'], cwd=origin, check=True)
+    base = commit(origin, 'a.txt', 'a')
+    store = disk(tmp_path)
+    site = jobs.remote_site(tmp_path / 'worker', store, fetch_from(store, origin, []), 0)
+    artifact = Source(vcs=Git(), repo=REPO, revision=Revision(base), history=[Revision(base)])
+    job = AgentJob.model_construct(agent_session=AGENT, place='p', artifact=artifact)
+    site.cwd(job).parent.mkdir(parents=True)
+    site.clones.checkout(job.artifact, site.cwd(job))
+    Repo(origin).git.checkout('-q', '--detach', base)
+    other = Revision(commit(origin, 'b.txt', 'a parallel candidate'))
+    failure: list[Exception] = []
+
+    def take(job: AgentJob, revisions: Sequence[Revision]) -> None:
+        if failure:
+            raise failure[0]
+        jobs.take(site, job, revisions)
+
+    def server(lease: int, relayed: Call) -> Relayed:
+        return Relayed(stdout='candidate#2\n', exit_code=0, history=[other])
+
+    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land, take)
+    relay.start()
+    relay.open(3, job)
+    answered = Relayed.model_validate_json(post(relay, call(argv=['sql', 'SELECT 1'])).content)
+    assert (answered.stdout, answered.stderr, answered.exit_code) == ('candidate#2\n', '', 0)
+    assert Repo(site.cwd(job)).git.show(f'{other}:b.txt') == 'a parallel candidate'
+    failure.append(OSError('No space left on device'))
+    answered = Relayed.model_validate_json(post(relay, call(argv=['sql', 'SELECT 1'])).content)
+    assert (answered.exit_code, answered.stderr) == (
+        0,
+        'piloop: the call ran, but this worker lacks some candidates, and `git show` may not find them: '
+        'No space left on device\n',
+    ), 'the call ran: its exit code stays'
+    relay.stop()
+
+
 def test_a_relayed_call_that_moves_the_agents_checkout_names_the_revision_and_moves_nothing_on_the_server(
     db: Database, campaign: Campaign, tmp_path: Path, runner: Runner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -385,7 +445,7 @@ def test_the_relay_moves_the_agents_checkout_after_a_call_that_names_a_revision(
             raise VcsError('no gone')
         moved.append((job, revision))
 
-    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, land)
+    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, land, no_take)
     relay.start()
     relay.open(3, JOB)
     answered = Relayed.model_validate_json(post(relay, call(argv=['idea', 'claim', '1', '--base', 'a' * 40])).content)

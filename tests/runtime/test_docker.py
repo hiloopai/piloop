@@ -23,7 +23,7 @@ from piloop.plugins.runtime.contract import AgentSpec, Deadline, ExitStatus, Han
 from piloop.plugins.runtime.docker import Docker, DockerRuntime, Mount, links, mounts_of
 from piloop.plugins.runtime.kit.egress import Allowed, EgressProxy
 from piloop.settings import INPUTS_DIR, settings
-from tests.conftest import no_land, no_ship
+from tests.conftest import no_land, no_ship, no_take
 
 IMAGE = 'buildpack-deps:noble-scm'
 """A glibc image with bash and git: piloop's own CLI runs in it from the worker's install."""
@@ -196,7 +196,7 @@ def relay() -> Generator[list[Call]]:
         calls.append(call)
         return Relayed(stdout=f'relayed on lease {lease}: {" ".join(call.argv)}\n', exit_code=0)
 
-    served = Relay(settings.relay_file, send, no_ship, no_land)
+    served = Relay(settings.relay_file, send, no_ship, no_land, no_take)
     served.start()
     served.open(7, AgentJob.model_construct(agent_session=AgentSessionId(1)))
     yield calls

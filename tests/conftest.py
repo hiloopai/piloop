@@ -12,7 +12,7 @@ import threading
 import time
 import tomllib
 import weakref
-from collections.abc import Callable, Generator, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime
 from importlib.metadata import EntryPoint, entry_points
@@ -944,3 +944,8 @@ def no_ship(job: AgentJob, revision: Revision | None) -> Shipped:
 def no_land(job: AgentJob, revision: Revision) -> None:
     """A relay's ``Land`` for a test whose agents move no checkout."""
     raise AssertionError(f'no agent of this test moves its checkout: {revision}')
+
+
+def no_take(job: AgentJob, revisions: Sequence[Revision]) -> None:
+    """A relay's ``Take`` for a test whose server names no candidate that a checkout started without."""
+    raise AssertionError(f'no answer of this test names a candidate: {revisions}')

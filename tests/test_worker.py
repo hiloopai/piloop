@@ -91,6 +91,7 @@ from tests.conftest import (
     home_cas,
     no_land,
     no_ship,
+    no_take,
     role_timeout,
     serving,
     still,
@@ -113,7 +114,7 @@ def quiet_relay(home: Path) -> Relay:
     def refuse(lease: int, call: Call) -> Relayed:
         raise AssertionError(f'no agent of this test relays a call: {call.argv}')
 
-    return Relay(socket_at(home / RELAY_SOCKET), refuse, no_ship, no_land)
+    return Relay(socket_at(home / RELAY_SOCKET), refuse, no_ship, no_land, no_take)
 
 
 def use(db: Database, campaign: Campaign, body: str, timeout: float = 20) -> None:
@@ -325,7 +326,11 @@ def test_a_worker_with_a_relay_relays_each_agent_while_its_job_runs(
     ex = RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers())
     worker = workers_of(ex).worker
     relay = worker.relay = Relay(
-        Settings(home=tmp_path / 'relay-home').relay_file, lambda lease, call: Relayed(exit_code=0), no_ship, no_land
+        Settings(home=tmp_path / 'relay-home').relay_file,
+        lambda lease, call: Relayed(exit_code=0),
+        no_ship,
+        no_land,
+        no_take,
     )
     ex.executor.adopt([])
     agent_session_id = request_agent(db, campaign)
@@ -343,7 +348,11 @@ def test_a_worker_with_a_relay_relays_each_agent_while_its_job_runs(
     launching.join(30)
     ex = RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers())
     relay = workers_of(ex).worker.relay = Relay(
-        Settings(home=tmp_path / 'relay-home').relay_file, lambda lease, call: Relayed(exit_code=0), no_ship, no_land
+        Settings(home=tmp_path / 'relay-home').relay_file,
+        lambda lease, call: Relayed(exit_code=0),
+        no_ship,
+        no_land,
+        no_take,
     )
     workers_of(ex).leases.renew_all()
     ex.executor.adopt([])

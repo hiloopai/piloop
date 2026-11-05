@@ -531,10 +531,14 @@ class Sources:
         manifest = put_tree(self._cas, workspace, names, seen=self._seen).manifest.put(self._cas)
         place = workspace.relative_to(self._home).as_posix()
         with self._db.session() as s:
-            query = select(Candidate.revision).where(Candidate.campaign_id == campaign.id).distinct()
-            history = list(s.scalars(query))
+            history = candidate_revisions(s, campaign.id)
         update = {'workspace': Workspace(place=place, manifest=manifest), 'history': history}
         return self.source(campaign, revision).model_copy(update=update)
+
+
+def candidate_revisions(s: Session, campaign_id: CampaignId) -> list[Revision]:
+    """The revision of every candidate of the campaign: what an agent's checkout holds (``Source.history``)."""
+    return list(s.scalars(select(Candidate.revision).where(Candidate.campaign_id == campaign_id).distinct()))
 
 
 def cloned(home: Path, campaign: Campaign) -> bool:

@@ -549,6 +549,11 @@ def land(site: Machine, job: AgentJob, revision: Revision) -> None:
         checkout.switch(revision)
 
 
+def take(site: Machine, job: AgentJob, revisions: Sequence[Revision]) -> None:
+    """Take those of ``revisions``, versions of the repo of record, that the job's clone lacks (``relay.Take``)."""
+    site.clones.fetch(job.artifact, revisions)
+
+
 def ship(site: Machine, job: AgentJob, revision: Revision | None) -> Shipped:
     """Send ``revision`` of the job's checkout, else the version that it is at, into the CAS (``relay.Ship``).
 
