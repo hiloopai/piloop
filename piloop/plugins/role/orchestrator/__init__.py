@@ -76,7 +76,7 @@ class OrchestratorRole(StartsItsAgents):
     )
 
     triggers: list[Trigger] = []
-    """Off by default. ``news``: an escalation, or what a person writes. ``run_failed``: a failed run. No other. An
+    """Off by default. ``news``: an escalation, what a person writes, or the evaluation retry wake threshold. ``run_failed``: a failed run. No other. An
     empty list means that its agents start only on request (``piloop launch``)."""
     quiet_seconds: float = Field(default=30, ge=0)
     """How long the role waits after the first news to launch an agent, so that one agent takes a burst of it. An open

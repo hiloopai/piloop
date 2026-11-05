@@ -75,6 +75,7 @@ from piloop.plugins.campaign_type.kit.evaluation.jobs import (
     EVALUATION,
     EvaluationJob,
     InfraFailed,
+    InfraRetrying,
     Sample,
     record,
 )
@@ -88,7 +89,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     score,
     sealed_evaluator,
 )
-from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline
+from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline, hold_on_infra_errors
 from piloop.plugins.campaign_type.kit.evaluation.submissions import submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.pool.due import needs
@@ -176,9 +177,12 @@ class Measuring(StrEnum):
     REPLACED = 'replaced'
     """Its campaign measures with another evaluator now (``queue.withdraw``): no measurement, and the current evaluator
     measures it instead."""
+    ABANDONED = 'abandoned'
+    """It failed ``[evaluation] stop_after_tries`` times in a row for a cause that is not its candidate's: no measurement,
+    and its campaign's measurements wait for a human (``hold_on_infra_errors``)."""
 
 
-type Halted = Literal[Measuring.CANCELLED, Measuring.STOPPED]
+type Halted = Literal[Measuring.CANCELLED, Measuring.STOPPED, Measuring.ABANDONED]
 """Why a run's candidate has no measurement to score it on."""
 
 
@@ -767,7 +771,7 @@ class RunController:
                 s.commit()
             return
         if ended is not Measuring.MEASURED:
-            return  # a stop killed the evaluator, someone cancelled it, or a new evaluator replaced it: nothing new
+            return  # a stop, a cancel, a new evaluator or the last infra error ended it: there is nothing new
         with self._db.session() as s:
             measured_now = s.get_one(Candidate, candidate_id)
             hold_on_failed_baseline(s, measured_now, eval_dir)
@@ -846,7 +850,7 @@ class RunController:
                         tried.add(evaluator_id)
                     case Measuring.REPLACED:
                         pass
-                    case Measuring.CANCELLED | Measuring.STOPPED:
+                    case Measuring.CANCELLED | Measuring.STOPPED | Measuring.ABANDONED:
                         return ended
                     case never:
                         assert_never(never)
@@ -990,6 +994,8 @@ class RunController:
                         return None
                     case Measuring.CANCELLED:  # no score: ``queue.cancel`` made it ``skipped``
                         span.set(status='skipped')
+                    case Measuring.ABANDONED:  # no score: the campaign's measurements wait for a human
+                        span.set(status=ended)
                     case Measuring.MEASURED:
                         span.set(status=ended)
                         last = candidate_id
@@ -1030,8 +1036,10 @@ class RunController:
         An evaluation that failed for a cause that is not its candidate's records nothing (``InfraFailed``): it waits in
         the queue, where ``piloop eval queue`` lists it and ``piloop eval cancel`` cancels it, and runs again after
         ``[evaluation] infra_retry``, twice as long after each failure up to ``infra_retry_max``. Each failure is an
-        event. It ends once it measures, someone cancels it, the daemon stops, or a new evaluator of its split replaces
-        ``evaluator_id`` (``queue.withdraw``): the caller then asks the current one (``Measuring.REPLACED``).
+        event. It ends once it measures, someone cancels it, the daemon stops, a new evaluator of its split replaces
+        ``evaluator_id`` (``queue.withdraw``): the caller then asks the current one (``Measuring.REPLACED``), or it
+        failed ``stop_after_tries`` times in a row: then the campaign's measurements pause, and piloop escalates
+        (``hold_on_infra_errors``).
         """
         failures, retry = 0, min(self._evaluation.infra_retry, self._evaluation.infra_retry_max)
         while True:
@@ -1049,6 +1057,25 @@ class RunController:
             ):
                 case InfraFailed(error=error):
                     failures += 1
+                    if failures >= self._evaluation.stop_after_tries:
+                        self._tracer.event(
+                            'evaluation.abandoned', candidate=candidate_id, evaluation=ended.evaluation, error=error
+                        )
+                        with self._db.session() as s:
+                            hold_on_infra_errors(s, candidate_id, ended.evaluation, evaluator_id, error, failures)
+                            s.commit()
+                        return Measuring.ABANDONED
+                    if failures == self._evaluation.wake_after_tries:
+                        with self._db.session() as s:
+                            write_transaction(s)
+                            if latest(s, InfraRetrying, has(InfraRetrying, evaluation=ended.evaluation)) is None:
+                                emit(
+                                    s,
+                                    InfraRetrying(evaluation=ended.evaluation, failures=failures, error=error),
+                                    TargetRef(CANDIDATE, candidate_id),
+                                    System.DAEMON,
+                                )
+                            s.commit()
                     self._tracer.event(
                         ended.kind, candidate=candidate_id, error=error, failures=failures, retry=retry.total_seconds()
                     )

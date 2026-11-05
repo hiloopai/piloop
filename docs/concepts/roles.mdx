@@ -66,7 +66,7 @@ An empty list turns them off, and an orchestrator then starts only by hand (`pil
 
 | Trigger | Wakes the orchestrator when |
 |---|---|
-| `news` | An agent escalates, or a person writes to the campaign, `quiet_seconds` (30) after the first such news, also while the campaign is paused, held or stopped. The rest of the news comes with it. |
+| `news` | An agent escalates, a person writes to the campaign, or an evaluation reaches `[evaluation] wake_after_tries`, `quiet_seconds` (30) after the first such news, also while the campaign is paused, held or stopped. The rest of the news comes with it. |
 | `run_failed` | A run failed or timed out, and no orchestrator got it yet. Its brief lists the failures. |
 
 ## Define a role

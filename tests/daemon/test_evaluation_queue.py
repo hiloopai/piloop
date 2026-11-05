@@ -13,7 +13,7 @@ from sqlalchemy import delete, select
 
 from piloop.actor import System
 from piloop.db.events import in_order, latest
-from piloop.db.models import PROCESS, Campaign, Event, utcnow
+from piloop.db.models import PROCESS, Campaign, Comment, Event, Pause, utcnow
 from piloop.db.session import Database
 from piloop.ids import TargetRef
 from piloop.otel import Tracer
@@ -21,7 +21,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Candidate
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.jobs import KIND, InfraFailed
+from piloop.plugins.campaign_type.kit.evaluation.jobs import KIND, InfraFailed, InfraRetrying
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     current_evaluator,
     measured,
@@ -36,6 +36,7 @@ from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
+from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import commands as git
 from piloop.settings import EvaluationSettings
@@ -177,6 +178,7 @@ def test_a_shared_evaluation_that_cannot_start_is_no_measurement_and_runs_again_
         assert [s.get_one(Run, r).status for r in (first, second)] == [RunStatus.SUCCEEDED] * 2
         [infra] = [p for _, p in in_order(s, InfraFailed)]
         assert infra.error == 'RuntimeError: cannot check out the commit'
+        assert len(in_order(s, InfraRetrying)) == 1, 'shared requests send one threshold notice'
     assert rows(db) == []
 
 
@@ -496,7 +498,9 @@ def test_an_evaluation_that_waits_after_an_infra_error_is_listed_and_a_cancel_en
 ) -> None:
     """The wait doubles after each failure, and the evaluation waits in the queue, where a cancel finds it."""
     set_config(db, campaign, evaluate=infra_first(tmp_path, times=99))
-    wait = EvaluationSettings(infra_retry=timedelta(milliseconds=50), infra_retry_max=timedelta(minutes=10))
+    wait = EvaluationSettings(
+        infra_retry=timedelta(milliseconds=50), infra_retry_max=timedelta(minutes=10), stop_after_tries=5
+    )
     ex = queued_executor(db, runtime, tmp_path, 1, wait)
     base = baseline(db, campaign.id).id
     remeasured = in_thread(lambda: ex.remeasure(base))
@@ -514,7 +518,9 @@ def test_an_evaluation_that_fails_for_infra_many_times_waits_at_the_cap_and_neve
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
     """60 infra errors in a row: ``infra_retry * 2**failures`` passed what ``timedelta`` holds at the 58th of 1 ms."""
-    wait = EvaluationSettings(infra_retry=timedelta(milliseconds=1), infra_retry_max=timedelta(milliseconds=4))
+    wait = EvaluationSettings(
+        infra_retry=timedelta(milliseconds=1), infra_retry_max=timedelta(milliseconds=4), stop_after_tries=61
+    )
     ex = queued_executor(db, runtime, tmp_path, 1, wait)
     failed = [InfraFailed(evaluation=0, error='HTTP 429')] * 60
     request = ex._request  # 60 real infra errors would take 60 evaluations: the 61st request is real
@@ -639,6 +645,74 @@ def test_a_sealed_split_s_evaluator_is_retired_only_by_a_new_sealed_command(db: 
     new_evaluator(db, campaign, evaluator={'sealed': ['echo', 'sealed', 'again']})
     with db.session() as s:
         assert retired(s, hidden.id)
+
+
+@pytest.mark.parametrize('limit', [None, 1, 5])
+def test_an_evaluation_that_keeps_failing_for_the_machine_stops_after_its_tries_and_escalates_once(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, limit: int | None
+) -> None:
+    """After ``stop_after_tries`` failures in a row, nothing is recorded, the evaluation leaves the queue, the campaign's
+    measurements pause, and one escalation names the candidate, the evaluation, the evaluator and the last error."""
+    set_config(db, campaign, evaluate=infra_first(tmp_path, times=99))
+    settings = EvaluationSettings(infra_retry=timedelta(milliseconds=10), infra_retry_max=timedelta(milliseconds=20))
+    if limit is not None:
+        settings = settings.model_copy(update={'stop_after_tries': limit})
+    expected = 3 if limit is None else limit
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        before = len(s.get_one(Candidate, base).measurements)
+    ex = queued_executor(db, runtime, tmp_path, 1, settings)
+    ex.remeasure(base)
+    assert tries(tmp_path) == expected
+    assert rows(db) == [], 'its slot is free, and nothing waits'
+    with db.session() as s:
+        assert len(s.get_one(Candidate, base).measurements) == before, 'an infra error is never a verdict'
+        proj = s.get_one(Campaign, campaign.id)
+        [*_, last] = [e for _, e in in_order(s, InfraFailed)]
+        notices = [p for _, p in in_order(s, InfraRetrying)]
+        assert len(notices) == int(expected > settings.wake_after_tries)
+        [escalation] = s.scalars(select(Comment).where(Comment.kind == ESCALATION)).all()
+        assert (proj.paused, escalation.target) == (Pause.ALL, TargetRef(CANDIDATE, base))
+        assert f'candidate#{base}, evaluation#{last.evaluation}, evaluator#{proj.evaluator_id}: {last.error}' in (
+            escalation.body
+        )
+        why = proj.paused_reason
+    run_id = make_run(db, campaign)
+    execute(ex, db, run_id)
+    assert tries(tmp_path) == expected * 2, "a run's version stops after its tries too"
+    [version] = run_candidates(db, run_id)
+    with db.session() as s:
+        assert s.get_one(Candidate, version.id).measurements == []
+        on = [c.target for c in s.scalars(select(Comment).where(Comment.kind == ESCALATION).order_by(Comment.id))]
+        assert on == [TargetRef(CANDIDATE, base), TargetRef(CANDIDATE, version.id)], 'one escalation for each'
+        assert len(in_order(s, InfraRetrying)) == 2 * int(expected > settings.wake_after_tries)
+        assert s.get_one(Campaign, campaign.id).paused_reason == why, 'the first pause holds'
+
+
+@pytest.mark.parametrize('wake_after', [1, 2, 4, 7])
+def test_the_wake_threshold_notifies_once_without_stopping_retries_that_later_succeed(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, wake_after: int
+) -> None:
+    set_config(db, campaign, evaluate=infra_first(tmp_path, times=3))
+    settings = EvaluationSettings(
+        infra_retry=timedelta(milliseconds=10),
+        infra_retry_max=timedelta(milliseconds=20),
+        stop_after_tries=4,
+        wake_after_tries=wake_after,
+    )
+    base = baseline(db, campaign.id).id
+    ex = queued_executor(db, runtime, tmp_path, 1, settings)
+    for sequence in range(2):
+        (tmp_path / 'tries').unlink(missing_ok=True)
+        ex.remeasure(base)
+        assert tries(tmp_path) == 4, 'waking does not end retries; the fourth attempt succeeds'
+        with db.session() as s:
+            notices = [p for _, p in in_order(s, InfraRetrying)]
+            assert len(notices) == (sequence + 1 if wake_after <= 3 else 0)
+            assert all(p.failures == wake_after and 'HTTP 429' in p.error for p in notices)
+            assert s.get_one(Campaign, campaign.id).paused is None
+            assert s.scalars(select(Comment).where(Comment.kind == ESCALATION)).all() == []
+    assert rows(db) == []
 
 
 def test_an_evaluate_that_crashes_on_a_signal_of_its_own_is_not_run_again(
