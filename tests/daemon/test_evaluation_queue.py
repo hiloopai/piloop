@@ -518,7 +518,9 @@ def test_an_evaluation_that_fails_for_infra_many_times_waits_at_the_cap_and_neve
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
     """60 infra errors in a row: ``infra_retry * 2**failures`` passed what ``timedelta`` holds at the 58th of 1 ms."""
-    wait = EvaluationSettings(infra_retry=timedelta(milliseconds=1), infra_retry_max=timedelta(milliseconds=4), stop_after_tries=61)
+    wait = EvaluationSettings(
+        infra_retry=timedelta(milliseconds=1), infra_retry_max=timedelta(milliseconds=4), stop_after_tries=61
+    )
     ex = queued_executor(db, runtime, tmp_path, 1, wait)
     failed = [InfraFailed(evaluation=0, error='HTTP 429')] * 60
     request = ex._request  # 60 real infra errors would take 60 evaluations: the 61st request is real
