@@ -13,7 +13,7 @@ from pathlib import Path
 from statistics import fmean
 from typing import Literal
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -77,6 +77,10 @@ class Split(StrEnum):
     """The sealed split (``[evaluator] sealed``): only a candidate to confirm, and the baseline."""
 
 
+SEALED = 'sealed'
+"""The key of a sealed split's evaluator's ``definition``: its command. A visible evaluator's has none."""
+
+
 def sealed_evaluator(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Evaluator | None:
     """Return the evaluator row of the campaign's sealed split, created if needed, or None without one.
 
@@ -87,7 +91,7 @@ def sealed_evaluator(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Eva
         return found
     try:
         with s.begin_nested():  # two candidates of one campaign confirmed at once both find none
-            found = Evaluator(campaign_id=campaign.id, key=_sealed_key(command), definition={'sealed': list(command)})
+            found = Evaluator(campaign_id=campaign.id, key=_sealed_key(command), definition={SEALED: list(command)})
             s.add(found)
     except IntegrityError:
         found = sealed_of(s, campaign, cfg)
@@ -102,8 +106,26 @@ def sealed_of(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Evaluator 
     return s.scalar(row)
 
 
+def retired(s: Session, evaluator_id: EvaluatorId) -> bool:
+    """Whether its campaign no longer measures with ``evaluator_id``: as its current evaluator or its sealed one.
+
+    A sealed split's evaluator stays while the stored config does not validate: what replaced it is not known.
+    """
+    evaluator = s.get_one(Evaluator, evaluator_id)
+    campaign = s.get_one(Campaign, evaluator.campaign_id)
+    if evaluator.id == campaign.evaluator_id:
+        return False
+    if SEALED not in evaluator.definition:
+        return True
+    try:
+        command = campaign.config.evaluator.sealed
+    except ValidationError:  # the campaigns' pass records this error for the campaign
+        return False
+    return command is None or _sealed_key(command) != evaluator.key
+
+
 def _sealed_key(command: Sequence[str]) -> str:
-    definition: dict[str, object] = {'sealed': list(command)}
+    definition: dict[str, object] = {SEALED: list(command)}
     return hashlib.sha256(json.dumps(definition, sort_keys=True).encode()).hexdigest()[:16]
 
 

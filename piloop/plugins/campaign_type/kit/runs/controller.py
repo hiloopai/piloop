@@ -18,7 +18,7 @@ from typing import ClassVar, Literal, assert_never
 
 from covalence import Cid
 from pydantic import ValidationError
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, undefer
 
 from piloop import deprecated
@@ -84,6 +84,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     gate_of,
     measured,
     remeasure_asked,
+    retired,
     score,
     sealed_evaluator,
 )
@@ -172,6 +173,9 @@ class Measuring(StrEnum):
     """Someone cancelled it (``queue.cancel``): no measurement."""
     STOPPED = 'daemon_stopped'
     """The daemon stopped: the next one asks again."""
+    REPLACED = 'replaced'
+    """Its campaign measures with another evaluator now (``queue.withdraw``): no measurement, and the current evaluator
+    measures it instead."""
 
 
 type Halted = Literal[Measuring.CANCELLED, Measuring.STOPPED]
@@ -294,7 +298,8 @@ class RunController:
         """Submit the next evaluations of the queue while the executor has free slots, in the queue's order.
 
         The order and the fairness are the queue's (``queue.waiting``), whichever the executor. Called after each
-        request, after each evaluation that ends, and on each pass.
+        request, after each evaluation that ends, after each infra error, and on each pass. It first takes what waits
+        under a retired evaluator from the queue (``queue.withdraw``): its requests ask the current one.
         """
         with self.launcher.lock:
             if self.launcher.cancelled.is_set():
@@ -302,6 +307,7 @@ class RunController:
             free = self.executor.capacity().free(EVALUATION)
             with self._db.session() as s:
                 write_transaction(s)
+                queue.withdraw(s)
                 starting: list[EvaluationJob] = []
                 for evaluation in queue.waiting(s):
                     if free is not None and len(starting) >= free:
@@ -761,7 +767,7 @@ class RunController:
                 s.commit()
             return
         if ended is not Measuring.MEASURED:
-            return  # a stop killed the evaluator, or someone cancelled it: there is nothing new
+            return  # a stop killed the evaluator, someone cancelled it, or a new evaluator replaced it: nothing new
         with self._db.session() as s:
             measured_now = s.get_one(Candidate, candidate_id)
             hold_on_failed_baseline(s, measured_now, eval_dir)
@@ -810,12 +816,16 @@ class RunController:
             except Exception as e:  # the thread's last frame: what failed goes into the span, never lost
                 span.error(e)
 
-    def _score_one(self, run_id: RunId, candidate_id: CandidateId, eval_dir: Path) -> Measuring:
+    def _score_one(
+        self, run_id: RunId, candidate_id: CandidateId, eval_dir: Path
+    ) -> Literal[Measuring.MEASURED] | Halted:
         """Evaluate a run's candidate once, confirm it if its mean beats the best's, and record where it stands.
 
         The first evaluation may stop at a rung of the ladder, against the best's values there (``EvaluationJob.gate``).
         A candidate that the current evaluator measured already is not evaluated again: the same tree again says
-        nothing new about it. An evaluator that ``piloop init`` makes meanwhile measures it again. Return how it ended: a stop of the daemon or a cancel records no score.
+        nothing new about it. An evaluator that ``piloop init`` makes meanwhile measures it again, and so does one that
+        replaces the evaluator before its evaluation runs (``Measuring.REPLACED``). Return how it ended: a stop of the
+        daemon or a cancel records no score.
         """
         tried: set[EvaluatorId] = set()  # a climb that stopped at a rung is a measurement too: one per evaluator
         while True:  # the evaluator now: one that ``piloop init`` made while it was measured measures it again
@@ -828,15 +838,21 @@ class RunController:
                 best = Pool.of(s, campaign, track_of(cfg, candidate)).best()
                 known = any(m.evaluator_id == evaluator_id for m in candidate.measurements)
                 campaign_id, revision = campaign.id, candidate.revision
-            if known or evaluator_id in tried:
+            if not known and evaluator_id not in tried:
+                match ended := self._measure(
+                    run_id, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir / 'eval', gate=best
+                ):
+                    case Measuring.MEASURED:
+                        tried.add(evaluator_id)
+                    case Measuring.REPLACED:
+                        pass
+                    case Measuring.CANCELLED | Measuring.STOPPED:
+                        return ended
+                    case never:
+                        assert_never(never)
+            elif (ended := self._confirm(run_id, candidate_id, eval_dir)) is not Measuring.REPLACED:
                 break
-            tried.add(evaluator_id)
-            ended = self._measure(
-                run_id, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir / 'eval', gate=best
-            )
-            if ended is not Measuring.MEASURED:
-                return ended
-        if (ended := self._confirm(run_id, candidate_id, eval_dir)) is not Measuring.MEASURED:
+        if ended is not Measuring.MEASURED:
             return ended
         self._scored(candidate_id)
         return Measuring.MEASURED
@@ -1014,8 +1030,8 @@ class RunController:
         An evaluation that failed for a cause that is not its candidate's records nothing (``InfraFailed``): it waits in
         the queue, where ``piloop eval queue`` lists it and ``piloop eval cancel`` cancels it, and runs again after
         ``[evaluation] infra_retry``, twice as long after each failure up to ``infra_retry_max``. Each failure is an
-        event. It ends once it measures, someone cancels it, the daemon stops, or, on the sealed split, a new
-        ``[evaluator] sealed`` replaces its command (``_replaced``): the candidate's next confirmation uses the new one.
+        event. It ends once it measures, someone cancels it, the daemon stops, or a new evaluator of its split replaces
+        ``evaluator_id`` (``queue.withdraw``): the caller then asks the current one (``Measuring.REPLACED``).
         """
         failures = 0
         while True:
@@ -1043,6 +1059,7 @@ class RunController:
                         waiting, _ = queue.request(s, candidate_id, evaluator_id)
                         s.commit()
                         row, before = waiting.id, _last_measurement(s, candidate_id, evaluator_id)
+                    self.dispatch()  # as after each request: a new evaluator takes it from the queue
                     gone = self._db.wait_until(
                         lambda s, row=row: s.get(Evaluation, row) is None,
                         give_up=self.launcher.cancelled.is_set,
@@ -1050,30 +1067,14 @@ class RunController:
                     )
                     if self.launcher.cancelled.is_set():
                         return Measuring.STOPPED
-                    if gone:  # another request ran it meanwhile, or someone cancelled it
+                    if gone:  # another request ran it meanwhile, someone cancelled it, or a new evaluator took it
                         with self._db.session() as s:
                             after = _last_measurement(s, candidate_id, evaluator_id)
-                        return Measuring.MEASURED if after != before else Measuring.CANCELLED
-                    if split is Split.SEALED and self._replaced(campaign_id, evaluator_id, row):
-                        return Measuring.CANCELLED
+                            return Measuring.MEASURED if after != before else _unmeasured(s, evaluator_id)
                 case Measuring():
                     return ended
                 case never:
                     assert_never(never)
-
-    def _replaced(self, campaign_id: CampaignId, evaluator_id: EvaluatorId, row: int) -> bool:
-        """Whether the campaign's sealed command is no longer ``evaluator_id``'s.
-
-        Then ``row``, its evaluation that waits to run again, leaves the queue.
-        """
-        with self.launcher.lock, self._db.session() as s:
-            campaign = s.get_one(Campaign, campaign_id)
-            current = sealed_evaluator(s, campaign, campaign.config)
-            if current is not None and current.id == evaluator_id:
-                return False
-            s.execute(delete(Evaluation).where(Evaluation.id == row, Evaluation.started_at.is_(None)))
-            s.commit()
-            return True
 
     def _request(
         self,
@@ -1165,9 +1166,11 @@ class RunController:
                     .limit(1)
                 ).first()
                 if measurement is None:
-                    infra = latest(s, InfraFailed, has(InfraFailed, evaluation=evaluation_id))
-                    span.set(status='infra_error' if infra is not None else 'cancelled')
-                    return Measuring.CANCELLED if infra is None else infra[1]
+                    if (infra := latest(s, InfraFailed, has(InfraFailed, evaluation=evaluation_id))) is not None:
+                        span.set(status='infra_error')
+                        return infra[1]
+                    span.set(status=(unmeasured := _unmeasured(s, evaluator_id)))
+                    return unmeasured
                 span.set(
                     measurement=measurement.id,
                     error=measurement.error,
@@ -1256,6 +1259,14 @@ def track_brief(idea: Idea) -> str | None:
     )
     addendum = (Path(idea.campaign.path) / track.addendum).read_text().rstrip() if track.addendum else ''
     return '\n\n'.join(p for p in (rule, addendum) if p)
+
+
+def _unmeasured(s: Session, evaluator_id: EvaluatorId) -> Literal[Measuring.CANCELLED, Measuring.REPLACED]:
+    """Why an evaluation under ``evaluator_id`` left the queue with no measurement and no infra error.
+
+    A new evaluator took it from the queue (``queue.withdraw``), or someone cancelled it (``queue.cancel``).
+    """
+    return Measuring.REPLACED if retired(s, evaluator_id) else Measuring.CANCELLED
 
 
 def _last_measurement(s: Session, candidate_id: CandidateId, evaluator_id: EvaluatorId) -> MeasurementId | None:

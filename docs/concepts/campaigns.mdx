@@ -87,7 +87,8 @@ An `infra_error` is never a score. Report it for a fault that is not the candida
 a lost GPU. piloop treats two more faults the same way: a worktree or inputs that it cannot make, and an evaluate that
 another process kills twice. piloop records no measurement and an `evaluation.infra_error` event. The evaluation waits
 in `piloop eval queue` for `[evaluation] infra_retry` in `config.toml`, twice as long after each failure up to
-`infra_retry_max`, then runs again, until it measures or you cancel it. A version that the repo lacks is a `crash`.
+`infra_retry_max`, then runs again, until it measures or you cancel it. When a new evaluator replaces its own, the new
+evaluator measures it instead. A version that the repo lacks is a `crash`.
 
 `[evaluator] dev` names a fast command that checks a change. Each implementer's brief names it. The implementers run
 it in their own checkouts as often as they like, and piloop never runs it:
@@ -246,8 +247,10 @@ agents never see them. No score reads them.
 
 An **evaluator** is the evaluate command, `link`, and the names and directions of the primaries and guardrails. A
 change to one of them makes a new evaluator at the next `piloop init`. piloop never compares scores of two evaluators:
-it measures the baseline and the best again, and the runs wait until both have a score under the new one. The other
-candidates keep the scores of the old evaluator until they are measured again:
+it measures the baseline and the best again, and the runs wait until both have a score under the new one. An
+evaluation that waits under the old evaluator moves to the new one, and one that runs finishes under the old one.
+`piloop eval queue` names the evaluator of each evaluation, and marks an old one `(retired)`. The other candidates keep
+the scores of the old evaluator until they are measured again:
 
 ```bash
 piloop candidate remeasure 2

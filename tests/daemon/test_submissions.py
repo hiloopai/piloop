@@ -66,7 +66,16 @@ from tests.conftest import (
     workers_of,
     write_toml,
 )
-from tests.daemon.test_evaluation_queue import queued_executor
+from tests.daemon.test_evaluation_queue import (
+    INFRA,
+    SCORE,
+    SHORT_RETRY,
+    in_thread,
+    logged,
+    logged_tries,
+    new_evaluator,
+    queued_executor,
+)
 from tests.daemon.test_run_controller import controller, make_run, run_row, scored_elsewhere, set_config
 from tests.daemon.test_scheduler import make_scheduler
 
@@ -538,6 +547,55 @@ def test_a_sealed_split_that_reports_an_infra_error_gives_no_score_and_scores_it
     oom.unlink()
     scoring_it.join(30)
     assert best(db, campaign) == candidate, 'scored on the sealed split, where it beats the baseline'
+
+
+def test_a_submission_whose_evaluator_is_replaced_while_an_infra_error_waits_is_scored_by_the_new_one(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """Its scoring asks the current evaluator (``Measuring.REPLACED``): the old one never runs again."""
+    new_evaluator(db, campaign, evaluator=SUBMIT, evaluate=logged(tmp_path, 'old', INFRA))
+    ex = queued_executor(db, runtime, tmp_path, 1, SHORT_RETRY)
+    candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
+    scoring_it = in_thread(lambda: ex.score_submission(candidate))
+    wait_until(lambda: logged_tries(tmp_path, 'old') >= 2, 'two infra errors')
+    tried = logged_tries(tmp_path, 'old')
+    new = new_evaluator(db, campaign, evaluator=SUBMIT, evaluate=logged(tmp_path, 'new', SCORE))
+    scoring_it.join(30)
+    assert not scoring_it.is_alive()
+    assert logged_tries(tmp_path, 'old') <= tried + 1, 'only the evaluation that ran at the change ran after it'
+    with db.session() as s:
+        assert [(m.evaluator_id, m.error) for m in s.get_one(Candidate, candidate).measurements] == [(new, None)]
+    assert scored(db, candidate) is not None, 'scored under the new evaluator'
+
+
+def test_a_confirmation_whose_evaluator_is_replaced_while_an_infra_error_waits_starts_again_under_the_new_one(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The first evaluation stays the old evaluator's measurement. The new one measures the submission, then confirms
+    it, and the old one never runs again."""
+    old_then_infra = f'if [ $(wc -l < {tmp_path / "old"}) -gt 1 ]; then {INFRA}; fi; {SCORE}'
+    old = new_evaluator(db, campaign, evaluator=CONFIRM, evaluate=logged(tmp_path, 'old', old_then_infra))
+    with db.session() as s:
+        s.add(
+            Measurement(
+                candidate_id=baseline(db, campaign.id).id, evaluator_id=old, metrics={'score': 1.0, 'size': 5.0}
+            )
+        )
+        s.commit()
+    ex = queued_executor(db, runtime, tmp_path, 1, SHORT_RETRY)
+    candidate = submitted(db, campaign, running(db, campaign), commit(worktree(campaign, tmp_path), 'base\na\n'))
+    scoring_it = in_thread(lambda: ex.score_submission(candidate))
+    wait_until(lambda: logged_tries(tmp_path, 'old') >= 2, 'a confirmation that failed for the machine')
+    tried = logged_tries(tmp_path, 'old')
+    new = new_evaluator(db, campaign, evaluator=CONFIRM, evaluate=logged(tmp_path, 'new', SCORE))
+    scoring_it.join(30)
+    assert not scoring_it.is_alive()
+    assert logged_tries(tmp_path, 'old') <= tried + 1, 'only the evaluation that ran at the change ran after it'
+    with db.session() as s:
+        found = [(m.evaluator_id, m.metrics['score']) for m in s.get_one(Candidate, candidate).measurements]
+    assert found[0] == (old, 2.0), 'the first evaluation keeps its evaluator'
+    assert {e for e, _ in found[1:]} == {new}
+    assert scored(db, candidate) is not None
 
 
 def ending(db: Database, run_id: RunId, how: RunEnding, reason: str | None = None) -> None:
