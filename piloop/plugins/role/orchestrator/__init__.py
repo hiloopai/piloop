@@ -2,7 +2,7 @@
 
 Off by default: with ``triggers = []``, the person runs an orchestrator of their own (the ``piloop-operate`` skill), and
 piloop launches none. ``triggers = ["news", "run_failed"]`` turns it on, for what needs a decision: an escalation,
-what a person writes, a failed run (``news`` and ``run_failed``, two functions of this package). It never wakes on a
+what a person writes, an evaluation retry, a failed run (``news`` and ``run_failed``, two functions of this package). It never wakes on a
 timer or a short board: it does not plan the work. Each agent of the role resumes the session of the one before
 (``continuity = "resume"``). The news comes in notes on its row.
 """
@@ -24,7 +24,7 @@ if TYPE_CHECKING:  # the daemon's types: the role's table loads with every confi
     from piloop.plugins.contribution import DaemonHost
 
 type Trigger = Literal['news', 'run_failed']
-"""What may wake the orchestrator: an escalation or what a person writes (``news``), and a failed run (``run_failed``)."""
+"""What wakes the orchestrator: escalations, personal messages or evaluation retries (``news``), and failed runs."""
 NEWS: Trigger = 'news'
 LEAD_TRIGGERS: frozenset[str] = frozenset({NEWS, 'run_failed'})
 
@@ -76,7 +76,7 @@ class OrchestratorRole(StartsItsAgents):
     )
 
     triggers: list[Trigger] = []
-    """Off by default. ``news``: an escalation, or what a person writes. ``run_failed``: a failed run. No other. An
+    """Off by default. ``news``: an escalation, what a person writes, or an evaluation retry. ``run_failed``: a failed run. An
     empty list means that its agents start only on request (``piloop launch``)."""
     quiet_seconds: float = Field(default=30, ge=0)
     """How long the role waits after the first news to launch an agent, so that one agent takes a burst of it. An open

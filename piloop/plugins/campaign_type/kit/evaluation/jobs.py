@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import System
 from piloop.db.events import emit
-from piloop.db.models import Campaign, EventModel, ReadBy
+from piloop.db.models import Campaign, EventModel
 from piloop.ids import TargetRef
 from piloop.otel import Span
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
@@ -72,7 +72,6 @@ class InfraFailed(EventModel):
     The request that waits for it asks for it again (``RunController``), so it never becomes a score.
     """
 
-    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
     kind: Literal['evaluation.infra_error'] = 'evaluation.infra_error'
     evaluation: int
     """The evaluation, by its row in the queue (``evaluations``)."""

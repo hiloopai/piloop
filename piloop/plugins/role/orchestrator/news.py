@@ -1,7 +1,7 @@
 """``news``: what ``piloop inbox wait`` would return to the role since its last agent took the news.
 
-One of the orchestrator's two wake-ups (``triggers``). Only what needs a decision wakes it (``wakes``): an escalation, or what a person
-wrote. The rest of the news, a score, an anomaly, the stop or an agent's note, comes with the next wake. The news
+One of the orchestrator's two wake-ups (``triggers``). An escalation, what a person wrote, or an evaluation retry
+wakes it. The rest of the news, a score, an anomaly, the stop or an agent's note, comes with the next wake. The news
 goes to the role's agent in notes (``Steer``): in its brief when the note is written before it starts, else as it
 works. Each note takes the news up to a cursor (``NewsTaken``), and the next one
 takes what came after it. A row that failed did not take its news, and an agent that ended did not take a note that it
@@ -19,9 +19,12 @@ from piloop.api.views import CommentNews, News, NewsItem
 from piloop.campaign import inbox
 from piloop.campaign.stop import CancelRequested
 from piloop.db import feed as db_feed
-from piloop.db.events import has, latest
+from piloop.db.events import has, in_order, latest
 from piloop.db.models import OPEN, AgentSession, AgentSessionState, Comment, Event, EventModel, ReadBy
 from piloop.ids import TargetKind
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
+from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.campaign_type.kit.evaluation.jobs import InfraFailed
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.role.orchestrator.passes import RolePass, Steer
 
@@ -96,34 +99,56 @@ def is_open(p: RolePass) -> bool:
     return bool(p.live()) or (p.last is not None and p.last.state is AgentSessionState.REQUESTED)
 
 
-WAKES: frozenset[type[EventModel]] = frozenset(topic.model for topic in inbox.WAKES)
-"""What makes the daemon pass over the campaigns for the news: the inbox's events."""
+WAKES: frozenset[type[EventModel]] = frozenset({*(topic.model for topic in inbox.WAKES), InfraFailed})
+"""The inbox's events and evaluation infrastructure failures whose requests retry."""
 
 
 def news(p: RolePass, quiet_seconds: float) -> tuple[Steer | None, datetime | None]:
     """New inbox items for the role's party, anomalies, scores and the stop: ``piloop inbox wait``'s news.
 
-    An escalation or what a person wrote wakes the role ``quiet_seconds`` after the first news, also while the campaign
-    is paused, held or stopped, and the rest of the news comes with it. Nothing else wakes it. An agent of the role that
+    An escalation, what a person wrote, or an evaluation retry wakes the role ``quiet_seconds`` after the first news,
+    also while the campaign is paused, held or stopped, and the rest of the news comes with it. An agent of the role that
     is open already gets the news at once, in a note. Returns the note, or when to ask again: None for the next event.
     """
     cursor = taken(p)
     found = inbox.news(p.s, cursor, campaign_id=p.campaign.id, party=p.role)
-    due = _due(p, found, cursor, quiet_seconds)
+    retries = in_order(
+        p.s,
+        InfraFailed,
+        Event.id > cursor,
+        Event.id <= found.next,
+        Event.target_kind == CANDIDATE,
+        Event.target_id.in_(select(Candidate.id).where(Candidate.campaign_id == p.campaign.id)),
+    )
+    due = _due(p, found, cursor, quiet_seconds, retries[0][0].at if retries else None)
     if due is None or due > p.now:
         return None, due
-    kinds = sorted({item.kind for item in found.items})
-    reason = f'news: {len(found.items)} items ({", ".join(kinds)})'
-    return Steer(note(found, p.now), reason, events=(NewsTaken(after=cursor, upto=found.next),)), None
+    kinds = sorted({item.kind for item in found.items} | ({'evaluation_retry'} if retries else set()))
+    reason = f'news: {len(found.items) + len(retries)} items ({", ".join(kinds)})'
+    text = '\n'.join(
+        [
+            note(found, p.now),
+            *(
+                f'- candidate#{event.target_id}: evaluation#{retry.evaluation} retry after infrastructure failure:'
+                f' {retry.error}'
+                for event, retry in retries
+            ),
+        ]
+    )
+    return Steer(text, reason, events=(NewsTaken(after=cursor, upto=found.next),)), None
 
 
-def _due(p: RolePass, found: News, cursor: int, quiet_seconds: float) -> datetime | None:
+def _due(
+    p: RolePass, found: News, cursor: int, quiet_seconds: float, first_retry: datetime | None = None
+) -> datetime | None:
     """When the role's agents may take ``found``, the news after ``cursor``, or None when nothing in it wakes them.
 
     An open agent takes it at once: the quiet window only saves launches.
     """
-    if not any(wakes(item) for item in found.items):
+    if first_retry is None and not any(wakes(item) for item in found.items):
         return None
     page = db_feed.after(p.s, cursor, inbox.WAKES, limit=1)
     first = p.s.scalar(select(Event.at).where(Event.id.in_(page.ids))) or p.now
+    if first_retry is not None:
+        first = min(first, first_retry)
     return first if is_open(p) else first + timedelta(seconds=quiet_seconds)
