@@ -57,7 +57,7 @@ def hold_on_infra_errors(
 ) -> None:
     """Pause the measurements of the candidate's campaign, and escalate: its evaluation failed for the machine.
 
-    It failed ``tries`` times in a row for a cause that is not the candidate's (``[evaluation] infra_tries``). That
+    It failed ``tries`` times in a row for a cause that is not the candidate's (``[evaluation] stop_after_tries``). That
     cause is the machine's or the evaluator's: the next evaluations would fail too, and the daemon would ask for this
     one again. Nothing is recorded, so the candidate waits as it was, and a resume evaluates it again. The escalation
     names the candidate, the evaluation, the evaluator and the last error. The caller commits.

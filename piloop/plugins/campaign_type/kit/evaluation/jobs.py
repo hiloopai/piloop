@@ -78,6 +78,15 @@ class InfraFailed(EventModel):
     error: str
 
 
+class InfraRetrying(EventModel):
+    """An evaluation reached its orchestrator wake threshold; its infrastructure retries continue."""
+
+    kind: Literal['evaluation.infra_retrying'] = 'evaluation.infra_retrying'
+    evaluation: int
+    failures: int
+    error: str
+
+
 class EvaluationJob(Job):
     """The description of an evaluation's job: the evaluator's runner and its arguments, on the candidate's tree.
 

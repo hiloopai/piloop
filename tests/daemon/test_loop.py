@@ -171,6 +171,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'comment.undelivered': [],
             'evaluation.cancelled': ['evaluations'],
             'evaluation.infra_error': [],
+            'evaluation.infra_retrying': ['campaigns'],
             'fact.read': ['campaigns'],
             'idea.created': ['campaigns'],
             'idea.deleted': ['campaigns'],
