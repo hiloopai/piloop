@@ -116,7 +116,7 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
     )
     assert defaults.context == [], 'no analysis artifacts unless the campaign names them'
     implementer = role_of(defaults, ImplementerRole)
-    assert (implementer.timeout, implementer.max_concurrent) == (1800, 1), 'one worker: more finish sooner, not cheaper'
+    assert (implementer.timeout, implementer.max_concurrent) == (3600, 2), 'two workers, an hour each'
     assert list(defaults.roles.all()) == [IMPLEMENTER, 'orchestrator'], 'no research, no watchdog'
 
 

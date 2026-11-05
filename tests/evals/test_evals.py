@@ -121,8 +121,7 @@ def test_every_piloop_arm_loads_on_every_task_with_this_piloop():
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', PiloopDeprecationWarning)
         for arm, task in itertools.product(arms, tasks):
-            if not arm.charters or task.name in arm.charters:  # an arm with charters runs only on their tasks
-                CampaignConfig.model_validate(piloop_config(task, arm, settings, 4))
+            CampaignConfig.model_validate(piloop_config(task, arm, settings, 4))
 
 
 def test_circles_check_is_exact():
@@ -514,21 +513,6 @@ def test_the_guard_halts_every_unfinished_run_at_the_ceiling(tmp_path: Path):
         watcher.join()
     assert 'ceiling of $1000' in halt.read_text()
     assert not (tmp_path / 't' / 'a-1' / HALT).exists()
-
-
-def test_charters_are_each_roles_addendum_on_their_task():
-    arm = load_arm('c-charters-2')
-    assert isinstance(arm, PiloopArm)
-    config = piloop_config(Task.load('t4-1brc'), arm, Settings(), 4)
-    roles = get(config, 'plugins', 'role')
-    assert isinstance(roles, dict)
-    assert {r: v.get('addendum') for r, v in roles.items() if isinstance(v, dict) and 'addendum' in v} == {
-        'implementer': 'charter-implementer.md',
-        'implementer_b': 'charter-implementer_b.md',
-    }
-    assert all(len(text.split()) <= 60 for charter in arm.charters.values() for text in charter.values())
-    with pytest.raises(ValueError, match='not for t2-circles'):
-        piloop_config(Task.load('t2-circles'), arm, Settings(), 4)
 
 
 def test_team_counts_keeps_in_the_final_head_races_and_notes_read_across(tmp_path: Path):

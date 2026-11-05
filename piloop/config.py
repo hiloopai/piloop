@@ -44,7 +44,17 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.fact_source.contract import FACT_SOURCES, FactSource
 from piloop.plugins.harness.contract import HARNESSES, Harness
-from piloop.plugins.host import Plugins, PluginTables, Scope, Unreached, refs, unknown, unreached
+from piloop.plugins.host import (
+    Capability,
+    Parameters,
+    Plugins,
+    PluginTables,
+    Scope,
+    Unreached,
+    refs,
+    unknown,
+    unreached,
+)
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer, env_names
 from piloop.plugins.role.contract import ROLES, ImplementerRole, RoleConfig, StartsItsAgents
 from piloop.plugins.runtime.contract import RUNTIMES
@@ -264,7 +274,8 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     def _sweep_vocabulary(cls, data: object) -> object:
         """Drop the ``SWEEP_TRIGGERS``, the ``SWEEP_KEYS`` of each role and the stop rule's ``while_held``.
 
-        Each one warns, but a trigger's table without keys: a stored config holds one for each built-in trigger.
+        Each one warns, but a trigger's table without keys: a stored config holds one for each built-in trigger. A
+        package's role keeps its keys and its triggers (``_packaged``).
         """
         plugins = data.get('plugins') if isinstance(data, dict) else None
         if not isinstance(data, dict) or not isinstance(plugins, dict):
@@ -287,7 +298,7 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
         if isinstance(roles := plugins.get('role'), dict):
             tables: dict[str, object] = {}
             for role, table in roles.items():
-                if not isinstance(table, dict):
+                if not isinstance(table, dict) or _packaged(ROLES, role):
                     tables[role] = table
                     continue
                 table = dict(table)
@@ -315,14 +326,15 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     def _research(cls, data: object) -> object:
         """Drop the research role, and its ``low_water`` and ``stalled`` triggers, with a warning for each.
 
-        A ``piloop.toml`` and a campaign's stored copy of it (``campaigns.config``) both go this validation.
+        A ``piloop.toml`` and a campaign's stored copy of it (``campaigns.config``) both go this validation. A package's
+        role keeps its table and its triggers (``_packaged``).
         """
         plugins = data.get('plugins') if isinstance(data, dict) else None
         if not isinstance(data, dict) or not isinstance(plugins, dict):
             return data
         roles = dict(r) if isinstance(r := plugins.get('role'), dict) else {}
         triggers = dict(t) if isinstance(t := plugins.get('trigger'), dict) else {}
-        if roles.pop('research', None) is not None:
+        if not _packaged(ROLES, 'research') and roles.pop('research', None) is not None:
             deprecated.dropped(
                 'the research role is removed; delete [plugins.role.research]: workers propose their own ideas',
                 removed_in='0.7.0',
@@ -338,7 +350,7 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
         gone |= {n: n for n in RESEARCH_TRIGGERS if n not in provider}
         for role, table in roles.items():
             listed = table.get('triggers') if isinstance(table, dict) else None
-            if not isinstance(table, dict) or not isinstance(listed, list):
+            if not isinstance(table, dict) or not isinstance(listed, list) or _packaged(ROLES, role):
                 continue
             for name in (n for n in listed if isinstance(n, str) and n in gone):
                 deprecated.dropped(
@@ -357,12 +369,15 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     @classmethod
     @deprecated.until('0.7.0', 'the watchdog is removed in 0.6: delete CampaignConfig._watchdog')
     def _watchdog(cls, data: object) -> object:
-        """Drop ``[plugins.role.watchdog]``, with a warning: of a file, or of a stored config."""
+        """Drop ``[plugins.role.watchdog]``, with a warning: of a file, or of a stored config.
+
+        A package's role called ``watchdog`` keeps its table (``_packaged``).
+        """
         plugins = data.get('plugins') if isinstance(data, dict) else None
         roles = plugins.get('role') if isinstance(plugins, dict) else None
         if not isinstance(data, dict) or not isinstance(plugins, dict) or not isinstance(roles, dict):
             return data
-        if 'watchdog' not in roles:
+        if 'watchdog' not in roles or _packaged(ROLES, 'watchdog'):
             return data
         deprecated.dropped(
             'the watchdog role is removed; delete [plugins.role.watchdog]: the orchestrator takes escalations and failed'
@@ -377,7 +392,8 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     def _removed_sections(cls, data: object) -> object:
         """Drop each section of ``REMOVED_SECTIONS`` from ``[plugins.section]``, its ``use`` and each role's ``sections``.
 
-        Each place warns. A stored config of 0.5 holds every section's table and lists them in ``use``.
+        Each place warns. A stored config of 0.5 holds every section's table and lists them in ``use``. A package's
+        section of one of these names stays (``_packaged``).
         """
         plugins = data.get('plugins') if isinstance(data, dict) else None
         if not isinstance(data, dict) or not isinstance(plugins, dict):
@@ -392,10 +408,10 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
         if isinstance(sections := plugins.get('section'), dict):
             table = dict(sections)
             if isinstance(use := table.get('use'), list):
-                for gone in (n for n in use if n in REMOVED_SECTIONS):
+                for gone in (n for n in use if _removed_section(n)):
                     dropped(gone, '[plugins.section] use')
-                table['use'] = [n for n in use if n not in REMOVED_SECTIONS]
-            for gone in REMOVED_SECTIONS:
+                table['use'] = [n for n in use if not _removed_section(n)]
+            for gone in filter(_removed_section, REMOVED_SECTIONS):
                 if table.pop(gone, None) is not None:
                     dropped(gone, f'[plugins.section.{gone}]')
             kept['section'] = table
@@ -404,9 +420,9 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
             for name, role in roles.items():
                 listed = role.get('sections') if isinstance(role, dict) else None
                 if isinstance(role, dict) and isinstance(listed, list):
-                    for gone in (n for n in listed if n in REMOVED_SECTIONS):
+                    for gone in (n for n in listed if _removed_section(n)):
                         dropped(gone, f'[plugins.role.{name}] sections')
-                    role = {**role, 'sections': [n for n in listed if n not in REMOVED_SECTIONS]}
+                    role = {**role, 'sections': [n for n in listed if not _removed_section(n)]}
                 tables[name] = role
             kept['role'] = tables
         return {**data, 'plugins': kept}
@@ -760,6 +776,22 @@ def merged(base: object, over: object) -> object:
             return over
 
 
+@deprecated.until('0.7.0', 'only the 0.6 bridges ask it: delete _packaged and _removed_section with them')
+def _packaged[P: Parameters](capability: Capability[P], name: str) -> bool:
+    """Whether ``name`` is a provider of ``capability`` that a package adds: its table and its keys are its own.
+
+    A 0.6 bridge drops only what piloop's own removed providers left, and what the file defines, never a package's.
+    """
+    found = capability.providers().get(name)
+    return found is not None and not found.source.built_in
+
+
+@deprecated.until('0.7.0', 'only the 0.6 bridges ask it: delete _packaged and _removed_section with them')
+def _removed_section(name: object) -> bool:
+    """Whether ``name`` is a section that 0.6 removed (``REMOVED_SECTIONS``), and no package adds a section of it."""
+    return isinstance(name, str) and name in REMOVED_SECTIONS and not _packaged(SECTIONS, name)
+
+
 def _has_table(plugins: object, capability: str, name: str) -> bool:
     """Whether ``plugins``, a file's raw ``[plugins]``, has the table ``[plugins.<capability>.<name>]``."""
     return isinstance(plugins, dict) and isinstance(of := plugins.get(capability), dict) and name in of
@@ -767,11 +799,15 @@ def _has_table(plugins: object, capability: str, name: str) -> bool:
 
 @deprecated.until('0.7.0', 'a role has no follow_head in 0.6: delete _without_head with _verdict_keys')
 def _without_head(name: str, role: object) -> object:
-    """``role`` without ``follow_head``, and with ``scoring`` for ``judging`` in its ``sections``."""
+    """``role`` without ``follow_head``, and with ``scoring`` for ``judging`` in its ``sections``.
+
+    A package's role keeps its ``follow_head`` (``_packaged``).
+    """
     if not isinstance(role, dict):
         return role
-    kept = {k: v for k, v in role.items() if k != 'follow_head'}
-    if 'follow_head' in role:
+    head = 'follow_head' in role and not _packaged(ROLES, name)
+    kept = {k: v for k, v in role.items() if k != 'follow_head' or not head}
+    if head:
         deprecated.dropped(
             f'there is no head to follow now: delete follow_head of [plugins.role.{name}]', removed_in='0.7.0'
         )

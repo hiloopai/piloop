@@ -45,6 +45,10 @@ class Relayed(BaseModel):
     checkout: Revision | None = None
     """A version of the repo of record that the call moves the agent's checkout to, such as the base that a claim
     chose (``CHECKOUT_ENV``). The worker moves it, and takes the version from the server first if it lacks it."""
+    history: list[Revision] = []
+    """The campaign's candidates that the job's checkout started without (``Source.history``), such as those of the
+    other workers' runs since. The worker takes those that its clone lacks before the agent reads the answer, so that
+    ``git show`` finds every candidate that a call named."""
 
 
 LOCAL: frozenset[tuple[str, ...]] = frozenset({('agent', 'messages')})

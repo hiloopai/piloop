@@ -14,7 +14,9 @@ Only the commands of the agent's role run (``RoleConfig.RELAYED``), the ones tha
 two in step. The call runs
 in the campaign's checkout on the server, so a command that finds its campaign from the cwd finds it there. A command
 that moves the agent's checkout, such as a claim with a base, writes the revision to ``CHECKOUT_ENV``'s file there
-instead: the worker takes the version from the server and moves the checkout (``Land``).
+instead: the worker takes the version from the server and moves the checkout (``Land``). Each answer names the
+candidates that the agent's checkout started without, and the worker takes them too (``Take``): a call can name any
+candidate, and the agent reads its code with ``git show``.
 
 Retirement: deleted when agents call typed operations over HTTP, if they ever do.
 """
@@ -36,6 +38,7 @@ from covalence import Cid
 from pydantic import ValidationError
 
 from piloop.actor import Agent
+from piloop.campaign.campaigns import candidate_revisions
 from piloop.db.models import AgentSession, Campaign
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, Revision
@@ -84,7 +87,8 @@ class Runner:
     def __call__(self, job: AgentJob, call: Call) -> Relayed:
         with self.db.session() as s:
             w = s.get_one(AgentSession, job.agent_session)
-            role = s.get_one(Campaign, w.campaign_id).config.roles.all().get(w.kind)
+            campaign = s.get_one(Campaign, w.campaign_id)
+            role = campaign.config.roles.all().get(w.kind)
         relayed = role.RELAYED if role is not None else RELAYED
         if verb(call.argv, relayed) is None:
             return refused(call.argv, relayed)
@@ -123,7 +127,12 @@ class Runner:
                     exit_code=124,
                 )
             checkout = Revision(moved.read_text().strip()) if moved.is_file() else None
-        return Relayed(stdout=done.stdout, stderr=done.stderr, exit_code=done.returncode, checkout=checkout)
+        started = {job.artifact.revision, *job.artifact.history}
+        with self.db.session() as s:
+            history = [r for r in candidate_revisions(s, campaign.id) if r not in started]
+        return Relayed(
+            stdout=done.stdout, stderr=done.stderr, exit_code=done.returncode, checkout=checkout, history=history
+        )
 
 
 @dataclass(frozen=True)
@@ -152,6 +161,8 @@ def shipped_commands() -> frozenset[Verb]:
 type Land = Callable[[AgentJob, Revision], None]
 """Move the job's checkout to ``revision``, a version of the repo of record, which the worker's clone takes from the
 server first if it lacks it (``jobs.land``). Raises ``VcsError``."""
+type Take = Callable[[AgentJob, Sequence[Revision]], None]
+"""Take those of the versions of the repo of record that the job's clone lacks from the server (``jobs.take``)."""
 type Run = Callable[[AgentJob, Call], Relayed]
 """Run an agent's relayed call on the server (``Runner``)."""
 type Send = Callable[[int, Call], Relayed]
@@ -165,12 +176,13 @@ class Relay:
     and the worker imports no web framework for it.
     """
 
-    def __init__(self, path: Path, send: Send, ship: Ship, land: Land) -> None:
+    def __init__(self, path: Path, send: Send, ship: Ship, land: Land, take: Take) -> None:
         self.path = path
         """The socket: ``Settings.relay_file``."""
         self._send = send
         self._ship = ship
         self._land = land
+        self._take = take
         self._shipped = shipped_commands()
         self._lock = threading.Lock()
         self._leases: dict[AgentSessionId, tuple[int, AgentJob]] = {}
@@ -217,11 +229,28 @@ class Relay:
             self._server.server_close()
             self.path.unlink(missing_ok=True)
 
+    def took(self, job: AgentJob, relayed: Relayed) -> Relayed:
+        """``relayed``, once the clone took the candidates that it names (``Take``), else with a line that says why not.
+
+        The call ran either way: its exit code stays.
+        """
+        if not relayed.history:
+            return relayed
+        try:
+            self._take(job, relayed.history)
+        except Exception as e:  # a full disk, a lost bundle, the server gone: a fault of the host, not of the call
+            why = (
+                f'piloop: the call ran, but this worker lacks some candidates, and `git show` may not find them: {e}\n'
+            )
+            return relayed.model_copy(update={'stderr': relayed.stderr + why})
+        return relayed
+
     def answer(self, body: bytes) -> tuple[HTTPStatus, Relayed | str]:
         """What a call gets: what the server's run printed, or why there is none.
 
         A command of ``SHIPPED_GROUP`` first sends the version of the agent's checkout that it names through the CAS
-        (``shipped``). A call that moves the agent's checkout (``Relayed.checkout``) moves it after it ran (``Land``).
+        (``shipped``). After the call ran, the clone takes the candidates that the answer names (``Take``), and a call
+        that moves the agent's checkout (``Relayed.checkout``) moves it (``Land``).
         """
         try:
             call = AgentCall.model_validate_json(body)
@@ -247,6 +276,7 @@ class Relay:
         ) as e:  # the answer was lost, so the command may have run: the agent must look before it retries
             stderr = f'piloop: the answer of the server was lost, and the call may have run there: {e}\n'
             return HTTPStatus.OK, Relayed(stderr=stderr, exit_code=1)
+        relayed = self.took(job, relayed)
         if relayed.checkout is None:
             return HTTPStatus.OK, relayed
         try:

@@ -7,7 +7,7 @@ import Sections from '/snippets/generated/sections.mdx';
 import Runtimes from '/snippets/generated/runtimes.mdx';
 import Harnesses from '/snippets/generated/harnesses.mdx';
 
-Each role has a table in `piloop.toml`. This one runs two implementers at a time on two harnesses, for at most 30
+Each role has a table in `piloop.toml`. This one runs ten implementers at a time on two harnesses, for at most 30
 minutes each, and turns the orchestrator on:
 
 ```toml
@@ -19,16 +19,15 @@ model = "gpt-6.1-sol"
 
 [plugins.role.implementer]
 harnesses = ["claude", "codex"]
-max_concurrent = 2
+max_concurrent = 10
 timeout = 1800
 
 [plugins.role.orchestrator]
 triggers = ["news", "run_failed"]
 ```
 
-One implementer at a time is the default. More of them spend more to finish sooner, and are no better per dollar:
-a run often starts from a best that another run has passed by the time it submits. Raise `max_concurrent`
-when the time matters more than the spend.
+Two implementers at a time is the default. More of them find a better best in the same hours, at more cost. Raise
+`max_concurrent` when the result matters more than the spend.
 
 Run `piloop init` after you change it. To ask for one more agent of a role:
 

@@ -3,7 +3,9 @@ and the roles, triggers and runtimes that packages add through entry points."""
 
 import os
 import re
+import warnings
 from collections.abc import Iterator
+from datetime import timedelta
 from importlib.metadata import EntryPoint
 from pathlib import Path
 
@@ -22,8 +24,9 @@ from piloop.config import ConfigError, load_campaign_config
 from piloop.daemon.main import Daemon
 from piloop.daemon.scheduler import Scheduler
 from piloop.db.events import emit, in_order, latest
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
+from piloop.deprecated import PiloopDeprecationWarning
 from piloop.ids import CampaignStatus, CommentKind, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins_module
@@ -64,6 +67,7 @@ from tests.conftest import (
     write_toml,
 )
 from tests.daemon.test_scheduler import add_ideas
+from tests.fixtures.plugin import Ticker
 
 PLUGIN = 'tests.fixtures.plugin'
 ROLE_GROUP, RUNTIME_GROUP = ROLES.group, RUNTIMES.group
@@ -412,6 +416,77 @@ def test_a_package_adds_a_role_that_does_runs(campaign_path: Path, plugins: None
     assert list(cfg.roles.doing_runs()) == ['quick', 'implementer']
     quick = cfg.roles.doing_runs()[RoleName('quick')]
     assert (quick.timeout, quick.max_concurrent) == (60, 1)
+
+
+TICKERS = [
+    EntryPoint('ticker', f'{PLUGIN}:Ticker', ROLE_GROUP),
+    EntryPoint('watchdog', f'{PLUGIN}:Ticker', ROLE_GROUP),
+    EntryPoint('research', f'{PLUGIN}:Ticker', ROLE_GROUP),
+]
+"""A package of roles that start their agents on a timer, two of them under a name that a role of piloop's had
+before 0.6."""
+
+
+@pytest.fixture
+def tickers(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    installed(monkeypatch, TICKERS)
+    Ticker.woken.clear()
+    yield
+    forget_loaded()
+
+
+@pytest.mark.usefixtures('tickers')
+def test_a_package_role_that_starts_its_agents_wakes_on_the_timer_that_its_request_returns(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """``StartsItsAgents``: each pass over the campaign asks the role (``request``), and the time that it returns is
+    the loop's next due. A package's role called ``watchdog`` is its own, and so is any role's ``interval``."""
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', PiloopDeprecationWarning)
+        configure(db, campaign, '#!/bin/sh\ntrue\n', ticker={'interval': 3}, watchdog={'interval': 4})
+    with db.session() as s:
+        starting = s.get_one(Campaign, campaign.id).config.roles.starting()
+        assert {n: r.interval for n, r in starting.items() if isinstance(r, Ticker)} == {
+            'ticker': 3,
+            'watchdog': 4,
+            'research': 60,
+        }
+    sched = scheduler(db, recording(runtime, []), tmp_path)
+    now = utcnow()
+    run_all(sched, now)
+    sched.wait(SETTLE)
+    sched.stop(timeout=5)
+    assert sorted(Ticker.woken) == [('research', now), ('ticker', now), ('watchdog', now)]
+    assert sched.loop.next_due() == now + timedelta(seconds=3)
+
+
+@pytest.fixture
+def tickers_and_yields(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """``TICKERS``, and a section that the package calls ``yields``."""
+    installed(monkeypatch, [*TICKERS, EntryPoint('yields', f'{PLUGIN}:Yields', SECTIONS.group)])
+    yield
+    forget_loaded()
+
+
+@pytest.mark.usefixtures('tickers_and_yields')
+def test_the_0_6_bridges_keep_a_package_s_role_and_section_that_have_the_names_of_removed_ones(
+    campaign_path: Path,
+) -> None:
+    """A bridge drops only what piloop's own removed roles, keys and sections left: never a package's own."""
+    own = {'triggers': ['stalled', 'cron'], 'follow_head': True, 'interval': 5, 'sections': ['goal', 'yields']}
+    plugins = {'role': {'research': own}, 'section': {'use': ['goal', 'yields'], 'yields': {}}}
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', PiloopDeprecationWarning)
+        cfg = load_campaign_config(campaign_path, plugins=plugins)
+    research = cfg.roles.starting()[RoleName('research')]
+    assert isinstance(research, Ticker)
+    assert (research.triggers, research.follow_head, research.interval, research.sections) == (
+        ['stalled', 'cron'],
+        True,
+        5,
+        ['goal', 'yields'],
+    )
+    assert SECTIONS.used(cfg.plugins) == ('goal', 'yields')
 
 
 HARNESS_NICENESS = '#!/bin/sh\nps -o nice= -p $$ | tr -d " " > "$PILOOP_HOME/niceness.txt"\n'

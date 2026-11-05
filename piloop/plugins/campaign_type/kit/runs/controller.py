@@ -1041,7 +1041,7 @@ class RunController:
         failed ``stop_after_tries`` times in a row: then the campaign's measurements pause, and piloop escalates
         (``hold_on_infra_errors``).
         """
-        failures, retry = 0, self._evaluation.infra_retry
+        failures, retry = 0, min(self._evaluation.infra_retry, self._evaluation.infra_retry_max)
         while True:
             match ended := self._request(
                 run_id,
@@ -1091,6 +1091,7 @@ class RunController:
                         give_up=self.launcher.cancelled.is_set,
                         timeout=retry.total_seconds(),
                     )
+                    # double the last wait: ``infra_retry * 2**failures`` overflows ``timedelta`` at the 42nd failure
                     retry = min(retry * 2, self._evaluation.infra_retry_max)
                     if self.launcher.cancelled.is_set():
                         return Measuring.STOPPED

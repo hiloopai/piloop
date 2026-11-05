@@ -189,7 +189,7 @@ class ImplementerRole(RoleConfig):
 
     runs: Literal[True] = True
     """The agents of this role do runs. A table of a new name needs ``runs = true``."""
-    timeout: float = 1800
+    timeout: float = 3600
     """The number of seconds one implementer may run before it is stopped. Its brief states it. A quarter of it before,
     at most ``wrap_up_lead``, the daemon tells the implementer to wrap up."""
     wrap_up_lead: timedelta = Field(default=timedelta(minutes=10), ge=timedelta(0))
@@ -200,10 +200,10 @@ class ImplementerRole(RoleConfig):
     startup_relaunches: int = Field(default=2, ge=0)
     """How many times a run is queued again with a new implementer after its implementer failed to start. Then the run
     fails. A failure at startup is a fault of the host or the harness, not an attempt at an idea."""
-    max_concurrent: int = Field(default=1, ge=1)
+    max_concurrent: int = Field(default=2, ge=1)
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
-    scored after its implementer ended does not count. More of them spend more to finish sooner, not more per dollar:
-    they often work on the same best."""
+    scored after its implementer ended does not count. More of them find a better best in the same hours, at more
+    cost."""
     IDEAS: ClassVar[str] = '- A hunch for another run goes in a note, with its numbers.'
     SURFACE: ClassVar[Surface] = Surface.RUN
     GUIDES: ClassVar[tuple[str, ...]] = ()
