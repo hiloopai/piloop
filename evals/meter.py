@@ -1,12 +1,13 @@
-"""Count the tokens of every Claude Code and Codex session under the given homes, by harness and model.
+"""Count the tokens of every Claude Code, Codex and pi session under the given directories, by harness and model.
 
-It runs inside an arm's sandbox with only the standard library, and writes one JSON object to its last argument:
-``{"claude": {model: tokens}, "codex": {model: tokens}}``, where ``tokens`` has ``input`` (not served by the cache),
-``output``, ``cache_read``, ``cache_write`` and ``turns``. It reads the files the way piloop's harnesses do: a Claude
-response counts once by its ``message.id``, across every file, since a resumed session copies earlier ones; a Codex
-session is its last ``token_count`` total.
+It runs inside an arm's sandbox with only the standard library, and writes one JSON object to its first argument:
+``{harness: {model: tokens}}``, where ``tokens`` has ``input`` (not served by the cache), ``output``, ``cache_read``,
+``cache_write`` and ``turns``. It reads the files the way piloop's harnesses do: a Claude response counts once by its
+``message.id``, across every file, since a resumed session copies earlier ones; a Codex session is its last
+``token_count`` total; a pi message counts once by its session's id and its own, as a session that piloop restores
+copies the earlier ones, under pi's ``<provider>/<model>``.
 
-Usage: ``python3 meter.py <claude projects dir> <codex sessions dir> <out>``.
+Usage: ``python3 meter.py <out> claude=<projects dir> codex=<sessions dir> pi=<sessions dir>``.
 """
 
 import json
@@ -92,10 +93,44 @@ def codex(root: Path) -> dict[str, Tokens]:
     return totals
 
 
-def main(claude_root: Path, codex_root: Path) -> dict[str, dict[str, Tokens]]:
-    """The tokens of both harnesses."""
-    return {'claude': claude(claude_root), 'codex': codex(codex_root)}
+def pi(root: Path) -> dict[str, Tokens]:
+    """The tokens of each distinct assistant message in the pi session files under ``root``, by ``<provider>/<model>``."""
+    totals: dict[str, Tokens] = {}
+    seen: set[tuple[object, object]] = set()
+    for path in sorted(root.rglob('*.jsonl')):
+        session = None
+        for rec in records(path):
+            if rec.get('type') == 'session':
+                session = rec.get('id')
+            message = rec.get('message')
+            if rec.get('type') != 'message' or not isinstance(message, dict) or message.get('role') != 'assistant':
+                continue
+            usage = message.get('usage')
+            if not isinstance(usage, dict) or (session, rec.get('id')) in seen:
+                continue
+            seen.add((session, rec.get('id')))
+            tokens = {
+                'input': usage.get('input') or 0,
+                'output': usage.get('output') or 0,
+                'cache_read': usage.get('cacheRead') or 0,
+                'cache_write': usage.get('cacheWrite') or 0,
+                'turns': 1,
+            }
+            if not any(tokens[k] for k in ('input', 'output', 'cache_read', 'cache_write')):
+                continue  # a request that failed, such as a 529: pi wrote it, no model ran
+            add(totals, f'{message.get("provider") or "unknown"}/{message.get("model") or "unknown"}', tokens)
+    return totals
+
+
+READERS = {'claude': claude, 'codex': codex, 'pi': pi}
+"""How each harness's session files are read."""
+
+
+def main(roots: dict[str, Path]) -> dict[str, dict[str, Tokens]]:
+    """The tokens of each harness, from the session files under its root."""
+    return {harness: READERS[harness](root) for harness, root in roots.items()}
 
 
 if __name__ == '__main__':
-    Path(sys.argv[3]).write_text(json.dumps(main(Path(sys.argv[1]), Path(sys.argv[2]))))
+    pairs = (arg.split('=', 1) for arg in sys.argv[2:])
+    Path(sys.argv[1]).write_text(json.dumps(main({harness: Path(root) for harness, root in pairs})))

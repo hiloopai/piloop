@@ -1,5 +1,6 @@
 """The Modal sandboxes: the image every run and every scoring uses, and running commands in one."""
 
+import json
 import shlex
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -15,7 +16,10 @@ from piloop.plugins.provisioner.kit.deadline import within
 PYTHON = '3.14'
 DEPS = ['numpy==2.3.4', 'scipy==1.16.3', 'uv==0.11.23']
 """What every task repo may import, also in the scorer, which runs without network."""
-AGENTS = ['@openai/codex@0.166.0', '@anthropic-ai/claude-code@2.1.310']
+AGENTS = ['@openai/codex@0.166.0', '@anthropic-ai/claude-code@2.1.310', '@earendil-works/pi-coding-agent@0.99.2']
+PI_MODELS = '/root/.pi/agent/models.json'
+"""pi's own config of its providers, in its home: pi sends each request to its model's ``baseUrl``, and takes no
+variable for it (``ANTHROPIC_BASE_URL`` is ignored, measured with pi 0.99.2)."""
 NODE = '22'
 OPT = '/opt/evals'
 WORK = '/work'
@@ -73,8 +77,25 @@ Step = Run | Env | Pip | Copy
 """One step of an image, in the words of both Modal's and Daytona's image builders."""
 
 
-def recipe(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> list[Step]:
-    """The tasks' data, the dependencies of their repos, both agents, and the arm's piloop, if any."""
+def runs_pi(arm: PiloopArm | PlainArm | None) -> bool:
+    """Whether an agent of ``arm`` runs on pi."""
+    match arm:
+        case PiloopArm(agents=agents):
+            return any(a.harness == 'pi' for a in agents)
+        case PlainArm(agent=agent):
+            return agent.harness == 'pi'
+        case None:
+            return False
+
+
+def recipe(tasks: list[Task], arm: PiloopArm | PlainArm | None, gateway: str = '') -> list[Step]:
+    """The tasks' data, the dependencies of their repos, the agents, and the arm's piloop, if any.
+
+    An arm that runs pi also gets pi's Anthropic provider on ``gateway``.
+
+    Raises:
+        ValueError: The arm runs pi and ``gateway`` is empty: its agents would call Anthropic outside the budget.
+    """
     steps: list[Step] = [
         Run(
             (
@@ -108,6 +129,11 @@ def recipe(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> list[Step]:
             steps.append(Run((f'mkdir -p {here}', *(f'cd {here} && {line}' for line in task.data))))
     if isinstance(arm, PiloopArm):
         steps += [Run((f'uv tool install {shlex.quote(arm.piloop)}',)), Env({'PILOOP_HOME': PILOOP_HOME})]
+    if runs_pi(arm):
+        if not gateway:
+            raise ValueError('an arm that runs pi needs the gateway in its image')
+        models = json.dumps({'providers': {'anthropic': {'baseUrl': gateway}}})
+        steps.append(Run((f'mkdir -p {Path(PI_MODELS).parent} && printf %s {shlex.quote(models)} > {PI_MODELS}',)))
     return [
         *steps,
         Copy(TASKS, f'{OPT}/tasks'),
@@ -119,9 +145,9 @@ def recipe(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> list[Step]:
     ]
 
 
-def image(tasks: list[Task], arm: PiloopArm | PlainArm | None) -> modal.Image:
+def image(tasks: list[Task], arm: PiloopArm | PlainArm | None, gateway: str = '') -> modal.Image:
     """``recipe`` as a Modal image. A copy that build steps follow goes into the image itself (``copy``)."""
-    return modal_image(recipe(tasks, arm))
+    return modal_image(recipe(tasks, arm, gateway))
 
 
 def modal_image(steps: Sequence[Step], *, baked: bool = False) -> modal.Image:

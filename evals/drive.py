@@ -53,8 +53,10 @@ from evals.score import sealed_data
 from evals.telemetry import exported, tracer
 from piloop.config import CampaignConfig
 from piloop.plugins.executor.kit.scaling import OWNER_FILE
-from piloop.plugins.harness.codex import toml
-from piloop.plugins.harness.contract import ModelId, Usage
+from piloop.plugins.harness.claude import Claude
+from piloop.plugins.harness.codex import Codex, toml
+from piloop.plugins.harness.contract import Harness, Usage
+from piloop.plugins.harness.pi import Pi
 from piloop.plugins.price_list.genai_prices import GenaiPrices
 from piloop.plugins.provisioner.modal import OWNER as MODAL_OWNER, POOL as MODAL_POOL
 
@@ -62,8 +64,11 @@ REPO = f'{WORK}/repo'
 SEALED = f'{PILOOP_HOME}/sealed'
 """A campaign's own sealed split: in its home, outside every agent's checkout."""
 OUT = f'{WORK}/out'
-SESSIONS = {'claude': '/root/.claude/projects', 'codex': '/root/.codex/sessions'}
-VENDORS = {'claude': 'anthropic', 'codex': 'openai'}
+HOME = '/root'
+SESSIONS = {'claude': '.claude/projects', 'codex': '.codex/sessions', 'pi': '.pi/agent/sessions'}
+"""Where each harness keeps its session files, under ``HOME``: the meter reads them, the export takes them."""
+HARNESSES: dict[str, Harness] = {'claude': Claude(), 'codex': Codex(), 'pi': Pi()}
+"""piloop's own harnesses, which name the vendor of each model that the meter counts."""
 type Counts = dict[str, dict[str, dict[str, int]]]
 """The meter's tokens: by harness, by model, by kind."""
 CREDENTIALS = f'{PILOOP_HOME}/credentials.env'
@@ -118,6 +123,11 @@ def codex_gateway(settings: Settings) -> dict[str, JsonValue]:
     }
 
 
+PI_ENV = {'PI_OFFLINE': '1'}
+"""Every pi agent: no model catalog from pi.dev or version check at its start, so that a run's models stay those of
+its image, and a sandbox that reaches the gateway alone starts as one that reaches all."""
+
+
 def piloop_config(task: Task, arm: PiloopArm, settings: Settings, hours: float) -> dict[str, JsonValue]:
     """The campaign's ``piloop.toml``: the task's keys, the arm's agents on the gateway, the time cap, the overlay."""
     harness: dict[str, JsonValue] = {'use': [a.harness for a in arm.agents]}
@@ -138,6 +148,12 @@ def piloop_config(task: Task, arm: PiloopArm, settings: Settings, hours: float) 
                         'ANTHROPIC_BASE_URL': settings.gateway,
                         'ANTHROPIC_AUTH_TOKEN': {'secret': 'GATEWAY_TOKEN'},
                     },
+                }
+            case 'pi':  # the gateway's URL is in its image (``sandbox.PI_MODELS``)
+                harness['pi'] = {
+                    'model': agent.model,
+                    'user_config': 'ignore',
+                    'env': {'ANTHROPIC_AUTH_TOKEN': {'secret': 'GATEWAY_TOKEN'}, **PI_ENV},
                 }
     own: dict[str, JsonValue] = {
         'plugins': {'runtime': {'use': 'subprocess'}, 'harness': harness, 'stop_rule': {'max_hours': hours}}
@@ -173,7 +189,7 @@ def price(tokens: Counts) -> float:
                 total=t['input'] + t['output'] + t['cache_read'] + t['cache_write'],
                 turns=t['turns'],
             )
-            cost = prices.usd(ModelId(VENDORS[harness], model), usage)
+            cost = prices.usd(HARNESSES[harness].model_id(model), usage)
             if cost is None:
                 raise ValueError(f'no list price for {harness} model {model!r}')
             usd += cost
@@ -293,6 +309,11 @@ class Plain:
                 flags = ['--model', agent.model, '--effort', self.arm.effort, '--dangerously-skip-permissions']
                 head = shlex.join(['claude', '-p', '--output-format', 'stream-json', '--verbose', *flags])
                 return f'{env} {head} {"--resume " + session if session else "--session-id $session"} {shlex.quote(prompt)}'
+            case 'pi':  # --session-id continues the session once it exists
+                env = ' '.join([*(f'{k}={v}' for k, v in PI_ENV.items()), 'ANTHROPIC_AUTH_TOKEN="$GATEWAY_TOKEN"'])
+                flags = ['--model', agent.model, '--thinking', self.arm.effort, '--approve', '--no-extensions']
+                head = shlex.join(['pi', '-p', '--mode', 'json', *Pi().isolation(), *flags])
+                return f'{env} {head} --session-id {session or "$session"} {shlex.quote(prompt)}'
 
     def script(self, prompt: str) -> str:
         """The first session, then a resume of it each time it ends, until the driver stops the sandbox.
@@ -303,7 +324,7 @@ class Plain:
         match self.arm.agent.harness:
             case 'codex':
                 name = f'session=$(grep -m 1 -o \'"thread_id": *"[^"]*\' {first} | cut -d \'"\' -f 4)'
-            case 'claude':
+            case 'claude' | 'pi':
                 name = 'true'
         return (
             f'cd {REPO} && session=$(cat /proc/sys/kernel/random/uuid)'
@@ -324,7 +345,7 @@ class Plain:
         return None
 
     def stop(self, box: Shell, reason: str) -> None:
-        box.run('pkill -f "[w]hile true; do n=" || true; pkill -f "[c]odex exec|[c]laude -p" || true')
+        box.run('pkill -f "[w]hile true; do n=" || true; pkill -f "[c]odex exec|[c]laude -p|[p]i -p" || true')
 
     def export(self, box: Shell) -> None:
         box.run(f'ls {OUT}/session-*.jsonl | wc -l > {OUT}/sessions')
@@ -382,7 +403,8 @@ def selftest(box: Shell, task: Task, settings: Settings) -> SelfTest:
 
 def meter(box: Shell) -> dict[str, dict[str, dict[str, int]]]:
     """The tokens of the agents' session files in ``box``, by harness and model."""
-    box.run(f'mkdir -p {WORK} && python3 {OPT}/meter.py {SESSIONS["claude"]} {SESSIONS["codex"]} {WORK}/meter.json')
+    roots = ' '.join(f'{harness}={HOME}/{path}' for harness, path in SESSIONS.items())
+    box.run(f'mkdir -p {WORK} && python3 {OPT}/meter.py {WORK}/meter.json {roots}')
     return json.loads(box.read(f'{WORK}/meter.json'))
 
 
@@ -433,7 +455,7 @@ def on_modal(
     r = arm.resources
     box = Box.create(
         settings,
-        image([task], arm),
+        image([task], arm, settings.gateway),
         cpu=r.cpu,
         memory_mb=r.memory_mb,
         hours=hours + 1,
@@ -462,7 +484,7 @@ def agent_box(task: Task, arm: PlainArm, settings: Settings, hours: float, env: 
     """A Modal sandbox of ``AGENT``."""
     return Box.create(
         settings,
-        image([task], arm),
+        image([task], arm, settings.gateway),
         cpu=AGENT.cpu,
         memory_mb=task.memory_limit_mb or AGENT.memory_mb,
         memory_limit_mb=task.memory_limit_mb,
@@ -544,7 +566,7 @@ def on_team(
     the meter and the export find the agents' sandboxes by their provisioner's tags.
     """
     cloud = daytona.client(settings)
-    steps = recipe([task], arm)
+    steps = recipe([task], arm, settings.gateway)
     labels = {'purpose': 'piloop-evals', 'run': name.replace('/', '_')}
     control = daytona.control(cloud, steps, {k: v for k, v in env.items() if k != HEADERS}, labels, hours)
     try:
@@ -771,7 +793,7 @@ def export(fleet: Fleet, run: Piloop | Plain, out: Path) -> list[str]:
     def sessions(box: Shell) -> bytes:
         box.run(
             f'mkdir -p {WORK} && tar czf {WORK}/sessions.tgz --ignore-failed-read'
-            ' -C /root .claude/projects .codex/sessions',
+            f' -C {HOME} {" ".join(SESSIONS.values())}',
             timeout=900,
         )
         return box.read(f'{WORK}/sessions.tgz')
@@ -783,7 +805,7 @@ def export(fleet: Fleet, run: Piloop | Plain, out: Path) -> list[str]:
             control.run(
                 f'git -C {REPO} bundle create {OUT}/repo.bundle --all'
                 f' && tar czf {WORK}/export.tgz --ignore-failed-read -C {WORK} out'
-                ' -C /root .claude/projects .codex/sessions',
+                f' -C {HOME} {" ".join(SESSIONS.values())}',
                 timeout=900,
             )
         return control.read(f'{WORK}/export.tgz')

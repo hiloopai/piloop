@@ -13,16 +13,17 @@ what each hands in on data that no agent saw.
 
 ## How a run works
 
-Every sandbox of a run starts from the same image: the task's repo at the same starting commit, its dev data, both
-agent CLIs, and, for a piloop arm, that arm's piloop with a fresh home. The agents call models through the gateway
-that `EVALS_GATEWAY` names, with `EVALS_GATEWAY_TOKEN`.
+Every sandbox of a run starts from the same image: the task's repo at the same starting commit, its dev data, the agent
+CLIs (Codex, Claude Code and pi), and, for a piloop arm, that arm's piloop with a fresh home. The agents call models
+through the gateway that `EVALS_GATEWAY` names, with `EVALS_GATEWAY_TOKEN`. A pi agent runs an `anthropic/<id>` model,
+and its image points pi's Anthropic provider at the gateway (`models.json`): pi takes no variable for it.
 
 - **piloop arm:** `piloop init` in the repo, with the task's keys, the arm's agents and `max_hours`. An arm with
   `split = "sealed"` also gets the task's dev command as `[evaluator] dev`, and a sealed split of its own as
   `[evaluator] sealed`: `EVALS_SEALED_URI/<task>.campaign/`, in the evaluators' image and no agent's. It is not the
   holdout that scores every arm afterwards. The run ends at the budget, at `max_hours`, or at the campaign's own stop;
   then the daemon gets `EVALS_STOP_GRACE_MINUTES` to score what was committed.
-- **plain arm:** one Codex or Claude Code session, told to keep `main` at its best version. When it ends early, it
+- **plain arm:** one Codex, Claude Code or pi session, told to keep `main` at its best version. When it ends early, it
   is resumed with the same short prompt. It runs in a Modal sandbox of the arm's `resources`, or with
   `EVALS_PLATFORM=daytona` in one of 2 CPUs and a hard 8 GiB, as each agent of a piloop arm.
 

@@ -1,0 +1,23 @@
+# The pool model with piloop's template rotation: 10 workers, each run on the next of pi, Claude Code and Codex
+# (round_robin, the default harness choice), with no cap per harness. No lead.
+kind = "piloop"
+name = "pool-rotation-10w"
+piloop = "piloop[modal,daytona] @ git+https://github.com/hiloopai/piloop@a555c8572a77e394707af16b55584f79a7b39bdf"
+agents = [
+    { harness = "pi", model = "anthropic/claude-opus-5-5" },
+    { harness = "claude", model = "claude-opus-5-5" },
+    { harness = "codex", model = "gpt-6.1-sol" },
+]
+split = "sealed"
+
+[overlay.evaluator]
+scoring = "submit"
+noise_runs = 3
+
+[overlay.plugins.role.orchestrator]
+triggers = []
+
+[overlay.plugins.role.implementer]
+max_concurrent = 10
+timeout = 3600
+effort = "high"

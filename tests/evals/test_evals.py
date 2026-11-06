@@ -83,7 +83,7 @@ from evals.model import (
 )
 from evals.pilot import guard, spent
 from evals.report import plain_bar, write
-from evals.sandbox import WORK, Box, Copy, Egress, Run, Step, memory, network_policy
+from evals.sandbox import PI_MODELS, WORK, Box, Copy, Egress, Run, Step, memory, network_policy, recipe
 from evals.score import Score, Scoring, score
 from evals.team import final_keeps, final_line, notes, races
 from evals.telemetry import exported
@@ -93,6 +93,10 @@ from piloop.db.session import Database
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.harness.contract import ModelId, Usage
+from piloop.plugins.harness_choice.contract import HARNESS_CHOICES
+from piloop.plugins.harness_choice.round_robin import RoundRobin
+from piloop.plugins.price_list.genai_prices import GenaiPrices
 from piloop.settings import Settings as PiloopSettings
 from tests.conftest import baseline
 
@@ -164,7 +168,7 @@ def test_meter_counts_each_response_once(tmp_path: Path):
         total = {'input_tokens': n, 'cached_input_tokens': n // 2, 'output_tokens': n // 10}
         lines.append(count | {'payload': {'type': 'token_count', 'info': {'total_token_usage': total}}})
     (codex / 'rollout.jsonl').write_text('\n'.join(map(json.dumps, lines)))
-    tokens = meter.main(tmp_path / 'claude', tmp_path / 'codex')
+    tokens = meter.main({'claude': tmp_path / 'claude', 'codex': tmp_path / 'codex'})
     assert tokens == {
         'claude': {'claude-opus-5-5': {'input': 10, 'output': 5, 'cache_read': 100, 'cache_write': 1, 'turns': 1}},
         'codex': {'gpt-6-astra': {'input': 150, 'output': 30, 'cache_read': 150, 'cache_write': 0, 'turns': 2}},
@@ -172,6 +176,78 @@ def test_meter_counts_each_response_once(tmp_path: Path):
     assert price(tokens) > 0
     with pytest.raises(ValueError, match='no list price'):
         price({'codex': {'no-such-model': tokens['codex']['gpt-6-astra']}})
+
+
+PI_SESSION = Path(__file__).parent / 'fixtures' / 'pi-session.jsonl'
+PI_TOKENS = {'input': 4, 'output': 920, 'cache_read': 6000, 'cache_write': 8000, 'turns': 2}
+"""What ``PI_SESSION`` spent: its two answers. Its third message is a failed request, which spent nothing."""
+
+
+def test_meter_counts_a_pi_session_once_under_its_provider_and_prices_it_at_opus(tmp_path: Path):
+    for folder in ('--root-.piloop-evals-runs-1-worktree--', '--root-.piloop-evals-runs-2-worktree--'):
+        (tmp_path / folder).mkdir()  # the second: the same session, restored for a resume in another worktree
+        shutil.copy(PI_SESSION, tmp_path / folder / '2026-11-05T12-00-00-000Z_01a0a1b2.jsonl')
+    tokens = meter.main({'pi': tmp_path, 'claude': tmp_path / 'none'})
+    assert tokens == {'pi': {'anthropic/claude-opus-5-5': PI_TOKENS}, 'claude': {}}
+    usage = Usage(input=4, output=920, cache_read=6000, cache_write=8000, total=14924, turns=2)
+    opus = GenaiPrices().usd(ModelId('anthropic', 'claude-opus-5-5'), usage)
+    assert opus is not None and opus > 0 and price(tokens) == pytest.approx(opus)
+    with pytest.raises(ValueError, match='no list price'):
+        price({'pi': {'anthropic/no-such-model': PI_TOKENS}})
+
+
+def test_the_export_takes_a_workers_pi_sessions_and_the_meter_reads_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    home, work = tmp_path / 'home', tmp_path / 'work'
+    session = home / '.pi' / 'agent' / 'sessions' / '--root-.piloop-evals-runs-1-worktree--' / 'a_01a0a1b2.jsonl'
+    session.parent.mkdir(parents=True)
+    shutil.copy(PI_SESSION, session)
+    monkeypatch.setattr('evals.drive.HOME', str(home))
+    monkeypatch.setattr('evals.drive.WORK', str(work))
+    control = FakeBox(METER)
+    worker = LocalBox()
+    team_ = Fleet(control=control, agents=lambda: {'sb-w': worker}, usd_per_hour=0, ids=['a'], close=control.close)
+    assert export(team_, plain_run(Settings()), tmp_path / 'run') == []
+    exported = tmp_path / 'run' / 'export' / 'workers' / 'sb-w'
+    assert (exported / session.relative_to(home)).read_bytes() == PI_SESSION.read_bytes()
+    assert meter.main({'pi': exported / '.pi' / 'agent' / 'sessions'}) == {
+        'pi': {'anthropic/claude-opus-5-5': PI_TOKENS}
+    }
+
+
+def test_the_rotation_arm_runs_pi_claude_and_codex_in_turn_with_no_cap_per_harness_all_on_the_gateway():
+    arm = load_arm('pool-rotation-10w')
+    assert isinstance(arm, PiloopArm)
+    settings = Settings(gateway='https://gw.example', gateway_token=SecretStr('t'))
+    config = piloop_config(Task.load('t5-lpaq'), arm, settings, 6)
+    harness = get(config, 'plugins', 'harness')
+    assert isinstance(harness, dict) and harness['use'] == ['pi', 'claude', 'codex']
+    assert get(harness, 'pi', 'model') == 'anthropic/claude-opus-5-5'
+    assert get(harness, 'pi', 'env', 'ANTHROPIC_AUTH_TOKEN') == {'secret': 'GATEWAY_TOKEN'}
+    loaded = CampaignConfig.model_validate(config)
+    assert loaded.run_slots == 10
+    assert isinstance(HARNESS_CHOICES.selected(loaded.plugins), RoundRobin)
+    assert loaded.harnesses == ['pi', 'claude', 'codex'] and loaded.harness_caps == {}
+    models = [line for step in recipe([Task.load('t5-lpaq')], arm, settings.gateway) if isinstance(step, Run)
+              for line in step.lines if PI_MODELS in line]  # fmt: skip
+    assert models and '{"providers": {"anthropic": {"baseUrl": "https://gw.example"}}}' in models[0]
+    with pytest.raises(ValueError, match='gateway'):
+        recipe([Task.load('t5-lpaq')], arm)
+
+
+def test_a_pi_agent_runs_only_an_anthropic_model_which_the_gateway_serves():
+    assert Agent(harness='pi', model='anthropic/claude-opus-5-5').model == 'anthropic/claude-opus-5-5'
+    with pytest.raises(ValueError, match='through the gateway'):
+        Agent(harness='pi', model='openai/gpt-6.1-sol')
+
+
+def test_a_plain_pi_session_continues_by_its_own_id_on_the_gateway():
+    arm = PlainArm(kind='plain', name='p', agent=Agent(harness='pi', model='anthropic/claude-opus-5-5'),
+                   resources=Resources(cpu=1, memory_mb=512))  # fmt: skip
+    script = Plain(Task.load('t5-lpaq'), arm, Settings(), 4).script('go')
+    assert script.count('--session-id $session') == 2 and 'ANTHROPIC_AUTH_TOKEN="$GATEWAY_TOKEN"' in script
+    assert '--no-extensions' in script and '--thinking high' in script
 
 
 def get(value: JsonValue, *keys: str) -> JsonValue:
@@ -253,6 +329,16 @@ class FakeBox:
 
     def close(self) -> None:
         self.closed = True
+
+
+class LocalBox(FakeBox):
+    """A sandbox that is this machine: each command runs in a shell here, and each read reads a file here."""
+
+    def run(self, script: str, timeout: float | None = None) -> str:
+        return subprocess.run(['bash', '-c', script], check=True, capture_output=True, text=True, timeout=60).stdout
+
+    def read(self, path: str) -> bytes:
+        return Path(path).read_bytes()
 
 
 def fleet(box: FakeBox, usd_per_hour: float = 0) -> Fleet:

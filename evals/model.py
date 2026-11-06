@@ -96,8 +96,16 @@ class Task(Frozen):
 class Agent(Frozen):
     """One coding agent's harness and model."""
 
-    harness: Literal['codex', 'claude']
+    harness: Literal['codex', 'claude', 'pi']
     model: str
+    """The harness's own name of the model. pi's is ``anthropic/<id>``: the gateway serves pi's Anthropic provider."""
+
+    @model_validator(mode='after')
+    def _on_the_gateway(self) -> Agent:
+        """A pi model of another provider would bypass the gateway, and the budget with it."""
+        if self.harness == 'pi' and not self.model.startswith('anthropic/'):
+            raise ValueError(f'pi model {self.model!r}: only anthropic/<id> goes through the gateway')
+        return self
 
 
 class Resources(Frozen):
