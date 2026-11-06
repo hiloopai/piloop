@@ -1,0 +1,41 @@
+name = "t9-piloop-bugs"
+metric = "passed"
+direction = "higher"
+dev = ["python3", "evaluate.py"]
+dev_base = 2606                           # tests that pass in the starting repo, but for SANDBOX_FAILS
+dev_ref = 2623                            # with the reference fixes and their tests: 17 tests more
+score_repeats = 1                         # the tests are deterministic: one scoring per version
+solve = 1.0                               # solvable: every held-out test of every open report passes, the suite green
+network = "gateway"                       # the fixes of the closed bugs are public upstream: agents reach the gateway alone
+private = true                            # <sealed_uri>/t9-piloop-bugs.private/: piloop with the bugs, in no repository
+data = [
+    # piloop's locked dependencies at the pin, into a uv cache at a path of its own, which every checkout's venv
+    # installs from offline (repo/uv.toml); uv's default cache, under $HOME, was missing on Modal's and Daytona's boxes.
+    # Modal's image builder sets UV_NO_CACHE=true, which makes uv write to a temporary cache whatever --cache-dir says,
+    # and UV_INDEX_URL to its own mirror, under whose name the build backend (hatchling) would be cached.
+    # Then the checkout goes, so the image holds no copy of the code without the bugs
+    "git init -q src && git -C src fetch -q --depth 1 https://github.com/hiloopai/piloop c5100cbed2bc9235a3ac37eeb25f63fc485ede49 && cd src && git checkout -q FETCH_HEAD && env -u UV_NO_CACHE -u UV_INDEX_URL uv sync --frozen -q --cache-dir /opt/uv-cache",
+    # the pin's files that sealed storage cannot hold, an executable or a symlink: none has a bug
+    "git -C src archive FETCH_HEAD install.sh tests/fixtures/fake_bin.py tests/fixtures/store_0_2_0/tree/idea1/link tests/fixtures/store_0_2_0/tree/idea1/run.sh | tar x && rm -rf src",
+]
+
+scorer = "modal"                          # a scoring runs the suite twice, dev then guard: ~13 min on Modal's 2 CPUs, and a
+                                          # Daytona evaluator has 1
+
+[piloop]
+name = "t9-piloop-bugs"
+# A pool ranks on the primary of `evaluate`: the campaign's split (rank.py), as the suite would tie every correct
+# candidate with the baseline. It runs on the evaluators, which hold the split at evals.drive.SEALED, so the task needs
+# an arm with `split = "sealed"`. The implementers' own loop is the task's dev command, the suite.
+evaluate = ["python3", "/opt/evals/tasks/t9-piloop-bugs/rank.py", "/root/.piloop-evals/sealed"]
+evaluate_timeout = 2400                   # also the driver's for the dev command, the suite: 6 to 15 min on 2 CPUs
+
+[[piloop.metrics]]
+name = "fixed"
+direction = "higher"
+role = "primary"
+
+[[piloop.metrics]]
+name = "seconds"
+direction = "lower"
+role = "watch"

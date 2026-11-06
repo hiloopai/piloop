@@ -1,0 +1,5 @@
+# The network reaches the model gateway alone: uv installs the locked dependencies from the cache in the image, and a
+# venv links to the cache's files rather than copying them, which takes a second rather than half a minute.
+offline = true
+cache-dir = "/opt/uv-cache"
+link-mode = "symlink"

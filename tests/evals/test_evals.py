@@ -1,3 +1,4 @@
+import ast
 import gzip
 import importlib.util
 import itertools
@@ -83,7 +84,7 @@ from evals.model import (
 )
 from evals.pilot import guard, spent
 from evals.report import plain_bar, write
-from evals.sandbox import PI_MODELS, WORK, Box, Copy, Egress, Run, Step, memory, network_policy, recipe
+from evals.sandbox import OPT, PI_MODELS, WORK, Box, Copy, Egress, Run, Step, memory, network_policy, recipe
 from evals.score import Score, Scoring, score
 from evals.team import final_keeps, final_line, notes, races
 from evals.telemetry import exported
@@ -1192,12 +1193,37 @@ def test_each_task_names_its_scorer_and_daytona_refuses_a_task_that_needs_a_gpu_
         't6-optcomp': 'modal',
         't7-semantics': 'modal',
         't8-lean-foundations': 'modal',
+        't9-piloop-bugs': 'modal',
     }
     t5 = Task.load('t5-lpaq').model_dump()
     for need in ({'gpu': 'L4'}, {'memory_limit_mb': 12288}):
         with pytest.raises(ValueError, match='daytona'):
             Task.model_validate(t5 | need)
     assert Task.model_validate(t5 | {'memory_limit_mb': 8192}).scorer == 'daytona'
+
+
+def printed_metrics(script: Path) -> set[str]:
+    """The names of the metrics that ``script`` writes, read from its source: its ``metrics`` dicts."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(script.read_text())):
+        match node:
+            case ast.AnnAssign(target=ast.Name(id='metrics'), value=ast.Dict(keys=keys)):
+                found |= {k.value for k in keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+            case ast.Dict(keys=[ast.Constant(value='metrics')], values=[ast.Dict(keys=keys)]):
+                found |= {k.value for k in keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+    return found
+
+
+def test_piloop_bugs_ranks_a_pool_on_its_campaign_split_and_declares_what_each_evaluator_prints():
+    """piloop refuses a result that names an undeclared metric. Both evaluators run piloop's tests, so they are read."""
+    from evals.drive import SEALED
+
+    task = Task.load('t9-piloop-bugs')
+    here = TASKS / 't9-piloop-bugs'
+    assert task.piloop['evaluate'] == ['python3', f'{OPT}/tasks/t9-piloop-bugs/rank.py', SEALED]
+    declared = tomllib.loads((here / 'task.toml').read_text())['piloop']['metrics']
+    assert printed_metrics(here / 'rank.py') == {m['name'] for m in declared} == {'fixed', 'seconds'}
+    assert task.metric in printed_metrics(here / 'repo' / 'evaluate.py') == {'passed', 'failed', 'seconds'}
 
 
 def test_a_solved_task_leads_with_the_time_dollars_and_tokens_to_solve():
