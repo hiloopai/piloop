@@ -1189,6 +1189,34 @@ def test_a_sandbox_call_that_hangs_fails_rather_than_holding_the_driver(
     hung.released.set()
 
 
+def test_a_control_probe_that_stalls_while_a_sample_is_tried_again_is_not_fatal(tmp_path: Path):
+    class Stalling(FakeBox):
+        def ended(self) -> bool:
+            raise TimeoutError('Box.ended did not answer in 60 s')
+
+    settings = Settings(poll_seconds=0)
+    box = Stalling(METER, fail=('meter.py',), fail_once=True)
+    assert (
+        watch(fleet(box), plain_run(settings), 100, 0, settings, tmp_path / 'spend.jsonl', time.monotonic()) == 'hours'
+    ), 'the next attempt samples'
+
+
+def test_a_run_end_probe_that_stalls_is_asked_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    settings = Settings(poll_seconds=0)
+    run = plain_run(settings)
+    answers = iter([TimeoutError('Box.run did not answer in 960 s'), 'the sessions ended: boom'])
+
+    def stalling(box: object) -> str | None:
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(run, 'ended', stalling)
+    stopped = watch(fleet(FakeBox(METER)), run, 100, 6, settings, tmp_path / 'spend.jsonl', time.monotonic())
+    assert stopped == 'the sessions ended: boom'
+
+
 def test_a_spend_sample_that_times_out_is_tried_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     settings = Settings(poll_seconds=0)
     box = FakeBox(METER)

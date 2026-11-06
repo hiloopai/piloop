@@ -800,6 +800,19 @@ def export(fleet: Fleet, run: Piloop | Plain, out: Path) -> list[str]:
     return failed
 
 
+def probed[T](probe: Callable[[], T], unknown: T, span: trace.Span) -> T:
+    """``probe()``, or ``unknown`` when it fails or stalls (a Modal call that hangs), recorded on ``span``.
+
+    A status probe is asked again at the next sample: only a spend sample that fails ``sample_attempts`` times stops a
+    run.
+    """
+    try:
+        return probe()
+    except (ConnectionError, RuntimeError, TimeoutError) as e:
+        span.add_event('evals.probe_failed', {'error': str(e)[:300]})
+        return unknown
+
+
 def watch(
     fleet: Fleet,
     run: Piloop | Plain,
@@ -830,7 +843,7 @@ def watch(
                     except (ConnectionError, RuntimeError, TimeoutError) as e:
                         span.add_event('evals.sample_retry', {'attempt': attempt, 'error': str(e)})
                         failed = e
-                        if fleet.control.ended():
+                        if probed(fleet.control.ended, False, span):
                             break
                         time.sleep(settings.poll_seconds / 4)
                     else:
@@ -853,7 +866,8 @@ def watch(
             elif now.hours >= hours:
                 stopped = 'hours'
             else:
-                stopped = run.ended(fleet.control) or ''
+                with tracer.start_as_current_span('evals.ended') as span:
+                    stopped = probed(lambda: run.ended(fleet.control), None, span) or ''
                 time.sleep(0 if stopped else settings.poll_seconds)
         with tracer.start_as_current_span('evals.stop', attributes={'reason': stopped}):
             run.stop(fleet.control, stopped)
