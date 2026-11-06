@@ -18,8 +18,8 @@ from functools import partial
 from typing import ClassVar, Literal, assert_never
 
 from pydantic import ValidationError
-from sqlalchemy import delete, select
-from sqlalchemy.orm import Session
+from sqlalchemy import delete, exists, select
+from sqlalchemy.orm import Session, aliased
 
 from piloop.actor import System
 from piloop.agents.results import (
@@ -98,6 +98,7 @@ from piloop.plugins.runtime.contract import handle_for, runtime_for
 from piloop.plugins.stop_rule.contract import GO, Go, Hold, Stop
 
 AGENT_SESSIONS = 'agent_sessions'
+BREAKER_HOLDS = 'relaunch not queued: the startup breaker holds the launches of its campaign'
 """The directory under the home of the place of each agent without a run: ``agent_sessions/<id>``."""
 EventModel.retire('agent_session.jobs_left')  # 0.2.0 listed the jobs of an idle implementer; its finding ends it now
 
@@ -528,10 +529,11 @@ class Campaigns:
         (``RunEnd.ROLE_REMOVED``), so that its idea goes back to the queue.
 
         Returns ``(agent_session_id, run_id)`` pairs. The run is what an implementer executes. Nothing is taken while the startup
-        breaker holds (``_paused``).
+        breaker holds (``_paused``), and a relaunch does not wait for it (``_end_relaunches``).
         """
         taken: list[tuple[AgentSessionId, RunId | None]] = []
         if (resumes := self._paused(s, campaign, now)) is not None:
+            self._end_relaunches(s, campaign)
             self._soonest.add(resumes)
             return taken
         all_roles = cfg.roles.all()
@@ -587,13 +589,37 @@ class Campaigns:
                 full = full_harnesses(s, campaign, cfg)
         return taken
 
+    def _end_relaunches(self, s: Session, campaign: Campaign) -> None:
+        """Close each requested relaunch of the campaign, and end its run ``not_started``: it frees its slot.
+
+        A relaunch is a requested row whose subject had an agent that never worked. While the breaker holds, it would
+        wait out the window with its run open, and keep the slot of a run that no agent of works on.
+        """
+        died = aliased(AgentSession)
+        before = exists().where(
+            died.subject_kind == AgentSession.subject_kind,
+            died.subject_id == AgentSession.subject_id,
+            died.state == AgentSessionState.NEVER_WORKED,
+            died.id < AgentSession.id,
+        )
+        relaunches = select(AgentSession).where(
+            AgentSession.campaign_id == campaign.id,
+            AgentSession.state == AgentSessionState.REQUESTED,
+            AgentSession.subject_kind.is_not(None),
+            before,
+        )
+        for agent_session in s.scalars(relaunches.order_by(AgentSession.id)).all():
+            close(s, agent_session, BREAKER_HOLDS, self._tracer)
+            self._planner(campaign).ended(s, agent_session, RunEnd.NOT_STARTED)
+
     def _paused(self, s: Session, campaign: Campaign, now: datetime) -> datetime | None:
         """Return when launches resume if ``startup_breaker`` agents failed at startup in ``startup_window``, else None.
 
         Requested rows wait, and launch when those failures are older than the window. The window is the back-off.
         Each pause posts one escalation (priority 1) with the load average and the failures' errors, which end with
         the agents' last screens. The escalation is updated in place while the pause holds, so an acknowledgement
-        means that the human saw it. A new escalation is posted only after launches resume and pause again.
+        means that the human saw it. When launches resume, the daemon acknowledges it, as nothing waits on it then. A
+        new escalation is posted only after launches resume and pause again.
         """
         agent_sessions = select(AgentSession.id).where(AgentSession.campaign_id == campaign.id)
         deaths = in_order(
@@ -614,6 +640,8 @@ class Campaigns:
         if len(deaths) < self._launch_policy.startup_breaker:
             if pause is not None:
                 emit(s, LaunchResumed(comment=pause.comment), on_campaign, System.DAEMON)
+                if (escalation := s.get(Comment, pause.comment)) is not None and escalation.acked_at is None:
+                    escalation.acked_at, escalation.acked_by = now, System.DAEMON.signature  # nothing waits on it
             return None
         escalation = s.get(Comment, pause.comment) if pause is not None else None
         if pause is None or escalation is None:

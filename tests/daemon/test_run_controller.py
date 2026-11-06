@@ -34,7 +34,7 @@ from piloop.agents.results import (
     never_worked,
 )
 from piloop.agents.roles import PILOOP_HINT, read_brief
-from piloop.campaign import stop
+from piloop.campaign import ops, stop
 from piloop.campaign.campaigns import sync
 from piloop.cli.plugins import selections
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
@@ -1108,7 +1108,10 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
             run = s.get_one(Run, run_id)
             assert (run.status, run.finished_at, idea_of(run).status) == (RunStatus.QUEUED, None, IdeaStatus.CLAIMED)
             rows = s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id)).all()
-            assert [w.state for w in rows] == [*[AgentSessionState.EXITED] * launches, AgentSessionState.REQUESTED]
+            assert [w.state for w in rows] == [
+                *[AgentSessionState.NEVER_WORKED] * launches,
+                AgentSessionState.REQUESTED,
+            ]
             assert (rows[-1].harness, rows[-1].model) == ('script', 'test-model')
             assert rows[-1].reason == f'run#{run_id} relaunched: implementer#{rows[-2].id} failed to start', 'its role'
             assert runs_stop.runs(s, run.campaign) == 1
@@ -1137,6 +1140,46 @@ def test_an_implementer_that_never_got_going_is_relaunched_on_its_run_then_the_r
         assert s.get_one(Idea, claimed_id(run_row(db, retried))).status is IdeaStatus.OPEN
 
 
+@pytest.mark.parametrize('held', ['lead', 'paused', 'stopped'])
+def test_a_run_whose_implementer_never_worked_ends_at_once_when_its_campaign_would_not_launch_it_now(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, held: str
+) -> None:
+    """#736: a relaunch that cannot start now would wait with its run open, and keep its slot.
+
+    Within the wrap-up lead, its implementer would be told to wrap up as it starts. While the campaign is paused, it
+    would wait for the resume, and once it stopped, nothing launches it. The run ends ``not_started`` instead: no attempt, and its idea goes back to the board.
+    """
+    write_toml(Path(campaign.path), '#!/bin/sh\necho Welcome\n', implementer_timeout=3600)
+    reload_campaign(db, campaign)
+    if held == 'lead':
+        set_config(db, campaign, plugins={'stop_rule': {'max_hours': 1}})
+        first = make_run(db, campaign, title='first')
+        with db.session() as s:
+            run = s.get_one(Run, first)
+            run.started_at = utcnow() - timedelta(seconds=3600 - 60)  # max_hours counts from it: 60 s left
+            close_run(s, run, RunEnd.FINISHED, None)
+            s.commit()
+    run_id = make_run(db, campaign)
+    with db.session() as s:
+        if held == 'paused':
+            ops.pause(s, campaign.id, evals=False, reason='a person reads the results')
+        if held == 'stopped':  # the stop's wind-down ends a run in flight: this one died before it
+            row = s.get_one(Campaign, campaign.id)
+            row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by hand'
+        s.commit()
+    execute(controller(db, runtime, tmp_path), db, run_id)
+    with db.session() as s:
+        run = s.get_one(Run, run_id)
+        rows = s.scalars(select(AgentSession).where(working_on(run_id))).all()
+        assert (run.status, run.end, [w.state for w in rows]) == (
+            RunStatus.FAILED,
+            RunEnd.NOT_STARTED,
+            [AgentSessionState.NEVER_WORKED],
+        )
+        assert in_order(s, RunRelaunched) == []
+        assert idea_of(run).status is IdeaStatus.OPEN
+
+
 def test_a_worktree_that_cannot_be_made_is_a_failed_start_that_frees_the_slot(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
@@ -1149,7 +1192,7 @@ def test_a_worktree_that_cannot_be_made_is_a_failed_start_that_frees_the_slot(
         execute(ex, db, run_id)
     with db.session() as s:
         rows = s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id)).all()
-        assert [w.state for w in rows] == [AgentSessionState.KILLED] * 3
+        assert [w.state for w in rows] == [AgentSessionState.NEVER_WORKED] * 3
         assert all('Could not write new index file' in (w.error or '') for w in rows)
         assert s.scalars(select(Event.target_id).where(has(StartupAnomaly))).all() == [w.id for w in rows]
         run = s.get_one(Run, run_id)
@@ -1199,7 +1242,7 @@ def test_an_implementer_that_spends_tokens_but_ends_at_once_with_nothing_did_not
     with db.session() as s:
         dead, relaunched = s.scalars(select(AgentSession).where(working_on(run_id)).order_by(AgentSession.id)).all()
         assert (dead.state, dead.usage.total if dead.usage else None, relaunched.state) == (
-            AgentSessionState.EXITED,
+            AgentSessionState.NEVER_WORKED,
             16478,
             AgentSessionState.REQUESTED,
         )
@@ -1235,7 +1278,7 @@ def test_a_cancel_made_while_the_implementer_starts_survives_a_failed_start(
         run = s.get_one(Run, run_id)
         assert (run.status, run.end, idea_of(run).status) == (RunStatus.FAILED, RunEnd.CANCELLED, IdeaStatus.OPEN)
         assert [w.state for w in s.scalars(select(AgentSession).where(working_on(run_id)))] == [
-            AgentSessionState.KILLED
+            AgentSessionState.NEVER_WORKED
         ]
         assert s.scalars(select(Event).where(Event.kind == 'run.relaunched')).all() == []
 

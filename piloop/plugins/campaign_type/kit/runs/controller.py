@@ -59,7 +59,16 @@ from piloop.db.models import (
     utcnow,
 )
 from piloop.db.session import Database, write_transaction
-from piloop.ids import AgentSessionId, CampaignId, CommentKind, Revision, RoleName, TargetKind, TargetRef
+from piloop.ids import (
+    AgentSessionId,
+    CampaignId,
+    CampaignStatus,
+    CommentKind,
+    Revision,
+    RoleName,
+    TargetKind,
+    TargetRef,
+)
 from piloop.net.tokens import Tokens
 from piloop.otel import Span, Tracer
 from piloop.plugins import limits
@@ -619,7 +628,8 @@ class RunController:
         The run stays open, so it keeps its slot, attempt number and brief. The ``implementer#<id>`` in the brief becomes the
         new implementer's id. The new implementer signs its notes with its own id. The scheduler launches the new agent session row like any other. The old implementer's transcript is
         renamed so that the new one does not overwrite it. A request made while the daemon stops waits for the next
-        daemon, as every request does. A cancelled run (``run_cancel``) is not queued again.
+        daemon, as every request does. A cancelled run (``run_cancel``) is not queued again, and neither is a run that
+        its campaign would not launch now (``unlaunchable``): it ends at once and frees its slot, rather than wait.
         """
         with self.launcher.lock:
             with self._db.session() as s:
@@ -627,6 +637,9 @@ class RunController:
                 role = run.campaign.config.roles.doing_runs().get(run.role)
                 launches = s.scalar(select(func.count()).select_from(AgentSession).where(working_on(run_id))) or 0
                 if role is None or launches > role.startup_relaunches or run_cancel(s, run_id) is not None:
+                    return False
+                if (why := unlaunchable(s, run.campaign, role.timeout, role.wrap_up_lead)) is not None:
+                    span.set(relaunch=why)
                     return False
                 run.status = RunStatus.QUEUED
                 agent_session = AgentSession(
@@ -1308,6 +1321,21 @@ def _last_measurement(s: Session, candidate_id: CandidateId, evaluator_id: Evalu
 def wrap_up_lead(timeout: float, most: timedelta) -> float:
     """How many seconds before its role ``timeout`` an implementer is told to wrap up: a quarter, at most ``most``."""
     return min(most.total_seconds(), timeout / 4)
+
+
+def unlaunchable(s: Session, campaign: Campaign, timeout: float, most: timedelta) -> str | None:
+    """Why ``campaign`` would not launch an implementer of role ``timeout`` and lead ``most`` now, or None.
+
+    It is not active, it is paused, or its stop rule ends the session within its wrap-up lead (``wrap_up_lead``): the
+    implementer would be told to wrap up as it starts.
+    """
+    if campaign.status is not CampaignStatus.ACTIVE:
+        return f'the campaign is {campaign.status}'
+    if campaign.paused is not None:
+        return f'the campaign is paused: {campaign.paused_reason}'
+    if seconds(agent_timeout(s, campaign, campaign.config, timeout, utcnow())) <= wrap_up_lead(timeout, most):
+        return 'its session would end within its wrap-up lead'
+    return None
 
 
 @dataclass(frozen=True)

@@ -149,10 +149,10 @@ class Launcher:
         return ended or DaemonStopped()
 
     def _fail(self, agent_session_id: AgentSessionId, error: str) -> None:
-        """Close a row whose job could not be described or submitted: no executor has it."""
+        """Close a row whose job could not be described or submitted: no executor has it, so it never worked."""
         with self.db.session() as s:
             w = s.get_one(AgentSession, agent_session_id)
-            w.state, w.ended_at, w.error = AgentSessionState.KILLED, utcnow(), error
+            w.state, w.ended_at, w.error = AgentSessionState.NEVER_WORKED, utcnow(), error
             session_finished(s, w)
             s.commit()
 
@@ -307,7 +307,7 @@ def _failed_resume(s: Session, w: AgentSession) -> SessionNotResumed | None:
     if started is None or started[1].resumes is None or latest(s, SessionNotResumed, on) is not None:
         return None
     match w.state, w.error:
-        case (AgentSessionState.KILLED, _) | (AgentSessionState.EXITED, str()):
+        case (AgentSessionState.KILLED | AgentSessionState.NEVER_WORKED, _) | (AgentSessionState.EXITED, str()):
             detail = f'agent_session#{w.id} resumed a session and ended {w.state}'
             return SessionNotResumed(reason=Unresumed.FAILED, detail=detail)
         case _:

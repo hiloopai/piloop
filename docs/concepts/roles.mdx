@@ -206,6 +206,7 @@ When an agent ends, piloop ends every process that it started, such as a build s
 | `starting`, `running` | Its process starts, then works. |
 | `ending` | A stop, a cancel or its run's end ends it. piloop refuses its `piloop run end` from now on. |
 | `exited`, `killed` | It ended by itself, or piloop ended it. |
+| `never_worked` | It did not start to work: its job did not start, or it ended within `startup_seconds` and left nothing. `error` says why. |
 
 ## Sessions
 

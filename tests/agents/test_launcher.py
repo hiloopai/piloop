@@ -537,7 +537,9 @@ def test_an_agent_that_ends_early_with_exit_0_and_nothing_done_says_its_last_out
     ended = launch(db, runtime, tmp_path, agent_session_id, agents=AgentSettings(exit_output_chars=200))
     said = f'{NEVER}: starting | error: helper binary not found at [secret TEAM_KEY]'
     assert [a.error for _, a in anomalies(db)] == [said], 'what the escalation of a pause lists'
-    assert (ended, agent_session(db, agent_session_id).error) == (NotStarted(said), None), 'the agent itself exited 0'
+    assert (ended, agent_session(db, agent_session_id).error) == (NotStarted(said), said), (
+        'it exited 0: the row says why'
+    )
 
 
 def test_an_agent_that_works_and_exits_0_has_no_error(
@@ -580,13 +582,13 @@ def test_runtime_failure_is_isolated(
     w = agent_session(db, agent_session_id)
     assert (outcome, w.state, w.handle, w.error) == (
         NotStarted('RuntimeError: no server'),
-        AgentSessionState.KILLED,
+        AgentSessionState.NEVER_WORKED,
         {},
         'RuntimeError: no server',
     )
     [job] = [span for span in spans.get_finished_spans() if span.name == 'piloop.job']
     assert job.status.status_code is StatusCode.ERROR, "the worker's span has the error"
-    assert span_attributes(spans, 'piloop.agent', agent_session_id)['state'] == 'killed'
+    assert span_attributes(spans, 'piloop.agent', agent_session_id)['state'] == 'never_worked'
     with db.session() as s:
         [(_, finished)] = in_order(s, AgentSessionFinished)
     assert (finished.role, finished.error) == (LEAD, 'RuntimeError: no server')
@@ -613,7 +615,7 @@ def test_an_agent_that_never_got_going_is_an_anomaly(
     mocker.patch.object(runtime, 'start', side_effect=RuntimeError('no such harness'))
     dialog = request(db, campaign)
     outcome = launch(db, runtime, tmp_path, dialog)
-    assert (isinstance(outcome, NotStarted), agent_session(db, dialog).state) == (True, AgentSessionState.KILLED)
+    assert (isinstance(outcome, NotStarted), agent_session(db, dialog).state) == (True, AgentSessionState.NEVER_WORKED)
     [(on, anomaly)] = anomalies(db)
     assert (on, anomaly.model_dump(exclude={'kind'})) == (
         dialog,
@@ -632,7 +634,7 @@ def test_an_agent_that_never_got_going_is_an_anomaly(
     use_harness(db, campaign, HARNESS_PROMPT_TO_FILE, **counted)
     idle_at_once = request(db, campaign)
     outcome = launch(db, runtime, tmp_path, idle_at_once)
-    assert (outcome, agent_session(db, idle_at_once).state) == (NotStarted(NEVER), AgentSessionState.EXITED)
+    assert (outcome, agent_session(db, idle_at_once).state) == (NotStarted(NEVER), AgentSessionState.NEVER_WORKED)
     assert [w for w, _ in anomalies(db)] == [dialog, idle_at_once], 'ended within a minute without a token'
 
     worked = AgentSettings(startup_seconds=0)
@@ -647,10 +649,14 @@ def test_an_agent_that_never_got_going_is_an_anomaly(
     assert len(anomalies(db)) == 2
 
 
-def test_an_agent_told_to_wrap_up_that_stops_with_nothing_is_not_a_failed_start(
+def test_an_agent_told_to_wrap_up_that_stops_with_nothing_never_worked_and_is_no_startup_anomaly(
     campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A cancel or a stop with the wrap-up prompt: the agent stopped because it was told to, not at startup."""
+    """A cancel, a stop or the end of its time with the wrap-up prompt, as it starts: it left nothing, so it never
+    worked, and its run is no attempt. It stopped because it was told to, so the startup breaker does not count it.
+
+    #736: an implementer that started with seconds left was told to wrap up at once, and its run ended ``gave_up``.
+    """
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     counted = {'headless': ['--session-id', '{session_id}', '{prompt}'], **READS_PI}
     use_harness(db, campaign, HARNESS_PROMPT_TO_FILE, **counted)
@@ -659,9 +665,9 @@ def test_an_agent_told_to_wrap_up_that_stops_with_nothing_is_not_a_failed_start(
         emit(s, WrapUp(reason='cancelled'), TargetRef(TargetKind.AGENT_SESSION, told), System.DAEMON)
         s.commit()
     outcome = launch(db, runtime, tmp_path, told)
-    assert (isinstance(outcome, NotStarted), agent_session(db, told).state, anomalies(db)) == (
-        False,
-        AgentSessionState.EXITED,
+    assert (outcome, agent_session(db, told).state, anomalies(db)) == (
+        NotStarted(NEVER),
+        AgentSessionState.NEVER_WORKED,
         [],
     )
 
@@ -682,7 +688,7 @@ def test_a_cwd_that_cannot_be_made_is_a_failed_start(
     w = agent_session(db, agent_session_id)
     assert (isinstance(outcome, NotStarted), w.state, w.error) == (
         True,
-        AgentSessionState.KILLED,
+        AgentSessionState.NEVER_WORKED,
         'OSError: [Errno 28] No space left on device',
     )
     assert [target for target, _ in anomalies(db)] == [agent_session_id] and not start.called
@@ -853,8 +859,8 @@ def test_the_agents_session_file_goes_into_the_cas_and_its_usage_is_summed_from_
     silent = request(db, campaign)
     launch(db, runtime, tmp_path, silent, tracer)
     w = agent_session(db, silent)
-    assert (w.state, w.error, w.usage, w.session_file) == (AgentSessionState.EXITED, None, None, None), (
-        'the row is fine'
+    assert (w.state, w.error, w.usage, w.session_file) == (AgentSessionState.NEVER_WORKED, NEVER, None, None), (
+        'it ended at once with nothing, and no usage is read'
     )
     assert events(spans, 'agent_session.usage_unknown') == [
         {
@@ -872,7 +878,7 @@ def test_the_agents_session_file_goes_into_the_cas_and_its_usage_is_summed_from_
     mocker.patch.object(Launcher, '_prepare', side_effect=RuntimeError('no config'))
     broken = request(db, campaign)
     launch(db, runtime, tmp_path, broken, tracer)
-    assert (agent_session(db, broken).state, agent_session(db, broken).usage) == (AgentSessionState.KILLED, None)
+    assert (agent_session(db, broken).state, agent_session(db, broken).usage) == (AgentSessionState.NEVER_WORKED, None)
     assert len(events(spans, 'agent_session.usage_unknown')) == 1, 'an agent that never ran has no session to read'
 
 
@@ -1090,7 +1096,7 @@ def test_the_mcp_element_expands_to_the_roles_servers_and_their_env_reaches_the_
     assert spec.env['PROBE_KEY'] == 'probe-value', 'each variable that a server names is the secret of its name'
     assert 'probe-value' not in ' '.join(spec.args) and 'probe-value' not in config.read_text()
     assert 'PI_MCP_CONFIG_MODE=exclusive' in (tmp_path / 'w' / 'env.txt').read_text().splitlines()
-    assert agent_session(db, agent_session_id).error is None
+    assert agent_session(db, agent_session_id).error == NEVER, 'the stand-in exits at once: no launch error'
 
 
 def test_an_agent_knows_when_its_timeout_ends(
@@ -1123,7 +1129,7 @@ def test_a_secret_that_the_home_lacks_fails_the_launch_naming_it_even_when_the_e
     agent_session_id = request(db, campaign)
     launch(db, runtime, tmp_path, agent_session_id)
     w = agent_session(db, agent_session_id)
-    assert w.state is AgentSessionState.KILLED and w.error is not None
+    assert w.state is AgentSessionState.NEVER_WORKED and w.error is not None
     assert w.error.startswith('MissingSecrets: the secrets PROBE_TOKEN are not set: `piloop secret set <NAME>`')
     assert not (tmp_path / 'w' / 'argv.txt').exists(), 'never started: a secret comes from `piloop secret` only'
 
@@ -1184,7 +1190,7 @@ def test_servers_that_cannot_be_rendered_fail_the_launch_on_the_row(
     agent_session_id = request(db, campaign)
     launch(db, runtime, tmp_path, agent_session_id)
     w = agent_session(db, agent_session_id)
-    assert w.state is AgentSessionState.KILLED and w.error is not None and w.error.startswith('McpError: ')
+    assert w.state is AgentSessionState.NEVER_WORKED and w.error is not None and w.error.startswith('McpError: ')
     assert 'printed no server list' in w.error, 'the stand-in is no codex: `mcp list --json` printed nothing'
 
 

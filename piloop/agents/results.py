@@ -566,9 +566,12 @@ class CampaignResults:
     def _agent(self, s: Session, job: AgentJob, report: AgentReport, output: str | None = None) -> None:
         """Close the row from the report, and emit ``AgentSessionFinished``, ``JobEnded`` and ``StartupAnomaly``.
 
-        The anomaly only when the agent did not start to work (``NotStarted``): its job did not start, or it ended
-        within ``startup_seconds`` (``[agents]``) and left nothing (``_never_worked``), unless the daemon told it to stop
-        or ended it. An agent that a daemon stop ended (``stopped_by_daemon``) closes as killed by the stop
+        An agent that did not start to work closes ``never_worked`` (``NotStarted``): its job did not start, or it ended
+        within ``startup_seconds`` (``[agents]``) and left nothing (``_never_worked``), unless the daemon ended it. A
+        wrap-up does not make it work: one told to wrap up as it starts, that leaves nothing, never worked either. The
+        anomaly, which the startup breaker counts as a fault of the host or the harness, comes only when nothing told
+        the agent to stop (``WrapUp``): a cancel or a stop that it obeyed is no such fault. An agent that a daemon stop
+        ended (``stopped_by_daemon``) closes as killed by the stop
         (``RunEnd.DAEMON_STOPPED``), with the usage that was read, whichever daemon process reads its report.
         The ``output`` of an agent that exited non-zero ends its error (``explained``), and the reason of one that exited 0
         and did not start to work.
@@ -581,7 +584,7 @@ class CampaignResults:
                 if stopped:
                     self._stopped(s, w, None)
                     return
-                w.state, w.error = AgentSessionState.KILLED, reason
+                w.state, w.error = AgentSessionState.NEVER_WORKED, reason
                 ended: Ran | NotStarted = NotStarted(reason)
             case AgentFinished(process=process):
                 found = {} if output is None else values(s, self._secrets, job.agent_session, job.secrets.values())
@@ -604,16 +607,10 @@ class CampaignResults:
                 if stopped:
                     self._stopped(s, w, report.work)
                     return
-                asked = _asked_to_end(s, w.id)
                 ending = w.state is AgentSessionState.ENDING  # its error says why the daemon ended it
-                w.state = (
-                    AgentSessionState.KILLED
-                    if ending or process.status is ExitStatus.TIMED_OUT
-                    else AgentSessionState.EXITED
-                )
-                w.error = w.error if ending else process.error
                 seconds = process.seconds
-                match asked or not _never_worked(s, w, report, self._startup_seconds), process.error:
+                worked = _ended_by_daemon(s, w.id) or not _never_worked(s, w, report, self._startup_seconds)
+                match worked, process.error:
                     case True, _:
                         ended = Ran(process, report.work)
                     case False, str() as error:
@@ -626,10 +623,22 @@ class CampaignResults:
                             self._exit_output_chars,
                         )
                         ended = NotStarted(said.error or never_worked(self._startup_seconds))
+                match ended:
+                    case NotStarted(reason=reason):
+                        w.state, w.error = AgentSessionState.NEVER_WORKED, reason
+                    case Ran():
+                        w.state = (
+                            AgentSessionState.KILLED
+                            if ending or process.status is ExitStatus.TIMED_OUT
+                            else AgentSessionState.EXITED
+                        )
+                        w.error = w.error if ending else process.error
+                    case _:
+                        assert_never(ended)
             case _:
                 assert_never(report)
         session_finished(s, w)
-        if isinstance(ended, NotStarted):
+        if isinstance(ended, NotStarted) and not _told_to_wrap_up(s, w.id):
             anomaly = StartupAnomaly(
                 role=w.kind,
                 harness=w.harness,
@@ -786,11 +795,17 @@ def stopped_by_daemon(s: Session, agent_session_id: AgentSessionId) -> bool:
     return found is not None and found[1].end is RunEnd.DAEMON_STOPPED
 
 
-def _asked_to_end(s: Session, agent_session_id: AgentSessionId) -> bool:
-    """Whether the daemon told the agent to stop or ended it (``WrapUp``, ``AgentEnded``): no failed start then."""
+def _told_to_wrap_up(s: Session, agent_session_id: AgentSessionId) -> bool:
+    """Whether the daemon told the agent to wrap up (``WrapUp``): for a cancel, a stop or its time."""
     on_agent_session = Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id)
-    asked = select(Event.id).where(on_agent_session, has(WrapUp) | has(AgentEnded))
-    return s.scalar(asked.limit(1)) is not None
+    return s.scalar(select(Event.id).where(on_agent_session, has(WrapUp)).limit(1)) is not None
+
+
+def _ended_by_daemon(s: Session, agent_session_id: AgentSessionId) -> bool:
+    """Whether the daemon ended the agent (``AgentEnded``): its end is the daemon's then, not a failed start."""
+    on_agent_session = Event.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id)
+    ended = select(Event.id).where(on_agent_session, has(AgentEnded))
+    return s.scalar(ended.limit(1)) is not None
 
 
 def _never_worked(s: Session, w: AgentSession, report: AgentFinished, startup_seconds: float) -> bool:

@@ -199,7 +199,9 @@ class ImplementerRole(RoleConfig):
     left: its last tool call returns first."""
     startup_relaunches: int = Field(default=2, ge=0)
     """How many times a run is queued again with a new implementer after its implementer failed to start. Then the run
-    fails. A failure at startup is a fault of the host or the harness, not an attempt at an idea."""
+    fails. A failure at startup is a fault of the host or the harness, not an attempt at an idea. A run that its
+    campaign would not launch now (paused, stopped, within its wrap-up lead, or held by the startup breaker) is not
+    queued again: it fails at once and frees its slot."""
     max_concurrent: int = Field(default=2, ge=1)
     """The maximum number of implementers that run at the same time, on all workers together. A run that is being
     scored after its implementer ended does not count. More of them find a better best in the same hours, at more

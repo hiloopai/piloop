@@ -354,12 +354,17 @@ def test_only_an_escalation_or_what_a_person_writes_wakes_it_also_while_the_camp
     assert 'candidate#1: the best: score 2.0' in brief(tmp_path, paused), 'what waited comes with it'
 
 
+@pytest.mark.parametrize('ended', [AgentSessionState.KILLED, AgentSessionState.NEVER_WORKED])
 def test_a_failed_orchestrator_leaves_its_news_to_the_next_and_off_is_the_default(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, on: None
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, on: None, ended: AgentSessionState
 ) -> None:
+    """One that never worked failed too: its notes were delivered in its brief, but it read none of them.
+
+    Such an orchestrator used to end ``exited`` with no error, the end of one that worked, and its news was lost.
+    """
     message(db, campaign, 'are you there?')
     with db.session() as s:
-        failed = AgentSession(kind=ORCHESTRATOR, campaign_id=campaign.id, state=AgentSessionState.KILLED)
+        failed = AgentSession(kind=ORCHESTRATOR, campaign_id=campaign.id, state=ended)
         s.add(failed)
         s.flush()
         on_failed = TargetRef(TargetKind.AGENT_SESSION, failed.id)

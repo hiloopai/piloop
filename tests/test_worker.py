@@ -209,7 +209,7 @@ def test_a_start_that_fails_is_reported_as_a_failed_start(
     outcome = launch(ex, agent_session_id, tmp_path)
     assert isinstance(outcome, NotStarted) and 'spawn_failed' in str(outcome.reason)
     w, lease = rows(db, agent_session_id)
-    assert (w.state, lease.state, w.handle) == (AgentSessionState.KILLED, LeaseState.REPORTED, {})
+    assert (w.state, lease.state, w.handle) == (AgentSessionState.NEVER_WORKED, LeaseState.REPORTED, {})
 
 
 def test_a_worker_that_stops_while_its_agent_gets_its_secrets_starts_nothing(

@@ -131,6 +131,8 @@ class AgentSessionState(StrEnum):
     """The process state of an agent, kept by the daemon. ``requested`` is a request to launch, not a process.
 
     ``ending``: the daemon ended the agent, for a stop, a cancel or its run's end, and its process is not gone yet.
+    ``never_worked``: its job did not start, or it ended within ``startup_seconds`` (``[agents]``) and left nothing. Its
+    error says why. It is a fault of the host or the harness, never of the agent.
     """
 
     REQUESTED = 'requested'
@@ -139,12 +141,13 @@ class AgentSessionState(StrEnum):
     ENDING = 'ending'
     EXITED = 'exited'
     KILLED = 'killed'
+    NEVER_WORKED = 'never_worked'
 
 
 LIVE = (AgentSessionState.STARTING, AgentSessionState.RUNNING, AgentSessionState.ENDING)
 OPEN = (AgentSessionState.REQUESTED, *LIVE)
 """An agent that is requested or live: its row is not closed yet."""
-ENDED = (AgentSessionState.EXITED, AgentSessionState.KILLED)
+ENDED = (AgentSessionState.EXITED, AgentSessionState.KILLED, AgentSessionState.NEVER_WORKED)
 
 
 class LeaseState(StrEnum):

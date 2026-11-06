@@ -66,6 +66,7 @@ from piloop.db.triggers import DAEMON_ACTOR
 from piloop.ids import AgentSessionId, CampaignStatus, CommentId, Ending, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins import host as plugins
+from piloop.plugins.campaign_type.consumers import BREAKER_HOLDS
 from piloop.plugins.campaign_type.contract import CAMPAIGNS, Take
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
 from piloop.plugins.campaign_type.kit.backlog.ideas import claimable
@@ -2589,6 +2590,69 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
     with db.session() as s:
         kinds = s.scalars(select(Event.kind).where(Event.kind.like('launch.%')).order_by(Event.id)).all()
     assert kinds == ['launch.paused', 'launch.resumed', 'launch.paused']
+
+
+def relaunched(db: Database, campaign: Campaign) -> tuple[RunId, AgentSessionId]:
+    """A run as ``_relaunch`` leaves it: queued, its implementer ``never_worked``, a new one requested on its harness."""
+    with db.session() as s:
+        run = Run(campaign_id=campaign.id, base_candidate_id=CandidateId(1), harness='script', model='test-model')
+        s.add(run)
+        s.flush()
+        on_run = {
+            'kind': IMPLEMENTER,
+            'campaign_id': campaign.id,
+            'subject': TargetRef(RUN, run.id),
+            'harness': 'script',
+        }
+        s.add(AgentSession(**on_run, state=AgentSessionState.NEVER_WORKED, ended_at=utcnow(), error='left nothing'))
+        relaunch = AgentSession(**on_run, model='test-model', reason='relaunched')
+        s.add(relaunch)
+        s.commit()
+        return run.id, relaunch.id
+
+
+def test_a_relaunch_does_not_wait_for_the_startup_breaker_its_run_ends_and_frees_its_slot(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """#736: the breaker tripped as a run's implementer died at startup, and held its relaunch for the window.
+
+    Its run stayed open all that while, so it kept its slot, and its last launch started as the campaign stopped.
+    Now the run ends ``not_started``, no attempt, and its idea goes back to the board. A first launch still waits.
+    """
+    run_id, relaunch = relaunched(db, campaign)
+    for _ in range(FewestLive().startup_breaker):
+        died_at_startup(db, campaign, IMPLEMENTER)
+    first = request_lead(db, campaign)
+    scheduler = make_scheduler(db, runtime, tmp_path, claims=False)
+    assert run_all(scheduler) == []
+    with db.session() as s:
+        run, row = s.get_one(Run, run_id), s.get_one(AgentSession, relaunch)
+        assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.NOT_STARTED)
+        assert (row.state, row.error) == (AgentSessionState.KILLED, BREAKER_HOLDS)
+        assert s.get_one(AgentSession, first).state is AgentSessionState.REQUESTED, 'no run of its own to free'
+    scheduler.stop(timeout=5)
+
+
+def test_the_startup_breaker_acknowledges_its_escalation_once_launches_resume(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """Nothing waits on the escalation once the deaths age out: it would remind the human of a pause that is over."""
+    for _ in range(FewestLive().startup_breaker):
+        died_at_startup(db, campaign, LEAD)
+    request_lead(db, campaign)
+    scheduler = make_scheduler(db, runtime, tmp_path)
+    assert run_all(scheduler) == []
+    [escalation] = pause_escalations(db)
+    assert escalation.acked_at is None
+    with db.session() as s:
+        for event in s.scalars(select(Event).where(has(StartupAnomaly))):
+            event.at -= FewestLive().startup_window
+        s.commit()
+    assert run_all(scheduler) != []
+    [resumed] = pause_escalations(db)
+    assert (resumed.acked_by, resumed.acked_at is not None) == (System.DAEMON.signature, True)
+    scheduler.wait(SETTLE)
+    scheduler.stop(timeout=5)
 
 
 def test_an_implementer_is_told_once_to_wrap_up_before_its_timeout(

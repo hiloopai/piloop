@@ -239,6 +239,19 @@ The `--reason` of `gave_up` is optional. A run whose process fails still fails.
 - `escalation` and `decision` are kinds of the escalation plugin. They work as before. A plugin that names them
   imports `ESCALATION` and `DECISION` from `piloop.plugins.escalation.kit.kinds`, not from `CommentKind`.
 
+### An agent that never worked ends `never_worked`
+
+An agent whose job did not start, or that ended within `startup_seconds` and left nothing, ends `never_worked`, not
+`exited` or `killed`. Its `error` says why, also when it exited 0. A query that counts ended agents with
+`state IN ('exited', 'killed')` adds `'never_worked'`. Rows that ended before the upgrade keep their state.
+
+- A wrap-up no longer hides such an end: an implementer told to wrap up as it starts, that leaves nothing, never
+  worked, and its run is no attempt.
+- A run is queued again after a failed start only when its campaign would launch it now. While the startup breaker
+  holds, within the wrap-up lead, or while the campaign is paused, the run ends `not_started` at once and frees its
+  slot.
+- When launches resume, the daemon acknowledges the startup breaker's escalation.
+
 ### The evaluate command reports a status and a score
 
 The result line names its `status`, and the primary is its `score`:

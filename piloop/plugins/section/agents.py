@@ -35,7 +35,9 @@ class Agents(Section):
         for kind in dict.fromkeys([*cfg.roles.all(), *(w.kind for w in rows)]):
             mine = [w for w in rows if w.kind == kind]
             killed = sum(w.state is AgentSessionState.KILLED for w in mine)
-            per_kind.append(f'{len(mine)} {kind}' + (f' ({killed} killed)' if killed else ''))
+            never = sum(w.state is AgentSessionState.NEVER_WORKED for w in mine)
+            ends = [f'{n} {what}' for n, what in ((killed, 'killed'), (never, 'never worked')) if n]
+            per_kind.append(f'{len(mine)} {kind}' + (f' ({", ".join(ends)})' if ends else ''))
             spend.append(f'{kind} {human(sum(_tokens(w) for w in mine))}')
         hour = sum(_tokens(w) for w in rows if w.ended_at is not None and now - w.ended_at <= timedelta(hours=1))
         by_source = '; '.join(y.line() for y in yields(s, campaign.id)) or 'none yet'
