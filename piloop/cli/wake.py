@@ -23,7 +23,7 @@ def wake(
 ) -> None:
     """Print what the orchestrator of a campaign needs first, in a fixed budget.
 
-    The latest lines of the campaign's journal, its open inbox, its head and the current lessons on its repo. Each
+    The latest lines of the campaign's journal, its open inbox, its best and the current lessons on its repo. Each
     section says how to read what did not fit. Without a campaign, it uses the campaign that the current directory is
     in, else the only active campaign, else the whole home. Run it at the start of every orchestrator session.
     """

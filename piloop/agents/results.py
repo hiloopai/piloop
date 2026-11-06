@@ -107,7 +107,7 @@ class StartupAnomaly(EventModel):
     role: RoleName
     harness: str | None
     subject: Ref | None
-    """What the agent was to work on, such as ``run#12``. None for a sweep."""
+    """What the agent was to work on, such as ``run#12``. None for an agent of a role that does no runs, such as an orchestrator."""
     seconds: float
     error: str | None
     """Why it did not start. None only in an event of 0.1.0, which did not always know."""
@@ -348,7 +348,7 @@ class Identified(EventModel):
     campaign: str | None
     """The campaign's name."""
     subject: Ref | None
-    """What the agent works on, such as ``run#12``. None for a sweep."""
+    """What the agent works on, such as ``run#12``. None for an agent of a role that does no runs, such as an orchestrator."""
     groups: tuple[Ref, ...]
     """What its work belongs to, such as the run's ``idea#4``."""
     parent: Proposer | None

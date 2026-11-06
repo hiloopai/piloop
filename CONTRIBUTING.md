@@ -192,6 +192,7 @@ renames a table, a column or a value, add the rename to `RENAMES` in that module
 - `docs/reference/configuration.mdx`, from the models that `piloop.config.CampaignConfig` reaches (in
   `piloop/config.py`, `piloop/plugins/harness/`, `piloop/mcp/` and `piloop/usage/`), from `piloop/deprecated.py`, and from
   the header in `scripts/generate/configuration.py`.
+- `docs/reference/cli.mdx`, from the help of the commands: their docstrings and parameter help, through cyclopts.
 - `docs/reference/schema.mdx`, from `piloop/db/models.py`.
 - `docs/reference/openapi.json`, the API's OpenAPI document, from the FastAPI routes of `piloop/daemon/api.py`.
 - `docs/snippets/generated/`: the generated parts of other pages. These are the diagram of the tables, the values of

@@ -9,12 +9,14 @@ PATH = SNIPPETS / 'roles.mdx'
 
 
 def generate() -> str:
-    """Return a table of the built-in roles: whether each does runs, its triggers, what it is."""
-    rows = ['| Role | Does runs | Triggers | What it is |', '|---|---|---|---|']
+    """Return a table of the built-in roles: whether each does runs, what starts its agents, what it is."""
+    rows = ['| Role | Does runs | Starts on | What it is |', '|---|---|---|---|']
     for name, provider in ROLES.builtins().items():
         role = provider()
-        fired = role.triggers if isinstance(role, OrchestratorRole) else []
-        triggers = ', '.join(f'`{t}`' for t in fired) or 'the run queue'
+        if isinstance(role, OrchestratorRole):
+            triggers = ', '.join(f'`{t}`' for t in role.triggers) or '`piloop launch` only: `triggers = []`'
+        else:
+            triggers = 'a free slot'
         what = cell(lead(type(role), type(role).__name__)).split(': ', 1)[-1]
         what = what[:1].upper() + what[1:]
         rows.append(f'| `{name}` | {"yes" if isinstance(role, ImplementerRole) else "no"} | {triggers} | {what} |')

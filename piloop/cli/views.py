@@ -166,9 +166,8 @@ def inbox_wait(
 ) -> None:
     """Wait until something needs the orchestrator, print it one line per item, then print the command to wait again.
 
-    These events end the wait: a new unacknowledged inbox item that someone else wrote, a seed that someone else
-    filed, a campaign that the daemon stopped, an anomaly that the daemon gave to an agent, and the daemon's score
-    of a candidate. Your own decisions, as PILOOP_ACTOR, do not end it. At --timeout it returns with nothing.
+    These events end the wait: a new or edited unacknowledged inbox item that someone else wrote, a campaign that
+    the daemon stopped, an anomaly that the daemon gave to an agent, and the daemon's score of a candidate. Your own decisions, as PILOOP_ACTOR, do not end it. At --timeout it returns with nothing.
     Each return also names the escalations that still wait for you, unacknowledged and unanswered, with their age.
     Set the timeout of your shell tool higher than --timeout. Without a campaign, it waits for every campaign.
     """

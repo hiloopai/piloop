@@ -471,7 +471,7 @@ def sync_campaign(
     """Read the campaign's ``piloop.toml`` again, and sync its documents into its memory.
 
     A campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its
-    checkout moves forward to them. Its candidates and head stay: new code comes in as a reference candidate or a fork.
+    checkout moves forward to them. Its candidates and their scores stay: new code comes in as a reference candidate or a fork.
     A changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions
     changed is active again.
     """

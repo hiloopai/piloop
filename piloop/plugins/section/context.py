@@ -18,7 +18,7 @@ class Context(Section):
     Then the lines that the campaign's type adds: the agent's run, or its sweep.
     """
 
-    SHOWN_IN: ClassVar[frozenset[Surface]] = frozenset({Surface.SWEEP, Surface.RUN})
+    SHOWN_IN: ClassVar[frozenset[Surface]] = frozenset({Surface.ORCHESTRATOR, Surface.RUN})
     ORDER: ClassVar[int] = 1
 
     lines: list[str] = [

@@ -11,7 +11,7 @@ class RunFunnel(Section):
     at a gate in the brief that runs cannot pass; many that reach it unmeasured point at the evaluator.
     """
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 175
 
     def render(self, r: Rendering) -> Rendered | None:

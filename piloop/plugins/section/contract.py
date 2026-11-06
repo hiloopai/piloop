@@ -21,6 +21,7 @@ from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, ClassVar
 
+from piloop import deprecated
 from piloop.actor import Agent
 from piloop.api.views import Rendered, Text
 from piloop.ids import AgentSessionId
@@ -78,10 +79,14 @@ class Surface(StrEnum):
 
     STATUS = 'status'
     """``piloop status``, the API's overview and a UI: ``[plugins.section] use``."""
-    SWEEP = 'sweep'
+    ORCHESTRATOR = 'orchestrator'
     """The brief of a role that does no runs, the orchestrator: ``[plugins.role.<name>] sections``."""
     RUN = 'run'
     """The brief of a role that does runs: ``[plugins.role.<name>] sections``."""
+
+    deprecated.until('0.7.0', 'Surface.SWEEP is Surface.ORCHESTRATOR in 0.6: delete the SWEEP alias')
+    SWEEP = 'orchestrator'
+    """An alias of ``ORCHESTRATOR``, its name in 0.5."""
 
 
 class Section(Parameters, ABC):

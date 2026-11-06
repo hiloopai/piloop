@@ -8,7 +8,7 @@ name = "my-campaign"                       # required; short identifier; piloop 
 evaluate = ["uv", "run", "python", "evaluate.py"]  # required; run in a clean checkout of each version; writes {"status": …, "score": …} to $PILOOP_RESULT_FILE
 evaluate_timeout = 600                    # seconds; a slower evaluation is stopped and recorded as a crash
 link = []                                 # gitignored paths put into every worktree read-only, for example "data" or ".venv"
-context = []                              # analysis files that every sweep reads first, for example ["docs/error-analysis.md"]
+context = []                              # analysis files that piloop history lists first, for example ["docs/error-analysis.md"]
 
 [plugins.runtime]                         # a capability's own settings are in its table, next to its instances
 use = "subprocess"                        # a [plugins.runtime.<name>] of config.toml; subprocess: a background process per agent

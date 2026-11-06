@@ -20,7 +20,7 @@ class Inbox(Section):
     A sweep reads it so that it does not repeat an escalation, and a human sees what waits for an acknowledgement.
     """
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 200
 
     def render(self, r: Rendering) -> Rendered:

@@ -147,7 +147,7 @@ def launch(role: OrchestratorRole, host: DaemonHost, agent_session_id: AgentSess
             ' of a done idea are archived, and removed from it after some days or when the disk is short; `piloop'
             f' restore {campaign.name} <idea id>|<workspace path>` writes them back.',
             *(['', '# Notes', *(f'{n.body}\n' for n in notes)] if notes else []),
-            f'- Sweep started at: {now:%Y-%m-%d %H:%M:%S} (UTC; the sections below are as of then).',
+            f'- Started at: {now:%Y-%m-%d %H:%M:%S} (UTC; the sections below are as of then).',
         ]
         agent = Agent(role=agent_session.kind, session=agent_session_id)
         brief_of = briefing(brief_role, campaign, agent, reason=agent_session.reason or 'requested', lines=lines)

@@ -11,6 +11,7 @@ from scripts.generate import (
     Mode,
     capabilities,
     cas_providers,
+    cli,
     configuration,
     contracts,
     data_model,
@@ -39,6 +40,7 @@ from scripts.generate import (
 
 GENERATORS = (
     configuration,
+    cli,
     schema,
     data_model,
     states,

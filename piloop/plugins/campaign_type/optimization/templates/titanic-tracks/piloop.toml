@@ -1,4 +1,4 @@
-# Two objectives as tracks on one pool. Reference: https://piloop.autoresearch.inc/concepts/tracks
+# Two objectives as tracks on one pool. Reference: https://piloop.autoresearch.inc/concepts/pool#tracks
 # The best of a track has the best primary metric of its track. It must also keep the other track's primary metric
 # within its margin of the baseline and on the right side of its floor.
 name = "titanic-tracks"

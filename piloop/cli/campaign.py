@@ -197,7 +197,7 @@ def sync_cmd(
 ) -> None:
     """Read a campaign's piloop.toml again. A campaign that the server cloned first takes its repository's new versions.
 
-    Its checkout moves forward to them; its candidates and head stay. New code comes in with
+    Its checkout moves forward to them; its candidates and their scores stay. New code comes in with
     `piloop candidate import`, or a fork with `piloop campaign fork --at`. A local checkout is read where it is:
     `piloop init <path>` does the same. For a private repository: `--secret`, or a token piped in with
     `--token-stdin`.

@@ -8,7 +8,7 @@ from piloop.text import metric
 class Goal(Section):
     """The goal: the primary metric of each track, the other metrics, the state, and the progress against the stop rule."""
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 110
 
     def render(self, r: Rendering) -> Rendered:

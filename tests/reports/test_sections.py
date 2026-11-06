@@ -105,7 +105,7 @@ def names(sections: list[Section]) -> list[str]:
 def test_an_installed_section_shows_where_it_declares_in_its_order_unless_a_list_is_set() -> None:
     status = SECTIONS.used({})
     assert status[status.index('evaluations') + 1] == 'keep_rate', 'ORDER 172: between the evaluations and the funnel'
-    assert 'keep_rate' not in defaults(Surface.SWEEP), 'only where it declares'
+    assert 'keep_rate' not in defaults(Surface.ORCHESTRATOR), 'only where it declares'
     listed = SECTIONS.validated_table({'use': ['goal']}, Scope.CAMPAIGN)
     assert SECTIONS.used({'section': listed}) == ('goal',), 'a list in the configuration replaces the defaults'
 
@@ -114,7 +114,7 @@ def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     overview = ['headline', 'goal', 'tracks', 'trajectory', 'runs', 'queue', 'agents', 'evaluations']
     overview += ['funnel', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
-    assert defaults(Surface.SWEEP) == ['context', 'lessons', 'incidents', *overview, 'tools', 'pack']
+    assert defaults(Surface.ORCHESTRATOR) == ['context', 'lessons', 'incidents', *overview, 'tools', 'pack']
     assert defaults(Surface.RUN) == ['context', 'measure', 'idea_comments', 'lessons', 'history'], (
         'no board: a worker claims or proposes its idea with `piloop idea`'
     )
@@ -228,7 +228,7 @@ class Units(Guide):
 
     TITLE = 'Units'
     TEXT = Path(__file__)
-    SHOWN_IN = frozenset({Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.ORCHESTRATOR})
 
 
 @pytest.fixture

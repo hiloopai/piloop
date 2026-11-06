@@ -27,7 +27,7 @@ def pause(
 
     The daemon queues no run, requests no role and launches no requested row. Running work goes on, and its commits
     are scored. The daemon still
-    measures again what a new evaluator or `piloop candidate remeasure` needs, so the pause can end on a measured head.
+    measures again what a new evaluator or `piloop candidate remeasure` needs, so the pause can end on a measured best.
     `--evals` holds those measurements too. The pause is in the database: it holds wherever you run the command.
     """
     with Client.connect(daemon_http()) as client:

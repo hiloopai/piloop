@@ -13,7 +13,7 @@ REPORTED_SHOWN = 12
 class Reported(Section):
     """The latest incidents that the daemon gave to agents, newest first, each with the agent that got it."""
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 190
 
     def render(self, r: Rendering) -> Rendered:

@@ -3,594 +3,48 @@ title: CLI
 description: Every piloop command and its options.
 ---
 
-Run `piloop --help` for the list of commands, and `piloop <command> --help` for the options of one command.
+{/* WARNING: This file is auto-generated (uv run -m scripts.generate_all). Update the docstrings and parameter help of the commands in `piloop/cli/main.py` and the `piloop.commands` entry points if you want to change anything here. */}
 
-Many commands take a `REF`: a campaign name, its id, or a path inside the campaign's repo. Without a `REF`, `piloop status`
-and `piloop history` use the campaign of the current directory, else the only active campaign, else every campaign.
-`piloop inbox`, `piloop inbox wait` and `piloop watch` cover every campaign.
+Each command prints the same with `--help`. With `PILOOP_SERVER` set, a command that calls the API asks that server
+([On a server](/guides/daemon#on-a-server)).
 
-Commands that write sign their writes with `PILOOP_ACTOR` (`human` by default). See
-[Environment variables](/reference/environment).
+### piloop agent
 
-## Set up
+Act on one agent.
 
-### piloop init
+#### piloop agent messages
 
 ```text
-piloop init [PATH] [--example enwik8|titanic-tracks|inference] [--name NAME]
+piloop agent messages [ARGS]
 ```
 
-Makes `PATH` (default `.`) a piloop campaign, starts the daemon unless one runs, registers the campaign, and waits
-while the daemon measures `HEAD` as the baseline. A baseline that fails to evaluate pauses the campaign, and `init`
-exits with why. Ctrl-C ends only the wait. Without a `piloop.toml`, it writes one from the template, with `brief.md`
-and `evaluate.py`, and stops while `evaluate.py` is the stub. Run it again after each edit of `piloop.toml`.
-`--example` creates a bundled example instead. See [Run a campaign by hand](/by-hand). `--name` registers the
-campaign under `NAME` instead of the `name` of `piloop.toml`. A campaign keeps its name.
+Take the messages that wait for this agent's turn, and print them.
 
-### piloop install-skills
+A hook of the harness runs it during a turn, so a message reaches the turn in progress. It prints nothing when no
+message waits.
 
-Copies the skills of this CLI into the skill directory of every harness on your `PATH`: `~/.claude/skills` for
-Claude Code (or `$CLAUDE_CONFIG_DIR/skills`), and `~/.agents/skills` for Codex, pi, Gemini CLI and Cursor. It replaces
-only piloop's own skills. The installer and `piloop upgrade` run it.
+**Parameters**:
 
-### piloop doctor
+* `HARNESS, --harness`: The harness whose hook reads them: one message a line without it.
 
-Checks the install, without changing anything. Each failure says how to fix it, often with the command to run. See
-[Upgrading](/guides/upgrading#check-the-install).
-
-### piloop plugins
-
-Lists each capability with every provider, the package and version that it comes from, and its entry point. Then it
-lists what the configuration selects, and checks it as the daemon does when it starts. See
-[How piloop loads plugins](/plugins/overview#how-piloop-loads-plugins).
-
-### piloop upgrade
+#### piloop agent cancel
 
 ```text
-piloop upgrade [--timeout SECONDS]
+piloop agent cancel [OPTIONS] AGENT_SESSION_ID
 ```
 
-Upgrades the CLI, the skills and the database, and restarts a running daemon in place. `--timeout` (default 30) is
-how long to wait for the daemon to come back. See [Upgrading](/guides/upgrading).
+Cancel an agent of any role. The daemon acts at once.
 
-### piloop migrate
+A requested agent never starts. A running one is ended with every process that it started, at once or, with
+`--wrap-up`, after it was told to save its work and stop. For an implementer, this cancels its run (`piloop run cancel`).
 
-Brings the database to the schema of this CLI and prints what changed. It backs up the database first. Only this
-command, `piloop serve` when it starts, and `piloop upgrade` migrate the database. Every other command refuses a
-database at another schema revision and says what to run. See [Upgrading](/guides/upgrading#the-database).
+**Arguments**:
 
-## The daemon
+* `AGENT_SESSION_ID`: The id of the agent. **[required]**
 
-### piloop serve
+**Parameters**:
 
-```text
-piloop serve [--detach] [--check] [--listen HOST:PORT]
-```
-
-Runs the daemon in the foreground. `--detach` starts it in the background, with its output in
-`$PILOOP_HOME/serve.log`. Only one daemon runs for each `PILOOP_HOME`. `--check` starts nothing: it checks what the
-daemon checks when it starts, its plugins and what `config.toml` binds, and fails with the reason when it would not
-start. See [How piloop loads plugins](/plugins/overview#how-piloop-loads-plugins).
-
-`--listen` serves [the API](#the-api) and the routes of the [executor](/plugins/infrastructure#executors) to
-other machines on `HOST:PORT`, in place of `[plugins.network] listen` in `config.toml`: for `workers`, the lease calls
-of [`piloop worker`](#piloop-worker). Each caller sends a token of `piloop token`. An address that is not loopback needs
-`tls`: see [Networks](/plugins/infrastructure#networks). Port 0 takes a free port, which `piloop restart`
-keeps. `piloop status` shows the URL:
-
-```text
-daemon: pid 1754168, up 0:00:05, listening on http://127.0.0.1:35601
-```
-
-#### The API
-
-The daemon serves an HTTP API, `/v1`, on the Unix socket `$PILOOP_HOME/piloop.sock`, which only your user can open.
-When that path is too long for a socket (104 bytes on macOS, 108 on Linux), the socket is
-`/tmp/piloop-<uid>/<hash>.sock`, a hash of the home. A call there needs no token. `GET /v1/openapi.json` describes
-every route. With `--listen`, other machines call the same routes with a token of `piloop token` whose access reads
-(`read`, `act` or `admin`). On such a machine, `PILOOP_SERVER=<url>` makes the commands that call the API, such as
-`status`, `inbox`, `message` and `secret`, ask that server, with the network's credential, such as
-`PILOOP_HTTPS_TOKEN`. The commands that read the database of the home, such as `history`, `attach`, `sql` and
-`worker list`, then refuse: run them on the server. See [Run piloop on a server](/guides/remote-server).
-
-```bash
-curl --unix-socket ~/.piloop/piloop.sock 'http://piloop/v1/status?campaign=enwik8'
-```
-
-### piloop cas serve
-
-```text
-piloop cas serve --listen HOST:PORT
-```
-
-Serves the CAS that `[plugins.cas]` selects to [workers on other machines](/guides/workers), on `HOST:PORT`,
-in a process of its own, until Ctrl-C. A worker reaches it with the `http` provider and its token of `piloop token`.
-TLS is that of `[plugins.network]`: an address that is not loopback needs `tls`.
-
-### piloop token
-
-```text
-piloop token create NAME [--access read|act|admin|worker] | list | revoke NAME
-```
-
-`create` prints a new token for the caller `NAME`. Copy it then: piloop keeps only its hash. `--access` says what its
-caller may do. `worker`, the default, calls the routes of `piloop worker` and `piloop cas serve`. `read` reads, `act`
-also acts on campaigns, and `admin` also changes the home. `list` shows the names, never the tokens. `revoke` deletes a token, and its next call
-gets 401.
-
-### piloop secret
-
-```text
-piloop secret set NAME [--campaign CAMPAIGN] | list | rm NAME [--campaign CAMPAIGN]
-```
-
-`set` reads a value on stdin, or asks for it on a terminal, and stores it as the secret `NAME`: the home's, or with
-`--campaign` that campaign's. `list` shows the names, never the values. `rm` deletes one. See
-[Secrets](/guides/secrets).
-
-### piloop stop
-
-```text
-piloop stop [--timeout SECONDS]
-```
-
-Sends SIGTERM to the daemon and waits up to `--timeout` seconds (default 30) for it to exit. The daemon stops the
-running agents. The campaigns stay active, and the next `piloop serve` continues them. See
-[Stop and restart](/guides/running-for-days).
-
-### piloop limits
-
-```text
-piloop limits
-piloop limits set KEY=VALUE --reason TEXT
-piloop limits unset KEY
-```
-
-Lists, sets or removes a **limit**: a value for a live key of a provider of the home, such as
-`executor.pools.serve.slots.evaluation`, that wins over `config.toml` at once. The value is JSON, or
-else text. `piloop status` shows each live key with its source:
-
-```text
-limit: executor.pools.serve.slots.evaluation = 1  (limit by human: the GPU is busy)
-```
-
-See [Capacity](/guides/workers#capacity).
-
-### piloop worker
-
-```text
-piloop worker --server URL --pool NAME
-```
-
-Takes the leases of the pool `NAME` from the server at `URL`, and runs their jobs on this machine until Ctrl-C.
-The [network](/plugins/infrastructure#networks) gives it its credential. It exits non-zero when the server
-refuses it. See [Workers on other machines](/guides/workers).
-
-### piloop worker list
-
-```text
-piloop worker list
-```
-
-Lists each worker: its pool, when it was last heard, its host sample, its live jobs, and why it got no lease. See
-[Capacity](/guides/workers#capacity).
-
-### piloop restart
-
-```text
-piloop restart [--timeout SECONDS]
-```
-
-Restarts the running daemon in place on the installed code. The process keeps its pid, its environment and its
-service manager. The running agents continue, and the new code connects to them again. `--timeout` (default 30) is how
-long to wait for the daemon to come back. It first checks, as `piloop serve --check` does, that the daemon can start
-again; when it cannot, it says why and leaves the daemon running.
-
-### piloop service-unit
-
-Prints a systemd user unit (Linux) or a launchd agent (macOS) that keeps `piloop serve` running. It installs nothing.
-See [Running for days](/guides/running-for-days#under-a-service-manager).
-
-## Campaigns
-
-### piloop pause
-
-```text
-piloop pause REF --reason TEXT [--evals]
-```
-
-Pauses one campaign. The daemon queues no run, requests no role and launches no requested agent. Running work goes on, and its commits are scored. Nothing is escalated. The daemon still measures what a new evaluator or
-`piloop candidate remeasure` needs, so the pause can end on a measured best. `--evals` holds those measurements too.
-The pause is a state of the campaign in the database (`campaigns.paused`), not a file, so it holds wherever you run the
-command. `piloop status` shows it with the reason. The paused time does not count toward `max_hours`, and no limit of
-the stop rule is checked while paused.
-
-A pause launches no agent at all, so no sweep starts for an anomaly of the running work either: the anomaly shows in
-`piloop status`, and a role whose triggers name it gets it after `piloop resume`. The running agents keep their timeouts.
-
-### piloop resume
-
-```text
-piloop resume REF
-```
-
-Ends the pause. The daemon queues runs and requests roles again at once.
-
-### piloop campaign stop
-
-```text
-piloop campaign stop REF [--kill] [--reason TEXT]
-```
-
-Stops a campaign at once, as a [limit of the stop rule](/concepts/cost) does, also a
-paused or held one. With `--kill`, the implementers are ended at once, without the prompt to save their work and stop, and their
-commits are still scored. On a stopped campaign, `--kill` ends the implementers that are still winding down.
-`--reason` goes into `stopped_reason`.
-
-### piloop campaign reopen
-
-```text
-piloop campaign reopen REF --reason TEXT
-```
-
-Sets a stopped campaign active again, once it is closed and its runs are over. Its limits count from the reopen.
-See [Reopen, fork and retire](/concepts/campaigns#reopen-fork-and-retire).
-
-### piloop campaign fork
-
-```text
-piloop campaign fork REF [--at VERSION] [--name NAME]
-```
-
-Makes a new campaign that starts from `VERSION` of another one, by default its best. See
-[Reopen, fork and retire](/concepts/campaigns#reopen-fork-and-retire).
-
-### piloop campaign sync
-
-```text
-piloop campaign sync REF [--secret NAME | --token-stdin]
-```
-
-Reads a campaign's `piloop.toml` again. A campaign that the server cloned first takes its repository's new commits. See
-[Update a cloned campaign](/concepts/campaigns#update-a-cloned-campaign).
-
-### piloop campaign retire
-
-```text
-piloop campaign retire REF --reason TEXT
-```
-
-Retires a stopped campaign for good, once it is closed and its runs are over. See
-[Retire a campaign](/concepts/campaigns#retire-a-campaign).
-
-### piloop campaign parent
-
-```text
-piloop campaign parent REF PARENT_REF | --clear
-```
-
-Puts a campaign under another one of the same home, or makes it a root with `--clear`.
-
-### piloop campaign tree
-
-Prints every campaign under its parent, with its type and its status.
-
-## Ideas and candidates
-
-### piloop idea add
-
-```text
-piloop idea add REF TITLE [options]
-```
-
-Adds an `open` idea to the board, where an implementer can claim it. The board lists ideas in order of priority.
-
-| Option | Meaning |
-|---|---|
-| `--hypothesis` | Why the idea should help, and by how much. |
-| `--plan` | Concrete steps for the implementer. |
-| `--from` | What prompted the idea, with ids or a URL. |
-| `--priority` | 0 (urgent) to 4 (someday). Default 2. |
-| `--track` | The track. Required when the campaign has several. |
-| `--after` | An idea to wait for. Repeat it for several. |
-
-### piloop idea claim
-
-```text
-piloop idea claim IDEA_ID [--base CANDIDATE]
-```
-
-Claims an `open` idea for the caller's run, which tries it until the run ends. Only an implementer claims, once per
-run. An idea that an `after` link holds waits until its prerequisites are `done`. With `--base`, the run starts from
-that candidate instead of the best: the caller's checkout moves to it, and its submissions build on it. See
-[Lines and bases](/concepts/pool#lines-and-bases).
-
-### piloop idea propose
-
-```text
-piloop idea propose TITLE [--hypothesis TEXT] [--plan TEXT] [--from TEXT] [--track TRACK] [--base CANDIDATE]
-```
-
-Adds an idea of the implementer's own and claims it for its run, in one step, instead of `claim`. `--base` is as in
-`claim`.
-
-### piloop idea status
-
-```text
-piloop idea status IDEA_ID STATUS --reason TEXT
-```
-
-Sets the status of an idea to `open` or `dropped`, with a note on the idea that says why. Only a run makes an idea
-`done`. A `claimed` idea, whose run is open (queued, running or being scored), can only be dropped: `open` would queue
-a second run. A dropped idea's open run finishes and is scored.
-
-### piloop idea link
-
-```text
-piloop idea link IDEA_ID after TARGET_ID --reason TEXT
-```
-
-Links an idea that exists to another idea of the same campaign: it is held until the target is `done` or `dropped`.
-The link is written in one transaction, so no implementer claims the idea without it. A claimed idea takes no link,
-and a link that closes a cycle is refused. The `--after` of `idea add` is checked the same way.
-`piloop idea unlink IDEA_ID after TARGET_ID --reason TEXT` deletes a link, for example to a prerequisite that is
-still open, to run the idea now.
-
-### piloop idea track
-
-```text
-piloop idea track IDEA_ID TRACK --reason TEXT
-```
-
-Moves an idea to another track of `piloop.toml`, with a note on the idea that says why. An idea whose run is open
-keeps its track, because the run's commits are scored on it.
-
-Each of these commands writes its reason in a note on the idea. The change log records the change, signed with
-`PILOOP_ACTOR`, whether a command or raw SQL made it: `idea.status` and `idea.track` with the old and new value, and `idea.linked` and `idea.unlinked` with the target and the kind.
-
-### piloop candidate show
-
-```text
-piloop candidate show CANDIDATE_ID
-```
-
-Prints where the candidate stands in the pool, why it is excluded if it is, its metrics beside its parent's under the
-current evaluator, and each
-[rung](/concepts/campaigns#the-evaluation-ladder) that it measured: its values, its time and why its climb stopped
-there. `GET /v1/candidates/{candidate}` answers the same as data.
-
-### piloop candidate remeasure
-
-```text
-piloop candidate remeasure CANDIDATE_ID [--repeats K]
-```
-
-Asks the daemon to measure the candidate again with the current evaluator, also on a stopped campaign. See
-[Act on a candidate](/concepts/pool#act-on-a-candidate).
-
-### piloop eval queue
-
-```text
-piloop eval queue
-```
-
-Lists the running evaluations, then the waiting ones in the order in which they get a slot. See
-[Act on a candidate](/concepts/pool#act-on-a-candidate).
-
-### piloop eval cancel
-
-```text
-piloop eval cancel CANDIDATE_ID
-```
-
-Cancels the evaluation of a candidate, waiting or running, or a requested remeasure. A cancel records no measurement.
-A run's candidate that has no measurement is `skipped` at once, and is evaluated again only when someone asks
-(`piloop candidate remeasure`).
-
-### piloop candidate import
-
-```text
-piloop candidate import REF COMMIT [--summary TEXT]
-```
-
-Registers the tree of a commit, branch or tag of the repo as a `reference` candidate, whose change an idea can name.
-The daemon scores it into the pool with the current evaluator, as any candidate: it may become the best. A run starts
-from it with `piloop idea claim <id> --base <candidate>`. To import a candidate
-of another campaign, fetch its commit into this repo first: `git fetch <its repo> <sha>`.
-
-### piloop candidate note
-
-```text
-piloop candidate note CANDIDATE_ID REASON [--follow-up HUNCH]... [--track TRACK]
-```
-
-Notes why a candidate is worth starting from: a `note` comment on the candidate, signed as `PILOOP_ACTOR`. Each
-`--follow-up` is an open idea about the candidate, whose run can start from it with `--base`. An implementer files no
-follow-ups.
-
-### piloop candidate exclude
-
-```text
-piloop candidate exclude CANDIDATE_ID --reason TEXT
-```
-
-Takes a candidate out of the race for the best, such as one that gamed the evaluation. Its scores stay in the pool,
-and a run may still start from it. The `candidate.excluded_reason` event records the reason, signed as
-`PILOOP_ACTOR`. The baseline cannot be excluded. To take it back, set `excluded_reason` and `excluded_by` to NULL with
-`piloop sql`. See [Act on a candidate](/concepts/pool#act-on-a-candidate).
-
-### piloop measurement add
-
-```text
-piloop measurement add CANDIDATE_ID --report FILE
-```
-
-Records a measurement that you made yourself, under the campaign's current evaluator. `FILE` is JSON:
-`{"metrics": {"<name>": <value>}, "seconds": <s>, "error": "<why>"}`. Every metric of `piloop.toml` is needed unless
-`error` says why the evaluation failed. The candidate's mean includes it at once, and the command says where the
-candidate stands now. See [Act on a candidate](/concepts/pool#act-on-a-candidate).
-
-## Status and the inbox
-
-### piloop status
-
-```text
-piloop status [REF] [--status active|stopped|retired] [--json]
-```
-
-Prints the daemon's state, then for each campaign the sections of its `[status] sections`: by default the best, the
-goal, the tracks, the trajectory, the open runs, the queue, the running agents with their last line, the recent
-candidates, the incidents that agents got, the inbox and the recent events. A sweep gets the same sections in its
-brief.
-
-Without `REF`, it lists the active and stopped campaigns. `--status` lists the campaigns of that status instead, and
-repeats. `--json` prints one JSON document instead: the daemon's pid and the main facts of each campaign, read at one cursor of
-the [event feed](/reference/event-feed).
-
-`status`, `inbox` (its list, `show` and `wait`) and `events` ask the daemon. Without one, they stop and say to run `piloop serve --detach`.
-
-### piloop events
-
-```text
-piloop events [--after CURSOR] [--campaign REF] [--kind KIND]... [--limit N] [--follow] [--timeout SECONDS] [--json]
-```
-
-Prints the events after `CURSOR` (default 0, the start of the feed), oldest first, at most `--limit` (default 100,
-at most 1000), then the cursor to read after next. `--campaign` keeps the events about rows of one campaign, and
-`--kind` the events of a kind; repeat it for several. The next cursor passes every event that the read examined,
-also those that the filters left out. `--follow` waits, up to `--timeout` seconds (default 1800), until an event
-arrives. `--json` prints one JSON document. See [Event feed](/reference/event-feed).
-
-### piloop watch
-
-```text
-piloop watch [REF] [--no-mouse]
-```
-
-Shows the campaign on one screen, with keys to act on it. `--no-mouse` leaves the mouse to the terminal, for a
-multiplexer that misreads it. See [Watching a campaign](/guides/watch).
-
-### piloop history
-
-```text
-piloop history [REF]
-```
-
-Prints the research pack: the metrics, the analysis files, the latest 60 ideas with their outcomes, the new bests, the agents' notes and the digests.
-
-### piloop inbox
-
-```text
-piloop inbox [REF] [--kind KIND]... [--all] [--json]
-```
-
-Lists the unacknowledged items that others wrote to you, most urgent first.
-`--kind` keeps only items of the given kind: `note`, `decision`, `escalation` or `message`. Repeat it to
-keep several kinds. `--all` includes acknowledged items. `--json` prints them as one JSON document, read at one cursor of the
-[event feed](/reference/event-feed). See [The orchestrator and the inbox](/concepts/orchestrator).
-
-### piloop inbox show
-
-```text
-piloop inbox show COMMENT_ID
-```
-
-Prints the thread of a comment: its root in full, then the replies with the comment that each answers, then the
-comments that cite the root as `comment#<id>` or that the root cites. Every comment of a thread prints the same thread.
-
-### piloop inbox ack
-
-```text
-piloop inbox ack IDS...
-piloop inbox ack --up-to ID [--campaign REF] [--kind KIND]...
-```
-
-Marks items as seen. Only the recipients of an item acknowledge it: an item that you wrote is refused. `--up-to`
-marks every unacknowledged item up to that id instead. With `--up-to`, `--campaign` keeps only the items of one
-campaign, and `--kind` keeps only the items of the given kinds. With `IDS`, `--campaign` and
-`--kind` are refused.
-Nothing waits on an acknowledgement. To revise a decision, write a `decision` comment on its target.
-
-### piloop inbox choose
-
-```text
-piloop inbox choose ID CHOICE
-```
-
-Answers an escalation with one of its choices: a `decision` reply in its thread, signed as you, and an
-acknowledgement. `piloop inbox show ID` lists the choices. See [Escalations](/concepts/orchestrator#escalations).
-
-### piloop inbox reply
-
-```text
-piloop inbox reply ID BODY [--priority N]
-```
-
-Answers an item with a `decision` on the root of its thread, `in_reply_to` the item. The answer is an inbox item
-itself, so it ends `piloop inbox wait` for every orchestrator but you.
-
-### piloop inbox wait
-
-```text
-piloop inbox wait [REF] [--after EVENT_ID] [--timeout SECONDS]
-```
-
-Blocks until something needs the orchestrator, then prints it, one line each, and the command for the next wait. It
-returns for a new inbox item that someone else wrote, a campaign that the daemon stopped,
-an anomaly that the daemon gave to an agent, and a candidate that the daemon scored into the pool. `--after` is the cursor
-that the last wait printed (default: now). `--timeout` (default 1800) is how long to wait before it returns with
-nothing. Set the timeout of your shell tool above it.
-
-### piloop escalate
-
-```text
-piloop escalate TARGET [--priority N] < form.json
-piloop escalate TARGET --guide
-```
-
-Files an escalation on `TARGET` (`idea#12`), with its form as JSON on stdin. The campaign's `[plugins.escalation]`
-provider checks the form, and a refusal says what to fix. `--guide` prints the provider's fields, limits and an example.
-`--priority` defaults to 2.
-
-### piloop message
-
-```text
-piloop message REF BODY [--priority N]
-```
-
-Writes to the campaign's orchestrator, which answers in your inbox. `--priority` defaults to 2. See
-[Messages](/concepts/orchestrator#the-inbox).
-
-### piloop wake
-
-```text
-piloop wake [REF] [--budget TOKENS]
-```
-
-Prints what the orchestrator of a campaign needs first, in a fixed budget of tokens (default 2000). Without `REF`, it
-uses the campaign of the current directory, else the only active campaign, else the whole home. See
-[Memory](/concepts/memory).
-
-### piloop journal
-
-```text
-piloop journal LINE [--campaign REF]
-```
-
-Adds one line, at most 280 bytes, to the campaign's append-only journal: a decision, a plan or a result, with its
-ids. Without `--campaign`, it uses the campaign of the current directory, else the only active campaign.
-
-## Agents
-
-### piloop launch
-
-```text
-piloop launch REF ROLE [--harness NAME] [--model MODEL] [--reason TEXT]
-```
-
-Asks the daemon for one more agent of `ROLE`, a role that does no runs: `orchestrator`. The daemon starts it at once,
-within the role's `max_concurrent`.
-Only the daemon starts implementers, because an implementer needs a run.
+* `--wrap-up`: Tell the agent to save its work and stop first, and end it 10 minutes later.
 
 ### piloop attach
 
@@ -598,9 +52,859 @@ Only the daemon starts implementers, because an implementer needs a run.
 piloop attach AGENT_SESSION_ID
 ```
 
-Prints the last 40 lines that an agent wrote, running or ended, on any machine. A running agent's lines come from the
-latest snapshot of its session, a few seconds old and at most 30. An agent has no terminal to type into: use `piloop prompt` to
-send it a message.
+Print the last lines that an agent wrote, running or ended: `[agents] attach_lines` of them.
+
+An agent is a background process, with no terminal to type into: `piloop prompt` sends it a message.
+A running agent's lines come from the latest snapshot of its session, on any machine: a few seconds old, 30 at most.
+
+**Arguments**:
+
+* `AGENT_SESSION_ID`: The id of the agent. **[required]**
+
+### piloop campaign
+
+Act on a campaign as a whole.
+
+#### piloop campaign parent
+
+```text
+piloop campaign parent [OPTIONS] REF [ARGS]
+```
+
+Put a campaign under another, or make it a root with --clear.
+
+A campaign has at most one parent, in the same piloop home, and never itself or one of its descendants.
+`piloop campaign tree` shows the tree.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+* `PARENT_REF`: The campaign to put it under.
+
+**Parameters**:
+
+* `--clear`: Make the campaign a root.
+
+#### piloop campaign tree
+
+```text
+piloop campaign tree
+```
+
+Print every campaign under its parent, with its type and its status.
+
+#### piloop campaign stop
+
+```text
+piloop campaign stop [OPTIONS] REF
+```
+
+Stop a campaign. The daemon stops it at once, as when a `[stop]` condition holds.
+
+This works also while the campaign is paused or held by its stop rule. It drops the queued runs and the requested
+agents. Each running implementer is told to save its work and stop, and is ended 10 minutes later. What the
+implementers saved is scored.
+With `--kill`, the implementers are ended at once, and what they committed is still scored. On a stopped campaign,
+`--kill` ends the implementers that are still winding down. The campaign's `piloop.toml` is not changed.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+
+**Parameters**:
+
+* `--kill`: End the running implementers at once, without the wrap-up prompt.
+* `--reason STR`: Why, for `stopped_reason`. *[default: ""]*
+
+#### piloop campaign fork
+
+```text
+piloop campaign fork [OPTIONS] REF
+```
+
+Make a new campaign that starts from a version of another one, by default its best, in a clone of its checkout.
+
+The source may be in any state, retired too, and goes on as it is. The fork takes its stored config and shares the
+memory of its repo: its lessons, ideas and documents. It starts with no ideas of its own and an empty workspace.
+The daemon measures its starting version as its baseline.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+
+**Parameters**:
+
+* `--at STR`: The version to start from, as the source's vcs names one. Default: its best.
+* `--name STR`: The new campaign's name. Default: \<source\>-\<n\>.
+
+#### piloop campaign sync
+
+```text
+piloop campaign sync [OPTIONS] REF
+```
+
+Read a campaign's piloop.toml again. A campaign that the server cloned first takes its repository's new versions.
+
+Its checkout moves forward to them; its candidates and their scores stay. New code comes in with
+`piloop candidate import`, or a fork with `piloop campaign fork --at`. A local checkout is read where it is:
+`piloop init <path>` does the same. For a private repository: `--secret`, or a token piped in with
+`--token-stdin`.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+
+**Parameters**:
+
+* `--secret STR`: The name of the server's secret that the host of the campaign's repository asks for.
+* `--token-stdin`: Read a token that the repository's host accepts from stdin, for this sync alone: nothing keeps it.
+
+#### piloop campaign reopen
+
+```text
+piloop campaign reopen --reason STR REF
+```
+
+Set a stopped campaign active again, once it is closed and its runs are over.
+
+The runs, hours and tokens that its stop rule limits count again from now, so it gets each of them again. A rule
+that would stop it at once, a target that it reached say, refuses: change the rule in piloop.toml and run
+`piloop init` instead. A retired campaign does not reopen: fork it.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+
+**Parameters**:
+
+* `--reason STR`: Why, with ids. **[required]**
+
+#### piloop campaign retire
+
+```text
+piloop campaign retire --reason STR REF
+```
+
+Retire a stopped campaign for good, once it is closed and its runs are over.
+
+It changes no more, `piloop status` leaves it out unless `--status retired` asks for it, and a new campaign may
+take its name. Its rows, events and archived files stay, and its id still names it. The reason goes into a note on
+the campaign.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+
+**Parameters**:
+
+* `--reason STR`: Why, with ids. **[required]**
+
+### piloop candidate
+
+Show a candidate, import a starting point, measure a candidate again, note one, or exclude one from the best.
+
+#### piloop candidate show
+
+```text
+piloop candidate show CANDIDATE_ID
+```
+
+Print a candidate: where it stands, its metrics beside its parent's, and each rung of the ladder that it measured.
+
+The metrics are the means under the campaign's current evaluator. A rung's time is its own, without the rungs
+before it.
+
+**Arguments**:
+
+* `CANDIDATE_ID`: The candidate. **[required]**
+
+#### piloop candidate import
+
+```text
+piloop candidate import [OPTIONS] REF VERSION
+```
+
+Register the files of a version as a reference candidate: a starting point for a run.
+
+The daemon scores it into the pool with the current evaluator, as any candidate: it may become the best. To import
+a candidate of another campaign, bring its `revision` into this campaign's repo first.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+* `VERSION`: A version in the campaign's repo, as its vcs names one: a revision, a branch, a tag. **[required]**
+
+**Parameters**:
+
+* `--summary STR`: A summary of the candidate. Default: the version's own summary.
+
+#### piloop candidate remeasure
+
+```text
+piloop candidate remeasure [OPTIONS] CANDIDATE_ID
+```
+
+Ask the daemon to evaluate a candidate `--repeats` more times, with the current evaluator.
+
+Use it when a fault of the host spoiled a measurement (a full disk, a lost GPU), or when load made it noisy. The
+candidate's mean includes the new evaluations, so the pool and its best follow. It measures soon, after the
+baseline, also when the campaign is stopped: not while it is paused with `--evals`, or held by its stop rule. A
+commit that the daemon never measured, `skipped` or `recovered`, gets its first evaluations.
+
+**Arguments**:
+
+* `CANDIDATE_ID`: The candidate to measure again. **[required]**
+
+**Parameters**:
+
+* `--repeats INT`: How many more evaluations. *[default: 3]*
+
+#### piloop candidate note
+
+```text
+piloop candidate note [OPTIONS] CANDIDATE_ID REASON
+```
+
+Note why a candidate is worth starting from, with follow-up ideas about it.
+
+The note is a comment on the candidate, signed as PILOOP_ACTOR. Each `--follow-up` is an open idea about the
+candidate, whose run can start from it (`piloop idea claim <id> --base <candidate>`). An implementer files no
+follow-ups.
+
+**Arguments**:
+
+* `CANDIDATE_ID`: The candidate. **[required]**
+* `REASON`: Why the tree is worth starting from. **[required]**
+
+**Parameters**:
+
+* `--follow-up STR..., --empty-follow-up`: An open idea about the candidate. Repeatable. *[default: ()]*
+* `--track STR`: The track of the follow-ups. Default: the track of the candidate's run, else the first track.
+
+#### piloop candidate exclude
+
+```text
+piloop candidate exclude --reason STR CANDIDATE_ID
+```
+
+Take a candidate out of the race for the best, such as one that gamed the evaluation.
+
+Its scores stay in the pool, and a run may still start from it. The `candidate.excluded_reason` event records the
+reason, signed as PILOOP_ACTOR. To take it back, set `excluded_reason` and `excluded_by` to NULL with `piloop sql`.
+
+**Arguments**:
+
+* `CANDIDATE_ID`: The candidate. **[required]**
+
+**Parameters**:
+
+* `--reason STR`: Why it may not be best, with ids: what the number does not say. **[required]**
+
+### piloop cas
+
+This home's CAS: print a blob, or serve the CAS to workers on other machines.
+
+#### piloop cas get
+
+```text
+piloop cas get CID
+```
+
+Print a file of the CAS of `[plugins.cas]` to stdout: a blob as stored, or a chunked file whole.
+
+An agent's session file (`agent_sessions.session_file`) is a chunked file.
+
+**Arguments**:
+
+* `CID`: The address of the file. **[required]**
+
+#### piloop cas serve
+
+```text
+piloop cas serve --listen STR
+```
+
+Serve the CAS of `[plugins.cas]` until Ctrl-C or SIGTERM. Each caller sends a worker's token.
+
+**Parameters**:
+
+* `--listen STR`: Serve on HOST:PORT. An address that is not loopback needs TLS ([plugins.network]). **[required]**
+
+### piloop doctor
+
+```text
+piloop doctor
+```
+
+Check the install without writing anything, and say how to fix each failure.
+
+It notes a newer piloop at the source of the CLI, and checks that the daemon runs the installed code, the database
+is at head, each piloop.toml loads, the MCP servers can start, and the harnesses are on PATH and have the skills
+of this CLI. The commands it names use PILOOP_CLI.
+
+### piloop escalate
+
+```text
+piloop escalate [OPTIONS] TARGET
+```
+
+Ask for a decision: an escalation on a target, with its form as JSON on stdin.
+
+The campaign's `[plugins.escalation]` provider checks the form and says what to fix. `--guide` prints its fields,
+limits and an example.
+
+**Arguments**:
+
+* `TARGET`: What it is about, such as idea#12. **[required]**
+
+**Parameters**:
+
+* `--priority INT`: From 0 (urgent) to 4 (someday). *[default: 2]*
+* `--guide, --no-guide`: Print how to fill the form of the target's campaign.
+
+### piloop eval
+
+List or cancel the evaluations that the daemon runs or that wait for a slot.
+
+#### piloop eval queue
+
+```text
+piloop eval queue
+```
+
+List the running evaluations, then the waiting ones in the order in which they get a slot.
+
+The last line counts them. A free slot of the executor goes to the campaign with the fewest running evaluations,
+and in that campaign to its baseline first, then to the oldest request. A requested remeasure shows as waiting at once.
+Each row names its evaluator. One that the campaign replaced since is `retired`: what runs finishes under it.
+
+#### piloop eval cancel
+
+```text
+piloop eval cancel CANDIDATE_ID
+```
+
+Cancel the evaluation of a candidate: a waiting one never starts, and the daemon stops a running one.
+
+It also cancels a requested remeasure. A cancel records no measurement. A run's candidate that has no measurement is
+`skipped` at once, and a daemon restart does not run it again. It is evaluated again only
+when someone asks (`piloop candidate remeasure`). A baseline that never measured pauses its campaign's measurements
+until you resume it.
+
+**Arguments**:
+
+* `CANDIDATE_ID`: The candidate whose evaluation to cancel. **[required]**
+
+### piloop events
+
+```text
+piloop events [OPTIONS]
+```
+
+Print the events after a cursor, oldest first, then the cursor to read after next.
+
+The cursor moves over every event that the read examined, also those that --campaign and --kind leave out. Read a
+snapshot first (`piloop status --json` or `piloop inbox --json`), then the events after its cursor: nothing is
+missed in between. Save the cursor after you have handled the events, and read from it again after a disconnect.
+An event can come twice then: skip an id that you have handled.
+
+**Parameters**:
+
+* `--after INT`: The cursor to read after: the `next` of the last read, or the `cursor` of a snapshot. *[default: 0]*
+* `--campaign STR`: Only the events about rows of this campaign.
+* `--kind STR..., --empty-kind`: Only events of this kind. Repeatable. *[default: ()]*
+* `--limit INT`: The most events to print. *[default: 100]*
+* `--follow`: Wait for an event when there is none yet, up to --timeout.
+* `--timeout FLOAT`: With --follow: seconds to wait. *[default: 1800]*
+* `--json`: Print one JSON document on stdout, for a program. Messages go to stderr.
+
+### piloop history
+
+```text
+piloop history [ARGS]
+```
+
+Print the research pack: the campaign's metrics, analysis, ideas, new bests and notes.
+
+It shows the metrics, the analysis artifacts, the latest ideas with their outcomes, the new bests, the latest
+notes and the digests, as many as `[plugins.section.pack]` says. Without a
+campaign, it uses the campaign that the current directory is in, else the only active campaign, else every campaign.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo.
+
+### piloop idea
+
+Add an idea to the board, claim or propose one for your run, and change an idea: its status, links or track.
+
+#### piloop idea add
+
+```text
+piloop idea add [OPTIONS] REF TITLE
+```
+
+Add an idea to the board. It is open.
+
+The `files` key of a role says whether its agents may add ideas. The orchestrator and humans may add ideas. The
+idea is signed as PILOOP_ACTOR. The idea and its links are written together, so the daemon never sees the idea
+without them.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+* `TITLE`: A short title for the idea. **[required]**
+
+**Parameters**:
+
+* `--hypothesis STR`: Why this should help, and by how much. Default: the title.
+* `--plan STR`: The steps for the implementer.
+* `--from STR`: What prompted the idea, with ids or a URL. Example: "note comment#881: …".
+* `--priority INT`: From 0 (urgent) to 4 (someday). *[default: 2]*
+* `--track STR`: The track it works on. Required when piloop.toml has more than one track.
+* `--after INT..., --empty-after`: An idea id to wait for. Repeatable. A worker can claim the idea once all are done or dropped. *[default: ()]*
+
+#### piloop idea claim
+
+```text
+piloop idea claim [OPTIONS] IDEA_ID
+```
+
+Claim an open idea for your run: you work on it until your run ends, and no other run takes it.
+
+Only a worker claims, once per run. An idea that an `after` link holds waits until its prerequisites are done.
+It prints the idea's hypothesis and its plan, which the board does not show, and, with several tracks, what the
+idea's track asks of your run. With `--base`, your run starts from that candidate: your checkout moves to it.
+
+**Arguments**:
+
+* `IDEA_ID`: The idea. **[required]**
+
+**Parameters**:
+
+* `--base INT`: The candidate that your run starts from, instead of the best: any candidate of the campaign. Your checkout moves to it, and your submissions build on it.
+
+#### piloop idea propose
+
+```text
+piloop idea propose [OPTIONS] TITLE
+```
+
+Add an idea of your own to the board and claim it for your run, in one step.
+
+Only a worker proposes, instead of a claim. The idea is signed as PILOOP_ACTOR. With `--base`, your run starts
+from that candidate: your checkout moves to it.
+
+**Arguments**:
+
+* `TITLE`: A short title for the idea. **[required]**
+
+**Parameters**:
+
+* `--hypothesis STR`: Why this should help, and by how much. Default: the title.
+* `--plan STR`: The steps you take.
+* `--from STR`: What prompted the idea, with ids or a URL.
+* `--track STR`: The track it works on. Required when piloop.toml has more than one track.
+* `--base INT`: The candidate that your run starts from, instead of the best: any candidate of the campaign. Your checkout moves to it, and your submissions build on it.
+
+#### piloop idea status
+
+```text
+piloop idea status --reason STR IDEA_ID STATUS
+```
+
+Set an idea's status, with a note on the idea that says why.
+
+`open` puts it back on the board, and `dropped` takes it off, which frees the ideas after it. Only a run makes an
+idea `done`. A claimed idea has an open run: it can only be dropped, and its run finishes.
+
+**Arguments**:
+
+* `IDEA_ID`: The idea. **[required]**
+* `STATUS`: open or dropped. **[required]** *[choices: open, claimed, done, dropped]*
+
+**Parameters**:
+
+* `--reason STR`: Why, with ids. It goes into the event or a note on the idea. **[required]**
+
+#### piloop idea link
+
+```text
+piloop idea link --reason STR IDEA_ID KIND TARGET_ID
+```
+
+Link an idea that exists to another idea of its campaign: it waits until the target is done.
+
+The link is written in one transaction, so no worker claims the idea in between. A claimed idea takes no link: its
+run started already. A link that closes a cycle is refused.
+
+**Arguments**:
+
+* `IDEA_ID`: The idea. **[required]**
+* `KIND`: after: wait until the target is done or dropped. **[required]** *[choices: after]*
+* `TARGET_ID`: The idea it links to. **[required]**
+
+**Parameters**:
+
+* `--reason STR`: Why, with ids. It goes into the event or a note on the idea. **[required]**
+
+#### piloop idea unlink
+
+```text
+piloop idea unlink --reason STR IDEA_ID KIND TARGET_ID
+```
+
+Delete an idea's link, for example an `after` link to a prerequisite that is still open, to free the idea.
+
+**Arguments**:
+
+* `IDEA_ID`: The idea. **[required]**
+* `KIND`: after. **[required]** *[choices: after]*
+* `TARGET_ID`: The idea it links to. **[required]**
+
+**Parameters**:
+
+* `--reason STR`: Why, with ids. It goes into the event or a note on the idea. **[required]**
+
+#### piloop idea track
+
+```text
+piloop idea track --reason STR IDEA_ID TRACK
+```
+
+Move an idea to another track of its campaign, with a note on the idea that says why.
+
+Its runs are scored on that track's primary. A scheduled idea keeps its track: its run is scored on it.
+
+**Arguments**:
+
+* `IDEA_ID`: The idea. **[required]**
+* `TRACK`: A track of piloop.toml. **[required]**
+
+**Parameters**:
+
+* `--reason STR`: Why, with ids. It goes into the event or a note on the idea. **[required]**
+
+### piloop inbox
+
+```text
+piloop inbox COMMAND [OPTIONS] [ARGS]
+```
+
+Read and acknowledge what the agents address to you: decisions, escalations and notes.
+
+**Commands**:
+
+* [`ack`](#piloop-inbox-ack): Acknowledge items to say that you have seen them.
+* [`choose`](#piloop-inbox-choose): Answer an escalation with one of its choices: a `decision` reply signed as PILOOP_ACTOR, and an ack.
+* [`reply`](#piloop-inbox-reply): Answer an item with a `decision` on the root of its thread, `in_reply_to` the item, signed as PILOOP_ACTOR.
+* [`show`](#piloop-inbox-show): Show the thread of a comment: its root in full, the replies with what each answers, then the citations.
+* [`wait`](#piloop-inbox-wait): Wait until something needs the orchestrator, print it one line per item, then print the command to wait again.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo.
+
+**Parameters**:
+
+* `--kind COMMENTKIND..., --empty-kind`: Only items of this kind. Repeatable. *[default: ()]*
+* `--all, --no-all`: Show acknowledged items too.
+* `--json`: Print one JSON document on stdout, for a program. Messages go to stderr.
+
+#### piloop inbox show
+
+```text
+piloop inbox show COMMENT
+```
+
+Show the thread of a comment: its root in full, the replies with what each answers, then the citations.
+
+**Arguments**:
+
+* `COMMENT`: The id of the item. **[required]**
+
+#### piloop inbox wait
+
+```text
+piloop inbox wait [OPTIONS] [ARGS]
+```
+
+Wait until something needs the orchestrator, print it one line per item, then print the command to wait again.
+
+These events end the wait: a new or edited unacknowledged inbox item that someone else wrote, a campaign that
+the daemon stopped, an anomaly that the daemon gave to an agent, and the daemon's score of a candidate. Your own decisions, as PILOOP_ACTOR, do not end it. At --timeout it returns with nothing.
+Each return also names the escalations that still wait for you, unacknowledged and unanswered, with their age.
+Set the timeout of your shell tool higher than --timeout. Without a campaign, it waits for every campaign.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo.
+
+**Parameters**:
+
+* `--timeout FLOAT`: Seconds to wait before it returns with nothing new. *[default: 1800]*
+* `--after INT`: The event id to start after: the cursor that the last wait printed. Default: now.
+
+#### piloop inbox ack
+
+```text
+piloop inbox ack [OPTIONS] [ARGS...]
+```
+
+Acknowledge items to say that you have seen them.
+
+Nothing waits for an acknowledgement. To change a decision, write a `decision` comment on its target.
+
+**Arguments**:
+
+* `IDS`: The ids of the items.
+
+**Parameters**:
+
+* `--up-to INT`: Acknowledge every unacknowledged item up to this id instead. --campaign and --kind narrow it.
+* `--campaign STR`: With --up-to: only the items of this campaign.
+* `--kind COMMENTKIND..., --empty-kind`: With --up-to: only the items of this kind. Repeatable. *[default: ()]*
+
+#### piloop inbox reply
+
+```text
+piloop inbox reply [OPTIONS] COMMENT BODY
+```
+
+Answer an item with a `decision` on the root of its thread, `in_reply_to` the item, signed as PILOOP_ACTOR.
+
+The answer is an inbox item of its own, so every orchestrator but you sees it in `piloop inbox wait`.
+
+**Arguments**:
+
+* `COMMENT`: The id of the item. **[required]**
+* `BODY`: The answer. **[required]**
+
+**Parameters**:
+
+* `--priority INT`: From 0 (urgent) to 4 (someday). *[default: 2]*
+
+#### piloop inbox choose
+
+```text
+piloop inbox choose COMMENT CHOICE
+```
+
+Answer an escalation with one of its choices: a `decision` reply signed as PILOOP_ACTOR, and an ack.
+
+**Arguments**:
+
+* `COMMENT`: The id of the escalation. **[required]**
+* `CHOICE`: The id of one of its choices, such as A. **[required]**
+
+### piloop init
+
+```text
+piloop init [OPTIONS] [ARGS]
+```
+
+Make a directory a piloop campaign and register it.
+
+It is safe to run again. When needed, it runs `git init` and makes a baseline commit. When there is no
+piloop.toml, it writes piloop.toml, brief.md and evaluate.py from the template, and keeps the files that exist.
+While evaluate.py is still the template stub, it stops and says what to edit. Then it starts the daemon, unless
+one runs, registers the campaign with HEAD as its baseline candidate, and waits while the daemon measures it. A
+baseline that fails to evaluate pauses the campaign, and init exits with why. Ctrl-C stops only the wait: the
+campaign stays registered. For a campaign that is registered already, it reads piloop.toml again.
+
+**Arguments**:
+
+* `PATH`: The campaign directory. *[default: .]*
+
+**Parameters**:
+
+* `--example STR`: Write a bundled example instead of the blank template: enwik8, titanic-tracks, inference.
+* `--name STR`: Register the campaign under this name, not the `name` of piloop.toml.
+
+### piloop install-skills
+
+```text
+piloop install-skills
+```
+
+Install the orchestrator skills into ~/.agents/skills, and for every harness on PATH.
+
+Codex, pi, Gemini CLI, Cursor and every other harness that follows agentskills.io read them from ~/.agents/skills.
+Claude Code reads them from ~/.claude/skills (or $CLAUDE_CONFIG_DIR/skills). PILOOP_CLAUDE_SKILLS_DIR and PILOOP_AGENT_SKILLS_DIR install them elsewhere, for a
+second install such as a build of main next to a release. It replaces piloop's own skills there and nothing else. A running harness loads them
+at its next session. The installer and `piloop upgrade` run this command.
+
+### piloop journal
+
+```text
+piloop journal [OPTIONS] LINE
+```
+
+Add one line to the journal of the campaign: a decision, a plan or a result, with its ids.
+
+The journal is how a new orchestrator session picks up the work: `piloop wake` prints the latest lines first.
+
+**Arguments**:
+
+* `LINE`: At most 280 bytes. **[required]**
+
+**Parameters**:
+
+* `--campaign STR`: The campaign name, or a path inside its repo. Else the campaign of the current directory, else the only active campaign.
+
+### piloop launch
+
+```text
+piloop launch [OPTIONS] REF ROLE
+```
+
+Ask the daemon for one more agent of a role.
+
+The daemon launches it at once, within the role's `max_concurrent`.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+* `ROLE`: The role of the agent: `orchestrator`. The daemon launches the agents of a role that does runs by itself, one for each queued run. **[required]**
+
+**Parameters**:
+
+* `--harness STR`: Use this harness instead of the rotation.
+* `--model STR`: The model id, as the harness names it.
+* `--reason STR`: Why you request the agent. The agent's brief includes it. *[default: requested from the CLI]*
+
+### piloop limits
+
+```text
+piloop limits COMMAND
+```
+
+Change a live key of a provider of the home while the daemon runs.
+
+**Commands**:
+
+* [`set`](#piloop-limits-set): Set a live key. It wins over `config.toml` at once, and holds until `piloop limits unset`.
+* [`unset`](#piloop-limits-unset): Remove a limit: `config.toml` holds again at once.
+
+#### piloop limits set
+
+```text
+piloop limits set --reason STR ASSIGNMENT
+```
+
+Set a live key. It wins over `config.toml` at once, and holds until `piloop limits unset`.
+
+The value is JSON (`1`, `null`, `1.5`), or else text.
+
+**Arguments**:
+
+* `ASSIGNMENT`: `KEY=VALUE`: `executor.pools.serve.slots.evaluation=1`. **[required]**
+
+**Parameters**:
+
+* `--reason STR`: Why: it shows next to the value. **[required]**
+
+#### piloop limits unset
+
+```text
+piloop limits unset KEY
+```
+
+Remove a limit: `config.toml` holds again at once.
+
+**Arguments**:
+
+* `KEY`: The key of the limit. **[required]**
+
+### piloop measurement
+
+Record a measurement made outside the daemon.
+
+#### piloop measurement add
+
+```text
+piloop measurement add --report PATH CANDIDATE_ID
+```
+
+Record a measurement of a candidate under the campaign's current evaluator. Its mean includes it at once.
+
+Use it for an evaluation that you ran yourself, for example the evaluate command on the candidate's commit after
+the daemon's run timed out. `metrics` takes the metrics of piloop.toml, all of them unless `error` says why the
+evaluation failed. `seconds` and `error` are optional. The output says where the candidate stands now. The
+measurement is signed as PILOOP_ACTOR.
+
+**Arguments**:
+
+* `CANDIDATE_ID`: The candidate that was measured. **[required]**
+
+**Parameters**:
+
+* `--report PATH`: A JSON file: \{"metrics": \{"\<name\>": \<value\>\}, "seconds": \<s\>, "error": "\<why\>"\}. **[required]**
+
+### piloop message
+
+```text
+piloop message [OPTIONS] REF BODY
+```
+
+Write to the campaign's orchestrator, signed as PILOOP_ACTOR. It ends the orchestrator's `piloop inbox wait`.
+
+The orchestrator answers with `piloop inbox reply`, and the answer is in your inbox.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+* `BODY`: What to say. **[required]**
+
+**Parameters**:
+
+* `--priority INT`: From 0 (urgent) to 4 (someday). *[default: 2]*
+
+### piloop migrate
+
+```text
+piloop migrate
+```
+
+Migrate the database to the schema of this piloop, and print what changed and where its backup is.
+
+Before it migrates, it copies the database next to it (`migration_backups` in config.toml). Only this command, `piloop serve` when it starts and `piloop upgrade` migrate. Every other command
+refuses a database at another schema revision, and says what to run. It refuses to migrate under the running
+daemon of an older piloop, and refuses an agent that the daemon launched.
+
+### piloop pause
+
+```text
+piloop pause --reason STR [OPTIONS] REF
+```
+
+Pause a campaign: nothing new launches, and nothing is escalated. `piloop resume` ends the pause.
+
+The daemon queues no run, requests no role and launches no requested row. Running work goes on, and its commits
+are scored. The daemon still
+measures again what a new evaluator or `piloop candidate remeasure` needs, so the pause can end on a measured best.
+`--evals` holds those measurements too. The pause is in the database: it holds wherever you run the command.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+
+**Parameters**:
+
+* `--reason STR`: Why, with ids: what the pause waits for. **[required]**
+* `--evals, --no-evals`: Hold the measurements that the daemon starts too: after a new evaluator, or asked.
+
+### piloop plugins
+
+```text
+piloop plugins
+```
+
+Show every capability, each of its providers and the package it comes from, then what the configuration selects.
+
+It loads the entry points as the daemon does when it starts, and fails on one of a capability that the daemon
+uses that does not load, is not of its kind, or reuses a name. A broken package of a capability that nothing
+selects, which the daemon does not load, is shown with its error.
 
 ### piloop prompt
 
@@ -608,154 +912,448 @@ send it a message.
 piloop prompt AGENT_SESSION_ID TEXT
 ```
 
-Queues `TEXT` for the next turn of a running agent of any role, as a `note` on the agent. The daemon gives it to the
-agent's runtime, and the command waits up to 20 seconds to say whether it is queued:
+Queue a message for the next turn of a running agent of any role, and say whether it is queued.
+
+The message is a note on the agent. The daemon queues it through the agent's executor and its runtime. When it
+cannot, the command says why. After 20 seconds without an outcome, the daemon still queues it once the agent runs.
+
+**Arguments**:
+
+* `AGENT_SESSION_ID`: The id of the agent, as `piloop status` lists it. **[required]**
+* `TEXT`: The message. **[required]**
+
+### piloop restart
 
 ```text
-queued comment#31 for agent_session#4: it reads it at its next piloop command
+piloop restart [OPTIONS]
 ```
 
-An agent of any harness reads its messages at its next `piloop` command, which prints them on stderr before its own
-output. A Claude Code agent also reads them after its next tool call (its hook runs `piloop agent messages`), and any
-agent at the end of its turn. `comment.delivered` on the agent records the read, and `comment.undelivered` an agent
-that ended first.
+Restart the running daemon on the installed code, in the same process.
 
-When the [runtime](/concepts/roles#runtimes) of the agent cannot take it, the command says why. The agent session ids are in
-`piloop status`.
+Running agents keep running. The daemon stops its loop, then the same process execs `piloop serve`. The new start
+re-attaches to every agent and finishes their runs. The process keeps its pid and its environment, so systemd,
+launchd or the terminal that started it still holds it. To change the environment of a service unit, use the
+restart of the service manager.
 
-### piloop run cancel
+**Parameters**:
 
-```text
-piloop run cancel RUN_ID [--wrap-up]
-```
-
-Cancels a queued or running run at once. A queued run never starts, and a run whose implementer fails to
-start is not launched again. A running implementer is ended with
-[every process that it started](/concepts/roles#watch-and-steer-an-agent), also those in sessions of their own. With `--wrap-up`, the implementer is first told to
-save its work and stop, and ended 10 minutes later. The run closes as `cancelled`, unless its implementer ended it first
-with `piloop run end`: a later end is refused. Its commits are scored, it counts toward no run limit, and its idea is dropped: set the idea `open` to run it again.
-
-### piloop run extend
-
-```text
-piloop run extend RUN_ID --by <duration>
-```
-
-Gives the running implementer of a run more time, such as `--by 1h` or `--by 90m`. Extensions add up:
-
-```text
-run#12: agent_session#40 may run 1:00:00 past its timeout
-```
-
-Its timeout ends it that much later, also on a worker elsewhere. A message to the implementer tells it its new
-deadline. A run that has no running implementer is refused.
-
-### piloop run end
-
-```text
-piloop run end submitted|gave_up [--reason <why>]
-```
-
-Ends your own run, as the implementer that works on it. `submitted`: your work is done, and your idea is `done` once
-its commits are scored. `gave_up` needs `--reason`: your idea goes back to `open`. The daemon ends you `end_grace`
-later (60 seconds), with every process that you started. Nothing else ends a run before its deadline.
-
-```text
-run#12 ended as submitted: the daemon ends this session in a moment
-```
-
-### piloop agent cancel
-
-```text
-piloop agent cancel AGENT_SESSION_ID [--wrap-up]
-```
-
-Cancels an agent of any role at once: an orchestrator, or an implementer, whose run it cancels as
-`piloop run cancel` does. A requested agent never starts. A running one is ended with every process that it started,
-at once or, with `--wrap-up`, after it was told to save its work and stop.
-
-### piloop agent messages
-
-```text
-piloop agent messages [--harness <harness>]
-```
-
-Takes the messages that wait for the agent of this shell, and prints them, one per line by default. A hook of the
-harness runs it during a turn, with `--harness` for the format that the hook reads: the `claude` harness passes
-`--harness claude`.
-
-## The database
-
-### piloop sql
-
-```text
-piloop sql STATEMENT|-
-```
-
-Runs one SQL statement against the piloop database. Schema changes, transactions, `ATTACH` and all but the read-only
-`PRAGMA`s are denied. So are writes to piloop's internal tables and to the full-text indexes. Everything else,
-including `DELETE`, is allowed. The output stops at 500 rows. See the [database schema](/reference/schema).
-
-With `-`, the statement is read from stdin, so a text with backticks, `$(…)` or `$VAR` reaches the database unchanged.
-Pipe it in from a quoted heredoc, which the shell does not expand:
-
-```bash
-piloop sql - <<'EOF'
-INSERT INTO comments (target_kind, target_id, author, kind, body)
-VALUES ('idea', 12, 'human', 'note', 'Run `make bench` first: it''s the slow step.');
-EOF
-```
-
-### piloop schema
-
-```text
-piloop schema [GUIDE ...]
-```
-
-Prints every guide to the database, then every table. With names, it prints only those guides, such as
-`piloop schema provenance`. The orchestrator reads it before it writes. A brief has the guides of its agent's role, and
-names the others.
-
-## The workspace archive
+* `--timeout FLOAT`: Seconds to wait for the daemon to start again. *[default: 30]*
 
 ### piloop restore
 
 ```text
-piloop restore REF [SUBJECT | PATH]
+piloop restore REF [ARGS]
 ```
 
-Writes archived workspace files back into the campaign's workspace: the files of `SUBJECT` (`idea#12`, or `12` for an idea), one
-workspace-relative `PATH` or everything under it, or with neither, every archived file. See
-[Getting files back](/concepts/archive).
+Write archived files back into the campaign's shared workspace: agents that start after get them in `./workspace/`.
 
-### piloop store status
+The daemon archives a settled subject's workspace files, such as a done idea's, and what is left when a campaign
+stops, into the artifact store and removes the local copies. This brings them back from the local store or its
+remote. A file that is already there with other content is kept, never overwritten.
 
-Prints the CAS provider and, for a cache, what it holds (blobs, their local size, how many are on the remote), how much of each campaign was
-archived, and how many settled subjects and stopped campaigns are still due:
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+* `TARGET`: A subject (`idea#12`, or `12` for an idea): its files; else a workspace-relative path: it or everything under it. Left out: every archived file.
+
+### piloop resume
 
 ```text
-to archive: 0 settled subject(s), 0 stopped campaign(s) (the daemon works through them in the background, one at a time)
+piloop resume REF
 ```
 
-### piloop store evict
+Resume a paused campaign. The daemon queues runs and requests roles again at once.
 
-Uploads the blobs that the remote does not have yet, then drops local copies as `[plugins.cas]` says. The daemon does this
-every hour.
+**Arguments**:
 
-### piloop store verify
+* `REF`: The campaign name, its id, or a path inside its repo. **[required]**
+
+### piloop run
+
+Act on one run.
+
+#### piloop run cancel
 
 ```text
-piloop store verify [REF]
+piloop run cancel [OPTIONS] RUN_ID
 ```
 
-Checks that the store holds every blob of every archive: local copies are hashed again, evicted ones are looked up on
-the remote. Exits non-zero when one is missing or corrupt.
+Cancel a queued or running run. The daemon acts at once.
 
-### piloop cas get
+A queued run never starts, and a run whose implementer fails to start is not launched again. A running implementer is ended
+with every process that it started, at once or, with `--wrap-up`, after it was told to save its work and stop. The run
+closes as `cancelled`, unless the implementer ran `piloop run end` before the daemon ended it: a later end is
+refused. Its commits are scored, and its idea is open again: drop it to take it off the board.
+
+**Arguments**:
+
+* `RUN_ID`: The id of the run. **[required]**
+
+**Parameters**:
+
+* `--wrap-up`: Tell the agent to save its work and stop first, and end it 10 minutes later.
+
+#### piloop run extend
 
 ```text
-piloop cas get CID
+piloop run extend --by TIMEDELTA RUN_ID
 ```
 
-Prints the file `CID` of the CAS to stdout: a blob as it was put, or a chunked file such as an agent's session file
-(`agent_sessions.session_file`) whole. Exits non-zero when the CAS does not have it.
+Give a running run's implementer more time.
+
+Its timeout ends it `--by` later, also on a worker elsewhere, and a note tells it its new deadline. Extensions add up.
+
+**Arguments**:
+
+* `RUN_ID`: The id of the run. **[required]**
+
+**Parameters**:
+
+* `--by TIMEDELTA`: How much more time, such as `1h` or `90m`. **[required]**
+
+#### piloop run end
+
+```text
+piloop run end [OPTIONS] HOW
+```
+
+End your own run now, with every process that you started.
+
+Optional: when your session exits, your run ends as `submitted` if it submitted a version, else as `gave_up`.
+`submitted` settles your idea as done once your work is scored: in a campaign that scores what you submit, only
+after a `piloop submit`. `gave_up` puts your idea back on the board, with your reason if you give one.
+
+**Arguments**:
+
+* `HOW`: submitted: your work is done. gave_up: you stop without a result. **[required]** *[choices: submitted, gave-up]*
+
+**Parameters**:
+
+* `--reason STR`: Why you give up, with ids.
+
+### piloop schema
+
+```text
+piloop schema [ARGS...]
+```
+
+Print the guides to the database and every table, or only the guides that you name.
+
+A brief has the guides of its agent's role; this prints any guide, also one that no brief has, such as
+`orchestration`. The examples name no campaign, and say what the default vcs provider writes.
+
+**Arguments**:
+
+* `NAMES`: The guides to print, such as `provenance` or `queries`. Without one, every guide, then every table.
+
+### piloop secret
+
+The secrets that agents get in their environment. No command shows a value.
+
+#### piloop secret set
+
+```text
+piloop secret set [OPTIONS] NAME
+```
+
+Set a secret, in place of any, from stdin: `printf %s "$KEY" | piloop secret set EXA_API_KEY`.
+
+On a terminal, it asks for the value and does not show it. Agents get the value from their next start. An agent
+sets only its own campaign's secrets.
+
+**Arguments**:
+
+* `NAME`: The name of the secret: the variable that agents get it in. **[required]**
+
+**Parameters**:
+
+* `--campaign STR`: The campaign whose secret it is, over the home's of the same name. Unset: the home's.
+
+#### piloop secret list
+
+```text
+piloop secret list
+```
+
+The secrets: the name, whose it is, and who set it last and when. Never a value.
+
+#### piloop secret rm
+
+```text
+piloop secret rm [OPTIONS] NAME
+```
+
+Delete a secret. An agent that starts after it no longer gets it.
+
+**Arguments**:
+
+* `NAME`: The name of the secret: the variable that agents get it in. **[required]**
+
+**Parameters**:
+
+* `--campaign STR`: The campaign whose secret it is, over the home's of the same name. Unset: the home's.
+
+### piloop serve
+
+```text
+piloop serve [OPTIONS]
+```
+
+Run the daemon, which launches the agents and reaps the agents that end.
+
+Only one daemon runs per PILOOP_HOME. The file serve.pid holds its lock.
+
+**Parameters**:
+
+* `--detach, --no-detach`: Start the daemon in the background. Its output goes to serve.log.
+* `--check, --no-check`: Check that the daemon can start (its plugins, and what config.toml binds), and start nothing.
+* `--listen STR`: Serve other machines on HOST:PORT ([plugins.network] listen). An address that is not loopback needs TLS. Port 0 takes a free port, which `piloop restart` keeps. `piloop status` shows the URL.
+
+### piloop service-unit
+
+```text
+piloop service-unit
+```
+
+Print a systemd user unit (a launchd plist on macOS) that keeps `piloop serve` running.
+
+It prints the unit only, and installs nothing. The unit carries the variables that the homes of the installed
+harnesses and of the registered campaigns' harnesses name.
+
+### piloop sql
+
+```text
+piloop sql STATEMENT
+```
+
+Run one SQL statement on the piloop database.
+
+These are denied: schema changes, ATTACH, transactions, and writes to `alembic_version` and `session_actor`. Only
+the PRAGMAs that describe the schema are allowed. A query prints at most 500 rows. With `-`, the statement is read
+from stdin: piped in from a quoted heredoc (`<<'EOF'`), an agent's text reaches the database as written, where a
+double-quoted argument would let the shell run what is in backticks or `$(…)` first.
+
+**Arguments**:
+
+* `STATEMENT`: One SQL statement, or - to read it from stdin. **[required]**
+
+### piloop status
+
+```text
+piloop status [OPTIONS] [ARGS]
+```
+
+Print the state of the daemon and the live keys that `config.toml` or a limit sets, then each campaign.
+
+Each campaign shows the sections of its [plugins.section] use: by default the best, the goal and the progress against
+the stop rule, the tracks, the trajectory, the open runs, the queue, the live agents with their last line, the
+evaluations, the recent candidates, the incidents that agents got, the inbox and the recent events. Without a campaign, it uses
+the campaign that the current directory is in, else the only active campaign, else every campaign but the retired
+ones (`--status`).
+
+With --json, it prints the daemon's pid and the URL it listens on, and the main facts of each campaign, read at one
+cursor: follow them with `piloop events --after <cursor>`.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo.
+
+**Parameters**:
+
+* `--status CHOICE...`: Without a campaign, list those of this status. Repeatable. *[choices: active, stopped, retired]* *[default: (active, stopped)]*
+* `--json`: Print one JSON document on stdout, for a program. Messages go to stderr.
+
+### piloop stop
+
+```text
+piloop stop [OPTIONS]
+```
+
+Stop the running daemon with SIGTERM, and wait for it to exit.
+
+The daemon kills the agents that are running, and their runs fail. A run whose implementer already ran `piloop run end`
+ends as it said instead: the next daemon scores its commits.
+
+**Parameters**:
+
+* `--timeout FLOAT`: Seconds to wait for the daemon to exit. *[default: 30]*
+
+### piloop store
+
+The artifact store that archived workspace files live in: what it holds, eviction, checks.
+
+#### piloop store status
+
+```text
+piloop store status
+```
+
+What the store holds, where, and how much of each campaign's workspace was archived into it.
+
+#### piloop store evict
+
+```text
+piloop store evict
+```
+
+Upload what the remote lacks, then drop local copies as `[plugins.cas]` says; the daemon does it hourly too.
+
+#### piloop store verify
+
+```text
+piloop store verify [ARGS]
+```
+
+Check that every blob of every archive is in the store: local copies are re-hashed, evicted ones asked of the remote.
+
+Exits non-zero when one is missing or corrupt.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo.
+
+### piloop submit
+
+```text
+piloop submit [ARGS]
+```
+
+Score a commit of your run. It returns at once: where it stands comes to you as a `[piloop]` message.
+
+piloop runs the campaign's evaluate command on the commit, and scores it into the campaign's pool. Keep working
+meanwhile. The message gives its score and its gain over its parent, your line's best and the campaign's best. A
+commit whose first score beats the best is evaluated again until it is confirmed, then it can be the best. A
+campaign can cap the submissions of a run (`[evaluator] submissions`).
+
+**Arguments**:
+
+* `REVISION`: The commit to submit. Default: the one that your checkout is at.
+
+### piloop token
+
+The bearer tokens of `piloop serve` and `piloop cas serve`.
+
+#### piloop token create
+
+```text
+piloop token create [OPTIONS] NAME
+```
+
+Make a token and print its secret. Only its hash is kept: copy the secret now.
+
+**Arguments**:
+
+* `NAME`: The name of the caller that uses it, such as a worker. **[required]**
+
+**Parameters**:
+
+* `--access CHOICE`: What its caller may do. *[choices: read, act, admin, worker]* *[default: worker]*
+
+#### piloop token list
+
+```text
+piloop token list
+```
+
+The tokens: name, access and when each was made. Never the secrets.
+
+#### piloop token revoke
+
+```text
+piloop token revoke NAME
+```
+
+Delete a token: the next call with it gets 401.
+
+**Arguments**:
+
+* `NAME`: The token to revoke. **[required]**
+
+### piloop upgrade
+
+```text
+piloop upgrade [OPTIONS]
+```
+
+Upgrade the CLI, the skills and the database to the latest version, and restart a running daemon.
+
+It reads the source that uv installed the CLI from (the uv receipt), and runs
+`uv tool upgrade --reinstall-package piloop piloop`. Then the new code runs `piloop install-skills`. A running
+daemon restarts in place, as with `piloop restart`: its agents keep running, and the new code migrates the
+database and re-attaches to them. When no daemon runs, the new code migrates the database and the daemon stays
+stopped. A checkout installed with `uv sync` is not a uv tool: upgrade it with `git pull`. It refuses an agent that
+the daemon launched.
+
+**Parameters**:
+
+* `--timeout FLOAT`: Seconds to wait for a running daemon to restart. *[default: 30]*
+
+### piloop wake
+
+```text
+piloop wake [OPTIONS] [ARGS]
+```
+
+Print what the orchestrator of a campaign needs first, in a fixed budget.
+
+The latest lines of the campaign's journal, its open inbox, its best and the current lessons on its repo. Each
+section says how to read what did not fit. Without a campaign, it uses the campaign that the current directory is
+in, else the only active campaign, else the whole home. Run it at the start of every orchestrator session.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo.
+
+**Parameters**:
+
+* `--budget INT`: Tokens to print, about 4 characters each. 0 prints nothing. Default: `[agents] wake_budget`.
+
+### piloop watch
+
+```text
+piloop watch [OPTIONS] [ARGS]
+```
+
+Show the campaign on one screen, with keys to act on it.
+
+It shows every campaign, or one campaign when you name it. A campaign has numbered panels (inbox, agents,
+candidates and status) and the detail of the selected row. `?` lists the keys of the focused panel, `/` filters
+it, esc goes back to every campaign and q quits. It reads the API, so it works with PILOOP_SERVER too. Writes are
+signed as PILOOP_ACTOR.
+
+**Arguments**:
+
+* `REF`: The campaign name, its id, or a path inside its repo.
+
+**Parameters**:
+
+* `--mouse, --no-mouse`: Take the mouse. --no-mouse leaves it to the terminal: a multiplexer can misread the mouse of the app. *[default: True]*
+
+### piloop worker
+
+```text
+piloop worker COMMAND --server STR --pool STR [OPTIONS]
+```
+
+The workers that run jobs on leases.
+
+**Commands**:
+
+* [`list`](#piloop-worker-list): List each worker: its pool, when it was last heard, its host sample, its jobs, and why it got no lease.
+
+**Parameters**:
+
+* `--server STR`: The URL of the server that `piloop serve --listen` runs. **[required]**
+* `--pool STR`: The pool of the server whose slots this machine has. **[required]**
+* `--once, --no-once`: Take one lease, run its job, and exit.
+* `--orphan-exit FLOAT`: Exit after this many seconds without an answer of the server, once no job runs.
+
+#### piloop worker list
+
+```text
+piloop worker list
+```
+
+List each worker: its pool, when it was last heard, its host sample, its jobs, and why it got no lease.
+
+Then each worker that a provisioner starts, until it ends: its pool, its state, and when it was asked for.

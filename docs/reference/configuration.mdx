@@ -47,7 +47,7 @@ section.
 | `evaluate` | list\[string\] | required | The command (argv) that scores a commit. It runs in a clean worktree of the commit and writes one JSON line, `{"metrics": {"<name>": <value>}}`, to `$PILOOP_RESULT_FILE`. |
 | `evaluate_timeout` | number | `600` | The number of seconds before the evaluate command is stopped. The evaluation is then a crash. |
 | `evaluator` | [EvaluatorConfig](#evaluatorconfig) | `{}` | `[evaluator]`: the commands beside `evaluate`, such as the fast one that implementers run themselves. |
-| `ladder` | list\[[Rung](#rung)\] | `[]` | `[[ladder]]`: the rungs that a run's evaluation of its own version climbs before the full panel, cheapest first. The climb stops at the first rung whose `stop` holds. A baseline, a head, a bar, a reference and a remeasure climb every rung and never stop. |
+| `ladder` | list\[[Rung](#rung)\] | `[]` | `[[ladder]]`: the rungs that a run's evaluation of its own version climbs before the full panel, cheapest first. The climb stops at the first rung whose `stop` holds. A baseline, a confirmation, a reference and a remeasure climb every rung and never stop. |
 | `link` | list\[string\] | `[]` | Repo-relative paths, ignored by git, that piloop puts into every worktree read-only, for example data or virtual environments. Each job gets them as they are when it is made. |
 | `context` | list\[string\] | `[]` | Repo-relative files or globs (for example `docs/error-analysis-*.md`) that hold the campaign's analysis: error analyses, comparisons with a reference, evaluation reports. The research pack (`piloop history`) lists each one with its outline, newest first. |
 | `agents` | [CampaignAgents](#campaignagents) | `{}` | `[agents]`: how long the campaign's agents get to wrap up, and its brief's budget. |
@@ -314,7 +314,7 @@ With `provider = "context"`:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `lines` | list\[string\] | `["- You are {agent}, the {role} for campaign#{campaign_id} ({campaign}): sign what you write as '{agent}'.", "- Why this agent started (context, not a scope): {reason}", "- Run every `piloop` command as `{piloop}`. `{piloop} sql -` runs one SQL statement from stdin: pipe it from a quoted heredoc (`<<'EOF'`, which expands nothing), and double each `'` in your text.", "- You may write: {writes}.", "- `{piloop} schema <guide>` prints another guide: {guides}."]` | The lines, in order, each with fields in braces (`FIELDS`). A line with a field that is empty is left out. |
+| `lines` | list\[string\] | `` ["- You are {agent}, the {role} for campaign#{campaign_id} ({campaign}): sign what you write as '{agent}'.", "- Why this agent started (context, not a scope): {reason}", "- Run every `piloop` command as `{piloop}`. `{piloop} sql -` runs one SQL statement from stdin: pipe it from a quoted heredoc (`<<'EOF'`, which expands nothing), and double each `'` in your text.", "- You may write: {writes}.", "- `{piloop} schema <guide>` prints another guide: {guides}."] `` | The lines, in order, each with fields in braces (`FIELDS`). A line with a field that is empty is left out. |
 
 With `provider = "cost"`:
 
@@ -794,7 +794,7 @@ These keys still work. Each one shows a `PiloopDeprecationWarning` that names th
 - `idle_alert` of a role that does runs is removed: an idea is never `proposed`, so no slot waits for a review. piloop drops it.
 - The `leaking_funnel` trigger is removed: stop rules and escalations cover a stuck campaign. piloop drops it from each role's `triggers`, and drops each `[plugins.trigger.<name>]` of it.
 - `[plugins.section.pack] seeds` is removed: there are no seeds, so the research pack lists none.
-- `takes`, `explore_every` and `recovery_requeues` are removed: the scheduler assigns no idea. Each run starts from the head, and its worker claims an idea. piloop drops the keys.
+- `takes`, `explore_every` and `recovery_requeues` are removed: the scheduler assigns no idea. Each run starts from the best, and its worker claims an idea. piloop drops the keys.
 - `files` and `plan_words` of a role that does runs are removed: its agents file no seeds, and no ideas for others. piloop drops them. An implementer's hunch goes in a note on the board.
 - `[plugins.role.scout]` is removed with the scout role: piloop drops the table, and no scout starts.
 - The `seed` trigger is removed: an idea is open on the board from the start, so there is no seed to develop. piloop drops it from each role's `triggers`, and drops each `[plugins.trigger.<name>]` of it.

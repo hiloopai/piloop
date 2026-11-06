@@ -204,7 +204,7 @@ class AgentJob(Job):
     """The session id the launcher made for the argv (``{session_id}``), or None when the runtime reports it."""
     capture: Ref | None = None
     """Bring the agent's work back, with what it left unsaved as a version recovered for this subject (``run#12``,
-    ``Repository.capture``). None for a sweep: nothing that it saves comes back."""
+    ``Repository.capture``). None for an agent of a role that does no runs: nothing that it saves comes back."""
     resume: Resume | None = None
     """Continue this session instead of starting a new one. When the worker cannot write its file back, it starts the
     agent with ``spec`` and says why (``AgentFinished.unrestored``)."""

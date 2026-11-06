@@ -18,7 +18,7 @@ class Headline(Section):
     paused. Imported references are not candidates.
     """
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 100
 
     def render(self, r: Rendering) -> Rendered:

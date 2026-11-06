@@ -11,7 +11,7 @@ class Runs(Section):
     A run shows its idea, its harness, its state and since when, and when its agent ended if it did.
     """
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 140
 
     def render(self, r: Rendering) -> Rendered:

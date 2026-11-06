@@ -31,7 +31,7 @@ class Candidates(Section):
     With a ladder, each also says where its latest climb is (``climb``).
     """
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 180
 
     def render(self, r: Rendering) -> Rendered:

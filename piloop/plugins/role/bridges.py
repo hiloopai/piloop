@@ -77,7 +77,7 @@ ASSIGNMENT_KEYS = ('takes', 'explore_every', 'recovery_requeues')
 def run_role_assignment(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """``takes``, ``explore_every`` and ``recovery_requeues`` are removed: the scheduler assigns no idea.
 
-    Each run starts from the head, and its worker claims an idea. piloop drops the keys.
+    Each run starts from the best, and its worker claims an idea. piloop drops the keys.
     """
     roles = deprecated.table_at(raw, 'plugins', 'role') or {}
     for name, table in [(n, t) for n, t in roles.items() if isinstance(t, dict)]:

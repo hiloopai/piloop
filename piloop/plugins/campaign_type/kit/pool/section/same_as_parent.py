@@ -18,7 +18,7 @@ class SameAsParent(Section):
     One candidate gets a line of its own, and several get one line with the latest.
     """
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 185
 
     def render(self, r: Rendering) -> Rendered | None:

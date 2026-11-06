@@ -147,7 +147,7 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     """``[evaluator]``: the commands beside ``evaluate``, such as the fast one that implementers run themselves."""
     ladder: list[Rung] = []
     """``[[ladder]]``: the rungs that a run's evaluation of its own version climbs before the full panel, cheapest
-    first. The climb stops at the first rung whose ``stop`` holds. A baseline, a head, a bar, a reference and a
+    first. The climb stops at the first rung whose ``stop`` holds. A baseline, a confirmation, a reference and a
     remeasure climb every rung and never stop."""
     link: list[str] = []
     """Repo-relative paths, ignored by git, that piloop puts into every worktree read-only, for example data or virtual

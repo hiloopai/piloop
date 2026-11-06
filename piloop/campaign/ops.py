@@ -59,7 +59,7 @@ def pause(s: Session, campaign_id: CampaignId, *, evals: bool, reason: str) -> C
 
     No run is queued, no role is requested and no requested row launches. Running work goes on and its commits are
     scored. Nothing is escalated. Without ``evals``, the daemon still measures what a new evaluator or a request needs, so the
-    pause can end on a measured head. A pause is state in the database, so the daemon holds wherever the caller is.
+    pause can end on a measured best. A pause is state in the database, so the daemon holds wherever the caller is.
 
     Raises:
         Refused: the reason is blank, or the campaign is paused that way already.

@@ -14,7 +14,7 @@ from piloop.usage import human
 class Agents(Section):
     """The agents: the live ones with their last line, the count of each role, the yield of each source, the tokens."""
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 160
 
     def render(self, r: Rendering) -> Rendered:

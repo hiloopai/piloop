@@ -93,7 +93,7 @@ class Ticker(StartsItsAgents):
     its own. It requests no agent, so it launches none.
     """
 
-    SURFACE: ClassVar[Surface] = Surface.SWEEP
+    SURFACE: ClassVar[Surface] = Surface.ORCHESTRATOR
     interval: float = 60
     triggers: list[str] = []
     follow_head: bool = False

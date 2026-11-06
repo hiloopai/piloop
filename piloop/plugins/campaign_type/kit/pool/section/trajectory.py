@@ -20,7 +20,7 @@ class Trajectory(Section):
     Then come the other lines worth branching from (``Pool.worth_branching``).
     """
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 130
 
     def render(self, r: Rendering) -> Rendered:

@@ -23,7 +23,7 @@ class Tools(Section):
     With the tables listed, an agent does not query the schema.
     """
 
-    SHOWN_IN = frozenset({Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.ORCHESTRATOR})
     ORDER = 900
 
     def render(self, r: Rendering) -> Rendered:

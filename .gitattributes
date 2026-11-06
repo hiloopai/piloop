@@ -1,4 +1,5 @@
 # Written by `make docs`. A merge or a rebase keeps the current side of each, and `make docs` writes them again.
+docs/reference/cli.mdx merge=generated linguist-generated
 docs/reference/configuration.mdx merge=generated linguist-generated
 docs/reference/schema.mdx merge=generated linguist-generated
 docs/reference/openapi.json merge=generated linguist-generated

@@ -105,7 +105,7 @@ class OrchestratorRole(StartsItsAgents):
     ]
     """The guides, the failed runs that woke it (``incidents``), and the status that each brief shows after the news:
     lean, because each one stays in the resumed session."""
-    SURFACE: ClassVar[Surface] = Surface.SWEEP
+    SURFACE: ClassVar[Surface] = Surface.ORCHESTRATOR
 
     @property
     def takes_escalations(self) -> bool:

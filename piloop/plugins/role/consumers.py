@@ -307,7 +307,9 @@ class Agents:
                 if (cancel := cancels.get(agent_session.id)) is not None:
                     request, asked = cancel
                     reason, end = f'cancelled by {request.actor}', RunEnd.CANCELLED
-                    what = 'Your run was cancelled' if run_of(agent_session) is not None else 'This sweep was cancelled'
+                    what = (
+                        'Your run was cancelled' if run_of(agent_session) is not None else 'This session was cancelled'
+                    )
                     cause, ending = f'by {request.actor}', asked.ending
                 else:
                     campaign = s.get_one(Campaign, agent_session.campaign_id)

@@ -82,7 +82,13 @@ def _default(name: str, prop: JsonSchema, schema: JsonSchema) -> str:
         return 'required'
     if '$ref' in prop and isinstance(prop.get('default', {}), dict):
         return '`{}`'  # a nested table left out: every key at the default that its own table shows
-    return f'`{json.dumps(prop.get("default"))}`'
+    return _code(json.dumps(prop.get('default')))
+
+
+def _code(text: str) -> str:
+    """Return ``text`` as one code span: its fence is longer than any run of backticks in it, as CommonMark allows."""
+    fence = '`' * (max((len(run) for run in re.findall('`+', text)), default=0) + 1)
+    return f'{fence}{text}{fence}' if fence == '`' else f'{fence} {text} {fence}'
 
 
 def _described(schema: JsonSchema, name: str) -> str:

@@ -6,14 +6,14 @@ from piloop.plugins.section.contract import Rendering, Section, Surface
 
 
 class Pack(Section):
-    """The research pack, which ``piloop history`` prints: what a sweep needs to propose work.
+    """The research pack, which ``piloop history`` prints: what an agent needs to propose work.
 
     It has the metrics, the analysis files and the workspace, the history, and the latest notes and digests. Its parameters bound each list.
 
     Nothing for an agent that got incidents to investigate: the pack is for proposing work.
     """
 
-    SHOWN_IN = frozenset({Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.ORCHESTRATOR})
     ORDER = 910
 
     ideas: int = Field(default=60, ge=1)

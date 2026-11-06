@@ -21,7 +21,7 @@ class Tracks(Section):
     best, its open runs, and its open ideas.
     """
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 120
 
     def render(self, r: Rendering) -> Rendered | None:

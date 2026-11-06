@@ -9,7 +9,7 @@ EVENTS_SHOWN = 5
 class Events(Section):
     """The latest events of the campaign, newest first."""
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 210
 
     def render(self, r: Rendering) -> Rendered:

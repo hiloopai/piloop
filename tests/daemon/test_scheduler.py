@@ -2318,7 +2318,7 @@ def test_a_cancelled_run_is_told_to_wrap_up_and_ended_after_the_grace(
             ),
             (
                 3,
-                '[piloop] This sweep was cancelled (by orchestrator). Save what you have now, with a summary that says where it stands. Leave a note on what you did, then stop. This session ends in 10 minutes.',
+                '[piloop] This session was cancelled (by orchestrator). Save what you have now, with a summary that says where it stands. Leave a note on what you did, then stop. This session ends in 10 minutes.',
             ),
         ]
     ), 'only the cancelled run and the cancelled sweep are told'

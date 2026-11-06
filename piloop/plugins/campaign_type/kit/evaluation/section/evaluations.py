@@ -18,7 +18,7 @@ class Evaluations(Section):
     The minutes of the latest evaluations against the first show whether evaluations got slower.
     """
 
-    SHOWN_IN = frozenset({Surface.STATUS, Surface.SWEEP})
+    SHOWN_IN = frozenset({Surface.STATUS, Surface.ORCHESTRATOR})
     ORDER = 170
 
     def render(self, r: Rendering) -> Rendered:

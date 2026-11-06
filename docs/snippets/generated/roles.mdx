@@ -1,6 +1,6 @@
 {/* WARNING: This file is auto-generated (uv run -m scripts.generate_all). Update the defaults and docstrings of the built-in roles in `piloop/plugins/role/` if you want to change anything here. */}
 
-| Role | Does runs | Triggers | What it is |
+| Role | Does runs | Starts on | What it is |
 |---|---|---|---|
-| `implementer` | yes | the run queue | A role that does runs. |
-| `orchestrator` | no | the run queue | Decides escalations, answers messages, steers the work and records each decision. |
+| `implementer` | yes | a free slot | A role that does runs. |
+| `orchestrator` | no | `piloop launch` only: `triggers = []` | Decides escalations, answers messages, steers the work and records each decision. |

@@ -19,7 +19,7 @@ class Lessons(Section):
     Nothing when there are no lessons, or when not one fits in the budget after the title and the introduction.
     """
 
-    SHOWN_IN = frozenset({Surface.SWEEP, Surface.RUN})
+    SHOWN_IN = frozenset({Surface.ORCHESTRATOR, Surface.RUN})
     ORDER = 10
 
     budget: int = Field(default=400, ge=1)
