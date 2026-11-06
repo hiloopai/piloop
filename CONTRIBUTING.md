@@ -227,8 +227,9 @@ file for each page. To preview it, with Node.js installed:
 ```bash
 cd docs
 npx mint dev
-npx mint broken-links --check-anchors
 ```
+
+`make docs-links` fails on a page that does not parse, or a link or an anchor that leads nowhere. CI runs it.
 
 Write docs, skills and agent prompts in Simplified Technical English. Less is more: cut each sentence that the reader
 can infer, and each mechanism that the reader does not act on. These rules apply, each with an example:

@@ -102,6 +102,16 @@ jobs:
           PATH="/tmp/bin:$PATH" piloop install-skills
           test -f ~/.agents/skills/piloop-operate/SKILL.md
 
+  docs:
+    name: docs links
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: make docs-links
+
   # Which tests run. A pull request with another stacked on it runs none: the top of the stack runs them for the whole
   # stack. So does one labelled `train`: the merge script's train has replayed it onto the merged pull request below,
   # with the trees that the top's run tested. A pull request into the default branch that changes only docs runs none. Anything else runs the whole suite;
@@ -295,7 +305,7 @@ jobs:
 
   check:
     if: always()
-    needs: [lint, select, test, coverage, macos]
+    needs: [lint, docs, select, test, coverage, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: re-actors/alls-green@release/v1

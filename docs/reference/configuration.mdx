@@ -466,6 +466,26 @@ the agent spent. Without either, no tokens are recorded.
 | `env` | dict\[string, string \| [SecretRef](#secretref)\] | `{}` | Variables of the agent's environment: a value, or a secret, `{ secret = "NAME" }`. For example a model gateway, `{ ANTHROPIC_BASE_URL = "https://gw.example.com", ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" } }`. When unset, the agent uses the login of the machine that runs it. |
 | `user_config` | `ignore` \| `load` | `"ignore"` | Whether its agents load the user's own setup of the harness: `ignore` or `load`. `{user_config}` in the argv expands to the provider's flags that ignore it, or to nothing. An argv without it loads it. |
 
+## SecretRef
+
+`{ secret = "NAME" }`: the value of the secret `NAME` (`piloop secret set`), in place of a literal.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `secret` | string | required | The name of the secret. |
+
+## Notifier
+
+A notifier: the keys of `[plugins.notifier.<name>]` besides `provider`, and how it sends.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `link` | string \| null | `null` | The page of an item, such as `https://piloop.example.com/inbox/{comment}`. `{comment}` is the item's id and `{campaign}` its campaign's name. Unset: a message names the command that shows the item. |
+| `max_priority` | integer | `1` | The least urgent priority that it sends, from 0 (urgent) to 4 (someday). A less urgent item waits in the inbox: by default only what needs a human now, 0 and 1. 4 sends every item that is due. |
+| `remind_every` | duration \| string | `"P1D"` | How long after a send an item that nobody acknowledged is sent again. `"never"`: once. |
+| `retry` | duration | `"PT1M"` | How long after a failed send the next try comes. It doubles with each failure in a row, up to `retry_max`. |
+| `retry_max` | duration | `"PT1H"` | The longest wait between two tries. |
+
 ## RoleConfig
 
 The keys that every `[plugins.role.<name>]` table accepts. Each role's table below adds keys and sets defaults.

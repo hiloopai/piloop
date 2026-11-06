@@ -7,7 +7,6 @@ from pydantic import BaseModel, RootModel
 
 from piloop.config import CampaignConfig
 from piloop.deprecated import bridges
-from piloop.plugins.harness.contract import HARNESSES
 from piloop.plugins.host import Capability, Many, One, Parameters, Pick, Scope, declared
 from piloop.plugins.role.contract import ROLES
 from piloop.settings import Settings
@@ -113,9 +112,18 @@ def generate() -> str:
     for model in _nested(CampaignConfig, []):
         out += show(model)
     out += plugins_section(Scope.CAMPAIGN, '##')
-    for model in [HARNESSES.contract, *ROLES.builtins().values()]:
-        out += show(model)
+    for model in [*shared_contracts(), *ROLES.builtins().values()]:
+        out += ''.join(show(m) for m in [model, *_nested(model, [])])
     return out + global_section() + deprecated_section()
+
+
+def shared_contracts() -> list[type[BaseModel]]:
+    """Return the contracts whose keys every instance of a capability of ``piloop.toml`` takes, which ``_instances`` links."""
+    return [
+        c.contract
+        for c in declared()
+        if isinstance(c.table, Many) and c.table.scope is Scope.CAMPAIGN and json_schema(c.contract).get('properties')
+    ]
 
 
 def global_section() -> str:
@@ -203,7 +211,7 @@ def _instances(capability: Capability[Parameters], scope: Scope, level: str) -> 
     out = f'\n{level}# `[plugins.{capability.name}.<name>]`\n\nEach {each} by name.\n'
     contract = capability.contract.__name__
     # keys that every provider shares: one section below, which only piloop.toml's models have
-    if scope is Scope.CAMPAIGN and json_schema(capability.contract).get('properties'):
+    if scope is Scope.CAMPAIGN and capability.contract in shared_contracts():
         return out + f'\nEach table takes the keys of [{contract}](#{contract.lower()}), and those of its provider.\n'
     return out + _providers(capability, level + '#')
 
