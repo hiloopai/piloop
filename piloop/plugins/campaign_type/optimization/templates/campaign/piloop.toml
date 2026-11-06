@@ -14,14 +14,11 @@ context = []                              # analysis files that every sweep read
 use = "subprocess"                        # a [plugins.runtime.<name>] of config.toml; subprocess: a background process per agent
 
 [plugins.harness]
-use = ["pi", "claude", "codex"]           # not the default, which is ["pi"]; fresh runs use these in turn
+use = ["claude", "codex"]                 # fresh runs use these in turn; add "pi" and its table to opt in
 
-[plugins.harness.pi]                      # a harness: a built-in one (pi, claude, codex) over its defaults, or a new name
-model = "anthropic/claude-opus-5-5"       # required for a harness in a rotation, in that harness's own naming
+[plugins.harness.claude]                  # a harness: a built-in one (claude, codex, pi) over its defaults, or a new name
+model = "claude-opus-5-5"                 # required for a harness in a rotation, in that harness's own naming
 # max_concurrent = 2                      # the most agents of this harness at the same time, all roles together
-
-[plugins.harness.claude]
-model = "claude-opus-5-5"
 # env = { ANTHROPIC_BASE_URL = "https://gw.example.com", ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" } }
 #                                         # more variables of its agents: a value, or a secret (`piloop secret set`)
 # user_config = "ignore"                  # "load" gives its agents your own CLAUDE.md, skills, plugins and hooks
@@ -30,6 +27,9 @@ model = "claude-opus-5-5"
 model = "gpt-6.1-sol"
 # config = { model_provider = "gateway", model_providers.gateway = { name = "gateway", base_url = "https://gw.example.com/v1", env_key = "GATEWAY_KEY", wire_api = "responses" } }
 #                                         # keys of Codex's config.toml, as -c flags: here a gateway
+
+# [plugins.harness.pi]                    # opt-in; on a Claude subscription, pi draws from extra usage, not plan limits
+# model = "anthropic/claude-opus-5-5"
 
 # [plugins.harness.<name>]                # a harness of your own
 # provider = "claude"                     # that harness over its defaults; without it, the argv only
@@ -57,8 +57,8 @@ model = "gpt-6.1-sol"
 
 [plugins.role.implementer]                # an implementer claims one idea and tries it in a new worktree of the best; its commits are scored
 runs = true                               # its agents do runs; the orchestrator has runs = false
-# harnesses = ["pi", "claude", "codex"]   # if not set: [plugins.harness] use
-# model = { pi = "..." }                  # over the model of each [plugins.harness.<name>]
+# harnesses = ["claude", "codex"]         # if not set: [plugins.harness] use
+# model = { claude = "..." }              # over the model of each [plugins.harness.<name>]
 # effort = "high"                         # how hard its agents think, as the harness names it
 # addendum = "briefs/implementer.md"           # a file appended to brief.md in this role's briefs only
 # mcp = ["exa"]                           # the [plugins.mcp_server.<name>] servers that this role's agents get; none by default

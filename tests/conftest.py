@@ -480,7 +480,12 @@ def bare_config(name: str) -> CampaignConfig:
     """Return the smallest valid config: for a campaign row that a test needs, with no repo behind it."""
     metric = {'name': 'score', 'direction': 'higher', 'role': 'primary'}
     return CampaignConfig.model_validate(
-        {'name': name, 'evaluate': ['true'], 'metrics': [metric], 'plugins': {'harness': {'pi': {'model': 'm'}}}}
+        {
+            'name': name,
+            'evaluate': ['true'],
+            'metrics': [metric],
+            'plugins': {'harness': {'claude': {'model': 'm'}, 'codex': {'model': 'm'}}},
+        }
     )
 
 

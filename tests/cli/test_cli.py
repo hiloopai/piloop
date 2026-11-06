@@ -524,7 +524,7 @@ def test_init_example(tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch) -> N
     template.mkdir(parents=True)
     (template / 'piloop.toml').write_text(
         'name = "demo"\nevaluate = ["python3", "-c", "import json, os; open(os.environ[\'PILOOP_RESULT_FILE\'], \'a\').write(json.dumps({\'metrics\': {\'score\': 3}}) + chr(10))"]\n'
-        '[[metrics]]\nname = "score"\ndirection = "higher"\nrole = "primary"\n[plugins.harness.pi]\nmodel = "m"\n'
+        '[[metrics]]\nname = "score"\ndirection = "higher"\nrole = "primary"\n[plugins.harness.claude]\nmodel = "m"\n[plugins.harness.codex]\nmodel = "m"\n'
     )
     monkeypatch.setattr(campaign_cli, 'TEMPLATES', tmp_path / 'templates')
     monkeypatch.setattr(campaign_cli, 'EXAMPLE_DATA', {'demo': {}})
@@ -549,7 +549,7 @@ def test_init_names_a_ratio_primary_in_the_baseline_line(tmp_path: Path, out, mo
         '[[metrics]]\nname = "tokens_per_s"\ndirection = "higher"\nrole = "primary"\n'
         'ratio = { numerator = "tokens", denominator = "seconds" }\n'
         '[[metrics]]\nname = "tokens"\ndirection = "higher"\n'
-        '[[metrics]]\nname = "seconds"\ndirection = "lower"\n[plugins.harness.pi]\nmodel = "m"\n'
+        '[[metrics]]\nname = "seconds"\ndirection = "lower"\n[plugins.harness.claude]\nmodel = "m"\n[plugins.harness.codex]\nmodel = "m"\n'
     )
     monkeypatch.setattr(campaign_cli, 'TEMPLATES', tmp_path / 'templates')
     monkeypatch.setattr(campaign_cli, 'EXAMPLE_DATA', {'ratio': {}})

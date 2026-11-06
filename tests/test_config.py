@@ -112,7 +112,7 @@ def test_roles_are_typed_per_kind(campaign_path: Path) -> None:
         name='bare',
         metrics=[Metric(name='a', direction=Direction.HIGHER, role=MetricRole.PRIMARY)],
         evaluate=['true'],
-        plugins={'harness': {'pi': {'model': 'm'}}},
+        plugins={'harness': {'claude': {'model': 'm'}, 'codex': {'model': 'm'}}},
     )
     assert defaults.context == [], 'no analysis artifacts unless the campaign names them'
     implementer = role_of(defaults, ImplementerRole)
@@ -671,9 +671,9 @@ def test_a_capability_s_own_settings_are_in_its_table_and_use_names_the_instance
     ]
     assert CampaignConfig.model_validate(cfg.model_dump(mode='json')) == cfg, 'use round-trips through the row'
     primary = {'name': 'a', 'direction': 'higher', 'role': 'primary'}
-    pi = {'harness': {'pi': {'model': 'm'}}}
-    bare = CampaignConfig.model_validate({'name': 'b', 'evaluate': ['true'], 'metrics': [primary], 'plugins': pi})
-    assert (bare.harnesses, bare.runtime) == (['pi'], 'subprocess'), 'the providers that are on by default'
+    models = {'harness': {'claude': {'model': 'c'}, 'codex': {'model': 'x'}}}
+    bare = CampaignConfig.model_validate({'name': 'b', 'evaluate': ['true'], 'metrics': [primary], 'plugins': models})
+    assert (bare.harnesses, bare.runtime) == (['claude', 'codex'], 'subprocess'), 'the providers that are on by default'
     monkeypatch.setenv('PILOOP_CAMPAIGN_PLUGINS__HARNESS__USE', '["script"]')
     assert load_campaign_config(campaign_path).harnesses == ['script'], 'a variable holds a JSON list'
 

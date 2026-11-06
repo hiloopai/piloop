@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from shlex import join
-from typing import Self
+from typing import ClassVar, Self
 
 from pydantic import JsonValue, model_validator
 
@@ -250,6 +250,8 @@ class Codex(Harness):
     The convention is OpenAI's: ``input_tokens`` includes the cached part, which piloop subtracts, so that ``input`` is
     the uncached input, as for the other harnesses. Checked against Codex 0.153.
     """
+
+    DEFAULT: ClassVar[bool] = True
 
     executable: str = 'codex'
     headless: list[str] = ['exec', *FLAGS, PROMPT]

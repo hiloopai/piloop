@@ -49,7 +49,7 @@ BASE_CONFIG: dict[str, object] = {
     'name': 'demo',
     'evaluate': ['./evaluate.sh'],
     'metrics': [{'name': 'accuracy', 'direction': 'higher', 'role': 'primary'}],
-    'plugins': {'harness': {'pi': {'model': 'anthropic/claude-opus-5-5'}}},
+    'plugins': {'harness': {'claude': {'model': 'claude-opus-5-5'}, 'codex': {'model': 'gpt-6.1-sol'}}},
 }
 """The smallest valid ``piloop.toml``. A TOML fragment is merged into it and the result must validate."""
 

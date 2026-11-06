@@ -23,12 +23,12 @@ Run each check yourself:
 - `git config user.email`. The baseline commit needs a git identity.
 - `uv --version`.
 - For each harness the human wants, check the version and the login:
-  - pi: `pi --version`, and look at `~/.pi/agent/auth.json`.
   - Claude Code: `claude --version` and `claude auth status`.
   - Codex: `codex --version` and `codex login status`.
+  - pi (opt-in): `pi --version`, and look at `~/.pi/agent/auth.json`.
 
 Fix what you can. A broken environment is yours to debug: read the error, fix the cause, check again.
-The only fixes you give to the human are logins: `pi` then `/login`, `claude auth login`, `codex login`.
+The only fixes you give to the human are logins: `claude auth login`, `codex login`, `pi` then `/login`.
 Ask for all of them once, together.
 
 ## 2. Interview the human
@@ -135,7 +135,7 @@ Map each answer to its keys:
 - **Prior art → `context`** (a top-level key). List the error analyses and evaluation reports of the repo (where the
   current system loses to a reference). `piloop history` lists them first.
 - **Harnesses → `[plugins.harness] use`, and `model` in each `[plugins.harness.<name>]`.** Remove the harnesses that the human does
-  not have.
+  not have. Add pi only on request: on a Claude subscription, Anthropic refuses pi unless extra usage is on.
 - **`link`:** gitignored data or virtualenvs that the evaluate command needs inside a worktree.
 - **Hours and money → `[plugins.stop_rule]` `max_hours` and `hold_at = { models_usd = <usd> }`**, with `"models"`
   in `[plugins.fact_source] use`. Add `target` when the human names one. Never write `[stop]`: it is deprecated.

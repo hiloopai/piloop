@@ -336,6 +336,11 @@ measured pauses its campaign's measurements until you resume it.
 `[plugins.role.implementer] max_concurrent` defaults to 2, not 4, and `timeout` to 3600 seconds, not 1800. A
 `piloop.toml` that sets them keeps its values.
 
+### Claude Code and Codex are the default harnesses
+
+`[plugins.harness] use` defaults to `["claude", "codex"]`, not `["pi"]`. A `piloop.toml` that sets it keeps its
+value. To keep pi, set `use = ["pi"]`.
+
 ### The orchestrator wakes only for a decision
 
 `[plugins.role.orchestrator] triggers` takes only `news` and `run_failed`. Another trigger, such as `low_water` or

@@ -10,10 +10,7 @@ link = ["data", ".venv"]
 use = "subprocess"
 
 [plugins.harness]
-use = ["pi", "claude", "codex"]
-
-[plugins.harness.pi]
-model = "anthropic/claude-opus-5-5"
+use = ["claude", "codex"]
 
 [plugins.harness.claude]
 model = "claude-opus-5-5"

@@ -51,7 +51,7 @@ section.
 | `link` | list\[string\] | `[]` | Repo-relative paths, ignored by git, that piloop puts into every worktree read-only, for example data or virtual environments. Each job gets them as they are when it is made. |
 | `context` | list\[string\] | `[]` | Repo-relative files or globs (for example `docs/error-analysis-*.md`) that hold the campaign's analysis: error analyses, comparisons with a reference, evaluation reports. The research pack (`piloop history`) lists each one with its outline, newest first. |
 | `agents` | [CampaignAgents](#campaignagents) | `{}` | `[agents]`: how long the campaign's agents get to wrap up, and its brief's budget. |
-| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "leases": {}, "models": {}, "optimization": {}, "spend": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["pi"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "notifier": {"slack": {}}, "role": {"implementer": {}, "orchestrator": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "comments": {}, "concepts": {}, "context": {}, "cost": {}, "database": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idea_comments": {}, "inbox": {}, "incidents": {}, "lessons": {}, "links": {}, "long_jobs": {}, "measure": {}, "orchestration": {}, "pack": {}, "past_campaigns": {}, "priorities": {}, "provenance": {}, "queries": {}, "queue": {}, "reported": {}, "research_commands": {}, "runs": {}, "same_as_parent": {}, "scoring": {}, "search": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "agents", "evaluations", "funnel", "candidates", "same_as_parent", "reported", "inbox", "events"], "workspace": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
+| `plugins` | dict\[string, object\] | `{"fact_source": {"campaign": {}, "leases": {}, "models": {}, "optimization": {}, "spend": {}, "use": ["campaign", "optimization"]}, "harness": {"claude": {}, "codex": {}, "pi": {}, "use": ["claude", "codex"]}, "lineage": {"optimization": {}, "use": "optimization"}, "mcp_server": {}, "notifier": {"slack": {}}, "role": {"implementer": {}, "orchestrator": {}}, "runtime": {"use": "subprocess"}, "section": {"agents": {}, "candidates": {}, "comments": {}, "concepts": {}, "context": {}, "cost": {}, "database": {}, "evaluations": {}, "events": {}, "funnel": {}, "goal": {}, "headline": {}, "history": {}, "idea_comments": {}, "inbox": {}, "incidents": {}, "lessons": {}, "links": {}, "long_jobs": {}, "measure": {}, "orchestration": {}, "pack": {}, "past_campaigns": {}, "priorities": {}, "provenance": {}, "queries": {}, "queue": {}, "reported": {}, "research_commands": {}, "runs": {}, "same_as_parent": {}, "scoring": {}, "search": {}, "tools": {}, "tracks": {}, "trajectory": {}, "use": ["headline", "goal", "tracks", "trajectory", "runs", "queue", "agents", "evaluations", "funnel", "candidates", "same_as_parent", "reported", "inbox", "events"], "workspace": {}}}` | `[plugins]`: the campaign's plugins, a table for each capability (`PluginTables`). |
 
 ## Tolerance
 
@@ -221,7 +221,7 @@ With `provider = "round_robin"`, the table has no other key.
 
 ### `[plugins.harness] use`
 
-The harness instances that the campaign uses, by name, in order. Unset: `pi`.
+The harness instances that the campaign uses, by name, in order. Unset: `claude`, `codex`.
 
 ### `[plugins.harness.<name>]`
 

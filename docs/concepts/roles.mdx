@@ -72,12 +72,12 @@ An empty list turns them off, and an orchestrator then starts only by hand (`pil
 ## Define a role
 
 A table with a new name and `runs = true` defines a role that does runs. It has the implementer's defaults. This one
-runs short sessions on `pi`:
+runs short sessions on `codex`:
 
 ```toml
 [plugins.role.quick]
 runs = true
-harnesses = ["pi"]
+harnesses = ["codex"]
 timeout = 300
 ```
 

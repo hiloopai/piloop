@@ -1,10 +1,9 @@
-"""``pi``: the pi coding agent, the harness of a campaign that does not set ``harnesses``."""
+"""``pi``: the pi coding agent."""
 
 import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
 
 from piloop.plugins.harness.contract import (
     EFFORT,
@@ -147,8 +146,6 @@ class Pi(Harness):
     message. The convention is Anthropic's: ``input`` does not include cached tokens, and ``totalTokens`` is pi's own
     sum of the four counts. pi has no memory store of its own, and its bash tool has no default timeout.
     """
-
-    DEFAULT: ClassVar[bool] = True
 
     executable: str = 'pi'
     headless: list[str] = ARGV

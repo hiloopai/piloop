@@ -624,7 +624,7 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
 
     @property
     def harnesses(self) -> list[str]:
-        """The harness rotation: ``[plugins.harness] use``, else the harnesses that are on by default (``pi``)."""
+        """The harness rotation: ``[plugins.harness] use``, else the default harnesses (``claude``, ``codex``)."""
         return list(HARNESSES.used(self.plugins))
 
     @property

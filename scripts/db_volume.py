@@ -95,7 +95,7 @@ def populate(path: Path, volume: Volume, seed: int = 0) -> None:
     """
     rng = random.Random(seed)
     cfg = load_campaign_config(
-        BLANK, plugins={'runtime': {'use': 'subprocess'}, 'harness': {'pi': {'max_concurrent': 2}}}
+        BLANK, plugins={'runtime': {'use': 'subprocess'}, 'harness': {'claude': {'max_concurrent': 2}}}
     )
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         con.execute('PRAGMA foreign_keys=OFF')  # parents are inserted first, and the check costs a scan per row
@@ -160,7 +160,7 @@ def _runs(con: sqlite3.Connection, v: Volume, rng: random.Random) -> None:
         st, end = rng.choice(ends)
         finished = None if end is None else f'2026-01-{1 + r % 28:02d} 12:00:00'
         campaign = _campaign_of(idea, v)
-        rows.append((r, campaign, idea, attempt, campaign, 'pi', 'm', st, end, finished))
+        rows.append((r, campaign, idea, attempt, campaign, 'claude', 'm', st, end, finished))
     con.executemany(
         'INSERT INTO runs (id, campaign_id, idea_id, attempt, base_candidate_id, harness, model, status, "end",'
         ' finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -227,12 +227,12 @@ def _agent_sessions(con: sqlite3.Connection, v: Volume, rng: random.Random) -> N
         p = _campaign_of(w, v)
         if w <= 2 * v.campaigns:  # a few live agents per campaign, on the headless runtime so status reads a file
             kind, run = ('implementer', w) if w % 2 else ('orchestrator', None)
-            rows.append((w, kind, p, run, 'pi', 'm', 'subprocess', '{}', 'running', None))
+            rows.append((w, kind, p, run, 'claude', 'm', 'subprocess', '{}', 'running', None))
             continue
         kind = rng.choice(['implementer'] * 80 + ['orchestrator'] * 20)
         run = rng.randint(1, v.runs) if kind == 'implementer' else None
         state = rng.choice(['exited'] * 90 + ['killed'] * 10)
-        rows.append((w, kind, p, run, 'pi', 'm', 'subprocess', '{}', state, f'2026-01-{1 + w % 28:02d} 12:00:00'))
+        rows.append((w, kind, p, run, 'claude', 'm', 'subprocess', '{}', state, f'2026-01-{1 + w % 28:02d} 12:00:00'))
     con.executemany(
         'INSERT INTO agent_sessions (id, kind, campaign_id, subject_kind, subject_id, harness, model, runtime, handle,'
         ' state, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',

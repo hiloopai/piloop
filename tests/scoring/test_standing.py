@@ -13,13 +13,13 @@ from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
 from piloop.plugins.campaign_type.kit.pool.pool import Entry, Pool
 from piloop.plugins.metric import Direction
 
-PI = {'harness': {'pi': {'model': 'm'}}}
+MODELS = {'harness': {'claude': {'model': 'm'}, 'codex': {'model': 'm'}}}
 C = CandidateId
 """Short for the candidates of these pools: candidate#1 is always the baseline."""
 
 
 def config(*metrics: Metric) -> CampaignConfig:
-    return CampaignConfig(name='v', metrics=list(metrics), evaluate=['true'], plugins=PI)
+    return CampaignConfig(name='v', metrics=list(metrics), evaluate=['true'], plugins=MODELS)
 
 
 SCORED = config(Metric(name='score', direction=Direction.HIGHER, role=MetricRole.PRIMARY))

@@ -596,7 +596,7 @@ def test_only_the_class_that_sets_default_is_a_default_and_a_campaign_has_one_de
     installed(monkeypatch, [EntryPoint('typed', f'{PLUGIN}:Typed', RUNTIMES.group)])
     assert (is_default(Subprocess), is_default(Typed)) == (True, False)
     assert RUNTIMES.used({}) == ('subprocess',), 'Typed subclasses Subprocess, and is no second default'
-    assert HARNESSES.used({}) == ('pi',)
+    assert HARNESSES.used({}) == ('claude', 'codex')
     installed(monkeypatch, [EntryPoint('also', f'{PLUGIN}:AlsoDefault', RUNTIMES.group)])
     with pytest.raises(ContractBroken, match='^one installed runtime is DEFAULT, not 2: subprocess, also$'):
         RUNTIMES.used({})
@@ -635,9 +635,12 @@ def test_refs_finds_each_name_of_an_instance_and_where_it_is() -> None:
         ('runtime', 'subprocess', ('by', 'pi', 0)),
         ('runtime', 'subprocess', ('inner', 'runtime')),
     ]
-    plugins = {'harness': {'pi': {'model': 'm'}}, 'role': {'orchestrator': {'model': {'pi': 'w'}}}}
+    plugins = {
+        'harness': {'claude': {'model': 'm'}, 'codex': {'model': 'm'}},
+        'role': {'orchestrator': {'model': {'claude': 'w'}}},
+    }
     roles = refs(CampaignConfig.model_validate({**BASE_CONFIG, 'plugins': plugins}))
-    assert ('harness', 'pi', ('plugins', 'role', 'orchestrator', 'model')) in [
+    assert ('harness', 'claude', ('plugins', 'role', 'orchestrator', 'model')) in [
         (r.capability.name, r.name, r.at) for r in roles
     ], 'the instances of [plugins] too'
 

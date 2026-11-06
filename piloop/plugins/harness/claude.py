@@ -4,6 +4,7 @@ import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from piloop.plugins.harness.contract import (
     EFFORT,
@@ -157,6 +158,8 @@ class Claude(Harness):
     is Anthropic's: ``input`` does not include cached tokens. Checked against Claude Code 2.1. Its hook takes the
     messages for the agent in the turn, and it reads user skills from its own directory only.
     """
+
+    DEFAULT: ClassVar[bool] = True
 
     executable: str = 'claude'
     headless: list[str] = argv('--session-id')

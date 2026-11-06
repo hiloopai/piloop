@@ -357,7 +357,10 @@ name = "score"
 direction = "higher"
 role = "primary"
 
-[plugins.harness.pi]
+[plugins.harness.claude]
+model = "m"
+
+[plugins.harness.codex]
 model = "m"
 
 {roles}
