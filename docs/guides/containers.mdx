@@ -22,8 +22,8 @@ use = "docker"
 
 ## The image
 
-The image holds the harness CLIs that your campaigns use, git, and glibc. piloop runs its own CLI in the container
-from the worker's install, so the image does not need piloop:
+The image holds the harness CLIs that your campaigns use, git, glibc, and the tools that the agents test with, such
+as `uv`. It does not need piloop: piloop runs its own CLI from the worker's install.
 
 ```text
 FROM ubuntu:24.04
@@ -32,11 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 RUN curl -fsSL https://claude.ai/install.sh | bash && cp -L /root/.local/bin/claude /usr/local/bin/claude
 ```
 
-Add the tools that the agents use to test their work, such as `uv` or a compiler.
-
 ## The login
 
-The container has an empty home, so your own login of the harness is not there. Give the harness a key:
+The container has an empty home, so your login of the harness is not there. Give the harness a key:
 
 ```toml
 [plugins.harness.claude]
@@ -65,8 +63,8 @@ allow = ["127.0.0.1:8317"]
 | The shared workspace | Read-write |
 | The harness's sessions | Read-write: piloop reads the tokens and keeps the session |
 | Your home | An empty one: no `CLAUDE.md`, `AGENTS.md`, skills, settings or credentials |
-| `piloop` | The worker's relay socket: the calls of the agent's role, as on a [worker elsewhere](/guides/workers) |
+| `piloop` | The calls of the agent's role, relayed as on a [worker elsewhere](/guides/workers) |
 | The network | Only `allow` and the role's HTTP MCP servers, through a proxy of the worker |
 
-An agent that asks for any other host gets a `403` from the proxy. The container runs as your user, so its commits
-are yours. When the agent ends, piloop removes the container and its home.
+Any other host gets a `403` from the proxy. The container runs as your user, and piloop removes it when the agent
+ends.

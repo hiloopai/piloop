@@ -4,8 +4,8 @@ description: Coding agents try ideas in your repo. piloop scores every commit th
 ---
 
 piloop runs coding agents on a goal that a program can measure. Each agent tries one idea in its own checkout of your
-repo, and submits the commits that it would ship. piloop scores each with your evaluate command. Every score stays in the
-campaign's pool, and the best candidate in it is the result.
+repo, and submits the commits that it would ship. piloop scores each one with your evaluate command. Every score stays
+in the campaign's pool, and the best candidate in it is the result.
 
 ![piloop watch on the enwik8 example campaign](/images/watch-campaign.svg)
 
@@ -31,27 +31,25 @@ The agent sets up the campaign, starts it, and answers for you while it runs. Se
 ```mermaid
 flowchart LR
     B[(Ideas)] --> W[Implementer<br/>in a worktree]
-    W -->|commit| E[Evaluate command]
+    W -->|submit| E[Evaluate command]
     E -->|score| P[(Pool)]
     P -->|the best| H[Best candidate]
     H -->|next runs start here| W
 ```
 
-1. You, your agent or the implementers add **ideas** to the **campaign**: one repo, one goal.
-2. The **daemon**, `piloop serve`, starts an **implementer** for each open idea. An implementer is a coding agent
-   (Claude Code, Codex or pi) in a **worktree**: its own checkout of the **best** candidate so far.
-3. The implementer commits. The daemon runs your **evaluate command** on the commit. The command writes one JSON line
-   with each metric to `$PILOOP_RESULT_FILE`.
-4. The score goes into the **pool**. A score that beats the best is evaluated again until it is **confirmed**. It is
-   then the new **best**, when no guardrail metric is worse than the baseline's by more than you allow.
-5. Your agent, the **orchestrator**, answers what the other agents escalate, and
-   records each decision in your **inbox**.
+1. The **daemon**, `piloop serve`, starts a run on each free **implementer** slot: 2 at a time by default. An
+   implementer is a coding agent, Claude Code or Codex, in its own checkout of the **best** candidate.
+2. The implementer claims an **idea** from the campaign's board, or proposes its own. It commits and submits.
+3. The daemon runs your **evaluate command** on each submission, and scores it into the **pool**. A score that beats
+   the best is evaluated again until it is **confirmed**. Then it is the new best, if its **guardrails** hold.
+4. Your coding agent, the **orchestrator**, answers what the implementers escalate, and records each decision in your
+   **inbox**.
 
 ## Why piloop
 
 - **No agent scores its own work.** piloop runs the evaluate command in a clean checkout of each commit.
-- **A gain must be real.** A candidate that beats the best is evaluated again, `noise_runs` times, before it can be
-  the best. A sealed split that no agent can read can check it too.
+- **A gain must be real.** A candidate that beats the best is evaluated `noise_runs` times before it can be the best.
+  A sealed split that no agent can read can check it too.
 - **Guardrails hold.** A second metric, such as latency, can get worse only by the margin that you set.
 - **Your state stays local.** piloop keeps a SQLite database in `~/.piloop` and git refs in your repo. It has no
   hosted service and no account. The agents send your code and prompts to their model providers, as they do when you
@@ -59,23 +57,8 @@ flowchart LR
 
 ## Requirements
 
-- Linux (x86-64 or ARM, glibc 2.28 or later) or macOS on Apple silicon. On an Intel Mac, installing builds
+- Linux (x86-64 or ARM, glibc 2.28 or later) or macOS on Apple silicon. On an Intel Mac, the install builds
   [covalence](https://pypi.org/project/covalence/) from source, which needs a recent Rust.
-- git 2.40 or later.
-- [uv](https://docs.astral.sh/uv/). The installer installs it.
-- At least one of [Claude Code](https://code.claude.com), [Codex](https://github.com/openai/codex) or
-  [pi](https://github.com/badlogic/pi-mono), logged in. The agent that you talk to can also be Gemini CLI or Cursor.
-
-## Next steps
-
-<CardGroup cols={3}>
-  <Card title="Quickstart" icon="rocket" href="/quickstart">
-    Your first campaign, through your agent.
-  </Card>
-  <Card title="Run a campaign by hand" icon="terminal" href="/by-hand">
-    The same steps with the CLI, on the enwik8 example.
-  </Card>
-  <Card title="Concepts" icon="book" href="/concepts/campaigns">
-    Campaigns, ideas, runs and the pool.
-  </Card>
-</CardGroup>
+- git 2.40 or later, and [uv](https://docs.astral.sh/uv/). The installer installs uv.
+- [Claude Code](https://code.claude.com) or [Codex](https://github.com/openai/codex), logged in.
+  [pi](https://github.com/badlogic/pi-mono) is opt-in. The agent that you talk to can also be Gemini CLI or Cursor.

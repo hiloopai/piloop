@@ -3,6 +3,8 @@ title: Write a plugin
 description: A plugin is a Python package that adds providers to piloop's capabilities, with entry points.
 ---
 
+import Capabilities from '/snippets/generated/capabilities.mdx';
+
 A **plugin** is a Python package that you install next to piloop. This one adds a best rule, `min_gain`. It calls
 the built-in rule `baseline` and changes one thing: a candidate whose gain over the baseline is below `min_gain` may
 not be best.
@@ -43,11 +45,21 @@ Each example plugin of these pages is a package in
 [`examples/plugins/`](https://github.com/hiloopai/piloop/tree/main/examples/plugins). piloop's tests install each one
 and select it.
 
+## Core
+
+piloop is a small **core** and a set of plugins. Core runs things: the SQLite database and its
+[event feed](/reference/event-feed), the daemon's loop, the plugin host, the API and the CLI, and the leases that
+hand jobs to workers. The plugins decide what to run, how to score it and where it runs. A plugin owns its tables and
+migrations, and core owns every other table.
+
+Ideas, runs, candidates, evaluations and the pool are the **campaign type** `optimization`, a plugin of piloop. Every
+campaign is of this type. The [database schema](/reference/schema) lists each table under the plugin that owns it.
+
 ## Providers and capabilities
 
 A **capability** is one kind of decision or service, such as the best rule. A **provider** is one implementation
-of it, with a name. Each capability has a built-in provider. [How piloop is built](/concepts/how-piloop-is-built#capabilities)
-lists every capability, the entry point group of its providers, and its built-in providers.
+of it, with a name. Each capability has at least one built-in provider, and your configuration selects one by its
+name.
 
 A provider is a class that subclasses its capability's contract. Its fields are its **parameters**, and its methods
 are the contract. Import the contract, its types and the built-in providers from one module,
@@ -55,6 +67,24 @@ are the contract. Import the contract, its types and the built-in providers from
 
 A provider that needs something on the machine, such as a program on `PATH`, an extra or a login, returns it from
 `checks()`, read only. `piloop doctor` runs it on every instance in use.
+
+### Capabilities
+
+<Capabilities />
+
+### What a package declares
+
+| Slot | Entry point group | What it adds |
+|---|---|---|
+| Providers | the capability's group, for example `piloop.best_rules` | an implementation of a capability |
+| Tables | `piloop.schemas` | its tables and its own chain of migrations |
+| Commands | `piloop.commands` | a command or a group of commands of `piloop` |
+| Skill parts | `piloop.skills` | a part of a skill, such as `piloop-operate` |
+| A capability | `piloop.capabilities` | a capability of its own, that other plugins add providers to |
+
+A provider that the daemon opens can also add consumers and routes. piloop declares its own providers, tables and
+commands in the same groups, so a plugin can do anything that a built-in provider does.
+[Tables, commands and routes](/plugins/contributions) shows each slot.
 
 ## Select a provider
 
@@ -65,7 +95,7 @@ A table selects a provider: `provider` is its name, and the other keys are its p
   executor.
 - A capability with several instances has a table for each, `[plugins.<capability>.<name>]`: `provider` is the one
   called `<name>` when the table has none. `[plugins.<capability>] use` names the instances in use, and a list of a
-  role, such as its `triggers`, names those that it uses.
+  role, such as its `sections` or `mcp`, names those that it uses.
 - A provider that is a parameter of another, such as the `remote` of a CAS, is a table: `{ provider = "<name>", … }`.
 
 piloop validates each table into the provider's class when it loads the file. An unknown name is an error that lists

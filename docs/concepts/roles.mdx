@@ -7,10 +7,13 @@ import Sections from '/snippets/generated/sections.mdx';
 import Runtimes from '/snippets/generated/runtimes.mdx';
 import Harnesses from '/snippets/generated/harnesses.mdx';
 
-Each role has a table in `piloop.toml`. This one runs ten implementers at a time on two harnesses, for at most 30
-minutes each, and turns the orchestrator on:
+Each role has a table in `piloop.toml`. By default, two implementers run at a time, for at most an hour each, in turn
+on Claude Code and Codex. This campaign runs ten, for 30 minutes each:
 
 ```toml
+[plugins.harness]
+use = ["claude", "codex"]
+
 [plugins.harness.claude]
 model = "claude-opus-5-5"
 
@@ -18,61 +21,30 @@ model = "claude-opus-5-5"
 model = "gpt-6.1-sol"
 
 [plugins.role.implementer]
-harnesses = ["claude", "codex"]
 max_concurrent = 10
 timeout = 1800
-
-[plugins.role.orchestrator]
-triggers = ["news", "run_failed"]
 ```
 
-Two implementers at a time is the default. More of them find a better best in the same hours, at more cost. Raise
-`max_concurrent` when the result matters more than the spend.
-
-Run `piloop init` after you change it. To ask for one more agent of a role:
-
-```bash
-piloop launch enwik8 orchestrator --reason "second opinion on idea#2"
-```
-
-```text
-agent_session#4 orchestrator requested for enwik8: second opinion on idea#2
-```
+More implementers find a better best in the same hours, at more cost. Run `piloop init` after each change. The
+[configuration reference](/reference/configuration#roleconfig) lists every key of a role.
 
 Each agent is an **agent session**, with an id, a log and the tokens that it used. It signs its writes
-`<role>#<id>`, such as `orchestrator#4`. The [configuration reference](/reference/configuration#roleconfig) lists every
-key of a role.
+`<role>#<id>`, such as `implementer#4`.
 
 ## The built-in roles
 
 | Role | What it does | When it starts |
 |---|---|---|
-| **implementer** | Claims an idea from the board, or proposes its own, implements it, submits, and leaves a `note` on it. Its submissions are scored. | A free slot. |
-| **orchestrator** | Answers messages and escalations, decides what the workers cannot, and records its decisions. Each one resumes the session of the one before. | An escalation or a person's message (`news`), a failed run (`run_failed`). Off until you set it: by default, you run your own [orchestrator](/concepts/orchestrator). |
+| **implementer** | Claims an idea from the board, or proposes its own, implements it, and submits versions. Its submissions are scored. | On each free slot. |
+| **orchestrator** | Answers escalations and messages, and records its decisions. | Off by default: you run your own [orchestrator](/concepts/orchestrator). |
 
-The implementer **does runs**: each run claims one idea from the board. The orchestrator does none: its triggers start
-its agents, and nothing that they commit is scored.
-
-## Triggers
-
-A **trigger** is a condition that starts one more orchestrator. This one wakes for news and for a failed run:
-
-```toml
-[plugins.role.orchestrator]
-triggers = ["news", "run_failed"]
-```
-
-An empty list turns them off, and an orchestrator then starts only by hand (`piloop launch`). There are two:
-
-| Trigger | Wakes the orchestrator when |
-|---|---|
-| `news` | An agent escalates, a person writes to the campaign, or an evaluation reaches `[evaluation] wake_after_tries`, `quiet_seconds` (30) after the first such news, also while the campaign is paused, held or stopped. The rest of the news comes with it. |
-| `run_failed` | A run failed or timed out, and no orchestrator got it yet. Its brief lists the failures. |
+The implementer **does runs**: each run claims one idea. The orchestrator does none, and nothing that it commits is
+scored.
 
 ## Define a role
 
-A table with a new name and `runs = true` defines a role that does runs. It has the implementer's defaults. This one
-runs short sessions on `codex`:
+A table with a new name and `runs = true` defines a role that does runs, with the implementer's defaults. This one
+runs short sessions on Codex:
 
 ```toml
 [plugins.role.quick]
@@ -81,57 +53,36 @@ harnesses = ["codex"]
 timeout = 300
 ```
 
-Each role fills its own slots, and its agents claim from the same board. A candidate of any role can become the best.
+Each role fills its own slots, and its agents claim from the same board. A candidate of any role can be the best. A
+plugin can add a role too: see [Roles](/plugins/agents#roles).
 
 ## Sections
 
-A **section** is one part of what `piloop status` or a brief shows, such as `## Goal` or `## Queue`. Without a list,
-each shows every section that declares it. `[plugins.section] use` lists those of `piloop status`, and a role's
-`sections` those of its briefs, in order. A section with parameters has a table:
+A **section** is one part of what `piloop status` or a brief shows, such as `## Goal` or `## Queue`.
+`[plugins.section] use` lists those of `piloop status`, and a role's `sections` those of its briefs, in order. Without a
+list, each shows every section that declares it. A section with parameters has a table:
 
 ```toml
 [plugins.section]
 use = ["headline", "trajectory", "runs"]
-
-[plugins.role.orchestrator]
-sections = ["database", "search", "context", "research_lessons", "goal", "queue", "pack"]
-
-[plugins.section.research_lessons]
-provider = "lessons"
-budget = 800
 
 [plugins.section.history]
 budget = 600                 # the tokens of an implementer's history
 ```
 
 A brief is the role's prompt, then `brief.md`, then the role's `addendum`, then its sections. A **guide**, such as
-`database` or `search`, is a section that says how to do one thing. Each role has its own guides, and `piloop schema
-<guide>` prints any other. A list without `sections` shows the guides first.
-
-The **context** section says who the agent is, where the campaign is, why the agent started and how it runs piloop. Then
-it shows what the agent's run or sweep adds. Its `lines` change what it says. A line with an empty field, such as a
-role that writes nothing, is left out:
-
-```toml
-[plugins.section.context]
-lines = ["- You are {agent}, the {role} for {campaign}.", "- Why you started: {reason}", "- You may write: {writes}."]
-```
-
-Each agent starts with the role's `first_message`, which names its brief. An agent that resumes the role's last
-session starts with `resume_message`. Any role can resume, with `continuity = "resume"`: for the implementer, each run's
-agent continues the last run's session in its own new checkout, and claims its own idea. With `max_concurrent = 1`,
-that is one worker that keeps its session for the whole campaign.
+`database`, is a section that says how to do one thing. `piloop schema <guide>` prints any guide.
 
 <Sections />
 
 ## Harnesses
 
-A **harness** is the coding agent CLI that an agent runs in. `use` in `[plugins.harness]` lists the ones that runs use
+A **harness** is the coding agent CLI that an agent runs in. `[plugins.harness] use` lists the ones that fresh runs use
 in turn. A `[plugins.harness.<name>]` table sets a harness's `model`, changes a built-in harness, or adds one:
 
 ```toml
 [plugins.harness]
-use = ["claude", "gateway", "mycli"]
+use = ["claude", "gateway"]
 
 [plugins.harness.claude]
 model = "claude-opus-5-5"
@@ -141,46 +92,24 @@ max_concurrent = 2   # agents of this harness at once, all roles together
 provider = "claude"
 model = "claude-opus-5-5"
 env = { ANTHROPIC_BASE_URL = "https://gw.example.com" }
-
-[plugins.harness.mycli]
-model = "my-model"
-executable = "mycli"
-headless = ["--model", "{model}", "{prompt}"]
 ```
 
-| Table | What it is |
-|---|---|
-| A built-in name, such as `[plugins.harness.claude]` | That harness, with the keys that the table changes. |
-| A new name with `provider`, such as `gateway` | That provider over its defaults: Claude Code through a gateway. |
-| A new name without `provider`, such as `mycli` | Its argv and nothing else: it takes no MCP servers, and records no tokens. |
-
-A harness with a table of its own is in `use`, or in a role's `harnesses`: piloop refuses a table that no rotation
-names.
-
-A campaign without `use` uses the ones on by default:
+A table of a new name with `provider` is that provider over its defaults. Without `provider`, it is its argv and
+nothing else: see [Harnesses](/plugins/agents#harnesses). piloop refuses a harness table that no rotation names.
 
 <Harnesses />
 
-An agent ignores your own setup of its harness: your instructions file, skills, plugins, hooks and settings. So it
-works the same on every machine. The campaign repo's own files still load, and so does the machine's login. To load
-your setup for one harness, set `user_config = "load"`:
+pi is opt-in: add `"pi"` to `use`, with a `[plugins.harness.pi]` table and its `model`. On a Claude subscription, pi
+draws from extra usage, not from the plan's limits.
 
-```toml
-[plugins.harness.claude]
-user_config = "load"
-```
-
-| Harness | What `ignore` leaves out |
-|---|---|
-| `claude` | `~/.claude`: `CLAUDE.md`, skills, plugins, hooks, `settings.json` |
-| `codex` | the hooks, the turn-end `notify` command and `developer_instructions` of `config.toml`. Codex still loads your `AGENTS.md` and skills in its home. |
-| `pi` | skills and context files. Its extensions are always off. |
+An agent ignores your own setup of its harness, such as your `CLAUDE.md`, skills, plugins and hooks, so it works the
+same on every machine. The repo's own files and the machine's login still load. `user_config = "load"` in a harness's
+table loads your setup.
 
 ## Runtimes
 
-A **runtime** starts, steers and stops the agents' processes. `[plugins.runtime] use` sets it for the campaign, and
-`[plugins.role.<name>] runtime` for one role.
-To run each agent in a container that sees only its own files, see [Run agents in containers](/guides/containers).
+A **runtime** starts, steers and stops the agents' processes. `[plugins.runtime] use` sets it for the campaign, and a
+role's `runtime` for one role. To run each agent in a container, see [Run agents in containers](/guides/containers).
 
 <Runtimes />
 
@@ -189,34 +118,26 @@ To run each agent in a container that sees only its own files, see [Run agents i
 | Command | What it does |
 |---|---|
 | `piloop watch` | Shows the agents with their last output. |
-| `piloop attach 12` | Prints the last 40 lines that agent 12 wrote. |
-| `piloop prompt 12 "<text>"` | Sends text to the agent's next turn. |
-
-A message to an orchestrator that has not started yet goes into its brief, under `# Notes`, and reaches it only there.
+| `piloop attach 12` | Prints the last lines that agent 12 wrote. |
+| `piloop prompt 12 "<text>"` | Sends a message to the running agent. |
 
 A run's brief, log and transcript are in `~/.piloop/runs/<run>/`, and an orchestrator's in
-`~/.piloop/agent_sessions/<id>/`.
-When an agent ends, piloop ends every process that it started, such as a build server.
+`~/.piloop/agent_sessions/<id>/`. When an agent ends, piloop ends every process that it started.
 
-`agent_sessions.state` is where an agent is:
-
-| State | Meaning |
+| `agent_sessions.state` | Meaning |
 |---|---|
 | `requested` | Waits for a slot. |
 | `starting`, `running` | Its process starts, then works. |
-| `ending` | A stop, a cancel or its run's end ends it. piloop refuses its `piloop run end` from now on. |
+| `ending` | A stop, a cancel or its run's end ends it. |
 | `exited`, `killed` | It ended by itself, or piloop ended it. |
 | `never_worked` | It did not start to work: its job did not start, or it ended within `startup_seconds` and left nothing. `error` says why. |
 
 ## Sessions
 
 piloop keeps each agent's **session**, the harness's file of its prompts, tool calls and reasoning, in the
-[CAS](/concepts/archive#the-cas). It saves a snapshot at least every 30 seconds while the agent runs. To read the
-session that made candidate 2:
+[CAS](/concepts/memory#the-cas). To read the session that made candidate 2:
 
 ```bash
 piloop sql "SELECT s.id, s.session_file FROM agent_sessions s JOIN candidates c ON s.subject_kind = 'run' AND c.run_id = s.subject_id WHERE c.id = 2"
 piloop cas get <session_file> > session.jsonl
 ```
-
-A plugin can add roles, triggers, sections and runtimes: see [Agents and sections](/plugins/agents).

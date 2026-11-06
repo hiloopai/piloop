@@ -1,5 +1,5 @@
 ---
-title: Harnesses, MCP servers, runtimes, roles, triggers, sections and lineage
+title: Harnesses, MCP servers, runtimes, roles, sections and lineage
 sidebarTitle: Agents and sections
 description: Plugins that start the agents, define what they do and when, and show a campaign.
 ---
@@ -11,14 +11,15 @@ import ContractSection from '/snippets/generated/contract-section.mdx';
 import ContractLineage from '/snippets/generated/contract-lineage.mdx';
 import ContractHarness from '/snippets/generated/contract-harness.mdx';
 
-A harness is the coding agent CLI that an agent runs in, and an MCP server gives it tools. A runtime starts and steers the agents. A role says what an agent does, and its triggers say when it starts. A section
-is one part of what `piloop status`, a brief or a UI shows. A lineage is the graph of a campaign that a UI draws. [Agents and roles](/concepts/roles) describes them as a
-user sees them.
+A harness is the coding agent CLI that an agent runs in, and an MCP server gives it tools. A runtime starts and steers
+the agents. A role says what an agent does and when it starts. A section is one part of what `piloop status`, a brief
+or a UI shows. A lineage is the graph of a campaign that a UI draws. [Agents and roles](/concepts/roles) describes
+them as a user sees them.
 
 ## Harnesses
 
 A harness provider holds what piloop knows about one coding agent CLI. This one is Claude Code's beta build, which every
-campaign that does not set `harnesses` rotates through:
+campaign that does not set `[plugins.harness] use` rotates through:
 
 ```python
 from typing import ClassVar
@@ -42,19 +43,17 @@ claude_beta = "my_package:ClaudeBeta"
 
 A harness provider is a subclass of `Harness`. Its fields are the keys of `[plugins.harness.<name>]` with its defaults. Its
 methods hold what piloop knows about the CLI: `mcp` writes a role's MCP servers in its flags, `usage` reads the tokens
-from its session files when an agent ends, `messages` is what its hook prints for a message, and `skills_dir` is where
-it reads user skills.
+from its session files when an agent ends, `messages` shows the messages that wait for an agent, and `skills_dir` is
+where it reads user skills.
 
 <ContractHarness />
 
-A table with a new name and `provider = "<harness>"` is that harness over its defaults. A table with a new name and no
-`provider` runs its argv and does nothing else: it takes no MCP servers, and records no tokens.
-[Harnesses](/concepts/roles#harnesses) lists the built-in ones.
+[Harnesses](/concepts/roles#harnesses) lists the built-in ones, and how a table with a new name uses them.
 
 ## MCP servers
 
-A package can ship an MCP server, so that a campaign names it without its command. The harnesses know two transports,
-so the server subclasses one of them, `HttpServer` or `StdioServer`, and gives its keys their defaults:
+A package can ship an MCP server, so that a campaign names it without its command. The server subclasses
+`HttpServer` or `StdioServer`, and gives its keys their defaults:
 
 ```python
 from piloop.capabilities import StdioServer
@@ -92,28 +91,24 @@ Install it, then select it in `piloop.toml` and run `piloop init .`:
 use = "nice"
 ```
 
-A role can select its own: `[plugins.role.orchestrator] runtime = "nice"`. `[plugins.runtime.nice]` in `config.toml` holds
-the runtime's settings.
+A role can select its own: `[plugins.role.<name>] runtime = "nice"`. `[plugins.runtime.nice]` in `config.toml` holds
+the runtime's settings. [Runtimes](/concepts/roles#runtimes) lists the built-in ones.
 
 ### The contract
 
 A runtime is a pydantic model, a subclass of `RuntimeConfig`: the name of its entry point is its name, and its fields
-are the keys of `[plugins.runtime.<name>]`. Its `open(name)`, with the name of the instance, returns an object with the methods of the `Runtime` protocol. That
-object starts the `headless` argv of a harness, with the first prompt in it. [Runtimes](/concepts/roles#runtimes)
-says what a runtime does for you.
+are the keys of `[plugins.runtime.<name>]`. Its `open(name)`, with the name of the instance, returns an object with
+the methods of the `Runtime` protocol. That object starts the `headless` argv of a harness, with the first prompt in
+it.
 
 <RuntimeProtocol />
 
-### Built in
-
-[Runtimes](/concepts/roles#runtimes) lists the built-in runtimes.
-
 ## Roles
 
-[Agents and roles](/concepts/roles#define-a-role) defines a role that does runs in `piloop.toml`. A plugin can ship
-one too.
+[Agents and roles](/concepts/roles#define-a-role) defines a role that does runs in `piloop.toml`. A package can ship
+a role too, in two kinds.
 
-### Example: a role from a plugin
+### Example: a role that does runs
 
 This plugin adds `quick`, a role that does runs with short sessions:
 
@@ -139,21 +134,30 @@ Any campaign then gets the `quick` role, with its table in `piloop.toml` over th
 ### The contract
 
 A role is a table in `piloop.toml`: its prompt, where it works, how (harnesses, models, MCP servers, timeout,
-concurrency) and what it may file. A role that does runs starts one run per free slot, whose agent claims an idea from
-the board, and its commits are scored into the pool. A plugin's role is a subclass of `ImplementerRole` whose fields have
-the role's defaults, and whose `PROMPT` is the prompt that starts its brief: a file of its package. `prompt` in the
-table overrides it. The orchestrator is the one role that does no runs: piloop starts its agents itself. [Roles](/concepts/roles)
-describes each key.
+concurrency) and what it may write. A role's entry point names a subclass of one of two classes:
+
+| Class | Its agents | When they start |
+|---|---|---|
+| `ImplementerRole` | Do runs: each claims an idea from the board, and its commits are scored into the pool. | One run per free slot. |
+| `StartsItsAgents` | Do no runs: nothing that they commit is scored. | When the provider asks, and on `piloop launch`. |
+
+The fields of the subclass are the role's defaults, and its `PROMPT`, a file of its package, starts its brief. `prompt`
+in the table overrides it.
+
+A `StartsItsAgents` role decides when its agents start, such as on a timer or on an event. On each pass over a
+campaign, the daemon calls its `request`, which inserts the rows of the agents it wants and says when to ask again.
+`wakes_on` names the events that make the daemon pass for the role, and `wakes_while` says whether it wakes while the
+campaign is paused, held or stopped. The daemon launches each row within the role's `max_concurrent` and the free
+slots, and calls `launch` in a thread of its own. The orchestrator is the built-in role of this kind.
+
+A package's role keeps its whole table and its keys, also a name or a key that piloop's own roles no longer have, such
+as `watchdog` or `interval`.
 
 ### Built in
 
 The built-in roles are the same tables with defaults, so a campaign can change any key of them:
 
 <Roles />
-
-## Triggers
-
-The orchestrator wakes on its two triggers: [`news` and `run_failed`](/concepts/roles#triggers). A plugin adds none.
 
 ## Sections
 
@@ -179,22 +183,18 @@ class BestRate(Section):
         return Rendered(title='New bests', blocks=(Figures(figures=(rate,)),))
 ```
 
-Declare it with an entry point in `piloop.sections`. `piloop status` then shows it after the evaluations, wherever
-`[plugins.section] use` is not set.
+Declare it with an entry point in `piloop.sections`. `piloop status` then shows it after the evaluations, unless
+`[plugins.section] use` is set.
 
 ### The contract
 
 A section is an instance that a list of sections names, with its parameters in `[plugins.section.<name>]`. A plugin's
-section is
-a subclass of `Section`: its fields are its parameters. Its `render` returns a `Rendered`, a title and its blocks. A
+section is a subclass of `Section`: its fields are its parameters. Its `render` returns a `Rendered`, a title and its blocks. A
 block is one of four kinds: `Text`, `Lines`, `Figures` (named values, a number with its unit) and `Table`.
 `piloop status`, a brief, the API and a UI render each kind their own way, so a section never formats for one reader.
+[Sections](/concepts/roles#sections) lists the built-in ones.
 
 <ContractSection />
-
-### Built in
-
-[Sections](/concepts/roles#sections) lists the built-in sections.
 
 ## Lineage
 
@@ -230,19 +230,14 @@ use = "spine_only"
 
 ### The contract
 
-A provider returns a `Graph`. The graph declares its own vocabulary: the kinds and the statuses of its nodes, each
-with a label, and the tracks of its scores. A status also has a `Tone`, which colours it. Every node names an entry of
-each, so a provider adds its own words with no new protocol. piloop checks the graph when the provider makes it:
-every name has an entry, every parent comes before its child, and the spine and the series are paths of the graph.
-
-`[plugins.lineage] use` names the one instance of a campaign, `optimization` when it is unset. Every provider shares
-the route.
+A provider returns a `Graph`. The graph declares its own words: the kinds and the statuses of its nodes, each with a
+label, and the tracks of its scores. A status also has a `Tone`, which colours it. piloop checks the graph when the
+provider makes it: every name has an entry, every parent comes before its child, and the spine and the series are
+paths of the graph. `[plugins.lineage] use` names the one instance of a campaign, `optimization` when it is unset.
 
 <ContractLineage />
 
-### Built in
-
-`optimization` has one node per candidate, with the candidate's parent:
+The built-in `optimization` has one node per candidate, with the candidate's parent:
 
 | What | `optimization` |
 |---|---|

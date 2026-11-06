@@ -50,16 +50,13 @@ A job's end goes to `host.results`: `finished` or `lost`, in a session that the 
 [leases](#leases) to refuse those reports; `inline` needs none. `run_agent` runs an agent's job on this machine, and
 `kind_of(job).run` a job of any other kind, such as an evaluation.
 
-### Built in
-
-`workers`, the default, runs every job on a [lease](#leases), taken by its worker in `piloop serve` or by
-a [worker on another machine](/guides/workers). Its routes are the lease calls. Its
-keys are in the [configuration reference](/reference/configuration#plugins).
+The built-in `workers`, the default, runs every job on a [lease](#leases), taken by its worker in `piloop serve` or by
+a [worker on another machine](/guides/workers). Its routes are the lease calls.
 
 ### Leases
 
 A **lease** is a time-limited claim on one job by one worker. Any executor can use leases: `Leases` in
-`piloop.capabilities`. `workers` runs every job on one.
+`piloop.capabilities`.
 
 ```mermaid
 stateDiagram-v2
@@ -152,16 +149,11 @@ tls = "proxy"
 The entry point names a subclass of `NetworkConfig`: its fields are the other keys of `[plugins.network]`. Its
 `client` finds this machine's credential itself, or raises `NoCredential` with what to set: `piloop worker` dials with
 it. The daemon calls its `open(host)` once, when it starts, to make the server's `Network`. A request that `identify`
-refuses gets 401.
+refuses gets 401. The built-in `https`, the default, knows no caller other than the tokens of `piloop token`, and its
+client sends the one in `PILOOP_HTTPS_TOKEN`. `proxy` trusts the headers of an
+[authenticating proxy](/guides/daemon#behind-an-authenticating-proxy).
 
 <ContractNetwork />
-
-### Built in
-
-`https`, the default, knows no caller other than the tokens of `piloop token`, and its client sends the one in
-`PILOOP_HTTPS_TOKEN`. An address that is not loopback needs `tls`: a certificate, or `"proxy"` when a reverse proxy or
-an SSH tunnel ends TLS. Its keys are in the
-[configuration reference](/reference/configuration#plugins).
 
 ## Provisioners
 
@@ -217,10 +209,8 @@ class Containers:
 ```
 
 The worker's credential goes to `docker` in its environment, never in its argv. Entry point group:
-`piloop.provisioners`.
-
-The provider's `open` makes its live side, which lists, starts and stops instances. It tags each instance with the
-server's id, and lists only those, so two servers on one account never stop each other's.
+`piloop.provisioners`. The provider's `open` makes its live side, which lists, starts and stops instances. It tags
+each instance with the server's id, and lists only those, so two servers on one account never stop each other's.
 
 <ContractProvisioner />
 
@@ -255,17 +245,13 @@ The store is a `Cas`: the methods of covalence's Python `Cas` that piloop calls,
 `covalence.Cas` is a store as it is. A blob's address is a raw BLAKE3 CID of its content. A missing blob reads as
 `None`, and bytes that do not match their CID raise covalence's `IntegrityError`. A store with a local tier over a
 remote one also implements `Upkeep`, which `piloop store` and the daemon's hourly upkeep use. A store that can be such
-a local tier is `Evictable`. Its provider is a `LocalProvider`, and an `Annotated[LocalProvider, CAS.entry]` key, as
-`cached`'s `local`, takes only those.
+a local tier is `Evictable`, and its provider is a `LocalProvider`.
 
 <ContractCas />
- `ObjectsCas` (`piloop.plugins.cas.kit.objects`) is a store of
-compressed objects over anything that puts, opens and finds whole files by key: `disk`, `s3` and `gcs` are three.
 
-`check_cas(cas, scratch)` runs the contract against a store, as piloop's tests do with each built-in provider and
-with covalence's `Cas.memory()`. It never deletes, so point it at a store that you can empty.
-
-### Built in
+`ObjectsCas` (`piloop.plugins.cas.kit.objects`) is a store of compressed objects over anything that puts, opens and
+finds whole files by key: `disk`, `s3` and `gcs` are three. `check_cas(cas, scratch)` runs the contract against a
+store, as piloop's tests do. It never deletes, so point it at a store that you can empty. The built-in providers:
 
 <CasProviders />
 
@@ -332,20 +318,17 @@ env_fallback = "my_package:EnvFallback"
 ## Notifiers
 
 A **notifier** sends the inbox items that need a human to a service outside piloop. `[plugins.notifier.<name>]`
-configures one, and `[plugins.notifier] use` names those in use: a campaign's `piloop.toml` over the defaults of
-`config.toml`. `slack`, built in, posts to an incoming
-webhook, and `slack_app` posts as an app and takes answers back. [Notifications](/guides/notifications) shows their
-keys. `send` gets the notices of one campaign, and the secrets of that campaign over the home's. It says what each
-notice became: its post, or None when the service gives no id. Or it raises
-`NotDelivered`, and piloop retries. piloop records which items it sent, and reminds.
+configures one, and `[plugins.notifier] use` names those in use. The built-in `slack` posts to an incoming webhook, and `slack_app` posts
+as an app and takes answers back: see [Notifications](/guides/notifications). `send` gets the notices of one
+campaign, and the secrets of that campaign over the home's. It returns what each notice became: its post, or None
+when the service gives no id. Or it raises `NotDelivered`, and piloop retries. piloop records which items it sent,
+and reminds.
 
 A notifier that also has `listen` (`Listens`) takes answers back. `listen` returns a lifecycle that the daemon starts
 and stops. `connection` names what it connects with, never a secret: the instances with the same one share one
 listener. For each answer, it calls `host.received` with an `Inbound`: the post whose thread it is in, the message,
-the service's user, and a `Reply`, `Ack`, `AddIdea`, `Edit` or `Choose`. piloop maps the post to its item, asks `person` of the
-notifier that posted it who the user is, writes what it asks as that person,
-and returns `Accepted` or `Declined`, each with what to tell the person, `Answered` for a choice on an escalation
-that someone answered already, `Again` for a redelivery, or `Foreign` for a thread that is not piloop's.
+the service's user, and a `Reply`, `Ack`, `AddIdea`, `Edit` or `Choose`. piloop writes it as the person that
+`person` names, and returns what to tell them.
 
 ```python
 from collections.abc import Sequence
@@ -381,7 +364,7 @@ ntfy = "my_package:Ntfy"
 The **archive** moves the finished parts of campaign workspaces into the CAS, and writes them back on
 `piloop restore`. `[plugins.archive]` in `config.toml` selects it. `local`, built in and the default, records each
 archiving in its `archives` table. Its archiver is a [consumer](/plugins/contributions#routes-and-consumers) of the
-daemon's loop. [The archive and the CAS](/concepts/archive) describes what it does. `local`, in
+daemon's loop. [The archive](/concepts/memory#the-archive) describes what it does. `local`, in
 [`piloop/plugins/archive/local/`](https://github.com/hiloopai/piloop/tree/main/piloop/plugins/archive/local), is
 the model for another provider.
 
@@ -391,8 +374,8 @@ the model for another provider.
 
 The **memory** provider keeps what past campaigns leave for the next ones. `[plugins.memory]` in `piloop.toml` selects
 it. `local`, built in and the default, has the `lessons`, `documents` and `journal` tables, the `piloop journal`
-command and its route: [Tables, commands, routes and consumers](/plugins/contributions) shows how. Its contract has one method,
-`sync`. [Memory](/concepts/memory) describes it.
+command and its route ([Tables, commands and routes](/plugins/contributions)). [Memory](/concepts/memory) describes
+it.
 
 This provider is `local` with other default documents:
 

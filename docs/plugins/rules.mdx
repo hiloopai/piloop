@@ -43,32 +43,24 @@ provider = "min_gain"
 min_gain = 1000
 ```
 
-[Write a plugin](/plugins/overview) installs and selects it.
-
 ### The contract
 
-A best rule is a [pure](/plugins/overview#host-and-pure-contracts) provider, a subclass of `BestRule`. Import the
-types from `piloop.capabilities`.
+A best rule is a [pure](/plugins/overview#host-and-pure-contracts) provider, a subclass of `BestRule`.
 
 <ContractBestRule />
 
 The rule decides only whether a candidate may be best. piloop decides when a candidate is confirmed, and ranks those
-that may be best by their mean.
-
-### Built in
-
-`baseline` is the rule of a campaign without `[plugins.best_rule]`. [The best](/concepts/pool#the-best) describes it.
+that may be best by their mean. `baseline` is the rule of a campaign without `[plugins.best_rule]`:
+[The best](/concepts/pool#the-best) describes it.
 
 ## Stop rules
 
-On each pass, the daemon asks the stop rule of each active campaign whether the campaign
-goes on, holds, or stops. piloop gives the rule a `StopCase`: the facts that the rule asked for. The rule returns one
+On each pass, the daemon asks the stop rule of each active campaign whether the campaign goes on, holds, or stops. piloop gives the rule a `StopCase`: the facts that the rule asked for. The rule returns one
 of four answers:
 
 <StopAnswers />
 
-A hold is not a pause. piloop asks the rule again on each pass, and the hold ends when the rule answers `Go`. piloop
-does not stop a paused campaign, but it holds one.
+A hold is not a pause: piloop asks the rule again on each pass, and the hold ends when the rule answers `Go`.
 
 The built-in rule is `limits`. It holds the campaign while a fact of `hold_at` is unknown or at its limit. Else it
 stops the campaign at the first of its other limits that the campaign reaches.
@@ -104,9 +96,9 @@ stop_at = 4
 
 ### The contract
 
-A stop rule is a [pure](/plugins/overview#host-and-pure-contracts) provider, a subclass of `StopRule`. Its fields are its limits and other
-parameters. Import the types from `piloop.capabilities`. Most facts cost database queries on every pass, so piloop
-gets only those of `reads`. `piloop status` and the briefs join the parts of `describe` into the progress line:
+A stop rule is a [pure](/plugins/overview#host-and-pure-contracts) provider, a subclass of `StopRule`. Its fields are
+its limits and other parameters. Most facts cost database queries on every pass, so piloop gets only those of
+`reads`. `piloop status` and the briefs join the parts of `describe` into the progress line:
 piloop formats no fact itself.
 
 <ContractStopRule />
@@ -118,22 +110,17 @@ closes its row. `check_config` refuses a campaign that the rule cannot serve whe
 `target` on a campaign of more than one track.
 
 A fact is a typed key, `Fact[T]`, that a [fact source](#fact-sources) of the campaign supplies.
-`case.facts.get(NEW_BESTS)` reads one, and `case.facts.get(reading('spend'))` one that a source reads by name. Every fact
-that a rule reads needs a source in the campaign, or piloop refuses the configuration. The facts of the built-in
-sources `campaign` and `optimization`, from `piloop.capabilities`, and the ratios over facts that a rule names (`spend`, the fact of what the
-campaign spent; `cost`, the evaluator's metric of what one evaluation costs):
+`case.facts.get(NEW_BESTS)` reads one, and `case.facts.get(reading('spend'))` one that a source reads by name. Every
+fact that a rule reads needs a source in the campaign, or piloop refuses the configuration. The facts of the built-in
+sources `campaign` and `optimization`, and the ratios over facts that a rule names (`spend`, what the campaign spent;
+`cost`, the evaluator's metric of what one evaluation costs):
 
 <Facts />
 
 Each is None while a term is, or when its count is 0. A rule that reads a ratio asks for the facts of its terms.
 
-A stop that a person requests (`piloop campaign stop`) stops the campaign whatever the rule answers, also when the
-rule holds it ([Spend outside piloop](/concepts/cost#spend-outside-piloop)).
-
-### Built in
-
-`limits` is the rule of a campaign without `[plugins.stop_rule]`. [Stop conditions](/concepts/cost)
-lists its limits.
+`piloop campaign stop` stops the campaign whatever the rule answers, also when the rule holds it. `limits` is the
+rule of a campaign without `[plugins.stop_rule]`: [Stop conditions and cost](/concepts/cost) lists its limits.
 
 ## Fact sources
 
@@ -183,24 +170,20 @@ facts = ["billing_usd"]
 
 `spend` sums the facts that it names, and `hold_at = { spend = 1000 }` then holds the campaign at that sum.
 
-A fact source is a provider of `FACT_SOURCES`, a subclass of `FactSource`. `[plugins.fact_source] use` lists a
-campaign's sources; a campaign that does not set it has every installed source that is on by default (`DEFAULT`):
-`campaign`, the hours and tokens of any campaign, and `optimization`, its research. A list that adds a source lists
-those too, and a source with a table of its own must be in it. Two sources never supply the same fact.
+A fact source is a subclass of `FactSource`. A campaign without `[plugins.fact_source] use` has every installed
+source that is on by default (`DEFAULT`): `campaign`, its hours and tokens, and `optimization`, its research. A list
+that adds a source names those too. Two sources never supply the same fact.
 
-A `Readings` source (`piloop.plugins.fact_source.kit.readings`) is one that the daemon reads every `interval` seconds,
-outside any transaction. It implements `names` and `read`, and piloop does the rest: each reading is a `fact.read`
-event on the campaign, its one record. It posts a note at each of its `notices`, and escalates once when its readings
-start to fail.
+The daemon reads a `Readings` source every `interval` seconds. It implements `names` and `read`, and piloop does the
+rest: each reading is a `fact.read` event on the campaign, a note goes to the inbox at each of its `notices`, and one
+escalation when its readings start to fail.
 
 ### The contract
 
 <ContractFactSource />
 
-The built-in `command` source runs a command that writes `{"metrics": {"<name>": <value>}}` to `$PILOOP_RESULT_FILE`,
-as the evaluate command does.
-[Spend outside piloop](/concepts/cost#spend-outside-piloop) configures it. piloop gives no fact a meaning: a stop rule
-or a section names the facts that it reads.
+The built-in `command` source runs a command that writes `{"metrics": {"<name>": <value>}}` to `$PILOOP_RESULT_FILE`:
+see [Spend outside piloop](/concepts/cost#spend-outside-piloop).
 
 ## Price lists
 
@@ -248,7 +231,7 @@ provider = "round_robin"   # the default
 ```
 
 The built-in `round_robin` gives the n-th agent of a role the n-th harness. A harness whose session the agent can
-resume comes first, and a full harness passes its turn. A harness that `piloop agent launch --harness` names is never
+resume comes first, and a full harness passes its turn. A harness that `piloop launch --harness` names is never
 replaced.
 
 <ContractHarnessChoice />

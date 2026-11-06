@@ -1,15 +1,15 @@
 ---
 title: Optimize inference
 sidebarTitle: Inference
-description: A campaign that makes a model serve more tokens per second without changing its output, and three plugins for that work.
+description: A campaign that makes a model serve more tokens per second without changing its output.
 ---
 
 import ExampleGpuHours from '/snippets/generated/example-gpu-hours.mdx';
 import ExampleMinSpeedup from '/snippets/generated/example-min-speedup.mdx';
 import ExampleLatency from '/snippets/generated/example-latency.mdx';
 
-This guide sets up a campaign that makes a model's serving faster while its quality holds, then adds plugins for that
-work. Its example serves a small model on a CPU, so it runs on a laptop:
+This campaign makes a model serve faster while its output stays the same. Its example serves a small model on a CPU,
+so it runs on a laptop:
 
 ```bash
 piloop init --example inference ~/piloop-inference
@@ -21,8 +21,7 @@ campaign inference #1 registered; measuring baseline candidate#1 (`piloop eval q
 baseline candidate#1: tokens 512, seconds 5.443, match 1, p50_ms 1433, p95_ms 1461
 ```
 
-The implementers edit `server.py`, the inference server. It reads a batch of prompts per line on stdin, and decodes the
-model of `model.py` greedily. The baseline recomputes the whole context for each new token.
+The implementers edit `server.py`, the inference server. The baseline recomputes the whole context for each new token.
 
 ## The evaluate command
 
@@ -39,24 +38,13 @@ python3 evaluate.py
 {"status": "ok", "score": 143.62, "direction": "higher", "metrics": {"tokens": 512, "seconds": 3.565, "match": 1.0, "p50_ms": 617.06, "p95_ms": 1865.05}}
 ```
 
-Each line is a workload of its own, cheapest first:
+- Each rung sends its requests again until it has run for a minimum time. A fixed number of requests would take
+  milliseconds once the server is much faster, and noise would decide the score.
+- `tokens` ÷ `seconds` is the throughput at the rung's concurrency.
+- `match` is the share of the checked tokens that equal the reference decoder's: the quality.
 
-```python
-RUNGS = (
-    # rung, requests, concurrency, new tokens per request, check one request in this many, minimum seconds
-    ('smoke', 2, 2, 8, 1, 0),
-    ('load', 8, 4, 16, 4, 0.5),
-    (None, 32, 8, 16, 4, 3),
-)
-```
-
-A rung sends its requests again until it has run for its minimum seconds. A fixed number of requests would take a few
-milliseconds once the server is a hundred times faster, and noise would decide the score. `seconds` is the wall time of
-the batches, and `tokens` counts every token served, so `tokens` ÷ `seconds` is the throughput at that concurrency. `match` is
-the share of the checked tokens that equal the reference decoder's: the quality. For a real model, start your server
-(vLLM, SGLang or your own) in the evaluate command, wait until it is healthy, and drive it with your load generator at
-a fixed concurrency. Score quality on a fixed prompt set against the outputs of a reference build. The lines stay the
-same.
+For a real model, start your server (vLLM, SGLang or your own) in the evaluate command, wait until it is healthy, and
+drive it at a fixed concurrency. Score quality on a fixed prompt set against the outputs of a reference build.
 
 ## The metrics
 
@@ -101,27 +89,14 @@ name = "load"                      # 8 requests at concurrency 4 for 0.5 s: is i
 stop = { p50_ms = { fraction = 0.5 } }
 ```
 
-- **Throughput is a [ratio](/concepts/campaigns#ratio-metrics).** The evaluate command reports `tokens` and `seconds`,
-  and piloop computes `tokens_per_s`. A rung that runs for a fixed time serves a different number of tokens on each
-  candidate, and the ratio still compares them.
-- **Noise.** A benchmark of times is noisy. A candidate whose first score beats the best is evaluated until it has
-  `[evaluator] noise_runs` evaluations, 3 by default, and only then can it be the best
-  ([Scoring](/concepts/pool#scoring)). The tolerances are wider than the noise: `p95_ms` may get 25% worse than the
-  baseline, and the short load test stops a candidate only when its median latency is 50% worse than the best's.
-- **Quality.** `match` may drop by `margin` from the baseline, and never below `floor`. An approximation, such as a
-  lower precision, that changes a few tokens can be the best. One that changes many cannot.
+- **Throughput is a [ratio](/concepts/campaigns#ratio-metrics).** A rung that runs for a fixed time serves a different
+  number of tokens on each candidate, and the ratio still compares them.
+- **Noise.** A candidate whose first score beats the best is evaluated `noise_runs` times before it can be the best.
+  The tolerances are wider than the noise.
+- **Quality.** `match` may drop by `margin` from the baseline, and never below `floor`. An approximation that changes a
+  few tokens can be the best. One that changes many cannot.
 - **The ladder.** The smoke rung stops a server that gives wrong tokens in seconds. The load rung stops a slow one
-  before the full benchmark. A stop names a reported metric, never a ratio.
-
-Add ideas, and watch:
-
-```bash
-piloop idea add inference "Precompute each token's feature once"
-piloop watch
-```
-
-A later commit was twice as slow as the best at the load test. Its climb stopped there, and it never ran the full
-benchmark. Its implementer heard:
+  before the full benchmark:
 
 ```text
 candidate#5: stopped at a rung of the ladder: p50_ms 42.65 vs 20.5 (+22.15; fraction 0.5)
@@ -155,51 +130,20 @@ gpu = "H100"
 
 [Workers](/guides/workers) shows the network, the CAS and the tokens that the workers need.
 
-## Write plugins for it
+## Plugins for this work
 
-A [plugin](/plugins/overview) is a Python package that adds providers to piloop. The package
-[`examples/plugins/inference`](https://github.com/hiloopai/piloop/tree/main/examples/plugins/inference) adds three:
-
-| Provider | Capability | What it does |
-|---|---|---|
-| `gpu_hours` | [fact source](/plugins/rules#fact-sources) | The GPU-hours of the evaluations, and their price. |
-| `min_speedup` | [best rule](/plugins/rules#best-rules) | The best must be at least a fraction faster than the baseline. |
-| `latency` | [section](/plugins/agents#sections) | A latency table in `piloop status` and in each implementer's brief. |
-
-Import the contracts, their types and the built-in providers from `piloop.capabilities`. A provider that reads the
-candidates or the measurements imports their tables from the component that owns them,
-`piloop.plugins.campaign_type.kit.candidates.tables` and `piloop.plugins.campaign_type.kit.evaluation.tables`.
-`piloop.db.models` has core's tables, such as `Campaign`.
-
-Install the package next to piloop, and check that piloop finds it:
+The package [`examples/plugins/inference`](https://github.com/hiloopai/piloop/tree/main/examples/plugins/inference)
+adds three providers. Install it next to piloop, select each one in `piloop.toml`, and run `piloop init` again:
 
 ```bash
 uv tool install piloop --with ./examples/plugins/inference
 piloop plugins
 ```
 
-```text
-fact sources (host tier, piloop.fact_sources):
-  campaign      piloop 0.3.0
-  command       piloop 0.3.0
-  optimization  piloop 0.3.0
-  gpu_hours     piloop-inference 0.1.0, entry point gpu_hours = piloop_inference.gpu_hours:GpuHours
-```
-
-Select each provider in `piloop.toml`, as below, and run `piloop init` again. `piloop plugins` then names the campaign's
-selection:
-
-```text
-  inference: best rule min_speedup, from piloop-inference 0.1.0 ([plugins.best_rule] provider, in the config of inference that the last `piloop init` stored from ~/piloop-inference/piloop.toml)
-```
-
-### A fact source: what the GPUs cost
-
-`gpu_hours` sums the wall time of the campaign's evaluations, and prices it:
+`gpu_hours`, a [fact source](/plugins/rules#fact-sources), prices the evaluations' wall time, so `hold_at` holds the
+campaign at a GPU budget:
 
 <ExampleGpuHours />
-
-The stop rule's `hold_at` then holds the campaign at a GPU budget:
 
 ```toml
 [plugins.fact_source]
@@ -210,17 +154,11 @@ gpus = 1
 usd_per_gpu_hour = 2.5
 
 [plugins.stop_rule]
-max_runs = 20
 hold_at = { gpu_usd = 50 }         # nothing new starts past 50 USD of GPU time
 ```
 
-`piloop status` shows the spend against the budget, at the end of the progress line: `gpu_usd 0.1043/50`.
-
-### A best rule: only real speedups
-
-With three evaluations, a gain of a few percent can be noise. Every run starts from the best by default, so a lucky
-best costs the runs after it. `min_speedup` calls the built-in rule `baseline`, and refuses a candidate that is less
-than the fraction faster than the baseline:
+`min_speedup`, a [best rule](/plugins/rules#best-rules), refuses a best that is less than a fraction faster than the
+baseline, so a lucky few percent never makes the best:
 
 <ExampleMinSpeedup />
 
@@ -230,38 +168,11 @@ provider = "min_speedup"
 min_speedup = 0.05
 ```
 
-### A section: latency for the agents
-
-The best rule reads throughput. `latency` shows each implementer what earlier candidates did to the tail:
+`latency`, a [section](/plugins/agents#sections), shows each implementer what the latest candidates did to the tail:
 
 <ExampleLatency />
-
-`SHOWN_IN` puts it in `piloop status` and in the brief of each run. Its table changes its parameters:
 
 ```toml
 [plugins.section.latency]
 metrics = ["p50_ms", "p95_ms", "match"]
 ```
-
-Each row is one of the latest candidates: how many evaluations of the full benchmark it has, and the mean of each
-metric over them.
-
-### Test the plugins
-
-A best rule is [pure](/plugins/overview#host-and-pure-contracts): test it with a case, without piloop running:
-
-```python
-from piloop.capabilities import Case, Criterion, Direction, Scores
-from piloop_inference.min_speedup import MinSpeedup
-
-
-def test_a_3_percent_gain_may_not_be_best() -> None:
-    throughput = Criterion('tokens_per_s', Direction.HIGHER)
-    mine = Scores('candidate#2', {'tokens_per_s': 103}, 3, None)
-    baseline = Scores('candidate#1', {'tokens_per_s': 100}, 3, None)
-    case = Case(throughput, (), mine, baseline, None)
-    assert MinSpeedup(min_speedup=0.05).refuse(case) == '3.0% is below min_speedup 5%'
-```
-
-The fact source and the section read the campaign's tables. Run `piloop serve --check` to check that they load, and
-`piloop status` to see their output.

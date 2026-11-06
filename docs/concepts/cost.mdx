@@ -1,23 +1,21 @@
 ---
 title: Stop conditions and cost
 sidebarTitle: Stop conditions and cost
-description: When a campaign stops, what its agents spend in tokens, what it spent in USD, and a hard limit on its spend.
+description: When a campaign stops, what its agents spend, and a hard limit on its spend.
 ---
 
 import Stop from '/snippets/generated/stop.mdx';
 
-`[plugins.stop_rule]` in `piloop.toml` says when a campaign stops:
+`[plugins.stop_rule]` in `piloop.toml` says when a campaign stops, and when it holds. The setup writes the hours and
+the cap in USD of model tokens that you give it:
 
 ```toml
 [plugins.stop_rule]
-max_runs = 20
-max_tokens = 50_000_000
-```
+max_hours = 6
+hold_at = { models_usd = 30 }      # nothing new starts at 30 USD of model tokens
 
-`piloop status enwik8` shows the progress against each limit:
-
-```text
-- Campaign: active. Progress: run 2/20 · 0.0h · 0/50.0M tok.
+[plugins.fact_source]
+use = ["campaign", "optimization", "models"]
 ```
 
 Any one limit stops the campaign. Without a limit, the campaign has no end. These are the limits of the built-in stop
@@ -25,10 +23,16 @@ rule, `limits`:
 
 <Stop />
 
+`piloop status enwik8` shows the progress against each limit:
+
+```text
+- Campaign: active. Progress: run 2/20 · 0.0h · 0/50.0M tok.
+```
+
 ## What a stop does
 
-The daemon tells the running implementers to commit and stop, ends them 10 minutes later, and scores what they
-committed. `wrap_up_grace` in `[agents]` of `piloop.toml` or of the home's `config.toml` changes the 10 minutes. It drops the queued runs.
+The daemon tells the running implementers to save their work and stop, and ends them 10 minutes later
+(`[agents] wrap_up_grace`). It drops the queued runs. Their submissions are still scored.
 
 | Command | What it stops |
 |---|---|
@@ -36,101 +40,13 @@ committed. `wrap_up_grace` in `[agents]` of `piloop.toml` or of the home's `conf
 | `piloop pause enwik8 --reason "<why>"` | New launches of one campaign, until `piloop resume enwik8`. |
 | `piloop stop` | The daemon, not the campaigns: the next `piloop serve` continues them. |
 
-To resume a stopped campaign, reopen it (`piloop campaign reopen`): its runs, hours and tokens count from the reopen.
-Or raise its limits and run `piloop init`. See [Reopen, fork and retire](/concepts/campaigns#reopen-fork-and-retire).
+To go on after a stop, raise the limits and run `piloop init`, or [reopen](/concepts/campaigns#reopen-fork-and-retire)
+the campaign.
 
-## Tokens
+## A hold
 
-When an agent ends, piloop reads its tokens from the harness's own session file, and writes them to
-`agent_sessions.usage`:
-
-```json
-{"input": 120345, "output": 18230, "cache_read": 950112, "cache_write": 40211, "total": 1128898, "turns": 41, "source": "…"}
-```
-
-`input` is the input that the prompt cache did not serve. `max_tokens` limits the `total` of every agent of the
-campaign.
-
-## What a campaign spent
-
-The `spend` fact source sums what a campaign spent in USD, from the facts of other sources:
-
-```toml
-[plugins.fact_source]
-use = ["campaign", "optimization", "leases", "models", "spend"]
-```
-
-The home's `config.toml` gives the price of one worker of each pool. It can also turn spend on for every campaign of
-the home, as a [default](/reference/configuration) of their `piloop.toml`:
-
-```toml
-[plugins.executor.pools.agents]
-usd_per_hour = 0.40
-
-[plugins.fact_source]
-use = ["campaign", "optimization", "leases", "models", "spend"]
-```
-
-`GET /v1/campaigns/enwik8/spend` answers each part and the sum:
-
-```json
-{
-  "usd": 16.0,
-  "parts": [
-    {"fact": "compute_usd", "usd": 1.0, "as_of": "2026-10-27T18:12:15.480248Z"},
-    {"fact": "models_usd", "usd": 15.0, "as_of": "2026-10-27T18:12:15.480248Z"}
-  ],
-  "per_best_usd": 8.0
-}
-```
-
-- `compute_usd`, from `leases`: each second that a worker held a job of the campaign, at the pool's `usd_per_hour`. A
-  worker that holds several jobs splits each second evenly among them. The time that a worker holds no job is no
-  campaign's.
-- `models_usd`, from `models`: the tokens of each agent that ended, at the list price of its model. The
-  [price list](/plugins/rules#price-lists) is that of [genai-prices](https://github.com/pydantic/genai-prices), which
-  piloop bundles. This is the API-equivalent cost, not an invoice: a subscription bills otherwise.
-- A pool or a model without a price makes its part unknown (`null`), and the sum too. An unknown value is never 0. An
-  alias such as `sonnet` is no model id, so it has no list price. Give it one, in USD per million tokens:
-
-  ```toml
-  [plugins.fact_source.models]
-  prices = { sonnet = { input = 3.0, output = 15.0, cache_read = 0.3, cache_write = 3.75 } }
-  ```
-
-- `per_best_usd` is the sum per new best.
-- `facts` in `[plugins.fact_source.spend]` names the parts. Add a value that a source reads, such as a cloud's bill
-  below: `facts = ["compute_usd", "models_usd", "gpu_usd"]`.
-- `hold_at = { spend = 1000 }` holds the campaign at that sum, as below.
-
-## Spend outside piloop
-
-GPU time and paid APIs are **facts** that a **fact source** reads. The built-in `command` source runs a command that
-writes `{"metrics": {"<name>": <value>}}` to `$PILOOP_RESULT_FILE`. `spend` adds the fact to the sum, and `hold_at`
-holds the campaign at a limit of the sum:
-
-```toml
-[plugins.stop_rule]
-max_runs = 20
-max_tokens = 50_000_000
-hold_at = { spend = 1000 }                    # nothing new starts at this spend
-
-[plugins.fact_source]
-use = ["campaign", "optimization", "billing", "spend"]
-
-[plugins.fact_source.billing]
-provider = "command"
-command = ["uv", "run", "python", "scripts/gpu_bill.py"]   # reports {"metrics": {"gpu_usd": 1012}}
-metrics = ["gpu_usd"]
-notices = { gpu_usd = [300, 600] }            # a note in the inbox as each one is passed
-
-[plugins.fact_source.spend]
-facts = ["gpu_usd"]                           # add "compute_usd" and "models_usd" with their sources
-```
-
-```text
-- Campaign: active. Progress: run 2/20 · 0.0h · 0/50.0M tok · spend 1012/1000 (launches held: spend at its limit).
-```
+A **hold** is not a stop. While a `hold_at` fact is at its limit, or unknown, nothing new starts. What runs finishes
+and is scored. The daemon escalates once. At `hold_at = { spend = 1000 }`:
 
 ```text
 comment#5 escalation on campaign#1 by daemon, 35s ago · p0, unacknowledged
@@ -141,17 +57,55 @@ spend reached its hold_at of 1000: nothing launches until you raise it and run p
 A. Change the rule in piloop.toml, then run piloop init. → The campaign goes on under the new rule.
 B. Keep the rule as it is. → Nothing new starts until the rule lets it.
 Answer: `piloop inbox choose 5 <A|B>`
-
-Details:
-Stop rule limits: spend reached its hold_at of 1000: nothing launches until you raise it and run piloop init
 ```
 
-- The daemon reads the source every `interval` seconds (300 by default), at the repo's root, with the daemon's
-  environment. Give it its keys as [secrets](/guides/secrets).
-- A **hold** is not a stop. While the value is at its limit, or unknown, nothing new starts, and what runs finishes and
-  is scored. An unknown value is never read as zero.
-- To resume, raise the limit and run `piloop init`.
-- `piloop campaign stop` stops a held campaign at once.
+## What a campaign spent
 
-A plugin can add a fact source, such as a cloud's billing API, or another stop rule: see
-[Rules and facts](/plugins/rules).
+Each **fact source** reads a fact that a limit or a section can use:
+
+| Source | Fact |
+|---|---|
+| `models` | `models_usd`: the tokens of each agent that ended, at the list price of its model. |
+| `leases` | `compute_usd`: each second that a worker held a job of the campaign, at its pool's `usd_per_hour`. |
+| `command` | Any fact that your own command reports, such as a GPU bill. |
+| `spend` | `spend`: the sum of the facts in its `facts`, by default `compute_usd` and `models_usd`. |
+
+`models_usd` is the API-equivalent cost from [genai-prices](https://github.com/pydantic/genai-prices), not an invoice:
+a subscription bills otherwise. A model without a price makes the fact unknown, never 0. An alias such as `sonnet` has
+no list price, so give it one, in USD per million tokens:
+
+```toml
+[plugins.fact_source.models]
+prices = { sonnet = { input = 3.0, output = 15.0, cache_read = 0.3, cache_write = 3.75 } }
+```
+
+piloop reads each agent's tokens from its harness's session file when it ends, into `agent_sessions.usage`.
+`max_tokens` limits their `total` over the campaign.
+
+## Spend outside piloop
+
+The built-in `command` source runs a command that writes `{"metrics": {"<name>": <value>}}` to `$PILOOP_RESULT_FILE`.
+`spend` adds the fact to the sum, and `hold_at` holds the campaign at a limit of the sum:
+
+```toml
+[plugins.stop_rule]
+hold_at = { spend = 1000 }
+
+[plugins.fact_source]
+use = ["campaign", "optimization", "models", "billing", "spend"]
+
+[plugins.fact_source.billing]
+provider = "command"
+command = ["uv", "run", "python", "scripts/gpu_bill.py"]   # reports {"metrics": {"gpu_usd": 1012}}
+metrics = ["gpu_usd"]
+notices = { gpu_usd = [300, 600] }            # a note in the inbox as each one is passed
+
+[plugins.fact_source.spend]
+facts = ["models_usd", "gpu_usd"]
+```
+
+The daemon runs the command every `interval` seconds (300 by default), at the repo's root, with the daemon's
+environment. Give it its keys as [secrets](/guides/secrets). `GET /v1/campaigns/enwik8/spend` returns each part and
+the sum.
+
+A plugin can add a fact source or another stop rule: see [Rules and facts](/plugins/rules).

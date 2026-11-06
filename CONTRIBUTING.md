@@ -398,7 +398,7 @@ that every subpackage may use.
 piloop, so every layer may use it. `plugins/metric.py` has the metric types that the verdict and stop contracts share.
 A plugin package keeps its tables and migrations beside its code: a `tables.py` with its `Schema`, and its
 `migrations/`. What a capability runs in the daemon for all its providers, such as the reading of fact sources, is its
-`consumers.py`, declared in `piloop.contributors`. [How piloop is built](https://piloop.autoresearch.inc/concepts/how-piloop-is-built) has the picture.
+`consumers.py`, declared in `piloop.contributors`. [How piloop is built](https://piloop.autoresearch.inc/plugins/overview) has the picture.
 
 Each capability is one package, `plugins/<capability>/`, with the name of its entry point in `piloop.capabilities`:
 - `contract.py` declares the capability, its entry point group, where the configuration selects it, and its types. A

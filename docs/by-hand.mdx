@@ -4,7 +4,7 @@ description: Set up and start a campaign with the piloop CLI, without an agent. 
 ---
 
 These are the commands that your agent runs for you in the [Quickstart](/quickstart). Install piloop first, and log
-in to at least one coding agent CLI: `claude auth login`, `codex login`, or `/login` in `pi`.
+in to Claude Code (`claude auth login`) or Codex (`codex login`).
 
 ## The enwik8 example
 
@@ -19,7 +19,7 @@ into as few bytes as possible. The agents edit `compressor.py`. The baseline is 
     ```
 
     `piloop init` copies the example, downloads the data, makes a git repo, starts the daemon and measures the
-    baseline. The daemon's log is `~/.piloop/serve.log`.
+    baseline:
 
     ```text
     daemon started: pid 41213, log ~/.piloop/serve.log
@@ -27,8 +27,8 @@ into as few bytes as possible. The agents edit `compressor.py`. The baseline is 
     baseline candidate#1: bytes 3688775, seconds 0.67
     ```
 
-    The example uses Claude Code. To use Codex or pi too, edit `harnesses` in `piloop.toml`, for example
-    `harnesses = ["claude", "codex"]`, and run `piloop init` again.
+    The example uses Claude Code. To add Codex, add `"codex"` to `use` in `[plugins.harness]` of `piloop.toml`, give
+    it a `[plugins.harness.codex]` table with its `model`, and run `piloop init` again.
   </Step>
   <Step title="Add an idea">
     ```bash
@@ -39,21 +39,21 @@ into as few bytes as possible. The agents edit `compressor.py`. The baseline is 
     idea#1 open p2: Try lzma at the highest preset
     ```
 
-    The daemon starts an implementer for the idea. When the board is empty, each implementer proposes its own.
+    The daemon starts a run on each free implementer slot. Each implementer claims an open idea, or proposes its own.
   </Step>
   <Step title="Watch the campaign">
     ```bash
     piloop watch
     ```
 
-    Press `enter` to open the campaign, and `q` to quit. The daemon continues to run.
+    Press `enter` to open the campaign, and `q` to quit. The daemon goes on.
   </Step>
 </Steps>
 
 ## What happens
 
-The implementer edits `compressor.py` and commits. The daemon runs `evaluate.py` on the commit. The script checks that
-the round trip gives back the exact input, then prints two metrics:
+The implementer edits `compressor.py`, commits and submits. The daemon runs `evaluate.py` on the commit. The script
+checks that the round trip gives back the exact input, then reports two metrics:
 
 ```toml
 [[metrics]]
@@ -69,8 +69,9 @@ margin = 60          # by at most 60 s from the baseline
 floor = 120          # and never past 120 s
 ```
 
-The daemon scores each commit into the campaign's **pool**. A commit with fewer bytes than the best, that holds the
-guardrail, becomes the best, and the next runs start from it. In this run, the lzma idea took 2 minutes and 356k tokens:
+The daemon scores each submission into the campaign's [pool](/concepts/pool). A candidate with fewer bytes than the
+best, that holds the guardrail, becomes the best, and the next runs start from it. Here the lzma idea took 2 minutes
+and 356k tokens:
 
 ```bash
 piloop status enwik8
@@ -88,14 +89,11 @@ The implementer heard where its commit stands:
 [piloop] candidate#2 (3f2c9a1b7d04): bytes 2720458 over 1 eval: the best of the bytes track now, rank 1 of 2; vs parent +968317
 ```
 
-The example stops after 20 scored runs (`[plugins.stop_rule] max_runs`). See [the pool](/concepts/pool) for the rules.
+The example stops after 20 scored runs (`[plugins.stop_rule] max_runs`). To let an agent answer the escalations, open
+your coding agent in `~/piloop-enwik8` and ask it to "orchestrate the piloop campaign".
 
-To let an agent answer the escalations, open your coding agent in `~/piloop-enwik8` and ask it to "orchestrate the
-piloop campaign". See [The orchestrator and the inbox](/concepts/orchestrator).
-
-The second example, `piloop init --example titanic-tracks ~/piloop-titanic`, has two objectives. See
-[Tracks](/concepts/tracks). The third, `inference`, makes a small model serve faster: see
-[Optimize inference](/guides/inference-optimization).
+Two more examples: `titanic-tracks` has two objectives ([Tracks](/concepts/pool#tracks)), and `inference` makes a small
+model serve faster ([Optimize inference](/guides/inference-optimization)).
 
 ## Your own repo
 
@@ -107,52 +105,42 @@ The second example, `piloop init --example titanic-tracks ~/piloop-titanic`, has
     ```
 
     `piloop init` writes `piloop.toml`, `brief.md` and a stub `evaluate.py`, and commits them. It keeps every file
-    that exists already. It stops while `evaluate.py` is the stub.
-
-    <Warning>
-      If your repo has an `evaluate.py` already, `piloop init` keeps it and does not stop. It registers the campaign
-      with the template's `piloop.toml`, whose baseline usually fails to evaluate, and that pauses the campaign until you fix it.
-    </Warning>
+    that exists already, and stops while `evaluate.py` is the stub. With an `evaluate.py` of your own, it does not
+    stop: it registers the campaign with the template's `piloop.toml`, whose baseline usually fails and pauses the
+    campaign. Then fix `piloop.toml` and run `piloop init` again.
   </Step>
   <Step title="Write the evaluate command">
-    Make `evaluate.py` measure your code, or set `evaluate` in `piloop.toml` to a command that you have. It writes one
-    JSON line with each metric to `$PILOOP_RESULT_FILE`. See [the evaluate command](/concepts/campaigns#the-evaluate-command).
+    Make `evaluate.py` measure your code, or set `evaluate` in `piloop.toml` to a command that you have. See
+    [the evaluate command](/concepts/campaigns#the-evaluate-command).
   </Step>
   <Step title="Edit piloop.toml">
-    Set `name`, `evaluate`, the `[[metrics]]` tables, `harnesses` and the `model` of each harness. The template lists every key, and the
-    [configuration reference](/reference/configuration) describes them. The daemon enforces only the limits in
-    `piloop.toml`, not the ones in `brief.md`.
+    Set `name`, `evaluate`, the `[[metrics]]` tables, `use` in `[plugins.harness]`, and the `model` of each harness.
+    Set the budget in `[plugins.stop_rule]`: `max_hours`, and a USD cap ([Stop conditions and cost](/concepts/cost)).
+    The template lists every key, and the [configuration reference](/reference/configuration) describes them.
   </Step>
   <Step title="Edit brief.md">
-    Tell the implementers what to improve, which files they may edit, which files they must not touch, and what needs
-    a human decision. Keep it under 400 words: `piloop init` and `piloop doctor` warn past `[agents] brief_words`. When
-    the campaign changes, rewrite the brief to that size: never append a rule.
+    Tell the implementers what to improve, which files they may edit, which they must not touch, and what needs a
+    human decision. Keep it under 400 words (`[agents] brief_words`). When the campaign changes, rewrite the brief:
+    never append a rule.
   </Step>
   <Step title="Register the campaign">
     ```bash
     piloop init
     ```
 
-    This commits your edits, starts the daemon and measures `HEAD` as the baseline. A baseline that surprises you usually means that the
-    evaluate command is wrong.
-  </Step>
-  <Step title="Start the campaign">
+    This commits your edits, starts the daemon and measures `HEAD` as the baseline. Runs start at once, and the
+    implementers propose their own ideas. To give them yours:
+
     ```bash
     piloop idea add my-repo "Cache the parsed input" --hypothesis "Parsing takes 40% of the time" --priority 1
-    piloop watch
     ```
 
-    The campaign name is the `name` in `piloop.toml`, by default the name of the directory.
+    The campaign's name is `name` in `piloop.toml`, by default the name of the directory.
   </Step>
 </Steps>
 
 ## Change the configuration
 
-Edit `piloop.toml` and run `piloop init` again. The daemon uses the copy that the last `piloop init` stored, so an
-edit has no effect before that. A change to the evaluate command, or to the name or direction of a metric, makes a new
-[evaluator](/concepts/campaigns#evaluators), and the daemon measures the baseline and the best again.
-
-## Next steps
-
-- [Campaigns and the evaluate command](/concepts/campaigns)
-- [Running for days](/guides/running-for-days)
+Edit `piloop.toml` and run `piloop init` again: the daemon uses the copy that the last `piloop init` stored. A change
+to the evaluate command, or to the name or direction of a metric, makes a new
+[evaluator](/concepts/campaigns#evaluators).

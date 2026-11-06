@@ -14,8 +14,9 @@ piloop idea add enwik8 "Model the text with an order-2 context mixer" \
 idea#2 open p2: Model the text with an order-2 context mixer
 ```
 
-The ideas of a campaign are its **board**. The board lists the `open` ideas, most urgent first: priority 0 is urgent,
-4 is someday, and 2 is the default. Each implementer **claims** one of them. To change a status, give the reason:
+The ideas of a campaign are its **board**. You, your agent and the implementers add them. Priority 0 is urgent, 4 is
+someday, and 2 is the default. `--after 1` holds an idea until idea 1 is `done` or `dropped`. To change a status, give
+the reason:
 
 ```bash
 piloop idea status 2 dropped --reason "idea#1 tests the same mechanism"
@@ -30,66 +31,44 @@ idea#2 open → dropped: idea#1 tests the same mechanism
 | `open` | On the board. An implementer can claim it, unless an `after` link holds it. |
 | `claimed` | A run claimed it. The run is open, or its commits wait for their scores. |
 | `done` | Its run finished and its last commit has a score. |
-| `dropped` | Off the board: by hand, after a cancel, or when its run ended on an open escalation. `open` puts it back. |
-
-## Who adds ideas
-
-| Who | What it adds |
-|---|---|
-| You, the orchestrator | Ideas. You change the priority and status of any idea. |
-| Implementer | One idea of its own, which it claims at once (`piloop idea propose`). It files none for others. |
-
-`piloop idea add enwik8 "<title>" --after 1` holds the idea until idea 1 is `done` or `dropped`. Then a worker can
-claim it, and its run starts from the best at that time.
-
-`piloop candidate import enwik8 <commit>` makes any commit a **reference**, such as a branch. To take its change, add
-an idea that names it, or start a run from it ([lines and bases](/concepts/pool#lines-and-bases)).
+| `dropped` | Off the board. `open` puts it back. |
 
 ## Runs
 
-A **run** is one implementer's session. For each free implementer slot, the daemon makes a worktree of the best,
-writes the brief (your `brief.md`, the board and the state of the campaign), and starts the implementer, on the next
-harness of `harnesses`. The implementer first takes one idea:
+A **run** is one implementer's session. On each free implementer slot, the daemon makes a worktree of the
+[best](/concepts/pool#the-best), writes the brief (your `brief.md`, the board and the state of the campaign), and
+starts an implementer on the next harness of `[plugins.harness] use`. The implementer first claims an open idea, or
+proposes one of its own:
 
 ```bash
 piloop idea claim 2
 piloop idea propose "Model the text with an order-3 context mixer" --hypothesis "order 2 leaves context unused"
 ```
 
-The run tries that idea only. The implementer commits, also when the idea did not work.
+The run tries that idea only. `--base 14` starts it from another candidate instead
+([lines and bases](/concepts/pool#lines-and-bases)). The implementer submits each version that it would ship with
+`piloop submit`, and the daemon scores it into the [pool](/concepts/pool).
 
-When the implementer exits, its run ends: `submitted` when it submitted a version, `gave_up` otherwise. In a campaign
-that scores every version after the run (`[evaluator] scoring = "run_end"`), a commit counts as a submission. An
-implementer can also end its run before it exits:
+When the implementer exits, its run ends: `submitted` when it submitted a version, `gave_up` otherwise. It can also
+end the run first:
 
 ```bash
-piloop run end submitted
 piloop run end gave_up --reason "the order-3 model does not fit in memory"
 ```
 
-A minute later (`end_grace`), the daemon ends the implementer. The run also ends at its `timeout`. To give it more time, use [`piloop run extend`](/reference/cli#piloop-run-extend). Then the daemon scores each new commit. What the implementer left uncommitted becomes a `recovered` commit, which is never measured.
-If git refuses that commit, the run fails, and an `agent_session.work_unsaved` event holds the changes as a patch.
-Restore them in a checkout of the implementer's last commit with `piloop cas get <blob> | git apply`.
+The run also ends at its role's `timeout`, 3600 seconds by default. [`piloop run extend`](/reference/cli#piloop-run-extend)
+gives it more time. What the implementer left uncommitted becomes a `recovered` commit, which is never scored.
 
-The claim ends with the run:
-
-| How the run ended | What happens to the idea |
+| How the run ended | What happens to its idea |
 |---|---|
 | `submitted` | `done` once its last commit has a score. |
 | `gave_up`, failed, timed out or stopped | Back to `open`, for another implementer. |
-| It was cancelled | `dropped`. |
+| Cancelled | `dropped`. |
 
-An implementer that never started to work claimed nothing: its run is queued again, up to two times.
+An implementer that failed to start claimed nothing: its run starts again with a new one, up to two times.
 
 ## Talk to a running implementer
 
-A `message` comment on a running run, or on its idea, reaches the implementer within seconds. It gets the first line,
-up to 200 characters. A `note` stays on the board: the runs that claim the idea later read it. An `escalation` holds
-nothing: the run goes on.
-
-An implementer can add a trailer to a commit message:
-
-| Trailer | Effect |
-|---|---|
-| `Piloop-Note: <why>` | The commit scores worse, but is worth starting from: its candidate gets the note. Read only with `scoring = "run_end"`. |
-| `Piloop-Eval: skip` | The commit is scaffolding: it is not measured. |
+A `message` comment on a run, or on its idea, reaches the implementer at its next `piloop` command. A Claude Code
+implementer also reads it after its next tool call. A `note` stays on the board: the runs that claim the idea later
+read it. `Piloop-Eval: skip` in a commit message marks scaffolding that is never measured.

@@ -35,6 +35,6 @@ the harnesses name.
 | `PILOOP_BIN` | every agent | `$PILOOP_HOME/bin/piloop`, which runs the daemon's own piloop on the daemon's home. On a [worker on another machine](/guides/workers), it relays the command to the server. The briefs run piloop with it. |
 | `PATH` | every agent | The daemon's `PATH`, after `$PILOOP_HOME/bin`, so that a plain `piloop` is the daemon's too. |
 | `PILOOP_DEADLINE` | every agent | The Unix time at which the role's `timeout`, or the campaign's stop if it comes first, ends the agent. `piloop run extend` moves the deadline, not the variable: a note tells the agent the new one. |
-| `PILOOP_MESSAGES` | every agent of the `subprocess` runtime | The file of the messages that wait for the agent. The hook of a Claude agent runs `piloop agent messages` after each tool call when it is not empty. |
+| `PILOOP_MESSAGES` | every agent of the `subprocess` and `docker` runtimes | The file of the messages that wait for the agent. Each `piloop` command of the agent prints them first, on stderr. A Claude agent's hook also takes them after each tool call. |
 | `PILOOP_PROCESS_TAG` | every agent | A random tag by which the runtime finds the processes that the agent started, also those in sessions of their own, to end them with the agent. |
 | `CLAUDE_CODE_CHILD_SESSION` | every agent, set to empty | Claude Code sets it for every process that it runs. A Claude Code agent that inherits it saves no transcript, so piloop clears it. |

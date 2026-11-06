@@ -6,43 +6,28 @@ description: The tables of the piloop database and how they relate.
 import DataModel from '/snippets/generated/data-model.mdx';
 import States from '/snippets/generated/states.mdx';
 
-The database is the contract between every actor: you, the orchestrator, the daemon and the agents. They all read and
-write the same tables, with `piloop sql` or through the CLI. CHECK constraints fix the allowed values, foreign keys
-and unique keys fix the relations, and triggers record who changed a row and log each change in `events`.
+The database is the contract between every actor: you, the orchestrator, the daemon and the agents. They read and
+write the same tables, with `piloop sql` or through the CLI. CHECK constraints fix the allowed values, and triggers
+record who changed a row and log each change in `events`.
 
-Core's tables hold what every campaign has:
+- A **campaign** is one repo. An **agent session** is one agent process, in any role.
+- A **comment** or an **event** points at any row through `(target_kind, target_id)`, so it has no foreign key.
+- An **idea** is something to try. `idea_links` holds an `after` link between two ideas of one campaign.
+- A **run** is one implementer session, from its base: the best, or the candidate of `--base`. Its `idea_id` is null
+  until it claims an idea.
+- A **candidate** is a distinct state of the code, identified by its git tree. `parent_id` is its line.
+- An **evaluator** is one version of the evaluate command and the metrics. A **measurement** is one run of an
+  evaluator on a candidate.
 
-- A **campaign** is one repo.
-- An **agent session** is one agent process, in any role.
-- A **comment** or an **event** points at any row through `(target_kind, target_id)`, so it has no foreign key. A
-  program reads the events after a cursor with `piloop events`: see the [event feed](/reference/event-feed).
-
-The `optimization` campaign type's tables hold the research:
-
-- An **idea** is something to try. `idea_links` relates two ideas of one campaign: one runs `after` the other.
-  `ideas.track` is the name of a track in `piloop.toml`.
-- A **run** is one implementer session of a campaign, from its base: the best, or the candidate of `--base`. Its `idea_id` is the idea that it claimed, null
-  until it claims one. Its agent session has the run as its subject.
-- A **candidate** is a distinct state of the code. Its git tree identifies it, and `parent_id` is its line.
-  `excluded_reason` is set on a candidate that someone took out of the race for the best.
-- An **evaluator** is one version of the evaluate command and the metrics. `piloop init` adds one when they change.
-  A **measurement** is one run of an evaluator on a candidate.
-- A **technique** is an outside technique that a scout sweep of piloop 0.5 or earlier found. Nothing writes them now.
-
-The memory's tables (`lessons`, `documents`, `journal`) and the archive's (`archives`) are their providers'.
-Two columns hold a candidate id or an evaluator id without a foreign key: `campaigns.evaluator_id` and
-`runs.base_candidate_id`. The foreign keys would make a cycle.
-
-Each line of the diagram is a foreign key, labeled with its column. The [database schema](/reference/schema) has the
-full DDL with the indexes, by the plugin that owns each table.
+`campaigns.evaluator_id` and `runs.base_candidate_id` have no foreign key: it would make a cycle. Each line of the
+diagram is a foreign key, labeled with its column. The [database schema](/reference/schema) has the full DDL, by the
+plugin that owns each table.
 
 <DataModel />
 
 ## Statuses
 
-A CHECK constraint fixes the values of each status column. The daemon and the CLI move a row from one value to the
-next, as [ideas and runs](/concepts/ideas-and-runs), [the pool](/concepts/pool) and
-[agents](/concepts/roles#watch-and-steer-an-agent) show. Anyone with `piloop sql` can set any value, for example to drop an
-idea.
+The daemon and the CLI move a row from one value to the next, as [ideas and runs](/concepts/ideas-and-runs),
+[the pool](/concepts/pool) and [agents](/concepts/roles#watch-and-steer-an-agent) show. `piloop sql` can set any value.
 
 <States />

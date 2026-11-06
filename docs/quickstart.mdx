@@ -11,8 +11,8 @@ You run piloop through one coding agent. You tell it the goal, and it sets up th
     curl -fsSL https://raw.githubusercontent.com/hiloopai/piloop/main/install.sh | sh
     ```
 
-    The installer installs uv, the `piloop` CLI and the piloop skills for each coding agent on your `PATH`. If you have
-    uv already, you can install only the CLI and the skills:
+    The installer installs uv, the `piloop` CLI and the piloop skills for each coding agent on your `PATH`. With uv
+    already installed, you can install only the CLI and the skills:
 
     ```bash
     uv tool install piloop
@@ -20,22 +20,14 @@ You run piloop through one coding agent. You tell it the goal, and it sets up th
     ```
   </Step>
   <Step title="Open your agent in your repo">
-    Start Claude Code, Codex, pi, Gemini CLI or Cursor in the repo that you want to improve. This is the only agent
-    that you talk to. The implementers run on Claude Code, Codex or pi, so install at least one of these.
+    Start Claude Code, Codex, pi, Gemini CLI or Cursor in the repo to improve. This is the only agent that you talk
+    to. The implementers run on Claude Code and Codex, so install at least one of them.
   </Step>
   <Step title="Tell it what to improve">
     Say "piloop", so that the agent uses the piloop skills:
 
     ```text
-    Use piloop to make our tokenizer faster without changing its output.
-    ```
-
-    ```text
     Use piloop to improve the holdout accuracy of the model in train.py.
-    ```
-
-    ```text
-    Use piloop to make the test suite run faster. Do not delete or skip tests.
     ```
 
     To try piloop on an example first, ask for "the enwik8 example campaign from piloop".
@@ -46,27 +38,24 @@ You run piloop through one coding agent. You tell it the goal, and it sets up th
 
 The agent follows the `piloop-setup` skill:
 
-1. It checks your machine: git, uv, and the logins of the coding agent CLIs. It asks you to log in only where a CLI
-   needs a browser.
+1. It checks git, uv and the logins of the coding agent CLIs. It asks you to log in only where a CLI needs a browser.
 2. It reads your repo and interviews you. It asks only what the repo does not answer.
-3. It writes `brief.md` for the implementers, `piloop.toml` with the metrics and limits, and the evaluate command. It
-   shows you the files before it continues.
-4. It starts the daemon and measures the baseline with `piloop init .`. A baseline that surprises you usually means
-   that the evaluate command is wrong.
-5. It adds the first ideas.
-6. It becomes the [orchestrator](/concepts/orchestrator), in this session or in a background subagent.
+3. It writes `brief.md` for the implementers, `piloop.toml` with the metrics and limits, and the evaluate command,
+   and shows you the files.
+4. It runs `piloop init .`, which starts the daemon and measures the baseline. A baseline that surprises you usually
+   means that the evaluate command is wrong.
+5. It becomes the [orchestrator](/concepts/orchestrator), in this session or in a background subagent.
 
-The interview covers these topics:
+The interview covers:
 
 | Topic | The agent asks |
 |---|---|
-| Objective | The metric to improve, its direction, and when to stop: a target, a deadline or a budget. |
-| Measurement | The command that measures it, how long it takes, and how much the result changes between identical runs. |
-| Guardrails | What must not get worse, such as latency, size or cost, and by how much. |
-| Scope | The files that the implementers may edit, the files that they must not touch, and forbidden techniques. |
-| Budget | The time for each run, how many implementers at the same time, and the total runs, hours or dollars. |
-| Prior art | What you tried already, and what you expect to work. |
-| Agents | The coding agents and models for the implementers. |
+| Objective | The metric to improve, its direction, and what "done" is. |
+| Measurement | The command that measures it, how long it takes, and how noisy it is. |
+| Guardrails | What must not get worse, such as latency or size, and by how much. |
+| Scope | The files that implementers may edit, the files they must not touch, and forbidden techniques. |
+| Hours and money | The campaign's hours (6 is suggested) and its cap in USD of model tokens. |
+| Width | How many implementers at a time: 2 by default, or 10 or more for a better result at more cost. |
 | Escalation | What the agent must ask you, and what it may decide alone. |
 
 The daemon enforces only the limits in `piloop.toml`. A limit that is only in `brief.md` is a request to the agents.
@@ -74,28 +63,16 @@ The daemon enforces only the limits in `piloop.toml`. A limit that is only in `b
 ## While the campaign runs
 
 Your agent waits on the inbox with `piloop inbox wait`, so it uses no tokens while nothing happens. It answers
-escalations, manages the ideas, and records each decision that it takes for you in your inbox, with how to revert it.
-It leaves to you the decisions that cannot be undone.
+escalations and records each decision that it takes for you in your inbox, with how to revert it. It leaves to you
+the decisions that cannot be undone.
 
-To check in, ask any agent with the piloop skills, also in a new session:
-
-```text
-How is the campaign going?
-```
-
-To look yourself, run `piloop watch`. Press `r` on an inbox item to reply to a decision. See
-[Watching a campaign](/guides/watch).
+To check in, ask any agent with the piloop skills, also in a new session: "How is the campaign going?" To look
+yourself, run `piloop watch` ([Watch and review a campaign](/guides/watch)).
 
 ## Stop
 
-The campaign ends by itself at the limits in the `[plugins.stop_rule]` table of `piloop.toml`. To end it sooner, lower a limit and
-run `piloop init` again, or ask your agent.
+The campaign ends by itself at the limits of `[plugins.stop_rule]` in `piloop.toml`
+([Stop conditions and cost](/concepts/cost)). To end it sooner, ask your agent, or run
+`piloop campaign stop <campaign>`.
 
-`piloop stop` stops the daemon and its agents, not the campaigns: the next `piloop serve --detach` continues them. To
-pause one campaign, run `piloop pause <campaign> --reason "<why>"`, and later `piloop resume <campaign>`.
-
-## Next steps
-
-- [Several campaigns](/concepts/orchestrator#several-campaigns): one agent runs a campaign in each of your repos.
-- [Run a campaign by hand](/by-hand): the same steps with the CLI.
-- [Running for days](/guides/running-for-days): keep the daemon running under a service manager.
+`piloop stop` stops the daemon, not the campaigns: the next `piloop serve --detach` continues them.

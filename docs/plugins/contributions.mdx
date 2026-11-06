@@ -28,8 +28,7 @@ class LocalMemory(MemoryProvider):
         return Contribution(router=router)  # a FastAPI APIRouter with POST /v1/campaigns/{campaign}/journal
 ```
 
-piloop reads the entry points before it opens any provider, and checks them as it checks the providers: two entries of
-one name in a group stop the daemon.
+Two entries of one name in a group stop the daemon.
 
 ## Tables and migrations
 
@@ -69,8 +68,8 @@ SCHEMA = Schema(tables=(Rung,), versions=Path(__file__).parent / 'migrations')
   plugin's revisions create the others.
 - `Schema.protected` names the tables that `piloop sql` cannot write, and `Schema.hidden` the columns that it reads as
   NULL, such as a secret's value.
-- When you uninstall the plugin, its tables, rows and revision stay, and piloop does not read them. `piloop doctor`
-  names the package. When you install it again, it migrates from its own revision.
+- When you uninstall the plugin, its tables, rows and revision stay, and piloop does not read them. When you install it
+  again, it migrates from its own revision.
 
 [CONTRIBUTING.md](https://github.com/hiloopai/piloop/blob/main/CONTRIBUTING.md#change-the-database-schema) shows how to
 write a revision.
@@ -85,12 +84,11 @@ function or a cyclopts `App`:
 lattice = "piloop_lattice.cli:app"
 ```
 
-`piloop` imports it only when the command runs, or when a help lists it. A name that a command of piloop has is
-refused.
+`piloop` imports it only when the command runs, or when a help lists it. A name that piloop has is refused.
 
 ## Skills
 
-An entry point in `piloop.skills` adds a part to one of the orchestrator's [skills](/concepts/orchestrator). Its name is the
+An entry point in `piloop.skills` adds a part to one of piloop's skills, such as `piloop-operate`. Its name is the
 part's, and it names a `SkillPart`:
 
 ```toml
@@ -124,8 +122,8 @@ A provider that implements `contribution()` adds, while the daemon runs:
 - **A router**: routes of the daemon's server, next to the API's. A [network](/plugins/infrastructure#networks) says
   who may call them.
 
-The daemon asks each provider that it opens, such as the executor and the archive, once. A provider of a capability
-that a campaign selects, such as memory, contributes once for every installed provider, built with its defaults.
-A consumer name or a route that is taken already stops the daemon.
+The daemon asks each provider that it opens, such as the executor, once. Each installed provider of a capability that a
+campaign selects, such as memory, contributes once, built with its defaults. A consumer name or a route that is taken already
+stops the daemon.
 
 <ContractContribution />

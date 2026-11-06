@@ -1,41 +1,27 @@
 ---
-title: Memory
-description: What past campaigns learned, and the orchestrator's journal, for the next agent to read.
+title: Memory and the archive
+sidebarTitle: Memory and archive
+description: What past campaigns learned, the orchestrator's journal, and the archive of the shared workspace.
 ---
 
-**Memory** is what a campaign leaves for the next agent: lessons, documents and the orchestrator's journal. An
-orchestrator session that loses its context writes to the **journal** as it goes, and the next session reads it first:
+**Memory** is what a campaign leaves for the next agent: the orchestrator's journal, lessons and documents.
+
+## The journal
+
+An orchestrator writes to the **journal** as it goes, so that the next session, after a lost context, reads it first:
 
 ```bash
 piloop journal "lesson on lzma recorded; idea#2 is next, p1" --campaign enwik8
 piloop wake enwik8
 ```
 
-```text
-journal#1
-# piloop wake: enwik8, 2026-10-26 17:16 UTC
-
-## Journal, oldest to newest (1 lines in all)
-- 2026-10-26 17:16 human: lesson on lzma recorded; idea#2 is next, p1
-
-## Inbox (1 open)
-- p2 comment#2 message on campaign#1 by human (enwik8): Try a larger dictionary next
-
-## Active campaigns (1)
-- enwik8 · best bytes 3688775 (candidate#1) · 0 new bests / 1 candidates
-
-## Current lessons on their repos (0)
-- none
-```
-
-A journal line has at most 280 bytes, and nobody can change it later. Without `--campaign`, it goes to the campaign of
-the current directory. The `piloop-operate` skill runs `piloop wake` first.
+`piloop wake` prints the journal, the open inbox, the active campaigns and the current lessons. The `piloop-operate`
+skill runs it first. A journal line has at most 280 bytes, and nobody can change it later.
 
 ## Lessons
 
-A **lesson** is the conclusion about one family of ideas, a mechanism such as "stronger generic compressor". The
-orchestrator or a person writes one for each family that the campaign tried: nothing writes one when a campaign stops.
-An agent writes one with SQL:
+A **lesson** is the conclusion about one family of ideas, such as "stronger generic compressor". The orchestrator or a
+person writes one with SQL. Nothing writes one by itself:
 
 ```sql
 INSERT INTO lessons (campaign_id, family, status, effect, metric, body, created_by)
@@ -43,28 +29,72 @@ VALUES (1, 'stronger generic compressor', 'promising', -976922, 'bytes',
         'LZMA1 at preset 9 extreme (idea#1, candidate#2) beat zlib by 976922 bytes; the time guardrail held.', 'orchestrator');
 ```
 
-| Column | Meaning |
-|---|---|
-| `status` | `dead`, `promising` or `untested`. |
-| `effect` | The best effect measured, in the units of `metric`, with its sign. NULL when nothing was measured. |
-| `body` | Why, with idea and candidate ids. |
-
+`status` is `dead`, `promising` or `untested`. `effect` is the best effect measured, in the units of `metric`, or NULL.
 A newer lesson for the same family replaces the older one. The briefs show the current lessons of every campaign on
-the same repo, also from other clones of it, in the [`lessons` section](/concepts/roles#sections).
+the same repo, in the `lessons` [section](/concepts/roles#sections).
 
 ## Documents
 
-Name the reports and notes that agents should be able to search:
+Name the reports and notes that agents may search:
 
 ```toml
 [plugins.memory]
 documents = ["docs/evidence/**/*.md"]
 ```
 
-`piloop init` and the stop of a campaign copy them into the `documents` table. An edited file is a new version.
+`piloop init` and the stop of a campaign copy them into the `documents` table.
 
 <Warning>
   Every agent of every campaign can read the documents. Never name one that comes from validation or test data.
 </Warning>
 
-`[plugins.memory]` selects the memory's provider. The built-in `local` keeps it in the home's database.
+## The archive
+
+Agents leave notes, logs and outputs in the campaign's shared workspace. What a run can make again, such as samples
+of the data and build outputs, goes in its checkout's `scratch/` instead: it is in no version and is deleted with the
+checkout. The **archive** moves the finished parts of the workspace into the [CAS](#the-cas):
+
+| When | What |
+|---|---|
+| An idea is done and none of its runs is open | The entries named after it: `idea12/`, `idea12-canary.log`. |
+| A campaign stops and none of its agents is alive | Everything left in its workspace. |
+| Never | `NOTES.md` and `research/` at the top of the workspace. |
+
+The daemon removes the local copies 7 days later, or sooner while the disk has less than `[storage] min_free_gb` free.
+`piloop restore` brings files back, and never overwrites a file:
+
+```bash
+piloop restore arch idea1/plots
+```
+
+```text
+restored 1 file(s), 200.0 kB, into /tmp/pl-docs/home/projects/3/workspace; 0 already there
+```
+
+`piloop restore arch idea#12` restores one idea's files, and `piloop restore arch` everything. `piloop store status`
+shows what is archived.
+
+## The CAS
+
+One content-addressed store, the **CAS**, serves every campaign of a `PILOOP_HOME`. It holds the archived files, the
+agents' [sessions](/concepts/roles#sessions) and the workers' jobs. A blob is addressed by its BLAKE3 hash, so a file
+is stored once. Nothing is deleted from it.
+
+`[plugins.cas]` in `$PILOOP_HOME/config.toml` selects where the blobs go. The default, `disk`, keeps them in
+`$PILOOP_HOME/store`. `cached` keeps a local cache over a remote store, such as a bucket:
+
+```toml
+[plugins.cas]
+provider = "cached"
+evict_after_days = 30      # drop local copies older than this
+local_max_gb = 200         # and keep the local cache under this size
+remote = { provider = "s3", url = "s3://my-bucket/piloop" }
+```
+
+| Command | What it does |
+|---|---|
+| `piloop store verify` | Checks that every archived blob is still there. |
+| `piloop store evict` | Drops the local copies that the remote holds, now. |
+| `piloop cas serve` | Serves the CAS to [workers on other machines](/guides/workers). |
+
+S3 finds its credentials as boto3 does. `gcs` needs the `gcs` extra: `uv tool install --reinstall 'piloop[gcs]'`.

@@ -21,33 +21,27 @@
       {
         "group": "Concepts",
         "pages": [
-          "concepts/how-piloop-is-built",
           "concepts/campaigns",
           "concepts/ideas-and-runs",
           "concepts/pool",
           "concepts/roles",
           "concepts/orchestrator",
-          "concepts/tracks",
-          "concepts/memory",
           "concepts/cost",
-          "concepts/archive"
+          "concepts/memory"
         ]
       },
       {
         "group": "Guides",
         "pages": [
-          "guides/running-for-days",
-          "guides/inference-optimization",
-          "guides/remote-server",
-          "guides/secrets",
-          "guides/notifications",
+          "guides/daemon",
           "guides/workers",
-            "guides/containers",
+          "guides/containers",
+          "guides/secrets",
           "guides/mcp-servers",
-          "guides/upgrading",
+          "guides/notifications",
           "guides/watch",
-        "guides/build-a-ui",
-          "guides/reviewing"
+          "guides/inference-optimization",
+          "guides/upgrading"
         ]
       },
       {
@@ -64,11 +58,11 @@
         "group": "Reference",
         "pages": [
           "reference/cli",
-          "reference/event-feed",
           "reference/configuration",
           "reference/schema",
           "reference/data-model",
-          "reference/environment"
+          "reference/environment",
+          "reference/event-feed"
         ]
       }
     ]
@@ -96,7 +90,7 @@
     },
     {
       "source": "/architecture/overview",
-      "destination": "/concepts/how-piloop-is-built"
+      "destination": "/plugins/overview"
     },
     {
       "source": "/concepts/research-memory",
@@ -104,7 +98,7 @@
     },
     {
       "source": "/concepts/artifact-store",
-      "destination": "/concepts/archive"
+      "destination": "/concepts/memory#the-archive"
     },
     {
       "source": "/architecture/run-lifecycle",
@@ -132,7 +126,35 @@
     },
     {
       "source": "/architecture/code-layout",
-      "destination": "/concepts/how-piloop-is-built"
+      "destination": "/plugins/overview"
+    },
+    {
+      "source": "/concepts/tracks",
+      "destination": "/concepts/pool#tracks"
+    },
+    {
+      "source": "/concepts/archive",
+      "destination": "/concepts/memory#the-archive"
+    },
+    {
+      "source": "/concepts/how-piloop-is-built",
+      "destination": "/plugins/overview"
+    },
+    {
+      "source": "/guides/running-for-days",
+      "destination": "/guides/daemon"
+    },
+    {
+      "source": "/guides/remote-server",
+      "destination": "/guides/daemon#on-a-server"
+    },
+    {
+      "source": "/guides/reviewing",
+      "destination": "/guides/watch#review-a-campaign"
+    },
+    {
+      "source": "/guides/build-a-ui",
+      "destination": "/reference/event-feed#build-a-ui"
     }
   ],
   "navbar": {

@@ -1,10 +1,98 @@
 ---
-title: Event feed
-description: Read the state of a campaign and follow its events from another program, without missing one.
+title: API and event feed
+sidebarTitle: API and event feed
+description: Read a campaign, follow its events without missing one, and act on it from another program.
 ---
 
-A program that watches or drives a campaign, such as a dashboard, a bot or your own controller, reads piloop with
-three commands. Each prints one JSON document on stdout. Messages go to stderr. Each asks the daemon, which must run.
+A program that watches or drives a campaign, such as a dashboard, a bot or a UI, reads a view at a cursor, follows the
+events after that cursor, and reads the view again when an event touches it. It calls the daemon's HTTP API, or the
+CLI's `--json` commands.
+
+## The API
+
+The daemon serves an HTTP API, `/v1`, on the Unix socket `$PILOOP_HOME/piloop.sock`, which only your user can open.
+When that path is too long for a socket (104 bytes on macOS, 108 on Linux), the socket is
+`/tmp/piloop-<uid>/<hash>.sock`, a hash of the home. A call there needs no token. `GET /v1/openapi.json` describes
+every route:
+
+```bash
+curl --unix-socket ~/.piloop/piloop.sock 'http://piloop/v1/status?campaign=enwik8'
+```
+
+With `piloop serve --listen`, other machines call the same routes with a token of `piloop token`: see
+[Run the daemon on a server](/guides/daemon#on-a-server). The `x-piloop-actor` header asks to act as an actor, such
+as `orchestrator`, and writes sign as that actor. Without it, a call acts as the caller itself.
+
+## Build a UI
+
+This loop prints the inbox again each time a comment arrives:
+
+```python
+from piloop.actor import System
+from piloop.api.client import Client
+from piloop.api.contract import EventsQuery, InboxQuery, Selection
+from piloop.settings import Settings
+
+with Client.on(Settings().socket_file, System.HUMAN) as client:
+    cursor = client.status(Selection(campaign='enwik8')).cursor
+    while True:
+        batch = client.events(EventsQuery(campaign='enwik8', after=cursor, wait=20))
+        cursor = batch.next
+        if any(e.subject.kind == 'comment' for e in batch.events):
+            for item in client.inbox(InboxQuery(campaign='enwik8')).items:
+                print(f'p{item.priority} {item.author}: {item.body}')
+```
+
+From another machine, give the client the server's URL and a token:
+
+```python
+import httpx2 as httpx
+
+from piloop.api.client import Client
+
+remote = Client(httpx.Client(base_url='https://piloop.example.com', headers={'Authorization': f'Bearer {token}'}))
+```
+
+Python clients use `piloop.api.client.Client` and its models. A client in another language generates its types from
+the OpenAPI document. `piloop watch` is a complete UI built this way: its code is in
+[`piloop/watch/`](https://github.com/hiloopai/piloop/tree/main/piloop/watch), and it imports only the API's clients
+and models.
+
+Every view answers with a `cursor`, the id of the newest event that it includes:
+
+| Route | What it answers |
+|---|---|
+| `GET /v1/status` | The main facts of each campaign: its state, the best of each track, ideas, open runs, live agents, inbox count and tokens. |
+| `GET /v1/overview` | The sections of each campaign's `[plugins.section] use`, as blocks of text, lines, figures and tables. |
+| `GET /v1/inbox` | The inbox items that wait for you. |
+| `GET /v1/inbox/{comment}` | A comment's thread. |
+| `GET /v1/campaigns/{campaign}/lineage` | The campaign as a graph: see [the lineage](#the-lineage). |
+| `GET /v1/agents/{agent}/output?lines=60` | An agent's last lines of output. |
+| `GET /v1/comments?kind=idea&id=12` | The comments on a row. |
+| `GET /v1/campaigns/{campaign}/ideas`, `GET /v1/ideas/{idea}` | The ideas, and one idea in full with its runs. |
+| `GET /v1/candidates/{candidate}` | A candidate's metrics beside its parent's. |
+
+`GET /v1/events?after=<cursor>&wait=20` holds a read until an event comes, or for `wait` seconds. Each event names
+its `subject`, the row that it is about: read again only the views that the subject touches. `piloop watch` reads the
+inbox again for a comment, the ideas for an idea, and the lineage for a candidate or a measurement.
+
+A write answers with the row that it changed, at a cursor. Its effects arrive on the feed, like any other client's:
+
+| Route | What it does |
+|---|---|
+| `POST /v1/inbox/ack` | Acknowledge inbox items. |
+| `POST /v1/inbox/{comment}/reply` | Answer an inbox item in its thread. |
+| `POST /v1/agents/{agent}/prompt` | Send a running agent a message. |
+| `POST /v1/ideas/{idea}/status` | Open, drop or settle an idea, with a reason. |
+| `POST /v1/ideas/{idea}/priority` | Set an idea's priority. |
+| `POST /v1/candidates/{candidate}/exclude` | Take a candidate out of the race for the best, with a reason. |
+
+A refused write answers 404 or 409 with a `ProblemDetail`: its `error` names the problem, and its `detail` says what to
+do. Show the detail.
+
+## The CLI
+
+Three commands print the same documents, with `protocol`. Messages go to stderr. Each asks the daemon, which must run.
 
 | Command | What it prints |
 |---|---|
@@ -31,15 +119,13 @@ again. Skip an event whose `id` you have handled. Each program keeps its own cur
 reader.
 
 `--campaign` and `--kind` filter the events. The `next` cursor still passes every event that the read examined, so a
-read that matches nothing moves on, and a filtered reader never reads the same range twice. `--campaign` also keeps
-the events whose campaign is unknown (see `subject.campaign` below), because they may be of that campaign: a campaign
-reader misses none of its events, and may get a few of other campaigns.
+read that matches nothing moves on. `--campaign` also keeps the events whose campaign is unknown (see
+`subject.campaign` below): a campaign reader misses none of its events, and may get a few of other campaigns.
 
 ## The documents
 
 Every document has `protocol`, the version of the documents and of the event envelope: `1`. Within a version, piloop
-may add fields. Ignore the fields that you do not know. A change that removes or changes a field is a new version.
-A payload is not part of the protocol: it has the shape of its kind, and the
+may add fields: ignore the fields that you do not know. A payload is not part of the protocol: the
 [upgrade guide](/guides/upgrading) lists each change to one.
 
 A read of events:
@@ -78,8 +164,7 @@ The `tokens` fact has what its agents spent. It covers the campaigns that `piloo
 
 `piloop inbox --json` has `cursor` and `items`, with the filters of `piloop inbox`.
 
-A program can also call the daemon's HTTP API, which answers the same documents without `protocol`: see
-[the API](/reference/cli#the-api).
+The API answers the same documents without `protocol`.
 
 ## The lineage
 
@@ -185,8 +270,7 @@ curl --unix-socket ~/.piloop/piloop.sock http://piloop/v1/campaigns/demo/lineage
 | `judged` | Who excluded the node and why, or null. |
 | `series` | The nodes of the spine that moved it forward, and when: a chart of the scores over time. |
 
-The shape is the same for every provider: [Lineage](/plugins/agents#lineage) shows how a plugin draws its own. The
-OpenAPI document (`GET /v1/openapi.json`) has every field.
+The shape is the same for every provider: [Lineage](/plugins/agents#lineage) shows how a plugin draws its own.
 
 ## The event envelope
 
@@ -206,13 +290,11 @@ The envelope shows each stored event as it is. It rewrites no row and invents no
 when the event is read, so it is null when the row is gone (a deleted idea, its older events and its `idea.deleted`
 included) or has no campaign (a comment on a reply to a reply).
 
-Only piloop writes events: `piloop sql` cannot insert one, and each payload has the shape of its kind. A row that an
-older piloop let through can still have a payload that is not strict JSON, such as `1e400`, or a time that is not a
-time. Such a value comes as null with its stored text under `invalid`, and the events after it read as usual. The
-documents are always strict JSON.
+Only piloop writes events: `piloop sql` cannot insert one. A stored value that is not strict JSON, such as `1e400`,
+comes as null with its stored text under `invalid`, and the events after it read as usual.
 
 `agent_session.identified` comes once for each harness session id of an agent, with `session_id`, `harness`,
-`executable`, `role`, `model`, `campaign`, `subject` (what the agent works on, such as `run#12`, or null for a sweep),
+`executable`, `role`, `model`, `campaign`, `subject` (what the agent works on, such as `run#12`, or null for an orchestrator),
 `groups` (what its work belongs to, such as the run's `idea#4`) and `parent` (the agent that proposed the idea, with its
 `actor`, `harness`, `executable` and `session_id`).
 
@@ -223,8 +305,7 @@ reader that ships lines takes only those that it has not shipped (`piloop cas ge
 An event kind that this version of piloop does not know, such as a plugin's, comes in the same envelope with its
 payload as opaque JSON. A reader that does not need it skips it and moves its cursor on.
 
-The subjects are rows of the tables in [the data model](/reference/data-model). The `events` table has the
-stored rows: [the database schema](/reference/schema).
+The subjects are rows of the tables in [the data model](/reference/data-model).
 
 ## Errors
 
@@ -235,8 +316,6 @@ with status 1. The message goes to stderr too.
 |---|---|---|
 | `cursor_ahead` | The cursor is past the newest event, so it is not a cursor of this feed: it comes from another piloop home, for example. | Read a new snapshot and use its cursor. |
 
-Other failures, such as an unknown campaign or a bad option, print a message on stderr, print nothing on stdout, and
-exit with a status other than 0.
-
-`cursor_ahead` only catches a cursor that is ahead of this feed. A cursor of another home that is behind this feed's
-end reads as a valid one: keep one cursor per piloop home.
+A cursor of another home that is behind this feed's end reads as a valid one: keep one cursor per piloop home. Other
+failures, such as an unknown campaign, print a message on stderr, nothing on stdout, and exit with a status other
+than 0.

@@ -5,12 +5,8 @@ description: Give the agents of a role extra tools, such as web search, with one
 
 import Harnesses from '/snippets/generated/harnesses.mdx';
 
-An MCP server gives an agent extra tools, such as web search. Define each server once in `piloop.toml`, and list it
-in the roles that need it. piloop gives the servers to each harness in that harness's own format.
-
-## Define a server
-
-A server is either streamable HTTP (`provider = "http"`) or stdio (`provider = "stdio"`):
+An MCP server gives an agent extra tools, such as web search. Define each server once in `piloop.toml`, and list it in
+the roles that need it. piloop gives the servers to each harness in that harness's own format:
 
 ```toml
 [plugins.mcp_server.exa]
@@ -23,66 +19,40 @@ provider = "http"
 url = "https://mcp.firecrawl.dev/v2/mcp"
 bearer_token_env = "FIRECRAWL_API_KEY"
 
-[plugins.mcp_server.xai]
+[plugins.mcp_server.search]
 provider = "stdio"
-command = ["python3", "/path/to/piloop/scripts/xai_search_mcp.py", "grok-4.7", "--max-usd", "1"]
-env = ["XAI_API_KEY"]
+command = ["python3", "server.py"]
+env = ["SEARCH_API_KEY"]
 
 [plugins.role.implementer]
-mcp = ["exa", "firecrawl", "xai"]
+mcp = ["exa", "firecrawl", "search"]
 ```
 
-Whether a harness takes servers can depend on the runtime of the role. See
-[what each harness gets](#what-each-harness-gets).
-
-A role gets no servers unless its `mcp` key lists them. The [configuration
-reference](/reference/configuration) has every key. A package can ship a server of its own, with its defaults, as a
-provider of `mcp_server`.
+`http` is a streamable HTTP server, and `stdio` a server that the harness starts. A role gets no servers unless its
+`mcp` key lists them. The [configuration reference](/reference/configuration) has every key.
 
 ## Keys stay out of the file
 
-A server names the environment variables that hold its keys. It never holds a key. So `piloop.toml` is safe to
-commit.
-
-Each variable is the name of a [secret](/guides/secrets), which piloop puts in the agent's environment. The harness
-then puts the value into the header or into the server's environment. A secret that is not set makes the launch fail,
-with an error that names it. `piloop doctor` lists the missing secrets by name.
+A server names the variables that hold its keys, never a key, so `piloop.toml` is safe to commit. Each variable is
+the name of a [secret](/guides/secrets). A secret that is not set makes the launch fail with its name, and
+`piloop doctor` lists the missing ones.
 
 <Warning>
-  The keys are in the agent's environment. An agent can read them with its shell tool. Codex agents are the exception:
-  piloop removes the role's variables from the environment of Codex's shell tool.
+  An agent can read the keys in its environment with its shell tool. Codex agents are the exception: piloop removes
+  the role's variables from the environment of Codex's shell tool.
 </Warning>
 
 ## What each harness gets
 
-Each built-in harness puts the role's servers at the `{mcp}` element of its command:
+The agents see only the role's servers, never the servers of your own configuration:
 
 - **Claude Code**: `--strict-mcp-config` and an inline `--mcp-config`.
-- **Codex**: every server of your Codex configuration is turned off, and the role's servers are added. A piloop
-  server with the same name as one of yours makes the launch fail.
-- **pi**: through `pi-mcp-adapter` in exclusive mode. This works only when pi's own extensions are off.
-
-So the agents see only the role's servers, never the servers in your own configuration.
+- **Codex**: your Codex servers are turned off, and the role's are added. A piloop server with the name of one of
+  yours makes the launch fail.
+- **pi**: through `pi-mcp-adapter` in exclusive mode.
 
 <Harnesses />
 
-`piloop init` refuses a role that lists servers when a harness of its rotation cannot take them. Then leave that
-harness out of the role's rotation, for example `harnesses = ["claude", "codex"]` under `[plugins.role.implementer]`.
-
-A [harness of your own](/plugins/agents#harnesses) takes servers when its command has an `{mcp}`
-element and it names a provider that takes them, such as `provider = "claude"`.
-
-## The X search server
-
-piloop includes a small stdio server, `scripts/xai_search_mcp.py`, with one tool, `x_search`. It searches recent posts
-on X through xAI's API, and uses only the Python standard library.
-
-```bash
-XAI_API_KEY=… python3 scripts/xai_search_mcp.py <model> [--max-usd 1] [--max-tool-calls 10]
-```
-
-Each call costs money. The server limits the spend of one agent session: each reply states the cost of the call and
-the total so far, and the server refuses every call after the total reaches `--max-usd`. `--max-tool-calls` limits
-the searches of one call. The campaign's `hold_at` does not see this cost, so set `--max-usd`.
-
-Use the script from a clone of the piloop repo. It is not part of the installed CLI.
+`piloop init` refuses a role that lists servers when a harness of its rotation cannot take them. Leave that harness
+out of the role's `harnesses`. A [harness of your own](/plugins/agents#harnesses) takes servers when its command has an
+`{mcp}` element and it names a provider that takes them, such as `provider = "claude"`.

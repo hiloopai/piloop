@@ -1,41 +1,27 @@
 ---
-title: Watching a campaign
-description: piloop watch shows the campaign on one screen, with keys to act on it.
+title: Watch and review a campaign
+sidebarTitle: Watch and review
+description: piloop watch shows a campaign on one screen, with keys to act on it. A review explains why the result is good or bad.
 ---
 
-`piloop watch` is a terminal app over piloop's API. It shows every campaign, or one campaign with
-`piloop watch <campaign>`. It follows the [event feed](/reference/event-feed) and reads again what each event changes.
-With `PILOOP_SERVER` set, it shows the campaigns of that server (see [Run piloop on a server](/guides/remote-server)).
-It is also an example of a UI built on the API: see [Build a UI on piloop](/guides/build-a-ui). `[watch]` in
-`config.toml` sets how much it shows ([configuration](/reference/configuration#watch)).
+`piloop watch` shows every campaign, or one with `piloop watch <campaign>`. It follows the
+[event feed](/reference/event-feed), so it is live. With `PILOOP_SERVER` set, it shows the campaigns of that server
+(see [On a server](/guides/daemon#on-a-server)). `[watch]` in `config.toml` sets how much it shows
+([configuration](/reference/configuration#watch)).
 
-## The screens
-
-The first screen lists every campaign, the active ones first. Press `enter` to open one, and `esc` to come back.
-
-It shows one row per campaign: its status, the best and its gain over the baseline, the live agents, the open ideas, the
-inbox, the tokens and the last event.
-
-A campaign has a header, five panels on the left, and the main pane on the right, which shows the selected row in
-full:
+The first screen lists the campaigns, the active ones first: the status, the best and its gain over the baseline, the
+live agents, the open ideas, the inbox, the tokens and the last event. Press `enter` to open one, and `esc` to come
+back. A campaign has a header, five panels on the left, and the selected row in full on the right:
 
 ![A campaign in piloop watch: the inbox, agents, ideas and candidates on the left, the selected row on the right](/images/watch-campaign.svg)
 
-These screens are from the enwik8 example campaign after its 10 runs. The Candidates panel, with the best selected:
+The Candidates panel, with the best selected, and the Ideas panel, with an idea's hypothesis and plan:
 
 ![The candidates panel and the best candidate's scores](/images/watch-candidates.svg)
 
-The Ideas panel, with an idea's hypothesis and plan:
-
 ![The ideas panel and an idea's hypothesis and plan](/images/watch-ideas.svg)
 
-The header shows the campaign's state, then the first section of its `[plugins.section] use`: by default the best, its
-score against the baseline, the candidates and the tokens. The Status panel lists every section, such as the goal and the progress against the
-stop rule.
-
 ## Panels and keys
-
-These keys work on the screen of a campaign. `?` and `q` also work on the list of campaigns.
 
 | Key | Action |
 |---|---|
@@ -47,22 +33,68 @@ These keys work on the screen of a campaign. `?` and `q` also work on the list o
 | `esc` | Go back to the list of campaigns. |
 | `q` | Quit. |
 
-| Panel | Rows | Main pane | Keys |
-|---|---|---|---|
-| [1] Inbox | The unacknowledged items, most urgent first, without the items that you wrote. | The item and its thread. | `a` acknowledge, `A` acknowledge every item shown, `r` reply |
-| [2] Agents | The starting and running agents. | The agent, its task, and its last 60 lines of output. | `s` steer |
-| [3] Ideas | The open, then the claimed ideas, and by priority within each status. | Hypothesis, plan, links, runs and comments. | `y` open, `x` drop, `+` `-` priority |
-| [4] Candidates | The nodes of the campaign's lineage (`GET /v1/campaigns/{campaign}/lineage`), newest first. The title shows each new best on the spine as a sparkline. | Its status in the pool, who excluded it and why, its scores against the parent, links, summary. | none |
-| [5] Status | The sections of the campaign's `[plugins.section] use`. | The section. | none |
+| Panel | Rows | Keys |
+|---|---|---|
+| [1] Inbox | The unacknowledged items, most urgent first, without the items that you wrote. | `a` acknowledge, `A` acknowledge every item shown, `r` reply |
+| [2] Agents | The starting and running agents, with their last 60 lines of output. | `s` steer |
+| [3] Ideas | The open, then the claimed ideas, by priority. | `y` open, `x` drop, `+` `-` priority |
+| [4] Candidates | The campaign's lineage, newest first. The title shows each new best as a sparkline. | none |
+| [5] Status | The sections of the campaign's `[plugins.section] use`. | none |
 
-## What the keys write
-
-Each key calls the route that the CLI calls, as `PILOOP_ACTOR`, which is `human` unless you set it. The `events` table
-records the write like any other.
+Each key calls the route that the CLI calls, as `PILOOP_ACTOR` (`human` unless you set it):
 
 - **Acknowledge** does what `piloop inbox ack` does.
-- **Reply** asks for the text and a priority (default 2). It writes a `decision` comment that replies to the first
-  item of the thread. The orchestrator's next wait returns with it, and the orchestrator acknowledges it after it
-  applies it.
-- **Steer** queues text for the agent's next turn, as `piloop prompt` does.
-- **Open and drop** ask why. Each one writes the status change and a `note` on the idea with the reason.
+- **Reply** asks for the text and a priority (default 2), and writes a `decision` that replies to the thread. The
+  orchestrator's next wait returns with it.
+- **Steer** sends text to the running agent, as `piloop prompt` does.
+- **Open** and **drop** ask why, and write the reason as a `note` on the idea.
+
+## Review a campaign
+
+A review explains why a campaign's result is good or bad, and names the part of piloop that owns each cause. Open
+your coding agent in the campaign repo and ask:
+
+```text
+review the piloop campaign
+```
+
+The agent follows the `piloop-review` skill. It answers six questions:
+
+1. Why is the result good, or bad?
+2. If the evaluation is bad, why?
+3. If there were infra failures, why?
+4. Were good ideas found? How, or why not?
+5. If another worker or arm did better, why?
+6. Where did time go to waste?
+
+Every number comes with the command that produced it, and a verifier runs each command again. Each claim is tagged
+measured or inferred, and each cause gets one owner, such as the brief, the evaluator or the harness. The review ends
+with draft bug reports, and files nothing.
+
+To check by hand, start from the trajectory and the new bests:
+
+```bash
+piloop status my-campaign
+piloop history my-campaign
+```
+
+Then check that the best changed no frozen file, such as the evaluate command or the data:
+
+```bash
+piloop sql "SELECT revision, summary, excluded_reason FROM candidates WHERE id = 42"
+git diff --stat <baseline-sha> <best-sha> -- evaluate.py data/
+```
+
+<Warning>
+  An evaluator is the evaluate command, the names and directions of the metrics and the `link` paths, not the
+  contents of `evaluate.py`. An implementer that edits `evaluate.py` changes its score without a new evaluator.
+  Check the diff of the best, and of each candidate that may be best.
+</Warning>
+
+The tokens of each role and harness:
+
+```bash
+piloop sql "SELECT kind, harness, COUNT(*) AS agents, SUM(usage->>'$.total') AS tokens FROM agent_sessions WHERE campaign_id = 1 GROUP BY kind, harness"
+```
+
+An agent's [session](/concepts/roles#sessions) shows what it did and why.

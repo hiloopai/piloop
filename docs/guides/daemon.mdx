@@ -1,0 +1,181 @@
+---
+title: Run the daemon
+sidebarTitle: The daemon
+description: Run the daemon in the background, under a service manager or on a server, and restart it without losing work.
+---
+
+`piloop serve` is the daemon: it starts the agents, scores the commits and enforces the limits of every campaign. One
+daemon runs for each `PILOOP_HOME`.
+
+```bash
+piloop serve --detach
+piloop restart
+piloop stop
+```
+
+```text
+daemon started: pid 586609, log ~/.piloop/serve.log
+daemon pid 586609 restarted
+daemon pid 586609 stopped
+```
+
+| Command | What happens to the agents |
+|---|---|
+| `piloop restart` | They keep running. The same process starts the installed code again, and connects to each agent. |
+| `piloop stop` | They stop. Their runs are not attempts: the ideas go back to `open`. Their commits stay as `recovered` candidates. |
+| A crash | Like a restart: the next daemon connects to the agents that still run. |
+
+The campaigns stay active through all three. To hold one campaign and leave the others running:
+
+```bash
+piloop pause enwik8 --reason "the GPU trains a model"
+piloop resume enwik8
+```
+
+```text
+campaign enwik8 paused (launches): the GPU trains a model; running work goes on; `piloop resume enwik8` ends it
+campaign enwik8 resumed
+```
+
+## Under a service manager
+
+`piloop service-unit` prints a unit file. It installs nothing.
+
+<Tabs>
+  <Tab title="Linux (systemd)">
+    ```bash
+    piloop service-unit > ~/.config/systemd/user/piloop.service
+    systemctl --user enable --now piloop
+    ```
+  </Tab>
+  <Tab title="macOS (launchd)">
+    ```bash
+    piloop service-unit > ~/Library/LaunchAgents/dev.piloop.serve.plist
+    launchctl load -w ~/Library/LaunchAgents/dev.piloop.serve.plist
+    ```
+  </Tab>
+</Tabs>
+
+- The unit carries your current `PATH` and the `PILOOP_*` and harness variables of your shell, such as
+  `CLAUDE_CONFIG_DIR`. Set them before you run `piloop service-unit`. API keys are [secrets](/guides/secrets).
+- Start and stop the daemon with the service manager. Never run `piloop serve --detach` beside it.
+- `piloop restart` and `piloop upgrade` keep the daemon under the service manager.
+- After you change the unit, run `systemctl --user daemon-reload`, then `systemctl --user restart piloop`.
+
+## Logs
+
+The daemon writes one line for each span to `~/.piloop/serve.log`. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to send the spans
+to an OpenTelemetry collector too. A `piloop.db.nested_checkout` span names code that asked for a second database
+connection while it held one: report it as a bug. The `events` table is the easiest record to query:
+
+```bash
+piloop sql "SELECT at, actor, kind, payload FROM events ORDER BY id DESC LIMIT 20"
+```
+
+## On a server
+
+One daemon on a server runs the campaigns, and you drive it from any machine with the same CLI. In the server's
+`$PILOOP_HOME/config.toml`:
+
+```toml
+[plugins.network]
+listen = "0.0.0.0:8443"
+tls = "proxy"
+```
+
+`tls = "proxy"` says that a reverse proxy or an SSH tunnel ends TLS in front of the daemon. To end it in the daemon,
+name a certificate: `tls = { cert = "<cert.pem>", key = "<key.pem>" }`. Only a loopback address may go without `tls`.
+
+### Give each caller a token
+
+```bash
+piloop token create laptop --access act
+```
+
+```text
+plt_zBvB6lzUJxSHmM4h7YKCmH_NxMjPUndxOPb3Yi5VzNU
+```
+
+The token prints once. `read` reads, `act` also acts on campaigns and sets their secrets, and `admin` also sets the
+home's secrets and tokens. `worker` is for [workers](/guides/workers). `piloop token revoke laptop` ends a token.
+
+On your laptop:
+
+```bash
+export PILOOP_SERVER=https://piloop.example.com:8443
+export PILOOP_HTTPS_TOKEN=<token>
+piloop status
+```
+
+```text
+daemon: pid 396206, up 0:00:20, listening on http://0.0.0.0:8443
+```
+
+Each command that calls the API now asks the server. Commands that open the database, such as `piloop sql`,
+`history`, `attach` and `worker list`, refuse: run them on the server. For a certificate that your system does not
+trust, set `SSL_CERT_FILE`.
+
+### Register a repo by its URL
+
+The server clones the repo, registers it, and measures `HEAD` as the baseline:
+
+```bash
+curl -X POST "$PILOOP_SERVER/v1/campaigns" -H "Authorization: Bearer $PILOOP_HTTPS_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"clone": {"url": "https://github.com/acme/enwik8.git"}}'
+```
+
+`"name"` next to `"clone"` registers it under another name. For a private repo, send a token that the host accepts,
+`"credential": {"token": "<token>"}`, which the server keeps nowhere. Or store it as a secret of the home, with an
+`admin` token, and name it:
+
+```bash
+printf %s "$GITHUB_TOKEN" | piloop secret set GITHUB_TOKEN
+```
+
+```json
+{"clone": {"url": "https://github.com/acme/enwik8.git", "credential": {"secret": "GITHUB_TOKEN"}}}
+```
+
+### Give agents their model credentials
+
+An agent on the server has no login of yours. Store the key as a [secret](/guides/secrets) of the campaign, and name
+it in `piloop.toml`:
+
+```bash
+printf %s "$ANTHROPIC_API_KEY" | piloop secret set ANTHROPIC_API_KEY --campaign enwik8
+```
+
+```toml
+[plugins.harness.claude.env]
+ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" }
+```
+
+For a Claude subscription, `claude setup-token` prints a token: store it as `CLAUDE_CODE_OAUTH_TOKEN` instead. For a
+model gateway, see [Model access](/guides/secrets#model-access).
+
+Nobody needs to keep a session open: `piloop message` and `piloop inbox` work from your laptop, and piloop can launch
+the [orchestrator](/concepts/orchestrator) on the server when you turn its triggers on.
+
+To run agents and evaluations on more machines, such as a GPU box, see [Workers](/guides/workers).
+
+### Behind an authenticating proxy
+
+When a proxy already checks every caller, such as Envoy's `ext_authz` or an oauth2-proxy, let it be the only check:
+
+```toml
+[plugins.network]
+provider = "proxy"
+listen = "0.0.0.0:8443"
+url = "https://piloop.example.com"
+claims = { org = "x-org-id", user = "x-user-id" }
+name_claims = ["user"]
+rules = [{ when = { org = "acme" }, access = "act" }]
+```
+
+piloop then reads who the caller is from the headers that the proxy stamps, and refuses its own tokens. On your
+laptop, set `PILOOP_HTTPS_TOKEN` to the credential that the proxy accepts. Workers need a rule of their own:
+[Behind an authenticating proxy](/guides/workers#behind-an-authenticating-proxy).
+
+<Warning>
+  Whoever reaches `listen` directly can claim any identity. Let only the proxy reach it.
+</Warning>

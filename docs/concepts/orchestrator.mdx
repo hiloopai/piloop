@@ -4,9 +4,9 @@ sidebarTitle: Orchestrator and inbox
 description: A coding agent of your choice runs the campaign for you, and records each decision that it takes for you in your inbox.
 ---
 
-The **orchestrator** is the coding agent that you talk to. It runs the campaign for you: it answers what the other
-agents escalate, manages the ideas and reports. Open your agent in the campaign repo and ask it to "orchestrate the
-piloop campaign". It follows the `piloop-operate` skill, and loops on one command:
+The **orchestrator** is the coding agent that you talk to. It answers what the other agents escalate, manages the
+ideas and reports to you. Open your agent in the campaign repo and ask it to "orchestrate the piloop campaign". It
+follows the `piloop-operate` skill, and loops on one command:
 
 ```bash
 PILOOP_ACTOR=orchestrator piloop inbox wait enwik8 --timeout 1800
@@ -18,36 +18,13 @@ campaign enwik8 stopped: max_runs: 1 runs
 next: piloop inbox wait enwik8 --after 17
 ```
 
-The wait returns on a new inbox item, score, anomaly or stop, or at the timeout. Its last line is the next
-wait, with a cursor, so nothing is lost between two waits. The orchestrator uses no tokens while it waits. The daemon
-runs without one. Run one orchestrator for each campaign: two would answer an escalation twice.
+The wait returns on a new inbox item, score, anomaly or stop, or at the timeout. Its last line is the next wait, with a
+cursor, so nothing is lost between two waits. The orchestrator uses no tokens while it waits. The daemon runs without
+one. Run one orchestrator for each campaign: two would answer an escalation twice.
 
-## Let piloop launch it
-
-It is off by default. With the `news` and `run_failed` triggers on `[plugins.role.orchestrator]`, the daemon launches
-it when something needs a decision, and nobody needs to keep a session open:
-
-```toml
-[plugins.role.orchestrator]
-triggers = ["news", "run_failed"]
-```
-
-- An escalation, what a person writes, or an evaluation reaching `[evaluation] wake_after_tries` launches it within
-  `quiet_seconds` (30); `run_failed`, a failed run.
-  Nothing else does: no timer, no short board, no score, no stop. The rest of the news comes with the next wake.
-- It decides what the workers cannot, and leaves the work to them: it never plans a run, caps one, or stops the
-  campaign. Only a stop rule or a person stops a campaign.
-- While an orchestrator works, new news goes to it as a note, at once. Claude Code reads it after its current tool
-  call. Codex and pi read it when their turn ends.
-- `piloop agent cancel` on an orchestrator drops the news it was launched for: no other one starts for it. News that
-  arrives after the cancel launches the next one.
-- It launches also while the campaign is paused or held.
-- Each orchestrator resumes the session of the one before, so it remembers what it decided. When it cannot, it starts
-  from its whole brief, and `agent_session.not_resumed` says why.
-- Its writes sign as `orchestrator#<id>`. The inbox treats every orchestrator, launched or not, as one: none waits for
-  what another wrote.
-
-Do not run `piloop-operate` on a campaign whose orchestrator piloop launches. Write to it with `piloop message`.
+piloop can also launch an orchestrator of its own, so that nobody keeps a session open. It is off by default.
+`triggers = ["news", "run_failed"]` in `[plugins.role.orchestrator]` launches one on an escalation, a person's message
+or a failed run. Then do not run `piloop-operate` on that campaign: write to it with `piloop message`.
 
 ## The inbox
 
@@ -55,17 +32,6 @@ The **inbox** is every comment that has a priority: 0 and 1 are urgent, 2 to 4 c
 
 ```bash
 piloop inbox
-```
-
-```text
-┏━━━━┳━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━┳━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ id ┃ p ┃ kind       ┃ campaign ┃ on         ┃ by     ┃ age ┃ first line                                                                                           ┃
-┡━━━━╇━━━╇━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━╇━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ 5  │ 0 │ escalation │ enwik8   │ campaign#1 │ daemon │ 2m  │ The stop rule needs your decision before the campaign goes on.                                       │
-│ 3  │ 1 │ note       │ enwik8   │ campaign#1 │ daemon │ 4m  │ Notice: spend is 412.3, past the 300 notice.                                                         │
-│ 4  │ 1 │ note       │ enwik8   │ campaign#1 │ daemon │ 2m  │ Notice: spend is 1012, past the 600 notice.                                                          │
-└────┴───┴────────────┴──────────┴────────────┴────────┴─────┴──────────────────────────────────────────────────────────────────────────────────────────────────────┘
-3 item(s) unacknowledged; `piloop inbox show <id>`, `piloop inbox ack <id>`
 ```
 
 | Command | What it does |
@@ -85,21 +51,18 @@ comment#2 message on campaign#1
 
 ## Comments
 
-Agents and people talk through **comments** on a campaign, an idea, a run, a candidate or another comment. A comment on
-an idea goes into the brief of its next run.
+Agents and people talk through **comments** on a campaign, an idea, a run, a candidate or another comment.
 
 | Kind | Use |
 |---|---|
-| `note` | Context, a remark, or what an agent tried and learned, on the board. It reaches no running agent. |
-| `message` | Words to someone. On an agent, or on a run or its idea, it reaches the running agent. On a campaign, it is for the orchestrator. |
+| `note` | Context, or what an agent tried and learned, on the board. The next run of the idea reads it. |
+| `message` | Words to someone. On a running agent, its run or its idea, it reaches the agent at its next `piloop` command. On a campaign, it is for the orchestrator. |
 | `decision` | A decision, with the reason and how to revert it. |
-| `escalation` | A question that needs a decision, filed with `piloop escalate`. It always has a priority, and holds no run. |
-
-No kind has a side effect: a run ends when its implementer exits or runs `piloop run end`, or at its deadline.
+| `escalation` | A question that needs a decision. It holds no run. |
 
 ## Escalations
 
-An agent asks for a decision with `piloop escalate`, and its form says it in plain words:
+An agent asks for a decision with `piloop escalate`, in a form that says it in plain words:
 
 ```bash
 piloop escalate campaign#1 --priority 1 <<'JSON'
@@ -126,15 +89,13 @@ Details:
 run#41 timed out.
 ```
 
-`piloop inbox choose 1 A` answers it: a decision signed as you, and an acknowledgement.
+`piloop inbox choose 1 A` answers it, signed as you.
 
-- With the orchestrator role on (`triggers` names `news`), an agent's escalation goes to the orchestrator first. The
-  orchestrator answers it, gives its duplicates the same answer, or files one escalation of its own for you. A
-  [notifier](/guides/notifications) sends it to you only when nobody has acknowledged it 30 minutes after it was filed.
-- With the orchestrator role off, the default, an agent's escalation reaches you at once.
+- An agent's escalation reaches you at once. When piloop launches an orchestrator (`triggers` names `news`), the
+  escalation goes to it first, and a [notifier](/guides/notifications) sends it to you only when nobody acknowledged
+  it 30 minutes later.
 - The orchestrator's escalations, and the daemon's, reach you at once.
-- The form, its limits and that wait are the campaign's `[plugins.escalation]`. `structured`, built in, is the
-  default. The [configuration reference](/reference/configuration#plugins) lists its keys.
+- `[plugins.escalation]` sets the form, its limits and that wait.
 
 ## Decisions
 
@@ -149,11 +110,11 @@ Revert: <the command or edit that undoes it>
 ```
 
 A change to a goal, a metric, a guardrail, the evaluate command or a stop condition has priority 0. A decision that
-cannot be undone, and can wait, it leaves to you as an escalation. To revise a decision, reply to it: in
-`piloop watch`, press `r`. The orchestrator applies your reply first.
+cannot be undone, and can wait, it leaves to you as an escalation. To revise a decision, reply to it: in `piloop watch`,
+press `r`.
 
 ## Several campaigns
 
 One daemon serves every campaign of a `PILOOP_HOME`. To improve two repos, set up a campaign in each. Two goals for the
-same code, such as accuracy and cost, are [tracks](/concepts/tracks) of one campaign. One agent can orchestrate every
-campaign: ask it to "orchestrate all my piloop campaigns".
+same code, such as accuracy and cost, are [tracks](/concepts/pool#tracks) of one campaign. One agent can orchestrate
+every campaign: ask it to "orchestrate all my piloop campaigns".

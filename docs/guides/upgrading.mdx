@@ -1,6 +1,6 @@
 ---
 title: Upgrading
-description: Upgrade the CLI, the skills and the database with one command.
+description: Upgrade the CLI, the skills and the database with one command, and what changes in this release.
 ---
 
 ```bash
@@ -9,117 +9,83 @@ piloop upgrade
 
 The command prints each step as it runs it:
 
-1. It upgrades the CLI with `uv tool upgrade --reinstall-package piloop piloop`, from the source that you installed
-   it from: PyPI (the latest release), the GitHub repo (the latest `main`), or a local checkout. It prints the version
-   before and after. To change the source, see [Follow main](#follow-main).
+1. It upgrades the CLI from the source that you installed it from: PyPI (the latest release), the GitHub repo (the
+   latest `main`), or a local checkout. It prints the version before and after.
 2. It runs `piloop install-skills` from the new code, so the skills of every harness on your `PATH` match the new CLI.
-   A running harness reads them at its next session.
-3. It restarts a running daemon in place, as `piloop restart` does. The running agents continue. The new code
-   migrates the database as it starts, and connects to the agents again. First it runs `piloop serve --check` from
-   the new code: when the new daemon would not start, for example on a `config.toml` that names a runtime that is no
-   longer installed, the upgrade stops with the reason and the old daemon keeps running. Fix it, then run
-   `piloop restart`. When no daemon runs, the upgrade migrates the
-   database itself, and the daemon stays stopped.
+3. It restarts a running daemon in place, as `piloop restart` does. The running agents continue, and the new code
+   migrates the database as it starts. First it checks that the new daemon starts (`piloop serve --check`): when it
+   would not, the upgrade stops with the reason and the old daemon keeps running. When no daemon runs, the upgrade
+   migrates the database itself.
 4. It runs `piloop doctor`. When a check fails, the upgrade exits with a non-zero status.
 
-`piloop --version` prints the version, for example `piloop 0.1.0`. For an install from the GitHub repo, it also
-prints the commit, for example `piloop 0.1.0 (a1b2c3d)`.
+`piloop --version` prints the version, and the commit for an install from the GitHub repo. A checkout that you
+installed with `uv sync` is not a uv tool: upgrade it with `git pull`.
 
 ## Upgrade one release at a time
 
-Upgrade through every minor release in order: 0.1 to 0.2, then 0.2 to 0.3, never 0.1 straight to 0.3. Each minor
-release still reads what the one before it left behind, such as a deprecated key, a renamed table or an agent that
-the old daemon started, and the release after it deletes that code. So each release migrates a database only from the
-newest schema of the minor release before it, or from a newer one.
-
-When the database is older, the new piloop refuses it, and changes nothing: no migration, and no backup. `piloop
-upgrade`, `piloop migrate`, `piloop serve`, `piloop doctor` and every other command name the release the database is
-from, and each release to install first:
+Upgrade through every minor release in order: 0.4 to 0.5, then 0.5 to 0.6. Each release migrates a database only from
+the newest schema of the minor release before it, or from a newer one. On an older database, every command names the
+release that it is from, and the release to install first. It changes nothing:
 
 ```bash
-uv tool install 'piloop==0.2.*'
+uv tool install 'piloop==0.5.*'
 piloop upgrade
 ```
 
-Then install the next release in the same way, up to the one you want. `uv tool install piloop` drops the pin and
-installs the latest. Quote the requirement: `*` is a glob in zsh. A daemon keeps running on its old code when
-`piloop upgrade` refuses the database: it does not restart.
+Then install the next release in the same way. `uv tool install piloop` drops the pin. Quote the requirement: `*` is
+a glob in zsh.
+
+This page covers the upgrade to 0.6.0. For an earlier one, follow the guide of the release that you upgrade to:
+[0.5.0](https://github.com/hiloopai/piloop/blob/v0.5.0/docs/guides/upgrading.mdx),
+[0.4.0](https://github.com/hiloopai/piloop/blob/v0.4.0/docs/guides/upgrading.mdx),
+[0.3.1](https://github.com/hiloopai/piloop/blob/v0.3.1/docs/guides/upgrading.mdx) or
+[0.2.1](https://github.com/hiloopai/piloop/blob/v0.2.1/docs/guides/upgrading.mdx).
 
 ## Who upgrades during a campaign
 
-An upgrade migrates the database one way, and the runs after it are scored by the new code. So by default the
-orchestrator does not upgrade by itself: when `piloop doctor` reports a newer piloop, it asks you in the inbox, with a
-link to the changes. Set `PILOOP_AUTO_UPGRADE=1` in the orchestrator's environment to let it upgrade and record the
-decision instead. A daemon that runs older code than the installed CLI is restarted either way, because that only
-catches up with an upgrade that you already made.
+The runs after an upgrade are scored by the new code. So the orchestrator does not upgrade by itself: when
+`piloop doctor` reports a newer piloop, it asks you in the inbox. Set `PILOOP_AUTO_UPGRADE=1` in its environment to let
+it upgrade and record the decision instead.
 
 ## Check the install
 
-`piloop doctor` is read-only. You can run it at any time. It checks:
+`piloop doctor` is read-only. It checks:
 
-- Whether the source that you installed the CLI from has a newer piloop: a newer release on PyPI, or a new commit on
-  the branch of the GitHub repo. This check asks the network. A newer piloop is a notice, not a failure. An install
-  pinned to a version (`piloop==0.1.0`) is not checked, because `uv tool upgrade` keeps the pin. When the check cannot
-  tell, it says why.
-- The daemon runs the installed code.
-- The database has the current schema.
-- The providers that packages add load, and none of them reuses a name. When they do not, the checks after this one
-  do not run.
-- `PILOOP_SECRETS_COMMAND`, when it is set, runs and prints `NAME=value` lines. The check shows the names only, and
-  warns that the command is deprecated.
-- The `piloop.toml` of every campaign loads.
-- The secrets that each campaign's MCP servers and harnesses need are set. One that only the environment of the
-  daemon has is a warning.
+- Whether the source that you installed from has a newer piloop. An install pinned to a version is not checked.
+- The daemon runs the installed code, and the database has the current schema.
+- The providers that packages add load, and none of them reuses a name.
+- The `piloop.toml` of every campaign loads, and the secrets that its MCP servers and harnesses need are set.
 - Every harness on your `PATH` has the skills of this CLI.
-- What each provider in use checks itself, for example: the harnesses and the commands of the stdio MCP servers that
-  your campaigns use are on your `PATH`, git is 2.40 or later, and the extra and the login of a Modal provisioner are
-  there. No check starts anything.
+- What each provider in use checks itself, such as the harness CLIs on your `PATH` and git 2.40 or later.
 
-Each failure says how to fix it, often with the command to run.
+Each failure says how to fix it. Set `PILOOP_DEBUG=1` to see the full traceback of an unexpected error.
 
 ## The database
 
-Three commands migrate the database to the schema of their piloop: `piloop migrate`, `piloop upgrade`, and
-`piloop serve` when the daemon starts. `piloop migrate` prints what changed, for example `schema: 0001 → 0002`. You
-never recreate the database by hand.
-
-Every other command, such as `status`, `sql`, `inbox`, `watch` and `init`, opens the database only when its schema is
-the one that this piloop knows. Otherwise it changes nothing, and exits with the revision that it found, the one that
-it knows, and what to run:
+`piloop migrate`, `piloop upgrade`, and `piloop serve` when the daemon starts, migrate the database to the schema of
+their piloop. Every other command opens the database only at the schema that it knows. Otherwise it changes nothing,
+and says what to run:
 
 - The database is older, and no daemon runs: run `piloop migrate`.
-- The database is older, and a daemon runs: the daemon runs an older piloop. Run `piloop restart` to restart it on
-  this piloop, which migrates the database.
-- The database is older, and an agent that the daemon started runs the command: the daemon is being upgraded, so the
-  agent retries in a minute. `piloop migrate` and `piloop upgrade` refuse an agent.
-- Another piloop build migrated it: a newer one, or one built from another branch. Install that piloop, for
-  example with `piloop upgrade`.
-- The database is older than the minor release before this piloop: see
-  [Upgrade one release at a time](#upgrade-one-release-at-a-time).
+- The database is older, and a daemon runs: run `piloop restart`, which migrates it on this piloop.
+- A newer piloop, or one built from another branch, migrated it: install that piloop.
 
-`piloop init` creates the database when there is none. `piloop doctor` reports the same, and never migrates.
+While a daemon of an older piloop runs, `piloop migrate` and `piloop serve` do not migrate, because that daemon would
+break on the new schema.
 
-Before it migrates, piloop writes a copy of the database next to it, as the old schema left it:
-`$PILOOP_HOME/piloop.db.bak-<revision>-<UTC time>`, for example `piloop.db.bak-0001-20261021T002254Z`. `piloop migrate`
-and `piloop upgrade` print where it is, and the daemon's log names it in its `piloop.start` line. piloop keeps the 3
-newest copies; `migration_backups` in `config.toml` sets how many, and `0` writes none. It never deletes a file of
-another name, such as a copy that you saved. Each copy is about the size of
-the database. When the copy cannot be written, for example on a full disk, nothing is migrated, and the error says so.
-
-While a daemon of an older piloop runs, `piloop migrate` and `piloop serve` do not migrate the database, because the
-daemon would break on the new schema: they exit and say what to run. This holds for any daemon, whether a shell,
-systemd or launchd started it. `piloop upgrade` restarts the daemon on the new code first, and the daemon migrates the
-database when it starts.
+Before it migrates, piloop writes a copy of the database next to it:
+`$PILOOP_HOME/piloop.db.bak-<revision>-<UTC time>`, such as `piloop.db.bak-0001-20261021T002254Z`. It keeps the 3
+newest copies: `migration_backups` in `config.toml` sets how many, and `0` writes none. When the copy cannot be written,
+nothing is migrated.
 
 ### Restore from the backup
 
-A backup brings the database back to the moment before the migration. What piloop wrote to the database after it is
-lost: the runs, measurements and comments since then. The git commits and the workspace files stay.
+A backup brings the database back to the moment before the migration. What piloop wrote after it is lost. The git
+commits and the workspace files stay.
 
 1. Stop the daemon: `piloop stop`.
-2. Install the piloop that the backup's revision belongs to, for example `uv tool install --reinstall piloop==0.1.0`
-   for a `0001` copy. A newer piloop would migrate the copy again.
-3. Put the copy in place of the database, and remove the database's `-wal` and `-shm` files:
+2. Install the piloop that the backup's revision belongs to. A newer one would migrate the copy again.
+3. Put the copy in place of the database, and remove its `-wal` and `-shm` files:
 
    ```bash
    cd "${PILOOP_HOME:-$HOME/.piloop}"
@@ -127,63 +93,69 @@ lost: the runs, measurements and comments since then. The git commits and the wo
    cp piloop.db.bak-0001-20261021T002254Z piloop.db
    ```
 
-4. Start the daemon: `piloop serve --detach`, and check with `piloop doctor`.
+4. Start the daemon, `piloop serve --detach`, and check with `piloop doctor`.
 
 ## Follow main
 
-To follow `main` instead of the releases, install piloop from the repo, then upgrade. From then on, `piloop upgrade`
-installs the latest `main`, and a release opens the database again only once it knows the schema that `main` gave it.
+To follow `main` instead of the releases, install piloop from the repo. From then on, `piloop upgrade` installs the
+latest `main`, and a release opens the database again only once it knows the schema that `main` gave it.
 
 ```bash
 uv tool install --reinstall 'git+https://github.com/hiloopai/piloop'
 piloop upgrade
 ```
 
-To try `main` next to the release that runs your campaigns instead, see
-[Run main next to a release](https://github.com/hiloopai/piloop/blob/main/CONTRIBUTING.md#run-main-next-to-a-release) in the contributing guide.
-
 ## Deprecated configuration keys
 
-When a release renames or removes a key of `piloop.toml`, the old key keeps working for at least one minor release.
-Each use shows a `PiloopDeprecationWarning` with the file, the line, the new key and the release that removes the old
-one. The [changelog](https://github.com/hiloopai/piloop/blob/main/CHANGELOG.md) lists every deprecation, and
-[Deprecated keys and variables](#deprecated-keys-and-variables) lists those of 0.2.0.
+A renamed or removed key of `piloop.toml` keeps working for at least one minor release. Each use shows a
+`PiloopDeprecationWarning` with the file, the line, the new key and the release that removes the old one. The
+[configuration reference](/reference/configuration#deprecated-keys) and the
+[changelog](https://github.com/hiloopai/piloop/blob/main/CHANGELOG.md) list them.
+
+## What is stable
+
+Before 1.0, a minor release may break these, and the changelog says so:
+
+- The `piloop` CLI: its commands and their flags.
+- The keys of `piloop.toml`.
+- The contract of the [evaluate command](/concepts/campaigns#the-evaluate-command).
+- The [database schema](/reference/schema), as `piloop sql` shows it.
+
+`piloop.capabilities` is the stable plugin API. Other `piloop.*` imports can change in any release.
 
 ## Upgrading to 0.6.0
 
 ### Removed features
 
-These features produced no kept candidate in past campaigns, so they are removed. Their keys still load, with a
-warning, until 0.7.0, and do nothing. What they wrote stays in the database.
+Their keys still load, with a warning, until 0.7.0, and do nothing. What they wrote stays in the database.
 
 | Removed | Its keys |
 |---|---|
+| The research role, and its `low_water` and `stalled` triggers. Each worker proposes its own idea when the board has none for it. | `[plugins.role.research]`, `"low_water"`, `"stalled"` |
+| The watchdog role. | `[plugins.role.watchdog]` |
 | The scout role. Its `techniques` table stays readable. | `[plugins.role.scout]` |
-| The `leaking_funnel` trigger: `low_yield` finds the runs that reach no measurement. | `"leaking_funnel"` in a role's `triggers`, `[plugins.trigger.leaking_funnel]` |
-| Ideas and seeds that implementers file for other runs. An implementer proposes only its own run's idea; a hunch for another run goes in a note on the board. | `files` and `plan_words` of a role that does runs |
-| Seeds. An idea is open on the board from the start. | `"seed"` in a role's `triggers`, `[plugins.trigger.seed]`, `files = "seeds"`, `[plugins.section.pack] seeds` |
-| Ideas that wait for a review, and the escalation of the slots that wait for them. | `idle_alert` of a role that does runs |
-| The rules that gave ideas to runs: an implementer claims its idea now. | `takes`, `explore_every` and `recovery_requeues` of a role that does runs |
-| The research role, and the `low_water` and `stalled` triggers that started it. Each worker proposes its own idea when the board has none for it, and the notes on the board are the workers' forum. Its sessions stay readable. | `[plugins.role.research]`, `"low_water"` and `"stalled"` in a role's `triggers`, `[plugins.trigger.low_water]`, `[plugins.trigger.stalled]` |
-| The watchdog role and its prompts. The orchestrator takes escalations and failed runs when its triggers name them. Its sessions stay readable. | `[plugins.role.watchdog]` |
-| A sweep's timer, its closing review at the stop, its incident and routine prompts, and the low-yield alarm: stop rules and escalations cover a stuck campaign. Nothing writes the lessons when a campaign stops now: the orchestrator or a person writes them. The `## Yield` section and its open escalations go too. | `"cron"`, `"stopped"`, `"low_yield"` and `"dead_at_startup"` in a role's `triggers`, their `[plugins.trigger.<name>]` tables, a role's `interval`, `incident_prompt` and `routine_prompt`, `[plugins.stop_rule] while_held`, `"yields"` in `[plugins.section] use` or a role's `sections`, `[plugins.section.yields]` |
-| Sweeps of your own: a table of a new name without `runs = true`, a package's sweeping role, and the `sql` trigger that woke them. The orchestrator is the one role that does no runs. A role of your own does runs. | `[plugins.role.<name>]` without `runs = true`, a `[plugins.trigger.<name>]` of `provider = "sql"` |
-| The caps on the orchestrator's ideas: it files ideas with no cap, and decides alone how many and how long. | `files`, `plan_words` and `max_ideas` of `[plugins.role.orchestrator]` |
-| The trigger tables. The orchestrator's two triggers, `news` and `run_failed`, are its own, and a plugin adds none. The news trigger's `quiet_seconds` moves to `[plugins.role.orchestrator]`, and the old value moves with a warning. | `[plugins.trigger.<name>]` |
-| The `idle_queue` section: every free slot gets a fresh run, so a free slot with no open idea is not idle. | `"idle_queue"` in `[plugins.section] use` or a role's `sections`, `[plugins.section.idle_queue]` |
+| Sweeps: a sweep's timer, its closing review at the stop, its incident and routine prompts, and the low-yield alarm. Nothing writes lessons at a stop: the orchestrator or a person writes them. | `"cron"`, `"stopped"`, `"low_yield"`, `"dead_at_startup"`, a role's `interval`, `incident_prompt` and `routine_prompt`, `[plugins.stop_rule] while_held`, the `yields` section |
+| Sweeps of your own: a role of your own does runs. | `[plugins.role.<name>]` without `runs = true`, a `[plugins.trigger.<name>]` of `provider = "sql"` |
+| The `leaking_funnel` and `seed` triggers, and seeds: an idea is open on the board from the start. | `"leaking_funnel"`, `"seed"`, `files = "seeds"`, `[plugins.section.pack] seeds` |
+| Ideas that implementers file for other runs. A hunch for another run goes in a note on the board. | `files` and `plan_words` of a role that does runs |
+| The caps on the orchestrator's ideas. | `files`, `plan_words` and `max_ideas` of `[plugins.role.orchestrator]` |
+| The rules that gave ideas to runs, and ideas that wait for a review. | `takes`, `explore_every`, `recovery_requeues`, `idle_alert` |
+| The trigger tables. `quiet_seconds` moves to `[plugins.role.orchestrator]`, with its value. | `[plugins.trigger.<name>]` |
+| The `idle_queue` section. | `"idle_queue"` in a list of sections, `[plugins.section.idle_queue]` |
+
+A package's own role, trigger or section of one of these names keeps its table and its keys.
 
 ### A plugin's role
 
-`piloop.capabilities` no longer has `SweepRole`, `Sweep` or `Files`, and a role has no `ideas_line` or `refuses_idea`: an agent of a role that does runs files no ideas for others, and the orchestrator's agents may. A plugin's role is a subclass of
-`ImplementerRole`, which does runs, or of `StartsItsAgents`, whose provider starts its agents itself: it answers each
-pass over a campaign with its requests (`request`), says whether it wakes while the campaign is paused, held or stopped
-(`wakes_while`), and launches its agents (`launch`). The orchestrator is the one built-in role of that kind, and its
-triggers are its own: two functions of the orchestrator plugin, with no capability. `Quiet` comes from `piloop.capabilities`.
+`piloop.capabilities` no longer has `SweepRole`, `Sweep` or `Files`, and a role has no `ideas_line` or `refuses_idea`.
+A plugin's role is a subclass of `ImplementerRole`, which does runs, or of `StartsItsAgents`, which decides when its
+agents start: it answers each pass over a campaign with its requests (`request`), says whether it wakes while the
+campaign is paused, held or stopped (`wakes_while`), and launches its agents (`launch`). The orchestrator is the
+built-in role of that kind. `Quiet` comes from `piloop.capabilities`.
 
 ### The board
 
-The ideas of a campaign are a board with four statuses. The migration renames the status of each idea, and of each
-`idea.status` and `idea.deleted` event:
+An idea is `open`, `claimed`, `done` or `dropped`. The migration renames each status:
 
 | 0.5 | 0.6 |
 |---|---|
@@ -193,51 +165,36 @@ The ideas of a campaign are a board with four statuses. The migration renames th
 | `parked`, `rejected` | `dropped` |
 
 - `piloop idea status` takes `open` or `dropped`. Only a run makes an idea `done`.
-- `piloop idea seed` and `piloop idea develop` are removed: add an idea with `piloop idea add`. Its `--family`,
-  `--proposed` and `--supersedes` are removed.
-- `supersedes` links and `ideas.family` are deleted. `piloop idea link` takes only `after`.
-- An `after` link holds an idea until its prerequisite is `done` or `dropped`. Nothing parks it: its status does not
-  change.
-- The inbox lists no seeds, and `piloop inbox wait` returns for none. The research pack has no families and no seeds.
+- `piloop idea seed` and `piloop idea develop` are removed: use `piloop idea add`. Its `--family`, `--proposed` and
+  `--supersedes` are removed.
+- `piloop idea link` takes only `after`. An `after` link holds an idea until its prerequisite is `done` or `dropped`.
 - `idea: <title>` in a notifier's thread adds an open idea. A notifier plugin answers it with `AddIdea`, not
   `FileSeed`.
 
 ### Claims
 
 The daemon gives no idea to a run. For each free slot it starts a run from the best, and the implementer claims one
-open idea (`piloop idea claim`), or proposes one of its own and claims it (`piloop idea propose`). The claim ends with
-the run: the idea is `done` after a finished run whose last candidate has a score, and `open` again otherwise, with a
-note that says why.
+open idea (`piloop idea claim`), or proposes one and claims it (`piloop idea propose`). The idea is `done` after a
+finished run whose last candidate has a score, and `open` again otherwise.
 
-- A run has a `campaign_id`. Its `idea_id` and `attempt` are null until its implementer claims an idea.
-- `piloop idea base` is removed, and `--harness` and `--base` of `piloop idea add`. The migration deletes
+- A run's `idea_id` and `attempt` are null until its implementer claims an idea.
+- `piloop idea base`, and `--harness` and `--base` of `piloop idea add`, are removed. The migration deletes
   `ideas.base_candidate_id`, `ideas.harness` and `ideas.max_runs`. A run starts from the best, or from the candidate
   that `--base` of `piloop idea claim` or `piloop idea propose` names.
-- `piloop candidate note --follow-up` adds an open idea about the candidate, not pinned to it.
-- A failed run's idea is not queued again from its last commit, and a queued run keeps its harness.
-- The `idea.base_candidate_id`, `run.rerouted` and `idea.recovery_requeued` events are retired: the old rows read as
-  unknown events. `run.queued` has only the `harness`.
-- A run that claimed no idea is scored on the first track.
-- `[tracks.<name>] share` is removed: workers claim any open idea. It loads with a warning until 0.7.0, and a table
-  that it leaves empty goes.
+- `[tracks.<name>] share` is removed: workers claim any open idea.
 
 ### Run ends and messages
 
-An implementer's clean exit ends its run: `finished` when it submitted a version, `gave_up` otherwise. In a campaign
-that keeps 0.5's `scoring = "run_end"`, a commit counts as a submission. `piloop run end submitted` or
-`piloop run end gave_up` ends the run before the session exits, and the daemon ends the implementer `end_grace` later.
-The `--reason` of `gave_up` is optional. A run whose process fails still fails.
+An implementer's clean exit ends its run: `finished` when it submitted a version, `gave_up` otherwise.
+`piloop run end submitted` or `piloop run end gave_up` ends it before the session exits.
 
-- The `finding` kind is removed: a worker reports in a `note` on its idea, and a sweep in a `note` on the campaign.
-  Old findings stay readable with `piloop sql`. A note ends no run.
-- `[plugins.role.<name>] finding_grace` is `end_grace`. The old key still loads, with a warning, until 0.7.0, and the
-  migration renames it in each stored config.
-- A run ends `gave_up` when its implementer gives up. An escalation holds no run: no run ends `awaiting_answer`, and
-  the migration makes each such run, and its `run.finished` event, `failed`.
-- Only a `message` reaches a running agent: on the agent, or on its run or its idea. `piloop prompt` and the
-  daemon's wrap-up prompts write messages. A `note` stays on the board.
-- `escalation` and `decision` are kinds of the escalation plugin. They work as before. A plugin that names them
-  imports `ESCALATION` and `DECISION` from `piloop.plugins.escalation.kit.kinds`, not from `CommentKind`.
+- The `finding` kind is removed: a worker reports in a `note` on its idea. Old findings stay readable.
+- `finding_grace` is `end_grace`. The migration renames it in each stored config.
+- An escalation holds no run: the migration makes each `awaiting_answer` run `failed`.
+- Only a `message` reaches a running agent, on the agent, its run or its idea. Every harness hears it at its next
+  `piloop` command. A `note` stays on the board.
+- A plugin that names `escalation` or `decision` imports `ESCALATION` and `DECISION` from
+  `piloop.plugins.escalation.kit.kinds`, not from `CommentKind`.
 
 ### An agent that never worked ends `never_worked`
 
@@ -254,35 +211,23 @@ An agent whose job did not start, or that ended within `startup_seconds` and lef
 
 ### The evaluate command reports a status and a score
 
-The result line names its `status`, and the primary is its `score`:
-
 | 0.5 | 0.6 |
 |---|---|
 | `{"metrics": {"bytes": 3688775, "seconds": 0.82}}` | `{"status": "ok", "score": 3688775, "direction": "lower", "metrics": {"seconds": 0.82}}` |
 | exit 1 | `{"status": "crash", "feedback": "<why>"}`, or exit 1 |
 | exit 1 on a rate limit | `{"status": "infra_error", "feedback": "<why>"}`: no score, run again later |
 
-A line without `status` still reads as `ok`, with the primary among `metrics`, until 0.7.0. A rung's line keeps its
-form.
+A line without `status` still reads as `ok`, with the primary among `metrics`, until 0.7.0.
 
 ### Implementers submit
 
-A new campaign scores what its implementers submit:
-
-| 0.6 default | What it does | 0.5's behavior |
+| 0.6 default | What it does | 0.5's value |
 |---|---|---|
-| `[evaluator] scoring = "submit"` | An implementer scores a commit with `piloop submit`, as many per run as `submissions` allows: no cap by default. Other commits are `skipped`. | `scoring = "run_end"` |
-| `[evaluator] noise_runs = 3` | The baseline, and each candidate whose first score beats the best, get 3 evaluations under each evaluator. | `noise_runs = 1` |
+| `[evaluator] scoring = "submit"` | An implementer scores a commit with `piloop submit`. Other commits are `skipped`. | `"run_end"` |
+| `[evaluator] noise_runs = 3` | The baseline, and each candidate whose first score beats the best, get 3 evaluations. | `1` |
 
-A campaign that 0.5 made keeps 0.5's values: the upgrade stores them in its stored config, where its `piloop.toml` did
-not set them. The repo's `piloop.toml` is not changed, so reading it again with `piloop campaign sync` or `piloop init`
-gives the 0.6 defaults. To switch a campaign to them, run:
-
-```bash
-piloop campaign sync enwik8
-```
-
-To keep 0.5's values through a sync, put them in its `piloop.toml`. `scoring = "run_end"` works until 0.7.0:
+A campaign that 0.5 made keeps 0.5's values in its stored config. `piloop campaign sync` or `piloop init` reads its
+`piloop.toml` again, and gives it the 0.6 defaults. To keep 0.5's values, put them in `piloop.toml`:
 
 ```toml
 [evaluator]
@@ -290,37 +235,36 @@ scoring = "run_end"
 noise_runs = 1
 ```
 
+### `piloop submit` returns at once
+
+`piloop submit` prints the candidate and returns. Where it stands reaches the implementer as a `[piloop]` message.
+`--wait` is ignored until 0.7.0. The route `GET /v1/submissions/{candidate}` is removed: read
+`GET /v1/candidates/{candidate}`. `[agents] relay_wait` and `relay_deadline` of `config.toml` are dropped with a
+warning.
+
 ### The pool replaces verdicts
 
-A candidate gets no verdict. piloop scores every candidate into the campaign's [pool](/concepts/pool), and the best is
-the confirmed candidate with the best mean that the best rule allows. There is no head, no bar, no trunk and no
-rebase: a run starts from the best, or from any candidate with `--base`.
+piloop scores every candidate into the campaign's [pool](/concepts/pool), and the best is a query. There is no
+verdict, head, bar, trunk or rebase.
 
-- `[plugins.verdict_rule]`, `[[metrics]] repeats` and `follow_head` of a role are dropped with a warning until 0.7.0.
-  The upgrade deletes them from each stored config. A [best rule](/plugins/rules#best-rules),
-  `[plugins.best_rule]`, says which confirmed candidate may be the best. The default is `baseline`.
-- A guardrail's `margin` and `fraction` compare with the baseline's value, not with the bar's. A `floor` is as before.
-- The section `judging` is `scoring`. The upgrade renames it in each stored config, and a `piloop.toml` that names it
-  loads with a warning until 0.7.0.
+- `[plugins.verdict_rule]`, `[[metrics]] repeats` and a role's `follow_head` are dropped with a warning. A
+  [best rule](/plugins/rules#best-rules), `[plugins.best_rule]`, says which confirmed candidate may be the best.
+- A guardrail's `margin` and `fraction` compare with the baseline's value.
+- The section `judging` is `scoring`.
 - `candidates.verdict`, `cause`, `verdict_by`, `verdict_reason` and `track`, and `measurements.pair_id`, are deleted.
-  Each verdict stays in a `candidate.verdict` event: the upgrade writes one for each verdict that had none.
-  `candidates.excluded_reason` and `excluded_by` are new.
-- `piloop candidate verdict` is removed. To take a candidate out of the race for the best, run
-  `piloop candidate exclude <id> --reason "<why>"`. `piloop candidate note` adds a note and follow-up ideas, and
-  changes no standing.
-- `piloop candidate remeasure` never refuses: the candidate's mean includes the new evaluations, and the best
-  follows.
+  Each verdict stays in a `candidate.verdict` event. `candidates.excluded_reason` and `excluded_by` are new.
+- `piloop candidate verdict` is removed: use `piloop candidate exclude <id> --reason "<why>"`.
+- `piloop candidate remeasure` never refuses: the mean includes the new evaluations, and the best follows.
 
 The facts of the `optimization` source are renamed:
 
 | 0.5 | 0.6 |
 |---|---|
-| `head` (`HEAD`) | `best` (`BEST`) |
-| `without_keep` (`WITHOUT_KEEP`) | `without_best` (`WITHOUT_BEST`) |
-| `keeps` (`KEEPS`) | `new_bests` (`NEW_BESTS`) |
-| `<name>_since_keep` (`since_keep`) | `<name>_since_best` (`since_best`) |
+| `head` | `best` |
+| `without_keep` | `without_best` |
+| `keeps` | `new_bests` |
+| `<name>_since_keep` | `<name>_since_best` |
 | `per_keep` | `per_best` |
-| `Funnel.keeps` | `Funnel.bests` |
 
 The API changes so:
 
@@ -332,931 +276,35 @@ The API changes so:
 | `CandidateView.label`, `cause`, `verdict_reason` | `CandidateView.origin`, `excluded_reason` |
 
 A plugin imports `BestRule`, `Case`, `Scores`, `Criterion` and `Baseline` from `piloop.capabilities`. `VerdictRule`,
-`Judgement`, `Outcome`, `Node`, `Trunk`, `Imported`, `Rebase`, `Noise`, `Bootstrap` and `Bar` are removed. The
-example plugins `keep-cost` and `stop-after-keeps` are `best-cost` and `stop-after-bests`.
-
-The events `candidate.judged`, `candidate.rebased`, `candidate.noted`, `candidate.rejudge_requested`,
-`candidate.rejudge_failed`, `run.verdict_told`, `run.head_replaced` and `candidate.verdict` are retired: their old rows
-stay. The new ones are `candidate.scored`, `run.score_told`, `run.base_chosen` and `candidate.excluded_reason`.
+`Judgement`, `Outcome`, `Node`, `Trunk`, `Imported`, `Rebase`, `Noise`, `Bootstrap` and `Bar` are removed. The events
+`candidate.judged`, `candidate.rebased`, `candidate.noted`, `candidate.rejudge_requested`, `candidate.rejudge_failed`,
+`run.verdict_told`, `run.head_replaced` and `candidate.verdict` are retired. The new ones are `candidate.scored`,
+`run.score_told`, `run.base_chosen` and `candidate.excluded_reason`.
 
 ### A cancelled evaluation records nothing
 
-`piloop eval cancel` records no measurement. A run's candidate is `skipped`, not a `crash`. A baseline that never
-measured pauses its campaign's measurements until you resume it.
+`piloop eval cancel` records no measurement. A run's candidate is `skipped`, not a `crash`.
 
-### Two implementers by default, an hour each
+### The implementer's brief is shorter
 
-`[plugins.role.implementer] max_concurrent` defaults to 2, not 4, and `timeout` to 3600 seconds, not 1800. A
-`piloop.toml` that sets them keeps its values.
+The implementer's brief no longer shows the `queue` section or the `database` guide. `piloop schema database` prints
+the guide. To keep them, list them in `[plugins.role.implementer] sections`.
 
-### Claude Code and Codex are the default harnesses
+### New defaults
 
-`[plugins.harness] use` defaults to `["claude", "codex"]`, not `["pi"]`. A `piloop.toml` that sets it keeps its
-value. To keep pi, set `use = ["pi"]`.
+| Key | 0.6 | 0.5 |
+|---|---|---|
+| `[plugins.role.implementer] max_concurrent` | 2 | 4 |
+| `[plugins.role.implementer] timeout` | 3600 | 1800 |
+| `[plugins.harness] use` | `["claude", "codex"]` | `["pi"]` |
+
+A `piloop.toml` that sets a key keeps its value. To keep pi, set `use = ["pi"]`.
 
 ### The orchestrator wakes only for a decision
 
-`[plugins.role.orchestrator] triggers` takes only `news` and `run_failed`. Another trigger, such as `low_water` or
-`cron`, is dropped with a warning until 0.7.0, and so is `[plugins.trigger.news] routine_every`, in `piloop.toml` and in
-a campaign's stored copy alike. `news` wakes it only for an escalation or what a person writes; the rest
-of the news comes with the next wake.
-
-### With no orchestrator, an agent's escalation reaches you at once
-
-With the orchestrator role off (no `news` in its `triggers`), an agent's escalation no longer waits
-`[plugins.escalation] grace` for an orchestrator: your notifiers send it at once. With the role on, it waits as before.
-
-### Only a stop rule or a person stops a campaign
-
-`piloop campaign stop` by an agent, or with `PILOOP_ACTOR=orchestrator`, is refused: the agent escalates a stop
-instead.
-
-### `piloop submit` returns at once
-
-`piloop submit` prints the candidate and returns. Where it stands reaches the implementer as a `[piloop]` message on
-its run. `--wait` is ignored until 0.7.0, and the route `GET /v1/submissions/{candidate}` is removed: read where it
-stands with `GET /v1/candidates/{candidate}`. `[agents] relay_wait` and `relay_deadline` of `config.toml` are dropped
-with a warning until 0.7.0.
-
-## Upgrading to 0.5.0
-
-### Upgrade from 0.4
-
-0.5.0 migrates a database from 0.4's heads or newer: a 0.3 home upgrades through 0.4 first, as
-[Upgrade one release at a time](#upgrade-one-release-at-a-time) says. The migrations before 0.4's heads are squashed
-into one revision for each chain, which a database at 0.4's heads is at already.
-
-### Removed keys
-
-The forms that 0.4 still loaded with a warning are removed. A file that still has one fails as an unknown key, or
-with a message that names what to write:
-
-| Removed | Write instead |
-|---|---|
-| `[harness.<name>]`, `[roles.<name>]`, `harnesses`, `runtime`, `[model]`, `[max_concurrent]`, `[runtimes.<name>]` | [Plugin tables](#plugin-tables) |
-| inline `triggers`, `sections` and `[[facts]]` entries, `[status] sections`, `[mcp.<name>]` | [Plugin tables](#plugin-tables) |
-| `[spend]`, `max_spend` | [Spend is a fact](#spend-is-a-fact) |
-| `[memory] documents` | [Memory documents](#memory-documents) |
-| `wake_budget` | the `budget` of the `lessons` section |
-| `mcp` and `usage` of a harness table, `piloop agent messages --format` | [Harnesses are providers](#harnesses-are-providers) |
-| the `anomaly` trigger | `run_failed` and `dead_at_startup` |
-| `name_claim` of the proxy network | `name_claims` |
-| `evaluations` of a pool | [A pool's slots of each kind of job](#a-pools-slots-of-each-kind-of-job) |
-| `[daemon] startup_breaker` and `startup_window` | [The startup breaker](#the-startup-breaker) |
-| `METRIC` lines, `PILOOP_UNITS_FILE` | [The evaluate command writes a result line](#the-evaluate-command-writes-a-result-line) |
-| `PILOOP_SECRETS_COMMAND`, `secrets_command` | `piloop secret set` |
-| a Claude login in `~/.claude/settings.json` | the harness's `env` ([Agents ignore your own harness setup](#agents-ignore-your-own-harness-setup)) |
-
-A plugin of 0.3.1 that still imports `Campaign.ideas`, `Campaign.evaluator`, a research table from `piloop.db.models`,
-`EvaluationKey`, `Capacity(evaluations=)`, `RunVersion`, `RebaseVersion`, `ReferenceVersion` or `Keep` fails at its
-import: see [Plugin authors](#plugin-authors) and [Executor and vcs plugins](#executor-and-vcs-plugins).
-
-### An escalation has a form
-
-An agent files an escalation with `piloop escalate <target>` and its form. An agent's `INSERT` of an escalation without
-a form is refused, with that command as the fix. An escalation that an older piloop filed as free text still shows as
-its body: answer it with `piloop inbox reply`, since it has no choices.
-
-### The context is a section
-
-A brief's context is the `context` section. A role's `sections` list puts it where it names it:
-
-```toml
-[plugins.role.orchestrator]
-sections = ["database", "search", "context", "goal", "queue", "pack"]
-```
-
-A list without `context` has no context: add it to each list. Each section has a `##` heading, and the brief has no
-`# Guides` or `# Context` heading.
-
-### Notifiers are per campaign
-
-`[plugins.notifier]` of `config.toml` holds the defaults of every campaign's notifiers, and a campaign's
-`piloop.toml` can set its own ([A campaign's own notifiers](/guides/notifications#a-campaigns-own-notifiers)). Run
-`piloop init` on each campaign to store them. Until then, a campaign that 0.4 stored sends its items to the notifiers
-of `config.toml`, until 0.6.0. An item of no campaign goes to those of `config.toml`.
-
-A notifier plugin changes:
-
-| Before 0.5.0 | Since 0.5.0 |
-|---|---|
-| `send(notices, secrets: HomeSecrets)` | `send(notices, secrets: SecretReader)`: the campaign's secrets over the home's. `secrets.missing(name)` says how to set one. |
-| `Inbound(thread, message, person, act)` | `Inbound(thread, message, member, act)`: the service's user id. `Listens.person(member)` says who it is. |
-| `Listens.listen(host)` | Also `Listens.connection(secrets)`: what identifies its connection, never a secret. The instances with the same one share one listener. |
-
-### Kinds of what events and comments point at
-
-`events.target_kind`, `comments.target_kind` and `archives.subject_kind` name a row of `target_kinds`, and a plugin
-can declare a kind of its own. A write of a kind that no installed piloop declared fails on the foreign key, where it
-failed on a CHECK before:
-
-```sql
-SELECT id, owner FROM target_kinds
-```
-
-The upgrade rebuilds `events` and `comments` once, with every row and id. It takes about 8 seconds per million events,
-so `piloop migrate` on a large home takes a while.
-
-### Kinds of comments
-
-`comments.kind` names a row of `comment_kinds`, and a plugin can declare a kind of its own with the event of such a
-comment, a subclass of `Commented`, in the entry point group `piloop.comment_kinds`. `finding` is the runs
-component's. A write of a kind that no installed piloop declared fails on the foreign key, where it failed on a CHECK
-before. The upgrade rebuilds `comments` once more.
-
-```sql
-SELECT id FROM comment_kinds
-```
-
-### `tokens` of a campaign's status
-
-The state of a campaign (`piloop status --json`, `GET /v1/status`) has no `tokens`: read the `tokens` fact, which the
-stop rule counts too.
-
-### The implementer's timings
-
-`startup_relaunches`, `finding_grace` and `wrap_up_lead` are keys of `[plugins.role.implementer]`, and so of each role
-that does runs. `[daemon] startup_relaunches` and `[agents] finding_grace` and `wrap_up_lead` of `config.toml`, and
-`[agents] finding_grace` of `piloop.toml`, still work until 0.6.0, with a warning. The upgrade moves the key in each
-campaign's stored config. Since 0.6.0, `finding_grace` is `end_grace`:
-
-```toml
-[plugins.role.implementer]
-end_grace = 60
-```
-
-### The startup breaker
-
-`startup_breaker` and `startup_window` are keys of `[plugins.launch_policy]`. `[daemon] startup_breaker` and
-`startup_window` of `config.toml` no longer load:
-
-```toml
-[plugins.launch_policy]
-startup_breaker = 3
-```
-
-### An agent's subject
-
-`agent_sessions.subject_kind` and `subject_id` say what an agent works on, such as `run` and `12` for an implementer.
-They are NULL for a sweep. `agent_sessions.run_id` is gone: change your own SQL to read the subject.
-
-```sql
-SELECT id, session_file FROM agent_sessions WHERE subject_kind = 'run' AND subject_id = <run>
-```
-
-`agent_session.identified` carries `subject`, `groups` (the run's idea) and `parent` (the agent that proposed it) in
-place of `run`, `idea` and `proposed_by`, and `anomaly.startup` carries `subject` in place of `run`. The upgrade
-rewrites the stored events, so a reader of the feed sees only the new keys. Upgrade hiloop-traces with piloop.
-
-### Upgrade the workers with the server
-
-The workers' protocol is 17. A server refuses a worker of another protocol, which stops its jobs and exits: an agent
-that it ran ends `worker_lost`, and an evaluation waits again. Upgrade when no job runs, and upgrade every worker
-elsewhere with the server.
-
-### A pool's slots of each kind of job
-
-`evaluations` of `[plugins.executor.pools.<pool>]` is `slots = { evaluation = n }`: change it in `config.toml`. The
-upgrade moves a live limit to its new key:
-
-```toml
-[plugins.executor.pools.gpu]
-agents = 0
-slots = { evaluation = 1 }
-```
-
-```bash
-piloop limits set executor.pools.gpu.slots.evaluation=1 --reason "the GPU trains a model"
-```
-
-`piloop worker list` has a column for each kind of job. `leases.evaluation_id` is `leases.job_id`, with the lease's
-`kind`, and `leases.runner` says what a worker needs to take the job.
-
-### Executor and vcs plugins
-
-A kind of job besides an agent's is a `JobKind`: its job and report models, what runs it on a worker, and what applies
-its report. An executor runs it with `kind_of(job).run`. The `JobKind(job, report)` of 0.4.0 is replaced.
-
-| Before 0.5.0 | Since 0.5.0 |
-|---|---|
-| `submit(job: AgentJob \| EvaluationJob)`, `Results.finished(job, report)` | `submit(job: Job)`; `finished` takes any kind's report |
-| `Capacity(agents, evaluations)`, `.evaluations` | `Capacity(agents, slots={'evaluation': n})`, `.free('evaluation')` |
-| `EvaluationKey(n)`, `type JobKey` | `JobKey('evaluation', n)`, `type Key = AgentKey \| JobKey` |
-| `run_evaluation`, `remove(job, site)` | `kind_of(job).run(job, control, site, span)`, `site.remove(job)` |
-| `Repository.capture(cas, base, run, ignore)` | `capture(cas, base, by, ignore)`: `by` is the agent's subject, `run#12` |
-| `Repository.keep(revision, RunVersion(c, run, i))` | `keep(revision, Pin(c, f'r{run}/{i}'))`: the ref names are the same |
-
-## Upgrading to 0.4.0
-
-### Removed keys
-
-The keys that 0.3.0 deprecated are removed, and a file that still sets one fails as an unknown key:
-
-| Removed | Write instead |
-|---|---|
-| `[stop]`, `confidence` and their `PILOOP_CAMPAIGN_STOP__<KEY>` and `PILOOP_CAMPAIGN_CONFIDENCE` | [Limits and confidence are parameters of the rules](#limits-and-confidence-are-parameters-of-the-rules) |
-| `[spend] limit` | `hold_at = { spend = ... }` in `[plugins.stop_rule]` ([Spend is a fact](#spend-is-a-fact)) |
-| `kind` in a trigger | [Triggers name their provider](#triggers-name-their-provider) |
-| `[storage.backend]` in `config.toml` | [The CAS](#the-cas) |
-| `max_evaluations` and `PILOOP_MAX_EVALUATIONS` | `evaluations` in `[plugins.executor.pools.serve]` of `config.toml` |
-| `tick_seconds` in `config.toml` | Nothing: delete it |
-
-The keys that 0.2.0 deprecated, the herdr runtime and `workdir` no longer get a message of their own: they fail as
-unknown keys too.
-
-### Shorter briefs, and the comments on an idea are a section
-
-The built-in prompts are a third of their size. What an implementer rarely needs is a guide away:
-`piloop schema long_jobs` and `piloop schema workspace`. An implementer's brief shows the comments on its idea in the
-`idea_comments` section, the latest 10, each cut at 600 characters. A role whose `sections` you set lists it to keep
-them:
-
-```toml
-[plugins.role.implementer]
-sections = ["database", "idea_comments", "lessons", "history"]
-```
-
-`piloop idea develop --check` says what the evaluator should show, not a gate before the first commit. A plan that an
-agent files has at most `plan_words` words (150).
-
-### Agents ignore your own harness setup
-
-Claude, Codex and pi agents no longer load your instructions, skills, plugins or hooks
-([Harnesses](/concepts/roles#harnesses)). Set `user_config = "load"` on a harness to keep them.
-
-A Claude login in `~/.claude/settings.json`, such as `apiKeyHelper` or `ANTHROPIC_BASE_URL` under `env`, still
-reaches the agents until 0.5.0, and `piloop doctor` warns. Move it to the harness's `env`:
-
-```toml
-[plugins.harness.claude]
-env = { ANTHROPIC_BASE_URL = "https://gw.example.com", ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" } }
-```
-
-### Measurements of the evaluation ladder
-
-A campaign with a [`[[ladder]]`](/concepts/campaigns#the-evaluation-ladder) records each rung as a measurement with
-`measurements.rung`, and `measurements.stopped` where a climb stopped. Only a measurement whose `rung` is NULL scores:
-add `AND m.rung IS NULL` to your own SQL that averages `measurements.metrics`. The upgrade sets both to NULL on every
-earlier measurement.
-
-### The evaluate command writes a result line
-
-The evaluate command writes its result as one JSON line to the pipe that `$PILOOP_RESULT_FILE` names, instead of
-printing `METRIC` lines. The per-unit results go into the same line, instead of `$PILOOP_UNITS_FILE`:
-
-| Before | Now |
-|---|---|
-| `print(f'METRIC accuracy={acc}')` | `{"metrics": {"accuracy": 0.83}}` appended to `$PILOOP_RESULT_FILE` |
-| a JSON object in `$PILOOP_UNITS_FILE` | `"units": {"accuracy": {"q-1": 0.002}}` in the same line |
-| a `METRIC` line that `[[metrics]]` does not name is recorded | a name that `[[metrics]]` does not name is a crash |
-| every metric is required | primaries and guardrails are required; a watch metric is optional |
-
-`METRIC` lines and `$PILOOP_UNITS_FILE` still work until 0.5.0: piloop posts one inbox note for each evaluator that
-uses them. A `command` fact source writes `{"metrics": {"billing_usd": 412.3}}` to `$PILOOP_RESULT_FILE` too. Upgrade
-`piloop worker` on every machine with the server: the server refuses a worker of the older protocol.
-
-### Agent sessions are in the CAS
-
-piloop keeps each agent's session, the harness's own file, in the CAS: `agent_sessions.session_file`. Print it with
-`piloop cas get <session_file>` ([Sessions](/concepts/roles#sessions)).
-
-- `usage->>'$.source'`, the file's path on the machine that ran the agent, is gone. The upgrade puts each file that is
-  still on this machine into the CAS, and drops every path.
-- Upgrade `piloop worker` on every machine with the server: the server refuses a worker of the older protocol.
-
-### Network plugins name the actor
-
-A network plugin implements `actor(headers)`: whom a request asks to act as. Its `client(server, actor)` sends that
-ask. A person whom the network names signs as `human:<name>`, not `human`, and as the orchestrator as
-`orchestrator via human:<name>`. A service, such as a service account's key, signs as `service:<name>`.
-`piloop pause` prints `paused (all)`.
-
-The `proxy` network names a caller by the first of its `name_claims` whose header is present and not empty.
-`name_claim = "<claim>"` in `config.toml` still works until 0.5.0, with a warning: write `name_claims = ["<claim>"]`.
-
-### Agents sign with their own token
-
-Each agent gets its own token when it starts, in `PILOOP_AGENT_TOKEN`, and it signs as that agent only. Setting
-`PILOOP_ACTOR` no longer lets an agent sign as `orchestrator`, `human` or another agent, and its token has `act`
-access: no `piloop token`, `limit` or `secret`. The person at the terminal still signs as `human` or
-`orchestrator` with no setup.
-
-- An agent that the older daemon started keeps signing as itself until it ends.
-- A token's name may not contain `#`.
-- Upgrade `piloop worker` on every machine with the server: the server refuses a worker of the older protocol. A
-  worker no longer passes its own credential to the jobs that it runs.
-
-### Spend is a fact
-
-piloop gives no fact a meaning: what a campaign spends outside piloop is a fact that a fact source reads, as GPU hours
-or anything else would be. The built-in `command` source writes `{"metrics": {"<name>": <value>}}` to
-`$PILOOP_RESULT_FILE`, as the evaluate command does. The `spend` source sums the facts that it names into `spend`, and
-`hold_at` of `limits` holds on any fact that it names:
-
-| Before 0.4.0 | Since 0.4.0 |
-|---|---|
-| `[spend] command` (prints one number) | a fact source with `provider = "command"`, whose command reports `{"metrics": {"billing_usd": <number>}}`, and `facts = ["billing_usd"]` in `[plugins.fact_source.spend]` |
-| `[spend] notices`, `interval` | `notices = { billing_usd = [...] }` and `interval` of that source |
-| `[spend] closing_review` | `[plugins.stop_rule] while_held` |
-| `[plugins.stop_rule] max_spend` | `[plugins.stop_rule] hold_at = { spend = ... }` |
-
-```toml
-[plugins.fact_source]
-use = ["campaign", "optimization", "billing", "spend"]
-
-[plugins.fact_source.billing]
-provider = "command"
-command = ["uv", "run", "scripts/spend.py"]   # reports {"metrics": {"billing_usd": 412.3}}
-metrics = ["billing_usd"]
-
-[plugins.fact_source.spend]
-facts = ["billing_usd"]
-
-[plugins.stop_rule]
-hold_at = { spend = 1000 }
-```
-
-The old keys still work until 0.5.0, with a warning: the old command runs in a wrapper that reports its number as
-`billing_usd`, and `spend` sums only that. The upgrade rewrites the stored configs the same way: a `command` source
-that reports `spend` reports `billing_usd`, which `spend` sums. It turns the latest reading of each campaign into
-`fact.read` events: `campaigns.spend_usd`, `spend_error` and `spend_at` are gone.
-
-A stop rule reads `StopCase.facts` by typed key (`case.facts.get(KEEPS)`, `case.facts.get(reading('spend'))`) instead
-of `Progress`. It shows its own progress line (`describe`), escalates itself (`Escalate(reason, then=...)`), and says
-what a stop while it holds does (`while_held`). A hold no longer posts an escalation of piloop's own.
-
-### The stop rule leaves a budget
-
-piloop no longer reads a stop rule's limits. A rule answers `Go(left=...)`: how much of each fact is left before it
-stops the campaign. piloop starts runs and cuts timeouts within it. `StopRule.limits` is gone, `reads` is abstract,
-and `check_config` refuses a campaign that the rule cannot serve. `limits` and a rule that subclasses it need no
-change.
-
-The stall mark became `every` of the `stalled` trigger, two rounds of the run slots when unset. 0.6.0 removes that
-trigger with the research role.
-
-### A reopened campaign's limits
-
-`piloop campaign reopen` sets a stopped campaign active again. Its `max_runs`, `max_hours` and `max_tokens` then count
-from the reopen, so a reopened campaign gets each of them again. A stopped campaign that `piloop init` sets active
-again, after a change to its stop rule, still counts from its start: raise the limit to its new total.
-
-### piloop's own commits
-
-piloop's own commits are by `piloop <piloop@localhost>`, whatever git's config says: merges, `piloop init`'s, and the
-save of what an implementer left uncommitted, which its run authors (`run#12`). Set another email in `[plugins.vcs]`:
-
-```toml
-[plugins.vcs]
-provider = "git"
-email = "piloop@example.com"
-```
-
-An agent's own commits are by the agent (`implementer#12`), with that email, no longer by you. A vcs plugin implements
-`Vcs.agent_env`.
-
-A vcs plugin's `Repository.capture` returns `Captured`. When the save of the unsaved changes fails, it puts them into
-the CAS (`Captured.unsaved`) and still returns the versions.
-
-### Memory documents
-
-`[memory] documents` is `documents` in [`[plugins.memory]`](/concepts/memory#documents); the old key works
-until 0.5.0, with a warning.
-
-### The journal is per campaign
-
-Each journal line belongs to a campaign (`journal.campaign_id`). `piloop journal` writes to the campaign of the current
-directory, else to the only active campaign: name another with `--campaign`. `piloop wake <name>` prints that
-campaign's journal, inbox and head.
-
-The upgrade gives each line the only campaign of the home, else the campaign of the agent that wrote it. The other
-lines keep no campaign. Each campaign's `piloop wake` prints them after its own lines, under their own heading:
-
-```sql
-SELECT created_at, author, line FROM journal WHERE campaign_id IS NULL ORDER BY id;
-```
-
-### A note keeps who judged
-
-`candidates.verdict_by` changes only with the verdict. A note on an `interesting` candidate no longer signs its verdict:
-find who noted a candidate in its `candidate.noted` events.
-
-```sql
-SELECT target_id AS candidate, actor, json_extract(payload, '$.reason') FROM events WHERE kind = 'candidate.noted';
-```
-
-### Harnesses are providers
-
-Each harness is a provider of the `harness` capability: it renders the MCP servers of a role, and reads the tokens
-from its session files under its `home`. A package adds one with an entry point in `piloop.harnesses`.
-
-| Before 0.4.0 | Since 0.4.0 |
-|---|---|
-| `mcp` and `[harness.<name>.usage]` in the table of a built-in harness | Nothing: delete them. To move its session files, set `home`. |
-| `mcp = "claude"` or `usage.tally = "claude"` in a table with a new name | `provider = "claude"` |
-| `piloop agent messages --format claude-hook` | `piloop agent messages --harness claude` |
-
-The old keys and the old option still work until 0.5.0, with a warning. The upgrade rewrites the stored configs the
-same way. Upgrade `piloop worker` on every machine with the server: the server refuses a worker of the older protocol.
-
-### Plugin tables
-
-A plugin's keys are under `[plugins]`. A capability of one instance has `[plugins.<capability>]`, as before, and one of
-several has `[plugins.<capability>.<name>]`. The harnesses, the roles, the runtimes, the triggers, the sections, the
-fact sources and the MCP servers are of several, and a list names them:
-
-| Before 0.4.0 | Since 0.4.0 |
-|---|---|
-| `[harness.<name>]` | `[plugins.harness.<name>]` |
-| `model = { claude = "…" }` | `model = "…"` in `[plugins.harness.claude]` |
-| `max_concurrent = { claude = 2 }` | `max_concurrent = 2` in `[plugins.harness.claude]` |
-| `[roles.<name>]` | `[plugins.role.<name>]` |
-| `PILOOP_CAMPAIGN_ROLES__<NAME>__<KEY>` | `PILOOP_CAMPAIGN_PLUGINS__ROLE__<NAME>__<KEY>` |
-| `harnesses = ["claude", "codex"]` | `use = ["claude", "codex"]` in `[plugins.harness]` |
-| `runtime = "nice"` | `use = "nice"` in `[plugins.runtime]` |
-| `[runtimes.<name>]` in `config.toml` | `[plugins.runtime.<name>]` |
-| `triggers = [{ provider = "low_water", buffer = 4 }]` | `triggers = ["research_low_water"]`, and `[plugins.trigger.research_low_water]` with `provider = "low_water"` and `buffer = 4` |
-| `sections = [{ provider = "goal" }]` of a role | `sections = ["goal"]` |
-| `[status] sections` | `use` in `[plugins.section]` |
-| `[[facts]]` | `use` in `[plugins.fact_source]`, and `[plugins.fact_source.<name>]` for a source with keys |
-| `[mcp.<name>]` with `url` or `command` | `[plugins.mcp_server.<name>]` with `provider = "http"` or `provider = "stdio"` |
-
-```toml
-[plugins.harness]
-use = ["claude", "codex"]
-
-[plugins.harness.claude]
-model = "claude-opus-5-5"
-max_concurrent = 2
-
-[plugins.harness.codex]
-model = "gpt-6.1-sol"
-
-[plugins.role.implementer]
-max_concurrent = 4
-```
-
-A capability's own settings are in its table, next to its instances: `use` names the instances that the campaign uses.
-An instance with a table of its own must be in a list, or piloop refuses the file. A 0.3 file that sets a `model` for a
-harness outside its rotation, or an `[mcp.<name>]` that no role lists, only gets a warning until 0.5.0: add the harness
-to `[plugins.harness] use`, or delete what nothing uses.
-A role's `harnesses`, `runtime` and `model = { <harness> = "…" }` keep their place: they name instances. The old keys
-still work until 0.5.0, with a warning, and the upgrade rewrites the stored configs the same way. A runtime's `open`
-takes the name of its instance. Upgrade `piloop worker` on every machine with the server: the server refuses a worker
-of the older protocol.
-
-### A run gets more time
-
-`piloop run extend <run> --by 1h` moves the deadline of a running implementer. A plugin follows the new deadline:
-
-| Before 0.4.0 | Since 0.4.0 |
-|---|---|
-| A runtime's `wait(handle, timeout)` | `wait(handle, deadline)`: kill the agent once `deadline.passed()`, which an extension can move while it waits |
-| An executor runs a job to its `timeout` | It also has `extend(key, seconds)`, and its `Control` has `extended()`, which `run_agent` reads |
-
-Upgrade `piloop worker` on every machine with the server: the server refuses a worker of the older protocol.
-
-### Archivings of subjects
-
-An archiving is of a subject: `archives.subject_kind` and `archives.subject_id` replace `archives.idea_id`, and
-`anomaly.disk` events name it in `subject` (`"idea#12"`) in place of `idea`. The migration rewrites both. A query of
-`archives.idea_id` reads `subject_id WHERE subject_kind = 'idea'`. `piloop store status` counts settled subjects in
-place of done ideas.
-
-piloop no longer reads an archive manifest of piloop 0.2. piloop 0.3 stored each one again at its start. When one
-was left, because the store could not give it back, the upgrade refuses the home and names the archive: run
-`piloop migrate` with piloop 0.3 first.
-
-### Incidents are triggers
-
-The `anomaly` trigger is two triggers, `run_failed` and `dead_at_startup`. `{ provider = "anomaly" }` still works
-until 0.5.0, as both of them. An idle queue and a candidate that scored exactly its parent are the `idle_queue` and
-`same_as_parent` sections, and the `reported` section lists the incidents that agents got. The watchdog also has the
-new `leaking_funnel` trigger by default: it starts an incident sweep when fewer than 5 of the last 10 attempts were
-measured.
-
-An `anomaly.reported` event names its `trigger` in place of `anomaly`. A plugin trigger no longer gets
-`Pass.incidents()`.
-
-### Plateau counts every run
-
-`plateau` counts every finished run without a keep, also one that never reached the evaluator. A campaign whose runs
-rarely submit now stops at `plateau`. `max_runs` still counts only the runs that reached the evaluator.
-
-### Low yield
-
-piloop escalates a campaign whose runs reach nothing, and the watchdog has the new
-`low_yield` trigger by default. If your `piloop.toml` lists the watchdog's `triggers`,
-add `"low_yield"` to the list.
-
-### The daemon registers campaigns
-
-`piloop init` starts the daemon and registers the campaign through it, so a `piloop serve --detach` after it fails
-with "already running". `piloop token create`, `piloop limits` and `piloop prompt` need a running daemon.
-
-### Plugin authors
-
-Import from `piloop.capabilities`. Other import paths are not stable, and several moved:
-
-| Before 0.4.0 | Since 0.4.0 |
-|---|---|
-| `piloop.tables` | `piloop.schemas`: a plugin owns its tables and their migrations |
-| `Vcs.clone` | `Vcs.replica`. `Vcs.clone` now clones a URL. |
-| An executor's `routes()`, `upkeep_events()` and `upkeep()` | `contribution()` |
-| `Scheduler(also=)`, `Scheduler(archiving=)` | Nothing: contribute through the slots |
-| `Client.journal` | `Client.post` |
-| `from piloop.db.models import Candidate` (and `Evaluator`, `Idea`, `IdeaLink`, `Run`, `Measurement`, `Evaluation`, `Technique`) | The table's module in its campaign type component; the warning names it |
-| `Campaign.ideas`, `Campaign.evaluator` | The backlog's `Idea` by `campaign_id`, and the evaluation component's `evaluator_of` |
-
-The old names of the last two rows still work until 0.5.0, with a warning.
-
-## Upgrading to 0.3.0
-
-### First, piloop 0.2.1
-
-A 0.2.0 daemon stops, with its agents, when 0.3.0 is installed under it. 0.2.1 fixes that, so upgrade to it first,
-with the daemon running:
-
-```bash
-uv tool install 'piloop==0.2.1'
-piloop restart
-```
-
-The running agents keep going. Then move your campaigns off herdr, as the next section says, and upgrade to 0.3.0:
-
-```bash
-uv tool install piloop
-piloop upgrade
-```
-
-### The herdr runtime
-
-The `herdr` runtime is removed. Agents run on `subprocess`, as background processes. Before you upgrade, with piloop
-0.2, move each active campaign off herdr:
-
-1. In its `piloop.toml`, set `runtime = "subprocess"`, or delete the key. Do the same for each
-   `[roles.<name>] runtime`.
-2. Run `piloop init <repo>`.
-3. Let its herdr agents end, or end them with `piloop agent cancel <agent-session-id>`.
-
-While an active campaign or a live agent is on herdr, `piloop upgrade` refuses and says what to do. The upgrade
-moves the stored config of each stopped campaign to `subprocess`, but not its `piloop.toml`: `piloop doctor` warns
-about each such file, and `piloop init`, which resumes a campaign, fails on it with a link to this section. Change it
-before you resume the campaign.
-
-- Delete `[runtimes.herdr]` from `config.toml`, and any `PILOOP_RUNTIMES__HERDR__<KEY>` variable: the daemon does not
-  start with them. Delete the `herdr_<key>` keys of `config.toml` too. The `PILOOP_HERDR_<KEY>` variables have no
-  effect.
-- Delete `interactive`, `startup_dialogs`, `busy_screens`, `failed_turn_screens`, `queue_key` and `composer` from
-  each `[harness.<name>]` table. A table that still has one fails, with a link to this section.
-- An agent has no terminal pane to read and type into. `piloop attach <agent-session-id>` prints its last lines, and
-  `piloop prompt` or `s` in `piloop watch` sends it a message.
-
-### workdir
-
-`[roles.<name>] workdir` is removed. Every agent works in a worktree of its own, at the head for a sweep, on any
-machine; the campaign checkout is only the repo of record. Delete the key from each role table of `piloop.toml`, then
-run `piloop init <repo>`. A `piloop.toml` that still sets it fails, with a link to this section. The stored configs lose
-it at the upgrade, and an agent that worked in the campaign checkout when you upgraded ends.
-
-### Entire
-
-piloop no longer attaches agent sessions to Entire. The harness's own file holds each session: find it by
-`agent_sessions.session_id` ([Sessions](/concepts/roles#sessions)).
-
-- `agent_sessions.checkpoint_id` and the `checkpoint` column of the kept lineage are gone.
-- Delete `entire_agent` from each `[harness.<name>]` table. A `piloop.toml` that still has it fails at `piloop init`,
-  with a link to this section. The upgrade deletes it from the stored configs.
-- Delete `entire_attach_timeout_seconds` from `config.toml`: the daemon does not start with it.
-- `piloop init` no longer writes `.entire/`. A campaign repo keeps the `.entire/` that it committed, and its
-  checkpoints under `refs/entire/`. To delete the checkpoints of a repo:
-
-  ```bash
-  git -C <repo> for-each-ref --format='%(refname)' refs/entire/
-  git -C <repo> for-each-ref --format='%(refname)' refs/entire/ | xargs -n1 git -C <repo> update-ref -d
-  ```
-
-- An executor plugin: `Host.entire_version`, `Control.entire_version`, `AgentFinished.checkpoint` and
-  `AgentJob.captures_session` are gone. `AgentJob.needs_session_id` says whether the session id is needed.
-
-### Removed keys
-
-The keys that 0.2.0 deprecated are removed: [Deprecated keys and variables](#deprecated-keys-and-variables) says what
-to write instead. A `piloop.toml` that still sets one fails at `piloop init` and in `piloop doctor`; the stored configs
-were converted when you upgraded to 0.2.0. While a `PILOOP_PROJECT_<KEY>` variable is set, no `piloop.toml` loads.
-`[storage.remote]` in `config.toml` is removed too: write `[plugins.cas]`, as [The CAS](#the-cas) says.
-
-### Deprecated keys
-
-`[storage.backend]` and `max_evaluations` of `config.toml` still load, with a warning, until 0.4.0, and so does
-`tick_seconds`, which does nothing: the daemon wakes on events. So do `[stop]`, `[spend] limit`, `confidence` and a
-trigger's `kind` in `piloop.toml`, as the sections below say.
-[Deprecated keys](/reference/configuration#deprecated-keys) says what to write instead.
-
-`PILOOP_SECRETS_COMMAND` works until 0.5.0: `piloop secret set` each key that it prints.
-
-`[memory] wake_budget` and `[roles.<name>] wake_budget` work until 0.5.0. They are the `budget` of the `lessons` entry
-of a role's [sections](/concepts/roles#sections), and 0 is a list without that entry. The watchdog now reads the
-lessons too.
-
-### Status and briefs are sections
-
-`piloop status` and the briefs show [sections](/concepts/roles#sections). `GET /v1/overview` answers each campaign's
-`sections`, typed blocks, in place of its `text`. The lessons in a brief come after the context, not before `brief.md`.
-
-### Harness tables
-
-A `[harness.<name>]` table for a built-in harness keeps the built-in's keys that it does not set. Before, it replaced
-the built-in, and a key that it left out took its default: no `resume`, no `usage`, no `mcp`. To define a harness from
-scratch, give it a name of its own.
-
-A table that sets its own `headless` now gets the built-in's `usage` too, which needs the session id: when its
-`headless` has no `{session_id}`, the file fails to load. Add `{session_id}` as the built-in does, or rename the table.
-
-### Status, inbox and events ask the daemon
-
-`piloop status`, `piloop inbox` and `piloop events` read through the daemon's API. Without a running daemon they stop
-and say to run `piloop serve --detach`, and `daemon` in `piloop status --json` is never null. `piloop sql` still reads
-the database without a daemon.
-
-### How a run ended
-
-`runs.end` says how a run ended, and `runs.error` only gives the detail. A new run no longer writes the texts below
-into `error`. The upgrade gives every old run its `end` and keeps its `error`. A query that compares `error` to one
-of these texts does not fail, but it finds only old runs: compare `end` instead.
-
-| Before 0.3.0 | Since 0.3.0 |
-|---|---|
-| `error = 'cancelled'` | `end = 'cancelled'` |
-| `error = 'campaign stopped'` | `end = 'campaign_stopped'` |
-| `error = 'daemon stopped'` | `end = 'daemon_stopped'` |
-| `error = 'daemon exited while the run was in progress'` | `end = 'stale'` |
-| `error = 'worker lost'` | `end = 'worker_lost'` |
-| `error = 'its role is no longer in piloop.toml'` | `end = 'role_removed'` |
-| `error = 'no agent of the run started to work'` | `end = 'not_started'` |
-| `error LIKE 'blocked on escalation%'` | `end = 'awaiting_answer'` |
-
-### A candidate's verdict
-
-`candidates.verdict` is only a judgement: `keep`, `interesting`, `discard` or `crash`, and NULL until the daemon judges
-the candidate. `candidates.origin` says where a candidate comes from, and `candidates.cause` why an `interesting` is
-not the verdict rule's own. The upgrade rewrites every candidate. A query that compares `verdict` to an old value does
-not fail, but it finds nothing: rewrite it, also in a trigger with `provider = "sql"`.
-
-| Before 0.3.0 | Since 0.3.0 |
-|---|---|
-| `verdict = 'pending'` | `verdict IS NULL AND origin IN ('baseline', 'run')` |
-| `verdict = 'reference'` | `origin = 'reference'` |
-| `verdict = 'unmeasured'` | `origin = 'skipped'` |
-| `verdict = 'recovered'` | `origin = 'recovered'` |
-| `verdict_reason LIKE 'note: %'` | `cause = 'note'` |
-| `verdict_reason LIKE 'keeps against its own bar, but the head moved on%'` | `cause = 'moved'` |
-
-`piloop candidate verdict` and `piloop candidate note` print and refuse with these names. A new note no longer starts
-its reason with `note: `.
-
-### Event payloads
-
-Each event's payload has its `kind`, and `events.kind` is read from it. Only piloop writes events: `piloop sql`
-refuses an `INSERT INTO events`. The upgrade rewrites the old events to the shapes below. A query that reads an old
-field does not fail, but it finds nothing: read the new one.
-
-| Before 0.3.0 | Since 0.3.0 |
-|---|---|
-| `kind = 'implementer.finished'`, and `<role>.started` of any role | `kind = 'agent_session.finished' AND payload->>'$.role' = 'implementer'` |
-| `$.kill` of `campaign.stop_requested` | `$.ending`: `now` or `wrap_up` |
-| `$.wrap_up` of `run.cancel_requested` and `agent_session.cancel_requested` | `$.ending`: `wrap_up` or `now` |
-| `$.status` of `run.finished` | `$.end`, as in `runs.end` |
-| `$.error` of `agent_session.stop_ended` | `$.end` |
-| `$.error` of `agent_session.wrap_up` | `$.comment`, the note that carries the prompt; a prompt that did not reach the agent is that note's `comment.undelivered` |
-| `kind = 'comment.delivered'`: the agent's runtime took the prompt | `kind = 'comment.queued'`; `comment.delivered` says that the agent read it |
-| `$.key` of `anomaly.reported` | `$.subject` and `$.trigger`, the trigger that found it; the line is `$.line` |
-| `$.kind` of `anomaly.startup` | `$.role` |
-| `$.kind` of `idea.linked` and `idea.unlinked` | `$.link_kind` |
-| `$.kind` of `comment.deleted` | `$.comment_kind` |
-| the payload of `agent_session.job_ended` | `$.ended` |
-| `$.status` `idle`, `blocked` or `working` of `<role>.finished` | `$.state = 'exited'` of `agent_session.finished` |
-| `$.status` of `agent_session.finished`, how the process ended | `$.state`, the row's `state`; the process is in `agent_session.job_ended` |
-| a payload that is not a JSON object | `$.invalid`, its stored text |
-| `$.old` or `$.new` of `candidate.verdict` that is not a judgement | null; a change between two of them is `kind = 'candidate.origin'` |
-| `candidate.judged` of an `unmeasured` or `recovered` verdict | `kind = 'candidate.origin'`, from `run` |
-| `$.verdict` of `candidate.deleted` that is not a judgement | null, with `$.origin` |
-
-### Plugins: a provider is its own parameters
-
-A provider of a `[plugins.<name>]` table is now a class: a pydantic model that subclasses the contract of its
-capability. Its fields are its parameters, and its methods are the contract. piloop validates the table into it when
-it loads the file. A plugin of 0.2.0 fails to load until you change it:
-
-| Before 0.3.0 | Since 0.3.0 |
-|---|---|
-| Imports from `piloop.plugins.contracts.*`, `piloop.plugins.builtin.*`, `piloop.config` or `piloop.triggers` | Every name from `piloop.capabilities` |
-| The entry point names an instance: `MIN_GAIN = MinGain()` | The entry point names the class: `piloop_min_gain:MinGain` |
-| `Parameters = Parameters`, then `json.loads(case.parameters)` | A field, `min_gain: float`, read as `self.min_gain` |
-| `class MinGain:` that calls `BOOTSTRAP.decide(case)` | `class MinGain(Bootstrap):` that calls `super().decide(case)` |
-| `class AfterKeeps:` that calls `LIMITS` | `class AfterKeeps(Limits):` that adds `{Fact.KEEPS: self.keeps}` to `super().limits()` |
-| `reads(self, limits, parameters)` | `limits()`, the limit on each fact, and `reads()`, by default the facts of `limits()` |
-| `Case.parameters`, `StopCase.parameters`, `StopCase.limits`, the `Limits` dataclass | The rule's fields |
-| `Case.confidence` | `self.confidence` of `Bootstrap` |
-| A role's entry point names `SweepRole(...)` | A subclass of `SweepRole` or `ImplementerRole` whose fields have the role's defaults |
-| `Capability(noun, group=..., check=...)`, `PureCapability(noun, group=..., contract=...)` | `Capability(name, contract)`, `tier=Tier.PURE` for a pure one: `name` is its entry point in `piloop.capabilities`, and its providers are in `piloop.<name>s` |
-| `get(name)` returns the provider | `get(name).model` is the provider's class |
-| A runtime class with `kind` and a constructor without arguments | A subclass of `RuntimeConfig` whose fields are `[runtimes.<name>]` and whose `open()` returns the runtime |
-| `runtime_settings(name)` | The runtime's fields |
-| `kind: Literal['<name>']` on a trigger | Nothing: the name of its entry point is its name |
-| `Selection`, `lookup`, `check_selection`, `Capability(check=...)` | The field that names a provider: `Annotated[P, CAP.entry]` for a table, `Annotated[str, CAP.named]` for a name, `Annotated[dict[str, P], CAP.tables()]` for a table of each provider |
-| A role's prompt as a path into its package: `prompt = str(Path(__file__).parent / 'auditor.md')` | `PROMPT = files(__package__) / 'auditor.md'`, a resource of the package; `prompt` in the table still overrides it |
-| A trigger's `fire(self, tick: Tick)` | `fire(self, p: Pass)`, and `due_in(self, p: Pass)`: how long until time alone can change the answer, or None |
-| A runtime's `wait` returns an `Outcome` with an `AgentStatus`; `status(handle)` | `wait` returns an `AgentExit` with an `ExitStatus`; `status` is gone |
-
-The examples in [`examples/plugins/`](https://github.com/hiloopai/piloop/tree/main/examples/plugins) show each one.
-A `[plugins.<name>]` table without `provider` now sets the parameters of the default provider.
-
-### Triggers name their provider
-
-An entry of `[roles.<name>] triggers` names its trigger with `provider`, as a `[plugins.<name>]` table does:
-`triggers = [{ provider = "cron" }]`. `kind` still works, with a warning, until 0.4.0. The upgrade changes the stored
-configs.
-
-### Limits and confidence are parameters of the rules
-
-The limits are fields of the stop rule, and `confidence` is a field of the verdict rule:
-
-| Before 0.3.0 | Since 0.3.0 |
-|---|---|
-| `[stop] <key>` | `[plugins.stop_rule] <key>` |
-| `[spend] limit` | `[plugins.stop_rule] max_spend` |
-| `confidence` | `[plugins.verdict_rule] confidence` |
-| `PILOOP_CAMPAIGN_STOP__<KEY>` | `PILOOP_CAMPAIGN_PLUGINS__STOP_RULE__<KEY>` |
-| `PILOOP_CAMPAIGN_CONFIDENCE` | `PILOOP_CAMPAIGN_PLUGINS__VERDICT_RULE__CONFIDENCE` |
-| `PILOOP_CAMPAIGN_SPEND__LIMIT` | `PILOOP_CAMPAIGN_PLUGINS__STOP_RULE__MAX_SPEND` |
-
-The old keys and variables still work, with a warning, until 0.4.0. `PILOOP_CAMPAIGN_SPEND__LIMIT` does not: it fails
-as an unknown key. A stop rule of a plugin that is not a subclass of `Limits` refuses the old `[stop]` keys. The
-upgrade rewrites the stored configs.
-
-### Archived manifests
-
-A blob's address is a [CID](https://dasl.ing/cid.html), and `archives.manifest` holds the CID's text instead of a
-base32 digest. A query that compares it to a digest finds nothing. No blob is rewritten.
-
-After the schema, `piloop migrate` and the daemon's start store each archive manifest of piloop 0.2 again as a DASL
-value. A manifest that is only on the remote is read from there. When one cannot be read, `piloop migrate` names the
-archive and exits non-zero, and the next run tries again. The old manifests stay, so a restored backup still works.
-
-The CIDs come from [covalence](https://pypi.org/project/covalence/), which has no prebuilt wheel for Intel macOS. There,
-the install builds it from source, which needs a Rust toolchain.
-
-### The CAS
-
-`[plugins.cas]` in `config.toml` selects where the blobs go. A store mirrored with `[storage.backend]` still loads, with
-a warning, until 0.4.0. Write it as a `cached` CAS:
-
-```toml
-[plugins.cas]
-provider = "cached"
-evict_after_days = 30   # was [storage] evict_after_days
-local_max_gb = 200      # was [storage] local_max_gb
-remote = { provider = "s3", url = "s3://my-bucket/piloop" }   # was [storage.backend], with kind as provider
-```
-
-- A storage backend that a package adds (the `piloop.stores` entry point group) no longer loads. Make it a CAS
-  provider: a `CasProvider` in the `piloop.cas` group, whose `open(home)` returns a `Cas`. See
-  [CAS providers](/plugins/infrastructure#cas-providers).
-- The example `dir` backend is gone. Write `remote = { provider = "disk", path = "<its root>" }` instead.
-- `min_free_gb` measures the disk of `PILOOP_HOME`, not the disk of the store.
-
-### The shared workspace
-
-An agent's `./workspace/` is no longer a link to the shared workspace. It is a read-only copy of it as it was when the
-agent started, and what the agent writes there goes into the shared workspace when it ends:
-
-- Agents no longer see each other's writes while they run.
-- A write in place fails. To change a file, remove it and write it again.
-- A file that the agent removes goes from the shared workspace too, unless another agent changed it meanwhile.
-- When two agents change one file, the first one's stays, and the second one's goes beside it, as
-  `NOTES.md.implementer-12`.
-- The evaluate command gets no `./workspace/`. Keep what it reads in a `link` input.
-
-### Linked inputs
-
-The `link` paths are read-only in a worktree, as they were when the job was made. A write in place to a linked file
-fails, and a new file stays in the worktree. An evaluation that changes a linked input anyway is a `crash`.
-
-### Briefs
-
-A run's brief is a blob in the [CAS](#the-cas), and `runs.brief_cid` holds its address: `runs.brief` is gone. Read a
-run's brief in `<runs.log_dir>/brief.md`. A change of a brief is a `run.brief_cid` event, with the old and the new
-address. The `run.brief` events of 0.2 keep their payload.
-
-### Versions
-
-`[plugins.vcs]` in `piloop.toml` selects how a campaign saves versions. `git` is the default, and a git campaign does
-not change. `documents.commit_sha` is gone: no code read it.
-
-`candidates.commit_sha` is `candidates.revision`: the commit SHA under `git`. Rename it in your own SQL and triggers.
-
-### Evaluators
-
-A watch metric is no longer part of the [evaluator](/concepts/campaigns#evaluators): adding one measures nothing again.
-Making a watch metric a guardrail or a primary, or the reverse, now makes a new evaluator. The upgrade gives each
-campaign's current evaluator its new key, so it measures nothing again. A failed evaluation's measurement keeps the
-`METRIC` lines that it printed.
-
-## Upgrading to 0.2.0
-
-Read this before you upgrade from 0.1.0.
-
-1. Check that git is 2.40 or later: `git --version`. piloop 0.2.0 needs it to merge by tree, and `piloop doctor`
-   checks it.
-2. Run `piloop upgrade`. It installs 0.2.0 and migrates the database. Until the database is migrated, every other
-   command of 0.2.0 refuses it and says what to run. If you installed 0.2.0 another way, run `piloop migrate`, or
-   `piloop restart` when a daemon runs. Before it migrates the database, piloop writes a copy of it. To go back to
-   0.1.0, see [Restore from the backup](#restore-from-the-backup).
-3. Restart the running agents, so that they read the new names.
-4. Change your SQL, your keys and your scripts, as the sections below say.
-
-### Renamed tables, columns and commands
-
-piloop 0.2.0 renames three concepts: a **project** is a **campaign**, the **worker** role, which runs one idea in its
-own worktree, is the **implementer**, and the `workers` table, which has one row per agent session in any role, is
-`agent_sessions`. Each evaluator also records its **runner**, how piloop runs it: `process`, the evaluate command run
-as a process, as before.
-The upgrade migrates the database, with the queries of the stored configs. Change the rest by hand:
-
-- the SQL in your `piloop.toml`: the `takes` of a role and the `when` of an `sql` trigger. `piloop init` refuses an
-  old name and names the new one.
-- the SQL in your own role prompt files, in your scripts and in the notes of an orchestrator.
-- the agents that run: restart them after `piloop upgrade`, so that they read the new names. An implementer that an
-  older piloop started and that you leave running still signs its rows `worker#<id>`. Until 0.3.0, piloop counts
-  those rows as the implementer's: its finding, its escalation and its own comments.
-
-A query with an old name fails, and the error names the new one. A query on old values, such as `kind =
-'project.status'` or `kind = 'worker'`, does not fail but finds nothing: use the new values.
-
-| What | Before 0.2.0 | Since 0.2.0 |
-|---|---|---|
-| Table | `projects` | `campaigns` |
-| Table | `workers` | `agent_sessions` |
-| Column | `project_id` (of `ideas`, `candidates`, `workers`, `evaluators`, `techniques`) | `campaign_id` |
-| New column | none | `evaluators.runner`, `process` for every evaluator |
-| `target_kind` of comments and events | `project`, `worker` | `campaign`, `agent_session` |
-| Role, in `agent_sessions.kind` and `runs.role` | `worker` | `implementer` |
-| Role table of `piloop.toml` | `[roles.worker]` (worked, with a warning, until 0.3.0) | `[roles.implementer]` |
-| Signature, in `PILOOP_ACTOR` and the `*_by` columns | `worker#<id>` | `implementer#<id>` |
-| Event kinds | `project.added`, `project.status`, `project.stopped`, `project.invalid_config` | `campaign.added`, `campaign.status`, `campaign.stopped`, `campaign.invalid_config` |
-| Event kind of a session | `worker.wrap_up` | `agent_session.wrap_up` |
-| Event kinds of the role | `worker.started`, `worker.finished` | `implementer.started`, `implementer.finished` |
-| Environment variable | `PILOOP_PROJECT_<KEY>` (worked, with a warning, until 0.3.0) | `PILOOP_CAMPAIGN_<KEY>` |
-| Environment variable of an agent, its process tag | `PILOOP_WORKER_TOKEN` (an agent that an older daemon started was found until 0.3.0) | `PILOOP_PROCESS_TAG` |
-| Verdict of a `Piloop-Eval: skip` commit | `discard` | `unmeasured` (the upgrade converts the stored ones) |
-
-The payloads of old events keep their text, so an old payload may have `project` keys. A signature in a payload and
-the `worker` key of `run.relaunched` are renamed. The directories of the campaigns stay under
-`$PILOOP_HOME/projects/<id>`, the agent sessions that started before the upgrade keep theirs under
-`$PILOOP_HOME/workers/<id>`, and the git refs keep their names.
-
-### Deprecated keys and variables
-
-Each of these still works in 0.2.0, with a `PiloopDeprecationWarning`. piloop 0.3.0 removes them.
-
-| Deprecated | Write instead |
-|---|---|
-| `[roles.worker]` | `[roles.implementer]` |
-| `PILOOP_PROJECT_<KEY>` | `PILOOP_CAMPAIGN_<KEY>`. When both are set, `PILOOP_CAMPAIGN_<KEY>` wins. |
-| `[roles.research.scout]` | `[roles.scout]`. The keys of `[roles.research]` that the scout used (`runtime`, `harnesses`, `model`, `timeout`, `mcp`, `addendum`) move with it. |
-| `[roles.research] buffer` | `buffer` on research's `low_water` trigger: `triggers = [{ provider = "low_water", buffer = 2 }, { provider = "seed" }, { provider = "stalled" }]` |
-| `[roles.research] context` | The top-level `context` |
-| `{ kind = "scout" }` in `[roles.research] triggers` | Nothing: the scout has its own `cron` trigger |
-| `{claude_config_dir}` in `[harness.<name>.usage] file` | `{env:CLAUDE_CONFIG_DIR:~/.claude}` |
-| `{codex_home}` in `[harness.<name>.usage] file` | `{env:CODEX_HOME:~/.codex}` |
-| An agent that 0.1.0 started and that signs `worker#<id>` | Nothing: restart it. Until then, piloop counts its rows as the implementer's. |
-
-### Removed
-
-- `piloop launch <campaign> research --scout`. The scout is a role of its own: `piloop launch <campaign> scout`. It is
-  off until you set `[roles.scout] interval`.
-
-## Other install types
-
-- A checkout that you installed with `uv sync` is not a uv tool. Upgrade it with `git pull`.
-
-## When something fails
-
-An unexpected error prints a short message without the traceback. Set `PILOOP_DEBUG=1` to see the full traceback.
-Then run `piloop doctor`.
-
-## What is stable
-
-Before 1.0, a minor release may contain breaking changes. These interfaces change only with an entry in the
-[changelog](https://github.com/hiloopai/piloop/blob/main/CHANGELOG.md):
-
-- The `piloop` CLI: its commands and their flags.
-- The keys of `piloop.toml`. A renamed or removed key keeps working, with a warning, for at least one minor release.
-  See [Deprecated configuration keys](#deprecated-configuration-keys).
-- The contract of the [evaluate command](/concepts/campaigns#the-evaluate-command): its result line and the exit
-  status.
-- The [database schema](/reference/schema), as `piloop sql` shows it. `piloop upgrade` migrates the database forward.
-
-`piloop.capabilities` is the stable plugin API: its names change only when the contract of a capability changes. Other
-`piloop.*` imports can change in any release. To script piloop, use the CLI and `piloop sql`.
+`[plugins.role.orchestrator] triggers` takes only `news` and `run_failed`. `news` wakes it for an escalation or what a
+person writes. Another trigger, and `[plugins.trigger.news] routine_every`, are dropped with a warning.
+
+- With the orchestrator off (no `news` in its `triggers`), an agent's escalation reaches your notifiers at once.
+- Only a stop rule or a person stops a campaign: `piloop campaign stop` by an agent is refused, and the agent
+  escalates a stop instead.

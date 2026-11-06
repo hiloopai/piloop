@@ -6,12 +6,12 @@ description: How many jobs each machine runs, and how to run agents and evaluati
 
 A **worker** runs the daemon's jobs: agent sessions and evaluations. `piloop serve` has one, called `serve`, and
 `piloop worker` adds one on another machine. A job's code, inputs and results go through the
-[CAS](/concepts/archive#the-cas), so the worker and the server share one.
+[CAS](/concepts/memory#the-cas), so the worker and the server share one.
 
 ## Capacity
 
-A **pool** is the capacity of each worker in it: its slots, and the thresholds that keep jobs off a busy host, as in a
-Kubernetes node pool. `piloop serve`'s worker is in the pool `serve`:
+A **pool** is the capacity of each worker in it: its slots, and the thresholds that keep jobs off a busy host.
+`piloop serve`'s worker is in the pool `serve`:
 
 ```toml
 [plugins.executor]
@@ -24,10 +24,10 @@ max_load = 1.5      # the 1-minute load per CPU
 min_memory_gb = 4
 ```
 
-Each heartbeat carries a sample of the worker's host. A worker over `max_load` or under `min_memory_gb` takes no job,
-and its slots count zero. The daemon launches an agent only into a free slot, and gives it to the campaign that the
-[launch policy](/plugins/rules#launch-policies) picks: by default, the one with the fewest live agents. To change a pool's key while the daemon runs, set a **limit**. It wins over `config.toml` from
-the daemon's next pass, and `piloop status` shows it with its reason:
+A worker over `max_load` or under `min_memory_gb` takes no job. The daemon launches an agent only into a free slot,
+and gives it to the campaign that the [launch policy](/plugins/rules#launch-policies) picks: by default, the one with
+the fewest live agents. To change a pool's key while the daemon runs, set a **limit**. It wins over `config.toml`, and
+`piloop status` shows it with its reason:
 
 ```bash
 piloop limits set executor.pools.serve.slots.evaluation=1 --reason "the GPU trains a model"
@@ -46,23 +46,13 @@ executor.pools.serve.slots.evaluation: the limit is gone
  serve   serve  6s ago  78.1/32  60.8 GB  379.3 GB  0       0           slots
 ```
 
-## When a worker goes silent
+A worker that misses its heartbeats for `grace_seconds` counts zero slots. After `toleration_seconds`, its leases
+expire and their jobs go back to the queue. A worker that hears nothing back stops its own jobs before its leases
+expire, so a job never runs twice. Both are keys of [`[plugins.executor]`](/reference/configuration#plugins).
 
-The timing follows the two stages of Kubernetes, with its defaults. For `workers`, each number is a key of
-[`[plugins.executor]`](/reference/configuration#plugins):
+## Add a worker on another machine
 
-| Key | Then |
-|---|---|
-| `renew_seconds` | The worker sends a heartbeat. |
-| `grace_seconds` | The worker is unreachable, and its slots count zero. |
-| `toleration_seconds` | Its leases expire, and their jobs go back to the queue with a new token. |
-
-A worker that hears nothing back stops its own jobs two heartbeats before its leases expire, so a job never runs
-twice.
-
-## On the server
-
-Give the worker's [pool](#capacity) its slots in `config.toml`:
+On the server, give the worker's pool its slots in `config.toml`:
 
 ```toml
 [plugins.executor.pools.gpu]
@@ -70,11 +60,8 @@ agents = 2
 slots = { evaluation = 1 }
 ```
 
-Set `tls` in `[plugins.network]`: a certificate, `tls = { cert = "<cert.pem>", key = "<key.pem>" }`, or `"proxy"`
-when a reverse proxy or an SSH tunnel ends TLS. Only a loopback address may go without it.
-
-Then listen, serve the CAS, and make the worker's token. `piloop init` started a daemon on the socket only, so stop it
-first:
+Set `tls` in `[plugins.network]` (see [On a server](/guides/daemon#on-a-server)). Then listen, serve the CAS, and make
+the worker's token. `piloop init` started a daemon on the socket only, so stop it first:
 
 ```bash
 piloop stop
@@ -83,13 +70,11 @@ piloop cas serve --listen 0.0.0.0:7701
 piloop token create gpu1
 ```
 
-`piloop cas serve` serves the server's `[plugins.cas]` until you stop it. When that is a bucket that the worker can
-reach, skip it, and give the worker the same `[plugins.cas]`. `token create` prints the token once: piloop keeps only
-its hash.
+When the server's `[plugins.cas]` is a bucket that the worker can reach, skip `piloop cas serve`, and give the worker
+the same `[plugins.cas]`.
 
-## On the worker
-
-Install the same piloop as on the server, and log in to the harnesses that its agents use. In its `config.toml`:
+On the worker, install the same piloop as on the server, and log in to the harnesses that its agents use. In its
+`config.toml`:
 
 ```toml
 [plugins.cas]
@@ -98,14 +83,12 @@ local_max_gb = 50
 remote = { provider = "http", url = "https://piloop.example.com:7701" }
 ```
 
-Start it with the token:
-
 ```bash
 PILOOP_HTTPS_TOKEN=<token> piloop worker --server https://piloop.example.com:8443 --pool gpu
 ```
 
-The worker's name is the token's name. It calls the server, and the server never calls it. For a certificate that
-your system does not trust, set `SSL_CERT_FILE`. On the server, `piloop worker list` shows it:
+The worker's name is the token's name. It calls the server, and the server never calls it. On the server,
+`piloop worker list` shows it:
 
 ```text
  worker  pool   seen    load     memory    disk      agents  evaluation  no lease
@@ -113,16 +96,14 @@ your system does not trust, set `SSL_CERT_FILE`. On the server, `piloop worker l
  serve   serve  6s ago  21.8/32  103.8 GB  816.4 GB  0       0           slots
 ```
 
-The server refuses a worker with another piloop protocol, also after the server upgrades, an unknown pool, a revoked
-token, or a `[plugins.cas]` that is not the server's. The worker then stops its jobs and exits with the reason.
+The server refuses a worker with another piloop protocol, an unknown pool, a revoked token, or a `[plugins.cas]` that
+is not the server's. The worker then stops its jobs and exits with the reason.
 
 ## Workers that the server starts
 
-A pool with a **provisioner** starts its own workers when jobs wait, and stops them when they idle. The pool counts
-the slots of its `max` workers, so its jobs wait on leases, and each waiting lease that no free slot takes starts a
-worker. One that held no lease for `idle_seconds` is drained: it takes no more jobs, and the server stops it once it
-holds none. One that cannot reach its server for `orphan_exit_seconds` exits by itself once it holds no job, so it never
-outlives a stopped server.
+A pool with a **provisioner** starts its own workers when jobs wait, and stops them when they idle. Each waiting job
+that no free slot takes starts a worker, up to `max`. A worker that held no job for `idle_seconds` is drained and
+stopped. A worker that cannot reach its server for `orphan_exit_seconds` exits by itself.
 
 On Modal, each worker is a sandbox of an image with `piloop` in it:
 
@@ -147,32 +128,13 @@ gpu = "A100"
 secrets = ["piloop-cas"]
 ```
 
-`image_id` names an image that Modal built already, in place of `image`. `memory_limit_mb` is a hard limit on each
-sandbox's memory, `outbound_domains` the only hosts that it reaches (the server's and the CAS's among them), and `cloud`
-the cloud that it runs on.
-
-Each worker gets a token of its own, and dials `url`. Give it the server's `[plugins.cas]` in its image, or as
-`PILOOP_PLUGINS` in the provider's `env`.
-
-`secrets` names the Modal Secrets that each sandbox gets as its environment. They are for the worker itself, such as
-the credentials of a bucket that the worker reads. A job's keys, such as a harness's API key, are piloop secrets, which
-the worker gets when the job starts. For an image in a private registry, name the Modal Secret that pulls it:
-
-```toml
-[plugins.executor.pools.gpu]
-runners = ["process"]
-
-[plugins.executor.pools.gpu.provisioner]
-max = 4
-
-[plugins.executor.pools.gpu.provisioner.compute]
-provider = "modal"
-image = "123456789012.dkr.ecr.us-east-1.amazonaws.com/piloop-worker:0.3"
-registry = { kind = "aws-ecr", secret = "piloop-ecr-pull" }
-```
-
-`aws-ecr` takes `AWS_ROLE_ARN` and `AWS_REGION` (Modal's OIDC) or an IAM user's keys. `basic` takes
-`REGISTRY_USERNAME` and `REGISTRY_PASSWORD`. The pull Secret is not in the sandbox's environment. The server needs Modal's credentials and `piloop[modal]`.
+- Each worker gets a token of its own, and dials `url`. Give it the server's `[plugins.cas]` in its image, or as
+  `PILOOP_PLUGINS` in the provider's `env`.
+- `secrets` names the Modal Secrets that each sandbox gets as its environment, for the worker itself, such as a
+  bucket's credentials. A job's keys are piloop [secrets](/guides/secrets), which the worker gets when the job starts.
+- `registry = { kind = "aws-ecr", secret = "<modal secret>" }` pulls from a private registry. `basic` takes
+  `REGISTRY_USERNAME` and `REGISTRY_PASSWORD`.
+- The server needs Modal's credentials and `piloop[modal]`.
 
 On Daytona, each worker is a sandbox of a snapshot with `piloop` in it:
 
@@ -191,26 +153,24 @@ snapshot = "piloop-worker-0.5"
 ttl_hours = 4
 ```
 
-A snapshot fixes the size of its sandboxes. In place of `snapshot`, name an `image`, which Daytona builds into a
-snapshot at its first sandbox, and size it with `cpu` (4 at most), `memory_gib` and `disk_gib`. Memory is a hard limit.
-The worker's token goes into a file in the sandbox that its command reads and deletes: Daytona's API shows a sandbox's
-`env`, so put no secret there. `secrets` maps a variable to a Daytona Secret, which the sandbox sees as a placeholder that
-Daytona replaces in requests to the Secret's hosts. Daytona deletes a sandbox after `ttl_hours` (24 by default). A
-server behind Daytona's preview URL uses `tls = "proxy"`. The server needs `DAYTONA_API_KEY` and `piloop[daytona]`.
+- In place of `snapshot`, an `image` is built into a snapshot at its first sandbox, sized with `cpu`, `memory_gib`
+  and `disk_gib`.
+- Daytona's API shows a sandbox's `env`, so put no secret there. `secrets` maps a variable to a Daytona Secret.
+- Daytona deletes a sandbox after `ttl_hours`, 24 by default.
+- The server needs `DAYTONA_API_KEY` and `piloop[daytona]`.
 
-To stop every worker of the pool, drain them:
+The [configuration reference](/reference/configuration#plugins) lists each provider's keys. To stop every worker of a
+pool, drain them:
 
 ```bash
 piloop limits set executor.pools.gpu.provisioner.max=0 --reason "the GPU budget is spent"
 ```
 
-`piloop worker list` shows each worker that the server started, until it ends.
-
 ## Behind an authenticating proxy
 
-When a proxy in front of the server already authenticates every caller and stamps who it is in headers, such as an
-Envoy `ext_authz` or an oauth2-proxy, let it be the only check. Name the headers that it stamps as claims, and give
-each caller its access by the values of its claims:
+When a proxy in front of the server authenticates every caller (see
+[Behind an authenticating proxy](/guides/daemon#behind-an-authenticating-proxy)), give the workers a rule of their
+own:
 
 ```toml
 [plugins.network]
@@ -226,15 +186,12 @@ rules = [
 ]
 ```
 
-The first rule that matches wins, and a caller that no rule matches is refused. A worker names itself in
-`x-piloop-worker`; anyone else is named by the first of its `name_claims` that is not empty, here its user, else its
-principal. A caller signs its writes as `human:<name>`, or as `service:<name>` when its rule says `caller = "service"`.
-The proxy must remove any copy of these headers that a caller sends, and only the proxy may reach `listen`:
-whoever reaches it can claim anything. The server refuses piloop's own tokens (`plt_`) on this network: the proxy is
-the one authentication.
+The first rule that matches wins, and no match is refused. A worker names itself in `x-piloop-worker`, and anyone
+else by the first of its `name_claims` that is not empty. The proxy must remove any copy of these headers that a
+caller sends.
 
-Workers share one credential that the proxy accepts and that the `worker` rule matches. Store it as a secret, which
-each provisioned worker gets, with its name:
+Workers share one credential that the proxy accepts and the `worker` rule matches. Store it as a secret, which each
+provisioned worker gets:
 
 ```bash
 printf %s "$WORKER_KEY" | piloop secret set PILOOP_WORKER_CREDENTIAL
@@ -245,22 +202,17 @@ provider's `env`.
 
 ## What an agent on a worker gets
 
-- The environment of the worker, and the [secrets](/guides/secrets) that its job names, which the server sends when
-  the job starts.
-- A clone of the campaign's repo and a copy of the shared [workspace](/concepts/campaigns#files). Its commits
-  and its workspace writes come back when it ends. The worker keeps its clones under its home: a new clone starts
-  from a copy of the whole repo that the server builds once per campaign, then takes only what is newer.
-- Its `piloop` commands, which the worker relays to the server while the agent's lease is live. For
-  `piloop submit`, the worker first sends the commit through the CAS.
+- The worker's environment, and the [secrets](/guides/secrets) that its job names.
+- A clone of the campaign's repo and a copy of the shared workspace. Its commits and workspace writes come back when
+  it ends.
+- Its `piloop` commands, which the worker relays to the server while the agent's job runs.
 
-Until it ends, its log files are in the worker's `$PILOOP_HOME`. Its session goes to the server's CAS a few seconds
-after it writes, and at least every 30 seconds. So `piloop attach` and `piloop status` show what it wrote, and a lost
+Its session goes to the server's CAS at least every 30 seconds, so `piloop attach` shows what it wrote, and a lost
 worker loses at most those 30 seconds.
 
 <Warning>
   An agent on a worker runs as the worker's user, so it holds the worker's token. It can do whatever the worker can
-  do on the server, as an agent of `piloop serve` can open its database. Run a worker as a user that you give that
-  trust.
+  do on the server. Run a worker as a user that you give that trust.
 </Warning>
 
 ## Faults
@@ -269,15 +221,8 @@ worker loses at most those 30 seconds.
 |---|---|
 | A worker dies during a run | The run ends `worker_lost`. It is not an attempt. |
 | A worker dies during an evaluation | The evaluation is queued again. Partial output is never scored. |
-| A late report | It is refused, and kept as a `lease.stale_report` event. Its commits and logs stay in the CAS, by address. |
-| The same report twice | The second gets the first's answer. |
-| A report names blobs that the server's CAS lacks | The job is lost, with the blobs it names. |
-| A worker stops or dies before it sends a report | The report waits in `$PILOOP_HOME/spool/<worker>`, and goes out when the worker starts again. |
-| The server does not answer | The worker tries each call again. Its log says `worker.unreachable` at the first failure, then once a minute. |
-| An agent runs `piloop` after its lease ended | The call is refused. |
-| The machine sleeps | A gap longer than the grace period is the daemon's own absence: nothing expires. |
-| `piloop serve` restarts | Its worker finds its leases again and re-attaches to each agent whose worktree is there. |
-| A started worker does not register within `register_seconds` | It is stopped, and the pool waits 30 s, doubling to 10 minutes, before it starts another. |
-| The platform refuses a start: a quota, no GPU | The pool backs off the same way. Three refusals in a row are an escalation in the inbox. |
-| The platform loses a worker, or it goes silent | It is stopped. Its jobs come back as for any lost worker, and the pool starts another if they still wait. |
-| The platform has a worker that the server has no record of | It is stopped. Two servers on one account never stop each other's: each tags its own. |
+| A worker stops before it sends a report | The report waits in `$PILOOP_HOME/spool/<worker>`, and goes out when the worker starts again. |
+| The server does not answer | The worker tries each call again. Its log says `worker.unreachable`. |
+| `piloop serve` restarts | Its worker finds its leases again and re-attaches to each agent. |
+| A started worker does not register within `register_seconds` | It is stopped, and the pool backs off before it starts another. |
+| The platform refuses a start: a quota, no GPU | The pool backs off. Three refusals in a row are an escalation in the inbox. |
