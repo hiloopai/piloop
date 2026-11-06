@@ -42,14 +42,18 @@ from evals.drive import (
     credentials,
     drive,
     export,
+    merge,
     on_team,
     piloop_config,
     prepare,
     price,
     private_files,
+    run_slots,
     sample,
     sealed_steps,
+    sessions,
     watch,
+    workers,
 )
 from evals.loop import evaluations
 from evals.metrics import (
@@ -235,6 +239,18 @@ def test_the_rotation_arm_runs_pi_claude_and_codex_in_turn_with_no_cap_per_harne
     assert models and '{"providers": {"anthropic": {"baseUrl": "https://gw.example"}}}' in models[0]
     with pytest.raises(ValueError, match='gateway'):
         recipe([Task.load('t5-lpaq')], arm)
+
+
+def test_an_orchestrator_that_its_triggers_start_gets_a_box_and_a_session_of_its_own_but_no_evaluator():
+    settings = Settings(gateway='https://gw.example', gateway_token=SecretStr('t'))
+    task, plain = Task.load('t5-lpaq'), load_arm('pool-2w')
+    assert isinstance(plain, PiloopArm)
+    led = plain.model_copy(
+        update={'overlay': merge(plain.overlay, {'plugins': {'role': {'orchestrator': {'triggers': ['news']}}}})}
+    )
+    assert (workers(task, plain, settings, 6), sessions(task, plain, settings, 6)) == (2, 2)
+    assert (workers(task, led, settings, 6), sessions(task, led, settings, 6)) == (3, 3)
+    assert run_slots(task, led, settings, 6) == 2
 
 
 def test_a_pi_agent_runs_only_an_anthropic_model_which_the_gateway_serves():

@@ -31,9 +31,10 @@ A piloop arm runs as a team (`drive.on_team`):
 
 - Its daemon (`piloop serve --listen`, `piloop cas serve`) runs in a control sandbox on Daytona, which takes no job.
   Its `config.toml` gives it two pools whose provisioners start the rest at once, and drain it when the run is over.
-- The pool `agents`: a Modal sandbox for each worker (the runs it keeps open at once), with 2 CPUs and a hard 8 GiB
+- The pool `agents`: a Modal sandbox for each worker (the runs it keeps open at once, and each agent of an orchestrator
+  that its triggers start), with 2 CPUs and a hard 8 GiB
   (or the task's `memory_limit_mb`), reaching what the task's `network` allows and the control sandbox.
-- The pool `eval`: `EVALS_EVALUATORS_PER_WORKER` evaluators for each worker, one evaluation at a time each, where the
+- The pool `eval`: `EVALS_EVALUATORS_PER_WORKER` evaluators for each run slot, one evaluation at a time each, where the
   task is scored: on Daytona for a task with `scorer = "daytona"`, else on Modal at the scorer's size. So every
   timing that decides a verdict runs where the holdout is scored, with hard limits.
 - The control sandbox keeps the gateway's token and the platforms' keys in a file that its daemon reads, never in its
