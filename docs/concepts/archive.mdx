@@ -4,8 +4,10 @@ sidebarTitle: Archive and CAS
 description: piloop archives the shared workspace when it is done with it, into a content-addressed store, and gets files back on request.
 ---
 
-Agents leave notes, logs and outputs in the campaign's shared workspace, `$PILOOP_HOME/projects/<id>/workspace`. The
-**archive** moves the finished parts of it into the **CAS**, a content-addressed store:
+Agents leave notes, logs and outputs in the campaign's shared workspace, `$PILOOP_HOME/projects/<id>/workspace`. What
+a run can make again, such as samples of the data and build outputs, goes in its checkout's `scratch/` instead: it is
+in no version and is deleted with the checkout. The **archive** moves the finished parts of the workspace into the
+**CAS**, a content-addressed store:
 
 ```bash
 piloop store status

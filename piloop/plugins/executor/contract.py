@@ -76,6 +76,12 @@ RepoId = NewType('RepoId', CampaignId)
 two tenants' forks: a vcs's own identity (git's root commit) is the same for all of them."""
 
 
+SCRATCH = 'scratch'
+"""An agent's own directory in its checkout, for what a run can make again: in no version, never brought back, and
+removed with the checkout. What an agent puts in the workspace instead reaches the control, every later checkout and
+the artifact store."""
+
+
 class Workspace(BaseModel):
     """A campaign's shared workspace, as a job gets it: read-only copies of its files when the job was made.
 

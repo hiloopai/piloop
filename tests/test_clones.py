@@ -13,7 +13,7 @@ from git import GitCommandError, Repo
 from piloop.ids import AgentSessionId, CampaignId, Revision, TargetRef
 from piloop.plugins.campaign_type.kit.runs.ids import RUN
 from piloop.plugins.cas.contract import Cas
-from piloop.plugins.executor.contract import AgentJob, RepoId, Source, Workspace
+from piloop.plugins.executor.contract import SCRATCH, AgentJob, RepoId, Source, Workspace
 from piloop.plugins.executor.kit.clones import WORKSPACE, Clones, Fetch, of_record, own_replica
 from piloop.plugins.executor.kit.jobs import land, remote_site
 from piloop.plugins.vcs.contract import MAX_HAVE, Captured, UnknownRevision, VcsError
@@ -166,7 +166,7 @@ def test_links_and_the_workspace_are_put_read_only(tmp_path: Path, origin: Path,
     assert (cwd / 'data' / 'train.csv').stat().st_mode & 0o222 == 0, 'an input never changes under another job'
     assert (cwd / WORKSPACE / 'NOTES.md').read_text() == 'notes\n'
     assert (cwd / WORKSPACE / 'NOTES.md').stat().st_mode & 0o222 == 0, 'nor does the workspace that it starts from'
-    assert clones.ignored(source) == ['data', WORKSPACE]
+    assert clones.ignored(source) == ['data', WORKSPACE, SCRATCH]
     (cwd / 'a.txt').write_text('changed')
     assert clones.bring_back(source, cwd, LEFTOVERS).work is not None, 'the change, without the links'
     assert Repo(cwd).git.show('--name-only', '--format=', 'HEAD').split() == ['a.txt']
@@ -197,9 +197,25 @@ def test_a_tree_that_tracks_the_workspace_name_keeps_its_own(tmp_path: Path, ori
     source = Source(vcs=Git(), repo=REPO, revision=head, workspace=workspace)
     clones.checkout(source, tmp_path / 'wt')
     assert (tmp_path / 'wt' / WORKSPACE).read_text() == 'a file of the tree'
-    assert clones.ignored(source) == []
+    assert clones.ignored(source) == [SCRATCH]
     (tmp_path / 'wt' / WORKSPACE).write_text('the agent changed it')
     assert clones.changed(source, tmp_path / 'wt') == {}, 'a file of the tree comes back as a commit'
+
+
+def test_an_agents_scratch_stays_in_its_checkout_and_goes_with_it(tmp_path: Path, origin: Path, store: Cas) -> None:
+    """What a run can make again never reaches the shared workspace, a version, or the artifact store (#711)."""
+    workspace = workspace_of(store, tmp_path / 'live', {'NOTES.md': 'notes\n'})
+    clones = Clones(store, {REPO: origin}.__getitem__, of_record, fetch_from(store, origin, []), tmp_path)
+    source = Source(vcs=Git(), repo=REPO, revision=Repo(origin).head.commit.hexsha, workspace=workspace)
+    cwd = tmp_path / 'wt'
+    clones.checkout(source, cwd)
+    (cwd / SCRATCH / 'sample.bin').write_bytes(b'data that a run makes again')
+    (cwd / WORKSPACE / 'idea1').mkdir()
+    (cwd / WORKSPACE / 'idea1' / 'result.md').write_text('what a later run needs')
+    assert list(clones.changed(source, cwd)) == ['idea1/result.md']
+    assert clones.bring_back(source, cwd, LEFTOVERS) == Captured(), 'no version holds it'
+    clones.remove(source, cwd)
+    assert not cwd.exists()
 
 
 @pytest.mark.parametrize('restarted', [False, True], ids=['checked-out', 'after-a-restart'])

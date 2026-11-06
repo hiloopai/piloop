@@ -36,7 +36,9 @@ from daytona import (
     SandboxState,
     SessionExecuteRequest,
 )
+from daytona.common.snapshot import Snapshot
 from daytona_api_client.models.snapshot_state import SnapshotState
+from opentelemetry import trace
 from pydantic import JsonValue
 
 from evals.model import Resources, Settings, Task
@@ -231,7 +233,8 @@ def snapshot(daytona: Daytona, steps: Sequence[Step], size: Resources) -> str:
     """The name of the snapshot of ``steps`` whose sandboxes are of ``size``, once it is ready.
 
     The first caller builds it. One that finds it building, another thread's or another driver's, waits for it: a
-    sandbox from a snapshot that still builds is refused.
+    sandbox from a snapshot that still builds is refused. At the org's snapshot quota, it evicts one of ours (``evict``)
+    and tries once more.
 
     Raises:
         DaytonaError: It could not be created, and no other caller builds it.
@@ -242,20 +245,13 @@ def snapshot(daytona: Daytona, steps: Sequence[Step], size: Resources) -> str:
     try:
         found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
     except DaytonaNotFoundError:
-        sized = Size(cpu=int(size.cpu), memory=size.memory_mb // 1024, disk=10)
         try:
-            daytona.snapshot.create(
-                CreateSnapshotParams(name=name, image=image(steps), resources=sized), timeout=SNAPSHOT_SECONDS
-            )
+            found = build(daytona, name, steps, size)
         except DaytonaError as failed:
-            # Another caller may have started its build first: Daytona then answers a conflict, or a quota that the
-            # pending build already fills. That build is ours to wait for below; the failure stands only without it.
-            try:
-                found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
-            except DaytonaNotFoundError:
-                raise failed from None
-        else:
-            found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
+            # Daytona names the quota only in its message, on a 400.
+            if 'quota' not in str(failed).lower() or evict(daytona) is None:
+                raise
+            found = build(daytona, name, steps, size)
     deadline = time.monotonic() + SNAPSHOT_SECONDS
     while found.state != SnapshotState.ACTIVE:
         if found.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED):
@@ -265,6 +261,64 @@ def snapshot(daytona: Daytona, steps: Sequence[Step], size: Resources) -> str:
         time.sleep(10)
         found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
     return name
+
+
+def build(daytona: Daytona, name: str, steps: Sequence[Step], size: Resources) -> Snapshot:
+    """Start the build of the snapshot ``name``, or find another caller's.
+
+    Raises:
+        DaytonaError: It could not be created, and no other caller builds it.
+    """
+    sized = Size(cpu=int(size.cpu), memory=size.memory_mb // 1024, disk=10)
+    try:
+        daytona.snapshot.create(
+            CreateSnapshotParams(name=name, image=image(steps), resources=sized), timeout=SNAPSHOT_SECONDS
+        )
+    except DaytonaError as failed:
+        # Another caller may have started its build first: Daytona then answers a conflict, or a quota that the
+        # pending build already fills. That build is ours to wait for; the failure stands only without it.
+        try:
+            return bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
+        except DaytonaNotFoundError:
+            raise failed from None
+    return bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
+
+
+SETTLED = (SnapshotState.ACTIVE, SnapshotState.INACTIVE, SnapshotState.ERROR, SnapshotState.BUILD_FAILED)
+"""The states of a snapshot that no caller builds or removes: only these may be evicted."""
+
+
+def evict(daytona: Daytona) -> str | None:
+    """Delete the least recently used ``evals-`` snapshot that no sandbox uses, once it is gone. Its name, or None.
+
+    None: each of ours is in use, builds, or goes. A snapshot is a function of its recipe (``fingerprint``), so the next
+    run that needs an evicted one builds it again, in a few minutes. Deleted when Daytona raises the cap or evicts by
+    itself.
+
+    Raises:
+        TimeoutError: The snapshot is still there after ``SNAPSHOT_SECONDS``.
+    """
+    used = {sandbox.snapshot for sandbox in bounded(None, lambda: [*daytona.list()], 'list')}
+    listed: list[Snapshot] = []
+    page, pages = 1, 1
+    while page <= pages:
+        found = bounded(None, lambda page=page: daytona.snapshot.list(page=page, limit=100), 'snapshot.list')
+        listed, pages, page = [*listed, *found.items], found.total_pages, page + 1
+    idle = [s for s in listed if s.name.startswith('evals-') and s.state in SETTLED and s.name not in used]
+    if not idle:
+        return None
+    victim = min(idle, key=lambda s: s.last_used_at or s.created_at)
+    bounded(None, lambda: daytona.snapshot.delete(victim), 'snapshot.delete')
+    trace.get_current_span().add_event('evals.snapshot_evicted', {'snapshot': victim.name})
+    deadline = time.monotonic() + SNAPSHOT_SECONDS
+    while True:  # one that Daytona still removes may still count against the quota
+        try:
+            bounded(None, lambda: daytona.snapshot.get(victim.name), 'snapshot.get')
+        except DaytonaNotFoundError:
+            return victim.name
+        if time.monotonic() > deadline:
+            raise TimeoutError(f'snapshot {victim.name} is still there {SNAPSHOT_SECONDS} s after its delete')
+        time.sleep(10)
 
 
 def params(

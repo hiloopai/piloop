@@ -37,6 +37,7 @@ A piloop arm runs as a team (`drive.on_team`):
 - The pool `eval`: `EVALS_EVALUATORS_PER_WORKER` evaluators for each run slot, one evaluation at a time each, where the
   task is scored: on Daytona for a task with `scorer = "daytona"`, else on Modal at the scorer's size. So every
   timing that decides a verdict runs where the holdout is scored, with hard limits.
+- A Daytona sandbox starts from a snapshot of its image, one per image and size. When the org is at its snapshot quota, the driver deletes the least recently used `evals-` snapshot that no sandbox uses, and tries once more: a run that needs it again builds it again.
 - The control sandbox keeps the gateway's token and the platforms' keys in a file that its daemon reads, never in its
   environment. It needs `EVALS_DAYTONA_API_KEY` and Modal's token (`modal token new`).
 
@@ -65,7 +66,7 @@ arm's candidates from its implementers (both schemas), with the candidate each c
 `main`'s first-parent line, with their first parent, as the session commits whatever it likes there. Each tree is
 scored once, so a head or a revert costs nothing more. This costs a sandbox per submission and repeat, at
 `score_concurrency` at a time: the 1-worker runs so far handed in 16 to 60 submissions, a 10-worker run over 600,
-which takes hours. `rescore` scores only what `scores.json` lacks: to count the regressions of a run scored before its task's
+which takes hours. Each score goes into `scores.json` as soon as its version is scored. A scoring that fails, such as on a 502 of the platform's API, is tried `EVALS_SCORE_ATTEMPTS` times; a version whose scoring still fails is left out, and the others are kept. `rescore` scores only what `scores.json` lacks: to count the regressions of a run scored before its task's
 scorer had items, remove its `scores.json` first.
 
 ## Metrics

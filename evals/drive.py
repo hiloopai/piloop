@@ -790,16 +790,14 @@ def export(fleet: Fleet, run: Piloop | Plain, out: Path) -> list[str]:
     """Export the run to ``out/export``, box by box, and return what failed: one box that fails stops no other.
 
     Each agent's sandbox but the control one gives its session files, under ``workers/<id>``, while it runs; then the
-    run ends (a team drains), and the control sandbox gives its repo, its run and its own sessions.
+    run ends (a team drains), and the control sandbox gives its repo, its run and its own sessions. ``export.tgz``
+    holds all of it, for the archive.
     """
     control, failed = fleet.control, []
 
     def take(where: str, give: Callable[[], bytes]) -> None:
         try:
-            data = give()
-            if not where:
-                (out / 'export.tgz').write_bytes(data)
-            with tarfile.open(fileobj=BytesIO(data)) as tar:
+            with tarfile.open(fileobj=BytesIO(give())) as tar:
                 tar.extractall(out / 'export' / where, filter='data')
         except Exception as e:  # recorded in run.json: the next box still gives its own
             failed.append(f'{where or "control"}: {type(e).__name__}: {e}'[:500])
@@ -833,6 +831,10 @@ def export(fleet: Fleet, run: Piloop | Plain, out: Path) -> list[str]:
         if box is not control:
             take(f'workers/{name}', lambda box=box: sessions(box))
     take('', own)
+    if (out / 'export').is_dir():
+        with tarfile.open(out / 'export.tgz', 'w:gz') as tar:
+            for given in sorted((out / 'export').iterdir()):
+                tar.add(given, arcname=given.name)
     return failed
 
 

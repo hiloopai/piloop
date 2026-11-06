@@ -30,10 +30,14 @@ def scored(run: Path, settings: Settings) -> None:
     scores = {k: Score.model_validate(v) for k, v in json.loads(known.read_text()).items()} if known.exists() else {}
 
     def add(revisions: list[str]) -> None:
-        """Score the ``revisions`` not scored yet, and keep their scores in ``scores.json``."""
-        if wanted := [rev for rev in dict.fromkeys(revisions) if rev not in scores]:
-            scores.update(score(task, run / 'export' / 'out' / 'repo.bundle', base, wanted, settings))
-            known.write_text(json.dumps({k: v.model_dump() for k, v in scores.items()}, indent=2))
+        """Score the ``revisions`` not scored yet, and keep each score in ``scores.json`` as soon as it is made."""
+        if not (wanted := [rev for rev in dict.fromkeys(revisions) if rev not in scores]):
+            return
+        for rev, found in score(task, run / 'export' / 'out' / 'repo.bundle', base, wanted, settings):
+            scores[rev] = found
+            kept = known.with_suffix('.tmp')
+            kept.write_text(json.dumps({k: v.model_dump() for k, v in scores.items()}, indent=2))
+            kept.replace(known)  # a driver that dies mid-write leaves the last whole file
 
     add([base, *(rev for rev, _ in heads_of(run))])
     if scores[base].items is not None:

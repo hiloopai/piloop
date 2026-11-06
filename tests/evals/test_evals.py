@@ -14,6 +14,7 @@ import time
 import tomllib
 import warnings
 from collections import Counter
+from collections.abc import Iterator
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from io import BytesIO, StringIO
@@ -23,7 +24,7 @@ from typing import cast
 
 import modal
 import pytest
-from daytona import Daytona, DaytonaBadRequestError, DaytonaNotFoundError, Sandbox
+from daytona import Daytona, DaytonaBadGatewayError, DaytonaBadRequestError, DaytonaNotFoundError, Sandbox
 from daytona_api_client.models.snapshot_state import SnapshotState
 from pydantic import JsonValue, SecretStr
 from sqlalchemy import select
@@ -39,6 +40,7 @@ from evals.drive import (
     Plain,
     admitted,
     agent_box,
+    archive,
     credentials,
     drive,
     export,
@@ -1112,6 +1114,29 @@ def test_the_export_takes_each_agents_sessions_before_the_run_drains(tmp_path: P
     assert ' out' not in worker.commands[0], "a worker's logs stay behind"
 
 
+def test_the_archive_keeps_every_agents_sessions_with_the_control_sandboxs_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    uploaded: dict[str, set[str]] = {}
+
+    def upload_file(path: str, bucket: str, key: str) -> None:
+        if key.endswith('.tgz'):
+            with tarfile.open(path) as tar:
+                uploaded[key] = {m.name for m in tar.getmembers() if m.isfile()}
+        else:
+            uploaded[key] = set()
+
+    monkeypatch.setattr('evals.drive.boto3.client', lambda name: SimpleNamespace(upload_file=upload_file))
+    control, worker = FakeBox(METER), FakeBox(METER)
+    team_ = Fleet(control=control, agents=lambda: {'sb-w': worker}, usd_per_hour=0, ids=['a'], close=control.close)
+    run = tmp_path / 't5-lpaq' / 'p-1'
+    export(team_, plain_run(Settings()), run)
+    archive(run, Settings(archive_uri='s3://bucket/runs'))
+    assert uploaded['runs/t5-lpaq/p-1/export.tgz'] == {'out/sessions', 'workers/sb-w/out/sessions'}, (
+        "the agents' sessions too: a lost results directory loses nothing that the archive had"
+    )
+
+
 def test_a_snapshots_name_changes_with_the_files_it_copies(tmp_path: Path):
     (tmp_path / 'f').write_text('a')
     steps = [Run(('true',)), Copy(tmp_path / 'f', '/opt/f')]
@@ -1140,6 +1165,10 @@ class Snapshots:
         self.started = True
         raise DaytonaBadRequestError('Snapshot quota exceeded. Maximum allowed: 30', status_code=400)
 
+    def list(self, page: int | None = None, limit: int | None = None) -> SimpleNamespace:
+        """None of ours to evict."""
+        return SimpleNamespace(items=[], total_pages=1)
+
 
 @pytest.mark.parametrize('other', [True, False])
 def test_a_snapshot_create_that_fails_waits_for_another_callers_build_and_else_raises_its_error(
@@ -1147,13 +1176,83 @@ def test_a_snapshot_create_that_fails_waits_for_another_callers_build_and_else_r
 ):
     snapshots = Snapshots(SnapshotState.PENDING, SnapshotState.BUILDING, SnapshotState.ACTIVE) if other else Snapshots()
     monkeypatch.setattr('evals.daytona.time.sleep', lambda seconds: snapshots.states.pop(0))
-    cloud = cast(Daytona, SimpleNamespace(snapshot=snapshots))
+    cloud = cast(Daytona, SimpleNamespace(snapshot=snapshots, list=lambda: iter([])))
     if other:
         assert daytona.snapshot(cloud, [Run(('true',))], daytona.EVALUATOR).endswith('-1c8g')
         assert snapshots.states == [SnapshotState.ACTIVE], 'it waited for the build to end'
     else:
         with pytest.raises(DaytonaBadRequestError, match='quota exceeded'):
             daytona.snapshot(cloud, [Run(('true',))], daytona.EVALUATOR)
+
+
+def made(name: str, day: int) -> SimpleNamespace:
+    """An active snapshot, made on that day of November and never used."""
+    when = datetime(2026, 11, day, tzinfo=UTC)
+    return SimpleNamespace(name=name, state=SnapshotState.ACTIVE, created_at=when, last_used_at=None, error_reason=None)
+
+
+class Org:
+    """A Daytona org at its snapshot quota: a create succeeds only once a snapshot was deleted since the last create.
+
+    Its snapshots are ``evals-old`` and ``evals-older``, ``evals-used`` (the oldest of ours, which a sandbox uses),
+    ``evals-building`` (old, still building) and ``general`` (the oldest, not ours), one per page.
+    """
+
+    def __init__(self) -> None:
+        self.held = {s.name: s for s in [made('general', 1), made('evals-used', 2), made('evals-building', 2)]}
+        self.held['evals-building'].state = SnapshotState.BUILDING
+        self.held |= {'evals-older': made('evals-older', 3), 'evals-old': made('evals-old', 4)}
+        self.held['evals-older'].last_used_at = datetime(2026, 11, 5, tzinfo=UTC)
+        self.deleted: list[str] = []
+        self.room, self.frees, self.used = False, True, ['evals-used']
+        self.snapshot = self
+
+    def list(self, page: int | None = None, limit: int | None = None) -> SimpleNamespace:
+        items = [*self.held.values()]
+        return SimpleNamespace(items=items[(page or 1) - 1 : page or 1], total_pages=len(items))
+
+    def get(self, name: str) -> SimpleNamespace:
+        if name not in self.held:
+            raise DaytonaNotFoundError(f'{name} not found')
+        return self.held[name]
+
+    def delete(self, snapshot: SimpleNamespace) -> None:
+        self.deleted.append(snapshot.name)
+        snapshot.state = SnapshotState.REMOVING
+
+    def create(self, params: SimpleNamespace, timeout: float) -> None:
+        if not self.room:
+            raise DaytonaBadRequestError('Snapshot quota exceeded. Maximum allowed: 30', status_code=400)
+        self.room = False
+        self.held[params.name] = made(params.name, 6)
+
+    def sandboxes(self) -> Iterator[SimpleNamespace]:
+        return iter([*(SimpleNamespace(snapshot=name) for name in self.used), SimpleNamespace(snapshot=None)])
+
+    def sleep(self, seconds: float) -> None:
+        """A wait: a deleted snapshot goes, and makes room for one more when ``frees``."""
+        for name in [n for n, s in self.held.items() if s.state == SnapshotState.REMOVING]:
+            del self.held[name]
+            self.room = self.frees
+
+
+def test_a_snapshot_at_the_quota_evicts_the_least_recently_used_idle_one_of_ours_and_tries_once_more(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    org = Org()
+    monkeypatch.setattr('evals.daytona.time.sleep', org.sleep)
+    cloud = cast(Daytona, SimpleNamespace(snapshot=org, list=org.sandboxes))
+    name = daytona.snapshot(cloud, [Run(('true',))], daytona.EVALUATOR)
+    assert org.deleted == ['evals-old'], 'not general, not the one in use, not one that builds; last used, else made'
+    assert org.held[name].state == SnapshotState.ACTIVE
+    org.frees = False  # another caller takes the room first
+    with pytest.raises(DaytonaBadRequestError, match='quota exceeded'):
+        daytona.snapshot(cloud, [Run(('false',))], daytona.EVALUATOR)
+    assert org.deleted == ['evals-old', 'evals-older'], 'one eviction, and one more try, per snapshot'
+    org.used.append(name)
+    with pytest.raises(DaytonaBadRequestError, match='quota exceeded'):
+        daytona.snapshot(cloud, [Run(('false',))], daytona.EVALUATOR)
+    assert org.deleted == ['evals-old', 'evals-older'], 'none left that no sandbox uses: the quota error stands'
 
 
 def test_the_driver_refuses_a_run_that_would_take_the_gateways_sessions_over_the_cap(tmp_path: Path):
@@ -1547,7 +1646,7 @@ def test_each_tree_is_scored_once_and_its_score_goes_to_every_revision_of_it(
     monkeypatch.setattr(scoring, 'score_one', fake_one)
     monkeypatch.setattr(scoring, 'sealed_data', lambda name, settings: b'')
     task = Task.load('t2-circles').model_copy(update={'score_repeats': 2})
-    found = score(task, bundle, base, [changed, reverted, empty, changed], Settings())
+    found = dict(score(task, bundle, base, [changed, reverted, empty, changed], Settings()))
     assert sorted(scored) == ['base', 'base', 'changed', 'changed'], 'two trees, two repeats each; not the base'
     assert set(found) == {changed, reverted, empty}
     assert found[reverted] is found[empty] and found[reverted].items == {'base': True}
@@ -1631,9 +1730,10 @@ def test_rescoring_an_old_run_scores_its_submissions_only_when_the_task_reports_
 
     def fake_score(
         task: Task, bundle: Path, base_rev: str, revisions: list[str], settings: Settings
-    ) -> dict[str, Score]:
+    ) -> Iterator[tuple[str, Score]]:
         asked.append(revisions)
-        return {rev: Score.of([scoring_of(items[rev])]) for rev in revisions}
+        for rev in revisions:
+            yield rev, Score.of([scoring_of(items[rev])])
 
     monkeypatch.setattr(pilot, 'score', fake_score)
     pilot.scored(run, Settings())
@@ -1647,3 +1747,62 @@ def test_rescoring_an_old_run_scores_its_submissions_only_when_the_task_reports_
     r = Result.model_validate_json((run / 'result.json').read_text())
     assert r.regressions == Regressions(submissions=2, scored=2, found=[Regression(revision=b, parent=a, lost=['x'])])
     assert r.regressions.share == 0.5
+
+
+def two_trees(tmp_path: Path) -> tuple[Path, str, str, str]:
+    """A bundle of a base and two changes of it, each its own tree."""
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    git(repo, 'init', '-q', '-b', 'main')
+    base = commit(repo, 'f', 'base')
+    one = commit(repo, 'f', 'one')
+    two = commit(repo, 'f', 'two')
+    bundle = tmp_path / 'repo.bundle'
+    git(repo, 'bundle', 'create', str(bundle), '--all')
+    return bundle, base, one, two
+
+
+def test_a_scoring_that_fails_is_tried_again_and_one_that_keeps_failing_fails_only_its_own_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle, base, flaky, broken = two_trees(tmp_path)
+    tried: Counter[str] = Counter()
+    lock = threading.Lock()
+
+    def fake_one(task: Task, rev: str, *_: object) -> Scoring:
+        with lock:
+            tried[rev] += 1
+            n = tried[rev]
+        if rev == broken or (rev == flaky and n == 1):
+            raise DaytonaBadGatewayError('Failed to get snapshot', status_code=502)
+        return scoring_of({'a': True})
+
+    monkeypatch.setattr(scoring, 'score_one', fake_one)
+    monkeypatch.setattr(scoring, 'sealed_data', lambda name, settings: b'')
+    found: dict[str, Score] = {}
+    with pytest.raises(ExceptionGroup, match='1 of 3 versions') as raised:
+        for rev, s in score(Task.load('t2-circles'), bundle, base, [base, flaky, broken], Settings(score_attempts=2)):
+            found[rev] = s
+    assert set(found) == {base, flaky}, 'the others are scored, the one that failed after its retry too'
+    assert tried == {base: 1, flaky: 2, broken: 2}
+    assert [type(e) for e in raised.value.exceptions] == [DaytonaBadGatewayError]
+
+
+def test_each_score_is_kept_as_it_arrives_so_a_failure_loses_none_of_the_others(
+    tmp_path: Path, db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, base, a, _ = pool_run(tmp_path, db, campaign)
+    (run / 'scores.json').unlink()
+
+    def fake_score(
+        task: Task, bundle: Path, base_rev: str, revisions: list[str], settings: Settings
+    ) -> Iterator[tuple[str, Score]]:
+        yield base, Score.of([scoring_of(None)])
+        assert set(json.loads((run / 'scores.json').read_text())) == {base}, 'kept before the next one ends'
+        raise ExceptionGroup('1 of 2 versions could not be scored', [RuntimeError('502')])
+
+    monkeypatch.setattr(pilot, 'score', fake_score)
+    with pytest.raises(ExceptionGroup):
+        pilot.scored(run, Settings())
+    assert set(json.loads((run / 'scores.json').read_text())) == {base}
+    assert not (run / 'result.json').exists(), 'no result while a head is unscored: rescore scores only that one'

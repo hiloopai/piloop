@@ -19,7 +19,7 @@ from covalence import Cid
 
 from piloop.ids import Revision, TargetRef
 from piloop.plugins.cas.contract import Cas
-from piloop.plugins.executor.contract import RepoId, Source
+from piloop.plugins.executor.contract import SCRATCH, RepoId, Source
 from piloop.plugins.vcs.contract import Captured, Repository, Vcs
 from piloop.settings import INPUTS_DIR
 from piloop.store.tree import Copies, Copy, Manifest, Materialised, Seen, changed, materialise
@@ -115,6 +115,8 @@ class Clones:
             done = materialise(self._cas, manifest, cwd / WORKSPACE, into=self._copies)
             self._workspaces[cwd] = done.copies
             links.rebuilt += done.rebuilt
+        if source.workspace is not None and not (cwd / SCRATCH).exists():  # else the tree has its own
+            (cwd / SCRATCH).mkdir()
         return links
 
     def changed(self, source: Source, cwd: Path) -> dict[str, Cid | None]:
@@ -125,8 +127,8 @@ class Clones:
         return changed(self._cas, cwd / WORKSPACE, base, self._workspaces.get(cwd, {}), self._seen)
 
     def ignored(self, source: Source) -> list[str]:
-        """What the checkout has that is not the agent's work: the links and the workspace that its revision lacks."""
-        names = [*source.links, *([WORKSPACE] if source.workspace is not None else [])]
+        """What the checkout has that is not the agent's work: the links, workspace and scratch that its revision lacks."""
+        names = [*source.links, *([WORKSPACE, SCRATCH] if source.workspace is not None else [])]
         with closing(self.repository(source)) as repo:
             return repo.untracked(source.revision, names)
 

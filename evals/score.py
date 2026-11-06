@@ -12,7 +12,8 @@ import statistics
 import subprocess
 import tarfile
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import boto3
@@ -167,24 +168,71 @@ def score_one(
         return found
 
 
-def score(task: Task, bundle: Path, base: str, revisions: list[str], settings: Settings) -> dict[str, Score]:
+def attempted(
+    task: Task,
+    rev: str,
+    base: bytes,
+    tree: bytes,
+    sealed: bytes,
+    settings: Settings,
+    parent: Context,
+    cloud: Daytona | None = None,
+) -> Scoring:
+    """``score_one``, tried ``score_attempts`` times in all.
+
+    A platform's API fails now and then, such as a 502 on ``snapshot.get``. A scorer that crashes reports it in its
+    score, and is never tried again.
+    """
+    for _ in range(settings.score_attempts - 1):
+        try:
+            return score_one(task, rev, base, tree, sealed, settings, parent, cloud)
+        except Exception:  # recorded on the attempt's span; the last attempt's error is raised
+            continue
+    return score_one(task, rev, base, tree, sealed, settings, parent, cloud)
+
+
+def score(task: Task, bundle: Path, base: str, revisions: list[str], settings: Settings) -> Iterator[tuple[str, Score]]:
     """Score ``revisions`` of ``bundle`` against ``base``, ``score_concurrency`` sandboxes at a time.
 
-    Each tree gets ``task.score_repeats`` sandboxes, and its score goes to every revision of it.
+    Each tree gets ``task.score_repeats`` sandboxes, and its score goes to every revision of it, yielded as soon as its
+    last scoring ends. A tree whose scoring still fails after its attempts (``attempted``) fails only its own revisions:
+    the others are yielded, then an ``ExceptionGroup`` names the failures.
     """
     with tracer.start_as_current_span('evals.score', attributes={'task': task.name, 'revisions': len(revisions)}):
         trees, tars = archives(bundle, [base, *revisions])
         sealed = sealed_data(task.name, settings)
         parent = context.get_current()
         cloud = daytona.client(settings) if task.scorer == 'daytona' else None
-        wanted = {trees[rev]: rev for rev in revisions}
-        with ThreadPoolExecutor(settings.score_concurrency) as pool:
-            futures = {
+        wanted: dict[str, list[str]] = {}
+        for rev in dict.fromkeys(revisions):
+            wanted.setdefault(trees[rev], []).append(rev)
+        pool = ThreadPoolExecutor(settings.score_concurrency)
+        failed: dict[str, BaseException] = {}
+        try:
+            scorings = {
                 tree: [
-                    pool.submit(score_one, task, rev, tars[trees[base]], tars[tree], sealed, settings, parent, cloud)
+                    pool.submit(
+                        attempted, task, revs[0], tars[trees[base]], tars[tree], sealed, settings, parent, cloud
+                    )
                     for _ in range(task.score_repeats)
                 ]
-                for tree, rev in wanted.items()
+                for tree, revs in wanted.items()
             }
-            done = {tree: Score.of([f.result() for f in fs]) for tree, fs in futures.items()}
-        return {rev: done[trees[rev]] for rev in revisions}
+            of = {f: tree for tree, fs in scorings.items() for f in fs}
+            left = {tree: len(fs) for tree, fs in scorings.items()}
+            for f in as_completed(of):
+                tree = of[f]
+                left[tree] -= 1
+                if left[tree]:
+                    continue
+                if errors := [e for g in scorings[tree] if (e := g.exception()) is not None]:
+                    failed[tree] = errors[0]
+                    continue
+                done = Score.of([g.result() for g in scorings[tree]])
+                for rev in wanted[tree]:
+                    yield rev, done
+        finally:
+            pool.shutdown(cancel_futures=True)  # a caller that stops early waits only for the scorings that run
+    if failed:
+        lost, of_all = sum(len(wanted[tree]) for tree in failed), sum(len(revs) for revs in wanted.values())
+        raise BaseExceptionGroup(f'{lost} of {of_all} versions could not be scored', list(failed.values()))

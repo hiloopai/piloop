@@ -456,3 +456,6 @@ class Settings(BaseSettings):
     otel_resource_attributes: str = Field(default='', validation_alias='OTEL_RESOURCE_ATTRIBUTES')
     """How long a plain Codex session gets to print its thread id."""
     score_concurrency: int = 8
+    score_attempts: int = Field(default=3, ge=1)
+    """How many times one scoring of a version is tried before the version is left unscored: a platform's API fails
+    now and then. The other versions keep their scores, and ``rescore`` tries it again."""

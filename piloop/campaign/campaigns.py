@@ -42,7 +42,7 @@ from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator
 from piloop.plugins.cas.contract import Cas
-from piloop.plugins.executor.contract import RepoId, Source, Workspace
+from piloop.plugins.executor.contract import SCRATCH, RepoId, Source, Workspace
 from piloop.plugins.stop_rule.contract import STOP_RULES
 from piloop.plugins.vcs.contract import VCS, Repository, UnknownRevision, Vcs, Version
 from piloop.proc import child_env
@@ -67,7 +67,7 @@ move every home's files and buy nothing."""
 REPOS = 'repos'
 """The directory under the piloop home that holds the checkout of each campaign that the daemon cloned, by its id
 (``register_clone``)."""
-IGNORED = ('data', '.venv', WORKSPACE, '__pycache__')
+IGNORED = ('data', '.venv', WORKSPACE, SCRATCH, '__pycache__')
 """What no version of a new campaign holds (``Vcs.init``)."""
 TEMPLATES = Path(__file__).parents[1] / 'plugins' / 'campaign_type' / 'optimization' / 'templates'
 """The examples that ``piloop init --example`` writes: optimization's, the one campaign type that has them."""
