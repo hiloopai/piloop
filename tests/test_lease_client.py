@@ -21,7 +21,7 @@ from sqlalchemy import delete, event
 
 from piloop.actor import Agent, System
 from piloop.api.contract import MAX_POLL_SECONDS, Access
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, LeaseState
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, LeaseState, utcnow
 from piloop.db.session import Database
 from piloop.ids import CampaignId, CommentId, Revision
 from piloop.net import tokens
@@ -254,7 +254,8 @@ def test_a_worker_gets_the_values_of_the_secrets_that_its_agents_job_names_and_i
     with pytest.raises(StaleLease, match='is reported'):
         w1.secrets(lease)
     with db.session() as s:
-        s.get_one(AgentSession, job.agent_session).state = AgentSessionState.EXITED
+        ended = s.get_one(AgentSession, job.agent_session)
+        ended.state, ended.ended_at = AgentSessionState.EXITED, utcnow()
         s.commit()
     assert Tokens(db).verify(again) is None, 'the token ends with its agent session'
 
