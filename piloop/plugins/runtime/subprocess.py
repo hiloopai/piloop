@@ -1,6 +1,5 @@
 """Agents as plain background processes: the built-in runtime."""
 
-import json
 import re
 import subprocess
 import time
@@ -8,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from piloop import deprecated
 from piloop.plugins.runtime.contract import (
     MESSAGES_ENV,
     QUEUE,
@@ -34,9 +32,6 @@ SESSION_ID_SECONDS = 30
 unknown."""
 TURNS = 'turns'
 """The handle's key of an agent that a supervisor runs (``kit.turns``), with the version of its protocol: 1."""
-CURRENT = 'agent_session.current'
-"""Under the log directory of an agent that piloop 0.4 started: the pid and start time of its latest turn, once a
-resumed turn replaced its first process."""
 
 
 class Subprocess(RuntimeConfig):
@@ -212,7 +207,7 @@ class SubprocessRuntime:
     def _leader(self, handle: Handle) -> Leader:
         """The agent's process: its ``Popen`` when this instance started it."""
         proc = self._procs.get(_pid(handle))
-        return proc if proc is not None else Started(*_current(handle))
+        return proc if proc is not None else Started(_pid(handle), float(str(handle.data['start_time'])))
 
     def _exit_code(self, handle: Handle) -> int | None:
         proc = self._procs.get(_pid(handle))
@@ -221,18 +216,6 @@ class SubprocessRuntime:
 
 def _pid(handle: Handle) -> int:
     return int(str(handle.data['pid']))
-
-
-def _current(handle: Handle) -> tuple[int, float]:
-    """The pid and start time of the agent's process: the handle's, or ``CURRENT`` of a resumed agent of piloop 0.4."""
-    path = _log_dir(handle) / CURRENT
-    data = handle.data
-    if path.is_file():
-        deprecated.until(
-            '0.6.0', 'an agent of piloop 0.4 names its resumed turn in CURRENT: delete CURRENT and this branch'
-        )
-        data = json.loads(path.read_text())
-    return int(str(data['pid'])), float(str(data['start_time']))
 
 
 @dataclass(frozen=True)

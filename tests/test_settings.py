@@ -5,18 +5,16 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from pydantic_settings import EnvSettingsSource
 
-from piloop import deprecated, settings as settings_module
+from piloop import settings as settings_module
 from piloop.actor import Agent, System
 from piloop.config import CampaignAgents
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.harness.contract import cleared_env, each_provider
-from piloop.plugins.host import Scope, campaign_defaults
+from piloop.plugins.host import campaign_defaults
 from piloop.settings import (
     UNDER_TEST_ENV,
     AgentSettings,
-    MovedEnv,
     Settings,
     StorageSettings,
     TracingSettings,
@@ -146,27 +144,6 @@ def test_the_daemon_s_timings_are_read_from_config_toml_the_environment_wins_and
     assert CampaignAgents().over(home.agents) == home.agents, "unset: the home's"
 
 
-def test_the_implementer_s_timings_of_config_toml_are_its_role_s_with_a_warning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``[daemon] startup_relaunches``, ``[agents] finding_grace`` (its ``end_grace``) and ``wrap_up_lead`` are the implementer's."""
-    (tmp_path / 'config.toml').write_text(
-        '[daemon]\nstartup_relaunches = 4\n[agents]\nfinding_grace = 5\nwrap_up_lead = 120\n'
-    )
-    monkeypatch.setenv('PILOOP_AGENTS__FINDING_GRACE', 'PT30S')
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        home = Settings(home=tmp_path)
-    assert [str(w.message).split('; removed')[0] for w in warned] == [
-        '`daemon.startup_relaunches` is deprecated; write `plugins.role.implementer.startup_relaunches`',
-        '`agents.finding_grace` is deprecated; write `plugins.role.implementer.end_grace`',
-        '`agents.wrap_up_lead` is deprecated; write `plugins.role.implementer.wrap_up_lead`',
-        'PILOOP_AGENTS__FINDING_GRACE is deprecated; set PILOOP_PLUGINS__ROLE__IMPLEMENTER__END_GRACE',
-    ]
-    assert campaign_defaults(home.plugins) == {
-        'role': {'implementer': {'startup_relaunches': 4, 'end_grace': 'PT30S', 'wrap_up_lead': 120}}
-    }
-
-
 def test_the_relay_s_wait_and_deadline_of_config_toml_are_dropped_with_a_warning(tmp_path: Path) -> None:
     """``piloop submit`` waits for nothing, so the relay calls it once: its two keys have nothing to set."""
     (tmp_path / 'config.toml').write_text('[agents]\nrelay_wait = "PT30S"\nrelay_deadline = "PT1H"\n')
@@ -187,11 +164,3 @@ def test_a_role_s_finding_grace_of_config_toml_is_its_end_grace_with_a_warning(t
         '`plugins.role.<name>.finding_grace` is deprecated; write `plugins.role.<name>.end_grace`'
     ]
     assert campaign_defaults(home.plugins) == {'role': {'implementer': {'end_grace': 5}}}
-
-
-def test_a_moved_variable_source_reads_a_field_as_the_environment_does(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv('PILOOP_MIGRATION_BACKUPS', '5')
-    env = EnvSettingsSource(Settings, env_prefix='PILOOP_')
-    moved = MovedEnv(env, deprecated.bridges(Scope.HOME), 'PILOOP_')
-    field = Settings.model_fields['migration_backups']
-    assert moved.get_field_value(field, 'migration_backups') == env.get_field_value(field, 'migration_backups')

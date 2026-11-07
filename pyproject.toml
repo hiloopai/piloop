@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "piloop"
-version = "0.5.0"
+version = "0.6.0"
 description = "Autoresearch for any repo: coding agents try ideas, piloop scores every commit and keeps what wins"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -249,8 +249,6 @@ stdio = "piloop.plugins.mcp_server.stdio:StdioServer"
 
 # The bridges of old keys (piloop.deprecated.BRIDGES): each declares the bridges that it runs after or before
 [project.entry-points."piloop.bridges"]
-implementer_timings = "piloop.deprecated:implementer_timings"
-campaign_finding_grace = "piloop.deprecated:campaign_finding_grace"
 scout_role = "piloop.plugins.role.bridges:scout_role"
 run_role_ideas = "piloop.plugins.role.bridges:run_role_ideas"
 leaking_funnel = "piloop.plugins.role.bridges:leaking_funnel"

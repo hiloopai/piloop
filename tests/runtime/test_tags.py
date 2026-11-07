@@ -9,7 +9,7 @@ import pytest
 
 from piloop.cli import main as cli_main
 from piloop.plugins.runtime.contract import TAG_ENV
-from piloop.plugins.runtime.kit.tags import kill_tagged, tagged
+from piloop.plugins.runtime.kit.tags import environ, kill_tagged, tagged
 from piloop.proc import child_env
 
 
@@ -74,3 +74,27 @@ def test_kill_tagged_ends_a_tree_that_forks_while_it_is_killed() -> None:
                 psutil.Process(pid).kill()
         forker.kill()
         forker.wait()
+
+
+def test_an_environment_that_cannot_be_read_is_none_and_another_error_is_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """psutil on macOS raises SystemError, caused by a PermissionError, for a process that exits while it is read."""
+    proc = psutil.Process()
+
+    def exiting() -> dict[str, str]:
+        raise SystemError('proc_environ returned a result with an exception set') from PermissionError(13, 'denied')
+
+    def foreign() -> dict[str, str]:
+        raise psutil.AccessDenied(proc.pid)
+
+    def broken() -> dict[str, str]:
+        raise SystemError('a bug of its own')
+
+    monkeypatch.setattr(proc, 'environ', exiting)
+    assert environ(proc) is None
+    monkeypatch.setattr(proc, 'environ', foreign)
+    assert environ(proc) is None
+    monkeypatch.setattr(proc, 'environ', broken)
+    with pytest.raises(SystemError, match='a bug of its own'):
+        environ(proc)

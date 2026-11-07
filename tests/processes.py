@@ -18,7 +18,7 @@ from collections.abc import Iterator
 import psutil
 import pytest
 
-from piloop.plugins.runtime.kit.tags import kill_tagged
+from piloop.plugins.runtime.kit.tags import environ, kill_tagged
 
 TAG_ENV = 'PILOOP_TEST_TAG'
 """The tag of a process that a test started: this pytest process's ``SESSION``, then the test's node id."""
@@ -31,7 +31,7 @@ def end(prefix: str) -> list[str]:
     found: dict[str, list[str]] = {}
     for proc in psutil.process_iter():
         try:
-            tag = proc.environ().get(TAG_ENV, '')
+            tag = (environ(proc) or {}).get(TAG_ENV, '')
             if tag.startswith(prefix) and proc.status() != psutil.STATUS_ZOMBIE:
                 found.setdefault(tag, []).append(f'pid {proc.pid}, {" ".join(proc.cmdline())}')
         except psutil.Error:  # another user's process, or one that ended while it was read

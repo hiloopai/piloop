@@ -5,12 +5,11 @@ marker and fails once ``pyproject.toml`` reaches its release, so the code goes b
 
 A deprecated key still loads, with a warning, until that release. To deprecate a key, write a bridge: a function that
 takes the file path, the parsed TOML and the release that removes the key, changes the old key to the new form in place
-and calls ``warn`` with that release. A key that only moved is a ``Move``: ``move_keys`` applies one to the file, its
-``env`` moves the environment variables (``moved_env``), and the revision that rewrites the stored copies applies the
-same moves. Declare it with ``bridge``, which marks it as ``until`` does, next to its capability in a ``bridges`` module
-that imports no provider, and name it in the ``piloop.bridges`` entry points (``BRIDGES``). A bridge that reads what
-another wrote says so with ``after`` or ``before``. A bridge of several capabilities, such as ``implementer_timings``,
-is here.
+and calls ``warn`` with that release. A key that only moved is a ``Move``: ``move_keys`` applies one to the file, and
+the revision that rewrites the stored copies applies the same moves. Declare it with ``bridge``, which marks it as
+``until`` does, next to its capability in a ``bridges`` module that imports no provider, and name it in the
+``piloop.bridges`` entry points (``BRIDGES``). A bridge that reads what another wrote says so with ``after`` or
+``before``.
 Its docstring is its entry under "Deprecated keys" in the generated configuration reference
 (``docs/reference/configuration.mdx``). The release notes list it under ``Deprecated``.
 
@@ -80,8 +79,6 @@ class Bridge:
     """The bridges whose result it reads, by name: it runs after them. Django's ``dependencies`` of a migration."""
     before: tuple[str, ...] = ()
     """The bridges that read its result, by name: it runs before them. Django's ``run_before``."""
-    env: tuple[Move, ...] = ()
-    """The keys that it moves out of a model of the settings, whose variables move too (``moved_env``)."""
 
     def __call__(self, toml: Path, raw: dict[str, object]) -> None:
         self.rewrite(toml, raw, self.removed_in)
@@ -101,7 +98,6 @@ def bridge(
     scope: Scope = Scope.CAMPAIGN,
     after: tuple[str, ...] = (),
     before: tuple[str, ...] = (),
-    env: tuple[Move, ...] = (),
 ) -> Callable[[Rewrite], Bridge]:
     """Declare a bridge of the file of ``scope`` that piloop keeps until release ``version``, as ``until`` marks code.
 
@@ -111,7 +107,7 @@ def bridge(
     removed_in = Version.parse(version)
 
     def declared(rewrite: Rewrite) -> Bridge:
-        return Bridge(rewrite, removed_in, scope, after, before, env)
+        return Bridge(rewrite, removed_in, scope, after, before)
 
     return declared
 
@@ -295,72 +291,6 @@ def table_at(raw: dict[str, object], *path: str) -> dict[str, object] | None:
     for key in path:
         table = table.get(key) if isinstance(table, dict) else None
     return table if isinstance(table, dict) else None
-
-
-IMPLEMENTER_TIMINGS = (
-    Move('daemon.startup_relaunches', 'plugins.role.implementer.startup_relaunches'),
-    Move('agents.finding_grace', 'plugins.role.implementer.end_grace'),
-    Move('agents.wrap_up_lead', 'plugins.role.implementer.wrap_up_lead'),
-)
-"""The implementer's timings of ``config.toml``, as the defaults of its role in every campaign of the home."""
-
-
-@bridge(
-    '0.6.0',
-    "[daemon] startup_relaunches and [agents] finding_grace and wrap_up_lead are the implementer role's: delete"
-    ' implementer_timings and IMPLEMENTER_TIMINGS',
-    Scope.HOME,
-    env=IMPLEMENTER_TIMINGS,
-)
-def implementer_timings(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """In ``config.toml``, ``[daemon] startup_relaunches``, ``[agents] finding_grace`` and ``wrap_up_lead`` are the role's.
-
-    They are keys of ``[plugins.role.implementer]``, the defaults of every campaign's implementer, and their variables
-    move the same way (``moved_env``). A role of your own that does runs gets the role's defaults, not these.
-    """
-    for move in IMPLEMENTER_TIMINGS:
-        move_keys(toml, raw, move, removed_in)
-
-
-CAMPAIGN_FINDING_GRACE = (Move('agents.finding_grace', 'plugins.role.implementer.end_grace'),)
-"""A campaign's ``[agents] finding_grace``, as its implementer's."""
-
-
-@bridge(
-    '0.6.0',
-    "[agents] finding_grace is the implementer role's: delete campaign_finding_grace and CAMPAIGN_FINDING_GRACE",
-    env=CAMPAIGN_FINDING_GRACE,
-)
-def campaign_finding_grace(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
-    """A ``piloop.toml``'s ``[agents] finding_grace`` is ``[plugins.role.implementer] end_grace``.
-
-    ``PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE`` moves the same way (``moved_env``).
-    """
-    for move in CAMPAIGN_FINDING_GRACE:
-        move_keys(toml, raw, move, removed_in)
-
-
-@until(
-    '0.6.0', "the implementer's timings are its role's, the last keys that move out of the settings: delete moved_env"
-)
-def moved_env(found: dict[str, object], moves: Sequence[Move], env: str, removed_in: Version) -> dict[str, object]:
-    """``found``, the settings that the variables of ``env`` give, with the keys of ``moves`` at their new keys.
-
-    ``PILOOP_AGENTS__FINDING_GRACE`` is ``PILOOP_PLUGINS__ROLE__IMPLEMENTER__FINDING_GRACE``, with a warning. The
-    environment wins over the file for the new key, as it did for the old one. A move inside a model of the settings
-    needs this, as the settings refuse the old key; ``moved`` moves the variables of the others.
-    """
-    for move in moves:
-        for old in move.apply(found):
-            new = move.rebased(old.split('.'))
-            assert new is not None  # apply moved it: old matches
-            warnings.warn(
-                f'{env}{"__".join(old.split(".")).upper()} is deprecated; set {env}{"__".join(new).upper()};'
-                f' removed in piloop {removed_in}',
-                PiloopDeprecationWarning,
-                stacklevel=2,
-            )
-    return found
 
 
 def show_in_cli() -> None:

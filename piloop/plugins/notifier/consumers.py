@@ -16,7 +16,6 @@ from pydantic import ValidationError
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
-from piloop import deprecated
 from piloop.actor import ACTORS, Person, System, by_a_person
 from piloop.campaign import escalations
 from piloop.campaign.campaigns import CampaignAdded
@@ -118,24 +117,9 @@ def routes(s: Session, db: Database, provider: SecretsProvider, home: Mapping[st
         except ValidationError:
             continue
         secrets = CampaignSecrets(db, provider, campaign.id, campaign.name)
-        used = _used(plugins, campaign.name) if _configured(s, campaign) else _stored_before(home)
+        used = _used(plugins, campaign.name)
         found += [Route(campaign.id, name, notifier, secrets) for name, notifier in used.items()]
     return found
-
-
-def _configured(s: Session, campaign: Campaign) -> bool:
-    """Whether the campaign's stored config has ``[plugins.notifier]``: one that ``piloop init`` stored since it may."""
-    stored = select(func.json_type(Campaign.config, '$.plugins.notifier')).where(Campaign.id == campaign.id)
-    return s.scalar(stored) is not None
-
-
-def _stored_before(home: Mapping[str, Notifier]) -> Mapping[str, Notifier]:
-    deprecated.until(
-        '0.6.0',
-        'a campaign that 0.4 stored, before notifiers were per campaign, gets the notifiers of config.toml until its'
-        ' next piloop init: delete _configured and this bridge',
-    )
-    return home
 
 
 def contribution(host: DaemonHost) -> Contribution:

@@ -35,13 +35,11 @@ from pydantic import (
     GetJsonSchemaHandler,
     InstanceOf,
     TypeAdapter,
-    model_validator,
 )
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema, core_schema
 from sqlalchemy.orm import Session
 
-from piloop import deprecated
 from piloop.actor import Agent
 from piloop.api.contract import Revealed
 from piloop.db.models import AgentSession, EventModel
@@ -208,15 +206,6 @@ class AgentJob(Job):
     resume: Resume | None = None
     """Continue this session instead of starting a new one. When the worker cannot write its file back, it starts the
     agent with ``spec`` and says why (``AgentFinished.unrestored``)."""
-
-    @model_validator(mode='before')
-    @classmethod
-    def _capture(cls, data: object) -> object:
-        """A job that a daemon of 0.4 queued captures for a run by its id: its agent may still run at the upgrade."""
-        if not isinstance(data, dict) or not isinstance(run := data.get('capture'), int):
-            return data
-        deprecated.until('0.6.0', 'a job of 0.4 captures for a run id: delete AgentJob._capture')
-        return {**data, 'capture': f'run#{run}'}
 
     @property
     def needs_session_id(self) -> bool:

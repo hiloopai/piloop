@@ -760,22 +760,6 @@ def test_config_toml_holds_defaults_of_each_campaign_s_plugins_which_piloop_toml
     assert isinstance(executor, Workers) and executor.pools['serve'].usd_per_hour == 0.5
 
 
-def test_a_campaign_s_finding_grace_is_its_implementer_s_with_a_warning(
-    campaign_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    toml = campaign_path / 'piloop.toml'
-    toml.write_text(toml.read_text() + '\n[agents]\nfinding_grace = 5\nwrap_up_grace = 7\n')
-    with pytest.warns(PiloopDeprecationWarning, match=r'`agents.finding_grace` is deprecated; write `plugins.role'):
-        cfg = load_campaign_config(campaign_path)
-    assert cfg.roles.doing_runs()[IMPLEMENTER].end_grace == timedelta(seconds=5)
-    assert cfg.agents.wrap_up_grace == timedelta(seconds=7), 'wrap_up_grace stays the [agents] of every role'
-    monkeypatch.setenv('PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE', 'PT9S')
-    with pytest.warns(PiloopDeprecationWarning) as warned:
-        cfg = load_campaign_config(campaign_path)
-    assert any(str(w.message).startswith('PILOOP_CAMPAIGN_AGENTS__FINDING_GRACE is deprecated; set') for w in warned)
-    assert cfg.roles.doing_runs()[IMPLEMENTER].end_grace == timedelta(seconds=9), 'the variable wins'
-
-
 def test_a_role_s_finding_grace_is_its_end_grace_with_a_warning(campaign_path: Path) -> None:
     """A finding ends no run now: the grace after a worker ends its run is ``end_grace``."""
     toml = campaign_path / 'piloop.toml'

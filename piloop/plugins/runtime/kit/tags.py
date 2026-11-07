@@ -58,12 +58,28 @@ def _kill(find: Callable[[], list[psutil.Process]]) -> None:
         time.sleep(KILL_POLL_SECONDS)
 
 
+def environ(proc: psutil.Process) -> dict[str, str] | None:
+    """The environment of ``proc``. None when it cannot be read: another user's process, or one that ended meanwhile.
+
+    On macOS, psutil raises SystemError, caused by a PermissionError, when ``sysctl(KERN_PROCARGS2)`` fails for a
+    process that is exiting.
+    """
+    try:
+        return proc.environ()
+    except psutil.Error:
+        return None
+    except SystemError as e:
+        if isinstance(e.__cause__, PermissionError):
+            return None
+        raise
+
+
 def _tagged(marker: str) -> list[psutil.Process]:
     name, _, value = marker.partition('=')
     found: list[psutil.Process] = []
     for proc in psutil.process_iter():
         try:
-            if proc.status() != psutil.STATUS_ZOMBIE and proc.environ().get(name) == value:
+            if proc.status() != psutil.STATUS_ZOMBIE and (environ(proc) or {}).get(name) == value:
                 found.append(proc)
         except psutil.Error:
             continue

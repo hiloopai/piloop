@@ -5,6 +5,124 @@ All notable changes to piloop are in this file. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, a minor release may contain breaking changes.
 A deprecated configuration key shows a warning for at least one minor release before it is removed.
 
+## [0.6.0](https://github.com/hiloopai/piloop/compare/v0.5.0...v0.6.0) - 2026-11-07
+
+This release has breaking changes, marked **Breaking** below. Read
+[Upgrading](https://piloop.autoresearch.inc/guides/upgrading) before you upgrade.
+
+The upgrade migrates the database from 0.5.0 or newer only. A 0.4 database upgrades through 0.5 first.
+
+### Added
+
+- The pool. piloop scores every candidate into the campaign's pool, and the best is the confirmed candidate with the
+  best mean that the best rule allows (`[plugins.best_rule]`, `baseline` by default). A run starts from the best, or
+  from any candidate with `--base`.
+- Implementers submit. `piloop submit` scores a version while the run works and returns at once. Where it stands
+  reaches the implementer as a message. A run may submit any number of versions; `[evaluator] submissions` sets a cap.
+- `[evaluator] noise_runs`, 3 by default, evaluates the baseline and each candidate whose first score beats the best 3
+  times. `[evaluator] sealed` scores each confirmed candidate on data outside the repo, and the best must beat the
+  baseline there.
+- The evaluate command reports a `status`: `ok` with a `score`, `crash` with `feedback`, or `infra_error`, which
+  records no score and runs again later. An evaluation that fails for the machine stops after `[evaluation]
+  stop_after_tries` tries in a row, 3 by default, pauses the campaign's measurements and escalates.
+  `wake_after_tries` tells the orchestrator of the retries before that.
+- The board. An idea is `open`, `claimed`, `done` or `dropped`. Each free slot gets a fresh run, and its implementer
+  claims an open idea (`piloop idea claim`) or proposes its own (`piloop idea propose`).
+- `continuity = "resume"` on a role that does runs: each implementer continues the session of the role's last one.
+- A notifier sends only the items as urgent as its `max_priority`: 0 and 1 by default.
+- A `daytona` provisioner starts and stops worker sandboxes.
+- A `kubernetes` provisioner runs each worker as a Kubernetes Job, queued by Kueue when `queue` is set and dispatched
+  by MultiKueue when `managed_by` is set.
+- `serve.log` shows when the Slack socket opens and each time it reconnects.
+- The setup skill asks for the hours, a USD cap and the number of implementers. The piloop-review skill answers six
+  fixed questions, each with the command behind its number.
+
+### Changed
+
+- **Breaking:** Two implementers by default, an hour each: `[plugins.role.implementer] max_concurrent` defaults to 2,
+  not 4, and `timeout` to 3600 seconds, not 1800.
+- **Breaking:** Claude Code and Codex are the default harnesses: `[plugins.harness] use` defaults to
+  `["claude", "codex"]`, not `["pi"]`. pi is opt-in: set `use = ["pi"]` to keep it.
+- **Breaking:** A new campaign scores what its implementers submit (`scoring = "submit"`, `noise_runs = 3`). A
+  campaign that 0.5 made keeps 0.5's values until `piloop campaign sync`.
+- **Breaking:** A candidate gets no verdict. There is no head, no bar, no trunk and no rebase. The facts, the API
+  fields and the events of verdicts and heads are renamed or retired: `head` is `best`, `keeps` is `new_bests`.
+- **Breaking:** The upgrade renames the status of each idea: `seed`, `proposed` and `ready` are `open`, `scheduled` is
+  `claimed`, `parked` and `rejected` are `dropped`. `piloop idea seed`, `develop` and `base`, `supersedes` links and
+  families are removed.
+- **Breaking:** An implementer's clean exit ends its run: `finished` when it submitted, `gave_up` otherwise. A worker
+  reports in a `note`, and only a `message` reaches a running agent. An escalation holds no run.
+- **Breaking:** The orchestrator wakes only for a decision (`news`) and for a failed run (`run_failed`). With the
+  orchestrator off, an agent's escalation reaches your notifiers at once. Only a stop rule or a person stops a
+  campaign.
+- **Breaking:** A plugin's role is a subclass of `ImplementerRole` or of `StartsItsAgents`. `SweepRole`, `Sweep`,
+  `Files`, `VerdictRule` and the other verdict types are removed from `piloop.capabilities`.
+- **Breaking:** An agent whose job did not start, or that ended within `startup_seconds` and left nothing, ends
+  `never_worked`, not `exited` or `killed`, and its run frees its slot instead of waiting. The upgrade rebuilds
+  `agent_sessions`; rows that ended before it keep their state.
+- An implementer puts what a run can make again in `scratch/` in its checkout. It is in no version, and piloop deletes
+  it when the run ends.
+- `piloop eval cancel` records no measurement.
+- The implementer's brief is shorter: 527 words, not 935.
+- The CLI reference is generated from each command's help.
+
+### Deprecated
+
+These still load, with a warning, until 0.7.0:
+
+- The keys of the removed roles, triggers and sections below. They do nothing.
+- `[evaluator] scoring = "run_end"`, and a result line without `status`, which reads as `ok`.
+- A role's `finding_grace`: write `end_grace`.
+- `[plugins.verdict_rule]`, `[[metrics]] repeats`, a role's `follow_head` and `[tracks.<name>] share`. The section
+  `judging` is `scoring`.
+- `piloop submit --wait`, and `[agents] relay_wait` and `relay_deadline` of `config.toml`.
+- The orchestrator's other triggers, `[plugins.trigger.news] routine_every`, and its `files`, `plan_words` and
+  `max_ideas`.
+- `Surface.SWEEP`: a plugin writes `Surface.ORCHESTRATOR`.
+
+### Removed
+
+- **Breaking:** The scout, research and watchdog roles, and sweeps of your own: the orchestrator is the one role that
+  does no runs. Their sessions and tables stay readable.
+- **Breaking:** Every trigger but the orchestrator's `news` and `run_failed`, and the `[plugins.trigger.<name>]`
+  tables.
+- **Breaking:** Seeds, ideas that implementers file for other runs, and the rules that gave ideas to runs (`takes`,
+  `explore_every`, `recovery_requeues`, `idle_alert`).
+- **Breaking:** The closing review at the stop, the `## Yield` and `idle_queue` sections, and the route
+  `GET /v1/submissions/{candidate}`.
+- **Breaking:** Every form that 0.5 bridged with a warning until 0.6.0: `[daemon] startup_relaunches` and
+  `[agents] finding_grace` and `wrap_up_lead` of `config.toml` and their variables, `[agents] finding_grace` of
+  `piloop.toml` and its variable, a job that piloop 0.4 queued, and the notifiers of `config.toml` for a campaign that
+  0.4 stored.
+
+### Fixed
+
+- An evaluation that waits under a retired evaluator moves to the current one, and `piloop eval queue` names each
+  evaluation's evaluator.
+- A large workspace merge, a racing prune and a late report at a stop no longer lose runs or work.
+- A database checkout waits out a disk stall instead of failing the runs, the evaluations and the daemon. No request or
+  thread holds two database connections.
+- No run starts within its wrap-up lead of the campaign's stop, and a run that the stop cuts short is no attempt.
+- A message to a running agent whose harness reads messages only between turns is refused, never queued. Every piloop
+  call of an agent first prints the messages that wait for it, so a Codex worker hears its scores.
+- A worker elsewhere takes the candidates submitted since its agent's checkout was made, and a worker heard again
+  after a silence wakes the evaluations that wait for its slots. A worker that a drain deleted is dismissed, not
+  answered 500.
+- Staging an agent's workspace files closes each temporary file's descriptor.
+- `piloop idea claim` prints the idea's hypothesis and plan.
+- A relayed call or Codex's `mcp list` that times out ends every process it started, not only its direct child.
+- A worker elsewhere whose report fails keeps its other jobs, and a slot frees as soon as nothing holds its lease. A
+  report that the server refuses `[plugins.executor] report_tries` times, 30 by default, ends its job as a crash.
+- A run closes once, and its first end stands: a run that a stop closed never starts. `run_failed` also wakes the
+  orchestrator for a run whose worker was lost or that went stale.
+- A stopped evaluation's group dies with its command, so a process that ignored or missed the SIGTERM does not run
+  on.
+- On macOS, a process that exits while piloop reads the process table no longer stops piloop ending an agent.
+- A second `piloop worker` on a home is refused, instead of taking the first one's agents' calls. A daemon never
+  migrates the database under another one, and `piloop restart` and `piloop upgrade` keep the daemon's lock.
+- A lease that ended never moves again, and every move of a lease is an event. The upgrade adds CHECKs on
+  `leases`, so a `piloop sql` write that leaves a lease without its worker or its times is refused.
+
 ## [0.5.0](https://github.com/hiloopai/piloop/compare/v0.4.0...v0.5.0) - 2026-10-29
 
 This release has breaking changes, marked **Breaking** below. Read

@@ -21,15 +21,11 @@ import pytest
 
 from piloop import deprecated
 from piloop.deprecated import PiloopDeprecationWarning
-from piloop.ids import AgentSessionId, CampaignId, Revision, TargetRef
-from piloop.plugins.campaign_type.kit.runs.ids import RUN
-from piloop.plugins.executor.contract import AgentJob, RepoId, Source
 from piloop.plugins.host import PluginError, Scope
-from piloop.plugins.vcs.git import Git
+from piloop.plugins.role import bridges as role_bridges
 from piloop.version import Version
 from tests.conftest import HARNESS_APPEND, write_toml
 from tests.daemon.test_roles import installed
-from tests.test_lease import BRIEF, START
 
 
 @deprecated.bridge('9.0.0', 'size is width: delete rename_size')
@@ -530,7 +526,7 @@ def test_until_leaves_what_it_marks_as_it_is() -> None:
     assert deprecated.until('0.3.0', 'r')(f) is f
 
 
-@deprecated.bridge('9.0.0', 'shade is tint: delete shade', after=('campaign_finding_grace',))
+@deprecated.bridge('9.0.0', 'shade is tint: delete shade', after=('end_grace',))
 def shade(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """A package's bridge of ``piloop.toml``: ``[plugins.role.<name>] shade`` is ``tint``."""
     for role in (deprecated.table_at(raw, 'plugins', 'role') or {}).values():
@@ -556,10 +552,10 @@ def second(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
 def test_a_package_s_bridge_runs_on_its_file_after_the_bridges_it_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """It reads ``[plugins.role]``, which ``campaign_finding_grace`` writes to; a cycle or a missing name is refused."""
+    """It reads ``[plugins.role]``, which ``end_grace`` writes to; a cycle or a missing name is refused."""
     installed(monkeypatch, [EntryPoint('shade', f'{__name__}:shade', deprecated.BRIDGES.group)])
     order = deprecated.bridges(Scope.CAMPAIGN)
-    assert order.index(shade) > order.index(deprecated.campaign_finding_grace)
+    assert order.index(shade) > order.index(role_bridges.end_grace)
     assert shade not in deprecated.bridges(Scope.HOME), 'config.toml has no roles'
     raw: dict[str, object] = {'plugins': {'role': {'orchestrator': {'shade': 2}}}}
     toml = tmp_path / 'piloop.toml'
@@ -593,20 +589,3 @@ def test_the_bridges_load_without_any_provider() -> None:
 
 def _package(module: str) -> bool:
     return (ROOT / module.replace('.', '/') / '__init__.py').is_file()
-
-
-def test_a_job_that_a_0_4_daemon_queued_captures_for_its_run_by_the_run_s_id() -> None:
-    """An agent of 0.4 that is live at the upgrade keeps its job: its capture is the run's id, not a ref."""
-    job = AgentJob(
-        agent_session=AgentSessionId(4),
-        runtime='subprocess',
-        artifact=Source(vcs=Git(), repo=RepoId(CampaignId(1)), revision=Revision('c1')),
-        place='runs/4',
-        timeout=60,
-        brief_cid=BRIEF,
-        spec=START,
-        capture=TargetRef(RUN, 4),
-    )
-    of_0_4 = job.model_dump(mode='json') | {'capture': 4}
-    assert AgentJob.model_validate(of_0_4) == job
-    assert AgentJob.model_validate(job.model_dump(mode='json')) == job, 'a job of this piloop is read as it is'

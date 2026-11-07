@@ -96,9 +96,7 @@ END_GRACE = deprecated.Move('plugins.role.*.finding_grace', 'plugins.role.*.end_
 """``finding_grace`` of a role that does runs, as its ``end_grace``: a finding ends no run now."""
 
 
-@deprecated.bridge(
-    '0.7.0', 'finding_grace is end_grace: delete end_grace and END_GRACE', after=('campaign_finding_grace',)
-)
+@deprecated.bridge('0.7.0', 'finding_grace is end_grace: delete end_grace and END_GRACE')
 def end_grace(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """A role's ``finding_grace`` is its ``end_grace``: the daemon ends a worker that grace after it ended its run."""
     deprecated.move_keys(toml, raw, END_GRACE, removed_in)
@@ -108,7 +106,6 @@ def end_grace(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     '0.7.0',
     'finding_grace is end_grace in config.toml too: delete home_end_grace',
     Scope.HOME,
-    after=('implementer_timings',),
 )
 def home_end_grace(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
     """In ``config.toml``, a role's ``finding_grace`` is its ``end_grace``, as in ``piloop.toml``."""

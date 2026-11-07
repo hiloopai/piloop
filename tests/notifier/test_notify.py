@@ -295,21 +295,6 @@ def test_a_campaign_s_use_replaces_config_toml_s_and_its_secret_wins_over_the_ho
         )
 
 
-def test_a_campaign_that_main_stored_before_notifiers_were_per_campaign_gets_config_toml_s(
-    db: Database, campaign: Campaign
-) -> None:
-    with db.session() as s:
-        raw = s.get_one(Campaign, campaign.id).config.model_dump(mode='json')
-    del raw['plugins']['notifier']
-    store_config(db, campaign.id, raw)
-    home = {'outbox': Outbox()}
-    with db.session() as s:
-        assert [(r.owner, r.name) for r in routes(s, db, LocalSecrets(), home)] == [
-            (None, 'outbox'),
-            (campaign.id, 'outbox'),
-        ]
-
-
 def test_without_use_no_notifier_runs(db: Database, campaign: Campaign, tmp_path: Path, tracer: Tracer) -> None:
     consumer = consumer_named(contribution(host_of(db, tmp_path, tracer, Settings(home=tmp_path).providers)), 'notify')
     write(db, campaign)

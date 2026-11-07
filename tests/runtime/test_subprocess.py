@@ -388,28 +388,6 @@ def test_each_resumed_turn_runs_turn_ones_resume_argv_and_env_with_only_the_prom
     assert len(envs) == 1 and 'SECRET=s\n' in envs.pop()
 
 
-def test_an_agent_that_piloop_0_4_resumed_is_killed_through_its_current_turn_and_takes_no_message(
-    tmp_path: Path,
-) -> None:
-    """piloop 0.4 resumed an agent from the daemon and named the resumed process in ``agent_session.current``."""
-    (tmp_path / 'logs').mkdir()
-    first = subprocess.Popen(['true'])
-    first.wait()
-    turn = subprocess.Popen(['sleep', '30'], start_new_session=True)
-    start = started(turn.pid)
-    (tmp_path / 'logs' / 'agent_session.current').write_text(json.dumps({'pid': turn.pid, 'start_time': start}))
-    handle = Handle(
-        'subprocess',
-        {'pid': first.pid, 'pgid': first.pid, 'start_time': 1.0, 'log_dir': str(tmp_path / 'logs'), 'token': 'old'},
-    )
-    rt = Subprocess().open('subprocess')
-    assert rt._alive(handle)
-    with pytest.raises(NotSteerable, match='an older piloop started it'):
-        rt.prompt(handle, 'hi')
-    rt.kill(handle)
-    assert turn.wait(5) == -signal.SIGKILL
-
-
 def test_queueing_and_draining_hold_one_lock_so_no_message_falls_between_them(tmp_path: Path) -> None:
     """A message appended while a turn starts is either in that turn's prompt or left for the next one."""
     rt = Subprocess().open('subprocess')

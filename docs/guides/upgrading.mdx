@@ -125,6 +125,24 @@ Before 1.0, a minor release may break these, and the changelog says so:
 
 ## Upgrading to 0.6.0
 
+### Upgrade from 0.5
+
+0.6.0 migrates a database from 0.5's heads or newer: a 0.4 home upgrades through 0.5 first, as
+[Upgrade one release at a time](#upgrade-one-release-at-a-time) says.
+
+### Removed keys
+
+The keys that 0.5 moved now fail as unknown keys. Write them as the 0.5 notes say:
+
+| Removed | Write |
+|---|---|
+| `[daemon] startup_relaunches` of `config.toml`, `PILOOP_DAEMON__STARTUP_RELAUNCHES` | `[plugins.role.implementer] startup_relaunches` |
+| `[agents] finding_grace` of `config.toml` or `piloop.toml`, and its variables | `[plugins.role.implementer] end_grace` |
+| `[agents] wrap_up_lead` of `config.toml`, `PILOOP_AGENTS__WRAP_UP_LEAD` | `[plugins.role.implementer] wrap_up_lead` |
+
+A campaign that 0.4 stored, and that no `piloop init` stored again since, gets no notifiers from `config.toml`: run
+`piloop init` on it to store its notifiers.
+
 ### Removed features
 
 Their keys still load, with a warning, until 0.7.0, and do nothing. What they wrote stays in the database.
@@ -189,6 +207,7 @@ An implementer's clean exit ends its run: `finished` when it submitted a version
 `piloop run end submitted` or `piloop run end gave_up` ends it before the session exits.
 
 - The `finding` kind is removed: a worker reports in a `note` on its idea. Old findings stay readable.
+- No kind of comment does anything when it is written: the migration deletes `comment_kinds.after_end`.
 - `finding_grace` is `end_grace`. The migration renames it in each stored config.
 - An escalation holds no run: the migration makes each `awaiting_answer` run `failed`.
 - Only a `message` reaches a running agent, on the agent, its run or its idea. Every harness hears it at its next

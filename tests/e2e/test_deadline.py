@@ -55,7 +55,7 @@ def test_the_brief_states_the_deadline(campaign: Smoke) -> None:
     run = campaign.run_of('long')
     assert run is not None
     brief = read_brief(CAS.selected({}).open(campaign.home), Cid(run['brief_cid']))  # a worker elsewhere has brief.md
-    assert '- Your session ends 8 minutes after it starts, at `$PILOOP_DEADLINE`' in brief
+    assert '- Your session ends at `$PILOOP_DEADLINE` (Unix time), 8 minutes after it starts.' in brief
 
 
 @needs(test_the_brief_states_the_deadline)
@@ -66,9 +66,17 @@ def test_the_wrap_up_reaches_the_turn_and_the_run_finishes_before_its_timeout(ca
     [implementer] = campaign.sql(
         "SELECT * FROM agent_sessions WHERE subject_kind = 'run' AND subject_id = ?", run['id']
     )
-    delivered = campaign.sql(
-        "SELECT kind FROM events WHERE target_kind = 'agent_session' AND target_id = ? AND kind LIKE 'comment.%'",
+    [wrap_up] = campaign.sql(
+        "SELECT json_extract(payload, '$.comment') AS comment FROM events"
+        " WHERE kind = 'agent_session.wrap_up' AND target_id = ?",
         implementer['id'],
+    )
+    # Not every comment: the score of the run's submission reaches the implementer as a message too.
+    delivered = campaign.sql(
+        "SELECT kind FROM events WHERE target_kind = 'agent_session' AND target_id = ? AND kind LIKE 'comment.%'"
+        " AND json_extract(payload, '$.comment') = ?",
+        implementer['id'],
+        wrap_up['comment'],
     )
     assert [e['kind'] for e in delivered] == ['comment.queued', 'comment.delivered'], 'the wrap-up note, read'
     assert (run['status'], run['end']) == ('succeeded', 'finished'), run['error']

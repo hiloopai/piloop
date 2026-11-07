@@ -326,8 +326,9 @@ def test_a_database_at_a_revision_that_a_baseline_squashed_is_refused_with_the_r
     engine = create_engine(f'sqlite:///{path}')
     with pytest.raises(
         SchemaTooOld,
-        match=r' is from piloop 0\.3 \(schema revision core 0053\), and this .* migrates from piloop 0\.4 .*: upgrade one'
-        r" release at a time: install piloop 0\.4 \(`uv tool install 'piloop==0\.4\.\*'`\) and run `piloop upgrade`, then",
+        match=r' is from piloop 0\.3 \(schema revision core 0053\), and this .* migrates from piloop 0\.5 .*: upgrade one'
+        r" release at a time: install piloop 0\.4 \(`uv tool install 'piloop==0\.4\.\*'`\) and run `piloop upgrade`, then"
+        r" install piloop 0\.5 \(`uv tool install 'piloop==0\.5\.\*'`\) and run `piloop upgrade`, then",
     ):
         migrate(engine, cas=disk(tmp_path), backups=1, daemon=None)
     engine.dispose()
@@ -409,10 +410,10 @@ def test_the_fingerprint_of_each_revision_after_a_baseline_is_what_the_squashed_
     )
 
 
-def at_floor(path: Path) -> None:
-    """Take the core chain of the database at ``path`` back to 0.4's head, with the fingerprint that 0.4 recorded."""
-    command.downgrade(alembic(path), '0067')
-    mark = fingerprints(ScriptDirectory(str(MIGRATIONS)))['0067']
+def at_floor(path: Path, head: str = '0073') -> None:
+    """Take the core chain of the database at ``path`` back to ``head``, 0.5's by default, with its fingerprint."""
+    command.downgrade(alembic(path), head)
+    mark = fingerprints(ScriptDirectory(str(MIGRATIONS)))[head]
     with closing(sqlite3.connect(path)) as con:
         con.execute("UPDATE migrations SET fingerprint = ? WHERE name = 'core'", (mark,))
         con.commit()
@@ -431,9 +432,9 @@ def test_a_migration_first_backs_up_the_database_and_keeps_the_newest_backups(tm
     for old in ('0001-20250101T000000Z', '0002-20250102T000000Z'):
         (tmp_path / f'piloop.db.bak-{old}').write_bytes(b'an older backup')
     backup = migrate(engine, cas=disk(tmp_path), backups=2, daemon=None)
-    assert backup is not None and re.fullmatch(r'piloop\.db\.bak-0067-\d{8}T\d{6}Z', backup.name), backup
+    assert backup is not None and re.fullmatch(r'piloop\.db\.bak-0073-\d{8}T\d{6}Z', backup.name), backup
     with closing(sqlite3.connect(f'file:{backup}?mode=ro', uri=True)) as con:
-        assert con.execute('SELECT version_num FROM alembic_version').fetchall() == [('0067',)]
+        assert con.execute('SELECT version_num FROM alembic_version').fetchall() == [('0073',)]
         assert con.execute('SELECT name FROM campaigns').fetchall() == [('kept',)]
         assert con.execute('PRAGMA integrity_check').fetchone() == ('ok',)
     assert sorted(p.name for p in tmp_path.glob('piloop.db.bak-*')) == [
@@ -455,7 +456,7 @@ def test_a_migration_prunes_only_the_backups_that_piloop_wrote_oldest_by_their_t
     digits are no time stay. The oldest by the time in its name goes, not the first by name: here a copy of 0067 is older
     than the copy of 0017."""
     path = tmp_path / 'piloop.db'
-    command.upgrade(alembic(path), '0067')
+    command.upgrade(alembic(path), '0073')
     engine = create_engine(f'sqlite:///{path}')
     ours = [
         'piloop.db.bak-0067-20250101T000000Z',
@@ -481,7 +482,7 @@ def test_a_migration_prunes_only_the_backups_that_piloop_wrote_oldest_by_their_t
 def test_a_backup_that_fails_leaves_the_database_unmigrated_and_no_partial_copy(tmp_path: Path) -> None:
     """A full disk, as a limit on the size of the files this process writes: the copy fails, nothing is migrated."""
     path = tmp_path / 'piloop.db'
-    command.upgrade(alembic(path), '0067')
+    command.upgrade(alembic(path), '0073')
     engine = create_engine(f'sqlite:///{path}')
     limit = resource.getrlimit(resource.RLIMIT_FSIZE)
     previous = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)  # a write past the limit fails instead of killing
@@ -492,7 +493,7 @@ def test_a_backup_that_fails_leaves_the_database_unmigrated_and_no_partial_copy(
     finally:
         resource.setrlimit(resource.RLIMIT_FSIZE, limit)
         signal.signal(signal.SIGXFSZ, previous)
-    assert revision(path) == '0067' and list(tmp_path.glob('piloop.db.bak-*')) == []
+    assert revision(path) == '0073' and list(tmp_path.glob('piloop.db.bak-*')) == []
     engine.dispose()
 
 

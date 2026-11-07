@@ -1,11 +1,11 @@
 {
-  "version": "0.5.0",
+  "version": "0.6.0",
   "heads": {
-    "core": "0073",
+    "core": "0080",
     "archive/local": "0003",
     "executor/workers": "0001",
     "memory/local": "0002",
-    "optimization": "0004",
+    "optimization": "0009",
     "secrets/local": "0001"
   },
   "triggers": {

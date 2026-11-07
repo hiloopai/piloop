@@ -60,7 +60,7 @@ from piloop.plugins.role.contract import ROLES, ImplementerRole, RoleConfig, Sta
 from piloop.plugins.runtime.contract import RUNTIMES
 from piloop.plugins.section.contract import SECTIONS, Section
 from piloop.plugins.stop_rule.contract import STOP_RULES, Shape
-from piloop.settings import AgentSettings, MovedEnv, settings
+from piloop.settings import AgentSettings, settings
 
 CONFIG_FILE = 'piloop.toml'
 BRIEF_FILE = 'brief.md'
@@ -866,8 +866,7 @@ def load_campaign_config(campaign: Path, **overrides: object) -> CampaignConfig:
             dotenv_settings: PydanticBaseSettingsSource,
             file_secret_settings: PydanticBaseSettingsSource,
         ) -> tuple[PydanticBaseSettingsSource, ...]:
-            moved = MovedEnv(env_settings, deprecated.bridges(Scope.CAMPAIGN), 'PILOOP_CAMPAIGN_')
-            return init_settings, moved, InitSettingsSource(settings_cls, raw)
+            return init_settings, env_settings, InitSettingsSource(settings_cls, raw)
 
     # pydantic validates the values; the cast only tells the type checker to let them through
     kwargs = cast(dict[str, Any], {k: v for k, v in overrides.items() if v is not None})
