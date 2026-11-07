@@ -10,7 +10,7 @@ import signal
 import subprocess
 import sys
 import threading
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Self, assert_never
@@ -44,7 +44,7 @@ class Started:
     start: float
 
 
-type Leader = subprocess.Popen[bytes] | Started
+type Leader = subprocess.Popen[bytes] | subprocess.Popen[str] | Started
 """The process that leads a group: a child of this process, or one that ``Started`` names."""
 
 
@@ -61,6 +61,35 @@ def kill_group(leader: Leader) -> None:
     except PermissionError:
         if running(leader):
             raise
+
+
+def run_group(
+    argv: Sequence[str], *, cwd: Path, env: Mapping[str, str], timeout: float, input: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run ``argv`` as ``subprocess.run`` does with ``capture_output`` and ``text``, in a session of its own.
+
+    ``subprocess.run`` kills only its child on a timeout, and what the child started runs on. Here the whole group dies.
+
+    Raises:
+        subprocess.TimeoutExpired: ``argv`` ran for longer than ``timeout`` seconds. Its group is dead.
+    """
+    with subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL if input is None else subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    ) as child:
+        try:
+            stdout, stderr = child.communicate(input, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            kill_group(child)
+            child.communicate()
+            raise
+    return subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
 
 
 def running(leader: Leader) -> bool:

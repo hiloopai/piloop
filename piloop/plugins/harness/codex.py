@@ -38,6 +38,7 @@ from piloop.plugins.host import ContractBroken
 from piloop.plugins.mcp_server.contract import McpServer, env_names
 from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.mcp_server.stdio import StdioServer
+from piloop.proc import run_group
 from piloop.settings import expand_env
 
 NO_MEMORY = 'features.memories=false'
@@ -135,15 +136,7 @@ def listed(launch: McpLaunch, flags: list[str]) -> dict[str, bool]:
     """The servers that Codex would load for this agent under ``flags``, and whether each one is enabled."""
     argv = [launch.executable, *config_flags(launch.argv), *flags, 'mcp', 'list', '--json']
     try:
-        done = subprocess.run(
-            argv,
-            cwd=launch.cwd,
-            env=launch.env,
-            capture_output=True,
-            text=True,
-            timeout=LIST_SECONDS,
-            stdin=subprocess.DEVNULL,
-        )
+        done = run_group(argv, cwd=launch.cwd, env=launch.env, timeout=LIST_SECONDS)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise McpError(f'`{join(argv)}` failed: {type(e).__name__}: {e}') from e
     if done.returncode != 0:

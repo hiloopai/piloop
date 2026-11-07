@@ -83,6 +83,9 @@ from piloop.settings import Settings, env_names
 from piloop.store import tree as tree_module
 from piloop.text import iso
 
+# Here, not by `-p`: it imports piloop, which must load after tests.isolation and once coverage measures.
+pytest_plugins = ['tests.processes']
+
 # Harness stand-ins: any argv that edits the worktree and commits.
 HARNESS_APPEND = '#!/bin/sh\necho line >> solve.txt\ngit commit -qam "add a line"\n'
 END_RUN = '"$PILOOP_BIN" run end submitted\n'

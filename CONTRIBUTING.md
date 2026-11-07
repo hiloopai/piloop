@@ -95,7 +95,8 @@ COLUMNS=150 uv run pytest tests/scoring
 ```
 
 On a Linux machine that others share, run `make shared`: it runs one suite at a time on the machine, with 16 workers,
-and kills one that grows past `SUITE_MEMORY` before it takes the machine down.
+and kills one that grows past `SUITE_MEMORY` before it takes the machine down. To load the machine while you
+reproduce a flake, start each load process under `timeout`, so that it ends even when the shell that started it dies.
 
 inline-snapshot cannot fix a snapshot in a parallel run: run that test without `-n` and with `--inline-snapshot=fix`.
 
@@ -106,6 +107,9 @@ Keep the suite fast:
 - Wait for a condition with `wait_until`, never with a fixed sleep or a loop that goes on after its deadline.
 - To test a timeout of the code, give it a fake clock that a sleep advances, rather than a short real timeout: that
   one is slow alone and flaky under load.
+
+A test ends every process that it starts. At the end of each module, `tests/processes.py` kills what its tests left
+running, and the run fails with each test and command.
 
 A test that fails without a code cause is quarantined at once. CI reruns a failed test once, and one that then passes
 is flaky: the job passes, and the `Flaky tests` workflow opens an issue labelled `flaky` and `critical` and a pull

@@ -51,7 +51,7 @@ from piloop.plugins.executor.kit.door import RELAY_SECONDS, AgentCall, Call, Rel
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.role.contract import RELAYED, Verb
 from piloop.plugins.vcs.contract import VcsError
-from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, CHECKOUT_ENV, PILOOP_ARGV, child_env
+from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, CHECKOUT_ENV, PILOOP_ARGV, child_env, run_group
 from piloop.settings import socket_dir
 
 RELAY_ARGV = (sys.executable, '-P', '-m', agent_end.__name__)
@@ -111,15 +111,12 @@ class Runner:
                 CHECKOUT_ENV: str(moved),
             }
             try:
-                done = subprocess.run(
+                done = run_group(
                     [*PILOOP_ARGV, *call.argv],
                     cwd=self.repos(job.artifact.repo),
                     env=env,
-                    input=call.stdin,
-                    stdin=None if call.stdin is not None else subprocess.DEVNULL,
-                    capture_output=True,
-                    text=True,
                     timeout=RELAY_SECONDS,
+                    input=call.stdin,
                 )
             except subprocess.TimeoutExpired:
                 return Relayed(

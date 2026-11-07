@@ -15,9 +15,11 @@ from piloop.proc import (
     Started,
     child_env,
     kill_group,
+    run_group,
     started,
     withhold,
 )
+from tests.conftest import wait_until
 
 
 def test_kill_group_tolerates_a_reaped_child() -> None:
@@ -79,6 +81,13 @@ def test_kill_group_of_a_process_that_is_no_child_takes_eperm_for_gone_once_it_e
 
 def _eperm(*_: object) -> None:
     raise PermissionError(1, 'Operation not permitted')
+
+
+def test_a_command_that_runs_too_long_dies_with_what_it_started(tmp_path: Path) -> None:
+    pid = tmp_path / 'pid'
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_group(['sh', '-c', f'sleep 30 & echo $! > {pid}; wait'], cwd=tmp_path, env=os.environ, timeout=0.5)
+    wait_until(lambda: started(int(pid.read_text())) is None, 'the end of the sleep that the shell started')
 
 
 def test_no_child_inherits_a_result_path(monkeypatch: pytest.MonkeyPatch) -> None:
