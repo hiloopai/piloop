@@ -4,8 +4,8 @@ The agents that run at the upgrade have no deadline: an agent that 0.6 launched 
 timeout, and its run ends as its process says. The tokens of agents whose session is no longer live are deleted:
 one that an earlier release left would act again if an UPDATE set its session live. The downgrade drops the column.
 
-Revision ID: 0084
-Revises: 0083
+Revision ID: 0083
+Revises: 0082
 """
 
 import logging
@@ -15,8 +15,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy import text
 
-revision: str = '0084'
-down_revision: str | None = '0083'
+revision: str = '0083'
+down_revision: str | None = '0082'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -29,7 +29,7 @@ ENDED_TOKENS = (
 def upgrade() -> None:
     op.add_column('agent_sessions', sa.Column('deadline', sa.DateTime(), nullable=True))
     if deleted := op.get_bind().execute(text(ENDED_TOKENS)).rowcount:
-        logging.getLogger(__name__).info('migration 0084 deleted %d tokens of agents that ended', deleted)
+        logging.getLogger(__name__).info('migration 0083 deleted %d tokens of agents that ended', deleted)
 
 
 def downgrade() -> None:

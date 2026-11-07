@@ -1465,13 +1465,13 @@ def test_0082_repairs_the_agent_sessions_that_raw_writes_broke_never_reuses_an_i
         assert 'AUTOINCREMENT' not in sql and 'PRIMARY KEY (id)' in sql
 
 
-def test_0084_gives_agent_sessions_a_deadline_deletes_the_tokens_of_agents_that_ended_and_downgrades(
+def test_0083_gives_agent_sessions_a_deadline_deletes_the_tokens_of_agents_that_ended_and_downgrades(
     tmp_path: Path,
 ) -> None:
     """A token stays only while its agent is live; a person's token has no agent and stays."""
     path = tmp_path / 'piloop.db'
     cfg = alembic(path)
-    command.upgrade(cfg, '0083')
+    command.upgrade(cfg, '0082')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         con.execute("INSERT INTO agent_sessions (id, kind, state) VALUES (1, 'implementer', 'running')")
         con.execute(
@@ -1480,11 +1480,11 @@ def test_0084_gives_agent_sessions_a_deadline_deletes_the_tokens_of_agents_that_
         token = 'INSERT INTO tokens (name, access, sha256, agent_session_id) VALUES (?, ?, ?, ?)'
         for row in (('implementer#1', 'act', 'a', 1), ('implementer#2', 'act', 'b', 2), ('gpu1', 'worker', 'c', None)):
             con.execute(token, row)
-    command.upgrade(cfg, '0084')
+    command.upgrade(cfg, '0083')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         assert con.execute('SELECT name FROM tokens ORDER BY name').fetchall() == [('gpu1',), ('implementer#1',)]
         assert con.execute('SELECT deadline FROM agent_sessions').fetchall() == [(None,), (None,)]
-    command.downgrade(cfg, '0083')
+    command.downgrade(cfg, '0082')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         assert 'deadline' not in [c for (_, c, *_) in con.execute('PRAGMA table_info(agent_sessions)')]
 
