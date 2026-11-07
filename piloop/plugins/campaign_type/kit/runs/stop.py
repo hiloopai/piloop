@@ -5,17 +5,14 @@ from datetime import datetime
 from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.orm import Session
 
-from piloop.campaign.stop import _over_runs, _since_reopen, run_cancel
-from piloop.db.events import has
+from piloop.campaign.stop import _over_runs, _since_reopen, reopened_at, run_cancel
 from piloop.db.models import (
     Campaign,
     Comment,
-    Event,
     EventModel,
 )
 from piloop.db.triggers import DAEMON_ACTOR
-from piloop.db.triggers.changelog import CampaignStatusChanged
-from piloop.ids import CampaignStatus, CommentKind, TargetKind, TargetRef
+from piloop.ids import CommentKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
@@ -126,18 +123,13 @@ def runs_without_best(s: Session, campaign: Campaign, before: datetime | None = 
 
     With ``before``, only the runs of that window that finished by then count: 0 if the window opened later.
 
-    The window starts when a run's candidate last became the best (``last_best_at``), or when the campaign was last set
-    ``active`` again after a stop (``piloop init``, or an UPDATE), whichever is later. A reactivated campaign gets a fresh window, so
-    a ``plateau`` stop does not fire again at once. An evaluator change alone does not reset the window.
+    The window starts when a run's candidate last became the best (``last_best_at``), or at the campaign's latest
+    reopen (``reopened_at``), whichever is later: a reopened campaign gets a fresh window, as it gets its runs, hours
+    and tokens again. An UPDATE that sets it active is no reopen, so it stops again at once. An evaluator change alone
+    does not reset the window.
     """
     last_best = last_best_at(s, campaign)
-    reactivated = s.scalar(
-        select(func.max(Event.at)).where(
-            has(CampaignStatusChanged, new=CampaignStatus.ACTIVE),
-            Event.target == TargetRef(TargetKind.CAMPAIGN, campaign.id),
-        )
-    )
-    since = max((t for t in (last_best, reactivated) if t is not None), default=None)
+    since = max((t for t in (last_best, reopened_at(s, campaign)) if t is not None), default=None)
     after = (Run.finished_at > since,) if since is not None else ()
     by = (Run.finished_at <= before,) if before is not None else ()
     return _over_runs(s, campaign, func.count(Run.id), Run.status.in_(FINISHED_RUNS), attempt(), *after, *by) or 0

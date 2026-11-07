@@ -598,7 +598,7 @@ def test_only_a_trigger_writes_an_event_through_piloop_sql(con: sqlite3.Connecti
     with pytest.raises(sqlite3.DatabaseError, match='not authorized'):
         event(con)
     sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
-    sql.run(con, "UPDATE campaigns SET status = 'stopped' WHERE id = 1")
+    sql.run(con, "UPDATE campaigns SET status = 'stopped', stopped_reason = 'enough' WHERE id = 1")
     assert [kind for (kind,) in sql.run(con, 'SELECT kind FROM events').rows] == ['campaign.status']
 
 

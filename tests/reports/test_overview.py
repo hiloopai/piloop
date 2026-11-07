@@ -265,7 +265,8 @@ def test_stop_conditions_say_how_far_each_one_is(db: Database, campaign: Campaig
         '- Campaign: active. Progress: run 2/10 · 1.9h/4h · 4k/1.0M tok · 1/3 runs without a new best · target ≥ 5 (best 3).'
     ), 'run#2 failed before it committed: plateau counts it, max_runs does not'
     with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         s.get_one(Campaign, campaign.id).stopped_reason = 'plateau: 3 runs without a new best'
         s.commit()
     text = render(db, campaign, cfg)

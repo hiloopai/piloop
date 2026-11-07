@@ -36,7 +36,7 @@ from piloop.api.contract import (
 )
 from piloop.api.views import CampaignState, InvalidConfig
 from piloop.campaign import ops
-from piloop.campaign.stop import CampaignClosed
+from piloop.campaign.stop import CampaignClosed, CampaignReopened
 from piloop.cli import common, main as cli
 from piloop.db.events import emit
 from piloop.db.models import (
@@ -97,7 +97,7 @@ def test_a_checkout_registers_at_once_the_daemon_measures_its_baseline_and_its_p
             for neither_or_both in ({}, {'path': str(campaign_path), 'clone': {'url': 'file:///x.git'}}):
                 assert raw.post('/v1/campaigns', json=neither_or_both).status_code == HTTPStatus.UNPROCESSABLE_ENTITY
         with db.session() as s:
-            s.execute(update(Campaign).values(status=CampaignStatus.STOPPED))
+            s.execute(update(Campaign).values(status=CampaignStatus.STOPPED, stopped_reason='by the test'))
             s.commit()
         (campaign_path / 'piloop.toml').write_text('name = "demo"\n')
         with pytest.raises(Refused, match='is not a valid piloop config') as invalid:
@@ -108,6 +108,43 @@ def test_a_checkout_registers_at_once_the_daemon_measures_its_baseline_and_its_p
         assert (synced.was, synced.campaign.status) == (CampaignStatus.STOPPED, CampaignStatus.STOPPED), (
             'the stop conditions did not change'
         )
+
+
+def test_a_sync_reopens_a_stopped_campaign_whose_stop_rule_changed_only_as_reopen_would(
+    db: Database, campaign_path: Path, cfg: Settings
+) -> None:
+    """A sync (``piloop init``) has no reactivation of its own: it reopens through ``ops.reopen``, with its guards.
+
+    So a campaign that still winds down stays stopped and is closed as any other, and a reopened one has its
+    ``CampaignReopened``, which its limits count from.
+    """
+    toml = campaign_path / 'piloop.toml'
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
+        campaign = client.register_campaign(Checkout(path=str(campaign_path))).campaign
+        with db.acting(System.DAEMON) as s:  # the daemon's stop, with an implementer that still winds down
+            row = s.get_one(Campaign, campaign.id)
+            row.status, row.stopped_reason = CampaignStatus.STOPPED, 'max_runs: 2 runs'
+            agent = AgentSession(kind='implementer', campaign_id=campaign.id, state=AgentSessionState.RUNNING)
+            s.add(agent)
+            s.commit()
+        toml.write_text(toml.read_text() + '\n[plugins.stop_rule]\nmax_runs = 5\n')
+        synced = client.sync_campaign('demo')
+        assert (synced.was, synced.campaign.status) == (CampaignStatus.STOPPED, CampaignStatus.STOPPED)
+        assert synced.stays_stopped == (
+            f'demo is still stopping; agents #{agent.id} are not over: try again once it is closed and its runs are over'
+        )
+        with db.acting(System.DAEMON) as s:
+            s.get_one(AgentSession, agent.id).state = AgentSessionState.EXITED
+            emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)
+            s.commit()
+        toml.write_text(toml.read_text().replace('max_runs = 5', 'max_runs = 6'))
+        synced = client.sync_campaign('demo')
+        assert (synced.campaign.status, synced.stays_stopped) == (CampaignStatus.ACTIVE, None)
+    with db.session() as s:
+        reopened = s.scalars(select(Event).where(Event.kind == 'campaign.reopened')).all()
+        assert [(e.actor, e.payload) for e in reopened] == [
+            ('human', CampaignReopened(reason='its stop rule changed in piloop.toml'))
+        ]
 
 
 def test_a_fork_starts_from_a_version_of_its_source_in_a_clone_with_its_config_and_repo(
@@ -151,7 +188,8 @@ def test_a_campaign_whose_checkout_left_the_disk_shows_its_files_missing_and_for
         added = client.register_campaign(Checkout(path=str(campaign_path)))
         assert isinstance(added.campaign, CampaignState) and added.campaign.files is CampaignFiles.KEPT
         with db.session() as s:
-            s.get_one(Campaign, added.campaign.id).status = CampaignStatus.STOPPED
+            row = s.get_one(Campaign, added.campaign.id)
+            row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
             emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, added.campaign.id), System.DAEMON)
             s.commit()
         campaign_path.rename(tmp_path / 'moved')
@@ -205,7 +243,8 @@ def test_a_stopped_campaign_retires_once_its_stop_is_over_and_its_name_registers
             client.retire('demo', RetireBody(reason='done'))
         assert e.value.error == Problem.REFUSED
         with db.session() as s:
-            s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+            row = s.get_one(Campaign, campaign.id)
+            row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
             s.add(AgentSession(kind='orchestrator', campaign_id=campaign.id, state=AgentSessionState.RUNNING))
             s.add(
                 Comment(
@@ -492,7 +531,15 @@ def test_without_a_campaign_named_status_answers_every_campaign(
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
     with db.session() as s:
-        s.add(Campaign(name='other', path='/elsewhere', status=CampaignStatus.STOPPED, config=campaign.config))
+        s.add(
+            Campaign(
+                name='other',
+                path='/elsewhere',
+                status=CampaignStatus.STOPPED,
+                stopped_reason='r',
+                config=campaign.config,
+            )
+        )
         s.commit()
     with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
         listed = client.status(Selection()).campaigns

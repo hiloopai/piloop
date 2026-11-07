@@ -342,7 +342,7 @@ def test_a_stopped_campaign_is_never_held(db: Database, campaign: Campaign) -> N
         p = s.get_one(Campaign, campaign.id)
         cfg = CampaignConfig.model_validate(p.config)
         assert check(s, p, cfg) == Hold('spend not known')
-        p.status = CampaignStatus.STOPPED
+        p.status, p.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         s.add(AgentSession(kind=LEAD, campaign_id=p.id, reason='by hand'))
         s.flush()
         assert progress(s, p, cfg, p.created_at).endswith(' · spend —/10 · no limit stops it: open-ended')

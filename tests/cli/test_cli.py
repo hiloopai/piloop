@@ -34,7 +34,7 @@ from piloop.api.client import Client, NoDaemon
 from piloop.api.contract import SecretCredential, Selection, SyncBody, TokenCredential
 from piloop.campaign import campaigns as campaign_module, inbox
 from piloop.campaign.campaigns import CampaignAdded
-from piloop.campaign.stop import CancelRequested, StopRequested
+from piloop.campaign.stop import CampaignReopened, CancelRequested, StopRequested
 from piloop.cli import (
     agents as agents_cli,
     campaign as campaign_cli,
@@ -385,7 +385,8 @@ def test_status_shows_why_a_campaign_stopped_and_init_resumes_it_when_the_stop_t
     toml.write_text(toml.read_text() + '\n[plugins.stop_rule]\ntarget = 4\n')
     run_cli(['init', str(campaign_path)])
     assert out().strip() == (
-        'campaign demo #1 already registered; config re-read from piloop.toml; resumed: stop conditions changed'
+        'campaign demo #1 already registered; config re-read from piloop.toml; reopened: its stop rule changed, and its'
+        ' limits count from now'
     )
     assert state() == (CampaignStatus.ACTIVE, None)
     run_cli(['status', 'demo'])
@@ -412,7 +413,30 @@ def test_status_shows_why_a_campaign_stopped_and_init_resumes_it_when_the_stop_t
                 'human',
                 CampaignStatusChanged(old=CampaignStatus.STOPPED, new=CampaignStatus.ACTIVE, stopped_reason=None),
             ),
-        ], 'the stop and the resume are the same change-log event, whoever wrote the row'
+            ('campaign.reopened', 'human', CampaignReopened(reason='its stop rule changed in piloop.toml')),
+        ], 'the stop and the reopen are the same change-log event, whoever wrote the row; init reopens as `reopen` does'
+    db.close()
+
+
+@pytest.mark.usefixtures('api')
+def test_init_says_why_a_stopped_campaign_whose_stop_rule_changed_stays_stopped(campaign_path: Path, out) -> None:
+    """``piloop init`` reopens only as ``piloop campaign reopen`` would: one that still winds down stays stopped."""
+    run_cli(['init', str(campaign_path)])
+    db = Database(common.settings.database_url, actor=common.settings.actor)
+    with db.session() as s:
+        row = s.get_one(Campaign, 1)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'max_runs: 2 runs'
+        s.add(AgentSession(kind=IMPLEMENTER, campaign_id=1, state=AgentSessionState.RUNNING))
+        s.commit()
+    toml = campaign_path / 'piloop.toml'
+    toml.write_text(toml.read_text() + '\n[plugins.stop_rule]\nmax_runs = 5\n')
+    out()
+    run_cli(['init', str(campaign_path)])
+    assert out().strip() == (
+        'campaign demo #1 already registered; config re-read from piloop.toml; its stop rule changed, but it stays'
+        ' stopped: demo is still stopping; agents #1 are not over: try again once it is closed and its runs are over'
+        ' (`piloop campaign reopen demo`)'
+    )
     db.close()
 
 
@@ -447,7 +471,11 @@ def test_outside_every_campaign_the_only_active_one_is_meant_else_all_of_them(
     db = Database(common.settings.database_url, actor=common.settings.actor)
     with db.session() as s:
         campaign = s.get_one(Campaign, 1)
-        s.add(Campaign(name='other', path='/other', config=campaign.config, status=CampaignStatus.STOPPED))
+        s.add(
+            Campaign(
+                name='other', path='/other', config=campaign.config, status=CampaignStatus.STOPPED, stopped_reason='r'
+            )
+        )
         s.add(
             Campaign(
                 name='third',
@@ -463,7 +491,8 @@ def test_outside_every_campaign_the_only_active_one_is_meant_else_all_of_them(
     assert f' demo #1  {campaign_path} ' in text and 'other' not in text, 'one active campaign: that one'
 
     with db.session() as s:
-        s.get_one(Campaign, 2).status = CampaignStatus.ACTIVE
+        other = s.get_one(Campaign, 2)
+        other.status, other.stopped_reason = CampaignStatus.ACTIVE, None
         s.commit()
     run_cli(['status'])
     text = out()
@@ -471,7 +500,7 @@ def test_outside_every_campaign_the_only_active_one_is_meant_else_all_of_them(
 
     with db.session() as s:
         for campaign in s.scalars(select(Campaign)):
-            campaign.status = CampaignStatus.STOPPED
+            campaign.status, campaign.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         s.commit()
     run_cli(['status'])
     text = out()

@@ -11,10 +11,11 @@ from typing import ClassVar, Literal, assert_never
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
-from piloop.actor import Actor
+from piloop.actor import Actor, System
 from piloop.campaign import escalations
 from piloop.config import CampaignConfig
 from piloop.db.events import emit, has, in_order, latest
+from piloop.db.machine import Machine, transition
 from piloop.db.models import (
     LIVE,
     AgentSession,
@@ -88,6 +89,28 @@ CANCELLABLE = (AgentSessionState.REQUESTED, *LIVE)
 def request_stop(s: Session, campaign: Campaign, actor: Actor, *, reason: str, ending: Ending) -> None:
     """Ask the daemon to stop ``campaign`` (``StopRequested``). The caller commits."""
     emit(s, StopRequested(reason=reason, ending=ending), TargetRef(TargetKind.CAMPAIGN, campaign.id), actor)
+
+
+CAMPAIGN_STATES: Machine[CampaignStatus] = Machine(
+    Campaign.status,
+    {
+        CampaignStatus.STOPPED: frozenset({CampaignStatus.ACTIVE}),
+        CampaignStatus.ACTIVE: frozenset({CampaignStatus.STOPPED}),
+        CampaignStatus.RETIRED: frozenset({CampaignStatus.STOPPED}),
+    },
+    TargetKind.CAMPAIGN,
+)
+"""A campaign's lifecycle. The pass stops an active campaign (``stop_campaign``), ``reopen`` sets a stopped one active
+again, and ``retire`` ends a stopped one for good. Each move's event is the change log's ``campaign.status``."""
+
+
+def stop_campaign(s: Session, campaign: Campaign, reason: str) -> None:
+    """Stop the active ``campaign`` for ``reason``: the daemon's stop, which it closes once it ``settled``. The caller commits.
+
+    Raises:
+        Refused: the campaign is not active: a raw write moved it since the pass read it.
+    """
+    transition(s, CAMPAIGN_STATES, campaign.id, CampaignStatus.STOPPED, None, System.DAEMON, stopped_reason=reason)
 
 
 class CampaignClosed(EventModel):
@@ -292,21 +315,16 @@ def timeout(
 
     The seconds are its ``role_timeout``, cut where the stop rule's ``hours`` run out (``Go.left``): a run that starts
     minutes before the stop ends with it. A stopped campaign cuts nothing, so an agent that a person requests has its whole timeout.
-    ``Stop``: the rule stops the active campaign now. An agent that has not started never starts: its row is requested
-    again, and the pass that stops the campaign closes it. One that runs is wound down by that pass.
+    ``Stop``: a stop is due now (``due``). An agent that has not started never starts: its row is requested again, and
+    the pass that stops the campaign closes it. One that runs is wound down by that pass.
     """
     if campaign.status is not CampaignStatus.ACTIVE:
         return role_timeout
     now = utcnow()
-    match answer := acted(STOP_RULES.selected(cfg.plugins).check(_case(s, campaign, cfg, now))):
-        case Go(left=facts):
-            hours = facts.get(HOURS)
-        case Stop():
-            return answer
-        case Hold():
-            hours = None
-        case _:
-            assert_never(answer)
+    answer = acted(STOP_RULES.selected(cfg.plugins).check(_case(s, campaign, cfg, now)))
+    if (stop := due(s, campaign, answer)) is not None:
+        return stop
+    hours = answer.left.get(HOURS) if isinstance(answer, Go) else None
     if hours is None:
         return role_timeout
     elapsed = (now - started_at).total_seconds()
@@ -328,6 +346,21 @@ def requested(s: Session, campaign: Campaign) -> Stop | None:
         return None
     asked, stop = asks[0]
     return Stop(f'stopped by {asked.actor}: {stop.reason}' if stop.reason else f'stopped by {asked.actor}')
+
+
+def due(s: Session, campaign: Campaign, answer: Go | Hold | Stop) -> Stop | None:
+    """Return the stop that is due now for ``campaign``, whose stop rule gave ``answer``, or None.
+
+    Only an active campaign stops. A stop that someone requested (``requested``) is due whatever the rule, a hold or a
+    pause say. The rule's ``Stop`` is due only while the campaign is not paused: a paused campaign does not stop at a
+    limit, so a person can change the rule first. The pass stops the campaign on this, and an agent's ``timeout`` is
+    cut on it, so the two never disagree.
+    """
+    if campaign.status is not CampaignStatus.ACTIVE:
+        return None
+    if (stop := requested(s, campaign)) is not None:
+        return stop
+    return answer if isinstance(answer, Stop) and campaign.paused is None else None
 
 
 def held(s: Session, campaign: Campaign, cfg: CampaignConfig) -> str | None:

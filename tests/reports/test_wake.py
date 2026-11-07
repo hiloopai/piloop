@@ -199,7 +199,8 @@ def test_wake_prints_the_journal_newest_lines_in_order_the_inbox_the_active_best
             '- none',
         ]
         sibling, other = clones(s, campaign)
-        s.get_one(Campaign, sibling.id).status = CampaignStatus.STOPPED
+        row = s.get_one(Campaign, sibling.id)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         voting = lesson(s, sibling.id, 'voting', 'dead')
         for i in range(40):
             s.add(

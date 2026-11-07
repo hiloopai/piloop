@@ -165,10 +165,10 @@ def test_the_headline_names_the_best_of_each_track_the_starting_points_and_why_t
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         candidate(s, p, 1, 3, 10, origin=Origin.REFERENCE)
-        p.paused, p.paused_reason = Pause.LAUNCHES, 'budget review'
+        p.paused, p.paused_reason, p.paused_by = Pause.LAUNCHES, 'budget review', 'human'
         s.commit()
     assert shown(db, campaign, 'headline', cfg) == snapshot("""\
 ## Campaign
 
-best of score: candidate#1 · score: 1 · may be best on score: 1 · best of size: candidate#1 · size: 5 · may be best on size: 2 · candidates: 1 · starting points: 1 · evaluator: #1, 0s old · paused: launches · paused because: budget review\
+best of score: candidate#1 · score: 1 · may be best on score: 1 · best of size: candidate#1 · size: 5 · may be best on size: 2 · candidates: 1 · starting points: 1 · evaluator: #1, 0s old · paused: launches · paused by: human · paused because: budget review\
 """)

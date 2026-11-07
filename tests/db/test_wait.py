@@ -35,7 +35,7 @@ def pause(db: Database, campaign: Campaign) -> None:
     """A change that adds an event: ``campaign.paused``."""
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        row.paused, row.paused_reason = Pause.ALL, 'a test'
+        row.paused, row.paused_reason, row.paused_by = Pause.ALL, 'a test', 'human'
         s.commit()
 
 

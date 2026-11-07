@@ -326,7 +326,7 @@ def test_the_orchestrator_launches_while_its_campaign_is_paused_only_if_a_trigge
     """``news`` wakes the orchestrator while its campaign is paused, held or stopped: ``run_failed`` does not."""
     configure(db, campaign, '#!/bin/sh\ntrue\n', orchestrator={'triggers': triggers})
     with db.session() as s:
-        ops.pause(s, campaign.id, evals=False, reason='a person reads the results')
+        ops.pause(s, campaign.id, System.HUMAN, evals=False, reason='a person reads the results')
         s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand'))
         s.commit()
     sched = scheduler(db, recording(runtime, []), tmp_path)
@@ -337,13 +337,13 @@ def test_the_orchestrator_launches_while_its_campaign_is_paused_only_if_a_trigge
         row = s.get_one(Campaign, campaign.id)
         assert awake_roles(row.config, Quiet.HELD) == ({LEAD} if launches else frozenset())
         assert (quiet_phase(s, row, None), quiet_phase(s, row, 'at the spend limit')) == (Quiet.PAUSED, Quiet.HELD)
-        row.paused = row.paused_reason = None
+        row.paused = row.paused_reason = row.paused_by = None
         assert (quiet_phase(s, row, None), awake_roles(row.config, None)) == (None, frozenset())
-        row.status = CampaignStatus.STOPPED
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         assert quiet_phase(s, row, None) is None, 'stopped, not closed yet'
         emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, row.id), System.DAEMON)
         assert quiet_phase(s, row, None) is Quiet.STOPPED
-        row.status = CampaignStatus.RETIRED
+        row.status, row.stopped_reason = CampaignStatus.RETIRED, 'by the test'
         with pytest.raises(ValueError, match='demo is retired'):
             quiet_phase(s, row, None)
 

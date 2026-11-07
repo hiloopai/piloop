@@ -107,7 +107,7 @@ def test_every_trigger_writes_an_event_that_loads_as_the_model_that_renders_it(
             "UPDATE runs SET status = 'failed', \"end\" = 'failed' WHERE id = 1",
             "INSERT INTO campaigns (name, path, config) VALUES ('other', '/other', '{}')",
             "UPDATE campaigns SET status = 'stopped', stopped_reason = 'enough', type = 'research' WHERE id = 2",
-            "UPDATE campaigns SET parent_id = 1, paused = 'all', paused_reason = 'night' WHERE id = 2",
+            "UPDATE campaigns SET parent_id = 1, paused = 'all', paused_reason = 'night', paused_by = 'human' WHERE id = 2",
             *(
                 'INSERT INTO comments (target_kind, target_id, author, kind, body, priority)'
                 f" VALUES ('idea', 1, 'me', '{kind}', 'x', 2)"

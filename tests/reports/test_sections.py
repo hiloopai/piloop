@@ -75,9 +75,11 @@ def test_the_headline_says_why_the_campaign_is_held(db: Database, campaign: Camp
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
         p.status, p.stopped_reason = CampaignStatus.STOPPED, 'plateau'
-        p.paused, p.paused_reason = Pause.ALL, 'new data'
+        p.paused, p.paused_reason, p.paused_by = Pause.ALL, 'new data', 'human'
         text = markdown(sections('headline'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
-    assert text.endswith('stopped because: plateau · paused: launches and evaluations · paused because: new data')
+    assert text.endswith(
+        'stopped because: plateau · paused: launches and evaluations · paused by: human · paused because: new data'
+    )
 
 
 class KeepRate(Section):

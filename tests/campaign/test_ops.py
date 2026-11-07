@@ -16,7 +16,9 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
 from piloop.campaign import ops
+from piloop.campaign.stop import CAMPAIGN_STATES
 from piloop.config import load_campaign_config
+from piloop.db import machine
 from piloop.db.events import in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, EventModel, Pause
 from piloop.db.session import Database
@@ -128,18 +130,21 @@ def run_candidate(db: Database, campaign: Campaign, *, origin: Origin = Origin.R
 
 def test_a_pause_holds_launches_or_everything_with_its_reason_and_a_resume_clears_it(me: Database) -> None:
     with me.session() as s:
-        campaign = ops.pause(s, CampaignId(1), evals=False, reason=' wait for evaluator v2 ')
+        campaign = ops.pause(s, CampaignId(1), System.HUMAN, evals=False, reason=' wait for evaluator v2 ')
         s.commit()
-        assert (campaign.paused, campaign.paused_reason) == (Pause.LAUNCHES, 'wait for evaluator v2')
-    with me.session() as s, pytest.raises(ops.Refused, match=r'paused already \(launches\): wait for evaluator v2'):
-        ops.pause(s, CampaignId(1), evals=False, reason='again')
+        assert ops.paused(campaign) == ops.Paused(Pause.LAUNCHES, System.HUMAN, 'wait for evaluator v2')
+    with (
+        me.session() as s,
+        pytest.raises(ops.Refused, match=r'paused already \(launches\) by human: wait for evaluator v2'),
+    ):
+        ops.pause(s, CampaignId(1), System.HUMAN, evals=False, reason='again')
     with me.session() as s:
-        ops.pause(s, CampaignId(1), evals=True, reason='and the evaluations')
+        ops.pause(s, CampaignId(1), System.HUMAN, evals=True, reason='and the evaluations')
         s.commit()
     with me.session() as s:
-        assert ops.resume(s, CampaignId(1)) is Pause.ALL
+        assert ops.resume(s, CampaignId(1)) == ops.Paused(Pause.ALL, System.HUMAN, 'and the evaluations')
         s.commit()
-        assert (s.get_one(Campaign, 1).paused, s.get_one(Campaign, 1).paused_reason) == (None, None)
+        assert ops.paused(s.get_one(Campaign, 1)) is None
     assert [e for e in kinds(me, TargetKind.CAMPAIGN, 1) if e[0] == 'campaign.paused'] == [
         (
             'campaign.paused',
@@ -158,9 +163,51 @@ def test_a_pause_holds_launches_or_everything_with_its_reason_and_a_resume_clear
         with pytest.raises(ops.Refused, match='campaign demo is not paused'):
             ops.resume(s, CampaignId(1))
         with pytest.raises(ops.Refused, match='a reason is required'):
-            ops.pause(s, CampaignId(1), evals=False, reason='  ')
+            ops.pause(s, CampaignId(1), System.HUMAN, evals=False, reason='  ')
         with pytest.raises(ops.Refused, match='no campaign#9'):
-            ops.pause(s, CampaignId(9), evals=False, reason='why')
+            ops.pause(s, CampaignId(9), System.HUMAN, evals=False, reason='why')
+
+
+def test_a_hold_of_the_daemon_only_widens_a_pause_and_a_resume_says_whose_pause_it_lifted(me: Database) -> None:
+    """The daemon's holds have one writer, ``hold``, and the pause records its owner.
+
+    A hold never narrows a pause, nor replaces one that holds as much: a person's reason stays. One that holds more
+    takes the pause over, and a resume lifts it as any other, saying that it was the daemon's.
+    """
+    with me.session() as s:
+        row = s.get_one(Campaign, 1)
+        ops.hold(row, Pause.LAUNCHES, 'the baseline failed')
+        assert ops.paused(row) == ops.Paused(Pause.LAUNCHES, System.DAEMON, 'the baseline failed')
+        ops.hold(row, Pause.LAUNCHES, 'it failed again')
+        assert ops.paused(row) == ops.Paused(Pause.LAUNCHES, System.DAEMON, 'the baseline failed'), 'once'
+        s.commit()
+        assert ops.resume(s, CampaignId(1)) == ops.Paused(Pause.LAUNCHES, System.DAEMON, 'the baseline failed')
+        ops.pause(s, CampaignId(1), System.HUMAN, evals=False, reason='a review')
+        ops.hold(row, Pause.LAUNCHES, 'the baseline failed')
+        assert ops.paused(row) == ops.Paused(Pause.LAUNCHES, System.HUMAN, 'a review'), "the person's stays"
+        ops.hold(row, Pause.ALL, 'evaluations fail for the machine')
+        assert ops.paused(row) == ops.Paused(Pause.ALL, System.DAEMON, 'evaluations fail for the machine'), 'widened'
+        ops.hold(row, Pause.LAUNCHES, 'the baseline failed')
+        assert ops.paused(row) == ops.Paused(Pause.ALL, System.DAEMON, 'evaluations fail for the machine'), (
+            'a hold never narrows a pause'
+        )
+        s.commit()
+
+
+def test_a_retire_lifts_the_pause_and_a_retired_campaign_never_moves_again(me: Database) -> None:
+    """A retired campaign holds nothing (``CAMPAIGN_CHECKS``), and ``retired`` is an end of ``CAMPAIGN_STATES``."""
+    with me.session() as s:
+        row = s.get_one(Campaign, 1)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
+        ops.pause(s, CampaignId(1), System.HUMAN, evals=True, reason='a review')
+        s.commit()
+        ops.retire(s, CampaignId(1), System.HUMAN, reason='done')
+        s.commit()
+        assert (row.status, ops.paused(row)) == (CampaignStatus.RETIRED, None)
+        with pytest.raises(machine.Refused, match=r'is retired: it cannot become active'):
+            machine.transition(
+                s, CAMPAIGN_STATES, row.id, CampaignStatus.ACTIVE, None, System.HUMAN, stopped_reason=None
+            )
 
 
 def test_a_raw_pause_needs_a_reason_and_a_known_scope(me: Database, tmp_path: Path) -> None:
@@ -168,7 +215,11 @@ def test_a_raw_pause_needs_a_reason_and_a_known_scope(me: Database, tmp_path: Pa
         with pytest.raises(sqlite3.IntegrityError, match='campaigns.paused and campaigns.paused_reason go together'):
             con.execute("UPDATE campaigns SET paused = 'launches' WHERE id = 1")
         with pytest.raises(sqlite3.IntegrityError, match='CHECK constraint failed'):
-            con.execute("UPDATE campaigns SET paused = 'forever', paused_reason = 'r' WHERE id = 1")
+            con.execute(
+                "UPDATE campaigns SET paused = 'forever', paused_reason = 'r', paused_by = 'human' WHERE id = 1"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match='campaigns.a pause has its owner'):
+            con.execute("UPDATE campaigns SET paused = 'launches', paused_reason = 'r' WHERE id = 1")
     with me.session() as s:
         s.get_one(Campaign, 1).paused_reason = 'no pause'
         with pytest.raises(IntegrityError, match='go together'):
@@ -311,7 +362,7 @@ def test_measuring_held_says_when_the_daemon_measures_a_campaign_again(me: Datab
         p.status, p.stopped_reason = CampaignStatus.STOPPED, 'max_runs: 3 runs'
         assert evaluation_ops.measuring_held(s, p, p.config) == '', 'a stopped campaign is still measured on request'
         p.status, p.stopped_reason = CampaignStatus.ACTIVE, None
-        ops.pause(s, CampaignId(1), evals=True, reason='why')
+        ops.pause(s, CampaignId(1), System.HUMAN, evals=True, reason='why')
         assert evaluation_ops.measuring_held(s, p, p.config) == (
             ' once campaign demo is resumed (its evaluations are paused)'
         )
@@ -322,7 +373,7 @@ def test_measuring_held_says_when_the_daemon_measures_a_campaign_again(me: Datab
         assert evaluation_ops.measuring_held(s, p, p.config) == (
             ' once the stop rule no longer holds it (spend not known)'
         )
-        p.status = CampaignStatus.STOPPED
+        p.status, p.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         assert evaluation_ops.measuring_held(s, p, p.config) == '', 'the stop rule holds an active campaign only'
 
 

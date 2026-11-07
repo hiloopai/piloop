@@ -394,6 +394,18 @@ class Tracked:
 
 
 PAUSE_CHECK = 'campaigns.paused and campaigns.paused_reason go together'
+CAMPAIGN_CHECKS = (
+    CheckConstraint('(paused IS NULL) = (paused_reason IS NULL)', name=PAUSE_CHECK),
+    CheckConstraint('(paused IS NULL) = (paused_by IS NULL)', name='campaigns.a pause has its owner'),
+    CheckConstraint(
+        f"(status = '{CampaignStatus.ACTIVE}') = (stopped_reason IS NULL)",
+        name='campaigns.a stopped or retired campaign has its stopped_reason',
+    ),
+    CheckConstraint(
+        f"status != '{CampaignStatus.RETIRED}' OR paused IS NULL", name='campaigns.a retired campaign is not paused'
+    ),
+)
+"""What ties a campaign's status to its stop and its pause: the guard that a raw ``piloop sql`` write meets too."""
 
 
 class Campaign(Tracked, Base):
@@ -401,7 +413,7 @@ class Campaign(Tracked, Base):
 
     __tablename__ = 'campaigns'
     __table_args__ = (
-        CheckConstraint('(paused IS NULL) = (paused_reason IS NULL)', name=PAUSE_CHECK),
+        *CAMPAIGN_CHECKS,
         *text_checks('campaigns', nullable=('paused_reason',)),
         Index('ix_campaigns_name', 'name', unique=True, sqlite_where=text(f"status != '{CampaignStatus.RETIRED}'")),
     )
@@ -421,16 +433,21 @@ class Campaign(Tracked, Base):
     status: Mapped[CampaignStatus] = mapped_column(
         default=CampaignStatus.ACTIVE, server_default=CampaignStatus.ACTIVE.value
     )
-    """``stopped`` after a ``[stop]`` condition held: running work finishes and nothing new is requested. To resume,
-    set it back to ``active`` and clear ``stopped_reason``. ``piloop init`` does this when the ``[stop]`` table
-    changed. ``retired`` after ``piloop campaign retire``, for good."""
+    """``stopped`` after its stop rule or a person stopped it: running work finishes and nothing new is requested.
+    ``piloop campaign reopen`` sets it ``active`` again, and so does ``piloop init`` when the stop rule changed.
+    ``retired`` after ``piloop campaign retire``, for good. ``piloop.campaign.stop.CAMPAIGN_STATES`` is its one
+    writer."""
     stopped_reason: Mapped[str | None]
     """The condition that ended the campaign, for example ``target: accuracy 0.8531 ≥ 0.85``."""
     paused: Mapped[Pause | None]
     """What ``piloop pause`` holds, NULL while the campaign is not paused. ``piloop resume`` clears it. Each change is a
     ``campaign.paused`` event with ``paused_reason``."""
     paused_reason: Mapped[str | None]
-    """Why the campaign is paused, as ``piloop pause --reason`` said it. NULL while it is not paused."""
+    """Why the campaign is paused, as ``piloop pause --reason`` or the daemon's hold said it. NULL while it is not
+    paused."""
+    paused_by: Mapped[str | None]
+    """Who owns the pause: the actor that paused it, ``daemon`` for a hold (``piloop.campaign.ops.hold``). NULL while
+    the campaign is not paused."""
     repo: Mapped[str | None]
     """The repository that the campaign works on, the same for every clone of it: the URL of its ``origin`` remote
     (else of its first remote) as ``host/owner/name``, else ``path``. ``piloop init`` sets it. Past work on the same

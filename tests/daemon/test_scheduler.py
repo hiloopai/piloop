@@ -2539,6 +2539,45 @@ def pause_escalations(db: Database) -> list[Comment]:
         return list(s.scalars(select(Comment).where(Comment.kind == 'escalation').order_by(Comment.id)))
 
 
+def test_a_paused_campaign_past_its_stop_limit_launches_its_requested_orchestrator_once(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A paused campaign does not stop at a limit, and its agent's timeout is not cut there either (``due``).
+
+    The pass takes the requested row of an orchestrator that a paused campaign wakes. Its launch used to read the
+    rule's stop, put the row back, and wake the pass at once: the same row was taken and put back every pass.
+    """
+    set_config(
+        db, campaign, plugins={'role': {'orchestrator': {'triggers': ['news']}}, 'stop_rule': {'max_hours': 0.5}}
+    )
+    with db.session() as s:
+        run = Run(
+            campaign_id=campaign.id,
+            base_candidate_id=CandidateId(1),
+            harness='script',
+            model='m',
+            status=RunStatus.RUNNING,
+            started_at=utcnow() - timedelta(hours=2),
+        )
+        s.add(run)
+        s.flush()
+        close_run(s, run, RunEnd.FINISHED, None)
+        ops.pause(s, campaign.id, System.HUMAN, evals=False, reason='a review')
+        s.commit()
+    row = request_lead(db, campaign)
+    sched = make_scheduler(db, runtime, tmp_path, claims=False)
+    launched = []
+    for _ in range(3):
+        launched.append(run_all(sched))
+        sched.wait(SETTLE)
+    sched.stop(timeout=5)
+    assert launched == [[row], [], []], 'launched once, and never put back'
+    with db.session() as s:
+        assert s.get_one(AgentSession, row).state is not AgentSessionState.REQUESTED
+        c = s.get_one(Campaign, campaign.id)
+        assert (c.status, c.paused) == (CampaignStatus.ACTIVE, Pause.LAUNCHES), 'paused: no stop at the limit'
+
+
 def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:

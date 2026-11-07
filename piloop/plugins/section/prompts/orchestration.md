@@ -94,9 +94,11 @@ exclusion with your actor. Its scores stay in the pool, and a run may still star
   UPDATE `campaigns.status`: the daemon does not close a campaign that an UPDATE stopped.
 - `piloop run cancel <run> [--wrap-up]` and `piloop agent cancel <agent-session> [--wrap-up]` end one run or one agent,
   with every process that it started. A cancelled run's idea is dropped.
-- To continue, raise or change the conditions in `piloop.toml` and run `piloop init <path>`.
-- Or by hand: `UPDATE campaigns SET status='active', stopped_reason=NULL WHERE id=<p>`. With the conditions unchanged, it
-  stops again at once.
+- To continue, change the conditions in `piloop.toml` and run `piloop init <path>`: it reopens the campaign if its
+  stop is over, and says why not if it is not.
+- Or `piloop campaign reopen <campaign> --reason "<why, with ids>"`, with the conditions as they are. Either way, the
+  runs, hours and tokens that the conditions limit count from the reopen. A condition that would stop it again at once
+  refuses the reopen.
 
 ### Spend
 

@@ -1364,3 +1364,56 @@ def test_0080_repairs_the_leases_that_raw_writes_broke_keeps_the_fencing_counter
     command.downgrade(cfg, '0079')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         con.execute("UPDATE leases SET state = 'expired' WHERE id = 6")  # 0079 had no such CHECK
+
+
+def test_0081_gives_each_pause_its_owner_repairs_the_campaigns_that_raw_writes_broke_and_checks_them(
+    tmp_path: Path,
+) -> None:
+    """Each broken row is repaired by the rule that the revision states; a paused campaign's owner is the actor of its
+    latest pause, else ``human``. Its children keep their foreign keys through the rebuild."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0080')
+    campaign = 'INSERT INTO campaigns (id, name, path, config, status, stopped_reason, paused, paused_reason) VALUES '
+    rows = [
+        "(1, 'a', '/a', '{}', 'active', 'max_runs: 2 runs', NULL, NULL)",
+        "(2, 'b', '/b', '{}', 'stopped', NULL, 'launches', 'a review')",
+        "(3, 'c', '/c', '{}', 'retired', 'tried it all', 'all', 'night')",
+        "(4, 'd', '/d', '{}', 'active', NULL, 'all', 'held')",
+        "(5, 'e', '/e', '{}', 'stopped', 'target', NULL, NULL)",
+    ]
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for row in rows:
+            con.execute(campaign + row)
+        pause = "INSERT INTO events (target_kind, target_id, actor, payload) VALUES ('campaign', 4, ?, ?)"
+        for actor, new in (('human', 'launches'), ('daemon', 'all')):  # the latest is the daemon's hold
+            con.execute(pause, (actor, json.dumps({'kind': 'campaign.paused', 'new': new})))
+        con.execute("INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (5, 't', 'c')")
+    command.upgrade(cfg, '0081')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        got = con.execute(
+            'SELECT id, status, stopped_reason, paused, paused_reason, paused_by FROM campaigns ORDER BY id'
+        ).fetchall()
+        assert got == [
+            (1, 'active', None, None, None, None),
+            (2, 'stopped', 'stopped by hand', 'launches', 'a review', 'human'),
+            (3, 'retired', 'tried it all', None, None, None),
+            (4, 'active', None, 'all', 'held', 'daemon'),
+            (5, 'stopped', 'target', None, None, None),
+        ]
+        con.execute('PRAGMA foreign_keys = ON')
+        assert con.execute('PRAGMA foreign_key_check').fetchall() == []
+        con.execute('DELETE FROM campaigns WHERE id = 5')
+        assert con.execute('SELECT count(*) FROM candidates').fetchone() == (0,), 'the foreign key still cascades'
+        with pytest.raises(
+            sqlite3.IntegrityError, match='campaigns.a stopped or retired campaign has its stopped_reason'
+        ):
+            con.execute("UPDATE campaigns SET status = 'stopped' WHERE id = 1")
+        with pytest.raises(sqlite3.IntegrityError, match='campaigns.a pause has its owner'):
+            con.execute("UPDATE campaigns SET paused = 'all', paused_reason = 'r' WHERE id = 1")
+        with pytest.raises(sqlite3.IntegrityError, match='campaigns.a retired campaign is not paused'):
+            con.execute("UPDATE campaigns SET paused = 'all', paused_reason = 'r', paused_by = 'human' WHERE id = 3")
+    command.downgrade(cfg, '0080')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("UPDATE campaigns SET status = 'stopped' WHERE id = 1")  # 0080 had no such CHECK
+        assert 'paused_by' not in [c for (_, c, *_) in con.execute('PRAGMA table_info(campaigns)')]

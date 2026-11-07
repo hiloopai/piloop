@@ -62,7 +62,7 @@ def test_pause_and_resume_hold_the_campaign_say_so_in_status_and_refuse_twice(ca
     text = out()
     assert text.count('evaluator v2 lands at 14:00') == 1, 'the reason is in the headline only'
     assert (
-        ' · paused: launches · paused because: evaluator v2 lands at 14:00\n' in text
+        ' · paused: launches · paused by: human · paused because: evaluator v2 lands at 14:00\n' in text
         and '- Campaign: active, paused. Progress:' in text
     )
     with pytest.raises(SystemExit, match=r'campaign demo is paused already \(launches\)'):
@@ -70,7 +70,7 @@ def test_pause_and_resume_hold_the_campaign_say_so_in_status_and_refuse_twice(ca
     run_cli(['pause', 'demo', '--evals', '--reason', 'the box is busy'])
     assert out().startswith('campaign demo paused (all): the box is busy;')
     run_cli(['resume', 'demo'])
-    assert out().strip() == 'campaign demo resumed'
+    assert out().strip() == 'campaign demo resumed; it was paused (all by human: the box is busy)'
     with pytest.raises(SystemExit, match='campaign demo is not paused'):
         run_cli(['resume', 'demo'])
     with pytest.raises(SystemExit, match='a reason is required'):

@@ -393,7 +393,8 @@ def test_a_stopped_campaign_s_items_stay_in_the_inbox_but_remind_again_only_once
 
 def set_status(db: Database, campaign: Campaign, status: CampaignStatus) -> None:
     with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = status
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = status, None if status is CampaignStatus.ACTIVE else 'by the test'
         s.commit()
 
 

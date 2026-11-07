@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
 from piloop.campaign import escalations
-from piloop.campaign.ops import Refused, existing, pause
+from piloop.campaign.ops import Refused, existing, hold
 from piloop.campaign.stop import held
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign, Pause
@@ -23,7 +23,7 @@ from piloop.plugins.escalation.contract import Choice, EscalationView
 
 
 def hold_on_failed_baseline(s: Session, candidate: Candidate, logs: Path | None) -> None:
-    """Pause the launches of an unpaused campaign when ``candidate`` is its baseline and each evaluation of it failed.
+    """Hold the launches of the campaign (``hold``) when ``candidate`` is its baseline and each evaluation of it failed.
 
     Nothing can be compared with a baseline without a score, and no agent should spend on a campaign that has none.
     One that an older evaluator measured has one, and its campaign goes on. The pause measures what is asked, so it
@@ -32,30 +32,33 @@ def hold_on_failed_baseline(s: Session, candidate: Candidate, logs: Path | None)
     """
     errors = [m.error for m in candidate.measurements]
     campaign = s.get_one(Campaign, candidate.campaign_id)
-    if candidate.origin is not Origin.BASELINE or campaign.paused is not None or None in errors or not errors:
+    if candidate.origin is not Origin.BASELINE or None in errors or not errors:
         return
     where = '' if logs is None else f'; its logs are in {logs}'
     fix = f'fix it, then `piloop candidate remeasure {candidate.id}` and `piloop resume {campaign.name}`'
-    pause(s, campaign.id, evals=False, reason=f'the baseline failed to evaluate: {errors[-1]}{where}; {fix}')
+    hold(campaign, Pause.LAUNCHES, f'the baseline failed to evaluate: {errors[-1]}{where}; {fix}')
 
 
 def hold_on_cancelled_baseline(s: Session, candidate: Candidate, actor: Actor) -> None:
-    """Pause every measurement of a campaign whose baseline never measured, when ``actor`` cancelled its evaluation.
+    """Hold every measurement of a campaign (``hold``) whose baseline never measured, when ``actor`` cancelled its evaluation.
 
     A cancel records nothing, and the daemon measures a baseline that has no score at once: the pause holds that until
     someone resumes the campaign. The caller commits.
     """
     campaign = s.get_one(Campaign, candidate.campaign_id)
-    if candidate.origin is not Origin.BASELINE or campaign.paused is Pause.ALL or candidate.measurements:
+    if candidate.origin is not Origin.BASELINE or candidate.measurements:
         return
-    why = f'{actor} cancelled the evaluation of the baseline; `piloop resume {campaign.name}` measures it again'
-    pause(s, campaign.id, evals=True, reason=why)
+    hold(
+        campaign,
+        Pause.ALL,
+        f'{actor} cancelled the evaluation of the baseline; `piloop resume {campaign.name}` measures it again',
+    )
 
 
 def hold_on_infra_errors(
     s: Session, candidate_id: CandidateId, evaluation: int, evaluator_id: EvaluatorId, error: str, tries: int
 ) -> None:
-    """Pause the measurements of the candidate's campaign, and escalate: its evaluation failed for the machine.
+    """Hold the measurements of the candidate's campaign (``hold``), and escalate: its evaluation failed for the machine.
 
     It failed ``tries`` times in a row for a cause that is not the candidate's (``[evaluation] stop_after_tries``). That
     cause is the machine's or the evaluator's: the next evaluations would fail too, and the daemon would ask for this
@@ -66,13 +69,7 @@ def hold_on_infra_errors(
     campaign = s.get_one(Campaign, candidate.campaign_id)
     failed = f'evaluation#{evaluation} of candidate#{candidate_id} under evaluator#{evaluator_id} failed {tries} times'
     resume = f'`piloop resume {campaign.name}`'
-    if campaign.paused is not Pause.ALL:
-        pause(
-            s,
-            campaign.id,
-            evals=True,
-            reason=f'{failed} for a cause that is not its own: {error}; fix it, then {resume}',
-        )
+    hold(campaign, Pause.ALL, f'{failed} for a cause that is not its own: {error}; fix it, then {resume}')
     asked = EscalationView(
         headline=f"Evaluations of {campaign.name} fail for a cause that is not their candidate's: fix it, then resume.",
         why=(

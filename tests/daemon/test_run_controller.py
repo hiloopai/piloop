@@ -1172,7 +1172,7 @@ def test_a_run_whose_implementer_never_worked_ends_at_once_when_its_campaign_wou
     run_id = make_run(db, campaign)
     with db.session() as s:
         if held == 'paused':
-            ops.pause(s, campaign.id, evals=False, reason='a person reads the results')
+            ops.pause(s, campaign.id, System.HUMAN, evals=False, reason='a person reads the results')
         if held == 'stopped':  # the stop's wind-down ends a run in flight: this one died before it
             row = s.get_one(Campaign, campaign.id)
             row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by hand'

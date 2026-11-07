@@ -99,7 +99,8 @@ def test_a_stop_is_answered_once_its_campaign_is_stopped_and_with_now_its_implem
         answer_done(s)
         s.commit()
         assert len(pending(s, StopRequested)) == 1, 'the campaign is still active'
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         answer_done(s)
         s.commit()
         assert len(pending(s, StopRequested)) == (ending is Ending.NOW), 'now: its implementer still runs'

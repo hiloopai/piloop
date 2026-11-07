@@ -36,9 +36,10 @@ from piloop.campaign.stop import (
     StopRequested,
     answer_done,
     check as check_stop,
+    due,
     escalated,
     hours_due,
-    requested,
+    stop_campaign,
     unclosed,
 )
 from piloop.config import CampaignConfig
@@ -302,8 +303,8 @@ class Campaigns:
 
         A stopped campaign requests nothing and is measured again only on request (``ledger.due``). The pass asks the
         stop rule (``piloop.campaign.stop.check``) of each active campaign. A campaign that it holds gets only the first
-        step. A paused campaign (``piloop pause``) asks no role for requests, does not stop at a limit of its stop rule, and
-        launches nothing, and with ``all`` it is not measured again either. A stop request stops a held or paused
+        step. A paused campaign (``piloop pause``) asks no role for requests, does not stop at a limit of its stop rule
+        (``due``), and launches nothing, and with ``all`` it is not measured again either. A stop request stops a held or paused
         campaign too. A stopped campaign launches what a human requests, whatever the pause (``launches``).
         """
         self._collect()
@@ -328,12 +329,10 @@ class Campaigns:
                 held = answer.reason if isinstance(answer, Hold) else None
                 if held is None and campaign.paused is not Pause.ALL:
                     self._planner(campaign).remeasure(s, campaign)
-                if campaign.status is CampaignStatus.ACTIVE:
-                    # A stop request wins over a hold and a pause.
-                    if (stop := requested(s, campaign)) is not None:
-                        self._go_or_stop(s, campaign, cfg, stop, turn.now)
-                    elif not isinstance(answer, Hold) and campaign.paused is None:
-                        self._go_or_stop(s, campaign, cfg, answer, turn.now)
+                if (stop := due(s, campaign, answer)) is not None:
+                    self._go_or_stop(s, campaign, cfg, stop, turn.now)
+                elif isinstance(answer, Go) and active and campaign.paused is None:
+                    self._go_or_stop(s, campaign, cfg, answer, turn.now)
                 s.flush()
                 if campaign.status is CampaignStatus.STOPPED and unclosed(s, campaign) and settled(s, campaign):
                     self._close_campaign(s, campaign, cfg)
@@ -394,7 +393,7 @@ class Campaigns:
             self._wake(s, campaign, cfg, now)
             return
         reason = answer.reason
-        campaign.status, campaign.stopped_reason = CampaignStatus.STOPPED, reason
+        stop_campaign(s, campaign, reason)
         self._tracer.event('campaign.stopped', campaign=campaign.name, reason=reason)
         self._drain(s, campaign)
         s.flush()

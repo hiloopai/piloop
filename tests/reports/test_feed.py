@@ -86,7 +86,7 @@ def test_the_envelope_normalizes_history_without_inventing_and_keeps_unknown_kin
         s.commit()
         idea.status = IdeaStatus.DROPPED
         s.commit()
-        ops.pause(s, campaign.id, evals=False, reason='a quiet night')
+        ops.pause(s, campaign.id, System.HUMAN, evals=False, reason='a quiet night')
         s.commit()
         idea_id = idea.id
     unknown = raw(db, 'myplugin.observed', '{"nested": {"a": [1, 2]}}')
@@ -356,6 +356,7 @@ def test_snapshots_carry_the_cursor_they_were_read_at(db: Database, campaign: Ca
         'stopped_reason': None,
         'paused': None,
         'paused_reason': None,
+        'paused_by': None,
         'evaluator': campaign.evaluator_id,
         'best': [{'track': 'score', 'candidate': candidate_id, 'metric': 'score', 'value': 1.0, 'delta': None}],
         'new_bests': 0,

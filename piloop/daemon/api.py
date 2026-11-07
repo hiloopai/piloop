@@ -85,6 +85,7 @@ from piloop.api.views import (
     Queued,
     Registered,
     Replied,
+    Resumed,
     SecretChanged,
     SecretList,
     SecretView,
@@ -465,6 +466,10 @@ def _credential(api: Handlers, s: Session, credential: Credential | None) -> Sec
             assert_never(credential)
 
 
+STOP_RULE_CHANGED = 'its stop rule changed in piloop.toml'
+"""The reason of the reopen that a sync makes."""
+
+
 @router.post('/campaigns/{campaign}/sync', operation_id='sync_campaign', dependencies=[Depends(actor_access)])
 def sync_campaign(
     api: Api, s: Writing, me: Acting, campaign: Addressed, body: Annotated[SyncBody | None, Body()] = None
@@ -474,7 +479,9 @@ def sync_campaign(
     A campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its
     checkout moves forward to them. Its candidates and their scores stay: new code comes in as a reference candidate or a fork.
     A changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions
-    changed is active again. A campaign whose checkout is not on the disk refuses.
+    changed is reopened (``ops.reopen``), with the same guards, once the sync is committed: its limits count from
+    then. One that it refuses stays stopped, and ``stays_stopped`` says why. A campaign whose checkout is not on the
+    disk refuses.
     """
     if (missing := checkout_missing(campaign)) is not None:
         raise missing
@@ -492,12 +499,24 @@ def sync_campaign(
                 ' a credential is for a cloned campaign, so sync it without one',
             )
     was = campaign.status
-    sync(s, campaign)
+    changed = sync(s, campaign)
     documents = MEMORY.selected(campaign.config.plugins).sync(s, campaign, me)
     s.commit()
+    stays: str | None = None
+    if was is CampaignStatus.STOPPED and changed:
+        try:
+            ops.reopen(s, campaign.id, me, reason=STOP_RULE_CHANGED)
+            s.commit()
+        except ops.Refused as e:
+            s.rollback()
+            stays = str(e)
     with db_feed.snapshot(s) as cursor:
         return CampaignSynced(
-            cursor=cursor, campaign=feed.status_view(s, [campaign], me)[0], was=was, documents=documents
+            cursor=cursor,
+            campaign=feed.status_view(s, [campaign], me)[0],
+            was=was,
+            stays_stopped=stays,
+            documents=documents,
         )
 
 
@@ -512,17 +531,27 @@ def message(s: Writing, me: Acting, campaign: Addressed, body: MessageBody) -> M
 @router.post('/campaigns/{campaign}/pause', operation_id='pause', dependencies=[Depends(actor_access)])
 def pause(s: Writing, me: Acting, campaign: Addressed, body: PauseBody) -> CampaignAnswer:
     """Pause a campaign: nothing new launches, and nothing is escalated. Running work goes on."""
-    ops.pause(s, campaign.id, evals=body.evals, reason=body.reason)
+    ops.pause(s, campaign.id, me, evals=body.evals, reason=body.reason)
     s.commit()
     return _campaign_answer(s, campaign, me)
 
 
 @router.post('/campaigns/{campaign}/resume', operation_id='resume', dependencies=[Depends(actor_access)])
-def resume(s: Writing, me: Acting, campaign: Addressed) -> CampaignAnswer:
-    """Resume a paused campaign. The daemon queues runs and requests roles again at once."""
-    ops.resume(s, campaign.id)
+def resume(s: Writing, me: Acting, campaign: Addressed) -> Resumed:
+    """Resume a paused campaign, whoever paused it, and say what the resume lifted.
+
+    It lifts a hold of the daemon too. The daemon queues runs and requests roles again at once.
+    """
+    lifted = ops.resume(s, campaign.id)
     s.commit()
-    return _campaign_answer(s, campaign, me)
+    answer = _campaign_answer(s, campaign, me)
+    return Resumed(
+        cursor=answer.cursor,
+        campaign=answer.campaign,
+        paused=lifted.scope,
+        paused_by=lifted.by,
+        paused_reason=lifted.reason,
+    )
 
 
 @router.post('/campaigns/{campaign}/stop', operation_id='stop', dependencies=[Depends(actor_access)])

@@ -327,8 +327,8 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
         emit(s, reported, TargetRef(TargetKind.AGENT_SESSION, worker.id), System.DAEMON)
         candidate = TargetRef(CANDIDATE, 1)
         emit(s, scored('score 2 over 1 eval: the best of the score track now, rank 1 of 1'), candidate, System.DAEMON)
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
-        s.get_one(Campaign, campaign.id).stopped_reason = 'max_tokens 100 reached'
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'max_tokens 100 reached'
         s.commit()
         last, lines = news_lines(s, cursor, me=System.ORCHESTRATOR)
         assert lines == snapshot(

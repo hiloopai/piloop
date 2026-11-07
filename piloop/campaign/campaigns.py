@@ -452,14 +452,14 @@ def checked_out(s: Session, path: Path) -> Campaign | None:
     return next((by_path[root] for root in roots if root in by_path), None)
 
 
-def sync(s: Session, campaign: Campaign) -> CampaignConfig:
-    """Read the repo's ``piloop.toml`` into the campaign row again.
+def sync(s: Session, campaign: Campaign) -> bool:
+    """Read the repo's ``piloop.toml`` into the campaign row again, and return whether its stop rule changed.
 
     A change to ``evaluate``, ``metrics`` or ``link`` makes a new evaluator. The campaign's type refuses a config that
-    its rows cannot run on (``CampaignType.check_config``). A stopped campaign whose stop rule or its
-    limits changed becomes active again, because the human changed the stop conditions. A stored copy that no longer
-    validates is replaced, and its stop rule counts as unchanged. The repo's identity is read again too, because a
-    remote may have been added since.
+    its rows cannot run on (``CampaignType.check_config``). A stored copy that no longer validates is replaced, and its
+    stop rule counts as unchanged. The repo's identity is read again too, because a remote may have been added since.
+    The status is not this function's: a stopped campaign whose stop rule changed is the caller's to reopen
+    (``piloop.campaign.ops.reopen``).
     """
     cfg = load_campaign_config(Path(campaign.path))
     campaign.repo = VCS.selected(cfg.plugins).identity(Path(campaign.path))
@@ -467,12 +467,10 @@ def sync(s: Session, campaign: Campaign) -> CampaignConfig:
         changed = cfg.plugins.get(STOP_RULES.name) != campaign.config.plugins.get(STOP_RULES.name)
     except ValidationError:
         changed = False  # the copy is replaced below; what it said about the stop rule is unknown
-    if campaign.status is CampaignStatus.STOPPED and changed:
-        campaign.status, campaign.stopped_reason = CampaignStatus.ACTIVE, None
     campaign.config = cfg
     CAMPAIGN_TYPES.model_of(campaign.type)().check_config(s, campaign)
     current_evaluator(s, campaign, cfg)
-    return cfg
+    return changed
 
 
 def tree(s: Session) -> list[tuple[int, Campaign]]:

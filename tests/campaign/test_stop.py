@@ -21,7 +21,9 @@ from piloop.campaign.stop import (
     CampaignClosed,
     CampaignReopened,
     StopRequested,
+    acted,
     check as check_campaign,
+    due,
     gather,
     hours,
     hours_due,
@@ -361,7 +363,7 @@ def test_the_pass_comes_back_when_the_hours_that_the_rule_leaves_run_out(db: Dat
         assert left is not None and abs(left - timedelta(hours=1)) < timedelta(minutes=1)
         assert hours_due(row, Go(), now) is None, 'an answer that leaves no hours: no clock'
         assert hours_due(row, Hold('spend not known'), now) is None, 'a held campaign uses up no hours'
-        row.paused, row.paused_reason = Pause.ALL, 'night'
+        row.paused, row.paused_reason, row.paused_by = Pause.ALL, 'night', 'human'
         assert due(row) is None, 'paused time does not count'
 
 
@@ -494,12 +496,14 @@ def test_a_run_whose_worker_gave_up_is_an_attempt_for_plateau_and_holds_no_place
         assert runs(s, s.get_one(Campaign, campaign.id)) == 1, 'only the measured run holds a place under max_runs'
 
 
-def test_reactivating_a_stopped_campaign_starts_a_fresh_plateau_window(db: Database, campaign: Campaign) -> None:
-    """A campaign reactivated after a plateau stop must not stop again on the next tick.
+def test_a_reopen_starts_a_fresh_plateau_window_and_an_update_that_sets_the_campaign_active_does_not(
+    db: Database, campaign: Campaign
+) -> None:
+    """``plateau`` counts the runs that finished after the later of the last new best and the latest reopen.
 
-    ``plateau`` counts the runs that finished after the later of the last new best and the last reactivation (a
-    ``campaign.status`` event to ``active``, by ``piloop init`` or by SQL). An evaluator change alone resets nothing:
-    the campaign still has made no progress.
+    A reopen (``CampaignReopened``) is the one start that every limit counts from: ``max_runs``, ``max_hours`` and
+    ``max_tokens`` too. An UPDATE that sets the campaign active is no reopen, so it stops again at once. An evaluator
+    change alone resets nothing: the campaign still has made no progress.
     """
     configure(db, campaign, plateau=2)
     add_run(db, campaign, keep_score=5.0, finished_at=timedelta(minutes=11))
@@ -511,7 +515,14 @@ def test_reactivating_a_stopped_campaign_starts_a_fresh_plateau_window(db: Datab
         row = s.get_one(Campaign, campaign.id)
         row.status, row.stopped_reason = CampaignStatus.ACTIVE, None
         s.commit()
-    assert reason(db, campaign) is None, 'the runs before the reactivation are not counted'
+    assert reason(db, campaign) == 'plateau: 2 runs without a new best', 'an UPDATE is no reopen'
+    stop_campaign(db, campaign, 'plateau: 2 runs without a new best')
+    with db.session() as s:
+        emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)
+        s.commit()
+        ops.reopen(s, campaign.id, System.HUMAN, reason='one more idea')
+        s.commit()
+    assert reason(db, campaign) is None, 'the runs before the reopen are not counted'
     add_run(db, campaign)
     assert reason(db, campaign) is None
     add_run(db, campaign)
@@ -610,7 +621,8 @@ def test_a_requested_stop_ends_the_campaign_as_a_stop_condition_does(
     assert campaign_state(db, campaign) == (CampaignStatus.STOPPED, 'stopped by human: machine needed')
     with db.session() as s:
         assert (s.get_one(Run, 2).end, s.get_one(Idea, idea).status) == (RunEnd.CAMPAIGN_STOPPED, IdeaStatus.OPEN)
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.ACTIVE
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.ACTIVE, None
         s.commit()
     assert run_all(sched) == [2], 'reactivated: the old request stops nothing, and the queued idea runs'
     sched.wait(SETTLE)
@@ -651,7 +663,7 @@ def stop_while_held(db: Database, campaign: Campaign, hold: str) -> int:
         s.get_one(Idea, idea).status = IdeaStatus.CLAIMED
         s.add(Run(campaign_id=campaign.id, idea_id=idea, attempt=1, base_candidate_id=1, harness='script', model='m'))
         if hold == 'pause':
-            pause(s, campaign.id, evals=False, reason='too expensive')
+            pause(s, campaign.id, System.HUMAN, evals=False, reason='too expensive')
         request_stop(s, s.get_one(Campaign, campaign.id), System.HUMAN, reason='over budget', ending=Ending.WRAP_UP)
         s.commit()
     return idea
@@ -732,7 +744,8 @@ def test_the_close_waits_until_the_stopped_campaigns_runs_are_scored_and_comes_o
     run_all(restarted)
     assert closes(db, campaign) == 1, 'once'
     with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.ACTIVE
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.ACTIVE, None
         request_stop(s, s.get_one(Campaign, campaign.id), System.HUMAN, reason='again', ending=Ending.WRAP_UP)
         s.commit()
     run_all(restarted)
@@ -1022,11 +1035,11 @@ def test_an_agent_may_run_its_role_timeout_cut_at_the_time_that_the_campaign_sto
         assert 290 < seconds(agent_timeout(s, row, cfg, 1800, now)) <= 300, 'five minutes left'
         started = now - timedelta(minutes=2)
         assert 410 < seconds(agent_timeout(s, row, cfg, 1800, started)) <= 420, 'an agent that started 2 minutes ago'
-        row.status = CampaignStatus.STOPPED
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         assert agent_timeout(s, row, cfg, 1800, now) == 1800, (
             'a stopped campaign cuts nothing: an agent that a person requests'
         )
-        row.status = CampaignStatus.ACTIVE
+        row.status, row.stopped_reason = CampaignStatus.ACTIVE, None
     add_run(db, campaign, started_at=timedelta(hours=3, minutes=5))
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
@@ -1038,6 +1051,36 @@ def test_an_agent_may_run_its_role_timeout_cut_at_the_time_that_the_campaign_sto
         hold = {'max_hours': 3, 'hold_at': {'spend': 300}}
         held = load_campaign_config(Path(campaign.path), plugins={'stop_rule': hold, 'fact_source': with_spend()})
         assert agent_timeout(s, row, held, 1800, utcnow()) == 1800, 'a hold leaves no budget: nothing launches then'
+
+
+def test_a_stop_is_due_by_one_rule_so_a_paused_campaign_past_its_limit_cuts_no_agent_short(
+    db: Database, campaign: Campaign
+) -> None:
+    """The pass stops a campaign on ``due``, and an agent's timeout is cut on it: the two never disagree.
+
+    A paused campaign does not stop at a limit of its rule. So its agents keep their whole timeout: an implementer is
+    not told of a campaign's stop 0 s away, and an orchestrator that a paused campaign wakes is not put back
+    every pass (the paused spin). A stop that someone requested is due also while the campaign is paused.
+    """
+    configure(db, campaign, max_hours=1)
+    add_run(db, campaign, started_at=timedelta(hours=2))
+    with db.session() as s:
+        row = s.get_one(Campaign, campaign.id)
+        cfg = CampaignConfig.model_validate(row.config)
+        rule = Stop('max_hours: 2.0h since the first run')
+        assert (due(s, row, acted(check_campaign(s, row, cfg))), agent_timeout(s, row, cfg, 1800, utcnow())) == (
+            rule,
+            rule,
+        )
+        ops.pause(s, campaign.id, System.HUMAN, evals=False, reason='a review')
+        assert due(s, row, acted(check_campaign(s, row, cfg))) is None, 'a paused campaign does not stop at a limit'
+        assert agent_timeout(s, row, cfg, 1800, utcnow()) == 1800, 'so it cuts no agent short'
+        request_stop(s, row, System.HUMAN, reason='enough', ending=Ending.WRAP_UP)
+        asked = Stop('stopped by human: enough')
+        assert (due(s, row, acted(check_campaign(s, row, cfg))), agent_timeout(s, row, cfg, 1800, utcnow())) == (
+            asked,
+            asked,
+        )
 
 
 def facts(**values: FactValue) -> Facts:
@@ -1244,7 +1287,8 @@ def test_a_reopen_refuses_a_campaign_that_its_rule_would_stop_at_once_or_that_is
             ops.reopen(s, campaign.id, System.HUMAN, reason='go on')
         s.rollback()
         assert s.get_one(Campaign, campaign.id).status is CampaignStatus.STOPPED
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.RETIRED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.RETIRED, 'by the test'
         s.commit()
     retired = rf'^campaign #{campaign.id} \(demo\) is retired, for good: fork it instead'
     with db.session() as s, pytest.raises(Refused, match=retired):
@@ -1253,5 +1297,6 @@ def test_a_reopen_refuses_a_campaign_that_its_rule_would_stop_at_once_or_that_is
 
 def stopped_and_closed(s: Session, campaign: Campaign) -> None:
     """Stop ``campaign`` as the daemon does, and close it."""
-    s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+    row = s.get_one(Campaign, campaign.id)
+    row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
     emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)

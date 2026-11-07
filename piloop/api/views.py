@@ -154,6 +154,8 @@ class CampaignState(View):
     paused: str | None
     """What ``piloop pause`` holds: ``launches`` or ``all``. Null while the campaign is not paused."""
     paused_reason: str | None
+    paused_by: str | None = None
+    """Who owns the pause: the actor that paused the campaign, ``daemon`` for a hold. Null while it is not paused."""
     evaluator: EvaluatorId | None
     best: list[TrackBest]
     """The best of each track. Empty before the campaign has a baseline."""
@@ -549,6 +551,16 @@ class CampaignAnswer(View):
     campaign: CampaignEntry
 
 
+class Resumed(CampaignAnswer):
+    """A campaign that a resume set going again, read at ``cursor``, with the pause that the resume lifted."""
+
+    paused: str
+    """What the pause held: ``launches`` or ``all``."""
+    paused_by: str
+    """Who owned it: the actor that paused the campaign, ``daemon`` for a hold."""
+    paused_reason: str
+
+
 class Registered(CampaignAnswer):
     """A campaign that registering added, read at ``cursor``, with its baseline candidate, which the daemon measures."""
 
@@ -560,7 +572,10 @@ class CampaignSynced(CampaignAnswer):
     """A campaign whose ``piloop.toml`` was read again, read at ``cursor``."""
 
     was: CampaignStatus
-    """Its status before: a stopped campaign whose stop conditions changed is active again."""
+    """Its status before: a stopped campaign whose stop rule changed is reopened."""
+    stays_stopped: str | None = None
+    """Why a stopped campaign whose stop rule changed was not reopened (``piloop campaign reopen`` refused it), or
+    null."""
     documents: Synced
 
 

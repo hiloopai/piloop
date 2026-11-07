@@ -19,7 +19,7 @@ from piloop.api.contract import (
     SyncBody,
     TokenCredential,
 )
-from piloop.api.views import Registered
+from piloop.api.views import CampaignSynced, Registered
 from piloop.campaign import ops
 from piloop.campaign.campaigns import (
     BLANK,
@@ -109,13 +109,11 @@ def init(
         else:
             synced = client.sync_campaign(found.name)
             campaign, documents = synced.campaign, synced.documents
-            resumed = (
-                '; resumed: stop conditions changed'
-                if synced.was is CampaignStatus.STOPPED and campaign.status is CampaignStatus.ACTIVE
-                else ''
-            )
             common.console.print(
-                f'campaign {campaign.name} #{campaign.id} already registered; config re-read from piloop.toml{resumed}'
+                f'campaign {campaign.name} #{campaign.id} already registered; config re-read from piloop.toml'
+                + _reopened(synced),
+                markup=False,
+                soft_wrap=True,
             )
     if documents.added or documents.unchanged or documents.skipped:
         common.console.print(documents.line(), markup=False, highlight=False, soft_wrap=True)
@@ -206,7 +204,21 @@ def sync_cmd(
     with Client.connect(daemon_http()) as client:
         synced = client.sync_campaign(campaign_name(client, ref), body)
     campaign = synced.campaign
-    common.console.print(f'campaign {campaign.name} #{campaign.id}: config re-read', markup=False)
+    common.console.print(
+        f'campaign {campaign.name} #{campaign.id}: config re-read' + _reopened(synced), markup=False, soft_wrap=True
+    )
+
+
+def _reopened(synced: CampaignSynced) -> str:
+    """What a sync did to a stopped campaign whose stop rule changed, to end its line: reopened it, or why not."""
+    if synced.stays_stopped is not None:
+        return (
+            f'; its stop rule changed, but it stays stopped: {synced.stays_stopped}'
+            f' (`piloop campaign reopen {synced.campaign.name}`)'
+        )
+    if synced.was is CampaignStatus.STOPPED and synced.campaign.status is CampaignStatus.ACTIVE:
+        return '; reopened: its stop rule changed, and its limits count from now'
+    return ''
 
 
 def _sync_credential(secret: str | None, token_stdin: bool) -> Credential | None:

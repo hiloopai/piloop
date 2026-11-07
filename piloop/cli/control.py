@@ -45,8 +45,9 @@ def pause(
 def resume(ref: CampaignRef, /) -> None:
     """Resume a paused campaign. The daemon queues runs and requests roles again at once."""
     with Client.connect(daemon_http()) as client:
-        state = client.resume(campaign_name(client, ref)).campaign
-    common.console.print(f'campaign {state.name} resumed', markup=False)
+        resumed = client.resume(campaign_name(client, ref))
+    lifted = f'{resumed.paused} by {resumed.paused_by}: {resumed.paused_reason}'
+    common.console.print(f'campaign {resumed.campaign.name} resumed; it was paused ({lifted})', markup=False)
 
 
 def stop(

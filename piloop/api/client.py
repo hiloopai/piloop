@@ -69,6 +69,7 @@ from piloop.api.views import (
     Prompted,
     Registered,
     Replied,
+    Resumed,
     SecretChanged,
     SecretList,
     Status,
@@ -158,8 +159,8 @@ class Client:
     def pause(self, campaign: str, body: PauseBody) -> CampaignAnswer:
         return self.post(f'/v1/campaigns/{segment(campaign)}/pause', body, CampaignAnswer)
 
-    def resume(self, campaign: str) -> CampaignAnswer:
-        return self.post(f'/v1/campaigns/{segment(campaign)}/resume', None, CampaignAnswer)
+    def resume(self, campaign: str) -> Resumed:
+        return self.post(f'/v1/campaigns/{segment(campaign)}/resume', None, Resumed)
 
     def stop(self, campaign: str, body: StopBody) -> CampaignAnswer:
         return self.post(f'/v1/campaigns/{segment(campaign)}/stop', body, CampaignAnswer)

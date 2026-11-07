@@ -198,7 +198,8 @@ def test_a_done_idea_without_its_event_is_left_to_the_campaign_s_archiving(
     write(workspace_dir(home, campaign.id) / f'idea{idea}' / 'x.npy')
     with db.session() as s:
         assert due(s) is None
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         s.commit()
         assert due(s) == Job(campaign.id, None)
     assert archive_job(db, store, home, Job(campaign.id, ref(idea))).rows[0].files == 0, 'none of its own'
@@ -210,7 +211,8 @@ def test_a_stopped_campaign_is_due_once_its_ideas_are_and_nothing_of_it_runs(db:
     idea = add_idea(db, campaign.id, 'idea')
     agent_session = add_run(db, idea)
     with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='campaign stopped'))
         s.commit()
         assert due(s) == Job(campaign.id, ref(idea)), 'its settled ideas first'
@@ -431,7 +433,8 @@ def test_what_does_not_fit_with_nothing_left_to_prune_is_short_and_stays_for_the
     assert files(workspace_dir(home, campaign.id)) == before
     with db.session() as s:
         assert due(s) == Job(campaign.id, ref(idea)), 'no batch stored: still due'
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         s.commit()
     monkeypatch.setattr(archive_module, 'free', lambda _: 1 << 40)
     assert [r.files for r in archive_job(db, store, home, Job(campaign.id, ref(idea)), reserve=1000).rows] == [4]
@@ -613,7 +616,7 @@ def test_a_retired_campaign_s_files_go_to_the_cas_once_archived_and_restore_brin
     write(directory / 'measure' / '1-e1' / 'stdout', 'METRIC score=1')
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        row.path, row.status = str(checkout), CampaignStatus.RETIRED
+        row.path, row.status, row.stopped_reason = str(checkout), CampaignStatus.RETIRED, 'by the test'
         s.commit()
         assert (due(s), files_of(s, row)) == (Job(campaign.id, None), CampaignFiles.PACKING), 'its archiving first'
         head = s.scalars(select(Candidate.revision).where(Candidate.campaign_id == campaign.id)).one()
@@ -644,7 +647,8 @@ def test_a_retired_campaign_s_own_checkout_stays_and_a_campaign_without_files_fr
     db: Database, campaign: Campaign, campaign_path: Path, home: Path, store: ObjectsCas
 ) -> None:
     with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.RETIRED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.RETIRED, 'by the test'
         s.commit()
     archive_job(db, store, home, Job(campaign.id, None))
     assert free_files(db, store, home, Free(campaign.id)) == CampaignFilesFreed(checkout=None, files=None)
@@ -661,7 +665,7 @@ def test_a_fork_of_a_campaign_whose_checkout_left_the_disk_starts_from_what_its_
     subprocess.run(['git', 'clone', '-q', str(campaign_path), str(checkout)], check=True)
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        row.path, row.status = str(checkout), CampaignStatus.RETIRED
+        row.path, row.status, row.stopped_reason = str(checkout), CampaignStatus.RETIRED, 'by the test'
         s.commit()
     archive_job(db, store, home, Job(campaign.id, None))
     freed = free_files(db, store, home, Free(campaign.id))
@@ -678,7 +682,8 @@ def test_a_retired_campaign_s_files_stay_while_the_store_does_not_hold_every_blo
 ) -> None:
     path = write(campaign_dir(home, campaign.id) / 'measure' / '1-e1' / 'stdout', 'log')
     with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.RETIRED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.RETIRED, 'by the test'
         s.commit()
     monkeypatch.setattr(ObjectsCas, 'missing', lambda self, cids: [LOST])
     with pytest.raises(NotArchived, match=f'^the store lacks 1 blobs of campaign#{campaign.id}, e.g. {LOST}$'):

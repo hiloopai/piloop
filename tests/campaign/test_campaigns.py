@@ -270,7 +270,8 @@ def test_init_replaces_a_stored_config_that_no_longer_validates_and_a_stopped_ca
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
         row.status, row.stopped_reason = CampaignStatus.STOPPED, 'target: score 3.0000 ≥ 3'
-        cfg = sync(s, row)
+        assert sync(s, row) is False, 'an old [stop] that no longer loads is not a changed one'
+        cfg = row.config
         s.commit()
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
@@ -308,6 +309,8 @@ def test_init_refuses_a_config_that_drops_a_track_that_ideas_are_on_and_keeps_th
 """)
     toml.write_text(renamed.replace('name = "score2"\n', 'name = "score2"\ntrack = "score"\n'))
     with db.session() as s:
-        cfg = sync(s, s.get_one(Campaign, campaign.id))
+        row = s.get_one(Campaign, campaign.id)
+        sync(s, row)
+        cfg = row.config
         s.commit()
     assert cfg.track(TrackName('score')).primary.name == 'score2'

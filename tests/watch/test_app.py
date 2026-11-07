@@ -550,7 +550,7 @@ def test_s_sends_a_pi_agent_its_message_too(db: Database, live_campaign: Campaig
 
 def test_a_paused_campaign_says_so_in_its_row_and_its_header(db: Database, live_campaign: Campaign) -> None:
     with db.session() as s:
-        ops.pause(s, live_campaign.id, evals=False, reason='evaluator v2')
+        ops.pause(s, live_campaign.id, System.HUMAN, evals=False, reason='evaluator v2')
         s.commit()
     shots: list[str] = []
 

@@ -214,8 +214,9 @@ piloop campaign fork enwik8 --name enwik8-lzma
 piloop campaign retire enwik8 --reason "tried every idea"
 ```
 
-- **Reopen** sets a stopped campaign active again. The runs, hours and tokens of its stop rule count from the reopen.
-  When the rule would stop it at once, change the rule and run `piloop init` instead.
+- **Reopen** sets a stopped campaign active again, once its stop is over. The runs, hours and tokens of its stop rule
+  count from the reopen. When the rule would stop it at once, change the rule and run `piloop init`: it reopens a
+  stopped campaign whose stop rule changed, the same way.
 - **Fork** makes a new campaign from the best of another one, or from the version that `--at` names. It takes the
   source's `piloop.toml` and shares its repo's [memory](/concepts/memory). It starts with no ideas.
 - **Retire** ends a stopped campaign for good and frees its name. Its rows stay: `piloop status 3`. Its files move

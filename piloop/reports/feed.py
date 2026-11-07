@@ -163,6 +163,7 @@ def _state(s: Session, campaign: Campaign, cfg: CampaignConfig, me: Actor) -> Ca
         stopped_reason=campaign.stopped_reason,
         paused=None if campaign.paused is None else str(campaign.paused),
         paused_reason=campaign.paused_reason,
+        paused_by=campaign.paused_by,
         evaluator=campaign.evaluator_id,
         best=[
             TrackBest(

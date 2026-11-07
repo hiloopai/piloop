@@ -43,7 +43,7 @@ def transition[S: StrEnum](
     m: Machine[S],
     row_id: int,
     to: S,
-    event: EventModel,
+    event: EventModel | None,
     actor: Actor,
     *,
     on: TargetRef | None = None,
@@ -51,7 +51,8 @@ def transition[S: StrEnum](
 ) -> None:
     """Move row ``row_id`` to ``to``, with ``values`` in the same UPDATE, and emit ``event``. The caller commits.
 
-    The event goes on the row, or on ``on``: a lease's go on its job's row, which its readers watch.
+    The event goes on the row, or on ``on``: a lease's go on its job's row, which its readers watch. ``event`` is None
+    only where the change log's trigger logs the column already (``campaigns.status``).
 
     Raises:
         Refused: the row is in a state that may not move to ``to``.
@@ -68,4 +69,5 @@ def transition[S: StrEnum](
     ).first()
     if moved is None:
         raise Refused(ref, to, s.execute(select(m.column).where(table.id == row_id)).scalar_one())
-    emit(s, event, on or ref, actor)
+    if event is not None:
+        emit(s, event, on or ref, actor)

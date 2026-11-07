@@ -382,7 +382,8 @@ def test_a_retired_campaign_is_archived_then_its_files_are_freed_one_job_after_t
 ) -> None:
     write(workspace_dir(home, campaign.id) / 'NOTES.md', 'n')
     with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.RETIRED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.RETIRED, 'by the test'
         s.commit()
     archiver = upkept(opened(db, store, home, tracer))
     archiver.run(utcnow())
@@ -409,7 +410,8 @@ def test_a_freeing_that_fails_is_on_its_span_and_pauses_the_archiver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.RETIRED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.RETIRED, 'by the test'
         s.add(Archive(campaign_id=campaign.id, complete=True))
         s.commit()
 

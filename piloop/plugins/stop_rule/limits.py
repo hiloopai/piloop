@@ -76,9 +76,9 @@ class Limits(StopRule):
     plateau: int | None = Field(default=None, ge=1)
     """Stop after this many finished runs without a new best, whether they reached the evaluator or not. A run that a
     stop ended, or whose agent never started, does not count. The count starts again each time a run's candidate
-    becomes the best, and when the campaign is set ``active`` after a stop (``piloop init``, or an UPDATE of
-    ``campaigns.status``), so a reactivated campaign gets this many runs again. A new evaluator alone does not reset
-    it."""
+    becomes the best, and when the campaign is reopened after a stop (``piloop campaign reopen``, or ``piloop init``
+    after its stop rule changed), so a reopened campaign gets this many runs again, as it gets ``max_runs``,
+    ``max_hours`` and ``max_tokens``. A new evaluator alone does not reset it."""
     hold_at: dict[str, Annotated[float, Field(gt=0)]] = {}
     """Hold the campaign while a fact that a source reads, by its name, is at this value or above, and while it is
     unknown: the daemon launches no agent and starts no evaluation. Work that already runs finishes and is scored.

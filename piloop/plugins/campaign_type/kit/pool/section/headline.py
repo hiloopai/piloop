@@ -48,6 +48,7 @@ class Headline(Section):
         if campaign.paused is not None:
             figures += [
                 Figure(label='paused', value=holds(campaign)),
+                Figure(label='paused by', value=campaign.paused_by),
                 Figure(label='paused because', value=campaign.paused_reason),
             ]
         return Rendered(title='Campaign', blocks=(Figures(figures=tuple(figures)),))

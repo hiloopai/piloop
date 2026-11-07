@@ -346,7 +346,7 @@ def test_only_an_escalation_or_what_a_person_writes_wakes_it_also_while_the_camp
         s.commit()
     assert wake(db, runtime, tmp_path) == [], 'nothing that needs a decision'
     with db.session() as s:
-        ops.pause(s, campaign.id, evals=False, reason='a person reads the results')
+        ops.pause(s, campaign.id, System.HUMAN, evals=False, reason='a person reads the results')
         s.commit()
     message(db, campaign, 'resume it when the best is measured')
     [paused] = wake(db, runtime, tmp_path)

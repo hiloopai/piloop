@@ -17,6 +17,7 @@ from pydantic import TypeAdapter
 from rich.console import Console
 from sqlalchemy import select, text
 
+from piloop.actor import System
 from piloop.api import views
 from piloop.api.client import Client
 from piloop.api.views import Batch
@@ -119,7 +120,7 @@ def test_status_and_inbox_print_one_json_document_with_the_cursor_they_were_read
                 body='a long body ' * 20,
             )
         )
-        ops.pause(s, campaign.id, evals=True, reason='budget review')
+        ops.pause(s, campaign.id, System.HUMAN, evals=True, reason='budget review')
         s.commit()
     end = event_ids(db, 0)[-1]
 
@@ -294,7 +295,7 @@ def test_a_separate_process_joins_a_snapshot_to_the_feed_and_resumes_after_a_dis
     ) as dropped:
         dropped.kill()
     with db.session() as s:
-        ops.pause(s, campaign.id, evals=False, reason='night')
+        ops.pause(s, campaign.id, System.HUMAN, evals=False, reason='night')
         s.get_one(Idea, idea).status = IdeaStatus.DROPPED
         s.commit()
     write(db, UNKNOWN)

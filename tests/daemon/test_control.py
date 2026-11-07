@@ -31,7 +31,7 @@ from tests.daemon.test_scheduler import add_ideas, make_scheduler, measured_by, 
 
 def pause(db: Database, *, evals: bool) -> None:
     with db.session() as s:
-        ops.pause(s, CampaignId(1), evals=evals, reason='wait for the new evaluator')
+        ops.pause(s, CampaignId(1), System.HUMAN, evals=evals, reason='wait for the new evaluator')
         s.commit()
 
 
@@ -118,7 +118,8 @@ def test_an_agent_requested_while_a_retire_checks_either_stops_the_retire_or_nev
 ) -> None:
     """A retire and a launch race: the retire must never pass while an agent of its campaign is open."""
     with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         s.commit()
     path = db.engine.url.database
     assert path is not None
@@ -153,7 +154,8 @@ def test_a_campaign_retired_while_the_daemon_takes_its_request_launches_nothing(
 ) -> None:
     """The second guard: a pass that read the campaign before a retire committed never launches its rows."""
     with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         s.commit()
     asked = request_lead(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
@@ -179,7 +181,8 @@ def test_a_campaign_that_a_feed_read_finds_retired_during_the_pass_drops_out_of_
 ) -> None:
     """A feed read (a news trigger's, say) reloads what the pass read: a retire that committed before it shows."""
     with db.session() as s:
-        s.get_one(Campaign, campaign.id).status = CampaignStatus.STOPPED
+        row = s.get_one(Campaign, campaign.id)
+        row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         s.commit()
     asked = request_lead(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)

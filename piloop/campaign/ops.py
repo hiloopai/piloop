@@ -11,16 +11,17 @@ into a ``note`` on the row. An operation emits the events of the changes that no
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import assert_never
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from piloop.actor import Actor, by_a_person
+from piloop.actor import Actor, System, by_a_person
 from piloop.campaign.campaigns import checkout_missing
-from piloop.campaign.stop import CampaignReopened, acted, check, request_stop, unclosed
-from piloop.db.events import emit
+from piloop.campaign.stop import CAMPAIGN_STATES, CampaignReopened, acted, check, request_stop, unclosed
+from piloop.db.machine import transition
 from piloop.db.models import ENDED, AgentSession, Base, Campaign, Comment, Pause
 from piloop.db.session import write_transaction
 from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentKind, Ending, RoleName, TargetKind, TargetRef
@@ -55,12 +56,22 @@ def required_reason(reason: str) -> str:
     return reason.strip()
 
 
-def pause(s: Session, campaign_id: CampaignId, *, evals: bool, reason: str) -> Campaign:
-    """Pause the campaign: nothing launches, and with ``evals`` the daemon starts no measurement either.
+@dataclass(frozen=True)
+class Paused:
+    """A campaign's pause: what it holds, who owns it (an actor's signature), and why."""
+
+    scope: Pause
+    by: str
+    reason: str
+
+
+def pause(s: Session, campaign_id: CampaignId, actor: Actor, *, evals: bool, reason: str) -> Campaign:
+    """Pause the campaign for ``actor``: nothing launches, and with ``evals`` the daemon starts no measurement either.
 
     No run is queued, no role is requested and no requested row launches. Running work goes on and its commits are
     scored. Nothing is escalated. Without ``evals``, the daemon still measures what a new evaluator or a request needs, so the
     pause can end on a measured best. A pause is state in the database, so the daemon holds wherever the caller is.
+    The daemon's own pauses are holds (``hold``).
 
     Raises:
         Refused: the reason is blank, or the campaign is paused that way already.
@@ -69,23 +80,50 @@ def pause(s: Session, campaign_id: CampaignId, *, evals: bool, reason: str) -> C
     why = required_reason(reason)
     scope = Pause.ALL if evals else Pause.LAUNCHES
     if campaign.paused is scope:
-        raise Refused(f'campaign {campaign.name} is paused already ({scope}): {campaign.paused_reason}')
-    campaign.paused, campaign.paused_reason = scope, why
+        raise Refused(
+            f'campaign {campaign.name} is paused already ({scope}) by {campaign.paused_by}: {campaign.paused_reason}'
+        )
+    _pause(campaign, Paused(scope, actor.signature, why))
     return campaign
 
 
-def resume(s: Session, campaign_id: CampaignId) -> Pause:
-    """Resume a paused campaign, and return what it held. The daemon schedules it again at once.
+def hold(campaign: Campaign, scope: Pause, reason: str) -> None:
+    """Pause ``campaign`` for the daemon as far as ``scope``, for ``reason``: a hold, which ``piloop resume`` ends.
+
+    A pause that holds as much already, whoever owns it, stays as it is. A narrower one widens to ``scope``, and the
+    daemon owns it from then: its reason says what to fix before the resume. The caller commits.
+    """
+    if campaign.paused not in (Pause.ALL, scope):
+        _pause(campaign, Paused(scope, System.DAEMON.signature, reason))
+
+
+def paused(campaign: Campaign) -> Paused | None:
+    """The campaign's pause, or None while it is not paused."""
+    if campaign.paused is None or campaign.paused_by is None or campaign.paused_reason is None:
+        return None
+    return Paused(campaign.paused, campaign.paused_by, campaign.paused_reason)
+
+
+def _pause(campaign: Campaign, pause: Paused | None) -> None:
+    """The one writer of a campaign's pause: its scope, owner and reason change together (``CAMPAIGN_CHECKS``)."""
+    campaign.paused = None if pause is None else pause.scope
+    campaign.paused_by = None if pause is None else pause.by
+    campaign.paused_reason = None if pause is None else pause.reason
+
+
+def resume(s: Session, campaign_id: CampaignId) -> Paused:
+    """Resume a paused campaign, whoever paused it, and return the pause that it lifted.
+
+    The daemon schedules it again at once.
 
     Raises:
         Refused: the campaign is not paused.
     """
     campaign = existing(s, Campaign, campaign_id, 'campaign')
-    if campaign.paused is None:
+    if (lifted := paused(campaign)) is None:
         raise Refused(f'campaign {campaign.name} is not paused')
-    held = campaign.paused
-    campaign.paused, campaign.paused_reason = None, None
-    return held
+    _pause(campaign, None)
+    return lifted
 
 
 def stop(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str, ending: Ending) -> Campaign:
@@ -167,7 +205,8 @@ def retire(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str) ->
     """
     why = required_reason(reason)
     campaign = _stopped(s, campaign_id, 'retire')
-    campaign.status = CampaignStatus.RETIRED
+    _pause(campaign, None)  # a retired campaign holds nothing
+    transition(s, CAMPAIGN_STATES, campaign.id, CampaignStatus.RETIRED, None, actor)
     target = TargetRef(TargetKind.CAMPAIGN, campaign.id)
     s.add(Comment(target=target, author=actor.signature, kind=CommentKind.NOTE, body=f'retired: {why}'))
     return campaign
@@ -188,8 +227,9 @@ def reopen(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str) ->
     campaign = _stopped(s, campaign_id, 'reopen')
     if (missing := checkout_missing(campaign)) is not None:
         raise missing
-    campaign.status, campaign.stopped_reason = CampaignStatus.ACTIVE, None
-    emit(s, CampaignReopened(reason=why), TargetRef(TargetKind.CAMPAIGN, campaign.id), actor)
+    transition(
+        s, CAMPAIGN_STATES, campaign.id, CampaignStatus.ACTIVE, CampaignReopened(reason=why), actor, stopped_reason=None
+    )
     match acted(check(s, campaign, campaign.config)):
         case Stop(reason=stops):
             raise Refused(f'{campaign.name} would stop again at once ({stops}): change its stop rule first')

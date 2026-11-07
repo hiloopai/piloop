@@ -1014,7 +1014,7 @@
     "/v1/campaigns/{campaign}/sync": {
       "post": {
         "summary": "Sync Campaign",
-        "description": "Read the campaign's ``piloop.toml`` again, and sync its documents into its memory.\n\nA campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its\ncheckout moves forward to them. Its candidates and their scores stay: new code comes in as a reference candidate or a fork.\nA changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions\nchanged is active again. A campaign whose checkout is not on the disk refuses.",
+        "description": "Read the campaign's ``piloop.toml`` again, and sync its documents into its memory.\n\nA campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its\ncheckout moves forward to them. Its candidates and their scores stay: new code comes in as a reference candidate or a fork.\nA changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions\nchanged is reopened (``ops.reopen``), with the same guards, once the sync is committed: its limits count from\nthen. One that it refuses stays stopped, and ``stays_stopped`` says why. A campaign whose checkout is not on the\ndisk refuses.",
         "operationId": "sync_campaign",
         "parameters": [
           {
@@ -1267,7 +1267,7 @@
     "/v1/campaigns/{campaign}/resume": {
       "post": {
         "summary": "Resume",
-        "description": "Resume a paused campaign. The daemon queues runs and requests roles again at once.",
+        "description": "Resume a paused campaign, whoever paused it, and say what the resume lifted.\n\nIt lifts a hold of the daemon too. The daemon queues runs and requests roles again at once.",
         "operationId": "resume",
         "parameters": [
           {
@@ -1288,7 +1288,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CampaignAnswer"
+                  "$ref": "#/components/schemas/Resumed"
                 }
               }
             }
@@ -5146,6 +5146,18 @@
             ],
             "title": "Paused Reason"
           },
+          "paused_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused By",
+            "description": "Who owns the pause: the actor that paused the campaign, ``daemon`` for a hold. Null while it is not paused."
+          },
           "evaluator": {
             "anyOf": [
               {
@@ -5267,7 +5279,19 @@
           },
           "was": {
             "$ref": "#/components/schemas/CampaignStatus",
-            "description": "Its status before: a stopped campaign whose stop conditions changed is active again."
+            "description": "Its status before: a stopped campaign whose stop rule changed is reopened."
+          },
+          "stays_stopped": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stays Stopped",
+            "description": "Why a stopped campaign whose stop rule changed was not reopened (``piloop campaign reopen`` refused it), or\nnull."
           },
           "documents": {
             "$ref": "#/components/schemas/Synced"
@@ -8324,6 +8348,41 @@
         ],
         "title": "Report",
         "description": "A measurement made outside the daemon, for example by running the evaluate command by hand."
+      },
+      "Resumed": {
+        "properties": {
+          "cursor": {
+            "type": "integer",
+            "title": "Cursor"
+          },
+          "campaign": {
+            "$ref": "#/components/schemas/CampaignEntry"
+          },
+          "paused": {
+            "type": "string",
+            "title": "Paused",
+            "description": "What the pause held: ``launches`` or ``all``."
+          },
+          "paused_by": {
+            "type": "string",
+            "title": "Paused By",
+            "description": "Who owned it: the actor that paused the campaign, ``daemon`` for a hold."
+          },
+          "paused_reason": {
+            "type": "string",
+            "title": "Paused Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cursor",
+          "campaign",
+          "paused",
+          "paused_by",
+          "paused_reason"
+        ],
+        "title": "Resumed",
+        "description": "A campaign that a resume set going again, read at ``cursor``, with the pause that the resume lifted."
       },
       "RetireBody": {
         "properties": {
