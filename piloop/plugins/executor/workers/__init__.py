@@ -77,6 +77,10 @@ class Workers(ExecutorConfig):
     """The silence after which its leases expire and their jobs are queued again with a larger fencing token. The
     worker stops its own jobs two heartbeats before. Kubernetes: the ``tolerationSeconds`` of 300 that the
     ``DefaultTolerationSeconds`` admission plugin gives a pod for the unreachable taint."""
+    report_tries: int = Field(default=30, gt=0)
+    """How many times the control plane may reject a job's report, with an error and not a silence, before the worker
+    gives up on it: the job then ends as a crash, and its slot is free. The worker sends a report again on each
+    heartbeat, so the default is about ``toleration_seconds``."""
     first_transfer_seconds: float = Field(default=1800, gt=0)
     """How long the server may build a repo's first transfer, which every new worker's empty clone starts from. Past
     it, the jobs that wait on the build fail, and no other build starts until it ends."""
@@ -100,7 +104,7 @@ class WorkersExecutor:
     """``Executor``: every job on a lease (``piloop.plugins.executor.kit.leases``), run by the worker of this process."""
 
     def __init__(self, host: Host, config: Workers) -> None:
-        timing = Timing(config.renew_seconds, config.grace_seconds, config.toleration_seconds)
+        timing = Timing(config.renew_seconds, config.grace_seconds, config.toleration_seconds, config.report_tries)
         self.leases = Leases(host.db, host.results, host.cas, timing, config.pools, host.secrets)
         self._changed = host.db.changed
         self._cas = host.cas
@@ -126,7 +130,14 @@ class WorkersExecutor:
         """The worker inside ``piloop serve``, in the pool ``serve``. Its agents call piloop directly, except those of a
         runtime that sees none of this home, such as ``docker``: they relay their calls, as on a worker elsewhere."""
         self.scaler = Scaler.of(
-            host.db, lambda: self.leases.pools, host.network, host.tracer, timing, host.home, _worker_argv
+            host.db,
+            lambda: self.leases.pools,
+            host.network,
+            host.tracer,
+            timing,
+            host.home,
+            _worker_argv,
+            self.leases.gone,
         )
         """Starts and stops the workers of the pools that have a provisioner."""
 

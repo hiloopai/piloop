@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import select
 
 from piloop.api.contract import Access
-from piloop.db.models import Campaign, Comment, utcnow
+from piloop.db.models import Campaign, Comment, Lease, LeaseState, utcnow
 from piloop.db.session import Database
 from piloop.net.tokens import Caller, Tokens
 from piloop.otel import Tracer
@@ -105,7 +105,8 @@ class Server:
 def server(db: Database, home: Path, found: Mapping[str, Pool]) -> Server:
     network = Https(url=URL).open(NetworkHost(Tokens(db), HomeSecrets(db, LocalSecrets())))
     leases = Leases(db, Recorder(db), home_cas(db), TIMING, found)
-    return Server(db, leases, Scaler.of(db, lambda: leases.pools, network, Tracer(None), TIMING, home, _worker_argv))
+    scaler = Scaler.of(db, lambda: leases.pools, network, Tracer(None), TIMING, home, _worker_argv, leases.gone)
+    return Server(db, leases, scaler)
 
 
 EVALUATIONS = count(1000)
@@ -390,6 +391,27 @@ def test_an_instance_that_ends_with_a_lease_ends_gone_and_a_silent_one_lost(
     assert (reasons[exited], reasons[crashed]) == (
         'its instance ended',
         'its instance ended before its worker registered',
+    )
+
+
+def test_the_leases_of_an_instance_that_ends_gone_end_with_it_and_free_their_slots(
+    db: Database, campaign: Campaign, platform: str, tmp_path: Path
+) -> None:
+    """Nothing renews or reports them: they used to hold their slots until they expired, and capacity forgot them (B5)."""
+    s = server(db, tmp_path / 'home', pools(platform, min=1))
+    s.scaler.reconcile(utcnow())
+    [name] = list(PLATFORMS[platform].machines)
+    waiting(db, campaign, tmp_path)
+    busy(s, name)
+    assert s.leases.capacity() == Capacity(0, {EVALUATION: 1})
+    s.scaler.reconcile(utcnow())
+    del PLATFORMS[platform].machines[name]  # preempted
+    s.scaler.reconcile(later(scaling.RESYNC_SECONDS))
+    with db.session() as session:
+        [lease] = session.scalars(select(Lease)).all()
+    assert (lease.state, lease.receipt) == (
+        LeaseState.EXPIRED,
+        {'lost': f'worker lost: its instance {name} ended: the provisioner no longer lists it'},
     )
 
 

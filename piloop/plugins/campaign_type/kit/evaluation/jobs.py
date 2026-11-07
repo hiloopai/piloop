@@ -8,7 +8,7 @@ measuring.
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
-from typing import ClassVar, Literal, assert_never
+from typing import ClassVar, Literal, Self, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -154,6 +154,16 @@ class EvaluationReport(Report):
     infra_error: InfraError | None = None
     """Set when its last run failed for a cause that is not the candidate's (``Failed.infra``): then no sample of it
     counts, and it records no measurement."""
+
+    def crashed(self, error: str) -> Self:
+        """The control plane, not the candidate, failed on it: an infra error, which records no measurement."""
+        return self.model_copy(
+            update={
+                'files': {},
+                'samples': [Sample(metrics={}, seconds=0, error=error)],
+                'infra_error': InfraError(why=Infra.REJECTED, error=error),
+            }
+        )
 
 
 class Evaluations(JobKind):

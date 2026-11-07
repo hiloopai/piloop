@@ -45,7 +45,7 @@ from piloop.plugins.executor.contract import (
 )
 from piloop.plugins.executor.kit import jobs
 from piloop.plugins.executor.kit.capacity import sample
-from piloop.plugins.executor.kit.client import Dismissed, LeaseClient, WorkerInfo
+from piloop.plugins.executor.kit.client import Dismissed, LeaseClient, Rejected, WorkerInfo
 from piloop.plugins.executor.kit.leases import (
     DEFAULT_TIMING,
     SERVE,
@@ -54,6 +54,7 @@ from piloop.plugins.executor.kit.leases import (
     Drain,
     Extend,
     Grant,
+    JobHandle,
     NotAddressed,
     ProcessHandle,
     PromptMessage,
@@ -68,6 +69,7 @@ from piloop.plugins.runtime.contract import Handle, Runtime, RuntimeFactory, mak
 from piloop.proc import Started, alive, kill_group, started
 
 GONE = 'worker lost: the worker restarted and could not find its {what}'
+GAVE_UP = 'the control plane rejected its report {tries} times'
 WORKER_ANOMALY = 'anomaly.worker'
 """An event in the daemon's log: the worker's turns fail one after another. It goes on trying."""
 
@@ -84,6 +86,10 @@ class Unsent(BaseModel):
     request_id: str
     report: Annotated[Report, REPORTS]
     job: AgentJob | None
+    rejected: int = 0
+    """How many times the control plane rejected this report (``Worker._rejected``)."""
+    crashed: bool = False
+    """It is the crash report that took the place of a report that was rejected ``report_tries`` times."""
 
 
 class Spool:
@@ -205,6 +211,8 @@ class Worker:
         """Set once the worker stops or hands over: its silence guard ends (``_guard_silence``)."""
         self._failures = 0
         """How many turns failed one after another (``FAILING_TURNS``)."""
+        self._acquiring: str | None = None
+        """The request id of an acquire that got no answer yet: the next one sends it again."""
         self._starting: set[int] = set()
         """The leases of the agents that start now: ``runtime.start`` ran or runs, and their start is not over."""
         self._started_all = threading.Condition(self._lock)
@@ -483,10 +491,10 @@ class Worker:
         """Send the heartbeat with a host sample, act on its answers, send what is unsent, and take new jobs."""
         host = sample(self.site.home)
         try:
-            with self._lock:  # every lease it holds, a job that is still starting too
+            with self._lock:  # every lease it holds: a job that is still starting, and a report in the spool too
                 sessions = {
                     lease_id: running.session if (running := self._jobs.get(lease_id)) is not None else HarnessSession()
-                    for lease_id in self._threads
+                    for lease_id in self._threads.keys() | self.spool.leases()
                 }
             sent = self.clock()
             answers = self.client.heartbeat(sessions, host)
@@ -503,10 +511,16 @@ class Worker:
                 self._stop_job(lease_id, answer)
         with self._lock:  # a job's thread sends its own report first
             waiting = self.spool.leases() - self._threads.keys()
+        # each call gives up within a renew period: the next heartbeat must not wait behind it
         for lease_id in sorted(waiting):
-            self._send(lease_id, self.spool.get(lease_id))
+            self._send(lease_id, self.spool.get(lease_id), retry_for=self.timing.renew)
         while not self._stopping and not self._draining:
-            match self.client.acquire(uuid.uuid4().hex, host):
+            # an acquire that got no answer in time goes again on the next turn with its request id: a grant that was
+            # cut on the way is the same lease then, not one that this worker holds and nothing runs
+            self._acquiring = self._acquiring or uuid.uuid4().hex
+            granted = self.client.acquire(self._acquiring, host, retry_for=self.timing.renew)
+            self._acquiring = None
+            match granted:
                 case Grant() as grant:
                     self._spawn(grant, partial(self._run, grant))
                     if self.once:
@@ -566,7 +580,7 @@ class Worker:
                 self._extended.pop(lease_id, None)
                 self._recovered.notify_all()
 
-    def _send(self, lease_id: int, unsent: Unsent) -> None:
+    def _send(self, lease_id: int, unsent: Unsent, *, retry_for: float | None = None) -> None:
         """Send a spooled report. Once the control plane accepted or refused it, unspool it and remove the agent's worktree.
 
         A refused one is dropped: the control plane keeps it as a stale report. One that names blobs that the CAS lacks
@@ -576,7 +590,7 @@ class Worker:
         worktree stays: a worker killed meanwhile leaves its successor the ended agent in its worktree, which it reports.
         """
         try:
-            self.client.report(lease_id, unsent.request_id, unsent.report)
+            self.client.report(lease_id, unsent.request_id, unsent.report, retry_for=retry_for)
         except StaleLease as e:
             self._tracer.event('worker.report_refused', worker=self.id, lease=lease_id, error=str(e))
         except MissingBlobs as e:
@@ -585,13 +599,36 @@ class Worker:
         except Dismissed as e:
             self._dismiss(e)
             return
-        except Exception as e:  # keep it and send it again
+        except Rejected as e:
+            if not self._rejected(lease_id, unsent, e):
+                return
+        except Exception as e:  # no answer, a partition: keep it and send it again
             self._tracer.event('worker.report_unsent', worker=self.id, lease=lease_id, error=str(e))
             return
         self.spool.remove(lease_id)
         if unsent.job is not None and not self._handover:
             self.site.remove(unsent.job)
         self.site.evict_inputs()  # once the job's worktree no longer links its copies
+
+    def _rejected(self, lease_id: int, unsent: Unsent, e: Rejected) -> bool:
+        """Count a rejected send of a report, and return whether the worker gave up on it: then it leaves the spool.
+
+        After ``report_tries``, the job's crash report takes its place (``Report.crashed``): it names no blob, so what
+        made the control plane fail is likely gone. Once that one is rejected as often, the job is lost.
+        """
+        tries = unsent.rejected + 1
+        self._tracer.event('worker.report_rejected', worker=self.id, lease=lease_id, tries=tries, error=str(e))
+        if tries < self.timing.report_tries:
+            self.spool.put(lease_id, unsent.model_copy(update={'rejected': tries}))
+            return False
+        why = f'{GAVE_UP.format(tries=tries)}, last: {e}'
+        if not unsent.crashed:
+            crash = Unsent(request_id=uuid.uuid4().hex, report=unsent.report.crashed(why), job=unsent.job, crashed=True)
+            self.spool.put(lease_id, crash)
+            self._wake()  # send it now
+            return False
+        self._lost(lease_id, f'worker lost: {why}')  # if this raises, the report stays in the spool
+        return True
 
     def _report(self, lease_id: int, report: Report, job: AgentJob | None = None) -> None:
         """Send the report of a job that ended, then remove ``job``'s worktree. Nothing after a hand-over."""
@@ -615,12 +652,17 @@ class Worker:
         return read_job(self.site.cas, grant.lease, grant.job_cid)
 
     def _recover(self, grant: Grant) -> None:
-        """Watch a job of this worker's that an earlier process of it started, or report it gone."""
-        job = self._job(grant)
+        """Watch a job of this worker's that an earlier process of it started, or report it gone.
+
+        A job that this worker cannot read (``read_job`` raises) is lost, after its process is ended by its handle.
+        """
+        try:
+            job = self._job(grant)
+        except Exception:  # any reason: once the lease is lost, nothing tracks the process, so end it first
+            self._end(grant.handle)
+            raise
         if not isinstance(job, AgentJob):
-            match grant.handle:
-                case ProcessHandle(pgid=pgid, start_time=float(start)) if alive(pgid, start):
-                    kill_group(Started(pgid, start))
+            self._end(grant.handle)
             self._lost(grant.lease, GONE.format(what=job.kind))
             self.site.remove(job)  # its worktree is this lease's own: no later lease removes it
             return
@@ -646,6 +688,18 @@ class Worker:
             )
         if report is not None:  # after the span ends: what waits for the report reads a finished span
             self._report(grant.lease, report, job)
+
+    def _end(self, handle: JobHandle | None) -> None:
+        """Kill what an earlier process of this worker started: an agent by its runtime, an evaluator by its group."""
+        match handle:
+            case AgentHandle(runtime=runtime, data=data):
+                self.runtime_factory(runtime).kill(Handle(runtime, data))
+            case ProcessHandle(pgid=pgid, start_time=float(start)) if alive(pgid, start):
+                kill_group(Started(pgid, start))
+            case ProcessHandle() | None:  # gone at its start, or before: nothing to kill
+                pass
+            case never:
+                assert_never(never)
 
     def _lost(self, lease_id: int, reason: str) -> None:
         self.relay.close(lease_id)

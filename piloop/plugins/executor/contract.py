@@ -20,7 +20,7 @@ import json
 import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Annotated, ClassVar, Final, Literal, NewType, Protocol, Self
@@ -251,6 +251,15 @@ class Report(BaseModel):
         """Every blob that it names: what the CAS holds before core applies it."""
         return list(self.files.values())
 
+    def crashed(self, error: str) -> Self:
+        """This report as its job's crash, which says ``error`` and names no blob.
+
+        A worker sends it in place of a report that the control plane rejected ``report_tries`` times
+        (``Worker._send``): whatever in the report made the control plane fail is likely gone. A kind whose report
+        can say that its job failed overrides it.
+        """
+        return self.model_copy(update={'files': {}})
+
 
 class Control(Protocol):
     """What running one job asks of the executor that runs it."""
@@ -375,6 +384,11 @@ class AgentFinished(Report):
     """The prompts that still waited in its runtime's queue when it ended."""
     workspace: dict[str, BlobAddress | None] = Field(default_factory=dict)
     """The files of its ``Workspace`` that it wrote, changed, added or removed (None), by relative path."""
+
+    def crashed(self, error: str) -> Self:
+        """Its process failed with ``error``: its run fails, and nothing of what it saved comes back."""
+        nothing = {'files': {}, 'workspace': {}, 'work': None, 'unsaved': None, 'session_file': None}
+        return self.model_copy(update={**nothing, 'process': replace(self.process, error=error)})
 
     def blobs(self) -> list[Cid]:
         """Every blob that it names: what the CAS holds before core applies it."""

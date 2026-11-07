@@ -257,6 +257,8 @@ class Infra(StrEnum):
     SEALED = 'sealed'
     """The sealed command (``[evaluator] sealed``) wrote a result that piloop refuses, or no score: its setup is at
     fault, as no candidate can change that command."""
+    REJECTED = 'rejected'
+    """The control plane rejected its report ``report_tries`` times (``Report.crashed``)."""
 
 
 type Unmeasured = Literal[Status.CRASH, Status.TIMEOUT, Status.INFRA_ERROR]

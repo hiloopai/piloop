@@ -33,7 +33,8 @@ def refuse(lease: int, call: Call) -> Relayed:
 
 def main() -> None:
     url, home, worker_id = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
-    timing = Timing(*(float(a) for a in sys.argv[4:7]))
+    renew, grace, toleration = (float(a) for a in sys.argv[4:7])
+    timing = Timing(renew, grace, toleration)
     db = Database(url, actor=System.DAEMON)
     cas = CAS.selected({}).open(home)
     results = CampaignResults(db, Tracer(None), home, cas, lambda: False)

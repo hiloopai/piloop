@@ -12,7 +12,7 @@ from typing import ClassVar, Protocol
 from pydantic import BaseModel, ConfigDict
 
 from piloop.plugins.cas.contract import BlobAddress
-from piloop.plugins.executor.contract import AgentJob, HarnessSession, JobSecrets, Report
+from piloop.plugins.executor.contract import AgentJob, HarnessSession, JobSecrets, MissingBlobs, Report
 from piloop.plugins.executor.kit.capacity import HostSample
 from piloop.plugins.executor.kit.leases import (
     Answer,
@@ -23,6 +23,7 @@ from piloop.plugins.executor.kit.leases import (
     Leases,
     PromptMessage,
     Revoke,
+    StaleLease,
     Timing,
     UnknownPool,
     UnknownWorker,
@@ -38,6 +39,13 @@ class Dismissed(Exception):
     """The control plane refuses this worker for good: a revoked token, another protocol, an unknown pool, or no row.
 
     The worker stops its jobs, keeps their reports, and exits with this message.
+    """
+
+
+class Rejected(Exception):
+    """The control plane answered the call with an error, a 5xx or a locked database say, and may answer it next time.
+
+    A call that got no answer at all raises the transport's error instead: the network, not the call, failed then.
     """
 
 
@@ -89,8 +97,11 @@ class LeaseClient(Protocol):
         """Start a worker's session: record it, and return its timing and its live leases."""
         ...
 
-    def acquire(self, request_id: str, sample: HostSample) -> Grant | NoLease:
-        """Take a queued job, or say why there is none. Sent again with its request id, it gets the same lease."""
+    def acquire(self, request_id: str, sample: HostSample, *, retry_for: float | None = None) -> Grant | NoLease:
+        """Take a queued job, or say why there is none. Sent again with its request id, it gets the same lease.
+
+        ``retry_for``: how long to send it again while it fails, at most. None: until the worker would stop its jobs.
+        """
         ...
 
     def started(self, lease: int, handle: JobHandle, session_id: str | None) -> None:
@@ -101,8 +112,14 @@ class LeaseClient(Protocol):
         """Renew the leases that the worker runs, each with what it knows of its agent's harness session."""
         ...
 
-    def report(self, lease: int, request_id: str, report: Report) -> dict[str, object]:
-        """Apply the job's result, and return its receipt. Sent again with its request id, it gets the same one."""
+    def report(
+        self, lease: int, request_id: str, report: Report, *, retry_for: float | None = None
+    ) -> dict[str, object]:
+        """Apply the job's result, and return its receipt. Sent again with its request id, it gets the same one.
+
+        ``retry_for`` as for ``acquire``. Raises ``Rejected`` when the control plane answered with an error to the last
+        try.
+        """
         ...
 
     def lost(self, lease: int, reason: str) -> None:
@@ -145,7 +162,7 @@ class Local:
             raise Dismissed(str(e)) from e
         return Registration(worker=self._worker, timing=self._leases.timing, held=held, cursor=cursor)
 
-    def acquire(self, request_id: str, sample: HostSample) -> Grant | NoLease:
+    def acquire(self, request_id: str, sample: HostSample, *, retry_for: float | None = None) -> Grant | NoLease:
         try:
             return self._leases.acquire(self._worker, request_id, sample)
         except UnknownWorker as e:
@@ -160,8 +177,15 @@ class Local:
         except UnknownWorker as e:
             raise Dismissed(str(e)) from e
 
-    def report(self, lease: int, request_id: str, report: Report) -> dict[str, object]:
-        return self._leases.report(lease, self._worker, request_id, report)
+    def report(
+        self, lease: int, request_id: str, report: Report, *, retry_for: float | None = None
+    ) -> dict[str, object]:
+        try:
+            return self._leases.report(lease, self._worker, request_id, report)
+        except StaleLease, MissingBlobs:
+            raise
+        except Exception as e:  # the control plane is this process: whatever failed, it answered
+            raise Rejected(f'{type(e).__name__}: {e}') from e
 
     def lost(self, lease: int, reason: str) -> None:
         self._leases.lost(lease, self._worker, reason)

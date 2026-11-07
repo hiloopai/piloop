@@ -5,11 +5,12 @@ import os
 import shutil
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta
 from functools import partial
 from http import HTTPStatus
 from pathlib import Path
+from typing import ClassVar
 from uuid import uuid4
 
 import psutil
@@ -32,7 +33,7 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.jobs import EvaluationJob, InfraFailed
+from piloop.plugins.campaign_type.kit.evaluation.jobs import EvaluationJob, EvaluationReport, InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunStatus
@@ -48,11 +49,12 @@ from piloop.plugins.executor.contract import (
     Source,
 )
 from piloop.plugins.executor.kit.capacity import HostSample, sample
-from piloop.plugins.executor.kit.client import Dismissed, Local, Registration, WorkerInfo
+from piloop.plugins.executor.kit.client import Dismissed, Local, Registration, Rejected, WorkerInfo
 from piloop.plugins.executor.kit.door import AgentCall, Call, Relayed
 from piloop.plugins.executor.kit.jobs import STOPPED, local_site, remote_site, send_of_record
 from piloop.plugins.executor.kit.leases import (
     SERVE,
+    AgentHandle,
     Answer,
     Drain,
     Extend,
@@ -75,9 +77,10 @@ from piloop.plugins.executor.kit.leases import (
 from piloop.plugins.executor.kit.relay import Relay
 from piloop.plugins.executor.kit.tables import INSTANCE, LeaseWorker
 from piloop.plugins.executor.workers import Workers
-from piloop.plugins.executor.workers.worker import WORKER_ANOMALY, Unsent, Worker
+from piloop.plugins.executor.workers.worker import WORKER_ANOMALY, Spool, Unsent, Worker
 from piloop.plugins.runtime.contract import QUEUE, AgentSpec, Deadline, ExitStatus, Handle, put, take
 from piloop.plugins.vcs.git import commands as git
+from piloop.proc import alive
 from piloop.settings import INPUTS_DIR, RELAY_SOCKET, Settings, socket_at
 from piloop.store import tree as tree_module
 from tests.conftest import (
@@ -103,7 +106,7 @@ from tests.conftest import (
 from tests.daemon.test_evaluation_queue import held_evaluate
 from tests.daemon.test_run_controller import execute, make_run, reload_campaign, set_config
 from tests.test_executors import Steerable
-from tests.test_lease import BRIEF, PROBE, START, Recorder, agent_job, evaluation_job
+from tests.test_lease import BRIEF, MEASURED, PROBE, START, Recorder, agent_job, evaluation_job
 
 HOLD = '#!/bin/sh\nwhile [ -f {hold} ]; do sleep 0.05; done\n'
 
@@ -415,6 +418,43 @@ def test_a_restarted_worker_reports_an_agent_whose_worktree_is_gone(
     outcome = second.launcher.reattach(agent_session_id)
     assert outcome == Lost('worker lost: the worker restarted and could not find its agent')
     hold.unlink()
+
+
+def test_a_restarted_worker_that_cannot_read_its_agents_job_ends_the_agent_before_it_loses_the_lease(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A job stored in a shape that this piloop no longer reads: its agent is killed by its handle, not orphaned.
+
+    The lease used to be lost with the process still running and spending, and nothing to track it.
+    """
+    hold = tmp_path / 'hold'
+    hold.touch()
+    use(db, campaign, HOLD.format(hold=hold))
+    first = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
+    agent_session_id = request_agent(db, campaign)
+    launching = threading.Thread(target=launch, args=(first, agent_session_id, tmp_path))
+    launching.start()
+    wait_until(lambda: lease_state(db, agent_session_id) is LeaseState.RUNNING)
+    first.hand_over()
+    launching.join(30)
+    with db.session() as s:
+        lease = s.scalars(select(Lease).where(Lease.agent_session_id == agent_session_id)).one()
+        lease.job_cid = first.cas.put(b'{"kind": "agent", "shape": "of an older piloop"}')
+        data = AgentHandle.model_validate(lease.handle).data
+        pid, start = int(str(data['pid'])), float(str(data['start_time']))
+        s.commit()
+    assert alive(pid, start)
+    second = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
+    workers_of(second).worker.start()
+    outcome = second.launcher.reattach(agent_session_id)
+    try:
+        assert isinstance(outcome, Lost), outcome
+        assert outcome.reason.startswith('worker lost: ValidationError'), outcome.reason
+        assert [h.data['pid'] for h in runtime.killed] == [pid]
+        assert not alive(pid, start), 'the agent is ended, not left running with nothing to track it'
+        assert rows(db, agent_session_id)[0].state is AgentSessionState.KILLED
+    finally:
+        hold.unlink()
 
 
 def test_a_hand_over_twice_leaves_a_re_attached_agent_to_the_third_daemon(
@@ -760,11 +800,11 @@ def test_a_worker_killed_after_its_agent_ended_but_before_it_reported_reports_on
     first = serving(RunController(db, Tracer(None), tmp_path, factory(runtime), executor=Workers()))
     send = Worker._send
 
-    def gone_before_the_report(self: Worker, lease_id: int, unsent: Unsent) -> None:
+    def gone_before_the_report(self: Worker, lease_id: int, unsent: Unsent, *, retry_for: float | None = None) -> None:
         if self is workers_of(first).worker:  # the process goes here: nothing after this line runs in it
             first.hand_over()
             return
-        send(self, lease_id, unsent)
+        send(self, lease_id, unsent, retry_for=retry_for)
 
     mocker.patch.object(Worker, '_send', gone_before_the_report)
     thread = threading.Thread(target=execute, args=(first, db, run_id))
@@ -1260,9 +1300,11 @@ class Refusing(Local):
         self._check('messages')
         return super().messages(after, wait)
 
-    def report(self, lease: int, request_id: str, report: Report) -> dict[str, object]:
+    def report(
+        self, lease: int, request_id: str, report: Report, *, retry_for: float | None = None
+    ) -> dict[str, object]:
         self._check('report')
-        return super().report(lease, request_id, report)
+        return super().report(lease, request_id, report, retry_for=retry_for)
 
     def lost(self, lease: int, reason: str) -> None:
         self._check('lost')
@@ -1598,3 +1640,183 @@ def infra_errors(db: Database) -> int:
     """How many evaluations failed for a cause that is not their candidate's (``InfraFailed``)."""
     with db.session() as s:
         return len(in_order(s, InfraFailed))
+
+
+class Rejecting(Local):
+    """``Local`` whose control plane rejects each report that ``rejects`` says it does, as a failing server would.
+
+    Each rejection takes ``retry_for``, as ``Remote`` resends it until then. It records what each heartbeat names.
+    """
+
+    partitionable: ClassVar[bool] = True
+
+    def __init__(self, leases: Leases, rejects: Callable[[int, Report], bool], longest: float) -> None:
+        super().__init__(leases, SERVE)
+        self.rejects, self.longest = rejects, longest
+        self.beats: list[set[int]] = []
+        self.rejected = 0
+
+    def heartbeat(self, leases: Mapping[int, HarnessSession], sample: HostSample) -> dict[int, Answer]:
+        self.beats.append(set(leases))
+        return super().heartbeat(leases, sample)
+
+    def report(
+        self, lease: int, request_id: str, report: Report, *, retry_for: float | None = None
+    ) -> dict[str, object]:
+        if not self.rejects(lease, report):
+            return super().report(lease, request_id, report, retry_for=retry_for)
+        self.rejected += 1
+        time.sleep(self.longest if retry_for is None else retry_for)
+        raise Rejected('500 from /v1/executor/report: database is locked')
+
+
+def rejecting_worker(db: Database, tmp_path: Path, client: Rejecting) -> Worker:
+    site = local_site(tmp_path, disk(tmp_path), partial(checkout_of, db), partial(record_of, db), reserve=0)
+    return Worker(client, Tracer(None), site, runners=('process',), relay=quiet_relay(site.home))
+
+
+SHORT = Timing(renew=0.1, grace=0.5, toleration=1.0, report_tries=1000)
+"""A lease whose worker stops its own jobs after 0.8 s of silence."""
+
+
+def test_a_report_that_waits_in_the_spool_keeps_its_lease_renewed(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """The heartbeat named only the jobs that ran, so a spooled report's lease expired as silent (B2)."""
+    leases = Leases(
+        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), SHORT
+    )
+    leases.submit(started_evaluation(db, campaign, tmp_path).model_copy(update={'command': ['true']}))
+    client = Rejecting(leases, lambda _lease, _report: True, SHORT.self_stop)
+    worker = rejecting_worker(db, tmp_path, client)
+    worker.start()
+    try:
+        wait_until(lambda: worker.spool.leases() == {1} and not worker._threads, 'the report waits in the spool')
+        heard = len(client.beats)
+        wait_until(lambda: any(1 in beat for beat in client.beats[heard:]), 'a heartbeat names it')
+        assert lease_states(db) == [LeaseState.RUNNING]
+    finally:
+        worker.stop()
+        worker.join(5)
+
+
+def test_a_report_that_the_control_plane_rejects_does_not_hold_the_heartbeat_back(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """Each send of it took ``Remote``'s whole retry, so the worker went silent and stopped every job it ran (B1)."""
+    leases = Leases(
+        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), SHORT
+    )
+    hold = tmp_path / 'hold'
+    hold.touch()
+    job = started_evaluation(db, campaign, tmp_path)
+    leases.submit(job.model_copy(update={'command': ['sh', '-c', f'while [ -f {hold} ]; do sleep 0.05; done']}))
+    poison = 999_999  # a report of a lease that the control plane no longer has
+    Spool(tmp_path / 'spool' / SERVE).put(poison, Unsent(request_id='x', report=MEASURED, job=None))
+    client = Rejecting(leases, lambda lease, _report: lease == poison, SHORT.self_stop)
+    worker = rejecting_worker(db, tmp_path, client)
+    worker.start()
+    try:
+        wait_until(lambda: lease_states(db) == [LeaseState.RUNNING])
+        wait_until(lambda: client.rejected >= 3 * SHORT.self_stop / SHORT.renew, 'rejected for three self-stops')
+        assert lease_states(db) == [LeaseState.RUNNING] and worker._jobs[1].asked is False, 'not stopped as silent'
+    finally:
+        hold.unlink(missing_ok=True)
+        worker.stop()
+        worker.join(10)
+
+
+def test_a_report_that_gets_no_answer_stays_in_the_spool_and_counts_no_rejection(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """No answer is a partition, not a refusal of the report: the next turn sends it again, and it applies."""
+    timing = Timing(renew=0.1, grace=0.5, toleration=1.0, report_tries=1)
+    leases = Leases(
+        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), timing
+    )
+    leases.submit(started_evaluation(db, campaign, tmp_path).model_copy(update={'command': ['true']}))
+    unanswered: list[int] = []
+
+    class Unanswered(Rejecting):
+        def report(
+            self, lease: int, request_id: str, report: Report, *, retry_for: float | None = None
+        ) -> dict[str, object]:
+            if len(unanswered) < 3:
+                unanswered.append(lease)
+                raise ConnectionError('no route to host')
+            return Local.report(self, lease, request_id, report, retry_for=retry_for)
+
+    client = Unanswered(leases, lambda _lease, _report: False, timing.self_stop)
+    worker = rejecting_worker(db, tmp_path, client)
+    worker.start()
+    try:
+        wait_until(
+            lambda: lease_states(db) == [LeaseState.REPORTED] and not worker.spool.leases(),
+            'the report applied once the control plane answered',
+        )
+        assert unanswered == [1, 1, 1]
+        with db.session() as s:
+            assert in_order(s, InfraFailed) == [], 'its own report, not a crash: no answer counts no try'
+    finally:
+        worker.stop()
+        worker.join(5)
+
+
+def test_a_crash_report_rejected_as_often_as_the_report_loses_the_job_and_frees_the_slot(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """The control plane rejects every report: after the crash report's tries, the worker gives the job up as lost."""
+    timing = Timing(renew=0.1, grace=0.5, toleration=1.0, report_tries=2)
+    leases = Leases(
+        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), timing
+    )
+    leases.submit(started_evaluation(db, campaign, tmp_path).model_copy(update={'command': ['true']}))
+    client = Rejecting(leases, lambda _lease, _report: True, timing.self_stop)
+    worker = rejecting_worker(db, tmp_path, client)
+    worker.start()
+    try:
+        wait_until(
+            lambda: lease_states(db) == [LeaseState.EXPIRED] and not worker.spool.leases(),
+            'the job is lost and its report left the spool',
+        )
+        assert client.rejected == 2 * timing.report_tries
+        with db.session() as s:
+            receipt = s.get_one(Lease, 1).receipt
+        assert str(receipt['lost']).startswith('worker lost: the control plane rejected its report 2 times'), receipt
+    finally:
+        worker.stop()
+        worker.join(5)
+
+
+def test_a_report_rejected_report_tries_times_gives_way_to_its_jobs_crash_and_frees_the_slot(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """A report that the control plane always rejects used to hold its lease, and its slot, for good.
+
+    The crash of an evaluation is no fault of its candidate: an infra error, which records no measurement.
+    """
+    timing = Timing(renew=0.1, grace=0.5, toleration=1.0, report_tries=3)
+    leases = Leases(
+        db, CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False), disk(tmp_path), timing
+    )
+    leases.submit(started_evaluation(db, campaign, tmp_path).model_copy(update={'command': ['true']}))
+
+    def rejects(_lease: int, report: Report) -> bool:
+        return not (isinstance(report, EvaluationReport) and report.infra_error is not None)
+
+    client = Rejecting(leases, rejects, timing.self_stop)
+    worker = rejecting_worker(db, tmp_path, client)
+    worker.start()
+    try:
+        # the server marks the lease reported before the worker hears the receipt and unspools the report
+        wait_until(
+            lambda: lease_states(db) == [LeaseState.REPORTED] and not worker.spool.leases(),
+            'the crash report applied and left the spool',
+        )
+        assert client.rejected == timing.report_tries
+        with db.session() as s:
+            [(_, failed)] = in_order(s, InfraFailed)
+        assert failed.error.startswith('the control plane rejected its report 3 times'), failed.error
+    finally:
+        worker.stop()
+        worker.join(5)

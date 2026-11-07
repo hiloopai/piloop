@@ -33,6 +33,7 @@ from piloop.plugins.executor.contract import (
     AgentFinished,
     AgentJob,
     AgentKey,
+    AgentNotStarted,
     Capacity,
     Guard,
     HarnessSession,
@@ -52,6 +53,7 @@ from piloop.plugins.executor.kit.capacity import GB, HostSample, Pool
 from piloop.plugins.executor.kit.client import Local, Registration, WorkerInfo
 from piloop.plugins.executor.kit.leases import (
     NOT_TAKEN,
+    SETTLED,
     AgentHandle,
     Answer,
     Grant,
@@ -577,38 +579,93 @@ class Settles(Recorder):
         raise Settled('agent_session#1 is closed')
 
 
-def test_a_job_whose_row_is_settled_is_refused_as_stale_and_its_lease_ends_all_the_same(
-    db: Database, campaign: Campaign, tmp_path: Path
+@pytest.mark.parametrize('refused', ['started', 'report'])
+def test_a_job_whose_row_is_settled_is_refused_as_stale_and_its_lease_ends_at_once(
+    db: Database, campaign: Campaign, tmp_path: Path, refused: str
 ) -> None:
-    """Core refuses a result for a closed row (``Settled``): the fence treats it as stale, and nothing else changes."""
+    """Core refuses a start or a result for a closed row (``Settled``): the worker stops the job and forgets it.
+
+    The lease used to stay live, with nothing to renew or report it: its slot was held until it expired as lost.
+    """
     leases = Leases(db, Settles(db), home_cas(db), TIMING, POOLS)
-    job = agent_job(db, campaign, tmp_path)
-    lease_id = queue(db, job)
+    lease_id = queue(db, agent_job(db, campaign, tmp_path))
     take(leases, 'w1', [])
     with pytest.raises(StaleLease, match='stale_lease: agent_session#1 is closed'):
-        Local(leases, 'w1').started(lease_id, AgentHandle(runtime='subprocess', data={'pid': 1}), None)
-    assert Local(leases, 'w1').heartbeat({lease_id: HarnessSession(id='sid')}, HOST) == {lease_id: Answer.RENEWED}, (
-        'the session id waits for the end'
+        if refused == 'started':
+            Local(leases, 'w1').started(lease_id, AgentHandle(runtime='subprocess', data={'pid': 1}), None)
+        else:
+            Local(leases, 'w1').report(lease_id, 'r', DONE)
+    assert (lease_row(db, lease_id).state, lease_row(db, lease_id).receipt) == (
+        LeaseState.CANCELLED,
+        {'cancelled': SETTLED, 'settled': 'agent_session#1 is closed'},
     )
-    with pytest.raises(StaleLease, match='stale_lease: agent_session#1 is closed'):
-        Local(leases, 'w1').report(lease_id, 'r', DONE)
-    [(_, _, payload)] = events(db, StaleReport)
-    assert payload.reason == 'agent_session#1 is closed'
-    Local(leases, 'w1').lost(lease_id, 'gone')
-    assert lease_row(db, lease_id).receipt == {'lost': 'gone', 'settled': 'agent_session#1 is closed'}
+    assert [p.reason for _, _, p in events(db, StaleReport)] == (
+        ['agent_session#1 is closed'] if refused == 'report' else []
+    )
+    assert Local(leases, 'w1').heartbeat({lease_id: HarnessSession()}, HOST) == {lease_id: Answer.STALE}
 
 
-def test_an_adoption_ends_the_evaluation_leases_that_no_worker_took(
+def test_an_adoption_ends_the_evaluation_leases_of_the_previous_daemon_taken_or_not(
     db: Database, campaign: Campaign, tmp_path: Path, leases: Leases
 ) -> None:
-    """The next daemon asks again for the measurements that it needs: the previous daemon's untaken ones would be lost
-    work."""
-    lease_id = queue(db, evaluation_job(db, campaign, tmp_path))
+    """The next daemon asks again for the measurements that it needs: core dropped the rows of the previous one's.
+
+    A taken one used to run to its end, and its refused report then left the lease live (B36): now it is revoked.
+    """
+    untaken = queue(db, evaluation_job(db, campaign, tmp_path))
+    taken = queue(db, evaluation_job(db, campaign, tmp_path, runner='other'))
+    join(leases, 'w1', ['other'])
+    Local(leases, 'w1').acquire(uuid4().hex, HOST)
     assert leases.adopt([], 'local') == []
-    assert (lease_row(db, lease_id).state, lease_row(db, lease_id).receipt) == (
+    assert (lease_row(db, untaken).state, lease_row(db, untaken).receipt) == (
         LeaseState.CANCELLED,
         {'cancelled': NOT_TAKEN},
     )
+    assert Local(leases, 'w1').heartbeat({taken: HarnessSession()}, HOST) == {taken: Answer.REVOKED}, 'it is killed'
+
+
+@pytest.mark.parametrize('marked', [False, True], ids=['silent', 'marked unreachable'])
+def test_a_daemon_back_from_an_absence_announces_the_workers_that_it_counts_again(
+    db: Database, campaign: Campaign, tmp_path: Path, marked: bool
+) -> None:
+    """``renew_all`` gives a silent worker's slots back: it says so, as a heartbeat would (B37)."""
+    leases = Leases(db, Recorder(db), home_cas(db), TIMING, {'test': Pool(slots={EVALUATION: 2})})
+    queue(db, evaluation_job(db, campaign, tmp_path))
+    take(leases, 'w1', ['process'])
+    with db.session() as s:
+        s.get_one(LeaseWorker, 'w1').seen_at = utcnow() - timedelta(seconds=TIMING.grace + 1)
+        s.commit()
+    if marked:
+        leases.expire()
+    joined = len(events(db, LeaseWorkerJoined))
+    assert leases.capacity().free(EVALUATION) == 0, 'silent'
+    leases.expire(absent=timedelta(seconds=TIMING.grace + 1))
+    assert (leases.capacity().free(EVALUATION), len(events(db, LeaseWorkerJoined)) - joined) == (1, 1)
+    with db.session() as s:
+        assert s.get_one(LeaseWorker, 'w1').no_lease is None
+
+
+def test_a_settled_refusal_of_a_lease_that_ended_meanwhile_leaves_its_end(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """A refusal races the lease's end, by a report or an expiry: the end that came first stays."""
+    leases = Leases(db, Recorder(db), home_cas(db), TIMING, POOLS)
+    lease_id = queue(db, agent_job(db, campaign, tmp_path))
+    take(leases, 'w1', [])
+    Local(leases, 'w1').report(lease_id, 'r', DONE)
+    receipt = lease_row(db, lease_id).receipt
+    leases._end_settled(lease_id, 'w1', Settled('agent_session#1 is closed'))
+    assert (lease_row(db, lease_id).state, lease_row(db, lease_id).receipt) == (LeaseState.REPORTED, receipt)
+
+
+def test_a_crash_report_names_no_blob_and_says_why() -> None:
+    """What a worker sends in place of a report that the control plane rejected ``report_tries`` times."""
+    blob = Cid.of(b'x')
+    finished = AgentFinished(process=AgentExit(ExitStatus.EXITED, 1.0, 0), files={'a': blob}, workspace={'b': blob})
+    crashed = finished.crashed('rejected')
+    assert (crashed.blobs(), crashed.process.error, crashed.process.status) == ([], 'rejected', ExitStatus.EXITED)
+    unstarted = AgentNotStarted(reason='a stop came', files={'a': blob})
+    assert unstarted.crashed('rejected') == unstarted.model_copy(update={'files': {}})
 
 
 def reported(leases: Leases, lease_id: int) -> None:

@@ -7,7 +7,7 @@ body says. A refusal has a typed body, ``RefusalBody``. What ``Remote`` does wit
 | Status | The worker |
 |---|---|
 | 409 with an ``error`` of ``CONFLICTS`` | raises its exception: ``StaleLease`` stops the job, ``NotAddressed`` drops an answer to a message that was not its, ``MissingBlobs`` loses the job whose report names blobs that the server's CAS lacks, ``NotSent`` fails the job whose versions the server could not send, ``Dismissed`` ends the worker (no such pool) |
-| 408, 429, 5xx, or no answer (``RETRIED``) | tries again with backoff, with the same body and so the same request id |
+| 408, 429, 5xx, or no answer (``RETRIED``) | tries again with backoff, with the same body and so the same request id, for the call's ``retry_for``; then raises ``Rejected`` for an answer, or the transport's error for none |
 | any other 4xx | ``Dismissed``: stops its jobs, keeps their reports, and exits. 401: the token is unknown or revoked. 403: a token named ``serve``. 404: the server's executor takes no workers. 412: the worker's CAS is not the server's. 422 or 426: another piloop |
 
 ``messages`` and ``send`` are long-polls: the server awaits a commit between two reads (``Route.long_poll``), and holds
@@ -42,7 +42,7 @@ from piloop.otel import Tracer
 from piloop.plugins.cas.contract import BlobAddress, Cas
 from piloop.plugins.executor.contract import REPORTS, HarnessSession, JobSecrets, MissingBlobs, RepoId, Report
 from piloop.plugins.executor.kit.capacity import HostSample
-from piloop.plugins.executor.kit.client import PROTOCOL, Dismissed, Local, Registration, WorkerInfo
+from piloop.plugins.executor.kit.client import PROTOCOL, Dismissed, Local, Registration, Rejected, WorkerInfo
 from piloop.plugins.executor.kit.clones import NotSent
 from piloop.plugins.executor.kit.door import RELAY_SECONDS, Call, Relayed
 from piloop.plugins.executor.kit.leases import (
@@ -347,8 +347,9 @@ class Remote:
         self._retry_for = registration.timing.self_stop
         return registration
 
-    def acquire(self, request_id: str, sample: HostSample) -> Grant | NoLease:
-        answer = self._post('acquire', Acquire(protocol=PROTOCOL, request_id=request_id, sample=sample))
+    def acquire(self, request_id: str, sample: HostSample, *, retry_for: float | None = None) -> Grant | NoLease:
+        body = Acquire(protocol=PROTOCOL, request_id=request_id, sample=sample)
+        answer = self._post('acquire', body, retry_for=retry_for)
         return Acquired.model_validate_json(answer).root
 
     def started(self, lease: int, handle: JobHandle, session_id: str | None) -> None:
@@ -358,8 +359,10 @@ class Remote:
         body = Heartbeat(protocol=PROTOCOL, leases=dict(leases), sample=sample)
         return Answers.model_validate_json(self._post('heartbeat', body)).root
 
-    def report(self, lease: int, request_id: str, report: Report) -> dict[str, object]:
-        answer = self._post('report', Reported(lease=lease, request_id=request_id, report=report))
+    def report(
+        self, lease: int, request_id: str, report: Report, *, retry_for: float | None = None
+    ) -> dict[str, object]:
+        answer = self._post('report', Reported(lease=lease, request_id=request_id, report=report), retry_for=retry_for)
         return Receipt.model_validate_json(answer).root
 
     def lost(self, lease: int, reason: str) -> None:
@@ -403,13 +406,21 @@ class Remote:
         body = LeaseCall(lease=lease, argv=call.argv, stdin=call.stdin, token=call.token)
         return Relayed.model_validate_json(self._post('cli', body, RELAY_SECONDS, resend=Resend.UNSENT))
 
-    def _post(self, path: str, body: BaseModel, wait: float = 0, *, resend: Resend = Resend.ANSWERLESS) -> bytes:
+    def _post(
+        self,
+        path: str,
+        body: BaseModel,
+        wait: float = 0,
+        *,
+        resend: Resend = Resend.ANSWERLESS,
+        retry_for: float | None = None,
+    ) -> bytes:
         """POST ``body`` until the server answers it, and return the body of its success.
 
         Raises the exception of a refusal, or the last error once the time is up, or at once when ``resend`` says
         that the call may not be sent again.
         """
-        deadline = monotonic() + self._retry_for
+        deadline = monotonic() + (self._retry_for if retry_for is None else retry_for)
         backoff = FIRST_BACKOFF
         content = body.model_dump_json()
         while True:
@@ -451,9 +462,5 @@ def _success(response: httpx.Response) -> bytes:
     raise Dismissed(f'the server refused this worker ({response.status_code}): {detail}')
 
 
-def _failed(response: httpx.Response) -> httpx.HTTPStatusError:
-    return httpx.HTTPStatusError(
-        f'{response.status_code} from {response.request.url.path}: {response.text}',
-        request=response.request,
-        response=response,
-    )
+def _failed(response: httpx.Response) -> Rejected:
+    return Rejected(f'{response.status_code} from {response.request.url.path}: {response.text}')

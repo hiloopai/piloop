@@ -119,6 +119,7 @@ def default_pools() -> dict[str, Pool]:
 
 
 UNSTARTED = 'the daemon stopped before the job started'
+SETTLED = 'its job was settled already'
 NOT_TAKEN = 'the daemon stopped before a worker took the job'
 PAGE = 100
 """How many messages one read returns at most. A worker reads again at once for the rest."""
@@ -234,7 +235,7 @@ def topics(worker: str) -> tuple[Topic, ...]:
 
 @dataclass(frozen=True)
 class Timing:
-    """The three numbers of a lease, after Kubernetes. The ``workers`` executor takes them as ``renew_seconds``..."""
+    """The numbers of a lease, after Kubernetes. The ``workers`` executor takes them as ``renew_seconds``..."""
 
     renew: float = 10
     """How often a worker sends a heartbeat. The kubelet renews its node Lease every 10 s."""
@@ -243,6 +244,8 @@ class Timing:
     toleration: float = 300
     """The silence after which a lease expires and its job is queued again. The ``tolerationSeconds`` of the
     unreachable taint: 300 s."""
+    report_tries: int = 30
+    """How many rejected sends of a job's report a worker makes before the job ends as a crash (``Worker._send``)."""
 
     @property
     def self_stop(self) -> float:
@@ -718,7 +721,8 @@ class Leases:
                 try:
                     machine = None if worker == SERVE else worker
                     self._results.started(AgentKey(agent_session), handle.data, session_id, machine=machine, guard=mark)
-                except Settled as e:
+                except Settled as e:  # the worker stops the job and forgets it: nothing renews the lease from now on
+                    self._end_settled(lease_id, worker, e)
                     raise StaleLease(f'stale_lease: {e}') from e
             case _:  # an evaluator: core needs nothing of its start
                 with self._db.session() as s:
@@ -727,7 +731,9 @@ class Leases:
                     s.commit()
 
     def heartbeat(self, worker: str, sessions: dict[int, HarnessSession], host: HostSample) -> dict[int, Answer]:
-        """Renew the leases of ``worker`` that it still runs, by id, with what it knows of each agent's session.
+        """Renew the leases of ``worker`` that it still holds, by id, with what it knows of each agent's session.
+
+        It holds a lease while it runs its job, and while the job's report waits in its spool.
 
         The answer for each says go on, stop (``REVOKED``, and report), or the lease is no longer yours (``STALE``).
         ``host`` is the worker's sample now: it goes on its row.
@@ -740,6 +746,8 @@ class Leases:
             self._heard(s, _registered(s, worker), host)
             for lease_id, session in sessions.items():
                 try:
+                    if s.get(Lease, lease_id) is None:  # a spooled report's, whose campaign was deleted since
+                        raise StaleLease(f'stale_lease: there is no lease#{lease_id}')
                     lease = self._live(s, lease_id, worker)
                 except StaleLease:
                     answers[lease_id] = Answer.STALE
@@ -823,10 +831,21 @@ class Leases:
             if (applied := self._job(lease_id)).state is LeaseState.REPORTED and applied.report_request == request_id:
                 return dict(applied.receipt)  # the same report, sent again while the first was applied
             self._keep_stale(lease, worker, report, str(e))
-            if isinstance(e, Settled):
+            if isinstance(e, Settled):  # the worker drops the report: nothing renews or reports the lease from now on
+                self._end_settled(lease_id, worker, e)
                 raise StaleLease(f'stale_lease: {e}') from e
             raise
         return receipt
+
+    def _end_settled(self, lease_id: int, worker: str, settled: Settled) -> None:
+        """End ``worker``'s live lease whose job core settled elsewhere, so that its slot is free at once."""
+        with self._db.session() as s:
+            write_transaction(s)
+            lease = s.get_one(Lease, lease_id)
+            if lease.worker == worker and lease.state in LIVE_LEASES:
+                cancel(s, lease, SETTLED)
+                lease.receipt = {**lease.receipt, 'settled': str(settled)}
+            s.commit()
 
     def _keep_stale(self, lease: Lease, worker: str, report: Report, reason: str) -> None:
         """Keep a refused report as a ``StaleReport`` event on its job's row: what it made stays in the CAS."""
@@ -907,6 +926,14 @@ class Leases:
         silent = heard + timedelta(seconds=self.timing.grace) if heard is not None else None
         return min((t for t in (expiry, silent) if t is not None), default=None)
 
+    def gone(self, worker: str, reason: str) -> None:
+        """End every live lease of ``worker``, whose machine is gone, as lost: nothing renews or reports them."""
+        with self._db.session() as s:
+            held = s.scalars(select(Lease.id).where(Lease.worker == worker, Lease.state.in_(LIVE_LEASES))).all()
+        for lease_id in held:
+            with contextlib.suppress(StaleLease):  # it reported or ended meanwhile
+                self.lost(lease_id, worker, reason)
+
     def _still_expired(self, s: Session, lease_id: int, now: datetime) -> Lease:
         """Return the lease if it is still live and past its expiry at ``now``, in the transaction that expires it."""
         lease = s.get_one(Lease, lease_id)
@@ -928,10 +955,21 @@ class Leases:
                 .where(live)
                 .values(renewed_at=now, expires_at=now + timedelta(seconds=self.timing.toleration))
             )
-            s.execute(
-                update(LeaseWorker).where(LeaseWorker.id.in_(select(Lease.worker).where(live))).values(seen_at=now)
-            )
+            for row in s.scalars(select(LeaseWorker).where(LeaseWorker.id.in_(select(Lease.worker).where(live)))):
+                self._revived(s, row, now)
             s.commit()
+
+    def _revived(self, s: Session, row: LeaseWorker, now: datetime) -> None:
+        """Count ``row``'s slots again from ``now``, as if heard, with ``LeaseWorkerJoined`` when it was silent.
+
+        ``_heard`` is the other writer of ``seen_at``: a waiter that read no free slot wakes either way.
+        """
+        silent = row.seen_at <= now - timedelta(seconds=self.timing.grace) or row.no_lease == NoLease.UNREACHABLE
+        row.seen_at = now
+        if row.no_lease == NoLease.UNREACHABLE:
+            row.no_lease = None
+        if silent:
+            emit(s, LeaseWorkerJoined(worker=row.id, pool=row.pool), HOME, System.DAEMON)
 
     def submit(self, job: Job) -> None:
         """Queue ``job`` on a new lease, which tells every worker (``Work``)."""
@@ -1021,16 +1059,21 @@ class Leases:
     def adopt(self, left: Sequence[LeftJob], worker: str) -> list[Key]:
         """Give every live lease a full period, and return the jobs of ``left`` that have no open lease.
 
-        A job on an open lease goes on: its worker finds it again (``register``).
+        An agent's job on an open lease goes on: its worker finds it again (``register``). Any other kind of job is the
+        previous daemon's, and core dropped its row: an untaken one ends, and a taken one is revoked.
         """
         self.renew_all()
         refused: list[Key] = []
         with self._db.session() as s:
             write_transaction(s)
-            # a job of a kind that no worker took is the previous daemon's: this one asks again for what it needs
-            untaken = (Lease.kind != AGENT) & (Lease.state == LeaseState.QUEUED)
-            for lease in s.scalars(select(Lease).where(untaken)).all():
-                cancel(s, lease, NOT_TAKEN)
+            # a job of another kind than an agent's is the previous daemon's, taken or not: core dropped its row, and
+            # this daemon asks again for what it needs. A taken one is revoked, not ended: its worker kills the process
+            # that it tracks, and its report, refused as settled, ends the lease (``_end_settled``)
+            for lease in s.scalars(select(Lease).where(Lease.kind != AGENT, Lease.state.in_(OPEN_LEASES))).all():
+                if lease.state is LeaseState.QUEUED:
+                    cancel(s, lease, NOT_TAKEN)
+                else:
+                    revoke(s, self._cas, lease)
             for job in left:
                 lease = lease_of(s, job.key)
                 if lease is None or lease.state not in OPEN_LEASES:

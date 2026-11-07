@@ -250,8 +250,9 @@ worker loses at most those 30 seconds.
 |---|---|
 | A worker dies during a run | The run ends `worker_lost`. It is not an attempt. |
 | A worker dies during an evaluation | The evaluation is queued again. Partial output is never scored. |
-| A worker stops before it sends a report | The report waits in `$PILOOP_HOME/spool/<worker>`, and goes out when the worker starts again. |
+| A worker stops before it sends a report | The report waits in `$PILOOP_HOME/spool/<worker>`, and goes out when the worker starts again. Its lease stays renewed while it waits. |
+| The server answers a report with an error, such as a 5xx | The worker sends it again on each heartbeat. After `report_tries` (30) such answers, the job ends as a crash and frees its slot. |
 | The server does not answer | The worker tries each call again. Its log says `worker.unreachable`. |
-| `piloop serve` restarts | Its worker finds its leases again and re-attaches to each agent. |
+| `piloop serve` restarts | Its worker finds its leases again and re-attaches to each agent. It ends each process whose job it cannot read. |
 | A started worker does not register within `register_seconds` | It is stopped, and the pool backs off before it starts another. |
 | The platform refuses a start: a quota, no GPU | The pool backs off. Three refusals in a row are an escalation in the inbox. |

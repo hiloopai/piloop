@@ -183,6 +183,8 @@ class Scaler:
     timing: Timing
     argv: Callable[[str, str, Provisioner], list[str]]
     """What an instance runs, for a server URL, a pool and its policy."""
+    gone: Callable[[str, str], None]
+    """End the live leases of a worker whose instance is gone, with why (``Leases.gone``)."""
     _started: dict[str, datetime] = field(default_factory=dict)
     """When this process started each instance, or found it started: a ``starting`` row that is not here is started
     again after a list. Its ``register_seconds`` count from then."""
@@ -204,6 +206,7 @@ class Scaler:
         timing: Timing,
         home: Path,
         argv: Callable[[str, str, Provisioner], list[str]],
+        gone: Callable[[str, str], None],
     ) -> Scaler:
         """Open the provisioner of each pool that has one, for this server's owner (``owner``)."""
         host = ProvisionerHost(owner(home), tracer)
@@ -212,7 +215,7 @@ class Scaler:
         }
         with db.session() as s:
             cursor = feed.newest(s)
-        return cls(db, pools, opened, network, tracer, timing, argv, _cursor=cursor)
+        return cls(db, pools, opened, network, tracer, timing, argv, gone, _cursor=cursor)
 
     def upkeep(self, now: datetime) -> datetime | None:
         """Start a pass when the feed has a change that it acts on, or at its deadline, and return the next deadline.
@@ -475,7 +478,11 @@ class Scaler:
     def _end(
         self, provisioning: Provisioning, row: WorkerInstance, end: InstanceEnd, reason: str | None = None
     ) -> None:
-        """Stop the instance, revoke its credential, forget its worker, and end its row."""
+        """Stop the instance, revoke its credential, forget its worker, and end its row.
+
+        A ``gone`` instance's leases end too: nothing renews or reports them, and each would hold its slot until it
+        expired.
+        """
         provisioning.stop(row.name)
         self.network.revoke(row.name)
         with self.db.session() as s:
@@ -489,6 +496,8 @@ class Scaler:
             s.commit()
         row.state = WorkerInstanceState.ENDED
         self._started.pop(row.name, None)
+        if end is InstanceEnd.GONE:
+            self.gone(row.name, f'worker lost: its instance {row.name} ended' + (f': {reason}' if reason else ''))
 
     def _escalate(self, row: WorkerInstance, reason: str) -> None:
         asked = EscalationView(
