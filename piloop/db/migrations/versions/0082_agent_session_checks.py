@@ -11,7 +11,7 @@ SQLite cannot add a CHECK or AUTOINCREMENT, so the table is rebuilt with its row
 triggers back. Its counter starts past every id that names an agent anywhere (a token, a lease, an event): a deleted
 agent's id is never used again. The downgrade drops the CHECKs and AUTOINCREMENT.
 
-Revision ID: 0083
+Revision ID: 0082
 Revises: 0081
 """
 
@@ -24,7 +24,7 @@ from sqlalchemy import text
 
 from piloop.db.triggers import recreate
 
-revision: str = '0083'
+revision: str = '0082'
 down_revision: str | None = '0081'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -40,7 +40,7 @@ REPAIRS = (
     " WHERE state IN ('exited', 'killed', 'never_worked') AND ended_at IS NULL",
     "UPDATE agent_sessions SET ended_at = NULL WHERE state IN ('requested', 'starting', 'running', 'ending')"
     ' AND ended_at IS NOT NULL',
-    "UPDATE agent_sessions SET error = 'it did not start to work (migration 0083)'"
+    "UPDATE agent_sessions SET error = 'it did not start to work (migration 0082)'"
     " WHERE state = 'never_worked' AND error IS NULL",
 )
 KEY = 'id INTEGER NOT NULL, '
@@ -58,7 +58,7 @@ def upgrade() -> None:
     bind = op.get_bind()
     if repaired := sum(bind.execute(text(each)).rowcount for each in REPAIRS):
         logging.getLogger(__name__).warning(
-            'migration 0083 repaired %d writes to agent_sessions that broke its CHECKs', repaired
+            'migration 0082 repaired %d writes to agent_sessions that broke its CHECKs', repaired
         )
     spent = bind.execute(text(SPENT)).scalar()
     _rebuild(_up)

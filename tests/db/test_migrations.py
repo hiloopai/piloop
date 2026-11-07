@@ -1420,7 +1420,7 @@ def test_0081_gives_each_pause_its_owner_repairs_the_campaigns_that_raw_writes_b
         assert 'paused_by' not in [c for (_, c, *_) in con.execute('PRAGMA table_info(campaigns)')]
 
 
-def test_0083_repairs_the_agent_sessions_that_raw_writes_broke_never_reuses_an_id_and_checks_them(
+def test_0082_repairs_the_agent_sessions_that_raw_writes_broke_never_reuses_an_id_and_checks_them(
     tmp_path: Path,
 ) -> None:
     """Each broken row is repaired by the rule that the revision states. The next id goes past every id that a row, a
@@ -1443,13 +1443,13 @@ def test_0083_repairs_the_agent_sessions_that_raw_writes_broke_never_reuses_an_i
             "INSERT INTO tokens (name, access, sha256, agent_session_id) VALUES ('implementer#9', 'act', 'x', 9)"
         )
         con.execute('DELETE FROM agent_sessions WHERE id = 9')  # by piloop sql: its token still names id 9
-    command.upgrade(cfg, '0083')
+    command.upgrade(cfg, '0082')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         got = con.execute('SELECT id, state, ended_at, error FROM agent_sessions ORDER BY id').fetchall()
         assert got == [
             (1, 'exited', '2026-01-02', None),
             (2, 'running', None, None),
-            (3, 'never_worked', '2026-01-01', 'it did not start to work (migration 0083)'),
+            (3, 'never_worked', '2026-01-01', 'it did not start to work (migration 0082)'),
             (4, 'killed', '2026-01-01', 'cancelled'),
         ]
         con.execute("INSERT INTO agent_sessions (kind) VALUES ('implementer')")
