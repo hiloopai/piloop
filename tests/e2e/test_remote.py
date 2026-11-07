@@ -253,6 +253,22 @@ def kind_on(kind: str, subject: str, subject_id: int) -> Callable[[Envelope], bo
     return lambda e: e.kind == kind and e.subject.kind == subject and e.subject.id == subject_id
 
 
+def added_event(api: Client, campaign: CampaignId) -> Envelope:
+    """The ``campaign.added`` of ``campaign``, read page by page from the start of the feed.
+
+    A campaign filter also keeps every event whose row is gone. On a server with a history, those can fill the first
+    page, so one read of the campaign's events can miss its own ``campaign.added``.
+    """
+    is_it, after = kind_on('campaign.added', 'campaign', campaign), 0
+    while True:
+        query = EventsQuery(campaign=str(campaign), kind=('campaign.added',), after=after, limit=MAX_LIMIT)
+        batch = api.events(query)
+        if found := next((e for e in batch.events if is_it(e)), None):
+            return found
+        assert batch.more, f'the feed has no campaign.added of campaign {campaign}'
+        after = batch.next
+
+
 def publish(directory: Path, files: dict[str, str]) -> str:
     """Write ``files`` in ``directory``, publish them as a secret gist, and return its URL. ``gh`` runs in the caller's
     environment, where it is logged in."""
@@ -369,9 +385,7 @@ def test_registers_a_repository_by_its_url(server: Server) -> None:
     assert registered.campaign.name == server.name
     assert registered.campaign.status == 'active'
     server.id, server.cursor, server.baseline = registered.campaign.id, registered.cursor, registered.baseline
-    [added] = [
-        e for e in server.api.events(EventsQuery(campaign=str(server.id), after=0)).events if e.kind == 'campaign.added'
-    ]
+    added = added_event(server.api, server.id)
     if not by_a_person(added.actor):
         server.api.pause(str(server.id), PauseBody(reason='e2e: the token signs as no person'))
         pytest.fail(f'the token signs as {added.actor}: the scenario stops campaigns, which only a person does')

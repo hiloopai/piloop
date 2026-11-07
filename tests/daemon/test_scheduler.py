@@ -1382,13 +1382,16 @@ def test_stop_waits_for_a_start_in_flight_then_kills_the_implementer(
     assert gate.entered.wait(10)
     stopper = threading.Thread(target=scheduler.stop, args=(10,))
     stopper.start()
-    stopper.join(0.3)
+
+    def row() -> tuple[AgentSessionState, object]:
+        with db.session() as s:
+            agent_session = s.get_one(AgentSession, 1)
+            return agent_session.state, agent_session.handle
+
+    # The stop writes the row from its own thread: on a slow machine that takes longer than any fixed wait.
+    wait_until(lambda: row()[0] is AgentSessionState.ENDING, 'the stop on the row')
+    assert row() == (AgentSessionState.ENDING, {}), 'the stop is on the row before its kill'
     assert stopper.is_alive(), 'stop() waits for the handle to be published'
-    with db.session() as s:
-        assert (s.get_one(AgentSession, 1).state, s.get_one(AgentSession, 1).handle) == (
-            AgentSessionState.ENDING,
-            {},
-        ), 'the stop is on the row before its kill'
     gate.release.set()
     stopper.join(10)
     assert not stopper.is_alive()
