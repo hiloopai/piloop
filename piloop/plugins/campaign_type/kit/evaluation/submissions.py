@@ -182,9 +182,10 @@ def waiting(s: Session, campaign: Campaign) -> list[Candidate]:
 def unscored(s: Session, candidate: CandidateId, since: int) -> bool:
     """Whether ``candidate`` waits for a score: no ``candidate.scored`` after the event ``since``.
 
-    A candidate that a cancel made ``skipped`` waits for none.
+    One whose evaluation someone cancelled under the current evaluator waits for none (``Measured.CANCELLED``).
     """
-    if s.get_one(Candidate, candidate).origin is Origin.SKIPPED:
+    found = s.get_one(Candidate, candidate)
+    if status(found, s.get_one(Campaign, found.campaign_id).evaluator_id).cancelled:
         return False
     scored = latest(s, CandidateScored, Event.target == TargetRef(CANDIDATE, candidate))
     return scored is None or scored[0].id < since

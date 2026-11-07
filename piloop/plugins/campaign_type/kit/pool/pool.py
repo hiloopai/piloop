@@ -32,7 +32,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     split_of,
     status,
 )
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
+from piloop.plugins.campaign_type.kit.evaluation.tables import Cancel, Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Case, Criterion, Scores
 from piloop.plugins.metric import number
 
@@ -165,6 +165,8 @@ class Standing:
                     return f'stopped at a rung of the ladder: {self.status.stopped}'
                 case Measured.CRASHED:
                     return 'crash: no evaluation succeeded'
+                case Measured.CANCELLED:
+                    return 'cancelled: not scored'
                 case _:
                     return 'not scored'
         evals = f'{self.status.scored} eval' + ('s' if self.status.scored != 1 else '')
@@ -320,19 +322,20 @@ class Pool:
         return next((r for r in self.ranked if r in mine), None)
 
     def confirm_due(self, c: CandidateId) -> bool:
-        """Whether ``c`` is to be confirmed: it beats the best (``beats_best``), and it is not confirmed yet.
+        """Whether ``c`` is to be confirmed: it beats the best (``beats_best``), and it needs more evaluations.
 
-        Then piloop evaluates it until it is confirmed.
+        It needs none once it is confirmed, once its crashes reach the count, or once someone cancelled its evaluation
+        (``Status.needs``). Until then piloop evaluates it.
         """
-        return self.beats_best(c) and not self.confirmed(c)
+        return self.beats_best(c) and self.entries[c].status.needs(self.confirm) > 0
 
     def seal_due(self, c: CandidateId) -> bool:
         """Whether the sealed split is to score ``c``: the campaign has one, ``c`` beats the best, and the split has not.
 
-        A crash of the sealed command is the split's answer too (``Status.measured``): only a new sealed command runs
-        it again. A confirmed candidate is due too, so a new sealed command scores the one that would be best.
+        A crash of the sealed command is the split's answer too, and a cancel stands (``Status.settled``): only a new
+        sealed command, or an ask, runs it again. A confirmed candidate is due too, so a new sealed command scores the one that would be best.
         """
-        return self.sealed and not self.entries[c].seal.measured and self.beats_best(c)
+        return self.sealed and not self.entries[c].seal.settled and self.beats_best(c)
 
     def beats_best(self, c: CandidateId) -> bool:
         """Whether the mean of ``c``, not excluded and not the best, beats the best's."""
@@ -424,7 +427,7 @@ class Pool:
 
 
 def _statuses(s: Session, ours: Select[CandidateId], evaluator_id: EvaluatorId | None) -> dict[CandidateId, Status]:
-    """The ``Status`` under ``evaluator_id`` of each candidate of ``ours`` that it measured, read as columns."""
+    """The ``Status`` under ``evaluator_id`` of each candidate of ``ours`` that it measured or that a cancel holds."""
     rows: dict[CandidateId, list[tuple[dict[str, float], str | None, RungName | None, str | None]]] = {}
     evaluated = (
         select(Measurement.candidate_id, Measurement.metrics, Measurement.error, Measurement.rung, Measurement.stopped)
@@ -433,7 +436,9 @@ def _statuses(s: Session, ours: Select[CandidateId], evaluator_id: EvaluatorId |
     )
     for c, values, error, rung, stopped in s.execute(evaluated):
         rows.setdefault(c, []).append((values, error, rung, stopped))
-    return {c: Status.of(found) for c, found in rows.items()}
+    held = select(Cancel.candidate_id).where(Cancel.candidate_id.in_(ours), Cancel.evaluator_id == evaluator_id)
+    cancelled = set(s.scalars(held))
+    return {c: Status.of(rows.get(c, ()), cancelled=c in cancelled) for c in rows.keys() | cancelled}
 
 
 def _samples(rows: Sequence[dict[str, float]]) -> dict[str, list[float]]:

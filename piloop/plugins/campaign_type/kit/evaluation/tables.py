@@ -104,6 +104,24 @@ def read(error: str | None, rung: RungName | None, stopped: str | None) -> Readi
     return Reading.CLIMB if stopped is None else Reading.STOP
 
 
+class Cancel(Base):
+    """Someone cancelled the evaluation of a candidate under one evaluator: the daemon does not evaluate it there unasked.
+
+    ``piloop eval cancel`` writes it (``queue.cancel``), and an ask to measure the candidate again
+    (``request_remeasure``) deletes it. A cancel never changes where a candidate came from (``Candidate.origin``).
+    """
+
+    __tablename__ = 'cancels'
+    __table_args__ = (*text_checks('cancels', 'cancelled_by'),)
+
+    candidate_id: Mapped[CandidateId] = mapped_column(ForeignKey('candidates.id', ondelete='CASCADE'), primary_key=True)
+    evaluator_id: Mapped[EvaluatorId] = mapped_column(ForeignKey('evaluators.id'), primary_key=True)
+    cancelled_by: Mapped[str]
+    cancelled_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
+
+    candidate: Mapped[Candidate] = relationship(back_populates='cancels')
+
+
 class Evaluation(Base):
     """An evaluation that the daemon needs: it waits for a slot of the executor or runs. The evaluation queue.
 

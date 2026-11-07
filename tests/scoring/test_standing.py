@@ -49,7 +49,7 @@ def entry(
         parent=None if parent is None else C(parent),
         origin=Origin.BASELINE if parent is None else Origin.RUN,
         excluded=excluded,
-        status=Status.of(rows),
+        status=Status.of(rows, cancelled=False),
         means={name: fmean(values) for name, values in samples.items() if values},
         samples=samples,
         seal=Status(),

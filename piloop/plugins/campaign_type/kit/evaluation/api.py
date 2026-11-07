@@ -88,8 +88,8 @@ def evaluations(s: Reading) -> EvaluationQueue:
 def cancel_evaluation(s: Writing, me: Acting, candidate: AddressedCandidate) -> CandidateAnswer:
     """Cancel a candidate's evaluation, waiting or running, or its requested remeasure. A cancel records nothing.
 
-    A run's candidate that has no measurement is ``skipped``. A baseline that never measured pauses every
-    measurement of its campaign (``ops.hold_on_cancelled_baseline``).
+    The cancel stands under each evaluator that it cancelled (``Cancel``) until someone asks again. A baseline that
+    never measured pauses every measurement of its campaign (``ops.hold_on_cancelled_baseline``).
     """
     if not queue.cancel(s, candidate.id, me):
         raise Refusal(

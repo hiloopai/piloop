@@ -20,17 +20,18 @@ from collections import Counter
 from datetime import datetime
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
 from piloop.db import requests
 from piloop.db.models import NOT_RETIRED, Campaign, Event, utcnow
 from piloop.ids import CampaignId, TargetRef
-from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
+from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import measure as ledger
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
+from piloop.plugins.campaign_type.kit.evaluation.tables import Cancel, Evaluation
 from piloop.plugins.campaign_type.kit.evaluation.wire import (
     CancelledBy,
     EvaluationQueue,
@@ -232,10 +233,10 @@ def cancel(s: Session, candidate_id: CandidateId, actor: Actor) -> int:
 
     Signed by ``actor``. Return how many it cancelled. The caller commits.
 
-    A cancel records no measurement. A run's candidate that has none under the current evaluator becomes ``skipped``,
-    so no daemon measures it again unless someone asks (``piloop candidate remeasure``), even after a restart. The
-    baseline is asked for again when a run needs it. A pending remeasure request is answered. A waiting evaluation leaves the queue. A running one gets
-    ``cancelled_by``, and the daemon stops its evaluator and records nothing.
+    A cancel records no measurement. It records a ``Cancel`` under each evaluator that it cancelled, the current one
+    for a pending remeasure: no daemon evaluates the candidate there again unless someone asks (``piloop candidate
+    remeasure``), even after a restart. Its origin stays. A pending remeasure request is answered. A waiting evaluation
+    leaves the queue. A running one gets ``cancelled_by``, and the daemon stops its evaluator and records nothing.
     """
     found = s.scalars(
         select(Evaluation).where(Evaluation.candidate_id == candidate_id, Evaluation.cancelled_by.is_(None))
@@ -247,8 +248,11 @@ def cancel(s: Session, candidate_id: CandidateId, actor: Actor) -> int:
     for ask, _ in asked:
         requests.answer(s, ask)
     current = s.get_one(Campaign, candidate.campaign_id).evaluator_id
-    if candidate.origin is Origin.RUN and not any(m.evaluator_id == current for m in candidate.measurements):
-        candidate.origin = Origin.SKIPPED
+    evaluators = {e.evaluator_id for e in found} | ({current} if asked and current is not None else set())
+    for evaluator in evaluators:
+        cancelled = {'candidate_id': candidate_id, 'evaluator_id': evaluator, 'cancelled_by': actor.signature}
+        s.execute(insert(Cancel).values(cancelled).on_conflict_do_nothing())
+    s.expire(candidate, ['cancels'])
     for evaluation in found:
         if evaluation.started_at is None:  # its executor finds it gone when a slot comes (``Results.started``)
             s.delete(evaluation)

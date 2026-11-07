@@ -1107,7 +1107,8 @@ def test_eval_queue_lists_the_running_then_the_waiting_evaluations_and_eval_canc
     assert summary == '2 running, 1 waiting; `piloop eval cancel <candidate>`'
     with closing(Database(common.settings.database_url, actor=System.HUMAN)) as db, db.session() as s:
         cancelled = s.get_one(Candidate, 2)
-        assert (cancelled.measurements, cancelled.origin) == ([], Origin.SKIPPED)
+        assert (cancelled.measurements, cancelled.origin) == ([], Origin.RUN), 'a cancel keeps the origin'
+        assert [c.evaluator_id for c in cancelled.cancels] == [1]
     run_cli(['candidate', 'remeasure', '1'])
     out()
     run_cli(['eval', 'queue'])

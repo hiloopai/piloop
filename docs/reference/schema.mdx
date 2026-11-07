@@ -449,6 +449,16 @@ CREATE TABLE candidates (
 );
 CREATE INDEX ix_candidates_parent ON candidates (parent_id);
 CREATE INDEX ix_candidates_run ON candidates (run_id);
+CREATE TABLE cancels (
+	candidate_id INTEGER NOT NULL,
+	evaluator_id INTEGER NOT NULL,
+	cancelled_by VARCHAR NOT NULL,
+	cancelled_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	PRIMARY KEY (candidate_id, evaluator_id),
+	CONSTRAINT "cancels.cancelled_by must be a text value" CHECK (typeof(cancelled_by) IN ('text')),
+	FOREIGN KEY(candidate_id) REFERENCES candidates (id) ON DELETE CASCADE,
+	FOREIGN KEY(evaluator_id) REFERENCES evaluators (id)
+);
 CREATE TABLE evaluations (
 	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	candidate_id INTEGER NOT NULL,

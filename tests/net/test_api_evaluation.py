@@ -136,8 +136,9 @@ def test_a_cancelled_evaluation_of_a_baseline_that_never_measured_pauses_its_mea
         held = s.get_one(Campaign, added.campaign.id)
         assert (held.paused, held.paused_reason) == (
             Pause.ALL,
-            'human cancelled the evaluation of the baseline; `piloop resume demo` measures it again',
-        ), 'a cancel records nothing: the pause holds the measurement that a baseline without a score asks for'
+            'human cancelled the evaluation of the baseline; `piloop candidate remeasure 1` and `piloop resume demo`'
+            ' measure it again',
+        ), 'a cancel records nothing, and it stands: the pause says how to measure the baseline'
         assert s.get_one(Candidate, added.baseline).measurements == []
 
 

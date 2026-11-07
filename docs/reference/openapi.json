@@ -4137,7 +4137,7 @@
     "/v1/candidates/{candidate}/evaluation/cancel": {
       "post": {
         "summary": "Cancel Evaluation",
-        "description": "Cancel a candidate's evaluation, waiting or running, or its requested remeasure. A cancel records nothing.\n\nA run's candidate that has no measurement is ``skipped``. A baseline that never measured pauses every\nmeasurement of its campaign (``ops.hold_on_cancelled_baseline``).",
+        "description": "Cancel a candidate's evaluation, waiting or running, or its requested remeasure. A cancel records nothing.\n\nThe cancel stands under each evaluator that it cancelled (``Cancel``) until someone asks again. A baseline that\nnever measured pauses every measurement of its campaign (``ops.hold_on_cancelled_baseline``).",
         "operationId": "cancel_evaluation",
         "parameters": [
           {

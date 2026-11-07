@@ -264,6 +264,12 @@ erDiagram
         datetime updated_at
         varchar updated_by
     }
+    cancels {
+        integer candidate_id PK,FK
+        integer evaluator_id PK,FK
+        varchar cancelled_by
+        datetime cancelled_at
+    }
     evaluations {
         integer id PK
         integer candidate_id FK
@@ -308,6 +314,8 @@ erDiagram
     campaigns ||--o{ candidates : "campaign_id"
     runs |o--o{ candidates : "run_id"
     candidates |o--o{ candidates : "parent_id"
+    candidates ||--o{ cancels : "candidate_id"
+    evaluators ||--o{ cancels : "evaluator_id"
     candidates ||--o{ evaluations : "candidate_id"
     evaluators ||--o{ evaluations : "evaluator_id"
     candidates ||--o{ measurements : "candidate_id"

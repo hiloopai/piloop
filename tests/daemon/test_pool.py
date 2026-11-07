@@ -23,10 +23,17 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
-from piloop.plugins.campaign_type.kit.evaluation.ids import Measured
-from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, sealed_of, status
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured
+from piloop.plugins.campaign_type.kit.evaluation.measure import (
+    current_evaluator,
+    record,
+    request_remeasure,
+    sealed_evaluator,
+    sealed_of,
+    status,
+)
 from piloop.plugins.campaign_type.kit.evaluation.submissions import submit, waiting
-from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+from piloop.plugins.campaign_type.kit.evaluation.tables import Cancel, Measurement
 from piloop.plugins.campaign_type.kit.pool.due import due, firsts
 from piloop.plugins.campaign_type.kit.pool.pool import Pool, best_of, branching, carried, checkout_candidate
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
@@ -149,8 +156,8 @@ def pool(db: Database, campaign: Campaign) -> Pool:
 
 
 def unmeasured(s: Session, campaign: Campaign) -> list[CandidateId]:
-    """What runs wait for (``firsts``) that the current evaluator has not answered yet."""
-    return [c.id for c in firsts(s, campaign) if not status(c, campaign.evaluator_id).measured]
+    """What runs wait for (``firsts``) that the current evaluator has not answered yet, nor anyone cancelled."""
+    return [c.id for c in firsts(s, campaign) if not status(c, campaign.evaluator_id).settled]
 
 
 def told(db: Database, candidate: CandidateId) -> str:
@@ -475,8 +482,114 @@ def test_a_submission_whose_evaluation_is_cancelled_waits_for_no_score(
         queue.request(s, made, evaluator)
         queue.cancel(s, made, System.HUMAN)
         s.commit()
-        assert s.get_one(Candidate, made).origin is Origin.SKIPPED
+        assert s.get_one(Candidate, made).origin is Origin.RUN, 'a cancel keeps the origin'
         assert waiting(s, s.get_one(Campaign, campaign.id)) == []
+
+
+def cancel_running(db: Database, candidate: CandidateId, evaluator: EvaluatorId) -> None:
+    """Start an evaluation of ``candidate`` under ``evaluator``, cancel it as a person, and end its job."""
+    with db.session() as s:
+        evaluation, _ = queue.request(s, candidate, evaluator)
+        assert queue.start(s, evaluation.id)
+        assert queue.cancel(s, candidate, System.HUMAN) == 1
+        assert queue.done(s, evaluation.id) is not None
+        s.commit()
+
+
+def current(db: Database, campaign: Campaign) -> EvaluatorId:
+    with db.session() as s:
+        found = s.get_one(Campaign, campaign.id).evaluator_id
+        assert found is not None
+        return found
+
+
+def test_a_cancelled_confirmation_stands_and_no_pass_runs_it_again(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """Its first score beats the best, and a person cancels the evaluation that confirms it: the cancel stands."""
+    configure(db, campaign, evaluator=SUBMIT)
+    ex = controller(db, runtime, tmp_path)
+    better = submitted(db, campaign, running(db, campaign), commit(checkout(campaign, tmp_path), 'base\na\nb\n'))
+    evaluator = current(db, campaign)
+    with db.session() as s:
+        first = s.get_one(Candidate, better)
+        record(s, first, evaluator, System.DAEMON, metrics={'score': 3.0, 'size': 9.0}, error=None, seconds=0)
+        s.commit()
+    assert pool(db, campaign).confirm_due(better)
+    cancel_running(db, better, current(db, campaign))
+    with db.session() as s:
+        assert waiting(s, s.get_one(Campaign, campaign.id)) == [], 'the cancel answers the submission'
+    assert not pool(db, campaign).confirm_due(better)
+    ex.score_submission(better)
+    assert evaluations(db, campaign, better) == (1, 0), 'no confirmation runs, whoever asks to score it'
+    assert pool(db, campaign).standing(better).told().startswith('score 3 over 1 eval'), 'it keeps its score'
+
+
+def test_a_cancelled_confirmation_of_the_baseline_stands_until_someone_asks_again(
+    db: Database, campaign: Campaign
+) -> None:
+    configure(db, campaign, evaluator=SUBMIT)
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        assert [c.id for c in due(s, p)] == [base], 'the baseline has 1 of its 3 evaluations'
+    cancel_running(db, base, current(db, campaign))
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        assert (due(s, p), p.paused) == ([], None), 'it has a score: runs go on, and nothing pauses'
+        request_remeasure(s, s.get_one(Candidate, base), System.HUMAN)
+        s.commit()
+        assert [c.id for c in due(s, p)] == [base], 'the ask lifts the cancel'
+        assert s.scalars(select(Cancel)).all() == []
+
+
+def test_a_cancelled_sealed_evaluation_stands(db: Database, campaign: Campaign, tmp_path: Path) -> None:
+    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1, 'sealed': lines('gamed')})
+    better = submitted(db, campaign, running(db, campaign), commit(checkout(campaign, tmp_path), 'base\na\n'))
+    evaluator = current(db, campaign)
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        first = s.get_one(Candidate, better)
+        record(s, first, evaluator, System.DAEMON, metrics={'score': 2.0, 'size': 7.0}, error=None, seconds=0)
+        hidden = sealed_evaluator(s, p, p.config)
+        assert hidden is not None
+        s.commit()
+        hidden_id = hidden.id
+    assert pool(db, campaign).seal_due(better)
+    cancel_running(db, better, hidden_id)
+    assert not pool(db, campaign).seal_due(better)
+    with db.session() as s:
+        assert better not in [c.id for c in due(s, s.get_one(Campaign, campaign.id))]
+
+
+def test_a_cancelled_remeasure_of_the_carried_best_keeps_it_in_every_pool(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """After an evaluator change the daemon measures the best before it. A cancel of that keeps it the best, and runs
+    no longer wait for it."""
+    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1})
+    ex = controller(db, runtime, tmp_path)
+    better = submitted(db, campaign, running(db, campaign), commit(checkout(campaign, tmp_path), 'base\na\n'))
+    ex.score_submission(better)
+    old = current(db, campaign)
+    configure(
+        db, campaign, evaluate=[*EVALUATE[:2], EVALUATE[2] + ' # v2'], evaluator={'scoring': 'submit', 'noise_runs': 1}
+    )
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        current_evaluator(s, p, p.config)
+        s.commit()
+    cancel_running(db, better, current(db, campaign))
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        assert s.get_one(Candidate, better).origin is Origin.RUN
+        assert Pool.of(s, p, p.config.all_tracks[0], old).best() == better, "the old evaluator's best stays"
+        found = carried(s, p)
+        assert found is not None and found.id == better
+        assert unmeasured(s, p) == [base], 'runs wait for the baseline alone'
+        assert best_of(s, p) == found, 'the best stays where it was'
+        assert Pool.of(s, p, p.config.all_tracks[0]).standing(better).told() == 'cancelled: not scored'
 
 
 def test_a_base_of_another_campaign_is_refused_and_a_campaign_without_a_candidate_has_no_best(

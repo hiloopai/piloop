@@ -17,7 +17,7 @@ from piloop.plugins.campaign_type.kit.pool.pool import Pool, baseline, carried, 
 def firsts(s: Session, campaign: Campaign) -> list[Candidate]:
     """What runs wait for: the ``carried`` best, then the baseline. The daemon confirms both with the current evaluator.
 
-    Runs start once the current evaluator answered both (``Status.measured``).
+    Runs start once the current evaluator answered both, or someone cancelled them (``Status.settled``).
     """
     return [c for c in (carried(s, campaign), baseline(s, campaign)) if c is not None]
 
@@ -32,7 +32,9 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     3. Each candidate that someone asked to measure again (``requested``), oldest request first.
     4. Each candidate that the sealed split is due to score (``Pool.seal_due``), such as the would-be best after a new
        sealed command: its visible evaluations stand.
-    5. Each reference that no evaluator measured: a new import.
+    5. Each reference that no evaluator measured and nobody cancelled: a new import.
+
+    A cancel stands (``Cancel``): what someone cancelled is not due again until someone asks.
 
     A stopped campaign gets only 3: what someone asked for, to review the campaign. Nothing else is measured again
     unasked: after an evaluator change, a candidate keeps the scores of the old evaluator until it is submitted again or
@@ -44,7 +46,10 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     confirm = confirm_runs(s, campaign, campaign.evaluator_id)
     unconfirmed = [c for c in firsts(s, campaign) if status(c, campaign.evaluator_id).needs(confirm)]
     new = select(Candidate).where(
-        Candidate.campaign_id == campaign.id, Candidate.origin == Origin.REFERENCE, ~Candidate.measurements.any()
+        Candidate.campaign_id == campaign.id,
+        Candidate.origin == Origin.REFERENCE,
+        ~Candidate.measurements.any(),
+        ~Candidate.cancels.any(),
     )
     pool = Pool.of(s, campaign, campaign.config.all_tracks[0])
     sealing = [s.get_one(Candidate, c) for c in pool.ranked_all() if pool.seal_due(c)]

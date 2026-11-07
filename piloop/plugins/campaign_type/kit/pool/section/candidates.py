@@ -13,6 +13,7 @@ PLACES = {
     Measured.CLIMBING: 'not scored',
     Measured.STOPPED: 'stopped',
     Measured.CRASHED: 'crash',
+    Measured.CANCELLED: 'cancelled',
     Measured.SCORED: 'not scored',
 }
 """The place of a candidate without a mean of the primary, by its ``Status.state``."""

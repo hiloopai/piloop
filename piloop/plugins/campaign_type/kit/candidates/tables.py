@@ -18,7 +18,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
 if TYPE_CHECKING:  # evaluation and runs need candidates: only the relationships name them
-    from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
+    from piloop.plugins.campaign_type.kit.evaluation.tables import Cancel, Measurement
     from piloop.plugins.campaign_type.kit.runs.tables import Run
 from sqlalchemy import Select, select
 
@@ -78,6 +78,7 @@ class Candidate(Tracked, Base):
     run: Mapped[Run | None] = relationship(back_populates='candidates', foreign_keys=[run_id])
     parent: Mapped[Candidate | None] = relationship(remote_side=[id], foreign_keys=[parent_id])
     measurements: Mapped[list[Measurement]] = relationship(back_populates='candidate', order_by='Measurement.id')
+    cancels: Mapped[list[Cancel]] = relationship(back_populates='candidate', cascade='all, delete-orphan')
 
 
 def produced(campaign: Campaign) -> Select[Candidate]:

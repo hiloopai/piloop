@@ -20,7 +20,7 @@ from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured
 from piloop.plugins.campaign_type.kit.evaluation.jobs import KIND, EvaluationJob, InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     current_evaluator,
@@ -233,10 +233,10 @@ def test_a_cancelled_evaluation_whose_job_is_lost_leaves_the_queue_for_good(db: 
             KIND.lost(s, evaluation.id)
 
 
-def test_a_cancelled_evaluation_is_no_score_and_its_candidate_is_skipped_at_once(
+def test_a_cancelled_evaluation_is_no_score_and_its_cancel_stands_at_once(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """A cancel skips the candidate itself, so it holds even if no daemon sees it; a running evaluator is stopped."""
+    """A cancel is a row of its own, so it holds even if no daemon sees it; a running evaluator is stopped."""
     write_script(Path(campaign.path).parent / 'harness.sh', HARNESS_OWN_LINE)
     (tmp_path / 'hold').touch()
     held_runs(db, campaign, tmp_path)
@@ -256,18 +256,19 @@ def test_a_cancelled_evaluation_is_no_score_and_its_candidate_is_skipped_at_once
     two.join(30)
     ex.stop_cancelled()
     one.join(30)
-    assert skipped(db, running.id) == []
-    assert skipped(db, waiting.id) == []
+    assert cancelled(db, running.id) == []
+    assert cancelled(db, waiting.id) == []
     assert errors(db, running.id)[1] is None and errors(db, waiting.id)[1] is None, 'no score'
     assert len(evaluated(tmp_path)) == 1, 'the waiting evaluation never started'
     assert rows(db) == []
 
 
-def skipped(db: Database, candidate_id: CandidateId) -> list[Measurement]:
-    """The measurements of a ``skipped`` candidate."""
+def cancelled(db: Database, candidate_id: CandidateId) -> list[Measurement]:
+    """The measurements of a candidate whose evaluation someone cancelled under the current evaluator."""
     with db.session() as s:
         c = s.get_one(Candidate, candidate_id)
-        assert c.origin is Origin.SKIPPED
+        assert status(c, s.get_one(Campaign, c.campaign_id).evaluator_id).state is Measured.CANCELLED
+        assert c.origin is not Origin.SKIPPED, 'a cancel keeps the origin'
         return list(c.measurements)
 
 
@@ -288,7 +289,7 @@ def test_a_cancel_holds_when_the_daemon_restarts_before_it_sees_it(db: Database,
         s.execute(delete(Evaluation))  # what the next daemon's reap does
         s.commit()
         assert not status(s.get_one(Candidate, other.id), evaluator).measured
-    assert skipped(db, other.id) == [], 'no daemon measures it'
+    assert cancelled(db, other.id) == [], 'no daemon measures it'
 
 
 def test_a_stop_ends_the_waiting_evaluations_and_records_nothing(

@@ -42,6 +42,8 @@ class Measured(StrEnum):
     """Its latest climb stopped at a rung: it has no score."""
     CRASHED = 'crashed'
     """Its latest evaluation failed, and none scored."""
+    CANCELLED = 'cancelled'
+    """Someone cancelled its evaluation before one scored (``Cancel``): the daemon does not evaluate it again unasked."""
     SCORED = 'scored'
     """At least one evaluation scored. The pool says whether enough did to confirm it (``Pool.confirmed``)."""
 

@@ -196,7 +196,7 @@ class OptimizationPlanner:
         stop rule's ``hours`` would end within its wrap-up lead: its worker would be told to wrap up as it starts.
         """
         best = best_of(s, campaign)
-        if best is None or not all(status(c, campaign.evaluator_id).measured for c in firsts(s, campaign)):
+        if best is None or not all(status(c, campaign.evaluator_id).settled for c in firsts(s, campaign)):
             return
         cfg = campaign.config
         runs_left, hours_left = left.get(facts.RUNS), left.get(facts.HOURS)

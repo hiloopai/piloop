@@ -1303,6 +1303,7 @@ def test_optimization_0009_keeps_every_verdict_in_an_event_drops_the_columns_and
             " WHERE kind = 'candidate.verdict' ORDER BY id"
         ).fetchall()
     assert events == [(2, 'keep', 'r'), (1, 'keep', 'reason 1'), (3, 'keep', 'reason 3'), (4, 'discard', 'reason 4')]
+    command.upgrade(chain, 'head')  # today's pool reads today's tables
     database = session.Database(f'sqlite:///{path}', actor=System.DAEMON)
     try:
         with database.session() as s:
@@ -1453,3 +1454,41 @@ def test_optimization_0010_deletes_each_cancelled_evaluation_that_waited_again_k
     command.downgrade(chain, '0009')
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         con.execute('UPDATE evaluations SET started_at = NULL WHERE id = 2')  # 0009 had no such CHECK
+
+
+def test_optimization_0011_gives_a_cancelled_candidate_its_origin_back_with_a_cancel_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    """0.6's cancel made a run's candidate ``skipped``. One that an ``evaluation.cancelled`` event names is ``run``
+    again, with a cancel under the current evaluator; a skip with no such event stays. The downgrade skips it again."""
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0010')
+    cancelled = {'kind': 'evaluation.cancelled', 'evaluation': 1, 'by': 'human:ana'}
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
+        con.execute("INSERT INTO evaluators (campaign_id, key, definition) VALUES (1, 'k', '{}')")
+        con.execute('UPDATE campaigns SET evaluator_id = 1')
+        for tree in ('cancelled', 'marked'):
+            con.execute(
+                "INSERT INTO candidates (campaign_id, tree_sha, revision, origin) VALUES (1, ?, ?, 'skipped')",
+                (tree, tree),
+            )
+        con.execute(
+            "INSERT INTO events (actor, target_kind, target_id, payload) VALUES ('human:ana', 'candidate', 1, ?)",
+            (dumps(cancelled),),
+        )
+    command.upgrade(chain, '0011')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT id, origin FROM candidates ORDER BY id').fetchall() == [(1, 'run'), (2, 'skipped')]
+        assert con.execute('SELECT candidate_id, evaluator_id, cancelled_by FROM cancels').fetchall() == [
+            (1, 1, 'human:ana')
+        ]
+    command.downgrade(chain, '0010')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT id, origin FROM candidates ORDER BY id').fetchall() == [
+            (1, 'skipped'),
+            (2, 'skipped'),
+        ]
+        assert con.execute("SELECT name FROM sqlite_master WHERE name = 'cancels'").fetchall() == []

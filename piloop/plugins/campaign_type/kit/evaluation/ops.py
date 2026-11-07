@@ -44,8 +44,8 @@ def hold_on_failed_baseline(s: Session, candidate: Candidate, logs: Path | None)
 def hold_on_cancelled_baseline(s: Session, candidate: Candidate, actor: Actor) -> None:
     """Hold every measurement of a campaign (``hold``) whose baseline never measured, when ``actor`` cancelled its evaluation.
 
-    A cancel records nothing, and the daemon measures a baseline that has no score at once: the pause holds that until
-    someone resumes the campaign. The caller commits.
+    A cancel records nothing, and it stands (``Cancel``): nothing measures the baseline until someone asks. The pause
+    says so. The caller commits.
     """
     campaign = s.get_one(Campaign, candidate.campaign_id)
     if candidate.origin is not Origin.BASELINE or candidate.measurements:
@@ -53,7 +53,8 @@ def hold_on_cancelled_baseline(s: Session, candidate: Candidate, actor: Actor) -
     hold(
         campaign,
         Pause.ALL,
-        f'{actor} cancelled the evaluation of the baseline; `piloop resume {campaign.name}` measures it again',
+        f'{actor} cancelled the evaluation of the baseline; `piloop candidate remeasure {candidate.id}` and'
+        f' `piloop resume {campaign.name}` measure it again',
     )
 
 

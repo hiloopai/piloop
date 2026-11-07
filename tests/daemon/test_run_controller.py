@@ -53,7 +53,7 @@ from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import jobs as evaluation_jobs, queue
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import CHANGED_INPUTS
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured
 from piloop.plugins.campaign_type.kit.evaluation.jobs import INPUTS_CHANGED
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     Split,
@@ -61,6 +61,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     request_remeasure,
     requested,
     save_units,
+    status,
     units,
 )
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
@@ -2279,7 +2280,7 @@ def cancelling(db: Database, measure: Callable[..., Measuring], cancelled: Candi
     return measured
 
 
-def test_a_cancelled_evaluation_leaves_its_candidate_skipped_also_when_the_run_resumes(
+def test_a_cancelled_evaluation_stands_also_when_the_run_resumes(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_id = make_run(db, campaign)
@@ -2290,8 +2291,9 @@ def test_a_cancelled_evaluation_leaves_its_candidate_skipped_also_when_the_run_r
     monkeypatch.setattr(ex, '_measure', measure)
     ex.resume(run_id)
     with db.session() as s:
-        skipped = s.get_one(Candidate, CandidateId(2))
-        assert (skipped.origin, told_of(s, skipped.id), skipped.measurements) == (Origin.SKIPPED, None, [])
+        found = s.get_one(Candidate, CandidateId(2))
+        assert (found.origin, told_of(s, found.id), found.measurements) == (Origin.RUN, None, [])
+        assert status(found, s.get_one(Campaign, campaign.id).evaluator_id).state is Measured.CANCELLED
 
 
 def test_a_tree_two_runs_reach_is_never_scored_against_itself(

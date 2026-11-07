@@ -869,7 +869,7 @@ class RunController:
         A candidate that the current evaluator measured already is not evaluated again: the same tree again says
         nothing new about it. An evaluator that ``piloop init`` makes meanwhile measures it again, and so does one that
         replaces the evaluator before its evaluation runs (``Measuring.REPLACED``). Return how it ended: a stop of the
-        daemon or a cancel records no score.
+        daemon or a cancel records no score, and a cancel stands until someone asks again (``Status.cancelled``).
         """
         tried: set[EvaluatorId] = set()  # a climb that stopped at a rung is a measurement too: one per evaluator
         while True:  # the evaluator now: one that ``piloop init`` made while it was measured measures it again
@@ -880,9 +880,11 @@ class RunController:
                 evaluator_id = current_evaluator(s, campaign, cfg).id
                 s.commit()
                 best = Pool.of(s, campaign, track_of(cfg, candidate)).best()
-                known = status(candidate, evaluator_id).latest is not None
+                now = status(candidate, evaluator_id)
                 campaign_id, revision = campaign.id, candidate.revision
-            if not known and evaluator_id not in tried:
+            if now.cancelled:  # a cancel stands until someone asks again
+                return Measuring.CANCELLED
+            if now.latest is None and evaluator_id not in tried:
                 match ended := self._measure(
                     run_id, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir / 'eval', gate=best
                 ):
@@ -1023,9 +1025,6 @@ class RunController:
                             s.commit()
                             span.set(status=unmeasured)
                             continue
-                        case None if candidate.origin in UNSCORED and candidate.revision == version.revision:
-                            span.set(status=candidate.origin)  # this very version: its mark, or a cancel, holds
-                            continue
                         case _:
                             if candidate.origin in UNSCORED:
                                 candidate.origin = Origin.RUN  # a tree that was skipped or recovered is measured now
@@ -1034,8 +1033,8 @@ class RunController:
                     case Measuring.STOPPED:
                         span.set(status='cancelled')
                         return None
-                    case Measuring.CANCELLED:  # no score: ``queue.cancel`` made it ``skipped``
-                        span.set(status='skipped')
+                    case Measuring.CANCELLED:  # no score: its cancel stands (``Cancel``)
+                        span.set(status='cancelled')
                     case Measuring.ABANDONED:  # no score: the campaign's measurements wait for a human
                         span.set(status=ended)
                     case Measuring.MEASURED:

@@ -168,10 +168,14 @@ class Status:
     """The rung of the latest measurement, or None."""
     stopped: str | None = None
     """Why the climb stopped at ``rung``, when the latest measurement is a stop."""
+    cancelled: bool = False
+    """Whether someone cancelled its evaluation, and nobody asked for one since (``Cancel``)."""
 
     @classmethod
-    def of(cls, rows: Iterable[tuple[dict[str, float], str | None, RungName | None, str | None]]) -> Status:
-        """The status that measurements give, as ``(metrics, error, rung, stopped)``, oldest first."""
+    def of(
+        cls, rows: Iterable[tuple[dict[str, float], str | None, RungName | None, str | None]], *, cancelled: bool
+    ) -> Status:
+        """The status that measurements give, as ``(metrics, error, rung, stopped)``, oldest first, and a cancel."""
         scores: list[dict[str, float]] = []
         crashes, latest, rung, stopped = 0, None, None, None
         for values, error, rung, stopped in rows:  # the latest row's rung and stop stay
@@ -179,12 +183,14 @@ class Status:
                 scores.append(values)
             elif latest is Reading.CRASH:
                 crashes += 1
-        return cls(tuple(scores), crashes, latest, rung, stopped)
+        return cls(tuple(scores), crashes, latest, rung, stopped, cancelled)
 
     @property
     def state(self) -> Measured:
-        """Where its measurement is: a score, once it has one, else what its latest measurement says."""
-        return Measured.SCORED if self.scores else LATEST[self.latest]
+        """Where its measurement is: a score, once it has one, else a cancel, else what its latest measurement says."""
+        if self.scores:
+            return Measured.SCORED
+        return Measured.CANCELLED if self.cancelled else LATEST[self.latest]
 
     @property
     def scored(self) -> int:
@@ -201,13 +207,18 @@ class Status:
         """
         return bool(self.scores) or self.crashes > 0
 
+    @property
+    def settled(self) -> bool:
+        """Whether the daemon evaluates it no more unasked: the evaluator answered it, or someone cancelled it."""
+        return self.measured or self.cancelled
+
     def needs(self, confirm: int) -> int:
         """How many more evaluations confirm it, with ``confirm`` successful ones (``confirm_runs``).
 
-        0 once it is confirmed, and once ``confirm`` of its evaluations failed: a fault of the evaluator is not fixed
-        by running it again.
+        0 once it is confirmed, once someone cancelled its evaluation, and once ``confirm`` of its evaluations failed: a
+        fault of the evaluator is not fixed by running it again.
         """
-        return 0 if self.crashes >= confirm else max(confirm - self.scored, 0)
+        return 0 if self.cancelled or self.crashes >= confirm else max(confirm - self.scored, 0)
 
     def climb(self) -> str | None:
         """Where its latest climb of the ladder is: ``reached <rung>``, ``stopped at <rung>: <why>``, or None."""
@@ -233,7 +244,8 @@ LATEST: Final[Mapping[Reading | None, Measured]] = {
 def status(candidate: Candidate, evaluator_id: EvaluatorId | None) -> Status:
     """The ``Status`` of ``candidate`` under ``evaluator_id``, from its measurements."""
     return Status.of(
-        (m.metrics, m.error, m.rung, m.stopped) for m in candidate.measurements if m.evaluator_id == evaluator_id
+        ((m.metrics, m.error, m.rung, m.stopped) for m in candidate.measurements if m.evaluator_id == evaluator_id),
+        cancelled=any(c.evaluator_id == evaluator_id for c in candidate.cancels),
     )
 
 
@@ -324,8 +336,10 @@ def request_remeasure(s: Session, candidate: Candidate, actor: Actor, repeats: i
     Use it for a measurement that a fault of the host spoiled (a full disk, a lost GPU), or that load made noisy. The
     request (``RemeasureRequested``) is pending until a measurement of the candidate under the campaign's current
     evaluator is recorded (``record``). A commit that the daemon never measured (``skipped`` or ``recovered``) gets
-    its first measurements, to isolate a regression to it, say. The candidate's mean then includes them.
+    its first measurements, to isolate a regression to it, say. The candidate's mean then includes them. The ask lifts
+    each cancel of the candidate (``Cancel``).
     """
+    candidate.cancels.clear()
     emit(s, RemeasureRequested(repeats=repeats), TargetRef(CANDIDATE, candidate.id), actor)
 
 

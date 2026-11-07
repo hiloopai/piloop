@@ -142,6 +142,13 @@ These keys still load, with a warning, until 0.7.0, and do nothing:
 
 `piloop inbox wait` and `GET /v1/inbox/news` no longer return news of kind `anomaly_requested`.
 
+### A cancel stands, and keeps the origin
+
+`piloop eval cancel` no longer makes a run's candidate `skipped`. It keeps its origin, and stays in the pool of every
+evaluator that scored it. The cancel stands under the evaluator that it cancelled: the daemon does not confirm the
+candidate, score it on the sealed split, or measure it again as the baseline or the best before an evaluator change.
+`piloop candidate remeasure` asks for it again. The table `cancels` holds each cancel.
+
 
 ### Upgrade from 0.5
 
