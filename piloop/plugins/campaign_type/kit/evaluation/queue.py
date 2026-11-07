@@ -6,6 +6,11 @@ campaign with the fewest running evaluations, and in that campaign to its baseli
 campaign with many requests never holds back the requests of another, and inside a campaign each request waits only
 for the ones before it. The queue is in the database: ``view`` answers it, and ``cancel`` takes from it.
 
+Every write of a row is here, one function for each move, each a guarded statement: ``request`` (absent → waiting),
+``start`` (waiting → running), ``lost`` (running → waiting, or absent when it was cancelled), ``cancel`` (waiting →
+absent, running → running and cancelled), ``withdraw`` (waiting under a retired evaluator → absent), ``done`` (running
+→ absent) and ``clear`` (every row, when a daemon starts). Only a running row is cancelled (``EVALUATION_CHECKS``).
+
 A remeasure that someone asked for (``ledger.request_remeasure``) enters the queue only when the daemon gets to it, one
 per campaign at a time. Until then ``requested`` lists its pending request, so ``piloop eval queue`` shows it from the
 moment it is asked.
@@ -14,12 +19,12 @@ moment it is asked.
 from collections import Counter
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
 from piloop.db import requests
-from piloop.db.models import NOT_RETIRED, Campaign, Event
+from piloop.db.models import NOT_RETIRED, Campaign, Event, utcnow
 from piloop.ids import CampaignId, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
@@ -51,6 +56,59 @@ def request(s: Session, candidate_id: CandidateId, evaluator_id: EvaluatorId) ->
     s.add(evaluation)
     s.flush()
     return evaluation, True
+
+
+def start(s: Session, evaluation_id: int) -> bool:
+    """Give a waiting evaluation its slot: it runs from now. False when it no longer waits. The caller commits."""
+    moved = s.execute(
+        update(Evaluation)
+        .where(Evaluation.id == evaluation_id, Evaluation.started_at.is_(None))
+        .values(started_at=utcnow())
+        .returning(Evaluation.id)
+        .execution_options(synchronize_session='fetch')
+    ).first()
+    return moved is not None
+
+
+def lost(s: Session, evaluation_id: int) -> bool:
+    """Nothing came back from a running evaluation: it waits again for a slot, or leaves the queue if it was cancelled.
+
+    A cancel stands: a cancelled evaluation never runs again, and its requests find it gone with no measurement.
+    False when it does not run. The caller commits.
+    """
+    gone = s.execute(
+        delete(Evaluation)
+        .where(Evaluation.id == evaluation_id, Evaluation.started_at.is_not(None), Evaluation.cancelled_by.is_not(None))
+        .returning(Evaluation.id)
+        .execution_options(synchronize_session='fetch')
+    ).first()
+    if gone is not None:
+        return True
+    waits = s.execute(
+        update(Evaluation)
+        .where(Evaluation.id == evaluation_id, Evaluation.started_at.is_not(None))
+        .values(started_at=None)
+        .returning(Evaluation.id)
+        .execution_options(synchronize_session='fetch')
+    ).first()
+    return waits is not None
+
+
+def done(s: Session, evaluation_id: int) -> Evaluation | None:
+    """Take a running evaluation out of the queue, as its job ended, and return it. None when it does not run.
+
+    The caller commits.
+    """
+    found = s.get(Evaluation, evaluation_id)
+    if found is None or found.started_at is None:
+        return None
+    s.delete(found)
+    return found
+
+
+def clear(s: Session) -> None:
+    """Take every evaluation out of the queue: a daemon that starts asks again for what it still needs."""
+    s.execute(delete(Evaluation))
 
 
 def _first(s: Session, campaign_id: CampaignId) -> CandidateId | None:
@@ -195,5 +253,10 @@ def cancel(s: Session, candidate_id: CandidateId, actor: Actor) -> int:
         if evaluation.started_at is None:  # its executor finds it gone when a slot comes (``Results.started``)
             s.delete(evaluation)
         else:
-            evaluation.cancelled_by = actor.signature
+            s.execute(
+                update(Evaluation)
+                .where(Evaluation.id == evaluation.id, Evaluation.started_at.is_not(None))
+                .values(cancelled_by=actor.signature)
+                .execution_options(synchronize_session='fetch')
+            )
     return max(len(found), 1)

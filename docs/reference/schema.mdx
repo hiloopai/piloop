@@ -457,6 +457,7 @@ CREATE TABLE evaluations (
 	started_at DATETIME,
 	cancelled_by VARCHAR,
 	UNIQUE (candidate_id, evaluator_id),
+	CONSTRAINT "evaluations.only a running evaluation is cancelled" CHECK (cancelled_by IS NULL OR started_at IS NOT NULL),
 	CONSTRAINT "evaluations.cancelled_by must be a text value" CHECK (typeof(cancelled_by) IN ('text', 'null')),
 	FOREIGN KEY(candidate_id) REFERENCES candidates (id) ON DELETE CASCADE,
 	FOREIGN KEY(evaluator_id) REFERENCES evaluators (id)

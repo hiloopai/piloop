@@ -18,7 +18,7 @@ from functools import partial
 from typing import ClassVar, Literal, assert_never
 
 from pydantic import ValidationError
-from sqlalchemy import delete, exists, select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session, aliased
 
 from piloop.actor import System
@@ -76,9 +76,9 @@ from piloop.db.triggers.changelog import (
 from piloop.ids import AgentSessionId, CampaignStatus, CommentId, RoleName, TargetKind, TargetRef
 from piloop.plugins.campaign_type.contract import CAMPAIGNS, CannotLaunch, Planner, Take
 from piloop.plugins.campaign_type.kit.candidates.references import CandidateImported
+from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded, RemeasureRequested
 from piloop.plugins.campaign_type.kit.evaluation.submissions import Submitted
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import (
     RUNS,
@@ -242,7 +242,7 @@ class Campaigns:
                 runs = {w.id: run_of(w) for w in live}
                 left = [LeftJob(AgentKey(w.id)) for w in live]
             with self._db.session() as s:
-                s.execute(delete(Evaluation))
+                queue.clear(s)
                 s.commit()
             refused = set(self._controller.executor.adopt(left))
             adopted = [

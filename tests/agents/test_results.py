@@ -94,8 +94,8 @@ def test_an_evaluation_that_left_the_queue_or_never_started_is_settled(
     report = EvaluationReport(samples=[Sample(metrics={'score': 1.0}, seconds=1)])
     with pytest.raises(Settled, match='is not running'):
         results.finished(job, report)  # it waits: no executor started it
-    with pytest.raises(Settled, match='left the queue'):
-        results.lost(JobKey(EVALUATION, waiting + 1), 'gone')
+    with pytest.raises(Settled, match=f'evaluation#{waiting + 1} is not running'):
+        results.lost(JobKey(EVALUATION, waiting + 1), 'gone')  # it left the queue
 
 
 def test_a_start_report_moves_a_starting_agent_to_running_and_leaves_an_ending_one_ending(

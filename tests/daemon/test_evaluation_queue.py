@@ -21,7 +21,7 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Candidate
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.jobs import KIND, InfraFailed, InfraRetrying
+from piloop.plugins.campaign_type.kit.evaluation.jobs import KIND, EvaluationJob, InfraFailed, InfraRetrying
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     current_evaluator,
     measured,
@@ -37,6 +37,7 @@ from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.escalation.contract import ESCALATION
+from piloop.plugins.executor.contract import Job, Settled
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.vcs.git import commands as git
 from piloop.settings import EvaluationSettings
@@ -180,6 +181,57 @@ def test_a_shared_evaluation_that_cannot_start_is_no_measurement_and_runs_again_
         assert infra.error == 'RuntimeError: cannot check out the commit'
         assert len(in_order(s, InfraRetrying)) == 1, 'shared requests send one threshold notice'
     assert rows(db) == []
+
+
+def test_an_evaluation_that_the_executor_refuses_leaves_the_queue_as_an_infra_error_and_runs_again(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B16: the row's start committed before the submit, so a submit that raised left it running with no job.
+
+    Every later request joined it and waited until a daemon restart. Now the refused row leaves the queue as an infra
+    error: nothing of the candidate ran, and its request asks again.
+    """
+    ex = queued_executor(db, runtime, tmp_path, slots=2)
+    submit = ex.executor.submit
+    refused: list[int] = []
+
+    def full_disk(job: Job) -> None:
+        if isinstance(job, EvaluationJob) and not refused:
+            refused.append(job.evaluation)
+            raise OSError(28, 'No space left on device')
+        submit(job)
+
+    monkeypatch.setattr(ex.executor, 'submit', full_disk)
+    run_id = make_run(db, campaign)
+    done = in_thread(lambda: execute(ex, db, run_id))
+    done.join(60)
+    assert not done.is_alive(), 'the request asked again, and its evaluation ran'
+    [candidate] = run_candidates(db, run_id)
+    assert errors(db, candidate.id) == ([None], TOLD), 'measured once, after the infra error; no crash'
+    with db.session() as s:
+        assert [(p.evaluation, p.error) for _, p in in_order(s, InfraFailed)] == [
+            (refused[0], 'the executor refused it: OSError: [Errno 28] No space left on device')
+        ]
+        assert s.get_one(Run, run_id).status is RunStatus.SUCCEEDED
+    assert rows(db) == []
+
+
+def test_a_cancelled_evaluation_whose_job_is_lost_leaves_the_queue_for_good(db: Database, campaign: Campaign) -> None:
+    """B21: a lost job cleared ``started_at`` and kept ``cancelled_by``, so the cancelled row waited again."""
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        evaluator = s.get_one(Campaign, campaign.id).evaluator_id
+        assert evaluator is not None
+        evaluation, _ = queue.request(s, base, evaluator)
+        assert queue.start(s, evaluation.id) and not queue.start(s, evaluation.id), 'a slot once'
+        s.commit()
+        assert queue.cancel(s, base, System.HUMAN) == 1
+        s.commit()
+        KIND.lost(s, evaluation.id)  # its worker's lease expired
+        s.commit()
+        assert s.scalars(select(Evaluation)).all() == [], 'the cancel stands: it never runs again'
+        with pytest.raises(Settled, match=f'evaluation#{evaluation.id} is not running'):
+            KIND.lost(s, evaluation.id)
 
 
 def test_a_cancelled_evaluation_is_no_score_and_its_candidate_is_skipped_at_once(

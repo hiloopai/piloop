@@ -87,6 +87,7 @@ from piloop.plugins.campaign_type.kit.evaluation.jobs import (
     InfraFailed,
     InfraRetrying,
     Sample,
+    not_started,
     record,
 )
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
@@ -339,12 +340,17 @@ class RunController:
                 for evaluation in queue.waiting(s):
                     if free is not None and len(starting) >= free:
                         break
-                    if (job := self._jobs.get(evaluation.id)) is not None:
-                        evaluation.started_at = utcnow()
+                    if (job := self._jobs.get(evaluation.id)) is not None and queue.start(s, evaluation.id):
                         starting.append(job)
                 s.commit()
             for job in starting:
-                self.executor.submit(job)
+                try:
+                    self.executor.submit(job)
+                except Exception as e:  # any refusal: the row must not run with no job, so it leaves the queue
+                    with self._db.session() as s:
+                        not_started(s, job, f'{type(e).__name__}: {e}')
+                        s.commit()
+                    self._tracer.event('evaluation.not_started', evaluation=job.evaluation, error=str(e))
 
     def stop(self, timeout: float) -> None:
         """Submit no more jobs, and stop the executor's: each still reports. Waits up to ``timeout`` for them.

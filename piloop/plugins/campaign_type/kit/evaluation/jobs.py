@@ -42,7 +42,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measure
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.campaign_type.kit.evaluation.measure import evaluator_runners, save_units
 from piloop.plugins.campaign_type.kit.evaluation.ops import sealed_refused
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.executor.contract import Applying, Control, Job, JobKind, Report, Settled, Site
 from piloop.plugins.executor.kit.jobs import SHOWN, rebuilt
@@ -195,11 +195,9 @@ class Evaluations(JobKind):
         measured(s, _own(job), report, daemon)
 
     def lost(self, s: Session, job_id: int) -> None:
-        """The evaluation waits again for a slot of the queue."""
-        evaluation = s.get(Evaluation, job_id)
-        if evaluation is None:
-            raise Settled(f'evaluation#{job_id} left the queue')
-        evaluation.started_at = None
+        """The evaluation waits again for a slot of the queue, or leaves it if it was cancelled (``queue.lost``)."""
+        if not queue.lost(s, job_id):
+            raise Settled(f'evaluation#{job_id} is not running')
 
     def waiting(self, s: Session, runners: Sequence[str]) -> bool:
         """Whether an evaluation of one of ``runners`` waits in the queue for a slot (``queue.backlog``).
@@ -219,6 +217,16 @@ KIND = Evaluations()
 """The kind, as its entry point names it."""
 
 
+def not_started(s: Session, job: EvaluationJob, error: str) -> None:
+    """The executor refused the job of a running evaluation: it leaves the queue as an infra error (``InfraFailed``).
+
+    Nothing ran, so nothing is the candidate's: its request asks again, after its backoff. The caller commits.
+    """
+    queue.done(s, job.evaluation)  # None when a restart cleared the queue in between: the event says it all the same
+    failed = InfraFailed(evaluation=job.evaluation, error=f'the executor refused it: {error}')
+    emit(s, failed, TargetRef(CANDIDATE, job.candidate), System.DAEMON)
+
+
 def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: Applying) -> None:
     """Record each sample of an evaluation as one measurement, and take the evaluation out of the queue.
 
@@ -226,10 +234,8 @@ def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: A
     evaluator was killed, and the next daemon measures it again. Nor does an infra error: it emits ``InfraFailed``, and
     its request asks again. A sealed command whose result piloop refuses escalates too, once (``sealed_refused``).
     """
-    evaluation = s.get(Evaluation, job.evaluation)
-    if evaluation is None or evaluation.started_at is None:
+    if (evaluation := queue.done(s, job.evaluation)) is None:
         raise Settled(f'evaluation#{job.evaluation} is not running')
-    s.delete(evaluation)
     if daemon.stopping or evaluation.cancelled_by is not None:
         return
     if (infra := report.infra_error) is not None:

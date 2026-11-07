@@ -1417,3 +1417,39 @@ def test_0081_gives_each_pause_its_owner_repairs_the_campaigns_that_raw_writes_b
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         con.execute("UPDATE campaigns SET status = 'stopped' WHERE id = 1")  # 0080 had no such CHECK
         assert 'paused_by' not in [c for (_, c, *_) in con.execute('PRAGMA table_info(campaigns)')]
+
+
+def test_optimization_0010_deletes_each_cancelled_evaluation_that_waited_again_keeps_the_counter_and_checks_them(
+    tmp_path: Path,
+) -> None:
+    """0.6's lost job cleared a cancelled row's ``started_at``: the row waited again, cancelled. The cancel stands."""
+    path = tmp_path / 'piloop.db'
+    command.upgrade(alembic(path), 'head')
+    chain = alembic_config(f'sqlite:///{path}', 'optimization', disk(tmp_path))
+    command.upgrade(chain, '0009')
+    evaluation = 'INSERT INTO evaluations (id, candidate_id, evaluator_id, started_at, cancelled_by) VALUES '
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
+        con.execute("INSERT INTO evaluators (campaign_id, key, definition) VALUES (1, 'k', '{}')")
+        for n in range(1, 5):
+            con.execute(f"INSERT INTO candidates (campaign_id, tree_sha, revision) VALUES (1, 't{n}', 'c{n}')")
+        con.execute(evaluation + "(1, 1, 1, NULL, 'human')")
+        con.execute(evaluation + "(2, 2, 1, '2026-10-01', 'human')")
+        con.execute(evaluation + '(3, 3, 1, NULL, NULL)')
+        con.execute(evaluation + '(9, 4, 1, NULL, NULL)')
+        con.execute('DELETE FROM evaluations WHERE id = 9')
+    command.upgrade(chain, '0010')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute(
+            'SELECT id, started_at IS NOT NULL, cancelled_by FROM evaluations ORDER BY id'
+        ).fetchall() == [
+            (2, 1, 'human'),
+            (3, 0, None),
+        ]
+        with pytest.raises(sqlite3.IntegrityError, match='evaluations.only a running evaluation is cancelled'):
+            con.execute('UPDATE evaluations SET started_at = NULL WHERE id = 2')
+        con.execute('INSERT INTO evaluations (candidate_id, evaluator_id) VALUES (4, 1)')
+        assert con.execute('SELECT max(id) FROM evaluations').fetchone() == (10,), 'an id is never used again'
+    command.downgrade(chain, '0009')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute('UPDATE evaluations SET started_at = NULL WHERE id = 2')  # 0009 had no such CHECK

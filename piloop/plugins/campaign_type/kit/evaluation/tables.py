@@ -104,6 +104,9 @@ class Evaluation(Base):
     __tablename__ = 'evaluations'
     __table_args__ = (
         UniqueConstraint('candidate_id', 'evaluator_id'),
+        CheckConstraint(
+            'cancelled_by IS NULL OR started_at IS NOT NULL', name='evaluations.only a running evaluation is cancelled'
+        ),
         *text_checks('evaluations', nullable=('cancelled_by',)),
         {'sqlite_autoincrement': True},
     )
@@ -115,6 +118,7 @@ class Evaluation(Base):
     started_at: Mapped[datetime | None]
     """When it got a slot. NULL while it waits."""
     cancelled_by: Mapped[str | None]
-    """Who cancelled it while it ran. Their crashed measurement is recorded; the daemon stops the evaluator."""
+    """Who cancelled it while it ran: the daemon stops the evaluator and records nothing. A waiting one that is
+    cancelled leaves the queue instead, so only a running one has it (a CHECK)."""
 
     candidate: Mapped[Candidate] = relationship()
