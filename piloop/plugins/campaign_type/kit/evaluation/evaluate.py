@@ -577,7 +577,7 @@ def run_evaluate(
     label = step.label(len(lines.rungs))
     last = lines.last if lines.bad is None else lines.bad
     if last is None:
-        last = _unreported(lines)
+        last = _unreported(lines, log_dir / f'{prefix}.stdout')
     kept = last.metrics if isinstance(last, Reported) else {}
     if isinstance(last, Reported) and last.said is not None:
         return [*rungs, Failed(last.said, seconds, kept, label)]
@@ -605,10 +605,16 @@ def run_evaluate(
             assert_never(last)
 
 
-def _unreported(lines: _Lines) -> BadResult:
-    """Why a run that wrote no last line has no result."""
+def _unreported(lines: _Lines, stdout: Path) -> BadResult:
+    """Why a run that wrote no last line has no result: also when its ``stdout`` has the ``METRIC`` lines of 0.4."""
     if lines.count:
         return BadResult(f'it stopped after rung {lines.rungs[-1].rung}, before its last line')
+    with stdout.open(errors='replace') as out:
+        if any(line.startswith('METRIC ') for line in out):
+            return BadResult(
+                f'it printed METRIC lines, which piloop no longer reads since 0.5.0: write the result line to'
+                f' ${RESULT_ENV}'
+            )
     return BadResult(f'it wrote no result to {RESULT_ENV}')
 
 

@@ -99,6 +99,7 @@ from piloop.campaign.campaigns import (
     CampaignError,
     FromUrl,
     UnknownCampaign,
+    checkout_missing,
     cloned,
     fork,
     named,
@@ -473,8 +474,10 @@ def sync_campaign(
     A campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its
     checkout moves forward to them. Its candidates and their scores stay: new code comes in as a reference candidate or a fork.
     A changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions
-    changed is active again.
+    changed is active again. A campaign whose checkout is not on the disk refuses.
     """
+    if (missing := checkout_missing(campaign)) is not None:
+        raise missing
     match cloned(api.cfg.home, campaign), None if body is None else body.credential:
         case True, credential:
             with closing(updating_vcs(campaign).open(FilePath(campaign.path))) as repo:

@@ -225,6 +225,9 @@ A server that cloned a campaign's repo takes its new commits with `piloop campai
 `piloop.toml` again, and the candidates and their scores stay. To try the new code, import it as a candidate
 (`piloop candidate import enwik8 origin/main`).
 
+When a campaign's checkout is gone from the disk, `piloop status` shows its files as `missing`, and fork, reopen and
+sync refuse with the path that is gone.
+
 ## Files
 
 | Path | What it is |

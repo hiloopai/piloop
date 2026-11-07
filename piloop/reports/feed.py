@@ -43,6 +43,7 @@ from piloop.api.views import (
     TrackBest,
 )
 from piloop.campaign import inbox
+from piloop.campaign.campaigns import checkout_missing
 from piloop.campaign.inbox import campaign_of
 from piloop.config import CampaignConfig, explain
 from piloop.db import feed as db_feed
@@ -208,7 +209,7 @@ def _state(s: Session, campaign: Campaign, cfg: CampaignConfig, me: Actor) -> Ca
 def files_of(s: Session, campaign: Campaign) -> CampaignFiles:
     """Where the campaign's files are (``CampaignFiles``)."""
     if campaign.status is not CampaignStatus.RETIRED:
-        return CampaignFiles.KEPT
+        return CampaignFiles.KEPT if checkout_missing(campaign) is None else CampaignFiles.MISSING
     freed = latest(s, CampaignFilesFreed, Event.target == TargetRef(TargetKind.CAMPAIGN, campaign.id))
     return CampaignFiles.PACKING if freed is None else CampaignFiles.FREED
 

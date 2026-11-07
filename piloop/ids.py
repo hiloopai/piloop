@@ -156,7 +156,9 @@ class CampaignFiles(StrEnum):
     """Where a campaign's files are: its checkout, if piloop cloned it, and its directory under the home."""
 
     KEPT = 'kept'
-    """On the disk: every campaign that is not retired."""
+    """On the disk: a campaign that is not retired, whose checkout is there."""
+    MISSING = 'missing'
+    """Not retired, but its checkout is not on the disk: fork, reopen and sync refuse it, and say so."""
     PACKING = 'packing'
     """Retired, and on their way to the CAS."""
     FREED = 'freed'

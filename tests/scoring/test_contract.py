@@ -87,8 +87,8 @@ def test_a_failed_or_incomplete_evaluation_gives_an_error(tmp_path: Path) -> Non
     assert evaluate(write({'errors': 3})) == ({'errors': 3.0}, 'evaluate reported no value for: seconds')
     assert evaluate('echo METRIC errors=3; echo METRIC seconds=2') == (
         {},
-        'evaluate wrote a bad result: it wrote no result to PILOOP_RESULT_FILE',
-    ), 'METRIC lines on stdout are only output'
+        'evaluate wrote a bad result: it printed METRIC lines, which piloop no longer reads since 0.5.0: write the result line to $PILOOP_RESULT_FILE',
+    ), 'METRIC lines on stdout are only output: the error says what to write instead'
 
 
 def test_per_unit_results_map_each_metric_to_finite_unit_values_that_sum_to_its_value(tmp_path: Path) -> None:

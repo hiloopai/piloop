@@ -1,6 +1,7 @@
 """The API registers, forks, clones, syncs, retires and lists campaigns."""
 
 import logging
+import re
 import subprocess
 from http import HTTPStatus
 from pathlib import Path
@@ -24,6 +25,7 @@ from piloop.api.contract import (
     PauseBody,
     Problem,
     Remote,
+    ReopenBody,
     RetireBody,
     SecretBody,
     SecretCredential,
@@ -47,7 +49,7 @@ from piloop.db.models import (
 )
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
-from piloop.ids import CampaignStatus, CommentKind, TargetKind, TargetRef
+from piloop.ids import CampaignFiles, CampaignStatus, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.candidates.wire import ImportBody
@@ -140,6 +142,33 @@ def test_a_fork_starts_from_a_version_of_its_source_in_a_clone_with_its_config_a
         assert first.config == s.get_one(Campaign, source.id).config, "the source's stored config"
         assert s.get_one(Candidate, at_head.baseline).revision == base, "the source's head is its baseline"
         assert (second.name, s.get_one(Candidate, at_run.baseline).revision) == ('from-the-run', kept)
+
+
+def test_a_campaign_whose_checkout_left_the_disk_shows_its_files_missing_and_fork_reopen_and_sync_say_so(
+    db: Database, campaign_path: Path, cfg: Settings, tmp_path: Path
+) -> None:
+    with serving_api(cfg), EveryClient.on(cfg.socket_file, System.HUMAN) as client:
+        added = client.register_campaign(Checkout(path=str(campaign_path)))
+        assert isinstance(added.campaign, CampaignState) and added.campaign.files is CampaignFiles.KEPT
+        with db.session() as s:
+            s.get_one(Campaign, added.campaign.id).status = CampaignStatus.STOPPED
+            emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, added.campaign.id), System.DAEMON)
+            s.commit()
+        campaign_path.rename(tmp_path / 'moved')
+        [listed] = client.status(Selection(campaign='demo')).campaigns
+        assert isinstance(listed, CampaignState) and listed.files is CampaignFiles.MISSING
+        gone = f"^demo's checkout {re.escape(str(campaign_path))} is not on the disk$"
+        for verb in (
+            lambda: client.register_campaign(Fork(fork='demo')),
+            lambda: client.reopen('demo', ReopenBody(reason='go on')),
+            lambda: client.sync_campaign('demo'),
+        ):
+            with pytest.raises(Refused, match=gone) as e:
+                verb()
+            assert e.value.error == Problem.REFUSED
+    with db.session() as s:
+        assert [c.name for c in s.scalars(select(Campaign))] == ['demo'], 'no fork registered'
+        assert s.get_one(Campaign, added.campaign.id).status is CampaignStatus.STOPPED, 'it did not reopen'
 
 
 def test_a_registration_names_the_campaign_and_its_git_refs_carry_that_name(

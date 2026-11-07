@@ -1014,7 +1014,7 @@
     "/v1/campaigns/{campaign}/sync": {
       "post": {
         "summary": "Sync Campaign",
-        "description": "Read the campaign's ``piloop.toml`` again, and sync its documents into its memory.\n\nA campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its\ncheckout moves forward to them. Its candidates and their scores stay: new code comes in as a reference candidate or a fork.\nA changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions\nchanged is active again.",
+        "description": "Read the campaign's ``piloop.toml`` again, and sync its documents into its memory.\n\nA campaign that the daemon cloned first takes what its repository has now: its new versions and tags, and its\ncheckout moves forward to them. Its candidates and their scores stay: new code comes in as a reference candidate or a fork.\nA changed evaluate command, metric set or link makes a new evaluator. A stopped campaign whose stop conditions\nchanged is active again. A campaign whose checkout is not on the disk refuses.",
         "operationId": "sync_campaign",
         "parameters": [
           {
@@ -5019,6 +5019,7 @@
         "type": "string",
         "enum": [
           "kept",
+          "missing",
           "packing",
           "freed"
         ],

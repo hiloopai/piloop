@@ -236,6 +236,11 @@ def assert_dead(pid: int) -> None:
     ('script', 'error'),
     [
         ('true', 'it wrote no result to PILOOP_RESULT_FILE'),
+        ('echo a METRIC a=1', 'it wrote no result to PILOOP_RESULT_FILE'),
+        (
+            'echo building; echo METRIC bytes=62',
+            'it printed METRIC lines, which piloop no longer reads since 0.5.0: write the result line to $PILOOP_RESULT_FILE',
+        ),
         (
             f'{write({"metrics": {"a": 1}})}; {write({"metrics": {"a": 2}})}',
             'it wrote a line after its last one',
@@ -449,7 +454,11 @@ def test_a_rungs_own_command_reports_one_line_without_its_name(tmp_path: Path) -
             'a rung reports its metrics, not a status',
             'screen',
         ),
-        ('echo METRIC a=1', 'it wrote no result to PILOOP_RESULT_FILE', 'screen'),
+        (
+            'echo METRIC a=1',
+            'it printed METRIC lines, which piloop no longer reads since 0.5.0: write the result line to $PILOOP_RESULT_FILE',
+            'screen',
+        ),
     ],
 )
 def test_a_climb_that_breaks_the_order_or_lacks_a_stops_metric_fails(

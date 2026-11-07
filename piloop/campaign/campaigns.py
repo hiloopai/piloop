@@ -95,6 +95,16 @@ class CampaignError(RuntimeError):
     """Registration failed. The message says why and what to do."""
 
 
+class CheckoutMissing(CampaignError):
+    """The campaign's checkout is not on the disk, so nothing can read, clone or run it."""
+
+
+def checkout_missing(campaign: Campaign) -> CheckoutMissing | None:
+    """The refusal of a verb that needs the checkout of ``campaign`` when it is not on the disk, else None."""
+    path = Path(campaign.path)
+    return None if path.is_dir() else CheckoutMissing(f"{campaign.name}'s checkout {path} is not on the disk")
+
+
 def create_campaign_repo(dest: Path, template: Path, data: dict[str, str]) -> list[str]:
     """Copy ``template`` to ``dest``, download ``data`` and make a repository with a baseline version (``Vcs.init``).
 
@@ -354,6 +364,7 @@ def fork(
     ``<source>-<n>``, with the lowest ``n`` from 2 that no campaign that is not retired has. The caller commits.
 
     Raises:
+        CheckoutMissing: The source has no pack, and its checkout is not on the disk.
         CampaignError: As ``register_clone``.
         CloneFailed: The clone of the source's checkout failed.
     """
@@ -362,6 +373,8 @@ def fork(
         name = next(n for i in itertools.count(2) if (n := f'{source.name}-{i}') not in taken)
     freed = latest(s, CampaignFilesFreed, Event.target == TargetRef(TargetKind.CAMPAIGN, source.id))
     packed = None if freed is None else freed[1].checkout
+    if packed is None and (missing := checkout_missing(source)) is not None:
+        raise missing
     origin = FromUrl(source.path, None) if packed is None else FromPack(cas, packed)
     return register_clone(s, home, vcs_of(source), origin, actor, name, ForkOf(source, at))
 

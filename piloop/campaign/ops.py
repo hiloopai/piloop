@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, by_a_person
+from piloop.campaign.campaigns import checkout_missing
 from piloop.campaign.stop import CampaignReopened, acted, check, request_stop, unclosed
 from piloop.db.events import emit
 from piloop.db.models import ENDED, AgentSession, Base, Campaign, Comment, Pause
@@ -181,9 +182,12 @@ def reopen(s: Session, campaign_id: CampaignId, actor: Actor, *, reason: str) ->
     Raises:
         Refused: the reason is blank, the campaign is not stopped (``_stopped``), or its stop rule stops it at once.
         StillStopping: the stop is not over.
+        CheckoutMissing: its checkout is not on the disk.
     """
     why = required_reason(reason)
     campaign = _stopped(s, campaign_id, 'reopen')
+    if (missing := checkout_missing(campaign)) is not None:
+        raise missing
     campaign.status, campaign.stopped_reason = CampaignStatus.ACTIVE, None
     emit(s, CampaignReopened(reason=why), TargetRef(TargetKind.CAMPAIGN, campaign.id), actor)
     match acted(check(s, campaign, campaign.config)):
