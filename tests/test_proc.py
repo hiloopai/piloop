@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from piloop.proc import (
     child_env,
     kill_group,
     run_group,
+    running,
     started,
     withhold,
 )
@@ -56,6 +58,23 @@ def test_kill_group_takes_eperm_for_gone_when_the_child_exited_while_another_thr
     monkeypatch.setattr(os, 'killpg', _eperm)
     monkeypatch.setattr(proc, 'poll', lambda: None)
     kill_group(proc)  # that thread reaped it meanwhile
+
+
+def test_a_child_that_exits_after_poll_looked_is_reaped_when_it_reads_as_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A killed group's leader can exit between ``poll`` and the kernel's answer: macOS's subprocess runtime then left
+    its ``Popen`` unreaped, and the finaliser warned that it was still running."""
+    proc = subprocess.Popen(['sleep', '30'], start_new_session=True)
+    waitid = os.waitid
+
+    def exit_first(*args: int) -> os.waitid_result | None:
+        kill_group(proc)
+        wait_until(lambda: psutil.Process(proc.pid).status() == psutil.STATUS_ZOMBIE)
+        return waitid(*args)
+
+    monkeypatch.setattr(os, 'waitid', exit_first)
+    assert not running(proc)
+    monkeypatch.undo()
+    assert proc.returncode == -signal.SIGKILL, 'reaped'
 
 
 def test_kill_group_raises_eperm_while_the_child_runs(monkeypatch: pytest.MonkeyPatch) -> None:

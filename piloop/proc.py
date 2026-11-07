@@ -101,9 +101,14 @@ def running(leader: Leader) -> bool:
             # poll() answers None too while another thread waits on the child (it skips a waitpid that Popen holds):
             # ask the kernel, without reaping it from under that thread. One that reaped it meanwhile ended it.
             try:
-                return os.waitid(os.P_PID, leader.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None
+                exited = os.waitid(os.P_PID, leader.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
             except ChildProcessError:
                 return False
+            if exited:
+                # It exited after poll() looked, as a killed group's leader often does. Reap it, or its Popen is
+                # finalised as "still running". While another thread waits on it, poll() skips it and that thread does.
+                leader.poll()
+            return not exited
         case Started(pid=pid, start=start):
             return alive(pid, start)
         case _:
