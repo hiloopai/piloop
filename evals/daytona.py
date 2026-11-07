@@ -21,6 +21,7 @@ import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 import tomli_w
 from daytona import (
@@ -57,6 +58,8 @@ AGENTS, EVAL = 'agents', 'eval'
 """The pools of the workers and of the evaluators."""
 SNAPSHOT_SECONDS = 3600
 """How long a snapshot may build."""
+SNAPSHOT_KEEP = timedelta(hours=24)
+"""How long one of our snapshots that no sandbox uses outlives its last use: ``prune`` deletes it then."""
 
 
 def home_config(
@@ -232,9 +235,9 @@ def client(settings: Settings) -> Daytona:
 def snapshot(daytona: Daytona, steps: Sequence[Step], size: Resources) -> str:
     """The name of the snapshot of ``steps`` whose sandboxes are of ``size``, once it is ready.
 
-    The first caller builds it. One that finds it building, another thread's or another driver's, waits for it: a
-    sandbox from a snapshot that still builds is refused. At the org's snapshot quota, it evicts one of ours (``evict``)
-    and tries once more.
+    The first caller builds it, once it has pruned ours that nothing needs (``prune``): the org's snapshot quota is
+    shared with other workloads. One that finds it building, another thread's or another driver's, waits for it: a
+    sandbox from a snapshot that still builds is refused.
 
     Raises:
         DaytonaError: It could not be created, and no other caller builds it.
@@ -245,13 +248,8 @@ def snapshot(daytona: Daytona, steps: Sequence[Step], size: Resources) -> str:
     try:
         found = bounded(None, lambda: daytona.snapshot.get(name), 'snapshot.get')
     except DaytonaNotFoundError:
-        try:
-            found = build(daytona, name, steps, size)
-        except DaytonaError as failed:
-            # Daytona names the quota only in its message, on a 400.
-            if 'quota' not in str(failed).lower() or evict(daytona) is None:
-                raise
-            found = build(daytona, name, steps, size)
+        prune(daytona, datetime.now(UTC))
+        found = build(daytona, name, steps, size)
     deadline = time.monotonic() + SNAPSHOT_SECONDS
     while found.state != SnapshotState.ACTIVE:
         if found.state in (SnapshotState.ERROR, SnapshotState.BUILD_FAILED):
@@ -285,18 +283,15 @@ def build(daytona: Daytona, name: str, steps: Sequence[Step], size: Resources) -
 
 
 SETTLED = (SnapshotState.ACTIVE, SnapshotState.INACTIVE, SnapshotState.ERROR, SnapshotState.BUILD_FAILED)
-"""The states of a snapshot that no caller builds or removes: only these may be evicted."""
+"""The states of a snapshot that no caller builds or removes: only these may be pruned."""
 
 
-def evict(daytona: Daytona) -> str | None:
-    """Delete the least recently used ``evals-`` snapshot that no sandbox uses, once it is gone. Its name, or None.
+def prune(daytona: Daytona, now: datetime) -> None:
+    """Delete each ``evals-`` snapshot that no sandbox uses and that was not made or used within ``SNAPSHOT_KEEP``.
 
-    None: each of ours is in use, builds, or goes. A snapshot is a function of its recipe (``fingerprint``), so the next
-    run that needs an evicted one builds it again, in a few minutes. Deleted when Daytona raises the cap or evicts by
-    itself.
-
-    Raises:
-        TimeoutError: The snapshot is still there after ``SNAPSHOT_SECONDS``.
+    A snapshot is a function of its recipe (``fingerprint``), so a run that needs a pruned one builds it again, in a few
+    minutes. One that builds or goes is left alone, and so is any other workload's. A delete that fails is a span event,
+    never the run's failure.
     """
     used = {sandbox.snapshot for sandbox in bounded(None, lambda: [*daytona.list()], 'list')}
     listed: list[Snapshot] = []
@@ -304,21 +299,24 @@ def evict(daytona: Daytona) -> str | None:
     while page <= pages:
         found = bounded(None, lambda page=page: daytona.snapshot.list(page=page, limit=100), 'snapshot.list')
         listed, pages, page = [*listed, *found.items], found.total_pages, page + 1
-    idle = [s for s in listed if s.name.startswith('evals-') and s.state in SETTLED and s.name not in used]
-    if not idle:
-        return None
-    victim = min(idle, key=lambda s: s.last_used_at or s.created_at)
-    bounded(None, lambda: daytona.snapshot.delete(victim), 'snapshot.delete')
-    trace.get_current_span().add_event('evals.snapshot_evicted', {'snapshot': victim.name})
-    deadline = time.monotonic() + SNAPSHOT_SECONDS
-    while True:  # one that Daytona still removes may still count against the quota
+    doomed = [
+        s
+        for s in listed
+        if s.name.startswith('evals-')
+        and s.state in SETTLED
+        and s.name not in used
+        and now - (s.last_used_at or s.created_at) > SNAPSHOT_KEEP
+    ]
+    span = trace.get_current_span()
+    for victim in doomed:
         try:
-            bounded(None, lambda: daytona.snapshot.get(victim.name), 'snapshot.get')
+            bounded(None, lambda victim=victim: daytona.snapshot.delete(victim), 'snapshot.delete')
         except DaytonaNotFoundError:
-            return victim.name
-        if time.monotonic() > deadline:
-            raise TimeoutError(f'snapshot {victim.name} is still there {SNAPSHOT_SECONDS} s after its delete')
-        time.sleep(10)
+            continue  # another driver pruned it first
+        except DaytonaError as failed:
+            span.add_event('evals.snapshot_prune_failed', {'snapshot': victim.name, 'error': str(failed)})
+            continue
+        span.add_event('evals.snapshot_pruned', {'snapshot': victim.name})
 
 
 def params(

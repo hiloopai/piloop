@@ -27,6 +27,9 @@ import modal
 import pytest
 from daytona import Daytona, DaytonaBadGatewayError, DaytonaBadRequestError, DaytonaNotFoundError, Sandbox
 from daytona_api_client.models.snapshot_state import SnapshotState
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import JsonValue, SecretStr
 from sqlalchemy import select
 
@@ -1255,7 +1258,7 @@ class Snapshots:
         raise DaytonaBadRequestError('Snapshot quota exceeded. Maximum allowed: 30', status_code=400)
 
     def list(self, page: int | None = None, limit: int | None = None) -> SimpleNamespace:
-        """None of ours to evict."""
+        """None of ours to prune."""
         return SimpleNamespace(items=[], total_pages=1)
 
 
@@ -1274,26 +1277,40 @@ def test_a_snapshot_create_that_fails_waits_for_another_callers_build_and_else_r
             daytona.snapshot(cloud, [Run(('true',))], daytona.EVALUATOR)
 
 
-def made(name: str, day: int) -> SimpleNamespace:
-    """An active snapshot, made on that day of November and never used."""
-    when = datetime(2026, 11, day, tzinfo=UTC)
-    return SimpleNamespace(name=name, state=SnapshotState.ACTIVE, created_at=when, last_used_at=None, error_reason=None)
+def made(name: str, hours_ago: float, used_hours_ago: float | None = None) -> SimpleNamespace:
+    """An active snapshot, made ``hours_ago``, and last used ``used_hours_ago`` (None: never)."""
+    now = datetime.now(UTC)
+    used = None if used_hours_ago is None else now - timedelta(hours=used_hours_ago)
+    return SimpleNamespace(
+        name=name,
+        state=SnapshotState.ACTIVE,
+        created_at=now - timedelta(hours=hours_ago),
+        last_used_at=used,
+        error_reason=None,
+    )
 
 
 class Org:
-    """A Daytona org at its snapshot quota: a create succeeds only once a snapshot was deleted since the last create.
+    """A Daytona org's snapshots, one per page, and its sandboxes, which use ``evals-used``.
 
-    Its snapshots are ``evals-old`` and ``evals-older``, ``evals-used`` (the oldest of ours, which a sandbox uses),
-    ``evals-building`` (old, still building) and ``general`` (the oldest, not ours), one per page.
+    ``evals-gone`` goes before our delete, as when another driver prunes it first; ``evals-stuck`` refuses its delete.
     """
 
     def __init__(self) -> None:
-        self.held = {s.name: s for s in [made('general', 1), made('evals-used', 2), made('evals-building', 2)]}
+        held = [
+            made('general', 900),
+            made('evals-used', 100),
+            made('evals-building', 100),
+            made('evals-new', 2),
+            made('evals-reused', 100, used_hours_ago=23),
+            made('evals-idle', 100, used_hours_ago=25),
+            made('evals-never-used', 25),
+            made('evals-gone', 100),
+            made('evals-stuck', 100),
+        ]
+        self.held = {s.name: s for s in held}
         self.held['evals-building'].state = SnapshotState.BUILDING
-        self.held |= {'evals-older': made('evals-older', 3), 'evals-old': made('evals-old', 4)}
-        self.held['evals-older'].last_used_at = datetime(2026, 11, 5, tzinfo=UTC)
         self.deleted: list[str] = []
-        self.room, self.frees, self.used = False, True, ['evals-used']
         self.snapshot = self
 
     def list(self, page: int | None = None, limit: int | None = None) -> SimpleNamespace:
@@ -1306,42 +1323,41 @@ class Org:
         return self.held[name]
 
     def delete(self, snapshot: SimpleNamespace) -> None:
+        if snapshot.name == 'evals-gone':
+            raise DaytonaNotFoundError('evals-gone not found')
+        if snapshot.name == 'evals-stuck':
+            raise DaytonaBadRequestError('cannot delete', status_code=400)
         self.deleted.append(snapshot.name)
-        snapshot.state = SnapshotState.REMOVING
+        del self.held[snapshot.name]
 
     def create(self, params: SimpleNamespace, timeout: float) -> None:
-        if not self.room:
-            raise DaytonaBadRequestError('Snapshot quota exceeded. Maximum allowed: 30', status_code=400)
-        self.room = False
-        self.held[params.name] = made(params.name, 6)
+        self.held[params.name] = made(params.name, 0)
 
     def sandboxes(self) -> Iterator[SimpleNamespace]:
-        return iter([*(SimpleNamespace(snapshot=name) for name in self.used), SimpleNamespace(snapshot=None)])
-
-    def sleep(self, seconds: float) -> None:
-        """A wait: a deleted snapshot goes, and makes room for one more when ``frees``."""
-        for name in [n for n, s in self.held.items() if s.state == SnapshotState.REMOVING]:
-            del self.held[name]
-            self.room = self.frees
+        return iter([SimpleNamespace(snapshot='evals-used'), SimpleNamespace(snapshot=None)])
 
 
-def test_a_snapshot_at_the_quota_evicts_the_least_recently_used_idle_one_of_ours_and_tries_once_more(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_a_new_snapshot_first_prunes_ours_that_no_sandbox_uses_and_nobody_made_or_used_in_a_day():
     org = Org()
-    monkeypatch.setattr('evals.daytona.time.sleep', org.sleep)
     cloud = cast(Daytona, SimpleNamespace(snapshot=org, list=org.sandboxes))
-    name = daytona.snapshot(cloud, [Run(('true',))], daytona.EVALUATOR)
-    assert org.deleted == ['evals-old'], 'not general, not the one in use, not one that builds; last used, else made'
+    spans = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(spans))
+    with provider.get_tracer('test').start_as_current_span('run'):
+        name = daytona.snapshot(cloud, [Run(('true',))], daytona.EVALUATOR)
+    assert org.deleted == ['evals-idle', 'evals-never-used'], (
+        'not general, not the one in use, not one that builds, not one made or used within the day'
+    )
     assert org.held[name].state == SnapshotState.ACTIVE
-    org.frees = False  # another caller takes the room first
-    with pytest.raises(DaytonaBadRequestError, match='quota exceeded'):
-        daytona.snapshot(cloud, [Run(('false',))], daytona.EVALUATOR)
-    assert org.deleted == ['evals-old', 'evals-older'], 'one eviction, and one more try, per snapshot'
-    org.used.append(name)
-    with pytest.raises(DaytonaBadRequestError, match='quota exceeded'):
-        daytona.snapshot(cloud, [Run(('false',))], daytona.EVALUATOR)
-    assert org.deleted == ['evals-old', 'evals-older'], 'none left that no sandbox uses: the quota error stands'
+    events = [(e.name, dict(e.attributes or {})) for s in spans.get_finished_spans() for e in s.events]
+    assert events == [
+        ('evals.snapshot_pruned', {'snapshot': 'evals-idle'}),
+        ('evals.snapshot_pruned', {'snapshot': 'evals-never-used'}),
+        ('evals.snapshot_prune_failed', {'snapshot': 'evals-stuck', 'error': 'cannot delete'}),
+    ], 'a delete that fails is reported, and the build goes on'
+    org.deleted.clear()
+    assert daytona.snapshot(cloud, [Run(('true',))], daytona.EVALUATOR) == name
+    assert org.deleted == [], 'a snapshot that is there is used as it is: no prune'
 
 
 def test_the_driver_refuses_a_run_that_would_take_the_gateways_sessions_over_the_cap(tmp_path: Path):

@@ -36,7 +36,9 @@ A piloop arm runs as a team (`drive.on_team`):
 - The pool `eval`: `EVALS_EVALUATORS_PER_WORKER` evaluators for each worker, one evaluation at a time each, where the
   task is scored: on Daytona for a task with `scorer = "daytona"`, else on Modal at the scorer's size. So every
   timing that decides a verdict runs where the holdout is scored, with hard limits.
-- A Daytona sandbox starts from a snapshot of its image, one per image and size. When the org is at its snapshot quota, the driver deletes the least recently used `evals-` snapshot that no sandbox uses, and tries once more: a run that needs it again builds it again.
+- A Daytona sandbox starts from a snapshot of its image, one per image and size. Before it builds one, the driver
+  deletes each `evals-` snapshot that no sandbox uses and that nobody made or used in the last 24 hours, since the org's
+  30-snapshot quota is shared with other workloads. A run that needs a deleted one builds it again.
 - The control sandbox keeps the gateway's token and the platforms' keys in a file that its daemon reads, never in its
   environment. It needs `EVALS_DAYTONA_API_KEY` and Modal's token (`modal token new`).
 
