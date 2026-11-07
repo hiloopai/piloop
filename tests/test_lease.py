@@ -639,6 +639,20 @@ def test_a_job_whose_row_is_settled_is_refused_as_stale_and_its_lease_ends_at_on
     assert Local(leases, 'w1').heartbeat({lease_id: HarnessSession()}, HOST) == {lease_id: Answer.STALE}
 
 
+def test_a_lost_job_whose_row_is_settled_ends_its_lease_and_its_receipt_says_so(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """A worker that restarted cannot find its job, whose row a stop closed meanwhile: nothing is left to lose."""
+    leases = Leases(db, Settles(db), home_cas(db), TIMING, POOLS)
+    lease_id = queue(db, agent_job(db, campaign, tmp_path))
+    take(leases, 'w1', [])
+    leases.lost(lease_id, 'w1', 'its worktree is gone')
+    assert (lease_row(db, lease_id).state, lease_row(db, lease_id).receipt) == (
+        LeaseState.EXPIRED,
+        {'lost': 'its worktree is gone', 'settled': 'agent_session#1 is closed'},
+    )
+
+
 def test_an_adoption_ends_the_evaluation_leases_of_the_previous_daemon_taken_or_not(
     db: Database, campaign: Campaign, tmp_path: Path, leases: Leases
 ) -> None:
