@@ -1,6 +1,8 @@
 """``piloop worker --server URL --pool NAME``: a worker on this machine, of a server on another."""
 
 import signal
+import subprocess
+import sys
 import threading
 from collections.abc import Callable, Generator, Sequence
 from pathlib import Path
@@ -86,6 +88,30 @@ def test_a_worker_in_a_pool_that_the_server_lacks_exits_with_why(server: str, as
     as_worker()
     with pytest.raises(SystemExit, match="no pool 'cpu': the pools are gpu"):
         run_cli(['worker', '--server', server, '--pool', 'cpu'])
+
+
+HOLD = (
+    'import fcntl, os, sys; fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600);'
+    ' fcntl.lockf(fd, fcntl.LOCK_EX); print("held", flush=True); sys.stdin.read()'
+)
+"""Another process that holds a lock until its stdin closes."""
+
+
+def test_a_second_worker_on_a_home_exits_with_why(server: str, as_worker: Callable[[], None]) -> None:
+    """Its relay would take the first's socket, and with it the calls of the first's agents (B33)."""
+    as_worker()
+    relay = common.settings.relay_file
+    relay.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock = relay.with_name(f'{relay.name}.lock')
+    with subprocess.Popen(
+        [sys.executable, '-c', HOLD, str(lock)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+    ) as first:
+        assert first.stdout is not None and first.stdout.readline() == 'held\n'
+        try:
+            with pytest.raises(SystemExit, match='another worker relays on .*: give each worker its own PILOOP_HOME'):
+                run_cli(['worker', '--server', server, '--pool', 'gpu'])
+        finally:
+            first.communicate('')
 
 
 def stop_once_registered(db: Database, stop: Callable[[], None]) -> None:

@@ -253,6 +253,30 @@ def test_the_relay_takes_an_agents_calls_on_its_lease_while_its_job_runs_on_this
     Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land, no_take).stop()
 
 
+SECOND_RELAY = (
+    'import sys; from pathlib import Path; from piloop.plugins.executor.kit.relay import Relay;'
+    ' from piloop.settings import Settings; from tests.conftest import no_land, no_ship, no_take;'
+    ' Relay(Settings(home=Path(sys.argv[1])).relay_file, print, no_ship, no_land, no_take).start()'
+)
+"""A second ``piloop worker`` on the home: its relay starts in a process of its own."""
+
+
+def test_a_second_worker_on_one_home_is_refused_and_the_first_keeps_relaying_its_agents_calls(tmp_path: Path) -> None:
+    """A second relay used to unlink the first's socket and bind its own: the first's agents got 404 from it, and once
+    it stopped, nothing relayed on the home (B33). Two processes with one worker name on one home meet here too (B39).
+    """
+    first = Relay(Settings(home=tmp_path).relay_file, Server(), no_ship, no_land, no_take)
+    first.start()
+    first.open(3, JOB)
+    second = [sys.executable, '-c', SECOND_RELAY, str(tmp_path)]
+    refused = subprocess.run(second, capture_output=True, text=True, timeout=60, cwd=Path(piloop.__file__).parents[1])
+    assert refused.returncode == 1 and 'RelayTaken: another worker relays on' in refused.stderr, refused.stderr
+    assert post(first, call()).status_code == 200, "the first worker's agent still reaches its own worker"
+    first.stop()
+    started = subprocess.run(second, capture_output=True, text=True, timeout=60, cwd=Path(piloop.__file__).parents[1])
+    assert started.returncode == 0, f'once the first stopped, its lock is free: {started.stderr}'
+
+
 def test_the_piloop_of_an_agent_elsewhere_prints_what_the_call_printed_and_exits_with_its_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], mocker: MockerFixture
 ) -> None:

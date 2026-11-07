@@ -222,7 +222,7 @@ class Worker:
 
     @property
     def spool(self) -> Spool:
-        """Reports not sent yet, under ``<home>/spool/<worker>``: workers that share a home never send each other's.
+        """Reports not sent yet, under ``<home>/spool/<worker>``: a home that another worker had keeps that one's apart.
 
         Each is sent again on every turn of the loop, also by the next process.
         """

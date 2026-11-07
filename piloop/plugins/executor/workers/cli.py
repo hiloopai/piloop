@@ -14,6 +14,7 @@ from piloop.db.models import utcnow
 from piloop.otel import tracer
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.contract import EXECUTORS, job_kinds
+from piloop.plugins.executor.kit.relay import RelayTaken
 from piloop.plugins.executor.workers import Workers, instances, remote_worker, seen
 from piloop.plugins.network.contract import NETWORKS, NoCredential
 from piloop.proc import withhold
@@ -70,7 +71,10 @@ def run(
 
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
-        worker.start()
+        try:
+            worker.start()
+        except RelayTaken as e:
+            raise SystemExit(str(e)) from e
         worker.wait()
     if worker.dismissed is not None:
         raise SystemExit(str(worker.dismissed))

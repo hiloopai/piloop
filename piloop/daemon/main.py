@@ -12,6 +12,7 @@ from piloop.daemon.scheduler import Scheduler
 from piloop.daemon.serve import (
     RESTART_SIGNAL,
     acquire,
+    hand_on,
     running_pid,
     serve_argv,
 )
@@ -106,78 +107,78 @@ class Daemon:
             served = preflight(cfg, listen)
         except plugins.PluginError as e:
             raise SystemExit(f'the daemon does not start: {e}') from e
-        self._inherited = inherited or Inherited(set())
-        """The children an in-place restart handed over (``piloop.proc.Inherited``): reaped as each one exits."""
-        self.tracer = tracer()
-        measures = self.tracer.measures
-        self.db = Database(
-            cfg.database_url,
-            actor=ACTOR,
-            writes=None if measures is None else WriteSpans(measures, cfg.tracing.slow_write),
-            strict=cfg.debug or None,
-        )
         self._cfg = cfg
-        self._argv = serve_argv(listen)
-        """What an in-place restart execs."""
-        self._address = served.listen
-        """Where the server listens, as asked."""
-        self._tokens = Tokens(self.db)
-        self.network = served.open(
-            network.NetworkHost(self._tokens, HomeSecrets(self.db, SECRETS.selected(cfg.providers)))
-        )
-        self._servers: list[Server] = []
-        self._cas = cas.CAS.selected(cfg.providers).open(cfg.home)
-        try:  # after the CAS opens: a revision may move data into it
-            self._backup = migrate(
-                self.db.engine, cas=self._cas, backups=cfg.migration_backups, daemon=running_pid(cfg)
+        self._lock = acquire(cfg)
+        """The lock of the home's only daemon, taken before the migration: another daemon may run an older schema."""
+        try:
+            self._inherited = inherited or Inherited(set())
+            """The children an in-place restart handed over (``piloop.proc.Inherited``): reaped as each one exits."""
+            self.tracer = tracer()
+            measures = self.tracer.measures
+            self.db = Database(
+                cfg.database_url,
+                actor=ACTOR,
+                writes=None if measures is None else WriteSpans(measures, cfg.tracing.slow_write),
+                strict=cfg.debug or None,
             )
-        except OlderDaemon, SchemaMismatch, BackupFailed:
-            self.db.close()
+            self._argv = serve_argv(listen)
+            """What an in-place restart execs."""
+            self._address = served.listen
+            """Where the server listens, as asked."""
+            self._tokens = Tokens(self.db)
+            self.network = served.open(
+                network.NetworkHost(self._tokens, HomeSecrets(self.db, SECRETS.selected(cfg.providers)))
+            )
+            self._servers: list[Server] = []
+            self._cas = cas.CAS.selected(cfg.providers).open(cfg.home)
+            try:  # after the CAS opens: a revision may move data into it
+                self._backup = migrate(
+                    self.db.engine, cas=self._cas, backups=cfg.migration_backups, daemon=running_pid(cfg)
+                )
+            except OlderDaemon, SchemaMismatch, BackupFailed:
+                self.db.close()
+                raise
+            opened = partial(make_runtime, cfg=cfg)
+            self.controller = RunController(
+                self.db,
+                self.tracer,
+                cfg.home,
+                executor=EXECUTORS.selected(cfg.providers),
+                cas=self._cas,
+                reserve=cfg.storage.reserve,
+                evaluation=cfg.evaluation,
+                agents=cfg.agents,
+                runtime_factory=opened,
+                network=self.network,
+                secrets=SECRETS.selected(cfg.providers),
+            )
+            archiver = ARCHIVES.selected(cfg.providers).open(
+                ArchiveHost(self.db, self._cas, cfg.home, cfg.storage.reserve, self.tracer, self._wake_archiver)
+            )
+            self.scheduler = Scheduler(
+                self.db,
+                self.controller,
+                self.tracer,
+                cfg.home,
+                archiver=archiver,
+                runtime_factory=opened,
+                daemon=cfg.daemon,
+                agents=cfg.agents,
+                plugins=cfg.providers,
+                defaults=cfg.campaign_defaults,
+            )
+            self._restart = False
+        except BaseException:  # no file names a daemon that never served
+            self._release()
             raise
-        opened = partial(make_runtime, cfg=cfg)
-        self.controller = RunController(
-            self.db,
-            self.tracer,
-            cfg.home,
-            executor=EXECUTORS.selected(cfg.providers),
-            cas=self._cas,
-            reserve=cfg.storage.reserve,
-            evaluation=cfg.evaluation,
-            agents=cfg.agents,
-            runtime_factory=opened,
-            network=self.network,
-            secrets=SECRETS.selected(cfg.providers),
-        )
-        archiver = ARCHIVES.selected(cfg.providers).open(
-            ArchiveHost(self.db, self._cas, cfg.home, cfg.storage.reserve, self.tracer, self._wake_archiver)
-        )
-        self.scheduler = Scheduler(
-            self.db,
-            self.controller,
-            self.tracer,
-            cfg.home,
-            archiver=archiver,
-            runtime_factory=opened,
-            daemon=cfg.daemon,
-            agents=cfg.agents,
-            plugins=cfg.providers,
-            defaults=cfg.campaign_defaults,
-        )
-        self._restart = False
 
     def serve(self) -> None:
-        """Lock the pid file, reap, then run the loop until Ctrl-C or SIGTERM.
+        """Reap, then run the loop until Ctrl-C or SIGTERM. The constructor took the lock.
 
-        On ``RESTART_SIGNAL``, stop the same way, then exec ``piloop serve``. The exec keeps the pid, the environment
-        and the service manager's hold on the process. So ``piloop upgrade`` and ``piloop restart`` start the installed
+        On ``RESTART_SIGNAL``, stop the same way, then exec ``piloop serve``. The exec keeps the pid, the environment,
+        the lock and the service manager's hold on the process. So ``piloop upgrade`` and ``piloop restart`` start the installed
         code under whatever started the daemon: systemd, launchd or a terminal.
         """
-        try:
-            # Lock before the main try block: shutdown() must never fail the runs of another daemon.
-            lock = acquire(self._cfg)
-        except SystemExit:
-            self.db.close()  # Only the database is open at this point.
-            raise
         self._cfg.code_file.write_text(code_digest())
         previous = signal.signal(signal.SIGTERM, self._on_sigterm)
         previous_restart = signal.signal(RESTART_SIGNAL, self._on_restart)
@@ -202,14 +203,11 @@ class Daemon:
                 if self._restart:
                     # Exec even after a failed shutdown. Otherwise its run threads keep this process, the old code
                     # and the lock alive. The reap in the new code fails the runs that this one could not stop.
-                    # The exec releases the lock, because Python's descriptors are close-on-exec.
+                    # The lock goes on to the new code: no other daemon starts in between.
+                    hand_on(self._lock)
                     sys.stdout.flush()  # exec discards Python's buffers.
                     sys.stderr.flush()
                     os.execv(self._argv[0], self._argv)
-            # Only for tidiness. The lock, not the file, tells which daemon runs.
-            self._cfg.pid_file.unlink(missing_ok=True)
-            self._cfg.code_file.unlink(missing_ok=True)
-            os.close(lock)
 
     def _listen(self, span: Span) -> None:
         """Serve the API on the home's Unix socket, and on the network's listener when it has one.
@@ -264,3 +262,15 @@ class Daemon:
         self.tracer.shutdown()
         self.db.close()
         plugins.close()
+        # a stop that failed keeps the lock while its run threads may live on; a restart hands it to the next program
+        if not self._restart:
+            self._release()
+
+    def _release(self) -> None:
+        """Stop being the home's daemon: remove its files, then free the lock, so that no file names another's.
+
+        The files are only for tidiness: the lock, not the file, tells which daemon runs.
+        """
+        self._cfg.pid_file.unlink(missing_ok=True)
+        self._cfg.code_file.unlink(missing_ok=True)
+        os.close(self._lock)

@@ -78,22 +78,51 @@ def _locked(fd: int) -> bool:
     return False
 
 
+LOCK_ENV = 'PILOOP_DAEMON_LOCK'
+"""The descriptor of the daemon's lock, which an in-place restart hands to the program that it execs (``hand_on``)."""
+
+
 def acquire(cfg: Settings) -> int:
     """Become the only daemon of this home: lock the pid file for the life of the process, then write the pid.
 
     The kernel releases the lock when the process dies. So a daemon runs if and only if the file is locked. There
     are no stale files, no pid reuse and no identity checks. The caller must keep the returned descriptor open.
     flock is advisory and works on one host only. A network filesystem may not support it, but ``PILOOP_HOME`` is
-    local.
+    local. The program of an in-place restart takes the lock that the one before it handed on (``LOCK_ENV``): the
+    lock never leaves the process, so no other daemon starts in between.
     """
-    fd = _open_pid_file(cfg, os.O_RDWR | os.O_CREAT)
-    if _locked(fd):
-        pid = os.read(fd, 32).decode().strip()
-        os.close(fd)
-        raise SystemExit(_already_running(cfg, pid))
-    os.ftruncate(fd, 0)
-    os.write(fd, str(os.getpid()).encode())
+    fd = _handed(cfg)
+    if fd is None:
+        fd = _open_pid_file(cfg, os.O_RDWR | os.O_CREAT)
+        if _locked(fd):
+            pid = os.read(fd, 32).decode().strip()
+            os.close(fd)
+            raise SystemExit(_already_running(cfg, pid))
+    os.ftruncate(fd, 0)  # written again after an exec too: ``restart`` waits for the new write
+    os.pwrite(fd, str(os.getpid()).encode(), 0)  # a handed-on descriptor's offset is past the start
     os.fsync(fd)
+    return fd
+
+
+def hand_on(fd: int) -> None:
+    """Keep the lock ``fd`` open across the ``execv`` of an in-place restart, for the next program (``acquire``)."""
+    os.set_inheritable(fd, True)
+    os.environ[LOCK_ENV] = str(fd)
+
+
+def _handed(cfg: Settings) -> int | None:
+    """The lock that the program before this one in the process handed on, or None. No child sees the variable."""
+    named = os.environ.pop(LOCK_ENV, None)
+    if named is None or not named.isdigit():
+        return None
+    fd = int(named)
+    try:
+        ours = os.path.samestat(os.fstat(fd), os.stat(cfg.pid_file))
+    except OSError:  # closed, or no pid file: not a lock of this home
+        return None
+    if not ours or _locked(fd):  # on the descriptor that holds it, flock succeeds
+        return None
+    os.set_inheritable(fd, False)
     return fd
 
 
@@ -138,7 +167,7 @@ def spawn_detached(cfg: Settings, listen: Address | None = None) -> int:
             if (holder := running_pid(cfg)) is not None:
                 raise SystemExit(_already_running(cfg, holder))
             raise SystemExit(
-                f'daemon pid {daemon.pid} exited with {daemon.returncode} before taking {cfg.pid_file}; see {cfg.log_file}'
+                f'daemon pid {daemon.pid} exited with {daemon.returncode} before it served; see {cfg.log_file}'
             )
         time.sleep(POLL_SECONDS)
     pid = daemon.pid

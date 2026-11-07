@@ -47,7 +47,7 @@ from piloop.cli import (
 )
 from piloop.config import ConfigError
 from piloop.daemon.main import Daemon
-from piloop.daemon.serve import acquire, running_pid
+from piloop.daemon.serve import LOCK_ENV, acquire, running_pid
 from piloop.db import feed as db_feed, session, sql
 from piloop.db.events import emit, has
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
@@ -1733,7 +1733,7 @@ def listening() -> str | None:
 @pytest.mark.usefixtures('no_database')
 def test_serve_detach_reports_a_child_that_dies_before_claiming(out) -> None:
     (common.settings.home / 'piloop.db').mkdir()
-    with pytest.raises(SystemExit, match=f'exited with 1 before taking {re.escape(str(common.settings.pid_file))}'):
+    with pytest.raises(SystemExit, match='exited with 1 before it served'):
         run_cli(['serve', '--detach'])
     assert (
         not common.settings.pid_file.exists() and 'unable to open database file' in common.settings.log_file.read_text()
@@ -2341,6 +2341,68 @@ def test_an_in_place_restart_holds_the_lock_itself_and_migrates() -> None:
     assert revision_of(database) == HEAD
 
 
+def test_a_daemon_takes_the_lock_before_it_migrates_so_it_never_migrates_under_another() -> None:
+    """The migration ran before the lock: a second ``piloop serve`` changed the schema of the daemon that runs."""
+    database = common.settings.home / 'piloop.db'
+    at_floor(database)
+    floor = revision_of(database)
+    fd = acquire(common.settings)  # another daemon: a lock on another open file
+    try:
+        with pytest.raises(SystemExit, match='a daemon is already running'):
+            Daemon(common.settings)
+    finally:
+        os.close(fd)
+    assert revision_of(database) == floor
+
+
+ACQUIRE = (
+    'from pathlib import Path; from piloop.daemon.serve import acquire, hand_on; from piloop.settings import Settings'
+)
+RIVAL = f'import sys; {ACQUIRE}; acquire(Settings(home=Path(sys.argv[1])))'
+"""A ``piloop serve`` that another shell starts: it takes the lock or exits."""
+NEXT = f"""import os, subprocess, sys; {ACQUIRE}
+rival = {{k: v for k, v in os.environ.items() if k != {LOCK_ENV!r}}}
+rival = subprocess.run([sys.executable, '-c', sys.argv[2], sys.argv[1]], env=rival, capture_output=True, text=True)
+acquire(Settings(home=Path(sys.argv[1])))
+print(rival.returncode, rival.stderr.strip())
+"""
+"""The program that an in-place restart execs: a rival starts before this program takes the lock, then it takes it."""
+RESTART = f"""import os, sys; {ACQUIRE}
+hand_on(acquire(Settings(home=Path(sys.argv[1]))))
+os.execv(sys.executable, [sys.executable, '-c', sys.argv[2], sys.argv[1], sys.argv[3]])
+"""
+
+
+@pytest.mark.parametrize('named', ['closed', 'another file', 'not a number'])
+def test_a_lock_variable_that_names_no_lock_of_this_home_is_not_trusted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, named: str
+) -> None:
+    """``PILOOP_DAEMON_LOCK`` left in an environment by mistake: the daemon takes its lock as any start does."""
+    other = os.open(tmp_path / 'other', os.O_RDWR | os.O_CREAT, 0o600)
+    common.settings.pid_file.touch()
+    closed = os.dup(other)
+    os.close(closed)
+    monkeypatch.setenv(LOCK_ENV, {'closed': str(closed), 'another file': str(other), 'not a number': 'x'}[named])
+    fd = acquire(common.settings)
+    try:
+        assert fd != other and running_pid(common.settings) == os.getpid() and LOCK_ENV not in os.environ
+    finally:
+        os.close(fd)
+        os.close(other)
+
+
+def test_an_in_place_restart_keeps_the_lock_through_the_exec_so_no_other_daemon_starts_in_between(
+    tmp_path: Path,
+) -> None:
+    """The exec released the lock, and the new program took it again only after its imports: a ``piloop serve``
+    started in between won the home (B40)."""
+    done = subprocess.run(
+        [sys.executable, '-c', RESTART, str(tmp_path), NEXT, RIVAL], capture_output=True, text=True, timeout=120
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.startswith('1 a daemon is already running'), f'the rival is refused: {done.stdout}'
+
+
 READERS = (
     ['history'],
     ['sql', 'SELECT 1'],
@@ -2514,13 +2576,13 @@ def test_serve_and_migrate_refuse_under_a_daemon_that_a_service_manager_started(
         common.settings.pid_file
     ):  # not a child of `serve --detach`: as a service manager starts it
         refuse_each(
-            (['serve'], ['migrate']),
+            (['migrate'],),
             database,
             rf'^the daemon \(pid {daemon.pid}\) runs an older piloop: the database is at schema core 0067, and'
             rf' this piloop .* would migrate it to {HEADS} under the daemon\. Run `piloop upgrade`',
         )
-        with pytest.raises(SystemExit, match=rf'a daemon is already running \(pid {daemon.pid}'):
-            run_cli(['serve', '--detach'])
+        # `serve` meets the lock before it would migrate
+        refuse_each((['serve'], ['serve', '--detach']), database, rf'a daemon is already running \(pid {daemon.pid}')
     assert revision_of(database) == '0067' and not list(database.parent.glob('piloop.db.bak-*'))
     run_cli(['migrate'])
     [backup] = database.parent.glob('piloop.db.bak-0067-*')

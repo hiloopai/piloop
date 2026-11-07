@@ -21,6 +21,8 @@ candidate, and the agent reads its code with ``git show``.
 Retirement: deleted when agents call typed operations over HTTP, if they ever do.
 """
 
+import fcntl
+import os
 import subprocess
 import sys
 import tempfile
@@ -166,6 +168,10 @@ type Send = Callable[[int, Call], Relayed]
 """Send a relayed call to the server on a lease (``Remote.cli``). Raises ``StaleLease`` once the lease ended."""
 
 
+class RelayTaken(Exception):
+    """Another process relays on this home's socket: a second worker on one home would take the first's agents' calls."""
+
+
 class Relay:
     """A worker's end: a Unix socket that takes its agents' calls, and the lease of each agent whose job runs.
 
@@ -185,10 +191,24 @@ class Relay:
         self._leases: dict[AgentSessionId, tuple[int, AgentJob]] = {}
         """The lease and the job of each agent whose job runs on this worker."""
         self._server: ThreadingUnixStreamServer | None = None
+        self._held: int | None = None
+        """The descriptor whose lock makes this process the socket's only server, while it serves."""
 
     def start(self) -> None:
-        """Serve on the socket, in place of one that an earlier process of this worker left."""
+        """Serve on the socket, in place of one that an earlier process of this worker left.
+
+        Raises:
+            RelayTaken: another process serves it. The lock goes with the process, so a killed one leaves none. It is a
+                POSIX lock, which a process holds once: the daemons that one test process builds on one home share it.
+        """
         socket_dir(self.path)
+        held = os.open(self.path.with_name(f'{self.path.name}.lock'), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.lockf(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:  # EAGAIN or EACCES: another process holds it
+            os.close(held)
+            raise RelayTaken(f'another worker relays on {self.path}: give each worker its own PILOOP_HOME') from e
+        self._held = held
         self.path.unlink(missing_ok=True)
         self._server = ThreadingUnixStreamServer(str(self.path), _handler(self))
         threading.Thread(target=self._server.serve_forever, name='relay', daemon=True).start()
@@ -225,6 +245,9 @@ class Relay:
             self._server.shutdown()
             self._server.server_close()
             self.path.unlink(missing_ok=True)
+        if self._held is not None:  # after the unlink: the next server binds its own socket
+            os.close(self._held)
+            self._held = None
 
     def took(self, job: AgentJob, relayed: Relayed) -> Relayed:
         """``relayed``, once the clone took the candidates that it names (``Take``), else with a line that says why not.

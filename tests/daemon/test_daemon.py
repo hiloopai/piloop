@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from inline_snapshot import snapshot
 from pytest_mock import MockerFixture
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -15,10 +15,10 @@ from piloop.actor import System
 from piloop.agents.results import CampaignResults
 from piloop.config import load_campaign_config
 from piloop.daemon.main import ACTOR, Daemon
-from piloop.daemon.serve import RESTART_SIGNAL, SERVE_ARGV
+from piloop.daemon.serve import LOCK_ENV, RESTART_SIGNAL, SERVE_ARGV, running_pid
 from piloop.db.events import latest
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event
-from piloop.db.session import Database, migrate
+from piloop.db.session import Database
 from piloop.ids import RoleName, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -41,7 +41,6 @@ from tests.conftest import (
     bare_config,
     claim,
     console_lines,
-    disk,
     end,
     factory,
     queued,
@@ -223,7 +222,10 @@ def test_the_restart_signal_hands_the_agents_over_then_execs_serve_in_place(
 
     mocker.patch.object(daemon.scheduler, 'serve', side_effect=serve)
     daemon.serve()
-    assert shutdown.called and not cfg.pid_file.exists(), 'shut down as on SIGTERM, lock released'
+    assert shutdown.called, 'shut down as on SIGTERM'
+    handed = int(os.environ.pop(LOCK_ENV))
+    assert running_pid(cfg) == os.getpid() and os.get_inheritable(handed), 'the lock goes on to the exec'
+    os.close(handed)
     assert hand_over.called and not stop.called, 'its agents are left for the new code'
     assert execv.call_args.args == (SERVE_ARGV[0], SERVE_ARGV)
     assert signal.getsignal(RESTART_SIGNAL) is previous
@@ -247,6 +249,7 @@ def test_a_restart_whose_shutdown_fails_still_execs(tmp_path: Path, mocker: Mock
     worker.join(5)
     daemon.db.close()
     assert execv.call_args.args == (SERVE_ARGV[0], SERVE_ARGV)
+    os.close(int(os.environ.pop(LOCK_ENV)))  # handed on to an exec that the mock left out
 
     execv.reset_mock()
     cfg = Settings(home=tmp_path / 'stopped')
@@ -381,6 +384,7 @@ def test_a_stop_that_ends_before_it_writes_the_rows_still_ends_the_run_when_the_
     first.db.notify()
     first.scheduler.wait(SETTLE)
     first.db.close()
+    os.close(first._lock)  # its process dies here: the kernel frees the lock
 
     second = Daemon(cfg)
     second.scheduler.reap()
@@ -436,21 +440,12 @@ def test_a_report_that_comes_after_the_stop_ended_keeps_its_work_for_the_next_da
     second.shutdown(timeout=5)
 
 
-def test_serve_refuses_when_a_daemon_holds_the_pid_file(
-    tmp_path: Path, mocker: MockerFixture, lock_holder: subprocess.Popen[str]
-) -> None:
+def test_serve_refuses_when_a_daemon_holds_the_pid_file(tmp_path: Path, lock_holder: subprocess.Popen[str]) -> None:
+    """The lock comes first: the refused daemon opens no database, so it migrates and stops nothing of the other's."""
     cfg = Settings(home=tmp_path)
-    engine = create_engine(cfg.database_url)
-    migrate(
-        engine, cas=disk(tmp_path), backups=0, daemon=None
-    )  # as the running daemon left it: under an older one, Daemon() refuses before it migrates
-    engine.dispose()
-    daemon = Daemon(cfg)
-    shutdown = mocker.patch.object(daemon, 'shutdown')
     with pytest.raises(SystemExit, match=f'already running \\(pid {lock_holder.pid}'):
-        daemon.serve()
-    assert not shutdown.called, "refusing must not touch the other daemon's runs"
-    assert cfg.pid_file.read_text() == str(lock_holder.pid)
+        Daemon(cfg)
+    assert cfg.pid_file.read_text() == str(lock_holder.pid) and not (tmp_path / 'piloop.db').exists()
 
 
 def test_shutdown_fails_open_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
