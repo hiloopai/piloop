@@ -1,9 +1,10 @@
 # The pool model (piloop 0.6): 2 identical Codex worker(s), no lead. The same as the worker-curve bench's wc-2w, at
-# the commit that replaced verdicts with a scored pool (#681), plus the provisioners that the driver needs; piloop
-# changed only in piloop/plugins/provisioner between the two.
+# the commit that replaced verdicts with a scored pool (#681), plus the provisioners that the driver needs and two
+# fixes: a 0.5 stored config loads (#687), and staging an agent's workspace leaks no file descriptor (#702). piloop
+# changed only in those between the two.
 kind = "piloop"
 name = "pool-2w"
-piloop = "piloop[modal,daytona] @ git+https://github.com/hiloopai/piloop@084abf641963732f8aabf3a55f1716186d4c8e7e"
+piloop = "piloop[modal,daytona] @ git+https://github.com/hiloopai/piloop@b0c930b704a24559bdf7b00cdfc9c5d0d616fb24"
 agents = [{ harness = "codex", model = "gpt-6.1-sol" }]
 split = "sealed"
 
