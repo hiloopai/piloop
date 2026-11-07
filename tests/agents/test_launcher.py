@@ -56,7 +56,17 @@ from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.contract import AGENT, AgentJob, HarnessSession, RepoId, Source
 from piloop.plugins.executor.kit import jobs, sessions
 from piloop.plugins.executor.kit.capacity import HostSample
-from piloop.plugins.executor.kit.leases import SERVE, Answer, LeaseQueued, Leases, LeaseWorkerJoined, read_job
+from piloop.plugins.executor.kit.leases import (
+    SERVE,
+    Answer,
+    LeaseAcquired,
+    LeaseQueued,
+    LeaseReported,
+    Leases,
+    LeaseStarted,
+    LeaseWorkerJoined,
+    read_job,
+)
 from piloop.plugins.executor.kit.sessions import SessionFile
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.harness.contract import MCP, PROMPT, SESSION_ID, Usage, UserConfig, each_provider
@@ -394,7 +404,10 @@ def test_launch_runs_the_row_through_its_lifecycle(
         (1, LeaseWorkerJoined(worker=SERVE, pool=SERVE)),
         (1, AgentSessionStarted(role=LEAD, harness='script', model='lead-model', reason='test')),
         (1, LeaseQueued(lease=1, lease_kind=AGENT)),
+        (1, LeaseAcquired(lease=1, worker=SERVE)),
+        (1, LeaseStarted(lease=1, worker=SERVE)),
         (1, AgentSessionRunning(machine=None)),
+        (1, LeaseReported(lease=1, worker=SERVE)),
         (1, AgentSessionFinished(role=LEAD, reason='test', state=AgentSessionState.EXITED, error=None)),
     ]
     [ended] = [payload.ended for _, payload in events if isinstance(payload, JobEnded)]

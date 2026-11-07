@@ -1918,6 +1918,8 @@ def lease_running(db: Database) -> None:
                     worker='elsewhere',
                     job_cid=job,
                     handle=handle,
+                    acquired_at=now,
+                    started_at=now,
                     renewed_at=now,
                     expires_at=now + timedelta(hours=1),
                 )

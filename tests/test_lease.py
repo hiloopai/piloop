@@ -19,6 +19,7 @@ from piloop.actor import System
 from piloop.agents.results import PromptOutcome
 from piloop.db import feed
 from piloop.db.events import emit, has, in_order
+from piloop.db.machine import Refused, transition
 from piloop.db.models import PROCESS, AgentSession, Campaign, Event, EventModel, Lease, LeaseState, utcnow
 from piloop.db.session import Database, write_transaction
 from piloop.ids import CommentId, TargetKind, TargetRef
@@ -52,16 +53,21 @@ from piloop.plugins.executor.kit import leases as leases_module
 from piloop.plugins.executor.kit.capacity import GB, HostSample, Pool
 from piloop.plugins.executor.kit.client import Local, Registration, WorkerInfo
 from piloop.plugins.executor.kit.leases import (
+    LEASE_STATES,
     NOT_TAKEN,
     SETTLED,
     AgentHandle,
     Answer,
     Grant,
+    LeaseAcquired,
+    LeaseCancelled,
     LeaseExpired,
     LeasePrompted,
     LeaseQueued,
+    LeaseReported,
     LeaseRevoked,
     Leases,
+    LeaseStarted,
     LeaseUnreachable,
     LeaseWorkerJoined,
     LeaseWorkerRelieved,
@@ -478,9 +484,37 @@ def test_a_revoke_or_a_cancel_changes_only_a_lease_it_applies_to(
     take(leases, 'w1', [])
     Local(leases, 'w1').report(queued, 'r', DONE)
     with db.session() as s:
-        cancel(s, s.get_one(Lease, queued), 'daemon stopped')
+        cancel(s, home_cas(db), s.get_one(Lease, queued), 'daemon stopped')
         s.commit()
     assert lease_row(db, queued).state is LeaseState.REPORTED
+
+
+def test_each_move_of_a_lease_is_one_event_on_its_jobs_row_and_an_ended_lease_never_moves_again(
+    db: Database, campaign: Campaign, tmp_path: Path, leases: Leases
+) -> None:
+    """``LEASE_STATES`` is the one writer of ``leases.state``: its guarded UPDATE refuses a move from any other state."""
+    lease_id = queue(db, agent_job(db, campaign, tmp_path))
+    take(leases, 'w1', [])
+    Local(leases, 'w1').started(lease_id, HANDLE, None)
+    Local(leases, 'w1').report(lease_id, 'r', DONE)
+    on = (TargetKind.AGENT_SESSION, 1)
+    assert [
+        (e[:2], e[2].kind) for model in (LeaseAcquired, LeaseStarted, LeaseReported) for e in events(db, model)
+    ] == [
+        (on, 'lease.acquired'),
+        (on, 'lease.started'),
+        (on, 'lease.reported'),
+    ]
+    with db.session() as s, pytest.raises(Refused, match=f'lease#{lease_id} is reported: it cannot become running'):
+        transition(
+            s, LEASE_STATES, lease_id, LeaseState.RUNNING, LeaseStarted(lease=lease_id, worker='w1'), System.DAEMON
+        )
+    queued = queue(db, evaluation_job(db, campaign, tmp_path))
+    with db.session() as s:
+        cancel(s, home_cas(db), s.get_one(Lease, queued), NOT_TAKEN)
+        s.commit()
+    [(_, _, cancelled)] = events(db, LeaseCancelled)
+    assert (cancelled.lease, cancelled.reason, lease_row(db, queued).state) == (queued, NOT_TAKEN, LeaseState.CANCELLED)
 
 
 def test_a_report_on_a_lease_that_never_was_is_refused_and_kept_nowhere(db: Database, leases: Leases) -> None:

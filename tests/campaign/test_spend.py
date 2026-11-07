@@ -98,6 +98,7 @@ def hold(
         worker=worker,
         job_cid=Cid.of(b'{}'),
         acquired_at=None if worker is None else zero + timedelta(seconds=start),
+        started_at=None if worker is None else zero + timedelta(seconds=start),
         ended_at=None if end is None else zero + timedelta(seconds=end),
     )
     s.add(lease)

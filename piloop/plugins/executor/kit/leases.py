@@ -52,6 +52,7 @@ from piloop.agents.results import PromptOutcome
 from piloop.db import feed
 from piloop.db.events import emit, has, latest
 from piloop.db.feed import Topic
+from piloop.db.machine import Machine, transition
 from piloop.db.models import (
     LIVE_LEASES,
     OPEN_LEASES,
@@ -118,6 +119,20 @@ def default_pools() -> dict[str, Pool]:
     return {SERVE: Pool()}
 
 
+LEASE = TargetKind('lease')
+"""What a refused move of a lease names (``Refused``). Its events go on its job's row (``_target``)."""
+LEASE_STATES = Machine(
+    Lease.state,
+    {
+        LeaseState.ACQUIRED: frozenset({LeaseState.QUEUED}),
+        LeaseState.RUNNING: frozenset(LIVE_LEASES),  # started again: a restarted worker found its job
+        LeaseState.REPORTED: frozenset(LIVE_LEASES),
+        LeaseState.EXPIRED: frozenset(LIVE_LEASES),
+        LeaseState.CANCELLED: frozenset(OPEN_LEASES),
+    },
+    LEASE,
+)
+"""A lease's state: its one writer is ``transition``. An ended lease never moves again."""
 UNSTARTED = 'the daemon stopped before the job started'
 SETTLED = 'its job was settled already'
 NOT_TAKEN = 'the daemon stopped before a worker took the job'
@@ -151,6 +166,42 @@ class LeaseExpired(EventModel):
     kind: Literal['lease.expired'] = 'lease.expired'
     lease: int
     worker: str | None
+    reason: str
+
+
+class LeaseAcquired(EventModel):
+    """On the job's row: ``worker`` took the lease."""
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['lease.acquired'] = 'lease.acquired'
+    lease: int
+    worker: str
+
+
+class LeaseStarted(EventModel):
+    """On the job's row: ``worker`` started the lease's job, or found it again after its restart."""
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['lease.started'] = 'lease.started'
+    lease: int
+    worker: str
+
+
+class LeaseReported(EventModel):
+    """On the job's row: ``worker``'s report applied, and the lease ended."""
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['lease.reported'] = 'lease.reported'
+    lease: int
+    worker: str
+
+
+class LeaseCancelled(EventModel):
+    """On the job's row: the lease ended without a report: ``reason`` says why (``cancel``)."""
+
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
+    kind: Literal['lease.cancelled'] = 'lease.cancelled'
+    lease: int
     reason: str
 
 
@@ -470,11 +521,26 @@ def drain(s: Session, worker: str, on: TargetRef) -> None:
         emit(s, WorkerDrained(worker=worker), on, System.DAEMON)
 
 
-def cancel(s: Session, lease: Lease, reason: str) -> None:
-    """End a lease that no worker will report: a queued one, or every one at a daemon stop. The caller commits."""
+def cancel(s: Session, cas: Cas, lease: Lease, reason: str) -> None:
+    """End a lease that no worker will report: a queued one, or every one at a daemon stop. The caller commits.
+
+    An ended lease stays as it ended.
+    """
     if lease.state in OPEN_LEASES:
-        receipt: dict[str, object] = {'cancelled': reason}
-        lease.state, lease.ended_at, lease.receipt = LeaseState.CANCELLED, utcnow(), receipt
+        cancelled = LeaseCancelled(lease=lease.id, reason=reason)
+        on = _target(cas, lease)
+        receipt = {'cancelled': reason}
+        transition(
+            s,
+            LEASE_STATES,
+            lease.id,
+            LeaseState.CANCELLED,
+            cancelled,
+            System.DAEMON,
+            on=on,
+            ended_at=utcnow(),
+            receipt=receipt,
+        )
 
 
 def _registered(s: Session, worker: str) -> LeaseWorker:
@@ -631,10 +697,21 @@ class Leases:
                         refused.append(refusal)
                     case _:
                         assert lease is not None  # the cases above take every other pair
-                        now = utcnow()
-                        lease.state, lease.worker, lease.acquired_at = LeaseState.ACQUIRED, worker, now
-                        lease.acquire_request = request_id
-                        lease.renewed_at, lease.expires_at = now, now + timedelta(seconds=self.timing.toleration)
+                        now, acquired = utcnow(), LeaseAcquired(lease=lease.id, worker=worker)
+                        transition(
+                            s,
+                            LEASE_STATES,
+                            lease.id,
+                            LeaseState.ACQUIRED,
+                            acquired,
+                            System.DAEMON,
+                            on=_target(self._cas, lease),
+                            worker=worker,
+                            acquired_at=now,
+                            acquire_request=request_id,
+                            renewed_at=now,
+                            expires_at=now + timedelta(seconds=self.timing.toleration),
+                        )
                         row.no_lease = None
                         s.commit()
                         return Grant.of(s, lease)
@@ -712,8 +789,17 @@ class Leases:
 
         def mark(s: Session) -> None:
             lease = self._live(s, lease_id, worker)
-            lease.state, lease.handle = LeaseState.RUNNING, handle.model_dump(mode='json')
-            lease.started_at = lease.started_at or utcnow()
+            transition(
+                s,
+                LEASE_STATES,
+                lease_id,
+                LeaseState.RUNNING,
+                LeaseStarted(lease=lease_id, worker=worker),
+                System.DAEMON,
+                on=_target(self._cas, lease),
+                handle=handle.model_dump(mode='json'),
+                started_at=lease.started_at or utcnow(),
+            )
 
         agent_session = self._job(lease_id).agent_session_id
         match handle:
@@ -818,11 +904,17 @@ class Leases:
 
         def mark(s: Session) -> None:
             live = self._live(s, lease_id, worker)
-            live.state, live.ended_at, live.report_request, live.receipt = (
+            transition(
+                s,
+                LEASE_STATES,
+                lease_id,
                 LeaseState.REPORTED,
-                utcnow(),
-                request_id,
-                receipt,
+                LeaseReported(lease=lease_id, worker=worker),
+                System.DAEMON,
+                on=_target(self._cas, live),
+                ended_at=utcnow(),
+                report_request=request_id,
+                receipt=receipt,
             )
 
         try:
@@ -843,7 +935,7 @@ class Leases:
             write_transaction(s)
             lease = s.get_one(Lease, lease_id)
             if lease.worker == worker and lease.state in LIVE_LEASES:
-                cancel(s, lease, SETTLED)
+                cancel(s, self._cas, lease, SETTLED)
                 lease.receipt = {**lease.receipt, 'settled': str(settled)}
             s.commit()
 
@@ -868,9 +960,19 @@ class Leases:
 
         def mark(s: Session) -> None:
             lease = fence(s)
-            lease.state, lease.ended_at, lease.receipt = LeaseState.EXPIRED, utcnow(), receipt
             expired = LeaseExpired(lease=lease.id, worker=lease.worker, reason=reason)
-            emit(s, expired, _target(self._cas, lease), System.DAEMON)
+            on = _target(self._cas, lease)
+            transition(
+                s,
+                LEASE_STATES,
+                lease.id,
+                LeaseState.EXPIRED,
+                expired,
+                System.DAEMON,
+                on=on,
+                ended_at=utcnow(),
+                receipt=receipt,
+            )
 
         lease = self._job(lease_id)
         try:
@@ -1071,7 +1173,7 @@ class Leases:
             # that it tracks, and its report, refused as settled, ends the lease (``_end_settled``)
             for lease in s.scalars(select(Lease).where(Lease.kind != AGENT, Lease.state.in_(OPEN_LEASES))).all():
                 if lease.state is LeaseState.QUEUED:
-                    cancel(s, lease, NOT_TAKEN)
+                    cancel(s, self._cas, lease, NOT_TAKEN)
                 else:
                     revoke(s, self._cas, lease)
             for job in left:
@@ -1092,7 +1194,7 @@ class Leases:
                 found = s.get_one(Lease, lease_id)
                 if found.state is not LeaseState.QUEUED:
                     raise StaleLease(f'stale_lease: lease#{lease_id} was taken')
-                cancel(s, found, NOT_TAKEN)
+                cancel(s, self._cas, found, NOT_TAKEN)
 
             report = AgentNotStarted(reason=NOT_TAKEN)
             try:
@@ -1114,7 +1216,7 @@ class Leases:
             write_transaction(s)
             live = (Lease.kind == AGENT) & (Lease.state == LeaseState.ACQUIRED)
             for lease in s.scalars(select(Lease).where(live)).all():
-                cancel(s, lease, UNSTARTED)
+                cancel(s, self._cas, lease, UNSTARTED)
             s.commit()
 
 

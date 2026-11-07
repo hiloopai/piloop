@@ -1317,3 +1317,49 @@ def test_optimization_0009_keeps_every_verdict_in_an_event_drops_the_columns_and
             ('keep',),
             ('discard',),
         ]
+
+
+def test_0080_repairs_the_leases_that_raw_writes_broke_keeps_the_fencing_counter_and_checks_them(
+    tmp_path: Path,
+) -> None:
+    """Each broken row is repaired by the rule that the revision states; the next lease id stays past every old one."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0079')
+    lease = 'INSERT INTO leases (id, kind, job_id, job_cid, state, worker, acquired_at, started_at, ended_at) VALUES '
+    rows = [
+        "(1, 'evaluation', 1, 'c', 'queued', 'w', '2026-01-01', NULL, NULL)",
+        "(2, 'evaluation', 2, 'c', 'acquired', NULL, NULL, NULL, NULL)",
+        "(3, 'evaluation', 3, 'c', 'running', 'w', NULL, NULL, NULL)",
+        "(4, 'evaluation', 4, 'c', 'reported', 'w', '2026-01-01', '2026-01-01', NULL)",
+        "(5, 'evaluation', 5, 'c', 'queued', NULL, NULL, NULL, '2026-01-01')",
+        "(6, 'evaluation', 6, 'c', 'running', 'w', '2026-01-01', '2026-01-02', NULL)",
+        "(9, 'evaluation', 9, 'c', 'queued', NULL, NULL, NULL, NULL)",
+    ]
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        for row in rows:
+            con.execute(lease + row)
+        con.execute('DELETE FROM leases WHERE id = 9')  # its campaign was deleted: id 9 is spent all the same
+    command.upgrade(cfg, '0080')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        got = con.execute(
+            'SELECT id, state, worker, acquired_at IS NOT NULL, started_at IS NOT NULL, ended_at IS NOT NULL, receipt'
+            ' FROM leases ORDER BY id'
+        ).fetchall()
+        assert got == [
+            (1, 'queued', None, 0, 0, 0, '{}'),
+            (2, 'cancelled', None, 0, 0, 1, '{"cancelled":"it had no worker (migration 0080)"}'),
+            (3, 'running', 'w', 1, 1, 0, '{}'),
+            (4, 'reported', 'w', 1, 1, 1, '{}'),
+            (5, 'queued', None, 0, 0, 0, '{}'),
+            (6, 'running', 'w', 1, 1, 0, '{}'),
+        ]
+        con.execute("INSERT INTO leases (kind, job_id, job_cid) VALUES ('evaluation', 10, 'c')")
+        assert con.execute('SELECT max(id) FROM leases').fetchone() == (10,), 'a fencing token never goes back'
+        with pytest.raises(sqlite3.IntegrityError, match='leases.an ended lease has its end'):
+            con.execute("UPDATE leases SET state = 'expired' WHERE id = 6")
+        with pytest.raises(sqlite3.IntegrityError, match='leases.only a queued lease has no worker'):
+            con.execute("UPDATE leases SET worker = 'w', acquired_at = '2026-01-01' WHERE id = 1")
+    command.downgrade(cfg, '0079')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("UPDATE leases SET state = 'expired' WHERE id = 6")  # 0079 had no such CHECK

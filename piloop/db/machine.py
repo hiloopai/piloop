@@ -39,9 +39,19 @@ class Refused[S: StrEnum](Exception):
 
 
 def transition[S: StrEnum](
-    s: Session, m: Machine[S], row_id: int, to: S, event: EventModel, actor: Actor, **values: object
+    s: Session,
+    m: Machine[S],
+    row_id: int,
+    to: S,
+    event: EventModel,
+    actor: Actor,
+    *,
+    on: TargetRef | None = None,
+    **values: object,
 ) -> None:
-    """Move row ``row_id`` to ``to``, with ``values`` in the same UPDATE, and emit ``event`` on it. The caller commits.
+    """Move row ``row_id`` to ``to``, with ``values`` in the same UPDATE, and emit ``event``. The caller commits.
+
+    The event goes on the row, or on ``on``: a lease's go on its job's row, which its readers watch.
 
     Raises:
         Refused: the row is in a state that may not move to ``to``.
@@ -58,4 +68,4 @@ def transition[S: StrEnum](
     ).first()
     if moved is None:
         raise Refused(ref, to, s.execute(select(m.column).where(table.id == row_id)).scalar_one())
-    emit(s, event, ref, actor)
+    emit(s, event, on or ref, actor)

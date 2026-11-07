@@ -455,6 +455,20 @@ def count[*Ts](s: Session, query: Select[*Ts]) -> int:
     return s.scalar(select(func.count()).select_from(query.subquery())) or 0
 
 
+LEASE_CHECKS = (
+    CheckConstraint(
+        "(state IN ('reported', 'expired', 'cancelled')) = (ended_at IS NOT NULL)",
+        name='leases.an ended lease has its end',
+    ),
+    CheckConstraint('(worker IS NULL) = (acquired_at IS NULL)', name='leases.a taken lease has its worker'),
+    CheckConstraint(
+        "state = 'cancelled' OR (state = 'queued') = (worker IS NULL)", name='leases.only a queued lease has no worker'
+    ),
+    CheckConstraint("state != 'running' OR started_at IS NOT NULL", name='leases.a running lease has its start'),
+)
+"""What ties a lease's state to its worker and its times: the guard that a raw ``piloop sql`` write meets too."""
+
+
 class Lease(Base):
     """A lease (``piloop.plugins.executor.kit.leases``): a time-limited claim on one job by one worker (``piloop.plugins.executor.kit.leases``).
 
@@ -471,6 +485,7 @@ class Lease(Base):
             "(kind = 'agent') = (agent_session_id IS NOT NULL) AND (kind = 'agent') = (job_id IS NULL)",
             name='leases.a lease has the job of its kind',
         ),
+        *LEASE_CHECKS,
         Index('ix_leases_state', 'state'),
         Index('ix_leases_agent_session', 'agent_session_id'),
         Index('ix_leases_job', 'kind', 'job_id'),
