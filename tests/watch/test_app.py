@@ -274,6 +274,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
                     kind=AUDITOR,
                     campaign_id=p.id,
                     state=AgentSessionState.EXITED,
+                    ended_at=utcnow(),
                     usage=spent(1_234_567, 9),
                 ),
             ]

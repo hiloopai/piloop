@@ -47,12 +47,14 @@ def transition[S: StrEnum](
     actor: Actor,
     *,
     on: TargetRef | None = None,
+    from_: frozenset[S] | None = None,
     **values: object,
 ) -> None:
     """Move row ``row_id`` to ``to``, with ``values`` in the same UPDATE, and emit ``event``. The caller commits.
 
     The event goes on the row, or on ``on``: a lease's go on its job's row, which its readers watch. ``event`` is None
-    only where the change log's trigger logs the column already (``campaigns.status``).
+    only where the change log's trigger logs the column already (``campaigns.status``), or where the machine names the
+    event that follows the move. ``from_`` narrows the states that may move to ``to``: a subset of the machine's.
 
     Raises:
         Refused: the row is in a state that may not move to ``to``.
@@ -60,9 +62,11 @@ def transition[S: StrEnum](
     table = m.column.class_
     assert isinstance(table, type)  # a mapped class, not an alias: the machine names its column on it
     ref = TargetRef(m.kind, row_id)
+    allowed = m.edges.get(to, frozenset())
+    assert from_ is None or from_ <= allowed, f'{sorted(from_ - allowed)} may not move to {to}'
     moved = s.execute(
         update(table)
-        .where(table.id == row_id, m.column.in_(m.edges.get(to, frozenset())))
+        .where(table.id == row_id, m.column.in_(allowed if from_ is None else from_))
         .values({m.column.key: to, **values})
         .returning(table.id)
         .execution_options(synchronize_session='fetch')

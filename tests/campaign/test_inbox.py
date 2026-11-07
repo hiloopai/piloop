@@ -46,7 +46,9 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
         theirs = idea(s, other, 'theirs', IdeaStatus.OPEN)
         run = Run(campaign_id=mine.campaign_id, idea=mine, attempt=1, base_candidate_id=1, harness='h', model='m')
         s.add(run)
-        s.add(AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, state=AgentSessionState.EXITED))
+        s.add(
+            AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=utcnow())
+        )
         s.flush()
         s.add(Measurement(candidate_id=1, evaluator_id=1, metrics={'score': 1}))
         s.flush()

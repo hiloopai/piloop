@@ -136,6 +136,7 @@ LEASE_STATES = Machine(
 UNSTARTED = 'the daemon stopped before the job started'
 SETTLED = 'its job was settled already'
 NOT_TAKEN = 'the daemon stopped before a worker took the job'
+ENDED_UNTAKEN = 'the daemon ended the agent before a worker took its job'
 PAGE = 100
 """How many messages one read returns at most. A worker reads again at once for the rest."""
 
@@ -1080,12 +1081,19 @@ class Leases:
             s.commit()
 
     def revoke(self, key: Key) -> None:
-        """Ask the worker of the job's live lease to stop it (``revoke``). Its job still reports."""
+        """Ask the worker of the job's live lease to stop it (``revoke``). Its job still reports.
+
+        An agent's lease that no worker took ends at once, with a result that says so (``_end_untaken``): no worker
+        would ever report it.
+        """
         with self._db.session() as s:
             lease = lease_of(s, key)
-            if lease is not None:
+            untaken = lease is not None and lease.kind == AGENT and lease.state is LeaseState.QUEUED
+            if lease is not None and not untaken:
                 revoke(s, self._cas, lease)
                 s.commit()
+        if lease is not None and untaken:  # after the session: the result commits in one of its own
+            self._end_untaken(lease, ENDED_UNTAKEN)
 
     def prompt(self, key: AgentKey, prompt: Prompt) -> None:
         """Send ``prompt`` to the worker of the agent's live lease (``LeasePrompted``), unless it was sent.
@@ -1189,23 +1197,32 @@ class Leases:
             queued = (Lease.kind == AGENT) & (Lease.state == LeaseState.QUEUED)
             untaken = s.scalars(select(Lease).where(queued)).all()
         for lease in untaken:
+            self._end_untaken(lease, NOT_TAKEN)
 
-            def take(s: Session, lease_id: int = lease.id) -> None:
-                found = s.get_one(Lease, lease_id)
-                if found.state is not LeaseState.QUEUED:
-                    raise StaleLease(f'stale_lease: lease#{lease_id} was taken')
-                cancel(s, self._cas, found, NOT_TAKEN)
+    def _end_untaken(self, lease: Lease, reason: str) -> None:
+        """End an agent's lease that no worker took, with ``AgentNotStarted``: what waits for its agent returns.
 
-            report = AgentNotStarted(reason=NOT_TAKEN)
-            try:
-                self._results.finished(read_job(self._cas, lease.id, lease.job_cid), report, guard=take)
-            except StaleLease:  # a worker took it meanwhile: it reports
-                continue
-            except Settled:  # its row was closed already: nothing waits for it
-                with self._db.session() as s:
-                    write_transaction(s)
+        A worker that took it meanwhile reports it. A row that is closed already only ends the lease.
+        """
+
+        def take(s: Session, lease_id: int = lease.id) -> None:
+            found = s.get_one(Lease, lease_id)
+            if found.state is not LeaseState.QUEUED:
+                raise StaleLease(f'stale_lease: lease#{lease_id} was taken')
+            cancel(s, self._cas, found, reason)
+
+        try:
+            self._results.finished(
+                read_job(self._cas, lease.id, lease.job_cid), AgentNotStarted(reason=reason), guard=take
+            )
+        except StaleLease:  # a worker took it meanwhile: it reports
+            return
+        except Settled:  # its row was closed already: nothing waits for it
+            with self._db.session() as s:
+                write_transaction(s)
+                with contextlib.suppress(StaleLease):  # a worker took it meanwhile: it reports
                     take(s)
-                    s.commit()
+                s.commit()
 
     def end_unstarted(self) -> None:
         """End the agent leases whose agent did not start: it made nothing, so a report that comes later is refused.

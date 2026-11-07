@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from piloop.actor import Agent, System
 from piloop.agents.launcher import Launcher, fill
 from piloop.agents.results import (
+    AGENT_SESSION_STATES,
     AgentSessionFinished,
     AgentSessionRunning,
     AgentSessionStarted,
@@ -31,6 +32,7 @@ from piloop.agents.results import (
     SessionSaved,
     StartupAnomaly,
     WrapUp,
+    end_agent,
     never_worked,
 )
 from piloop.agents.roles import (
@@ -45,13 +47,14 @@ from piloop.agents.roles import (
 )
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.events import emit, in_order
+from piloop.db.machine import transition
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, Lease, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import AgentSessionRequested
 from piloop.ids import AgentSessionId, CampaignId, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
+from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd
 from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.contract import AGENT, AgentJob, HarnessSession, RepoId, Source
 from piloop.plugins.executor.kit import jobs, sessions
@@ -136,11 +139,15 @@ def brief_in(
 
 
 def request(db: Database, campaign: Campaign, kind: RoleName = AUDITOR, **fields: object) -> AgentSessionId:
-    """A requested row, on ``script`` unless ``fields`` names a harness: the pass that takes a row chooses one."""
+    """A row that the pass took for a slot (``starting``, unless ``fields`` names a state), on ``script`` unless
+    ``fields`` names a harness: the pass that takes a row chooses one."""
     fields.setdefault('harness', 'script')
     with db.session() as s:
         agent_session = AgentSession(kind=kind, campaign_id=campaign.id, reason='test', **fields)
         s.add(agent_session)
+        s.flush()
+        if agent_session.state is AgentSessionState.REQUESTED:
+            transition(s, AGENT_SESSION_STATES, agent_session.id, AgentSessionState.STARTING, None, System.DAEMON)
         s.commit()
         return agent_session.id
 
@@ -709,6 +716,23 @@ def test_a_brief_that_the_cas_lacks_is_a_failed_start(
         read_brief(home_cas(db), missing)
 
 
+def test_an_agent_that_a_cancel_ended_before_its_launch_never_starts_and_closes_with_why(
+    campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The pass took the row, then a cancel ended it before its launch thread filled it in: no job is submitted, and
+    the row closes ``killed`` with the cancel's reason. Before, the launch set the row ``starting`` again and ran it."""
+    agent_session_id = request(db, campaign)
+    with db.session() as s:
+        end_agent(s, s.get_one(AgentSession, agent_session_id), 'cancelled by human', RunEnd.CANCELLED, Tracer(None))
+        s.commit()
+    outcome = launch(db, runtime, tmp_path, agent_session_id)
+    assert outcome == NotStarted(f'agent_session#{agent_session_id} is ending: it cannot become starting')
+    w = agent_session(db, agent_session_id)
+    assert (w.state, w.error, w.runtime) == (AgentSessionState.KILLED, 'cancelled by human', None)
+    with db.session() as s:
+        assert s.scalars(select(Lease)).all() == [], 'no job was submitted'
+
+
 def test_nothing_starts_after_cancel(campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path) -> None:
     agent_session_id = request(db, campaign)
     lc = launcher(db, runtime, tmp_path)
@@ -717,7 +741,7 @@ def test_nothing_starts_after_cancel(campaign: Campaign, db: Database, runtime: 
         agent_session_id, brief=home_cas(db).put(b'x'), place='w', artifact=checkout(campaign), timeout=60
     )
     w = agent_session(db, agent_session_id)
-    assert (outcome, w.state) == (DaemonStopped(), AgentSessionState.REQUESTED), 'stop() closes rows'
+    assert (outcome, w.state) == (DaemonStopped(), AgentSessionState.STARTING), 'stop() closes rows'
     assert not (tmp_path / 'w').exists()
 
 

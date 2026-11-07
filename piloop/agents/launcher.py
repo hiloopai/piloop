@@ -11,7 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from covalence import Cid
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
@@ -26,11 +26,12 @@ from piloop.agents.results import (
     Unresumed,
     end_agent,
     ended_of,
+    finish,
     learn,
-    session_finished,
 )
 from piloop.config import BRIEF_FILE, CampaignConfig
 from piloop.db.events import emit, latest
+from piloop.db.machine import Refused
 from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Event, utcnow
 from piloop.db.session import Database, write_transaction
 from piloop.ids import AgentSessionId, CommentId, TargetKind, TargetRef
@@ -117,6 +118,9 @@ class Launcher:
                         agent_session_id, span, brief, place, artifact, timeout, capture, resumed_brief, read
                     )
                     self.executor.submit(job)
+                except Refused as e:  # the daemon ended it before it started: a stop or a cancel
+                    self._fail(agent_session_id, str(e))
+                    return NotStarted(str(e))
                 except Exception as e:  # a harness or a runtime that piloop.toml no longer has, an executor's refusal
                     span.error(e)
                     error = f'{type(e).__name__}: {e}'
@@ -149,11 +153,17 @@ class Launcher:
         return ended or DaemonStopped()
 
     def _fail(self, agent_session_id: AgentSessionId, error: str) -> None:
-        """Close a row whose job could not be described or submitted: no executor has it, so it never worked."""
+        """Close a row whose job could not be described or submitted: no executor has it, so it never worked.
+
+        A row that the daemon ended meanwhile (a stop or a cancel) closes ``killed``, with why it ended it.
+        """
         with self.db.session() as s:
+            write_transaction(s)
             w = s.get_one(AgentSession, agent_session_id)
-            w.state, w.ended_at, w.error = AgentSessionState.NEVER_WORKED, utcnow(), error
-            session_finished(s, w)
+            if w.state is AgentSessionState.ENDING:
+                finish(s, w, AgentSessionState.KILLED, w.error)
+            else:
+                finish(s, w, AgentSessionState.NEVER_WORKED, error)
             s.commit()
 
     def _prepare(
@@ -238,8 +248,23 @@ class Launcher:
                 capture=capture,
                 resume=resumes,
             )
-            w.harness, w.model, w.runtime, w.log_dir = harness, model, runtime_kind, str(self.home / place)
-            w.state, w.started_at = AgentSessionState.STARTING, utcnow()
+            # guarded: a stop or a cancel can end the row once the pass took it, and an ended row never starts
+            filled = s.execute(
+                update(AgentSession)
+                .where(AgentSession.id == agent_session_id, AgentSession.state == AgentSessionState.STARTING)
+                .values(
+                    harness=harness,
+                    model=model,
+                    runtime=runtime_kind,
+                    log_dir=str(self.home / place),
+                    started_at=utcnow(),
+                )
+                .returning(AgentSession.id)
+                .execution_options(synchronize_session='fetch')
+            ).first()
+            if filled is None:
+                found = s.scalars(select(AgentSession.state).where(AgentSession.id == agent_session_id)).one()
+                raise Refused(TargetRef(TargetKind.AGENT_SESSION, agent_session_id), AgentSessionState.STARTING, found)
             started = AgentSessionStarted(
                 role=kind,
                 harness=harness,

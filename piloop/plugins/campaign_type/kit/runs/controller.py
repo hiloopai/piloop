@@ -18,13 +18,14 @@ from typing import ClassVar, Literal, assert_never
 
 from covalence import Cid
 from pydantic import ValidationError
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, undefer
 
 from piloop import deprecated
 from piloop.actor import Actor, Agent, System
 from piloop.agents.launcher import Launcher
 from piloop.agents.results import (
+    AGENT_SESSION_STATES,
     AgentEnded,
     CampaignResults,
     DaemonStopped,
@@ -33,6 +34,8 @@ from piloop.agents.results import (
     NotStarted,
     Ran,
     WorkUnsaved,
+    end_agent,
+    finish,
 )
 from piloop.agents.roles import briefing, compose_brief, compose_resumed, read_brief, render_sections, role
 from piloop.campaign.campaigns import (
@@ -49,6 +52,7 @@ from piloop.config import TRANSCRIPT, CampaignConfig
 from piloop.db.events import emit, has, latest
 from piloop.db.machine import Machine, Refused, transition
 from piloop.db.models import (
+    LIVE,
     AgentSession,
     AgentSessionState,
     Campaign,
@@ -60,6 +64,7 @@ from piloop.db.models import (
     utcnow,
 )
 from piloop.db.session import Database, write_transaction
+from piloop.db.triggers.changelog import AgentSessionRequested
 from piloop.ids import (
     AgentSessionId,
     CampaignId,
@@ -122,6 +127,7 @@ from piloop.plugins.cas.contract import CAS, Cas
 from piloop.plugins.executor.contract import (
     DEADLINE_ENV,
     EXECUTORS,
+    AgentKey,
     Executor,
     ExecutorConfig,
     Host,
@@ -405,9 +411,10 @@ class RunController:
         self._guarded(run_id, agent_session_id, lambda span: self._finish(run_id, agent_session_id, None, span))
 
     def _guarded(self, run_id: RunId, agent_session_id: AgentSessionId, body: Callable[[Span], None]) -> None:
-        """Run ``body``. A failure fails the run, and closes its implementer if the failure came before the launch.
+        """Run ``body``. A failure fails the run, and closes its implementer, or ends it once its job was submitted.
 
-        A failure before the launch is no attempt at the idea (``RunEnd.NOT_STARTED``): its agent never ran.
+        A failure before the launch is no attempt at the idea (``RunEnd.NOT_STARTED``): its agent never ran. One after
+        it ends the agent through its executor, as nothing waits for it any more.
         """
         with self._tracer.span('piloop.run', run=run_id) as span:
             try:
@@ -417,7 +424,13 @@ class RunController:
                 error = f'{type(e).__name__}: {e}'
                 with self._db.session() as s:
                     closed = _close_unstarted(s, agent_session_id, error)
+                    agent = s.get_one(AgentSession, agent_session_id)
+                    live = agent.state in LIVE
+                    if live:
+                        end_agent(s, agent, error, RunEnd.FAILED, self._tracer)
                     s.commit()
+                if live:
+                    self.executor.cancel(AgentKey(agent_session_id))
                 end = RunEnd.NOT_STARTED if closed else RunEnd.FAILED
                 self._close(span, run_id, end, error)
                 self._settle(run_id, end, None)
@@ -433,7 +446,14 @@ class RunController:
                 cfg = campaign.config
                 timeout = agent_timeout(s, campaign, cfg, cfg.role(run.role).timeout, utcnow())
                 if isinstance(timeout, Stop):  # the run stays queued, its agent requested again: the stop closes both
-                    s.get_one(AgentSession, agent_session_id).state = AgentSessionState.REQUESTED
+                    agent = s.get_one(AgentSession, agent_session_id)
+                    again = AgentSessionRequested(role=agent.kind, campaign=agent.campaign_id, reason=agent.reason)
+                    try:
+                        transition(
+                            s, AGENT_SESSION_STATES, agent_session_id, AgentSessionState.REQUESTED, again, System.DAEMON
+                        )
+                    except Refused:  # a stop or a cancel ended it since the pass took it: it never starts
+                        _close_unstarted(s, agent_session_id, timeout.reason)
                     s.commit()
                     self._tracer.event(
                         'agent_session.not_started', agent_session=agent_session_id, reason=timeout.reason
@@ -1462,15 +1482,17 @@ def close_run(s: Session, run: Run, end: RunEnd, error: str | None) -> Run:
 
 
 def _close_unstarted(s: Session, agent_session_id: AgentSessionId, error: str) -> bool:
-    """Close the implementer if it is still ``starting``: it was not launched. Return whether it was. The caller commits."""
-    unstarted = (AgentSession.id == agent_session_id) & (AgentSession.state == AgentSessionState.STARTING)
-    closed = s.scalar(
-        update(AgentSession)
-        .where(unstarted)
-        .values(state=AgentSessionState.KILLED, ended_at=utcnow(), error=error)
-        .returning(AgentSession.id)
-    )
-    return closed is not None
+    """Close the implementer if the launcher submitted no job for it. Return whether it closed. The caller commits.
+
+    The launcher gives the row its runtime before it submits its job (``Launcher._prepare``): a row without one was not
+    launched, and no report will close it. One with it may run already: its executor has it. A row that a stop or a
+    cancel ended meanwhile (``ending``) keeps why it ended it.
+    """
+    agent = s.get_one(AgentSession, agent_session_id)
+    if agent.runtime is not None or agent.state not in (AgentSessionState.STARTING, AgentSessionState.ENDING):
+        return False
+    finish(s, agent, AgentSessionState.KILLED, agent.error if agent.state is AgentSessionState.ENDING else error)
+    return True
 
 
 def handed_off(ending: RunEndRequested) -> tuple[RunEnd, str | None]:

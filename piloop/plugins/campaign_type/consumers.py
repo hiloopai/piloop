@@ -12,6 +12,7 @@ import os
 from collections import Counter
 from collections.abc import Collection, Sequence
 from concurrent.futures import Future
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -23,6 +24,7 @@ from sqlalchemy.orm import Session, aliased
 
 from piloop.actor import System
 from piloop.agents.results import (
+    AGENT_SESSION_STATES,
     AgentSessionFinished,
     AgentSessionRunning,
     AgentSessionStarted,
@@ -45,6 +47,7 @@ from piloop.campaign.stop import (
 from piloop.config import CampaignConfig
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
 from piloop.db.events import emit, has, in_order
+from piloop.db.machine import Refused, transition
 from piloop.db.models import (
     LIVE,
     NOT_RETIRED,
@@ -282,7 +285,8 @@ class Campaigns:
                 if reaped and run_of(agent_session) is None and agent_session.campaign_id is not None:
                     campaign = s.get_one(Campaign, agent_session.campaign_id)
                     remove_checkouts(self._agent_sessions_dir / str(agent_session.id), campaign, self._tracer)
-                close(s, agent_session, end, self._tracer)
+                with suppress(Refused):  # its report closed it since: that end stands
+                    close(s, agent_session, end, self._tracer)
             s.commit()
 
     def _kill_stale(self, s: Session, agent_session: AgentSession) -> None:
@@ -583,7 +587,7 @@ class Campaigns:
                     if harness is None or harness in full:
                         continue
                     agent_session.harness = harness
-                agent_session.state = AgentSessionState.STARTING
+                transition(s, AGENT_SESSION_STATES, agent_session.id, AgentSessionState.STARTING, None, System.DAEMON)
                 taken.append((agent_session.id, run_of(agent_session)))
                 full = full_harnesses(s, campaign, cfg)
         return taken
@@ -673,7 +677,8 @@ class Campaigns:
 
     def _close_dead(self, agent_session_id: AgentSessionId, error: str) -> None:
         with self._db.session() as s:
-            close(s, s.get_one(AgentSession, agent_session_id), error, self._tracer)
+            with suppress(Refused):  # the thread died after the row closed: that end stands
+                close(s, s.get_one(AgentSession, agent_session_id), error, self._tracer)
             s.commit()
 
 

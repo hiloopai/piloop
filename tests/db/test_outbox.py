@@ -52,7 +52,8 @@ def test_a_requested_agent_emits_its_request_from_piloop_sql_and_no_other_insert
         )
         sql.run(
             con,
-            f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('{AUDITOR}', {campaign.id}, 'exited')",
+            f"INSERT INTO agent_sessions (kind, campaign_id, state, ended_at) VALUES ('{AUDITOR}', {campaign.id},"
+            " 'exited', CURRENT_TIMESTAMP)",
         )
     [(actor, target, event)] = emitted(db, start)
     assert actor == 'human' and target.kind == TargetKind.AGENT_SESSION

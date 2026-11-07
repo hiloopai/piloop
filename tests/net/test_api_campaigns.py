@@ -46,6 +46,7 @@ from piloop.db.models import (
     Comment,
     Event,
     Pause,
+    utcnow,
 )
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignPausedChanged, CampaignStatusChanged
@@ -134,7 +135,8 @@ def test_a_sync_reopens_a_stopped_campaign_whose_stop_rule_changed_only_as_reope
             f'demo is still stopping; agents #{agent.id} are not over: try again once it is closed and its runs are over'
         )
         with db.acting(System.DAEMON) as s:
-            s.get_one(AgentSession, agent.id).state = AgentSessionState.EXITED
+            ended = s.get_one(AgentSession, agent.id)
+            ended.state, ended.ended_at = AgentSessionState.EXITED, utcnow()
             emit(s, CampaignClosed(), TargetRef(TargetKind.CAMPAIGN, campaign.id), System.DAEMON)
             s.commit()
         toml.write_text(toml.read_text().replace('max_runs = 5', 'max_runs = 6'))
@@ -263,7 +265,7 @@ def test_a_stopped_campaign_retires_once_its_stop_is_over_and_its_name_registers
             client.retire('demo', RetireBody(reason='done'))
         assert e.value.error == Problem.STILL_STOPPING
         with db.session() as s:
-            s.execute(update(AgentSession).values(state=AgentSessionState.EXITED))
+            s.execute(update(AgentSession).values(state=AgentSessionState.EXITED, ended_at=utcnow()))
             s.commit()
         with pytest.raises(
             Refused, match=r'^demo is still stopping: try again once it is closed and its runs are over'

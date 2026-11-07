@@ -681,6 +681,18 @@ class Comment(Tracked, Base):
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
 
+AGENT_SESSION_CHECKS = (
+    CheckConstraint(
+        "(state IN ('exited', 'killed', 'never_worked')) = (ended_at IS NOT NULL)",
+        name='agent_sessions.an ended agent has its end',
+    ),
+    CheckConstraint(
+        "state != 'never_worked' OR error IS NOT NULL", name='agent_sessions.a never-worked agent says why'
+    ),
+)
+"""What ties an agent's state to its end: the guard that a raw ``piloop sql`` write meets too."""
+
+
 class AgentSession(Tracked, Base):
     """An agent process in one of the roles. While ``state`` is ``requested``, the row is a request to start one.
 
@@ -695,10 +707,14 @@ class AgentSession(Tracked, Base):
         # the sessions of a subject: those of a run, behind its candidates (every new-best row)
         Index('ix_agent_sessions_subject', 'subject_kind', 'subject_id'),
         CheckConstraint('(subject_kind IS NULL) = (subject_id IS NULL)', name='agent_sessions_subject'),
+        *AGENT_SESSION_CHECKS,
         *text_checks('agent_sessions', 'kind', nullable=('reason', 'harness', 'model')),
+        {'sqlite_autoincrement': True},
     )
 
     id: Mapped[AgentSessionId] = mapped_column(primary_key=True)
+    """AUTOINCREMENT: an id is never used again, so what names an agent (its token, its signature) never names a later
+    one."""
     kind: Mapped[RoleName]
     """The agent's role: a role of its campaign, a built-in one or a ``[plugins.role.<name>]`` table. A trigger refuses other
     names."""

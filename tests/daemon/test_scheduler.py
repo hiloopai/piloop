@@ -48,6 +48,7 @@ from piloop.daemon.scheduler import Scheduler
 from piloop.db import sql
 from piloop.db.events import has, in_order, latest, payload_of
 from piloop.db.models import (
+    ENDED,
     OPTIMIZATION,
     AgentSession,
     AgentSessionState,
@@ -594,6 +595,7 @@ def test_a_run_of_a_resuming_role_starts_on_the_harness_of_the_roles_last_saved_
                 campaign_id=campaign.id,
                 harness='pi',
                 state=AgentSessionState.EXITED,
+                ended_at=utcnow(),
                 session_file=home_cas(db).put(b'{}'),
             )
         )
@@ -690,7 +692,8 @@ def test_a_sweep_passes_over_a_harness_at_its_cap_and_a_pinned_one_stays_request
     assert take() == [2]
     with db.session() as s:
         assert s.get_one(AgentSession, 2).harness == 'pi', 'script is at its cap: the sweep takes pi'
-        s.get_one(AgentSession, 2).state = AgentSessionState.EXITED
+        ended = s.get_one(AgentSession, 2)
+        ended.state, ended.ended_at = AgentSessionState.EXITED, utcnow()
         s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, harness='script', reason='pinned'))
         s.commit()
     assert take() == [], 'a sweep pinned to a harness at its cap waits'
@@ -1880,6 +1883,7 @@ def running_agent_session(
                 runtime='subprocess',
                 handle={'agent': f'implementer-{run.id}', 'pid': 4242},
                 state=state,
+                ended_at=utcnow() if state in ENDED else None,
                 log_dir='x',
             )
         )
@@ -2499,7 +2503,7 @@ def died_at_startup(db: Database, campaign: Campaign, kind: RoleName, minutes_ag
     """Add a killed agent row and the launcher's ``anomaly.startup`` event, ``minutes_ago`` minutes ago."""
     with db.session() as s:
         agent_session = AgentSession(
-            kind=kind, campaign_id=campaign.id, harness='script', state=AgentSessionState.KILLED
+            kind=kind, campaign_id=campaign.id, harness='script', state=AgentSessionState.KILLED, ended_at=utcnow()
         )
         s.add(agent_session)
         s.flush()
@@ -2784,7 +2788,8 @@ def test_no_run_starts_whose_session_the_stop_would_end_before_its_wrap_up(
         first = s.get_one(Run, 1)
         first.started_at = utcnow() - (timedelta(hours=1) - left)
         close_run(s, first, RunEnd.FINISHED, None)
-        s.get_one(AgentSession, 1).state = AgentSessionState.EXITED
+        ended = s.get_one(AgentSession, 1)
+        ended.state, ended.ended_at = AgentSessionState.EXITED, utcnow()
         s.commit()
     scheduler = make_scheduler(db, runtime, tmp_path)
     with db.session() as s:
@@ -2886,12 +2891,19 @@ def test_a_wind_down_that_read_the_implementer_before_its_report_closed_the_row_
     ended_by_its_worker(db, idea, ago=timedelta(seconds=61))
     end = Agents._end
 
-    def reported_first(agents: Agents, s: Session, agent_session: AgentSession, reason: str, how: RunEnd) -> None:
+    def reported_first(
+        agents: Agents,
+        s: Session,
+        agent_session: AgentSession,
+        reason: str,
+        how: RunEnd,
+        kills: list[AgentSessionId],
+    ) -> None:
         with elsewhere(db) as second, second.session() as other:  # the worker's report, from its own process
             row = other.get_one(AgentSession, agent_session.id)
             row.state, row.ended_at = closed, utcnow()
             other.commit()
-        end(agents, s, agent_session, reason, how)
+        end(agents, s, agent_session, reason, how, kills)
 
     monkeypatch.setattr(Agents, '_end', reported_first)
     run_all(scheduler)

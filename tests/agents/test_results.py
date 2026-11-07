@@ -29,7 +29,7 @@ from piloop.agents.results import (
     learn,
 )
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event, utcnow
+from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, Event, utcnow
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, Revision, TargetRef
 from piloop.otel import Tracer
@@ -110,7 +110,13 @@ def test_a_start_report_moves_a_starting_agent_to_running_and_leaves_an_ending_o
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
     with db.session() as s:
         rows = [
-            AgentSession(kind=AUDITOR, campaign_id=campaign.id, harness='script', state=state)
+            AgentSession(
+                kind=AUDITOR,
+                campaign_id=campaign.id,
+                harness='script',
+                state=state,
+                ended_at=utcnow() if state in ENDED else None,
+            )
             for state in (AgentSessionState.STARTING, AgentSessionState.ENDING)
         ]
         s.add_all(rows)
@@ -138,7 +144,14 @@ def test_the_finished_event_of_an_agent_says_the_state_of_its_closed_row(
     """A cancelled agent's process exits once the daemon killed it: its row and its event both say killed."""
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
     with db.session() as s:
-        w = AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=state, reason='t', error='cancelled by human')
+        w = AgentSession(
+            kind=AUDITOR,
+            campaign_id=campaign.id,
+            state=state,
+            ended_at=utcnow() if state in ENDED else None,
+            reason='t',
+            error='cancelled by human',
+        )
         s.add(w)
         s.commit()
         agent_session_id = w.id
@@ -204,7 +217,13 @@ def test_a_report_read_after_a_restart_closes_the_agent_as_the_stop_on_its_row_s
     """The daemon that reads the report does not stop: only the stop that the earlier one recorded says it was cut."""
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
     with db.session() as s:
-        w = AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=state, reason='t')
+        w = AgentSession(
+            kind=AUDITOR,
+            campaign_id=campaign.id,
+            state=state,
+            ended_at=utcnow() if state in ENDED else None,
+            reason='t',
+        )
         s.add(w)
         s.flush()
         if stop:

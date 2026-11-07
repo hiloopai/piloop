@@ -24,6 +24,7 @@ from piloop.agents.results import (
 )
 from piloop.campaign.launches import close
 from piloop.campaign.stop import (
+    ACTING,
     CancelRequested,
     StopRequested,
     answer_done,
@@ -254,30 +255,30 @@ class Agents:
 
         A cancelled run or agent of any role (a pending ``CancelRequested``) is ended at once, or after the wrap-up prompt
         and the grace period when the cancel asked for it. Its run ends ``RunEnd.CANCELLED``. A cancelled request never
-        starts, and its queued run fails. The campaign type settles the run's idea. A starting agent is left for a later
-        pass, once it runs; if its start fails, the run is not launched again (``RunController._relaunch``). An
-        ``ending`` agent gets its kill again every ``[daemon] kill_retry`` until it ends: a kill can fail. Then the
-        stops and cancels that are carried out are answered (``stop.answer_done``).
+        starts, and its queued run fails. The campaign type settles the run's idea. A starting agent, cancelled or of a
+        stopped campaign, is ended at once: it has no work to save, and its job may wait for a worker that never comes.
+        Its run is not launched again (``RunController._relaunch``). An ``ending`` agent gets its kill again every
+        ``[daemon] kill_retry`` until it ends: a kill can fail. Then the stops and cancels that are carried out are
+        answered (``stop.answer_done``).
 
         Returns when a grace period or a wrap-up lead ends, or when to send an ending agent's kill again.
         """
         now, soonest = turn.now, Soonest()
+        kills: list[AgentSessionId] = []
         with self._db.session() as s:
             cancels = {
                 agent_session.id: (request, cancel)
                 for request, cancel in pending(s, CancelRequested)
                 for agent_session in s.scalars(
-                    select(AgentSession).where(
-                        cancelled(request, cancel),
-                        AgentSession.state.in_((AgentSessionState.REQUESTED, AgentSessionState.RUNNING)),
-                    )
+                    select(AgentSession).where(cancelled(request, cancel), AgentSession.state.in_(ACTING))
                 )
             }
             winding = (AgentSessionState.RUNNING, AgentSessionState.ENDING)
+            starting_or_running = (AgentSessionState.STARTING, AgentSessionState.RUNNING)
             stopping = (
                 select(AgentSession.id)
                 .join(Campaign, AgentSession.campaign_id == Campaign.id)
-                .where((AgentSession.subject_kind == RUN), AgentSession.state == AgentSessionState.RUNNING)
+                .where((AgentSession.subject_kind == RUN), AgentSession.state.in_(starting_or_running))
                 .where(Campaign.status == CampaignStatus.STOPPED)
             )
             implementers = select(AgentSession).where(
@@ -298,10 +299,10 @@ class Agents:
             ).all()
             for agent_session in agent_sessions:
                 if (end := found.get(agent_session.id)) is not None:
-                    self._end(s, agent_session, ENDED, end)
+                    self._end(s, agent_session, ENDED, end, kills)
                     continue
                 if agent_session.state is AgentSessionState.ENDING:
-                    self._kill(s, agent_session)
+                    kills.append(agent_session.id)
                     soonest.add(now + self._daemon.kill_retry)
                     continue
                 if (cancel := cancels.get(agent_session.id)) is not None:
@@ -329,14 +330,14 @@ class Agents:
                     )
                 )
                 grace = self._timings(s, agent_session).wrap_up_grace
-                if ending is Ending.NOW:
-                    self._end(s, agent_session, reason, end)
+                if ending is Ending.NOW or agent_session.state is AgentSessionState.STARTING:
+                    self._end(s, agent_session, reason, end, kills)
                 elif told is None:
                     text = WRAP_UP_PROMPT.format(what=what, cause=cause, minutes=grace.total_seconds() / 60)
                     self._wrap_up(s, agent_session, reason, text)
                     soonest.add(now + grace)
                 elif now - told >= grace:
-                    self._end(s, agent_session, reason, end)
+                    self._end(s, agent_session, reason, end, kills)
                 else:
                     soonest.add(told + grace)
             for agent_session in s.scalars(implementers.where(AgentSession.state == AgentSessionState.RUNNING)):
@@ -349,6 +350,10 @@ class Agents:
                     soonest.add(left)
             answer_done(s)
             s.commit()
+        # after the commit: the run that a kill ends reads the row when it closes, and the executor writes in a session
+        # of its own, which would wait for this one's write lock
+        for agent_session_id in kills:
+            self._controller.executor.cancel(AgentKey(agent_session_id))
         return soonest.at
 
     def _timings(self, s: Session, agent_session: AgentSession) -> AgentSettings:
@@ -403,19 +408,14 @@ class Agents:
         emit(s, told, TargetRef(TargetKind.AGENT_SESSION, agent_session.id), System.DAEMON)
         self._tracer.event(told.kind, agent_session=agent_session.id, reason=reason, comment=told.comment)
 
-    def _end(self, s: Session, agent_session: AgentSession, reason: str, end: RunEnd) -> None:
-        """Kill a wound-down agent, once ``ending``: its executor stops it, and it reports.
+    def _end(
+        self, s: Session, agent_session: AgentSession, reason: str, end: RunEnd, kills: list[AgentSessionId]
+    ) -> None:
+        """Set a wound-down agent ``ending``, and add it to ``kills``: its executor stops it once the wind-down commits.
 
         The row is ``ending``, with ``AgentEnded``, in a commit before the first kill. SQLite has one writer at a time,
         so a run end that the agent asks for either committed before, and the agent ended first, or is refused: its
-        run is not running then.
+        run is not running then. The kill goes again on each wind-down until the agent ends.
         """
         end_agent(s, agent_session, reason, end, self._tracer)
-        self._kill(s, agent_session)
-
-    def _kill(self, s: Session, agent_session: AgentSession) -> None:
-        """Commit, then send the kill of an ``ending`` agent to its executor. Sent on each wind-down until it ends."""
-        # before the kill: the run that the kill ends reads it when it closes, and the executor writes in a session of
-        # its own, which waits for this one's write lock
-        s.commit()
-        self._controller.executor.cancel(AgentKey(agent_session.id))
+        kills.append(agent_session.id)

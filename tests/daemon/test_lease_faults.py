@@ -18,6 +18,7 @@ from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
+from typing import NoReturn
 
 import psutil
 import pytest
@@ -26,12 +27,16 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from pytest_mock import MockerFixture
 from sqlalchemy import func, select
 
+from piloop.actor import System
+from piloop.agents.results import StartupAnomaly
+from piloop.campaign.stop import CancelRequested, StopRequested, request_cancel, request_stop
 from piloop.daemon.scheduler import Scheduler
 from piloop.daemon.serve import SERVE_ARGV
 from piloop.db.events import has, in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event, Lease, LeaseState, utcnow
+from piloop.db.requests import pending
 from piloop.db.session import Database
-from piloop.ids import TargetKind
+from piloop.ids import Ending, TargetKind
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
@@ -462,6 +467,62 @@ def test_a_stop_ends_an_agent_lease_that_no_worker_took_yet(
     thread.join(30)
     assert (lease_of(db, 1).state, lease_of(db, 1).receipt) == (LeaseState.CANCELLED, {'cancelled': NOT_TAKEN})
     assert run_row(db, run_id).status is RunStatus.RUNNING, 'the stop writes the run, not its thread'
+
+
+@pytest.mark.parametrize('ask', ['stop', 'cancel'])
+def test_a_stop_or_cancel_now_ends_a_starting_agent_whose_lease_no_worker_takes_and_is_answered(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, ask: str
+) -> None:
+    """A starting implementer whose lease waits for a worker that never comes is ended by a stop or a cancel ``now``:
+    its lease ends untaken, its row closes, its run ends, and the request is answered. Before, the wind-down skipped a
+    starting agent, so the row stayed starting for as long as the daemon ran."""
+    run_id = make_run(db, campaign)
+    ex = control_plane(db, runtime, tmp_path)
+    scheduler = Scheduler(db, ex, Tracer(None), tmp_path, factory(runtime))
+    thread = in_thread(execute, ex, db, run_id)
+    wait_until(lambda: state(db, 1) is LeaseState.QUEUED)
+    with db.session() as s:
+        if ask == 'stop':
+            request_stop(s, s.get_one(Campaign, campaign.id), System.HUMAN, reason='now', ending=Ending.NOW)
+        else:
+            request_cancel(s, s.get_one(Run, run_id), System.HUMAN, ending=Ending.NOW)
+        s.commit()
+    scheduler.run_all()
+    scheduler.run_all()  # a stop: the pass stops the campaign, then the wind-down ends its agents
+    thread.join(30)
+    assert not thread.is_alive(), 'the run thread waited for the agent'
+    scheduler.run_all()
+    assert lease_of(db, 1).state is LeaseState.CANCELLED
+    with db.session() as s:
+        assert s.get_one(AgentSession, 1).state is AgentSessionState.KILLED
+        assert s.get_one(Run, run_id).end is (RunEnd.CANCELLED if ask == 'cancel' else RunEnd.NOT_STARTED)
+        assert s.scalars(select(Event).where(has(StartupAnomaly))).all() == [], 'no fault of the host'
+        asked = StopRequested if ask == 'stop' else CancelRequested
+        assert pending(s, asked) == [], 'the request is answered'
+    scheduler.stop(5)
+
+
+def test_a_run_that_fails_after_its_agent_was_submitted_ends_the_agent_through_its_executor(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure of the run's thread once the job is submitted fails the run, and ends the agent through its executor:
+    its lease, which no worker took, ends too. Before, the row read ``starting`` as "not launched": it closed, and its
+    job stayed queued for any worker to start."""
+    run_id = make_run(db, campaign)
+    ex = control_plane(db, runtime, tmp_path)
+
+    def broken(agent_session_id: int, span: object) -> NoReturn:
+        raise RuntimeError('the wait broke')
+
+    monkeypatch.setattr(ex.launcher, '_await', broken)
+    execute(ex, db, run_id)
+    assert lease_of(db, 1).state is LeaseState.CANCELLED, 'no worker takes the job of a failed run'
+    with db.session() as s:
+        agent = s.get_one(AgentSession, 1)
+        assert (agent.state, agent.error) == (AgentSessionState.KILLED, 'RuntimeError: the wait broke')
+        run = s.get_one(Run, run_id)
+        assert (run.end, run.error) == (RunEnd.FAILED, 'RuntimeError: the wait broke'), 'its agent was launched'
+    ex.stop(5)
 
 
 def test_a_running_agent_without_a_lease_is_not_adopted_and_fails_as_stale(

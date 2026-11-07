@@ -25,6 +25,7 @@ from piloop.db.models import (
     Campaign,
     Comment,
     Event,
+    utcnow,
 )
 from piloop.db.session import Database
 from piloop.ids import CommentId
@@ -169,7 +170,7 @@ def test_behind_the_proxy_an_agent_s_token_signs_on_the_socket_and_no_piloop_tok
         s.flush()
         agent, gone = (Agent(role=AUDITOR, session=w.id) for w in (live, ended))
         [secret, stale] = [tokens.mint_agent(s, a).get_secret_value() for a in (agent, gone)]
-        ended.state = AgentSessionState.EXITED
+        ended.state, ended.ended_at = AgentSessionState.EXITED, utcnow()
         s.commit()
     person = token(db, 'ana', Access.ADMIN)
     uds = httpx.HTTPTransport(uds=str(cfg.socket_file))

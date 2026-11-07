@@ -12,7 +12,7 @@ from piloop.campaign.stop import (
     run_cancel,
 )
 from piloop.db.events import emit, in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign
+from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.requests import RequestAnswered, answer, pending
 from piloop.db.session import Database
 from piloop.ids import CampaignStatus, Ending, TargetKind, TargetRef
@@ -65,7 +65,13 @@ def queued_run(db: Database, campaign: Campaign, state: AgentSessionState) -> tu
         )
         s.add(run)
         s.flush()
-        agent = AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), state=state)
+        agent = AgentSession(
+            kind=IMPLEMENTER,
+            campaign_id=campaign.id,
+            subject=TargetRef(RUN, run.id),
+            state=state,
+            ended_at=utcnow() if state in ENDED else None,
+        )
         s.add(agent)
         s.commit()
         return run.id, agent
@@ -87,6 +93,7 @@ def test_a_cancel_is_answered_once_none_of_its_agents_is_requested_starting_or_r
         assert len(pending(s, CancelRequested)) == 2, 'a starting agent and a running auditor: not yet'
         s.get_one(AgentSession, agent.id).state = AgentSessionState.ENDING
         s.get_one(AgentSession, auditing.id).state = AgentSessionState.EXITED
+        s.get_one(AgentSession, auditing.id).ended_at = utcnow()
         answer_done(s)
         s.commit()
         assert pending(s, CancelRequested) == [], 'the daemon ended one, and the other ended on its own'

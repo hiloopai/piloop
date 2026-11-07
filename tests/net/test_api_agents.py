@@ -18,13 +18,7 @@ from piloop.api.contract import (
 )
 from piloop.api.views import Pending, Queued
 from piloop.db.events import has
-from piloop.db.models import (
-    AgentSession,
-    AgentSessionState,
-    Campaign,
-    Comment,
-    Event,
-)
+from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CommentId, Ending, RoleName, TargetRef
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId, RunStatus
@@ -62,7 +56,7 @@ def test_a_prompt_waits_for_what_came_of_its_note_and_refuses_an_agent_that_does
         s.add_all(
             [
                 AgentSession(kind=AUDITOR, campaign_id=1, state=AgentSessionState.RUNNING),
-                AgentSession(kind=AUDITOR, campaign_id=1, state=AgentSessionState.EXITED),
+                AgentSession(kind=AUDITOR, campaign_id=1, state=AgentSessionState.EXITED, ended_at=utcnow()),
             ]
         )
         s.commit()
@@ -104,7 +98,7 @@ def test_a_cancel_asks_the_daemon_to_end_an_open_run_or_a_live_agent_and_refuses
         s.add_all(
             [
                 AgentSession(kind=AUDITOR, campaign_id=1, state=AgentSessionState.REQUESTED),
-                AgentSession(kind=AUDITOR, campaign_id=1, state=AgentSessionState.EXITED),
+                AgentSession(kind=AUDITOR, campaign_id=1, state=AgentSessionState.EXITED, ended_at=utcnow()),
             ]
         )
         s.commit()
@@ -140,7 +134,13 @@ def test_an_extension_gives_a_running_run_s_implementer_more_time_signed_tells_i
             AgentSession(kind='implementer', campaign_id=1, subject=TargetRef(RUN, 1), state=AgentSessionState.RUNNING)
         )
         s.add(
-            AgentSession(kind='implementer', campaign_id=1, subject=TargetRef(RUN, 2), state=AgentSessionState.EXITED)
+            AgentSession(
+                kind='implementer',
+                campaign_id=1,
+                subject=TargetRef(RUN, 2),
+                state=AgentSessionState.EXITED,
+                ended_at=utcnow(),
+            )
         )
         s.commit()
     with serving_api(cfg), EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client:

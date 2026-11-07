@@ -305,7 +305,9 @@ def test_usage_of_an_implementer_never_raises(
         found = AgentSession(kind=IMPLEMENTER, harness='pi', session_id=PI_ID, **ended)
         removed = AgentSession(kind=IMPLEMENTER, harness='local-agent', session_id='x', **ended)
         no_spec = AgentSession(kind=IMPLEMENTER, harness='script', session_id='x', **ended)
-        orphan = AgentSession(kind=AUDITOR, harness='pi', session_id=PI_ID, state=AgentSessionState.EXITED)
+        orphan = AgentSession(
+            kind=AUDITOR, harness='pi', session_id=PI_ID, state=AgentSessionState.EXITED, ended_at=utcnow()
+        )
         s.add_all([found, removed, no_spec, orphan])
         s.flush()
         usage = usage_of(s, found)

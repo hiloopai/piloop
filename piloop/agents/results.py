@@ -17,14 +17,27 @@ from typing import Annotated, ClassVar, Literal, assert_never
 
 from covalence import Cid
 from pydantic import Field, SecretStr, TypeAdapter, ValidationError
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, Agent, SignedAgent, System
 from piloop.agents.roles import harness_of
 from piloop.config import TRANSCRIPT
 from piloop.db.events import emit, has, in_order, latest
-from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, Comment, Event, EventModel, ReadBy, utcnow
+from piloop.db.machine import Machine, Refused, transition
+from piloop.db.models import (
+    ENDED,
+    LIVE,
+    OPEN,
+    AgentSession,
+    AgentSessionState,
+    Campaign,
+    Comment,
+    Event,
+    EventModel,
+    ReadBy,
+    utcnow,
+)
 from piloop.db.session import Database, write_transaction
 from piloop.ids import AgentSessionId, CommentId, CommentKind, EnvName, Ref, RoleName, TargetKind, TargetRef
 from piloop.otel import Tracer
@@ -144,6 +157,25 @@ class AgentEnded(EventModel):
     end: RunEnd
 
 
+AGENT_SESSION_STATES: Machine[AgentSessionState] = Machine(
+    AgentSession.state,
+    {
+        AgentSessionState.STARTING: frozenset({AgentSessionState.REQUESTED}),
+        AgentSessionState.REQUESTED: frozenset({AgentSessionState.STARTING}),
+        AgentSessionState.RUNNING: frozenset({AgentSessionState.STARTING}),
+        AgentSessionState.ENDING: frozenset({AgentSessionState.STARTING, AgentSessionState.RUNNING}),
+        AgentSessionState.EXITED: frozenset(LIVE),
+        AgentSessionState.NEVER_WORKED: frozenset(LIVE),
+        AgentSessionState.KILLED: frozenset(OPEN),
+    },
+    TargetKind.AGENT_SESSION,
+)
+"""An agent's lifecycle. The pass takes a requested row for a free slot (``starting``), or puts it back when a stop is
+due as it launches; its executor reports it ``running``; the daemon ends it (``ending``, ``end_agent``); and its row
+closes once (``finish``): ``exited``, ``never_worked``, or ``killed``, which a requested row can be too. The take has no
+event of its own: the launcher's ``agent_session.started`` follows it, or the put-back or the close emits its own."""
+
+
 def end_agent(s: Session, w: AgentSession, reason: str, end: RunEnd, tracer: Tracer) -> None:
     """Set a starting or running agent ``ending``, with ``AgentEnded``, before its executor stops it. The caller commits.
 
@@ -151,19 +183,40 @@ def end_agent(s: Session, w: AgentSession, reason: str, end: RunEnd, tracer: Tra
     checked as the database has it, not as ``w`` was read: the agent's report can close it in between, and a closed
     row stays closed.
     """
-    ending = (
-        update(AgentSession)
-        .where(AgentSession.id == w.id, AgentSession.state.in_((AgentSessionState.STARTING, AgentSessionState.RUNNING)))
-        .values(state=AgentSessionState.ENDING, error=reason)
-        .returning(AgentSession.id)
-        .execution_options(synchronize_session=False)
-    )
-    ended = s.execute(ending).first() is not None
-    s.expire(w, ['state', 'error'])
-    if not ended:
+    try:
+        transition(
+            s,
+            AGENT_SESSION_STATES,
+            w.id,
+            AgentSessionState.ENDING,
+            AgentEnded(reason=reason, end=end),
+            System.DAEMON,
+            error=reason,
+        )
+    except Refused:
+        s.expire(w, ['state', 'error'])
         return
-    emit(s, AgentEnded(reason=reason, end=end), TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
     tracer.event('agent_session.ended', agent_session=w.id, reason=reason)
+
+
+def finish(
+    s: Session,
+    w: AgentSession,
+    to: AgentSessionState,
+    error: str | None,
+    *,
+    from_: frozenset[AgentSessionState] | None = None,
+) -> None:
+    """Close the agent's row as ``to``, with ``error``, and emit ``AgentSessionFinished``. The caller commits.
+
+    Every close of an agent's row goes through here. ``from_``: only from these states.
+
+    Raises:
+        Refused: the row is closed already, so its first end stands, or it is in no state of ``from_``.
+    """
+    assert to in ENDED, f'{to} does not close a row'
+    finished = AgentSessionFinished(role=w.kind, reason=w.reason, state=to, error=error)
+    transition(s, AGENT_SESSION_STATES, w.id, to, finished, System.DAEMON, from_=from_, ended_at=utcnow(), error=error)
 
 
 class WorkspaceConflict(EventModel):
@@ -476,8 +529,8 @@ class CampaignResults:
             w = _open(s, key)
             w.handle, w.machine = handle, machine
             if w.state is AgentSessionState.STARTING:  # a row that the daemon ended meanwhile stays ending
-                w.state = AgentSessionState.RUNNING
-                emit(s, AgentSessionRunning(machine=machine), TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
+                running = AgentSessionRunning(machine=machine)
+                transition(s, AGENT_SESSION_STATES, w.id, AgentSessionState.RUNNING, running, System.DAEMON)
             learn(s, w, session_id)
 
         self._apply(guard, change)
@@ -537,8 +590,7 @@ class CampaignResults:
                 job_kinds()[key.kind].lost(s, key.id)
                 return
             w = _open(s, key)
-            w.state, w.ended_at, w.error = AgentSessionState.KILLED, utcnow(), reason
-            session_finished(s, w)
+            finish(s, w, AgentSessionState.KILLED, reason)
             _ended(s, w.id, Lost(reason))
 
         self._apply(guard, change)
@@ -580,14 +632,13 @@ class CampaignResults:
         and did not start to work.
         """
         w = _open(s, AgentKey(job.agent_session))
-        w.ended_at = utcnow()
         stopped = stopped_by_daemon(s, w.id)
+        ending = w.state is AgentSessionState.ENDING  # its error says why the daemon ended it
         match report:
             case AgentNotStarted(reason=reason, seconds=seconds):
                 if stopped:
                     self._stopped(s, w, None)
                     return
-                w.state, w.error = AgentSessionState.NEVER_WORKED, reason
                 ended: Ran | NotStarted = NotStarted(reason)
             case AgentFinished(process=process):
                 found = {} if output is None else values(s, self._secrets, job.agent_session, job.secrets.values())
@@ -610,7 +661,6 @@ class CampaignResults:
                 if stopped:
                     self._stopped(s, w, report.work)
                     return
-                ending = w.state is AgentSessionState.ENDING  # its error says why the daemon ended it
                 seconds = process.seconds
                 worked = _ended_by_daemon(s, w.id) or not _never_worked(
                     s, w, report, self._startup_seconds, self._startup_turns
@@ -628,22 +678,10 @@ class CampaignResults:
                             self._exit_output_chars,
                         )
                         ended = NotStarted(said.error or never_worked(self._startup_seconds))
-                match ended:
-                    case NotStarted(reason=reason):
-                        w.state, w.error = AgentSessionState.NEVER_WORKED, reason
-                    case Ran():
-                        w.state = (
-                            AgentSessionState.KILLED
-                            if ending or process.status is ExitStatus.TIMED_OUT
-                            else AgentSessionState.EXITED
-                        )
-                        w.error = w.error if ending else process.error
-                    case _:
-                        assert_never(ended)
             case _:
                 assert_never(report)
-        session_finished(s, w)
-        if isinstance(ended, NotStarted) and not _told_to_wrap_up(s, w.id):
+        _close(s, w, ended, ending=ending)
+        if isinstance(ended, NotStarted) and not ending and not _told_to_wrap_up(s, w.id):
             anomaly = StartupAnomaly(
                 role=w.kind,
                 harness=w.harness,
@@ -697,9 +735,26 @@ class CampaignResults:
 
     @staticmethod
     def _stopped(s: Session, w: AgentSession, work: Transfer | None) -> None:
-        w.state, w.error = AgentSessionState.KILLED, RunEnd.DAEMON_STOPPED
-        session_finished(s, w)
+        finish(s, w, AgentSessionState.KILLED, RunEnd.DAEMON_STOPPED)
         _ended(s, w.id, DaemonStopped(work))
+
+
+def _close(s: Session, w: AgentSession, ended: Ran | NotStarted, *, ending: bool) -> None:
+    """Close the row of an agent whose job ended as ``ended``. ``ending``: the daemon ended it, and its error says why.
+
+    One that the daemon ended before it started is ``killed``, not ``never_worked``: no fault of the host or the harness.
+    """
+    match ended:
+        case NotStarted() if ending:
+            finish(s, w, AgentSessionState.KILLED, w.error)
+        case NotStarted(reason=reason):
+            finish(s, w, AgentSessionState.NEVER_WORKED, reason)
+        case Ran(process=process):
+            timed_out = process.status is ExitStatus.TIMED_OUT
+            to = AgentSessionState.KILLED if ending or timed_out else AgentSessionState.EXITED
+            finish(s, w, to, w.error if ending else process.error)
+        case _:
+            assert_never(ended)
 
 
 def _open(s: Session, key: AgentKey) -> AgentSession:
@@ -762,12 +817,6 @@ def _proposer(s: Session, created_by: str) -> Proposer | None:
         return Proposer(agent, None, None, None)
     definition = harness_of(s, row)
     return Proposer(agent, row.harness, None if definition is None else definition.executable, row.session_id)
-
-
-def session_finished(s: Session, w: AgentSession) -> None:
-    """Emit ``AgentSessionFinished`` for the row that just closed. The caller commits."""
-    event = AgentSessionFinished(role=w.kind, reason=w.reason, state=w.state, error=w.error)
-    emit(s, event, TargetRef(TargetKind.AGENT_SESSION, w.id), System.DAEMON)
 
 
 def _record(s: Session, agent_session_id: AgentSessionId, outcome: PromptOutcome) -> None:

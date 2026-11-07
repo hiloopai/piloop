@@ -26,11 +26,13 @@ from sqlalchemy.orm import Session
 from piloop.actor import System
 from piloop.agents.launcher import Launcher
 from piloop.agents.results import (
+    AGENT_SESSION_STATES,
     Ended,
     Lost,
     NotStarted,
     StartupAnomaly,
     WorkUnsaved,
+    end_agent,
     never_worked,
 )
 from piloop.agents.roles import PILOOP_HINT, read_brief
@@ -39,11 +41,11 @@ from piloop.campaign.campaigns import sync
 from piloop.cli.plugins import selections
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.events import has, in_order, latest
-from piloop.db.machine import Refused
+from piloop.db.machine import Refused, transition
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import OriginChanged
-from piloop.ids import CampaignId, CampaignStatus, CommentKind, Ending, Revision, TargetRef
+from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentKind, Ending, Revision, TargetKind, TargetRef
 from piloop.otel import Span, Tracer
 from piloop.plugins import host
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaId, IdeaStatus
@@ -212,7 +214,8 @@ def test_an_implementer_whose_launch_the_stop_rule_stops_never_starts_and_its_ru
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """The rule answers ``Stop`` (the best reached the target) after the pass took the run: nothing starts. The run
-    stays queued and its implementer is requested again, for the pass that stops the campaign to close both."""
+    stays queued and its implementer is requested again, for the pass that stops the campaign to close both. The
+    request again is an ``agent_session.requested``, as the first one was."""
     run_id = make_run(db, campaign)
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = load_campaign_config(
@@ -230,6 +233,34 @@ def test_an_implementer_whose_launch_the_stop_rule_stops_never_starts_and_its_ru
             AgentSessionState.REQUESTED,
             None,
         )
+        on_agent = Event.target == TargetRef(TargetKind.AGENT_SESSION, agent.id)
+        assert [e.kind for e in s.scalars(select(Event).where(on_agent).order_by(Event.id))] == [
+            'agent_session.requested',
+            'agent_session.requested',
+        ]
+
+
+def test_an_implementer_that_a_stop_ended_after_the_pass_took_it_closes_with_why_when_its_launch_finds_a_stop_due(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A stop ended the row that the pass took, before its thread ran. The launch finds the stop due and does not put
+    the row back: nothing will report it, so it closes ``killed`` with the stop's reason."""
+    run_id = make_run(db, campaign)
+    with db.session() as s:
+        s.get_one(Campaign, campaign.id).config = load_campaign_config(
+            Path(campaign.path), plugins={'stop_rule': {'target': -1e9}}
+        )
+        transition(s, AGENT_SESSION_STATES, 1, AgentSessionState.STARTING, None, System.DAEMON)
+        end_agent(s, s.get_one(AgentSession, 1), 'stopped by human', RunEnd.CAMPAIGN_STOPPED, Tracer(None))
+        s.commit()
+    controller(db, runtime, tmp_path).execute(run_id, AgentSessionId(1))
+    with db.session() as s:
+        agent = s.get_one(AgentSession, 1)
+        assert (agent.state, agent.error, s.get_one(Run, run_id).status) == (
+            AgentSessionState.KILLED,
+            'stopped by human',
+            RunStatus.QUEUED,
+        ), 'the stop that is due closes the run'
 
 
 def reload_campaign(db: Database, campaign: Campaign) -> None:

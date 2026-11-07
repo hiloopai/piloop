@@ -69,7 +69,10 @@ def agent(
 ) -> AgentSessionId:
     """An agent of ``campaign`` that ran ``model`` on ``harness``. With ``usage``, it ended."""
     row = AgentSession(kind='implementer', campaign_id=campaign.id, harness=harness, model=model, usage=usage)
-    row.state = AgentSessionState.RUNNING if usage is None else AgentSessionState.EXITED
+    if usage is None:
+        row.state = AgentSessionState.RUNNING
+    else:
+        row.state, row.ended_at = AgentSessionState.EXITED, utcnow()
     s.add(row)
     s.flush()
     return row.id

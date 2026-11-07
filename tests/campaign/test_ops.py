@@ -20,7 +20,7 @@ from piloop.campaign.stop import CAMPAIGN_STATES
 from piloop.config import load_campaign_config
 from piloop.db import machine
 from piloop.db.events import in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, EventModel, Pause
+from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, Comment, Event, EventModel, Pause, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import (
     CampaignParentChanged,
@@ -392,7 +392,13 @@ def worker(db: Database, status: RunStatus = RunStatus.RUNNING) -> tuple[RunId, 
         s.add(run)
         s.flush()
         state = AgentSessionState.RUNNING if status is RunStatus.RUNNING else AgentSessionState.REQUESTED
-        session = AgentSession(kind='implementer', campaign_id=1, subject=TargetRef(RUN, run.id), state=state)
+        session = AgentSession(
+            kind='implementer',
+            campaign_id=1,
+            subject=TargetRef(RUN, run.id),
+            state=state,
+            ended_at=utcnow() if state in ENDED else None,
+        )
         s.add(session)
         s.commit()
         return run.id, Agent(role='implementer', session=session.id)

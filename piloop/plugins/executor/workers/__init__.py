@@ -161,7 +161,10 @@ class WorkersExecutor:
         self.leases.extend(key, seconds)
 
     def cancel(self, key: Key) -> None:
-        """Revoke the job's live lease: its worker stops it, and it still reports. A queued job is not touched."""
+        """Revoke the job's live lease: its worker stops it, and it still reports.
+
+        An agent's job that no worker took ends at once. A queued job of another kind is not touched.
+        """
         self.leases.revoke(key)
 
     def adopt(self, left: Sequence[LeftJob]) -> list[Key]:

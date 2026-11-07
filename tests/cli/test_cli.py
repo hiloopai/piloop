@@ -50,7 +50,7 @@ from piloop.daemon.main import Daemon
 from piloop.daemon.serve import LOCK_ENV, acquire, running_pid
 from piloop.db import feed as db_feed, session, sql
 from piloop.db.events import emit, has
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
+from piloop.db.models import ENDED, AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.schema import CORE
 from piloop.db.session import Database, alembic_config, described, heads, migrate
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged
@@ -907,7 +907,8 @@ def test_cli_writes_as_the_actor_from_the_environment(
     with pytest.raises(SystemExit, match='^sql error: auditor#4 acts only as itself, not as orchestrator$'):
         run_cli(['sql', "UPDATE campaigns SET name='posing'"])
     with closing(Database(common.settings.database_url, actor=System.DAEMON)) as db, db.session() as s:
-        s.get_one(AgentSession, 4).state = AgentSessionState.EXITED
+        ended = s.get_one(AgentSession, 4)
+        ended.state, ended.ended_at = AgentSessionState.EXITED, utcnow()
         s.commit()
     with pytest.raises(SystemExit, match='^sql error: PILOOP_AGENT_TOKEN is unknown, or its agent ended$'):
         run_cli(['sql', 'SELECT 1'])
@@ -1346,6 +1347,7 @@ def test_attach_prints_the_last_lines_that_an_agent_wrote(campaign_path: Path, o
                     runtime='subprocess',
                     handle={'pid': 1, 'pgid': 1, 'start_time': 0, 'started_at': 0, 'log_dir': str(log_dir)},
                     state=state,
+                    ended_at=utcnow() if state in ENDED else None,
                     log_dir=str(log_dir),
                 )
             )
@@ -1461,7 +1463,7 @@ def test_prompt_is_a_message_to_the_agent_and_says_whether_it_arrived(
             'human',
             'no answer',
         )
-        s.add(AgentSession(kind=AUDITOR, campaign_id=1, state=AgentSessionState.EXITED))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=1, state=AgentSessionState.EXITED, ended_at=utcnow()))
         s.get_one(AgentSession, 1).harness = 'codex'
         s.commit()
     with pytest.raises(SystemExit, match='^agent_session#2 is not running$'):
@@ -1500,7 +1502,11 @@ def test_campaign_stop_and_cancels_are_requests_that_the_daemon_acts_on(campaign
                     kind='implementer', campaign_id=1, subject=TargetRef(RUN, 1), state=AgentSessionState.RUNNING
                 ),
                 AgentSession(
-                    kind='implementer', campaign_id=1, subject=TargetRef(RUN, 1), state=AgentSessionState.EXITED
+                    kind='implementer',
+                    campaign_id=1,
+                    subject=TargetRef(RUN, 1),
+                    state=AgentSessionState.EXITED,
+                    ended_at=utcnow(),
                 ),
                 AgentSession(kind=AUDITOR, campaign_id=1, state=AgentSessionState.RUNNING),
             ]

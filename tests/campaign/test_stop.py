@@ -15,6 +15,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
+from piloop.agents.results import AgentSessionFinished
 from piloop.campaign import ops
 from piloop.campaign.ops import Refused, pause
 from piloop.campaign.stop import (
@@ -590,6 +591,8 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
         assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
         [(event, finished)] = in_order(s, RunFinished)
         assert (event.target_id, finished) == (2, RunFinished(end=RunEnd.CAMPAIGN_STOPPED, error=None))
+        closed = sorted((e.target_id, f.state) for e, f in in_order(s, AgentSessionFinished))
+        assert closed == [(1, AgentSessionState.KILLED), (2, AgentSessionState.KILLED)], 'each close says so'
         s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='by hand, after the stop'))
         s.commit()
     assert run_all(sched) == [3], 'a request made after the stop is explicit and launches'

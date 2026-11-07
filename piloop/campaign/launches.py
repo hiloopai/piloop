@@ -10,9 +10,10 @@ from sqlalchemy import func, select, true
 from sqlalchemy.orm import Session
 
 from piloop.agents.refill import usage_of
+from piloop.agents.results import finish
 from piloop.campaign.campaigns import vcs_of
 from piloop.config import CampaignConfig
-from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign, utcnow
+from piloop.db.models import LIVE, AgentSession, AgentSessionState, Campaign
 from piloop.ids import AgentSessionId, CampaignId, RoleName
 from piloop.otel import Tracer
 from piloop.plugins.harness.contract import Usage
@@ -109,8 +110,11 @@ def close(s: Session, agent_session: AgentSession, error: str, tracer: Tracer) -
     The usage comes from a scan of the session store. The agent can spend many tokens before it is killed. If the
     budget ignored them, a restarted campaign could go past ``max_tokens``. A requested row never started and has
     no session to read.
+
+    Raises:
+        Refused: the row is closed already: its first end stands.
     """
-    agent_session.state, agent_session.ended_at, agent_session.error = AgentSessionState.KILLED, utcnow(), error
+    finish(s, agent_session, AgentSessionState.KILLED, error)
     if agent_session.session_id is None:
         return
     found = usage_of(s, agent_session)
