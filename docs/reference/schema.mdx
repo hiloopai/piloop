@@ -84,7 +84,7 @@ CREATE TABLE tokens (
 	UNIQUE (agent_session_id)
 );
 CREATE TABLE agent_sessions (
-	id INTEGER NOT NULL,
+	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	kind VARCHAR NOT NULL,
 	campaign_id INTEGER,
 	subject_kind VARCHAR(16),
@@ -105,7 +105,8 @@ CREATE TABLE agent_sessions (
 	usage JSON,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_by VARCHAR,
-	PRIMARY KEY (id),
+	CONSTRAINT "agent_sessions.an ended agent has its end" CHECK ((state IN ('exited', 'killed', 'never_worked')) = (ended_at IS NOT NULL)),
+	CONSTRAINT "agent_sessions.a never-worked agent says why" CHECK (state != 'never_worked' OR error IS NOT NULL),
 	CONSTRAINT agent_sessions_subject CHECK ((subject_kind IS NULL) = (subject_id IS NULL)),
 	CONSTRAINT "agent_sessions.kind must be a text value" CHECK (typeof(kind) IN ('text')),
 	CONSTRAINT "agent_sessions.reason must be a text value" CHECK (typeof(reason) IN ('text', 'null')),
