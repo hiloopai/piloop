@@ -97,6 +97,7 @@ CREATE TABLE agent_sessions (
 	reason VARCHAR,
 	log_dir VARCHAR,
 	started_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	deadline DATETIME,
 	ended_at DATETIME,
 	error VARCHAR,
 	session_id VARCHAR,
