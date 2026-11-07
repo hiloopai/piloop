@@ -6,7 +6,7 @@ every network, before the network identifies a caller that sends none (``piloop.
 
 The daemon also mints a token for each agent that it launches (``mint_agent``), which its worker hands it at its start
 as ``PILOOP_AGENT_TOKEN``, as a Kubernetes pod gets its projected service-account token. The agent acts only as itself
-with it, and only while its session is live.
+with it, and only while its session is live: the token is deleted when the session ends (``end_agent_token``).
 """
 
 import hashlib
@@ -23,6 +23,7 @@ from piloop.api.contract import Access
 from piloop.api.views import TokenList, TokenMade, TokenView
 from piloop.db.models import LIVE, AgentSession, Token
 from piloop.db.session import Database
+from piloop.ids import AgentSessionId
 
 PREFIX = 'plt_'
 AGENT_ACCESS = Access.ACT
@@ -66,6 +67,14 @@ def mint_agent(s: Session, agent: Agent) -> SecretStr:
     s.execute(delete(Token).where(Token.agent_session_id == agent.session))
     token = Token(name=agent.signature, access=AGENT_ACCESS, agent_session_id=agent.session)
     return SecretStr(_added(s, token))
+
+
+def end_agent_token(s: Session, agent_session_id: AgentSessionId) -> None:
+    """Delete the token of an agent whose session ended: it acts as nobody from now on. The caller commits.
+
+    So an UPDATE that sets the session live again revives no token.
+    """
+    s.execute(delete(Token).where(Token.agent_session_id == agent_session_id))
 
 
 def _added(s: Session, token: Token) -> str:

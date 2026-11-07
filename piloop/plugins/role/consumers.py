@@ -29,8 +29,6 @@ from piloop.campaign.stop import (
     StopRequested,
     answer_done,
     cancelled,
-    seconds,
-    timeout as agent_timeout,
 )
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
 from piloop.db.events import emit, has, in_order, latest
@@ -371,19 +369,18 @@ class Agents:
     def _time_left(self, s: Session, implementer: AgentSession, now: datetime) -> TimeLeft | datetime | None:
         """What an implementer that was not told to wrap up has left, once it is ``wrap_up_lead`` or less.
 
-        Its timeout is its role's, cut at the campaign's stop (``stop.timeout``), as when it started, plus its
+        Its timeout is its ``deadline``, set at its launch (its role's, cut at the campaign's stop), plus its
         extensions. One told before its last extension is told again. Before the lead, when it comes. None when it was
-        told, or has no timeout to wrap up before.
+        told, or has no deadline to wrap up before (0.6 launched it).
         """
         campaign = s.get_one(Campaign, implementer.campaign_id)
-        cfg = campaign.config
-        role = cfg.roles.doing_runs().get(implementer.kind)
+        role = campaign.config.roles.doing_runs().get(implementer.kind)
         on = Event.target == TargetRef(TargetKind.AGENT_SESSION, implementer.id)
         last = latest(s, AgentSessionExtended, on)
         told = select(Event.id).where(on, has(WrapUp), Event.id > (0 if last is None else last[0].id))
-        if role is None or implementer.started_at is None or s.scalar(told.limit(1)) is not None:
+        if role is None or implementer.deadline is None or s.scalar(told.limit(1)) is not None:
             return None
-        cut_at = seconds(agent_timeout(s, campaign, cfg, role.timeout, implementer.started_at))
+        cut_at = (implementer.deadline - implementer.started_at).total_seconds()
         extended = extension(s, implementer.id)
         timeout = cut_at + extended
         left = timeout - (now - implementer.started_at).total_seconds()

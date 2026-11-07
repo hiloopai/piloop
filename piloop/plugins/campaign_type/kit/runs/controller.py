@@ -484,6 +484,7 @@ class RunController:
                         case _:
                             assert_never(table.continuity)
                 brief = run.brief_cid
+                assert brief is not None  # composed above, or by the launch that a relaunch follows
                 try:
                     transition(
                         s,
@@ -503,14 +504,12 @@ class RunController:
                     span.set(status='already_closed', found=e.found)
                     return
                 s.commit()
-        self._finish(run_id, agent_session_id, brief, span, resumed)
+        self._finish(run_id, agent_session_id, Start(brief, timeout, resumed), span)
 
-    def _finish(
-        self, run_id: RunId, agent_session_id: AgentSessionId, brief: Cid | None, span: Span, resumed: Cid | None = None
-    ) -> None:
+    def _finish(self, run_id: RunId, agent_session_id: AgentSessionId, start: Start | None, span: Span) -> None:
         """Run the agent, then record the outcome, score the commits and settle the idea.
 
-        With a ``brief``, a new agent starts in a new worktree. With None, the daemon re-attaches to the agent that is
+        With a ``start``, a new agent starts in a new worktree. With None, the daemon re-attaches to the agent that is
         already in the worktree. A handed-over agent leaves the worktree and the rows to the next daemon.
         """
         with self._db.session() as s:
@@ -519,24 +518,22 @@ class RunController:
             cfg = campaign.config
             base_revision = s.get_one(Candidate, run.base_candidate_id).revision
             role_timeout = cfg.role(run.role).timeout
-            timeout = seconds(agent_timeout(s, campaign, cfg, role_timeout, utcnow()))
-            stop_cut = timeout < role_timeout  # only the stop shortens a session: a timeout then is the stop's
             harness, model, campaign_id = run.harness, run.model, campaign.id
             name, vcs, campaign_path = campaign.name, vcs_of(campaign), Path(campaign.path)
         log_dir = self._runs_dir / str(run_id)
         with closing(vcs.open(campaign_path)) as repo:
             span.set(agent_session=agent_session_id, harness=harness, model=model)
-            if brief is None:
+            if start is None:
                 ended = self.launcher.reattach(agent_session_id)
             else:
                 ended = self.launcher.launch(
                     agent_session_id,
-                    brief=brief,
+                    brief=start.brief,
                     place=run_place(run_id),
                     artifact=self.sources.agent(self._campaign(campaign_id), base_revision),
-                    timeout=timeout,
+                    timeout=start.timeout,
                     capture=TargetRef(RUN, run_id),
-                    resumed_brief=resumed,
+                    resumed_brief=start.resumed,
                 )
             # a daemon stop owns the rows, also when it came just after the report applied
             stopping = self.launcher.cancelled.is_set()
@@ -570,10 +567,22 @@ class RunController:
                         base_revision,
                         ended,
                         log_dir,
-                        stop_cut=stop_cut,
+                        stop_cut=self._cut_by_stop(agent_session_id, role_timeout),
                     )
                 case _:
                     assert_never(ended)
+
+    def _cut_by_stop(self, agent_session_id: AgentSessionId, role_timeout: float) -> bool:
+        """Whether the campaign's stop cut the agent's session shorter than its role timeout, as its deadline says.
+
+        The deadline is the one of its launch: a daemon that re-attaches to the agent after the campaign stopped reads
+        the same. An agent that 0.6 launched has none: it was not cut.
+        """
+        with self._db.session() as s:
+            agent = s.get_one(AgentSession, agent_session_id)
+            if agent.deadline is None:
+                return False
+            return (agent.deadline - agent.started_at).total_seconds() < role_timeout
 
     def _cut(
         self,
@@ -1410,6 +1419,15 @@ def unlaunchable(s: Session, campaign: Campaign, timeout: float, most: timedelta
     if seconds(agent_timeout(s, campaign, campaign.config, timeout, utcnow())) <= wrap_up_lead(timeout, most):
         return 'its session would end within its wrap-up lead'
     return None
+
+
+@dataclass(frozen=True)
+class Start:
+    """What a new implementer starts with: its ``brief``, the seconds that it may run, and a resumed session's brief."""
+
+    brief: Cid
+    timeout: float
+    resumed: Cid | None
 
 
 @dataclass(frozen=True)

@@ -11,7 +11,7 @@ from collections import Counter
 from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from importlib.metadata import EntryPoints
 from pathlib import Path
 from unittest.mock import call
@@ -2705,9 +2705,7 @@ def test_an_implementer_is_told_once_to_wrap_up_before_its_timeout(
     lead = wrap_up_lead(timeout, ImplementerRole().wrap_up_lead)
 
     def started(ago: float) -> None:
-        with db.session() as s:
-            s.get_one(AgentSession, 1).started_at = utcnow() - timedelta(seconds=ago)
-            s.commit()
+        launched(db, utcnow() - timedelta(seconds=ago), timeout)
 
     started(timeout - lead - 5)
     run_all(scheduler)
@@ -2731,6 +2729,14 @@ def test_an_implementer_is_told_once_to_wrap_up_before_its_timeout(
     scheduler.stop(timeout=5)
 
 
+def launched(db: Database, at: datetime, timeout: float, agent_session_id: int = 1) -> None:
+    """The agent's launch was at ``at``, with ``timeout`` seconds to run: its start and its deadline."""
+    with db.session() as s:
+        agent = s.get_one(AgentSession, agent_session_id)
+        agent.started_at, agent.deadline = at, at + timedelta(seconds=timeout)
+        s.commit()
+
+
 def test_an_extension_reaches_the_executor_once_for_each_total_and_an_implementer_told_to_wrap_up_is_told_again(
     db: Database, campaign: Campaign, tmp_path: Path, mocker: MockerFixture
 ) -> None:
@@ -2743,9 +2749,7 @@ def test_an_extension_reaches_the_executor_once_for_each_total_and_an_implemente
     with db.session() as s:
         timeout = s.get_one(Campaign, campaign.id).config.role(IMPLEMENTER).timeout
     lead = wrap_up_lead(timeout, ImplementerRole().wrap_up_lead)
-    with db.session() as s:
-        s.get_one(AgentSession, 1).started_at = utcnow() - timedelta(seconds=timeout - lead)
-        s.commit()
+    launched(db, utcnow() - timedelta(seconds=timeout - lead), timeout)
     timings(db, campaign, wrap_up_grace=0)
     for _ in range(2):
         run_all(scheduler)
@@ -2766,9 +2770,7 @@ def test_an_extension_reaches_the_executor_once_for_each_total_and_an_implemente
         'the total that it has not handed over: again after the executor refused it, then never'
     )
     assert [p.text[:40] for _, p in fake.prompts[1:]] == ['[piloop] orchestrator gave you 1:00:00 m'] * 2
-    with db.session() as s:
-        s.get_one(AgentSession, 1).started_at = utcnow() - timedelta(seconds=timeout + 7200 - lead)
-        s.commit()
+    launched(db, utcnow() - timedelta(seconds=timeout + 7200 - lead), timeout)
     for _ in range(2):
         run_all(scheduler)
     assert fake.prompts[-1][1].text.startswith(
@@ -2814,10 +2816,11 @@ def test_an_implementer_is_told_to_wrap_up_before_the_campaign_stops_when_that_c
     fake = prompted(db, scheduler, mocker)
 
     def started(minutes: float) -> None:
+        at = utcnow() - timedelta(minutes=minutes)
         with db.session() as s:
-            at = utcnow() - timedelta(minutes=minutes)
-            s.get_one(AgentSession, 1).started_at = s.get_one(Run, 1).started_at = at
+            s.get_one(Run, 1).started_at = at
             s.commit()
+        launched(db, at, 900)  # what its launch stored: the stop 15 minutes after the first run started
 
     started(10)  # the stop in 5 minutes: its timeout is 15 minutes, and the wrap-up comes 3.75 minutes before
     run_all(scheduler)
@@ -2830,6 +2833,34 @@ def test_an_implementer_is_told_to_wrap_up_before_the_campaign_stops_when_that_c
     [(agent, prompt)] = fake.prompts
     assert agent == 1 and prompt.text.startswith(
         "[piloop] Your time is almost up (the campaign's stop, 900s after you started). Save what you have now"
+    )
+    scheduler.stop(timeout=5)
+
+
+def test_an_implementer_is_told_to_wrap_up_before_the_deadline_of_its_launch_when_the_rule_changes_since(
+    db: Database, campaign: Campaign, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """The stop cut the session at launch, and its executor ends it then. A rule that gives the campaign more hours
+    since does not move that deadline, so the wrap-up still comes before it. Before, the wind-down worked out the cut
+    again from the rule as it is now, and the agent ran into its end untold."""
+    set_config(db, campaign, plugins={'role': {'implementer': {'timeout': 3600}}, 'stop_rule': {'max_hours': 0.25}})
+    runtime = PromptingRuntime()
+    running_agent_session(db, campaign, 'late')
+    lease_running(db)
+    scheduler = make_scheduler(db, runtime, tmp_path)
+    fake = prompted(db, scheduler, mocker)
+    at = utcnow() - timedelta(minutes=12)
+    with db.session() as s:
+        s.get_one(Run, 1).started_at = at
+        s.commit()
+    launched(db, at, 900)
+    set_config(db, campaign, plugins={'role': {'implementer': {'timeout': 3600}}, 'stop_rule': {'max_hours': 10}})
+    timings(db, campaign, wrap_up_grace=0)
+    for _ in range(2):
+        run_all(scheduler)
+    [(agent, prompt)] = fake.prompts
+    assert agent == 1 and prompt.text.startswith(
+        "[piloop] Your time is almost up (the campaign's stop, 900s after you started)."
     )
     scheduler.stop(timeout=5)
 

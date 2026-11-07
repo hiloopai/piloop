@@ -263,6 +263,57 @@ def test_an_implementer_that_a_stop_ended_after_the_pass_took_it_closes_with_why
         ), 'the stop that is due closes the run'
 
 
+def test_a_reattached_run_that_ran_into_the_stop_s_cut_ends_campaign_stopped_after_the_campaign_stopped(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The stop rule's hours cut the implementer's session at launch. The daemon restarts in place, the campaign stops,
+    and the agent then runs into the cut: no attempt at its idea. Before, the next daemon worked out the cut again
+    from the stopped campaign, which cuts nothing, and the run ended ``timed_out``."""
+    write_toml(Path(campaign.path), '#!/bin/sh\nexec sleep 600\n', implementer_timeout=600)
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        s.get_one(Campaign, campaign.id).config = load_campaign_config(
+            Path(campaign.path), plugins={'stop_rule': {'max_hours': 1}}
+        )
+        first_run = Run(
+            campaign_id=campaign.id,
+            base_candidate_id=base,
+            harness='script',
+            model='m',
+            status=RunStatus.RUNNING,
+            started_at=utcnow() - timedelta(hours=1) + timedelta(seconds=8),
+        )
+        s.add(first_run)
+        s.commit()
+    run_id = make_run(db, campaign)
+    first = controller(db, GoneWithItsDaemon(), tmp_path, agents=WORKED)
+    thread = threading.Thread(target=execute, args=(first, db, run_id))
+    thread.start()
+    wait_until(lambda: agent_row(db).state is AgentSessionState.RUNNING)
+    first.hand_over()  # an in-place restart: the agent runs on
+    thread.join(30)
+    with db.session() as s:
+        stop.stop_campaign(s, s.get_one(Campaign, campaign.id), 'max_hours: 1h since the first run')
+        s.commit()
+    second = controller(db, runtime, tmp_path, agents=WORKED)
+    second.reattach(run_id, AgentSessionId(1))
+    run = run_row(db, run_id)
+    assert (run.end, run.error) == (RunEnd.CAMPAIGN_STOPPED, None)
+    second.stop(5)
+
+
+class GoneWithItsDaemon(ScriptRuntime):
+    """The runtime of a daemon that restarts in place: its wait goes with its process, and never kills the agent."""
+
+    def wait(self, handle: Handle, deadline: Deadline) -> AgentExit:
+        return super().wait(handle, Deadline.after(3600))
+
+
+def agent_row(db: Database, agent_session_id: int = 1) -> AgentSession:
+    with db.session() as s:
+        return s.get_one(AgentSession, agent_session_id)
+
+
 def reload_campaign(db: Database, campaign: Campaign) -> None:
 
     with db.session() as s:

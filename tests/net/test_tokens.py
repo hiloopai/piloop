@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import select
 
 from piloop.actor import Agent
+from piloop.agents.results import finish
 from piloop.api.contract import Access
 from piloop.db import sql
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Token
@@ -80,3 +81,21 @@ def test_a_deleted_agent_session_s_id_is_never_used_again_so_its_token_never_act
         s.commit()
         assert new.id > old_id
         assert tokens.verify(s, secret) is None
+
+
+def test_an_agent_s_token_ends_with_its_session_so_an_update_that_sets_it_live_again_revives_nothing(
+    db: Database, campaign: Campaign, tmp_path: Path
+) -> None:
+    """The close of the session deletes its token. Before, the token stayed and acted again once a raw UPDATE set the
+    session live."""
+    with db.session() as s:
+        w = AgentSession(kind='implementer', campaign_id=campaign.id, state=AgentSessionState.RUNNING)
+        s.add(w)
+        s.flush()
+        secret = tokens.mint_agent(s, Agent(role=w.kind, session=w.id)).get_secret_value()
+        finish(s, w, AgentSessionState.EXITED, None)
+        s.commit()
+        assert s.scalars(select(Token)).all() == []
+    with closing(sql.connect(tmp_path / 'piloop.db', actor=Agent(role='implementer', session=w.id))) as con:
+        con.execute("UPDATE agent_sessions SET state = 'running', ended_at = NULL WHERE id = ?", (w.id,))
+    assert Tokens(db).verify(secret) is None

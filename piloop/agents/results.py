@@ -40,6 +40,7 @@ from piloop.db.models import (
 )
 from piloop.db.session import Database, write_transaction
 from piloop.ids import AgentSessionId, CommentId, CommentKind, EnvName, Ref, RoleName, TargetKind, TargetRef
+from piloop.net.tokens import end_agent_token
 from piloop.otel import Tracer
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.runs.ids import RunEnd
@@ -209,7 +210,8 @@ def finish(
 ) -> None:
     """Close the agent's row as ``to``, with ``error``, and emit ``AgentSessionFinished``. The caller commits.
 
-    Every close of an agent's row goes through here. ``from_``: only from these states.
+    Every close of an agent's row goes through here. Its token goes with it (``end_agent_token``). ``from_``: only from
+    these states.
 
     Raises:
         Refused: the row is closed already, so its first end stands, or it is in no state of ``from_``.
@@ -217,6 +219,7 @@ def finish(
     assert to in ENDED, f'{to} does not close a row'
     finished = AgentSessionFinished(role=w.kind, reason=w.reason, state=to, error=error)
     transition(s, AGENT_SESSION_STATES, w.id, to, finished, System.DAEMON, from_=from_, ended_at=utcnow(), error=error)
+    end_agent_token(s, w.id)
 
 
 class WorkspaceConflict(EventModel):

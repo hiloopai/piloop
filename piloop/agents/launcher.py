@@ -7,6 +7,7 @@ that starts, waits for and closes an agent process. It never raises: a failure g
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -178,7 +179,7 @@ class Launcher:
         resumed_brief: Cid | None,
         read: Sequence[CommentId],
     ) -> AgentJob:
-        """Fill in the row, mark it ``starting``, emit ``<kind>.started``, and return the agent's job.
+        """Fill in the row with its start and ``deadline``, emit ``<kind>.started``, and return the agent's job.
 
         The harness and the model are picked here, and the job describes the agent's start (``AgentJob``). A session
         that it resumes picks the harness: that session's.
@@ -249,6 +250,7 @@ class Launcher:
                 resume=resumes,
             )
             # guarded: a stop or a cancel can end the row once the pass took it, and an ended row never starts
+            now = utcnow()
             filled = s.execute(
                 update(AgentSession)
                 .where(AgentSession.id == agent_session_id, AgentSession.state == AgentSessionState.STARTING)
@@ -257,7 +259,8 @@ class Launcher:
                     model=model,
                     runtime=runtime_kind,
                     log_dir=str(self.home / place),
-                    started_at=utcnow(),
+                    started_at=now,
+                    deadline=now + timedelta(seconds=timeout),
                 )
                 .returning(AgentSession.id)
                 .execution_options(synchronize_session='fetch')

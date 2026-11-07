@@ -739,6 +739,10 @@ class AgentSession(Tracked, Base):
     log_dir: Mapped[str | None]
     started_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
     """The time of the request until the launch, then the time of the launch."""
+    deadline: Mapped[datetime | None]
+    """When the agent's timeout ends it, set at its launch: its role's ``timeout``, cut where the campaign's stop rule
+    runs out of hours. Each reader reads it here: the brief, the wrap-up prompt, and how its run ends. Its extensions
+    (``agent_session.extended``) come on top. NULL before the launch, and for an agent that 0.6 launched."""
     ended_at: Mapped[datetime | None]
     error: Mapped[str | None]
     session_id: Mapped[str | None]
