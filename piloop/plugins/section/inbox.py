@@ -15,7 +15,7 @@ COMMENTS_SHOWN = 8
 
 
 class Inbox(Section):
-    """The unacknowledged inbox items and the latest decisions and escalations, newest first.
+    """The inbox items that wait for the reader, and the latest decisions and escalations, newest first.
 
     A sweep reads it so that it does not repeat an escalation, and a human sees what waits for an acknowledgement.
     """
@@ -25,15 +25,16 @@ class Inbox(Section):
 
     def render(self, r: Rendering) -> Rendered:
         s, campaign, now = r.s, r.campaign, r.now
-        unacked = Comment.priority.is_not(None) & Comment.acked_at.is_(None)
-        said = unacked | Comment.kind.in_((DECISION, ESCALATION))
+        # what waits for the agent who reads, else for the people (``piloop status``)
+        waiting = inbox.waiting_for(s, r.brief.agent.party if r.brief else inbox.HUMAN, campaign_id=campaign.id)
+        unacked = {c.id for c, _ in waiting}
+        said = Comment.id.in_(unacked) | Comment.kind.in_((DECISION, ESCALATION))
         rows = s.scalars(
             select(Comment)
             .where(said, campaign_of(Comment.target_kind, Comment.target_id) == campaign.id)
             .order_by(Comment.id.desc())
             .limit(COMMENTS_SHOWN)
         ).all()
-        waiting = inbox.items(s, campaign_id=campaign.id)
         asked = [c for c, _ in waiting if c.kind == ESCALATION]
         # an escalation that waits drops off the newest-first list below when more comments follow it, so count it here
         oldest = min(asked, key=attrgetter('id'), default=None)
@@ -45,7 +46,7 @@ class Inbox(Section):
         )
         lines = [
             f'- comment#{c.id} {c.kind}'
-            f'{" (p" + str(c.priority) + ", unacknowledged)" if c.priority is not None and c.acked_at is None else ""}'
+            f'{" (p" + str(c.priority) + ", unacknowledged)" if c.id in unacked else ""}'
             f' on {c.target} by {c.author}, {age(c.created_at, now)} ago: {cell(c.body, settings.agents.detail_chars)}'
             for c in rows
         ]

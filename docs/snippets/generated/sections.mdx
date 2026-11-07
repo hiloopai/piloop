@@ -30,7 +30,7 @@
 | `funnel` | The run funnel: ideas → attempts → reached the evaluator → measured → new bests, and how the unmeasured attempts ended. | status, orchestrator | 175 | none |
 | `candidates` | The latest candidates, oldest first, each with where it stands and its primary score against its parent's. | status, orchestrator | 180 | none |
 | `same_as_parent` | The candidates whose primary score is exactly their parent's: a cost, since the evaluation saw no change. | status, orchestrator | 185 | none |
-| `inbox` | The unacknowledged inbox items and the latest decisions and escalations, newest first. | status, orchestrator | 200 | none |
+| `inbox` | The inbox items that wait for the reader, and the latest decisions and escalations, newest first. | status, orchestrator | 200 | none |
 | `events` | The latest events of the campaign, newest first. | status, orchestrator | 210 | none |
 | `cost` | What the campaign spent: per new best, since the latest new best, and with `metric` per evaluation and per attempt. | none | 500 | `spend`, `metric` |
 | `tools` | How an agent queries the database, the transcripts and the history, with every table and its columns. | orchestrator | 900 | none |

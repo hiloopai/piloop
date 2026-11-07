@@ -8,7 +8,6 @@ body.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Annotated, ClassVar, Literal
 
 from pydantic import JsonValue, TypeAdapter
@@ -123,12 +122,16 @@ class CampaignPausedChanged(Changed[Pause]):
     paused_reason: str | None
 
 
-class CommentAcked(Changed[datetime]):
-    """An inbox item was acknowledged. The actor of the event is who did it, whatever ``acked_by`` says."""
+class CommentAcked(EventModel):
+    """A party acknowledged an inbox item (an ``acks`` row). The actor of the event is who wrote the row."""
 
     READ_BY: ClassVar[ReadBy] = ReadBy.READERS
-    kind: Literal['comment.acked_at'] = 'comment.acked_at'
-    acked_by: str | None
+    kind: Literal['comment.acked'] = 'comment.acked'
+    party: str
+    acked_by: str
+
+
+EventModel.retire('comment.acked_at')  # 0.6 had one ack for every party, a column of the comment; 0.7 has one per party
 
 
 class CommentEdited(Changed[str]):
@@ -529,6 +532,15 @@ OUTBOX = (
 )
 """The writes that the daemon reacts to and that no decision above logs, so that it wakes on the event."""
 
+ACKED = Trigger(
+    'acks_event',
+    'acks',
+    'AFTER INSERT',
+    body=event_insert(SESSION_ACTOR, "'comment'", 'NEW.comment_id', payload(CommentAcked, 'NEW')),
+    temp=True,
+)
+"""TEMP: log each inserted ``acks`` row on its comment, as ``comment.acked``."""
+
 CHANGES = (
     changed(IdeaStatusChanged, IDEA_SETTLED),
     changed(IdeaPriorityChanged),
@@ -542,7 +554,7 @@ CHANGES = (
     changed(CampaignTypeChanged),
     changed(CampaignParentChanged),
     changed(CampaignPausedChanged),
-    changed(CommentAcked),
+    ACKED,
     changed(CommentEdited),
 )
 """The decisions that are logged. To log another column, add its ``Changed`` model here."""

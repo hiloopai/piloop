@@ -33,8 +33,8 @@ piloop inbox
 | Command | What it does |
 |---|---|
 | `piloop inbox show 5` | Shows the item and its thread. |
-| `piloop inbox ack 5` | Marks it as seen. |
-| `piloop inbox reply 5 "<text>"` | Answers it. |
+| `piloop inbox ack 5` | Marks it as seen, for you: the orchestrator still sees it. |
+| `piloop inbox reply 5 "<text>"` | Answers it, which takes it out of every inbox. |
 | `piloop message enwik8 "<text>"` | Writes to the orchestrator. Its next wait returns the message. |
 
 ```bash

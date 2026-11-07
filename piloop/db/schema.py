@@ -15,6 +15,7 @@ from sqlalchemy import Column, Table
 from sqlalchemy.orm import InstrumentedAttribute
 
 from piloop.db.models import (
+    Ack,
     AgentSession,
     Base,
     Campaign,
@@ -63,6 +64,7 @@ CORE_TABLES = (
     AgentSession,
     Event,
     Comment,
+    Ack,
     Lease,
     Limit,
     Token,

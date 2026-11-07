@@ -128,8 +128,6 @@ CREATE TABLE comments (
 	kind VARCHAR(16) DEFAULT 'note' NOT NULL,
 	body VARCHAR NOT NULL,
 	priority INTEGER,
-	acked_at DATETIME,
-	acked_by VARCHAR,
 	form JSON,
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -144,7 +142,7 @@ CREATE TABLE comments (
 	FOREIGN KEY(in_reply_to) REFERENCES comments (id) ON DELETE SET NULL,
 	CONSTRAINT commentkind FOREIGN KEY(kind) REFERENCES comment_kinds (id)
 );
-CREATE INDEX ix_comments_inbox ON comments (priority, id) WHERE priority IS NOT NULL AND acked_at IS NULL;
+CREATE INDEX ix_comments_inbox ON comments (priority, id) WHERE priority IS NOT NULL;
 CREATE INDEX ix_comments_target ON comments (target_kind, target_id);
 CREATE TABLE events (
 	id INTEGER NOT NULL,
@@ -159,6 +157,16 @@ CREATE TABLE events (
 );
 CREATE INDEX ix_events_kind ON events (kind, target_kind, target_id, id);
 CREATE INDEX ix_events_target ON events (target_kind, target_id, id);
+CREATE TABLE acks (
+	comment_id INTEGER NOT NULL,
+	party VARCHAR NOT NULL,
+	acked_by VARCHAR NOT NULL,
+	acked_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+	PRIMARY KEY (comment_id, party),
+	CONSTRAINT "acks.party must be a text value" CHECK (typeof(party) IN ('text')),
+	CONSTRAINT "acks.acked_by must be a text value" CHECK (typeof(acked_by) IN ('text')),
+	FOREIGN KEY(comment_id) REFERENCES comments (id) ON DELETE CASCADE
+);
 CREATE TABLE leases (
 	id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
 	kind VARCHAR NOT NULL,

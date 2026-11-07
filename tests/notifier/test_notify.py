@@ -16,7 +16,7 @@ from piloop.actor import Actor, Agent, Person, System
 from piloop.api.views import CommentNews
 from piloop.campaign import escalations
 from piloop.campaign.campaigns import CampaignAdded
-from piloop.campaign.inbox import ack, items, news
+from piloop.campaign.inbox import HUMAN, ack, items, news
 from piloop.campaign.ops import Refused as BacklogRefused
 from piloop.config import CampaignConfig, load_campaign_config
 from piloop.daemon.loop import Consumer, Phase, Turn
@@ -386,7 +386,7 @@ def test_a_stopped_campaign_s_items_stay_in_the_inbox_but_remind_again_only_once
         assert due(s, route_of(db, campaign, 'outbox', outbox), later) == consumers.Due((), 0, None), (
             'no reminder, and no wake for one'
         )
-        assert [c.id for c, _ in items(s)] == [item], 'the escalation still waits for an answer'
+        assert [c.id for c, _ in items(s, HUMAN)] == [item], 'the escalation still waits for an answer'
     fresh = write(db, campaign)
     with db.session() as s:
         assert [(n.comment, n.kind) for n in due(s, route_of(db, campaign, 'outbox', outbox), later).notices] == [
@@ -635,7 +635,7 @@ def test_a_reaction_acks_the_item_and_an_idea_is_added_to_its_campaign(
     ) == Declined('human:alice files nothing')
     with db.session() as s:
         acked = s.get_one(Comment, item)
-        assert (acked.acked_by, acked.acked_at is not None) == ('human:alice', True)
+        assert [(a.party, a.acked_by) for a in acked.acks] == [('human', 'human:alice')], 'for every person'
         [added] = s.scalars(select(Idea).where(Idea.campaign_id == campaign.id, Idea.title == 'halve the window')).all()
         assert (added.status, added.created_by, added.provenance) == (
             IdeaStatus.OPEN,
@@ -682,8 +682,8 @@ def test_a_button_answers_the_escalation_with_its_choice_as_the_person_who_click
     with db.session() as s:
         answered = s.get_one(Comment, item)
         [decision] = s.scalars(select(Comment).where(Comment.kind == DECISION)).all()
-        assert (answered.acked_by, decision.author, decision.in_reply_to, decision.body) == (
-            'human:alice',
+        assert (answered.acks, decision.author, decision.in_reply_to, decision.body) == (
+            [],
             'human:alice',
             item,
             'Chose A: Raise it. → Runs cost more.',
@@ -700,26 +700,24 @@ def test_a_button_answers_the_escalation_with_its_choice_as_the_person_who_click
         assert len(s.scalars(select(Comment).where(Comment.kind == DECISION)).all()) == 1
 
 
-def test_a_click_on_an_escalation_acknowledged_without_an_answer_records_nothing(
+def test_a_click_on_an_escalation_that_the_orchestrator_only_acknowledged_answers_it(
     db: Database, campaign: Campaign, tmp_path: Path, tracer: Tracer
 ) -> None:
+    """An ack says that its party saw the item, for that party alone: the people can still answer it."""
     with db.session() as s:
         item = escalations.escalate(
-            s, TargetRef(TargetKind.CAMPAIGN, campaign.id), ASKED, author=System.ORCHESTRATOR, priority=1
+            s, TargetRef(TargetKind.CAMPAIGN, campaign.id), ASKED, author=System.DAEMON, priority=1
         ).id
         s.commit()
     chat = Chat()
     send_due(host_of(db, tmp_path, tracer, {}), route_of(db, campaign, 'chat', chat), utcnow())
     with db.session() as s:
-        ack(s, [item], System.DAEMON)
+        ack(s, [item], System.ORCHESTRATOR)
         s.commit()
     post, route = MessageRef(f'C/{item}.1'), [route_of(db, campaign, 'chat', chat)]
-    assert received(db, tracer, route, inbound(post, Choose('A'), 'C/a')) == Answered(
-        f'comment#{item} was acknowledged already, by daemon. piloop recorded nothing.', 'daemon', None
+    assert received(db, tracer, route, inbound(post, Choose('A'), 'C/a')) == Accepted(
+        f'piloop recorded comment#{item + 1}, Chose A: Raise it. → Runs cost more.'
     )
-    with db.session() as s:
-        assert s.scalars(select(Comment).where(Comment.kind == DECISION)).all() == []
-        assert list(in_order(s, NotificationReceived)) == []
 
 
 def test_an_item_of_no_campaign_takes_no_idea(db: Database, tmp_path: Path, tracer: Tracer) -> None:
@@ -873,6 +871,7 @@ def test_an_edit_of_a_reply_changes_it_as_its_author_and_it_waits_to_be_read_aga
     with db.session() as s:
         [reply] = s.scalars(select(Comment).where(Comment.author == 'human:alice')).all()
         ack(s, [reply.id], System.ORCHESTRATOR)
+        s.commit()
         cursor = newest(s)
     edit = Edit('raise it')
     assert received(db, tracer, [route_of(db, campaign, 'chat', chat)], inbound(post, edit, 'C/9')) == Accepted(
@@ -893,7 +892,7 @@ def test_an_edit_of_a_reply_changes_it_as_its_author_and_it_waits_to_be_read_aga
     )
     with db.session() as s:
         edited = s.get_one(Comment, reply.id)
-        assert (edited.body, edited.acked_at, edited.acked_by) == ('raise it', None, None)
+        assert (edited.body, edited.acks) == ('raise it', []), 'it waits again for every party'
         [(_, change)] = in_order(s, CommentEdited)
         assert (change.old, change.new) == ('aise it', 'raise it')
         found = news(s, cursor, campaign_id=campaign.id, party='orchestrator')

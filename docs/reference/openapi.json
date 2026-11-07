@@ -854,7 +854,7 @@
     "/v1/inbox/{comment}/choose": {
       "post": {
         "summary": "Choose",
-        "description": "Answer an escalation with one of its choices: a ``decision`` reply signed by the caller, and an ack.",
+        "description": "Answer an escalation with one of its choices: a ``decision`` reply signed by the caller, which settles it.\n\nOne that another party answered already is refused, with that answer.",
         "operationId": "choose",
         "parameters": [
           {
@@ -2718,7 +2718,7 @@
     "/v1/inbox/{comment}/reply": {
       "post": {
         "summary": "Reply",
-        "description": "Answer an inbox item with a ``decision`` on the root of its thread, which is an inbox item of its own.",
+        "description": "Answer an inbox item with a ``decision`` on the root of its thread, which is an inbox item of its own.\n\nAn escalation that another party answered already is refused, with that answer.",
         "operationId": "reply",
         "parameters": [
           {
@@ -4797,7 +4797,7 @@
               }
             ],
             "title": "Acked By",
-            "description": "Who acknowledged it: the caller, or whoever did before. Null while nobody has."
+            "description": "Who acknowledged it for the caller's party: the caller, or whoever did before. Null while nobody has."
           }
         },
         "type": "object",
@@ -4808,6 +4808,31 @@
         ],
         "title": "AckResult",
         "description": "What an acknowledgement did to one id."
+      },
+      "AckView": {
+        "properties": {
+          "party": {
+            "type": "string",
+            "title": "Party",
+            "description": "``human`` for every person, else a role, such as ``orchestrator``."
+          },
+          "by": {
+            "type": "string",
+            "title": "By"
+          },
+          "at": {
+            "type": "string",
+            "title": "At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "party",
+          "by",
+          "at"
+        ],
+        "title": "AckView",
+        "description": "One party's acknowledgement of an inbox item."
       },
       "Acked": {
         "properties": {
@@ -5710,6 +5735,14 @@
             "title": "Priority",
             "description": "Null for a comment that is not in the inbox."
           },
+          "acks": {
+            "items": {
+              "$ref": "#/components/schemas/AckView"
+            },
+            "type": "array",
+            "title": "Acks",
+            "description": "Each party's acknowledgement of the item, oldest first: each party acknowledges for itself."
+          },
           "acked_at": {
             "anyOf": [
               {
@@ -5719,7 +5752,9 @@
                 "type": "null"
               }
             ],
-            "title": "Acked At"
+            "title": "Acked At",
+            "description": "Deprecated: the time of the earliest of ``acks``, as 0.6's one ack of every party was. Null while there is none.",
+            "deprecated": true
           },
           "acked_by": {
             "anyOf": [
@@ -5730,7 +5765,9 @@
                 "type": "null"
               }
             ],
-            "title": "Acked By"
+            "title": "Acked By",
+            "description": "Deprecated: who wrote the earliest of ``acks``.",
+            "deprecated": true
           },
           "body": {
             "type": "string",
@@ -5746,8 +5783,7 @@
           "author",
           "created",
           "priority",
-          "acked_at",
-          "acked_by",
+          "acks",
           "body"
         ],
         "title": "CommentView",
@@ -6841,6 +6877,14 @@
             "type": "string",
             "title": "Created"
           },
+          "acks": {
+            "items": {
+              "$ref": "#/components/schemas/AckView"
+            },
+            "type": "array",
+            "title": "Acks",
+            "description": "Each party's acknowledgement of the item, oldest first: each party acknowledges for itself."
+          },
           "acked_at": {
             "anyOf": [
               {
@@ -6850,7 +6894,9 @@
                 "type": "null"
               }
             ],
-            "title": "Acked At"
+            "title": "Acked At",
+            "description": "Deprecated: the time of the earliest of ``acks``, as 0.6's one ack of every party was. Null while there is none.",
+            "deprecated": true
           },
           "acked_by": {
             "anyOf": [
@@ -6861,7 +6907,9 @@
                 "type": "null"
               }
             ],
-            "title": "Acked By"
+            "title": "Acked By",
+            "description": "Deprecated: who wrote the earliest of ``acks``.",
+            "deprecated": true
           },
           "body": {
             "type": "string",
@@ -6879,8 +6927,7 @@
           "in_reply_to",
           "author",
           "created",
-          "acked_at",
-          "acked_by",
+          "acks",
           "body"
         ],
         "title": "Item",
@@ -7214,6 +7261,14 @@
             "title": "Priority",
             "description": "Null for a comment that is not in the inbox."
           },
+          "acks": {
+            "items": {
+              "$ref": "#/components/schemas/AckView"
+            },
+            "type": "array",
+            "title": "Acks",
+            "description": "Each party's acknowledgement of the item, oldest first: each party acknowledges for itself."
+          },
           "acked_at": {
             "anyOf": [
               {
@@ -7223,7 +7278,9 @@
                 "type": "null"
               }
             ],
-            "title": "Acked At"
+            "title": "Acked At",
+            "description": "Deprecated: the time of the earliest of ``acks``, as 0.6's one ack of every party was. Null while there is none.",
+            "deprecated": true
           },
           "acked_by": {
             "anyOf": [
@@ -7234,7 +7291,9 @@
                 "type": "null"
               }
             ],
-            "title": "Acked By"
+            "title": "Acked By",
+            "description": "Deprecated: who wrote the earliest of ``acks``.",
+            "deprecated": true
           },
           "body": {
             "type": "string",
@@ -7254,8 +7313,7 @@
           "author",
           "created",
           "priority",
-          "acked_at",
-          "acked_by",
+          "acks",
           "body",
           "relation"
         ],
@@ -9297,6 +9355,18 @@
             "type": "array",
             "title": "Linked",
             "description": "The replies, oldest first, then the other comments that cite the root or that it cites, oldest first."
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer",
+            "description": "The latest reply that answers the root, which it waits no more for, or null."
           },
           "escalation": {
             "anyOf": [

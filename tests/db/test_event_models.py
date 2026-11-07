@@ -114,7 +114,7 @@ def test_every_trigger_writes_an_event_that_loads_as_the_model_that_renders_it(
                 f" VALUES ('idea', 1, 'me', '{kind}', 'x', 2)"
                 for kind in (CommentKind.NOTE, DECISION, ESCALATION, CommentKind.MESSAGE)
             ),
-            "UPDATE comments SET acked_at = '2026-10-01 12:00:00', acked_by = 'human' WHERE id = 1",
+            "INSERT INTO acks (comment_id, party, acked_by) VALUES (1, 'human', 'human')",
             "UPDATE comments SET body = 'y' WHERE id = 1",
             'DELETE FROM comments WHERE id = 1',
             'DELETE FROM candidates WHERE id = 2',

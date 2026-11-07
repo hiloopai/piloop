@@ -39,7 +39,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.engine import Dialect
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, composite, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, composite, mapped_column, relationship
 from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.types import TypeDecorator
 
@@ -637,8 +637,9 @@ class Limit(Base):
 class Comment(Tracked, Base):
     """The forum and the human's inbox. Anything with an id can get a comment: ``idea#12``, ``run#7``, ``candidate#30``.
 
-    A comment with a ``priority`` is for the human. It stays in the inbox (``piloop inbox``) until someone acknowledges
-    it (``acked_at``, ``acked_by``). An escalation always has a priority (a CHECK makes sure). The orchestrator gives
+    A comment with a ``priority`` is an inbox item. It waits for each party but its author's until that party
+    acknowledges it (``acks``), or until another party answers it (``piloop.campaign.inbox.answers``). An escalation
+    always has a priority (a CHECK makes sure). The orchestrator gives
     a priority to every decision it makes for the human, so that the human can review and change each one later. The
     rest of the forum (implementers that steer each other, notes on the board) has no priority.
     """
@@ -647,7 +648,7 @@ class Comment(Tracked, Base):
     __table_args__ = (
         Index('ix_comments_target', 'target_kind', 'target_id'),
         # the inbox: the widget counts the items not acknowledged on every refresh, and the CLI lists them by priority
-        Index('ix_comments_inbox', 'priority', 'id', sqlite_where=text('priority IS NOT NULL AND acked_at IS NULL')),
+        Index('ix_comments_inbox', 'priority', 'id', sqlite_where=text('priority IS NOT NULL')),
         CheckConstraint("kind != 'escalation' OR priority IS NOT NULL", name='escalation_needs_priority'),
         CheckConstraint("in_reply_to IS NULL OR target_kind = 'comment'", name='reply_is_on_a_comment'),
         CheckConstraint("target_kind != 'home'", name='comment_not_on_home'),
@@ -671,14 +672,31 @@ class Comment(Tracked, Base):
     body: Mapped[str]
     priority: Mapped[int | None]
     """When set, the comment is for the human: 0 (urgent, notify now) to 4 (someday), as on ideas. NULL: forum only."""
-    acked_at: Mapped[datetime | None]
-    """When someone acknowledged the inbox item. NULL while it waits in the inbox."""
-    acked_by: Mapped[str | None]
-    """Who acknowledged it: ``human`` with ``piloop inbox ack``, or ``orchestrator`` when the orchestrator did."""
+    acks: Mapped[list[Ack]] = relationship(order_by='Ack.acked_at', passive_deletes=True)
+    """Each party's acknowledgement of the item, oldest first."""
     form: Mapped[JsonValue | None] = mapped_column(JSON)
     """An escalation's typed payload, as ``piloop escalate`` filed it: the campaign's ``[plugins.escalation]`` provider
     reads it, and ``body`` is its plain text. NULL for every other comment, and for an escalation filed as free text."""
     created_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
+
+
+class Ack(Base):
+    """One party's acknowledgement of an inbox item: that party saw it, and it waits no more for that party.
+
+    Each party acknowledges for itself (``piloop.campaign.inbox.ack``): a person's ``piloop inbox ack`` leaves the item
+    waiting for the orchestrator. Rows are inserted, and deleted when the item changes (an edit puts it back in each
+    inbox), never updated. Each insert is a ``comment.acked`` event on the comment.
+    """
+
+    __tablename__ = 'acks'
+    __table_args__ = (*text_checks('acks', 'party', 'acked_by'),)
+
+    comment_id: Mapped[CommentId] = mapped_column(ForeignKey('comments.id', ondelete='CASCADE'), primary_key=True)
+    party: Mapped[str] = mapped_column(primary_key=True)
+    """The party that it acknowledges for (``Actor.party``): ``human``, or a role such as ``orchestrator``."""
+    acked_by: Mapped[str]
+    """Who acknowledged it: an actor of ``party``, by its signature."""
+    acked_at: Mapped[datetime] = mapped_column(default=utcnow, server_default=NOW)
 
 
 AGENT_SESSION_CHECKS = (

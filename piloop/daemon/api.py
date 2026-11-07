@@ -405,8 +405,12 @@ def escalation_guide(s: Reading, query: Annotated[GuideQuery, Query()]) -> Guide
 
 @router.post('/inbox/{comment}/choose', operation_id='choose', dependencies=[Depends(actor_access)])
 def choose(s: Writing, me: Acting, comment: Commented, body: ChooseBody) -> Replied:
-    """Answer an escalation with one of its choices: a ``decision`` reply signed by the caller, and an ack."""
+    """Answer an escalation with one of its choices: a ``decision`` reply signed by the caller, which settles it.
+
+    One that another party answered already is refused, with that answer.
+    """
     answer = escalations.choose(s, comment.id, body.choice, author=me)
+    s.commit()
     with db_feed.snapshot(s) as cursor:
         return Replied(cursor=cursor, comment=inbox_module.comment_view(answer))
 
@@ -816,13 +820,17 @@ def cancel_agent(s: Writing, me: Acting, agent: AddressedAgent, body: CancelBody
 def ack(s: Writing, me: Acting, body: AckBody) -> Acked:
     """Acknowledge inbox items, to say that the caller has seen them. Nothing waits for an acknowledgement."""
     results = inbox_module.ack(s, body.ids, me)
+    s.commit()
     with db_feed.snapshot(s) as cursor:
         return Acked(cursor=cursor, results=results)
 
 
 @router.post('/inbox/{comment}/reply', operation_id='reply', dependencies=[Depends(actor_access)])
 def reply(s: Writing, me: Acting, comment: Commented, body: ReplyBody) -> Replied:
-    """Answer an inbox item with a ``decision`` on the root of its thread, which is an inbox item of its own."""
+    """Answer an inbox item with a ``decision`` on the root of its thread, which is an inbox item of its own.
+
+    An escalation that another party answered already is refused, with that answer.
+    """
     answer = inbox_module.reply(s, comment.id, body.body, author=me, priority=body.priority)
     with db_feed.snapshot(s) as cursor:
         return Replied(cursor=cursor, comment=inbox_module.comment_view(answer))
@@ -870,6 +878,7 @@ def with_api(server: App, api: Handlers) -> App:
 REFUSALS: tuple[type[Exception], ...] = (
     ops.Refused,
     escalations.Refused,
+    inbox_module.Answered,
     ImportRefused,
     limits_module.Refused,
     tokens.NameTaken,

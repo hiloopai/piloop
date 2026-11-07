@@ -145,9 +145,7 @@ class SlackApp(SlackText):
             case Accepted():
                 line = f':white_check_mark: <@{click.member}> chose *{click.choice}*'
             case Answered(by=by, answer=answer):
-                line = f':white_check_mark: Answered by {escaped(by)}' + (
-                    f': {escaped(answer)}' if answer is not None else ''
-                )
+                line = f':white_check_mark: Answered by {escaped(by)}: {escaped(answer)}'
             case _:
                 assert_never(receipt)
         settled = {'type': 'context', 'elements': [{'type': 'mrkdwn', 'text': _clip(line, SECTION_CHARS)}]}

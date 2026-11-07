@@ -874,7 +874,9 @@ def test_a_message_reaches_the_orchestrator_s_wait_and_its_reply_the_sender_s_in
     monkeypatch.setattr(common, 'settings', as_human)
     run_cli(['inbox', 'show', '2'])
     title, *lines = out().splitlines()
-    assert title.startswith('comment#1 message on campaign#1 by human, ') and title.endswith(' · p1, unacknowledged')
+    assert title.startswith('comment#1 message on campaign#1 by human, ') and title.endswith(
+        ' · p1, answered by comment#2'
+    )
     assert lines == [
         'what next?',
         '',
@@ -2756,7 +2758,7 @@ def test_an_escalation_is_filed_with_its_form_shown_by_its_provider_and_answered
     run_cli(['inbox', 'choose', '1', 'a'])
     assert out().strip() == 'comment#2 decision on comment#1: Chose A: Raise it to 4 hours. → Each run costs more.'
     run_cli(['inbox', 'show', '1'])
-    assert '· p1, acknowledged by human 0s ago' in out().splitlines()[0]
+    assert '· p1, answered by comment#2' in out().splitlines()[0]
     with pytest.raises(
         SystemExit, match='comment#2 is a decision, not an escalation: answer it with `piloop inbox reply`'
     ):

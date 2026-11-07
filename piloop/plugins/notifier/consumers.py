@@ -13,17 +13,17 @@ from datetime import datetime
 from typing import assert_never
 
 from pydantic import ValidationError
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, delete, func, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import ACTORS, Person, System, by_a_person
 from piloop.campaign import escalations
 from piloop.campaign.campaigns import CampaignAdded
-from piloop.campaign.inbox import ack, campaign_of, items, root_of
+from piloop.campaign.inbox import HUMAN, Answered as AnsweredAlready, ack, campaign_of, items, root_of
 from piloop.campaign.ops import Refused as BacklogRefused
 from piloop.daemon.loop import Consumer, Kinds, Phase, Soonest, Turn
 from piloop.db.events import emit, has, in_order, latest
-from piloop.db.models import NOT_RETIRED, Campaign, Comment, Event
+from piloop.db.models import NOT_RETIRED, Ack as Acked, Campaign, Comment, Event
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CampaignConfigChanged, CampaignStatusChanged, Commented
 from piloop.ids import HOME, CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
@@ -260,7 +260,7 @@ def received(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inb
 
     The thread maps to its item through the ``notification.sent`` event that names the post, and the route of that
     item says who the person is. A choice answers an escalation through ``escalations.choose``, unless someone answered
-    or acknowledged it already: then it writes nothing (``Answered``). A post that no route
+    it already: then it writes nothing (``Answered``). An ack is the person's, for every person (``inbox.ack``). A post that no route
     of ``shared`` made is ``Foreign``. A redelivered post is accepted once: its ``notification.received`` is there
     already.
     """
@@ -317,10 +317,10 @@ def received(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inb
                 target = TargetRef(IDEA, idea.id)
                 said = f'piloop added this as idea#{idea.id}, open on the board'
             case Choose(choice=choice):
-                if (done := escalations.settled(s, item)) is not None:
-                    return _answered(item.id, done)
                 try:
                     decision = escalations.choose(s, item.id, choice, author=person)
+                except AnsweredAlready as e:
+                    return _answered(e)
                 except escalations.Refused as e:
                     return Declined(str(e))
                 target = TargetRef(TargetKind.COMMENT, decision.id)
@@ -333,14 +333,9 @@ def received(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inb
     return Accepted(said)
 
 
-def _answered(item: CommentId, done: escalations.Settled) -> Answered:
-    """What a choice on ``item``, which ``done`` settled before, tells the person: it records nothing."""
-    match done.decision:
-        case None:
-            said = f'comment#{item} was acknowledged already, by {done.by}. piloop recorded nothing.'
-        case decision:
-            said = f'comment#{item} was answered already, by {done.by}: {decision} piloop recorded nothing.'
-    return Answered(said, done.by, done.decision)
+def _answered(done: AnsweredAlready) -> Answered:
+    """What a choice on an escalation that another party answered before tells the person: it records nothing."""
+    return Answered(f'{done} piloop recorded nothing.', done.settled.by, done.settled.answer)
 
 
 def _route_of(s: Session, shared: Sequence[Route], name: str, comment: CommentId) -> Route:
@@ -379,7 +374,9 @@ def _edit(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inboun
         if comment.body == edit.text:
             return Again()
         comment.body = edit.text
-        comment.acked_at, comment.acked_by = None, None  # changed, it waits to be read again
+        s.execute(
+            delete(Acked).where(Acked.comment_id == comment.id)
+        )  # changed, it waits to be read again by each party
         s.commit()
     tracer.event('notification.received', notifier=route.name, act='Edit', target=f'comment#{comment.id}')
     return Accepted(f'piloop updated comment#{comment.id}')
@@ -486,7 +483,7 @@ def due(s: Session, route: Route, now: datetime) -> Due:
     threaded = {comment.id for comment, _ in follow_ups}
     later = Soonest()
     wanted: list[tuple[Comment, Campaign | None]] = []
-    for comment, campaign in items(s):
+    for comment, campaign in items(s, HUMAN):
         if (
             (campaign.id if campaign is not None else None) != route.owner
             or by_a_person(comment.author)

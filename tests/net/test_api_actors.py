@@ -147,11 +147,11 @@ def test_a_proxy_caller_s_ack_reply_and_pause_sign_as_the_person_it_names(
     assert acted.author == f'orchestrator via {me}', 'a person acts as the orchestrator, and the write says who'
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        assert (row.updated_by, s.get_one(Comment, 1).acked_by) == (me, me)
+        assert (row.updated_by, [a.acked_by for a in s.get_one(Comment, 1).acks]) == (me, [me])
         signed = {(e.kind, e.actor) for e in s.scalars(select(Event).where(Event.id > 1))}
     assert signed == {
         ('campaign.paused', me),
-        ('comment.acked_at', me),
+        ('comment.acked', me),
         ('comment.decision', me),
         ('comment.decision', f'orchestrator via {me}'),
     }, 'the change log signs as the caller'

@@ -7,7 +7,6 @@ checks the form, writes its plain text, says when it reaches a human, and how it
 comment (``comments.form``) and never reads it.
 """
 
-from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import JsonValue, ValidationError
@@ -15,10 +14,11 @@ from sqlalchemy import literal, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, System
-from piloop.campaign.inbox import ack, campaign_of, root_of
+from piloop.campaign.inbox import answer, campaign_of
 from piloop.db.models import Campaign, Comment
+from piloop.db.session import write_transaction
 from piloop.db.triggers.changelog import Commented
-from piloop.ids import CampaignId, CommentId, TargetKind, TargetRef
+from piloop.ids import CampaignId, CommentId, TargetRef
 from piloop.plugins.escalation.contract import (
     DECISION,
     ESCALATION,
@@ -133,35 +133,18 @@ def _drafted(s: Session, target: TargetRef, asked: Asked) -> tuple[JsonValue, st
     return form, chosen.body(form)
 
 
-@dataclass(frozen=True)
-class Settled:
-    """An escalation that someone answered, or acknowledged, already."""
-
-    by: str
-    """The signature of whoever wrote its latest decision, else of whoever acknowledged it."""
-    decision: str | None
-    """The text of its latest decision, or None when it was only acknowledged."""
-
-
-def settled(s: Session, item: Comment) -> Settled | None:
-    """Whether ``item`` has a ``decision`` reply, or an acknowledgement: then a choice would be a second answer."""
-    latest = select(Comment).where(Comment.in_reply_to == item.id, Comment.kind == DECISION)
-    if (decision := s.scalars(latest.order_by(Comment.id.desc()).limit(1)).first()) is not None:
-        return Settled(decision.author, decision.body)
-    if item.acked_by is not None:
-        return Settled(item.acked_by, None)
-    return None
-
-
 def choose(s: Session, comment_id: CommentId, choice: str, *, author: Actor) -> Comment:
-    """Answer the escalation ``comment_id`` with ``choice``: a ``decision`` reply in its thread, then acknowledge it.
+    """Answer the escalation ``comment_id`` with ``choice``: a ``decision`` reply in its thread (``inbox.answer``).
 
-    Both happen in one transaction, signed as ``author``, and the decision is an inbox item of its own, as
-    ``piloop inbox reply`` writes one.
+    The decision is signed as ``author``, and is an inbox item of its own, as ``piloop inbox reply`` writes one. It
+    settles the escalation for every party. It takes the write lock first (``write_transaction``), so the session must
+    have no open transaction. The caller commits.
 
     Raises:
         Refused: The comment is no escalation, or it offers no such choice.
+        Answered: another party answered it already.
     """
+    write_transaction(s)
     item = s.get_one(Comment, comment_id)
     if item.kind != ESCALATION:
         raise Refused(f'comment#{comment_id} is a {item.kind}, not an escalation: answer it with `piloop inbox reply`')
@@ -174,15 +157,4 @@ def choose(s: Session, comment_id: CommentId, choice: str, *, author: Actor) -> 
         text = policy(s, found.campaign).choose(found, choice)
     except ValueError as e:
         raise Refused(str(e)) from e
-    answer = Comment(
-        target=TargetRef(TargetKind.COMMENT, root_of(s, item).id),
-        in_reply_to=item.id,
-        author=author.signature,
-        kind=DECISION,
-        priority=DECISION_PRIORITY,
-        body=text,
-    )
-    s.add(answer)
-    s.flush()
-    ack(s, [item.id], author)
-    return answer
+    return answer(s, item, text, author=author, kind=DECISION, priority=DECISION_PRIORITY)

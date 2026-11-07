@@ -9,7 +9,10 @@ The inbox is every comment that has a `priority`.
 
 - `piloop inbox` lists the unacknowledged items, most urgent first.
 - `piloop inbox show <id>` shows one item with its thread.
-- `piloop inbox ack <id>` (or `--up-to <id>`) marks items as seen.
+- `piloop inbox ack <id>` (or `--up-to <id>`) marks items as seen, for your side only: the people's, or the
+  orchestrator's.
+- An answer (`piloop inbox choose`, `piloop inbox reply`) takes an item out of every inbox. An escalation takes one
+  answer: a second one is refused, with the first.
 
 The priority says how urgent an item is:
 
@@ -31,12 +34,12 @@ writer gave it a priority.
 2. **Decide.**
    - If the human is talking to you now, give them the one decision, with the evidence and your recommendation.
    - Otherwise decide yourself. Take the smallest reversible step that keeps work moving.
-   - An irreversible step that can wait is not yours: leave it unacknowledged. Too low a priority? Raise it with SQL.
+   - An irreversible step that can wait is not yours: leave it unanswered. Too low a priority? Raise it with SQL.
    - Answer one that offers choices with `piloop inbox choose <id> <choice>`. Give duplicates the same answer. Ask the
      human with `piloop escalate <target>` (its form on stdin; `--guide`), citing in `details` what it settles.
 3. **Record** the decision on the same target, addressed to the human (use the template below).
-   - Then acknowledge the escalation: `PILOOP_ACTOR=orchestrator piloop inbox ack <id>`. Your decision replaces it in
-     the inbox.
-   - If the human decided it with you, the decision is theirs. Record it without a priority, and acknowledge it as the
-     human: `piloop inbox ack <id>`, with no `PILOOP_ACTOR`.
+   - Answer the escalation with it: `PILOOP_ACTOR=orchestrator piloop inbox reply <id> "<decision>"`, or
+     `piloop inbox choose`. Your decision replaces it in the human's inbox.
+   - If the human decided it with you, the decision is theirs: answer it as the human,
+     `piloop inbox reply <id> "<decision>"`, with no `PILOOP_ACTOR`.
 4. **Apply** it: open or drop the idea, change its priority, or fix `piloop.toml` and run `piloop init .`.

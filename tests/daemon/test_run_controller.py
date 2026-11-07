@@ -1714,7 +1714,7 @@ def test_an_open_escalation_holds_no_run_whose_worker_ends_it_as_its_verb_says(
     reload_campaign(db, campaign)
     execute(controller(db, runtime, tmp_path), db, run_id)
     with db.session() as s:
-        assert s.scalars(select(Comment.acked_at).where(Comment.kind == ESCALATION)).all() == [None], 'still asked'
+        assert [c.acks for c in s.scalars(select(Comment).where(Comment.kind == ESCALATION))] == [[]], 'still asked'
         run = s.get_one(Run, run_id)
         assert (run.status, run.end, run.error) == (RunStatus.SUCCEEDED, RunEnd.FINISHED, None)
         assert s.get_one(Idea, idea_id).status is IdeaStatus.DONE

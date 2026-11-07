@@ -66,8 +66,9 @@ Steps:
    - An item: `piloop inbox show <id>` shows it with its thread.
    - A stop: `piloop status <name>`.
 4. **Decide and record.** See "The inbox" below: escalations, every decision, the surfacing policy.
-5. **Acknowledge** what you answered: `PILOOP_ACTOR=orchestrator piloop inbox ack <id>`. Leave unacknowledged what
-   only the human can decide.
+5. **Acknowledge** what you read and need not answer: `PILOOP_ACTOR=orchestrator piloop inbox ack <id>`. It leaves
+   your waits only; the human still sees it. Your answer leaves every inbox. Leave unanswered what only the human can
+   decide.
 6. **Act.** Apply the decision with a piloop command: `piloop pause`, a sweep, a command of the campaign's type
    (below), or `piloop.toml` followed by `piloop init .`. Use `piloop sql` for a write only when no command does it.
    Never raise `hold_at` in `[plugins.stop_rule]` yourself. An escalation that a fact reached its `hold_at` belongs to

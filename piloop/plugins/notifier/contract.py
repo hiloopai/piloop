@@ -263,16 +263,16 @@ class Foreign:
 
 @dataclass(frozen=True)
 class Answered:
-    """Someone answered or acknowledged the escalation before this choice: piloop wrote nothing.
+    """Someone answered the escalation before this choice: piloop wrote nothing.
 
     ``said`` tells the person by whom.
     """
 
     said: str
     by: str
-    """Who answered it, or acknowledged it: their signature."""
-    answer: str | None
-    """The text of the decision that answered it, or None when it was only acknowledged."""
+    """Who answered it: their signature."""
+    answer: str
+    """The text of the answer."""
 
 
 type Receipt = Accepted | Again | Declined | Foreign | Answered

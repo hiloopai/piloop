@@ -77,6 +77,7 @@ def test_schema_ddl_lists_every_table_with_its_indexes_and_runs(tmp_path: Path) 
     ddl = sql.schema_ddl()
     assert sorted(line.split()[2] for line in ddl.splitlines() if line.startswith('CREATE TABLE')) == snapshot(
         [
+            'acks',
             'agent_sessions',
             'archives',
             'campaigns',
@@ -672,16 +673,17 @@ def test_acknowledging_an_inbox_item_is_logged_with_the_connection_actor(con: sq
         'INSERT INTO comments (target_kind, target_id, author, kind, body, priority)'
         " VALUES ('run', 7, 'pi', 'decision', 'lowered the floor', 0)",
     )
-    sql.run(con, "UPDATE comments SET acked_at = '2026-10-01 12:00:00', acked_by = 'human' WHERE id = 1")
-    sql.run(con, "UPDATE comments SET acked_by = 'human' WHERE id = 1")
+    sql.run(con, "INSERT INTO acks (comment_id, party, acked_by) VALUES (1, 'human', 'human')")
+    with pytest.raises(sqlite3.IntegrityError, match='UNIQUE constraint failed: acks.comment_id, acks.party'):
+        sql.run(con, "INSERT INTO acks (comment_id, party, acked_by) VALUES (1, 'human', 'human')")
     assert events(con)[1:] == snapshot(
         [
             (
-                'comment.acked_at',
+                'comment.acked',
                 'human',
                 'comment',
                 1,
-                '{"kind":"comment.acked_at","old":null,"new":"2026-10-01 12:00:00","acked_by":"human"}',
+                '{"kind":"comment.acked","party":"human","acked_by":"human"}',
             )
         ]
     )

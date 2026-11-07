@@ -1,8 +1,10 @@
-"""The human's inbox: every comment with a ``priority`` that nobody has acknowledged yet.
+"""The inbox: every comment with a ``priority``. It waits for each party until that party acknowledges it, or it is answered.
 
 A comment addressed to the human has a priority from 0 (urgent) to 4 (someday). Examples are decisions that the
 orchestrator took for the human, escalations and notes that ask for the human. Other comments have no priority and form the log.
-Nothing waits for the human. An item is a record to review, and ``piloop inbox ack`` only marks it as seen.
+Nothing waits for the human. An item is a record to review, and ``piloop inbox ack`` only marks it as seen, for the
+caller's party (``seer``): the people and the orchestrator each acknowledge for themselves. An answer (``answer``)
+settles it for every party, and an escalation takes one.
 
 The orchestrator is any harness that runs the ``piloop-operate`` skill. It learns of new items from the events
 table: ``piloop inbox wait`` blocks until ``news`` returns something, so the orchestrator loops on one command.
@@ -10,16 +12,19 @@ table: ``piloop inbox wait`` blocks until ``news`` returns something, so the orc
 
 import re
 from collections.abc import Collection, Sequence
-from datetime import datetime
+from dataclasses import dataclass
 from typing import Final
 
-from sqlalchemy import ColumnElement, ScalarSelect, case, select
+from sqlalchemy import ColumnElement, ScalarSelect, case, exists, literal, select
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Mapped, Session, aliased
 
-from piloop.actor import Actor, party_of
+from piloop import deprecated
+from piloop.actor import Actor, System, by_a_person, party_of
 from piloop.api.views import (
     AckOutcome,
     AckResult,
+    AckView,
     CommentNews,
     CommentView,
     Linked,
@@ -31,7 +36,8 @@ from piloop.api.views import (
     Thread,
 )
 from piloop.db import feed as db_feed
-from piloop.db.models import NOT_RETIRED, AgentSession, Campaign, Comment, Event, utcnow
+from piloop.db.models import NOT_RETIRED, Ack, AgentSession, Campaign, Comment, Event, utcnow
+from piloop.db.session import write_transaction
 from piloop.db.triggers.changelog import CampaignStatusChanged, Commented, CommentEdited
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
@@ -53,14 +59,33 @@ CITATION = re.compile(r'comment#(\d+)')
 """How a comment refers to another comment in its body. ``thread`` follows these references in both directions."""
 
 
-def items(
-    s: Session, *, campaign_id: CampaignId | None = None, kinds: Collection[CommentKind] = (), acked: bool = False
-) -> list[tuple[Comment, Campaign | None]]:
-    """Return the inbox items with their campaigns, most urgent first, then oldest first.
+HUMAN: Final = System.HUMAN.signature
+"""The party that every person acknowledges for: the inbox has one person's side, whoever reads it."""
 
-    Only unacknowledged items are returned, unless ``acked`` is True, and none of a retired campaign. ``campaign_id``
-    and ``kinds`` filter the items.
-    An item whose target has no campaign (``campaign_of``) appears only when ``campaign_id`` is None.
+
+READERS: Final = (HUMAN, System.ORCHESTRATOR.party)
+"""The parties that read the inbox: the people, and the orchestrator."""
+
+
+def seer(party: str) -> str:
+    """The party that ``party`` acknowledges for (``Ack.party``): ``human`` for every person, else ``party``."""
+    return HUMAN if by_a_person(party) else party
+
+
+def items(
+    s: Session,
+    seen_by: str,
+    *,
+    campaign_id: CampaignId | None = None,
+    kinds: Collection[CommentKind] = (),
+    acked: bool = False,
+) -> list[tuple[Comment, Campaign | None]]:
+    """Return the inbox items that wait for the party ``seen_by`` (``seer``), with their campaigns, most urgent first.
+
+    An item waits until ``seen_by`` acknowledges it, or until a party other than its author's answers it (``answers``):
+    an answer settles it for every party. With ``acked``, the items that ``seen_by`` acknowledged or that were answered
+    come too. None of a retired campaign comes. ``campaign_id`` and ``kinds`` filter the items. An item whose target has
+    no campaign (``campaign_of``) appears only when ``campaign_id`` is None. Items of one priority come oldest first.
     """
     owner = campaign_of(Comment.target_kind, Comment.target_id)
     query = (
@@ -70,12 +95,16 @@ def items(
         .order_by(Comment.priority, Comment.id)
     )
     if not acked:
-        query = query.where(Comment.acked_at.is_(None))
+        query = query.where(~exists().where(Ack.comment_id == Comment.id, Ack.party == seen_by))
     if campaign_id is not None:
         query = query.where(owner == campaign_id)
     if kinds:
         query = query.where(Comment.kind.in_(kinds))
-    return [(c, p) for c, p in s.execute(query)]
+    found: list[tuple[Comment, Campaign | None]] = [(c, p) for c, p in s.execute(query)]
+    if acked:
+        return found
+    settled = answers(s, [c for c, _ in found])
+    return [(c, p) for c, p in found if c.id not in settled]
 
 
 def waiting_for(
@@ -86,14 +115,33 @@ def waiting_for(
     kinds: Collection[CommentKind] = (),
     acked: bool = False,
 ) -> list[tuple[Comment, Campaign | None]]:
-    """Return the inbox items of ``items`` that ``party`` did not write: what its actors have to look at (``Actor.party``).
+    """Return the inbox items of ``items`` that wait for ``party`` and that it did not write (``Actor.party``).
 
     A comment is for its recipients. Its author sees it in its thread (``thread_of``), with the answers, and never as
     an item to acknowledge (``ack``). An agent's party is its role (``Agent.party``), so an orchestrator never waits for
     what an earlier orchestrator wrote.
     """
-    found = items(s, campaign_id=campaign_id, kinds=kinds, acked=acked)
+    found = items(s, seer(party), campaign_id=campaign_id, kinds=kinds, acked=acked)
     return [(c, p) for c, p in found if party_of(c.author) != party]
+
+
+def answers(s: Session, asked: Sequence[Comment]) -> dict[CommentId, Comment]:
+    """The latest answer of each of ``asked`` that has one, by its id: the one definition of an answered item.
+
+    An answer is a comment on the root of the item's thread (``reply``) that is ``in_reply_to`` the item, or that is
+    on the item and answers nothing else. Its author is of a party that reads the inbox (``READERS``), other than the
+    item author's: an agent's follow-up or the daemon's report on an item answers nothing.
+    """
+    by_id = {c.id: c for c in asked}
+    roots = {c.target_id if c.target_kind == TargetKind.COMMENT else c.id for c in asked}
+    on_roots = (Comment.target_kind == TargetKind.COMMENT) & Comment.target_id.in_(roots)
+    found: dict[CommentId, Comment] = {}
+    for answer in s.scalars(select(Comment).where(on_roots).order_by(Comment.id)):
+        to = by_id.get(answer.in_reply_to if answer.in_reply_to is not None else CommentId(answer.target_id))
+        party = party_of(answer.author)
+        if to is not None and seer(party) in READERS and party != party_of(to.author):
+            found[to.id] = answer
+    return found
 
 
 WAKES: Final = tuple(db_feed.Topic(m) for m in (Commented, CommentEdited, CampaignStatusChanged, CandidateScored))
@@ -112,7 +160,7 @@ def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party
 
     It reads the ``WAKES`` events from the feed (``piloop.db.feed``), a page at a time until a page gives a line.
     ``campaign_id`` filters all of them. The returned cursor passes every event that it read, so no event is missed.
-    The escalations that still wait for ``party`` (``unanswered``) come with it, but end no wait: an orchestrator that
+    The escalations that still wait for ``party`` come with it, but end no wait: an orchestrator that
     moved past one sees it again on each wait.
     """
     cursor, found, more, waiting = after, list[NewsItem](), True, []
@@ -125,25 +173,8 @@ def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party
         waiting = waiting_for(s, party, campaign_id=campaign_id)
         found = _news(s, events, waiting, campaign_id, party)
     shown = {item.comment.id for item in found if isinstance(item, CommentNews)}
-    escalations = [comment_view(c) for c in unanswered(s, waiting) if c.id not in shown]
+    escalations = [comment_view(c) for c, _ in waiting if c.kind == ESCALATION and c.id not in shown]
     return News(next=cursor, items=found, escalations=escalations)
-
-
-def unanswered(s: Session, waiting: Sequence[tuple[Comment, Campaign | None]]) -> list[Comment]:
-    """The escalations of ``waiting`` that no other party answered, oldest first.
-
-    An answer is a comment on the root of the escalation's thread (``reply``) that is ``in_reply_to`` it, or that is on
-    it and answers nothing else.
-    """
-    asked = {c.id: c for c, _ in waiting if c.kind == ESCALATION}
-    roots = {c.target_id if c.target_kind == TargetKind.COMMENT else c.id for c in asked.values()}
-    on_roots = (Comment.target_kind == TargetKind.COMMENT) & Comment.target_id.in_(roots)
-    answered = set[CommentId]()
-    for answer in s.scalars(select(Comment).where(on_roots)):
-        to = asked.get(answer.in_reply_to if answer.in_reply_to is not None else CommentId(answer.target_id))
-        if to is not None and party_of(answer.author) != party_of(to.author):
-            answered.add(to.id)
-    return [c for id_, c in sorted(asked.items()) if id_ not in answered]
 
 
 def _news(
@@ -173,46 +204,127 @@ def _news(
 
 
 def ack(s: Session, ids: Sequence[CommentId], actor: Actor) -> list[AckResult]:
-    """Acknowledge the inbox items ``ids`` as ``actor`` and commit. Return what happened to each id.
+    """Acknowledge the inbox items ``ids`` for ``actor``'s party (``seer``), and return what happened to each id.
 
-    An id that is not an inbox item, that ``actor``'s party wrote, or that is already acknowledged, is reported and not
-    changed.
+    Each party acknowledges for itself: the item waits on for every other party. An id that is not an inbox item, that
+    ``actor``'s party wrote, or that its party acknowledged already, is reported and not changed. Each ack is one
+    ``INSERT … ON CONFLICT DO NOTHING``, so of two that race, one acknowledges and the other learns who did. The caller
+    commits.
     """
-    now = utcnow()
+    party = seer(actor.party)
     results = []
     for comment_id in ids:
         match comment := s.get(Comment, comment_id):
             case None | Comment(priority=None):
                 results.append(AckResult(id=comment_id, outcome=AckOutcome.NOT_IN_INBOX, acked_by=None))
             case Comment(author=author) if party_of(author) == actor.party:
-                results.append(AckResult(id=comment_id, outcome=AckOutcome.OWN, acked_by=comment.acked_by))
-            case Comment(acked_at=datetime()):
-                results.append(AckResult(id=comment_id, outcome=AckOutcome.ALREADY, acked_by=comment.acked_by))
+                results.append(AckResult(id=comment_id, outcome=AckOutcome.OWN, acked_by=None))
             case _:
-                comment.acked_at, comment.acked_by = now, actor.signature
-                results.append(AckResult(id=comment_id, outcome=AckOutcome.ACKED, acked_by=actor.signature))
-    s.commit()
+                s.expire(comment, ['acks'])  # read again, as the insert leaves them
+                added = s.execute(
+                    insert(Ack)
+                    .values(comment_id=comment.id, party=party, acked_by=actor.signature, acked_at=utcnow())
+                    .on_conflict_do_nothing()
+                    .returning(Ack.acked_by)
+                ).scalar()
+                if added is not None:
+                    results.append(AckResult(id=comment_id, outcome=AckOutcome.ACKED, acked_by=added))
+                    continue
+                first = s.scalars(select(Ack.acked_by).where(Ack.comment_id == comment.id, Ack.party == party)).one()
+                results.append(AckResult(id=comment_id, outcome=AckOutcome.ALREADY, acked_by=first))
     return results
 
 
+def withdraw(s: Session, item_id: CommentId) -> None:
+    """Take piloop's own item ``item_id`` out of every inbox: it asks nothing any more. The caller commits.
+
+    It is acknowledged for each of the ``READERS`` that has not acknowledged it, signed by the daemon: an answer
+    would come from another party, and nobody answers what nothing asks. An item that is gone (a raw DELETE) takes
+    nothing.
+    """
+    for party in READERS:
+        row = select(Comment.id, literal(party), literal(System.DAEMON.signature), literal(utcnow())).where(
+            Comment.id == item_id
+        )
+        s.execute(
+            insert(Ack).from_select(['comment_id', 'party', 'acked_by', 'acked_at'], row).on_conflict_do_nothing()
+        )
+
+
+def ack_views(comment: Comment) -> tuple[list[AckView], str | None, str | None]:
+    """The ``acks`` of ``comment`` as a view shows them, and 0.6's ``acked_at`` and ``acked_by``: its earliest ack.
+
+    The earliest ack of any party, not the people's: 0.6 had one ack, the first of whoever acknowledged the item.
+    """
+    deprecated.until('0.7.0', 'ack_views returns only the acks: the views lose acked_at and acked_by')
+    first = comment.acks[0] if comment.acks else None
+    views = [AckView(party=a.party, by=a.acked_by, at=iso(a.acked_at)) for a in comment.acks]
+    return views, None if first is None else iso(first.acked_at), None if first is None else first.acked_by
+
+
+@dataclass(frozen=True)
+class Settled:
+    """An escalation that someone answered already (``answers``)."""
+
+    by: str
+    """The signature of whoever wrote its latest answer."""
+    answer: str
+    """The text of its latest answer."""
+
+
+class Answered(Exception):
+    """An escalation that ``answer`` refused: another party answered it first (``settled``)."""
+
+    def __init__(self, item: CommentId, settled: Settled) -> None:
+        super().__init__(f'comment#{item} was answered already, by {settled.by}: {settled.answer}')
+        self.item, self.settled = item, settled
+
+
+def settled(s: Session, item: Comment) -> Settled | None:
+    """The latest answer of ``item`` (``answers``), or None: then an answer would be a second one."""
+    found = answers(s, [item]).get(item.id)
+    return None if found is None else Settled(found.author, found.body)
+
+
+def answer(s: Session, item: Comment, body: str, *, author: Actor, kind: CommentKind, priority: int | None) -> Comment:
+    """Answer inbox item ``item`` as ``author``: a reply of ``kind`` on the root of its thread. The caller commits.
+
+    An escalation takes one answer: a second one is refused, whoever writes it. The caller holds the write lock
+    (``write_transaction``), so the check and the reply are in one write transaction: of two answers that race, the
+    second sees the first.
+
+    Raises:
+        Answered: ``item`` is an escalation that another party answered already.
+    """
+    if item.kind == ESCALATION and (done := settled(s, item)) is not None:
+        raise Answered(item.id, done)
+    reply = Comment(
+        target=TargetRef(TargetKind.COMMENT, root_of(s, item).id),
+        in_reply_to=item.id,
+        author=author.signature,
+        kind=kind,
+        priority=priority,
+        body=body.strip(),
+    )
+    s.add(reply)
+    s.flush()
+    return reply
+
+
 def reply(s: Session, comment_id: CommentId, body: str, *, author: Actor, priority: int) -> Comment:
-    """Answer inbox item ``comment_id`` as ``author`` with a ``decision`` on the root of its thread, and commit.
+    """Answer inbox item ``comment_id`` as ``author`` with a ``decision`` (``answer``), and commit.
 
     As in email, the answer is ``in_reply_to`` the item, and its target is the root (``root_of``): threads stay flat,
     so ``campaign_of`` finds the campaign of every reply. The priority makes the answer an inbox item, so ``news``
     reports it to every orchestrator except its author until it is acknowledged.
+
+    Raises:
+        Answered: the item is an escalation that another party answered already.
     """
-    answer = Comment(
-        target=TargetRef(TargetKind.COMMENT, root_of(s, s.get_one(Comment, comment_id)).id),
-        in_reply_to=comment_id,
-        author=author.signature,
-        kind=DECISION,
-        priority=priority,
-        body=body.strip(),
-    )
-    s.add(answer)
+    write_transaction(s)
+    decision = answer(s, s.get_one(Comment, comment_id), body, author=author, kind=DECISION, priority=priority)
     s.commit()
-    return answer
+    return decision
 
 
 def message(s: Session, campaign_id: CampaignId, body: str, *, author: Actor, priority: int) -> Comment:
@@ -242,6 +354,7 @@ def root_of(s: Session, comment: Comment) -> Comment:
 
 def comment_view(c: Comment) -> CommentView:
     """``c`` as the API shows it."""
+    acks, acked_at, acked_by = ack_views(c)
     return CommentView(
         id=c.id,
         kind=str(c.kind),
@@ -250,16 +363,19 @@ def comment_view(c: Comment) -> CommentView:
         author=c.author,
         created=iso(c.created_at),
         priority=c.priority,
-        acked_at=iso(c.acked_at) if c.acked_at else None,
-        acked_by=c.acked_by,
         body=c.body,
+        acks=acks,
+        acked_at=acked_at,
+        acked_by=acked_by,
     )
 
 
 def thread_of(s: Session, comment: Comment) -> Thread:
     """The thread that ``comment`` is in: its root (``root_of``) and the comments linked to the root (``thread``)."""
     root = root_of(s, comment)
+    answered = answers(s, [root]).get(root.id)
     return Thread(
+        answer=None if answered is None else answered.id,
         comment=comment_view(root),
         linked=[Linked(**comment_view(c).model_dump(), relation=relation) for c, relation in thread(s, root)],
     )

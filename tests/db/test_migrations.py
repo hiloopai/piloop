@@ -74,6 +74,7 @@ def test_head_has_every_table_and_trigger_and_matches_the_models(tmp_path: Path)
     with closing(sqlite3.connect(path, isolation_level=None)) as con:
         tables = [t for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")]
         assert tables == [
+            'acks',
             'agent_sessions',
             'alembic_version',
             'archives',
@@ -1561,3 +1562,35 @@ def test_optimization_0011_gives_a_cancelled_candidate_its_origin_back_with_a_ca
             (2, 'skipped'),
         ]
         assert con.execute("SELECT name FROM sqlite_master WHERE name = 'cancels'").fetchall() == []
+
+
+def test_0084_gives_each_acknowledged_item_an_ack_of_each_party_that_reads_the_inbox_and_downgrades(
+    tmp_path: Path,
+) -> None:
+    """An ack of 0.6 took the item out of every inbox, so each item keeps that: an ack of the people's and of the
+    orchestrator's, signed and timed as it was. The downgrade puts each item's earliest ack back on its row."""
+    path = tmp_path / 'piloop.db'
+    cfg = alembic(path)
+    command.upgrade(cfg, '0083')
+    comment = 'INSERT INTO comments (target_kind, target_id, author, kind, body, priority, acked_at, acked_by) VALUES '
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        con.execute("INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
+        con.execute(comment + "('campaign', 1, 'implementer#2', 'note', 'seen', 1, '2026-10-01 12:00:00', 'human')")
+        con.execute(comment + "('campaign', 1, 'implementer#2', 'note', 'waits', 1, NULL, NULL)")
+    command.upgrade(cfg, '0084')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT comment_id, party, acked_by, acked_at FROM acks ORDER BY party').fetchall() == [
+            (1, 'human', 'human', '2026-10-01 12:00:00'),
+            (1, 'orchestrator', 'human', '2026-10-01 12:00:00'),
+        ]
+        assert 'acked_at' not in [c for (_, c, *_) in con.execute('PRAGMA table_info(comments)')]
+        con.execute('PRAGMA foreign_keys = ON')
+        con.execute('DELETE FROM comments WHERE id = 1')
+        assert con.execute('SELECT count(*) FROM acks').fetchone() == (0,), 'an ack goes with its comment'
+        con.execute(
+            "INSERT INTO acks (comment_id, party, acked_by, acked_at) VALUES (2, 'orchestrator', 'o', '2026-10-02')"
+        )
+    command.downgrade(cfg, '0083')
+    with closing(sqlite3.connect(path, isolation_level=None)) as con:
+        assert con.execute('SELECT id, acked_at, acked_by FROM comments').fetchall() == [(2, '2026-10-02', 'o')]
+        assert con.execute("SELECT name FROM sqlite_master WHERE name = 'acks'").fetchall() == []

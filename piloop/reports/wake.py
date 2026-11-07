@@ -17,6 +17,7 @@ from typing import NamedTuple
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
+from piloop.actor import System
 from piloop.campaign import inbox
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign
@@ -194,7 +195,7 @@ def orchestrator_overview(s: Session, campaign: Campaign | None, budget: int, no
     for part in scope.journals:
         journal += _journal_part(s, part, journal_share - cost(journal))
 
-    items = inbox.items(s, campaign_id=scope.campaign_id)
+    items = inbox.waiting_for(s, System.ORCHESTRATOR.party, campaign_id=scope.campaign_id)
     inbox_title = f'## Inbox ({len(items)} open)'
     inbox_lines = fitted(
         [

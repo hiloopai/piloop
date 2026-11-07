@@ -157,7 +157,7 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'candidate.scored': ['scores', 'campaigns'],
             'candidate.origin': ['campaigns'],
             'candidate.remeasure_requested': ['campaigns'],
-            'comment.acked_at': [],
+            'comment.acked': [],
             'comment.body': [],
             'comment.decision': ['notify', 'prompts'],
             'comment.deleted': [],

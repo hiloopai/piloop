@@ -207,17 +207,21 @@ def _comments(con: sqlite3.Connection, v: Volume, rng: random.Random) -> None:
     limits = {'idea': v.ideas, 'candidate': v.candidates, 'campaign': v.campaigns, 'run': v.runs}
     authors = ['research#1', 'implementer#2', 'orchestrator', 'pi']
 
-    def row(i: int) -> tuple[str, int, str, str, str, int | None, str | None]:
+    def row(i: int) -> tuple[str, int, str, str, str, int | None]:
         target, kind = rng.choice(targets), rng.choice(kinds)
-        # the inbox holds every escalation and decision; all but the last few are acknowledged
+        # the inbox holds every escalation and decision
         priority = rng.randint(0, 4) if kind == 'escalation' or kind == 'decision' else None
-        acked = '2026-01-02 12:00:00' if priority is not None and i < v.comments - 20 else None
-        return target, rng.randint(1, limits[target]), rng.choice(authors), kind, f'body {i}', priority, acked
+        return target, rng.randint(1, limits[target]), rng.choice(authors), kind, f'body {i}', priority
 
+    rows = [row(i) for i in range(v.comments)]
     con.executemany(
-        'INSERT INTO comments (target_kind, target_id, author, kind, body, priority, acked_at)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?)',
-        (row(i) for i in range(v.comments)),
+        'INSERT INTO comments (target_kind, target_id, author, kind, body, priority) VALUES (?, ?, ?, ?, ?, ?)', rows
+    )
+    # all but the last few items are acknowledged, by the people and by the orchestrator
+    acked = [i + 1 for i, r in enumerate(rows) if r[5] is not None and i < v.comments - 20]
+    con.executemany(
+        "INSERT INTO acks (comment_id, party, acked_by, acked_at) VALUES (?, ?, ?, '2026-01-02 12:00:00')",
+        ((c, party, party) for c in acked for party in ('human', 'orchestrator')),
     )
 
 

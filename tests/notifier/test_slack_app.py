@@ -267,10 +267,6 @@ def test_a_click_on_a_choice_s_button_chooses_it(payload: dict[str, object], fou
             Answered('comment#1 was answered already', 'human:bob', 'Chose B: Keep <it> & go.'),
             ':white_check_mark: Answered by human:bob: Chose B: Keep &lt;it&gt; &amp; go.',
         ),
-        (
-            Answered('comment#1 was acknowledged already', 'orchestrator', None),
-            ':white_check_mark: Answered by orchestrator',
-        ),
         (Declined('you are not in people'), None),
     ],
 )

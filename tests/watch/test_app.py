@@ -30,7 +30,7 @@ from piloop.api.contract import Access
 from piloop.api.views import Batch, Envelope, Subject
 from piloop.campaign import ops
 from piloop.db.events import emit
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, UnknownEvent, utcnow
+from piloop.db.models import Ack, AgentSession, AgentSessionState, Campaign, Comment, Event, UnknownEvent, utcnow
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
 from piloop.net import tokens
@@ -286,8 +286,7 @@ def live_campaign(db: Database, campaign: Campaign, tmp_path: Path) -> Campaign:
                     target=TargetRef(RUN, run.id),
                     kind=ESCALATION,
                     priority=1,
-                    acked_at=ago(minutes=20),
-                    acked_by='pi',
+                    acks=[Ack(party='human', acked_by='pi', acked_at=ago(minutes=20))],
                     body='keep #2?',
                     **comment,
                 ),
@@ -347,7 +346,7 @@ def test_the_campaigns_screen_opens_a_campaign_and_esc_comes_back(db: Database, 
 
     drive(db, None, scenario)
     assert shots[0].startswith(' piloop: 2 campaigns\n')
-    assert {'active', '4 score', '+3', '2 agents', '2 open', '2 inbox', 'comment.note 1m ago'} <= set(
+    assert {'active', '4 score', '+3', '2 agents', '2 open', '2 inbox', 'comment.acked 1m ago'} <= set(
         cells(shots[0], 'demo')
     )
     assert cells(shots[0], 'other')[1] == 'stopped: max_runs: 50 runs, and more wo…'
@@ -430,7 +429,7 @@ def test_inbox_keys_acknowledge_one_item_or_every_item_shown(db: Database, live_
     drive(db, 'demo', scenario)
     assert notes == ['comment#2 acknowledged', 'comment#3 acknowledged']
     with db.session() as s:
-        assert [(c.id, c.acked_by) for c in s.scalars(select(Comment).where(Comment.acked_at.is_not(None)))] == [
+        assert [(a.comment_id, a.acked_by) for a in s.scalars(select(Ack).order_by(Ack.comment_id))] == [
             (1, 'pi'),
             (2, 'human'),
             (3, 'human'),

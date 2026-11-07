@@ -126,7 +126,8 @@ def inbox_list(
     now = clock()
     table = Table('id', 'p', 'kind', 'campaign', 'on', 'by', 'age', *(['acked'] if all_ else []), 'first line')
     for item in inbox.items:
-        acked = [f'{item.acked_by}, {_age(item.acked_at, now)} ago' if item.acked_at else '—'] if all_ else []
+        seen = ', '.join(f'{a.by}, {_age(a.at, now)} ago' for a in item.acks) or '—'
+        acked = [seen] if all_ else []
         table.add_row(
             str(item.id),
             str(item.priority),

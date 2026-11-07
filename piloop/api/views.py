@@ -13,6 +13,7 @@ from typing import Annotated, Literal, assert_never
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from piloop import deprecated
 from piloop.api.contract import Access, Revealed
 from piloop.ids import AgentSessionId, CampaignFiles, CampaignId, CampaignStatus, CommentId, KeyOrigin, RoleName
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId
@@ -206,6 +207,19 @@ class Target(View):
     id: int
 
 
+ACKED_AT = 'acked_at and acked_by are the earliest ack of any party: read acks, one per party; removed in piloop 0.7.0'
+deprecated.until('0.7.0', 'delete ACKED_AT and the acked_at and acked_by fields of CommentView and Item: read acks')
+
+
+class AckView(View):
+    """One party's acknowledgement of an inbox item."""
+
+    party: str
+    """``human`` for every person, else a role, such as ``orchestrator``."""
+    by: str
+    at: str
+
+
 class Item(View):
     """An inbox item: a comment with a priority."""
 
@@ -219,8 +233,12 @@ class Item(View):
     """The comment that it answers, when it is a reply. Its target is then the root of the thread."""
     author: str
     created: str
-    acked_at: str | None
-    acked_by: str | None
+    acks: list[AckView]
+    """Each party's acknowledgement of the item, oldest first: each party acknowledges for itself."""
+    acked_at: str | None = Field(default=None, deprecated=ACKED_AT)
+    """Deprecated: the time of the earliest of ``acks``, as 0.6's one ack of every party was. Null while there is none."""
+    acked_by: str | None = Field(default=None, deprecated=ACKED_AT)
+    """Deprecated: who wrote the earliest of ``acks``."""
     body: str
 
 
@@ -409,8 +427,12 @@ class CommentView(View):
     created: str
     priority: int | None
     """Null for a comment that is not in the inbox."""
-    acked_at: str | None
-    acked_by: str | None
+    acks: list[AckView]
+    """Each party's acknowledgement of the item, oldest first: each party acknowledges for itself."""
+    acked_at: str | None = Field(default=None, deprecated=ACKED_AT)
+    """Deprecated: the time of the earliest of ``acks``, as 0.6's one ack of every party was. Null while there is none."""
+    acked_by: str | None = Field(default=None, deprecated=ACKED_AT)
+    """Deprecated: who wrote the earliest of ``acks``."""
     body: str
 
 
@@ -465,6 +487,8 @@ class Thread(View):
     """The root of the thread: the comment itself, or the comment that its target is."""
     linked: list[Linked]
     """The replies, oldest first, then the other comments that cite the root or that it cites, oldest first."""
+    answer: CommentId | None = None
+    """The latest reply that answers the root, which it waits no more for, or null."""
     escalation: EscalationView | None = None
     """How the root shows, when it is an escalation: its campaign's ``[plugins.escalation]`` provider says."""
 
@@ -663,7 +687,7 @@ class AckOutcome(StrEnum):
 
     ACKED = 'acked'
     ALREADY = 'already'
-    """Someone acknowledged it before: ``acked_by`` says who."""
+    """Someone of the caller's party acknowledged it before: ``acked_by`` says who."""
     NOT_IN_INBOX = 'not_in_inbox'
     """No such comment, or one without a priority: nothing to acknowledge."""
     OWN = 'own'
@@ -676,7 +700,7 @@ class AckResult(View):
     id: CommentId
     outcome: AckOutcome
     acked_by: str | None
-    """Who acknowledged it: the caller, or whoever did before. Null while nobody has."""
+    """Who acknowledged it for the caller's party: the caller, or whoever did before. Null while nobody has."""
 
     def line(self) -> str:
         """The result as ``piloop inbox ack`` prints it."""
@@ -735,10 +759,13 @@ def thread_lines(thread: Thread, now: datetime) -> tuple[str, list[str]]:
     c = thread.comment
     if c.priority is None:
         state = 'not in the inbox'
-    elif c.acked_at is None:
+    elif thread.answer is not None:
+        state = f'p{c.priority}, answered by comment#{thread.answer}'
+    elif not c.acks:
         state = f'p{c.priority}, unacknowledged'
     else:
-        state = f'p{c.priority}, acknowledged by {c.acked_by} {age(datetime.fromisoformat(c.acked_at), now)} ago'
+        acks = ', '.join(f'{a.by} {age(datetime.fromisoformat(a.at), now)} ago' for a in c.acks)
+        state = f'p{c.priority}, acknowledged by {acks}'
     title = f'comment#{c.id} {c.kind} on {c.target} by {c.author}, {age(datetime.fromisoformat(c.created), now)} ago · {state}'
     lines = (escalation_lines(thread.escalation, c.id) if thread.escalation else c.body.strip().splitlines()) + (
         [''] if thread.linked else []

@@ -9,12 +9,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from piloop.actor import Actor, Agent, Orchestrating, Person, Service, System, party_of
-from piloop.api.views import AckOutcome, News, Relation, thread_lines
-from piloop.campaign import inbox
+from piloop.api.views import AckOutcome, CommentView, Item, News, Relation, thread_lines
+from piloop.campaign import escalations, inbox
 from piloop.campaign.escalations import DecisionWritten
 from piloop.db import feed as db_feed
 from piloop.db.events import emit, in_order
-from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
+from piloop.db.models import Ack, AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CommentAcked, Commented, IdeaCreated
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
@@ -26,7 +26,8 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from piloop.plugins.escalation.contract import DECISION, ESCALATION
+from piloop.plugins.escalation.contract import DECISION, ESCALATION, Choice, EscalationView
+from piloop.reports import feed
 from piloop.settings import DaemonSettings
 from tests.conftest import elsewhere
 from tests.reports.test_history import idea
@@ -72,7 +73,7 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
             ]
         )
         s.commit()
-        assert bodies(inbox.items(s, campaign_id=campaign.id)) == [
+        assert bodies(inbox.items(s, inbox.HUMAN, campaign_id=campaign.id)) == [
             'on campaign',
             'on idea',
             'on run',
@@ -82,12 +83,12 @@ def test_items_scope_to_the_campaign_through_every_target(db: Database, campaign
             'on a comment of the campaign',
             'two levels deep',
         ], 'the forum (no priority) is not in it'
-        assert bodies(inbox.items(s, campaign_id=other.id)) == [
+        assert bodies(inbox.items(s, inbox.HUMAN, campaign_id=other.id)) == [
             'other campaign',
             'other campaign too',
             'on a comment of the other',
         ]
-        everything = inbox.items(s)
+        everything = inbox.items(s, inbox.HUMAN)
         assert len(everything) == 12, 'unfiltered, the comment three levels deep is in it too'
         assert [p.name if p else None for _, p in everything][-3:] == ['other', 'demo', None]
         s.commit()  # its connection goes back: ``render`` reads in a session of its own
@@ -124,13 +125,13 @@ def test_most_urgent_first_narrowed_by_kind_until_acknowledged(db: Database, cam
             ]
         )
         s.commit()
-        assert bodies(inbox.items(s)) == [
+        assert bodies(inbox.items(s, inbox.HUMAN)) == [
             'lowered the floor',
             'SSO expired',
             'requeued idea#4',
             'half the sweeps add nothing',
         ]
-        assert bodies(inbox.items(s, kinds=[DECISION])) == ['lowered the floor', 'requeued idea#4']
+        assert bodies(inbox.items(s, inbox.HUMAN, kinds=[DECISION])) == ['lowered the floor', 'requeued idea#4']
         assert [
             r.line() for r in inbox.ack(s, [CommentId(3), CommentId(1), CommentId(3), CommentId(99)], System.HUMAN)
         ] == [
@@ -139,15 +140,15 @@ def test_most_urgent_first_narrowed_by_kind_until_acknowledged(db: Database, cam
             'comment#3 was acknowledged already, by human',
             'comment#99 is not in the inbox',
         ]
-        assert bodies(inbox.items(s)) == ['SSO expired', 'half the sweeps add nothing']
-        assert bodies(inbox.items(s, acked=True)) == [
+        assert bodies(inbox.items(s, inbox.HUMAN)) == ['SSO expired', 'half the sweeps add nothing']
+        assert bodies(inbox.items(s, inbox.HUMAN, acked=True)) == [
             'lowered the floor',
             'SSO expired',
             'requeued idea#4',
             'half the sweeps add nothing',
         ]
         acked = in_order(s, CommentAcked)
-        assert [(e.target_id, a.acked_by) for e, a in acked] == [(3, 'human'), (1, 'human')]
+        assert [(e.target_id, a.party, a.acked_by) for e, a in acked] == [(3, 'human', 'human'), (1, 'human', 'human')]
 
 
 def test_an_author_never_has_its_own_comment_waiting_nor_acknowledges_it(db: Database, campaign: Campaign) -> None:
@@ -159,10 +160,10 @@ def test_an_author_never_has_its_own_comment_waiting_nor_acknowledges_it(db: Dat
         assert [r.line() for r in inbox.ack(s, [sent.id], ana)] == [
             'comment#1 is yours: only its recipients acknowledge it'
         ]
-        assert s.get_one(Comment, sent.id).acked_at is None
+        assert s.get_one(Comment, sent.id).acks == []
         assert [r.outcome for r in inbox.ack(s, [sent.id], System.ORCHESTRATOR)] == [AckOutcome.ACKED]
         [own] = inbox.ack(s, [sent.id], ana)
-        assert (own.outcome, own.acked_by) == (AckOutcome.OWN, 'orchestrator'), 'yours, whoever acknowledged it'
+        assert (own.outcome, own.acked_by) == (AckOutcome.OWN, None), 'yours, whoever acknowledged it'
 
 
 def test_every_agent_of_a_role_is_one_party_and_so_is_the_outside_orchestrator_for_what_waits_and_what_is_news(
@@ -291,7 +292,7 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
                     kind=DECISION,
                     priority=2,
                     body='seen',
-                    acked_at=utcnow(),
+                    acks=[Ack(party='orchestrator', acked_by='orchestrator')],
                     **on(campaign),
                 ),
                 Comment(author='implementer#5', kind=ESCALATION, priority=0, body='theirs', **on(other)),
@@ -347,7 +348,8 @@ def test_news_reads_only_what_wakes_a_page_at_a_time_until_a_page_has_a_line(
         cursor = s.scalar(select(func.max(Event.id))) or 0
         on_campaign = TargetRef(TargetKind.CAMPAIGN, campaign.id)
         for n in range(3):
-            s.add(Comment(target=on_campaign, author='implementer#1', priority=1, body=f'acked {n}', acked_at=utcnow()))
+            seen = Ack(party='orchestrator', acked_by='orchestrator')
+            s.add(Comment(target=on_campaign, author='implementer#1', priority=1, body=f'acked {n}', acks=[seen]))
         emit(s, IdeaCreated(), TargetRef(IDEA, 99), System.HUMAN)  # a deleted idea: no line
         s.add(Comment(target=on_campaign, author='implementer#1', priority=1, body='open'))
         s.add(Comment(target=on_campaign, author='implementer#1', body='a note: an event, but not of the inbox'))
@@ -397,7 +399,9 @@ def test_a_reply_answers_the_root_of_the_thread_and_wakes_the_orchestrator_but_n
             DecisionWritten(target_kind=TargetKind.COMMENT, target_id=item.id, in_reply_to=follow_up.id)
         ]
         assert [c.id for c, _ in inbox.thread(s, item)] == [follow_up.id, answer.id]
-        assert [c.id for c, _ in inbox.items(s, campaign_id=campaign.id)] == [item.id, answer.id, follow_up.id]
+        assert [c.id for c, _ in inbox.items(s, inbox.HUMAN, campaign_id=campaign.id)] == [item.id, answer.id], (
+            'the follow-up that the human answered waits for no party'
+        )
         assert news_lines(s, cursor, campaign_id=campaign.id, me=System.ORCHESTRATOR)[1] == [
             'comment#3 decision p2 on comment#1 (demo) by human: Revert it: the floor moved.'
         ]
@@ -441,6 +445,7 @@ def test_an_escalation_left_unacknowledged_comes_back_with_its_age_on_each_wait_
             'its own follow-up answers nothing'
         )
         inbox.ack(s, [CommentId(1)], System.ORCHESTRATOR)
+        s.commit()
         quiet = inbox.news(s, db_feed.newest(s), campaign_id=campaign.id, party=System.ORCHESTRATOR.party)
         assert (quiet.items, quiet.reminder(now)) == ([], '1 escalation waits unacknowledged: comment#2 (5m old)'), (
             'a timeout says it too, but it ends no wait'
@@ -490,3 +495,113 @@ def test_an_item_that_lands_while_news_reads_is_news_now_or_after_its_cursor(
         cursor, now = news_lines(s, start, campaign_id=campaign.id, me=System.ORCHESTRATOR)
         _, then = news_lines(s, cursor, campaign_id=campaign.id, me=System.ORCHESTRATOR)
     assert [*now, *then] == ['comment#1 escalation p1 on campaign#1 (demo) by implementer#2: SSO expired']
+
+
+def test_two_acks_that_race_acknowledge_once_and_the_second_learns_who_did(db: Database, campaign: Campaign) -> None:
+    """B26: ``ack`` read the item, then wrote it, so two concurrent acks both returned ACKED and the first was lost."""
+    with db.session() as s:
+        item = Comment(
+            target=TargetRef(TargetKind.CAMPAIGN, campaign.id), author='implementer#3', priority=1, body='look'
+        )
+        s.add(item)
+        s.commit()
+    ana, bob = Person(name='ana'), Person(name='bob')
+    other = Database(str(db.engine.url), actor=bob)  # a second process: bob's CLI
+    with db.session() as first, other.session() as second:
+        assert first.get_one(Comment, item.id).acks == second.get_one(Comment, item.id).acks == [], 'both read it'
+        [mine] = inbox.ack(first, [item.id], ana)
+        first.commit()
+        [theirs] = inbox.ack(second, [item.id], bob)
+        second.commit()
+    other.close()
+    assert (mine.outcome, mine.acked_by, theirs.outcome, theirs.acked_by) == (
+        AckOutcome.ACKED,
+        ana.signature,
+        AckOutcome.ALREADY,
+        ana.signature,
+    )
+    with db.session() as s:
+        assert [(a.party, a.acked_by) for a in s.get_one(Comment, item.id).acks] == [('human', ana.signature)]
+        assert [a.acked_by for _, a in in_order(s, CommentAcked)] == [ana.signature], 'one event'
+
+
+def test_a_person_s_ack_leaves_the_escalation_waiting_for_the_orchestrator_and_an_answer_ends_it_for_both(
+    db: Database, campaign: Campaign
+) -> None:
+    """B27: one global ack hid an unanswered escalation from the orchestrator. Each party acknowledges for itself."""
+    with db.session() as s:
+        asked = Comment(
+            target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
+            author='implementer#3',
+            kind=ESCALATION,
+            priority=1,
+            body='which floor?',
+        )
+        s.add(asked)
+        s.commit()
+        assert [r.outcome for r in inbox.ack(s, [asked.id], System.HUMAN)] == [AckOutcome.ACKED]
+        s.commit()
+
+        def waits(party: str) -> list[CommentId]:
+            return [c.id for c, _ in inbox.waiting_for(s, party, campaign_id=campaign.id)]
+
+        assert (waits(System.HUMAN.party), waits(System.ORCHESTRATOR.party)) == ([], [asked.id])
+        later = inbox.news(s, db_feed.newest(s), campaign_id=campaign.id, party='orchestrator')
+        assert [c.id for c in later.escalations] == [asked.id], 'still unanswered: it comes with each wait'
+        decision = inbox.reply(s, asked.id, 'the old one', author=System.ORCHESTRATOR, priority=2)
+        assert (waits(System.HUMAN.party), waits(System.ORCHESTRATOR.party)) == ([decision.id], []), (
+            'answered: the decision replaces it in the human inbox'
+        )
+
+
+def test_an_escalation_takes_one_answer_whoever_writes_the_second(db: Database, campaign: Campaign) -> None:
+    """B28: ``piloop inbox choose`` recorded a second, conflicting decision; only the Slack path checked."""
+    view = EscalationView(
+        headline='Go on?',
+        why='w',
+        choices=(Choice(id='A', label='a', result='ra'), Choice(id='B', label='b', result='rb')),
+        details='d',
+    )
+    with db.session() as s:
+        item = escalations.escalate_once(s, TargetRef(TargetKind.CAMPAIGN, campaign.id), view, priority=0)
+        assert item is not None
+        s.commit()
+    with db.session() as s:
+        escalations.choose(s, item.id, 'A', author=System.ORCHESTRATOR)
+        s.commit()
+    with db.session() as s, pytest.raises(inbox.Answered, match=rf'^comment#{item.id} was answered already, by'):
+        escalations.choose(s, item.id, 'B', author=System.HUMAN)
+    with db.session() as s, pytest.raises(inbox.Answered, match='by orchestrator: Chose A'):
+        inbox.reply(s, item.id, 'B, after all', author=System.HUMAN, priority=2)
+    with db.session() as s:
+        decisions = s.scalars(select(Comment).where(Comment.in_reply_to == item.id, Comment.kind == DECISION)).all()
+        assert [d.author for d in decisions] == ['orchestrator']
+
+
+def test_the_deprecated_acked_at_and_acked_by_still_read_as_the_earliest_ack_of_any_party(
+    db: Database, campaign: Campaign
+) -> None:
+    """0.6's one ack was the first of whoever acknowledged the item. Until 0.7.0 the API views keep it, derived from
+    ``acks``, for a client that reads them (the hosted console), and the OpenAPI marks both fields deprecated."""
+    with db.session() as s:
+        item = Comment(
+            target=TargetRef(TargetKind.CAMPAIGN, campaign.id), author='implementer#3', priority=1, body='look'
+        )
+        s.add(item)
+        s.commit()
+        assert inbox.comment_view(item).model_dump(include={'acks', 'acked_at', 'acked_by'}) == {
+            'acks': [],
+            'acked_at': None,
+            'acked_by': None,
+        }
+        inbox.ack(s, [item.id], System.ORCHESTRATOR)
+        s.commit()
+        inbox.ack(s, [item.id], System.HUMAN)
+        s.commit()
+        view = inbox.comment_view(item).model_dump(mode='json')
+        listed = feed.inbox_view(s, 0, System.HUMAN, acked=True).model_dump(mode='json')['items']
+    [first, _] = view['acks']
+    assert (view['acked_at'], view['acked_by'], first['party']) == (first['at'], 'orchestrator', 'orchestrator')
+    assert [(i['acked_at'], i['acked_by']) for i in listed] == [(first['at'], 'orchestrator')]
+    schemas = CommentView.model_json_schema()['properties'], Item.model_json_schema()['properties']
+    assert all(p[field].get('deprecated') for p in schemas for field in ('acked_at', 'acked_by'))

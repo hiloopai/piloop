@@ -30,7 +30,7 @@ from piloop.agents.results import (
     AgentSessionStarted,
     StartupAnomaly,
 )
-from piloop.campaign import escalations
+from piloop.campaign import escalations, inbox
 from piloop.campaign.campaigns import CampaignAdded
 from piloop.campaign.launches import choose_harness, close, earlier, full_harnesses, remove_checkouts, resumed_on
 from piloop.campaign.stop import (
@@ -643,8 +643,7 @@ class Campaigns:
         if len(deaths) < self._launch_policy.startup_breaker:
             if pause is not None:
                 emit(s, LaunchResumed(comment=pause.comment), on_campaign, System.DAEMON)
-                if (escalation := s.get(Comment, pause.comment)) is not None and escalation.acked_at is None:
-                    escalation.acked_at, escalation.acked_by = now, System.DAEMON.signature  # nothing waits on it
+                inbox.withdraw(s, pause.comment)  # nothing waits on it
             return None
         escalation = s.get(Comment, pause.comment) if pause is not None else None
         if pause is None or escalation is None:

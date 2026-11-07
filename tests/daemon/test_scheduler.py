@@ -25,7 +25,7 @@ from opentelemetry.trace import StatusCode
 from pytest_mock import MockerFixture
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from piloop import proc
 from piloop.actor import Agent, System
@@ -39,7 +39,7 @@ from piloop.agents.results import (
     extend,
 )
 from piloop.agents.roles import PILOOP_HINT, compose_brief
-from piloop.campaign import campaigns, ops
+from piloop.campaign import campaigns, inbox, ops
 from piloop.campaign.campaigns import sync
 from piloop.campaign.stop import left, request_cancel, request_stop
 from piloop.config import CampaignConfig, load_campaign_config
@@ -2528,7 +2528,8 @@ def died_at_startup(db: Database, campaign: Campaign, kind: RoleName, minutes_ag
 
 def pause_escalations(db: Database) -> list[Comment]:
     with db.session() as s:
-        return list(s.scalars(select(Comment).where(Comment.kind == 'escalation').order_by(Comment.id)))
+        query = select(Comment).where(Comment.kind == 'escalation').options(selectinload(Comment.acks))
+        return list(s.scalars(query.order_by(Comment.id)))
 
 
 def test_a_paused_campaign_past_its_stop_limit_launches_a_requested_agent_of_a_role_awake_in_it_once(
@@ -2597,14 +2598,14 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
     assert run_all(scheduler) == [] and len(pause_escalations(db)) == 1, 'one escalation while the pause holds'
 
     with db.session() as s:
-        s.get_one(Comment, escalation.id).acked_at = utcnow()
+        inbox.ack(s, [escalation.id], System.HUMAN)
         s.commit()
     assert run_all(scheduler) == [] and len(pause_escalations(db)) == 1, 'acknowledged means seen: not posted again'
 
     latest = died_at_startup(db, campaign, AUDITOR)
     assert run_all(scheduler) == []
     [extended] = pause_escalations(db)
-    assert extended.id == escalation.id and extended.acked_at is not None, 'the same pause: updated in place'
+    assert extended.id == escalation.id and extended.acks != [], 'the same pause: updated in place'
     assert details(extended).startswith(
         'Launches paused: 5 agents'
     ) and f'- agent_session#{latest} (auditor' in details(extended)
@@ -2676,14 +2677,16 @@ def test_the_startup_breaker_acknowledges_its_escalation_once_launches_resume(
     scheduler = make_scheduler(db, runtime, tmp_path)
     assert run_all(scheduler) == []
     [escalation] = pause_escalations(db)
-    assert escalation.acked_at is None
+    assert escalation.acks == []
     with db.session() as s:
         for event in s.scalars(select(Event).where(has(StartupAnomaly))):
             event.at -= FewestLive().startup_window
         s.commit()
     assert run_all(scheduler) != []
     [resumed] = pause_escalations(db)
-    assert (resumed.acked_by, resumed.acked_at is not None) == (System.DAEMON.signature, True)
+    assert [(a.party, a.acked_by) for a in resumed.acks] == [('human', 'daemon'), ('orchestrator', 'daemon')], (
+        'withdrawn: it asks nothing any more'
+    )
     scheduler.wait(SETTLE)
     scheduler.stop(timeout=5)
 
