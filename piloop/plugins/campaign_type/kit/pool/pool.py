@@ -12,7 +12,7 @@ from functools import cached_property
 from math import sqrt
 from statistics import fmean, stdev
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.exc import NoResultFound
 from sqlalchemy.orm import Session
 
@@ -21,8 +21,17 @@ from piloop.db.models import Campaign
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, Track
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, TrackName
-from piloop.plugins.campaign_type.kit.evaluation.measure import derive, means, ratios, sealed_of
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured, RungName, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.measure import (
+    Split,
+    Status,
+    derive,
+    means,
+    ratios,
+    sealed_of,
+    split_of,
+    status,
+)
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES, BestRule, Case, Criterion, Scores
 from piloop.plugins.metric import number
@@ -42,16 +51,14 @@ class Entry:
     origin: Origin
     excluded: str | None
     """Why someone excluded it (``piloop candidate exclude``), or None."""
+    status: Status
+    """What the evaluator measured of it."""
     means: dict[str, float]
-    """The mean of each metric over its successful evaluations of the full panel, ratios included."""
+    """The mean of each metric over the evaluations that scored (``Status.scores``), ratios included."""
     samples: dict[str, list[float]]
-    """Each metric's value in each successful evaluation of the full panel."""
-    measured: int
-    """Its successful evaluations of the full panel."""
-    failed: int
-    """Its evaluations that failed."""
-    stopped: str | None
-    """Why its latest climb of the ladder stopped at a rung, if it stopped there."""
+    """Each metric's value in each evaluation that scored."""
+    seal: Status
+    """What the sealed split measured of it: nothing without one."""
     sealed: float | None
     """Its score on the sealed split, or None."""
 
@@ -89,11 +96,7 @@ def deterministic(s: Session, campaign: Campaign, evaluator_id: EvaluatorId | No
     if first is None:
         return False
     found = ratios(s.get(Evaluator, evaluator_id) if evaluator_id is not None else None)
-    rows = [
-        derive(m.metrics, found)
-        for m in first.measurements
-        if m.evaluator_id == evaluator_id and m.error is None and not m.rung
-    ]
+    rows = [derive(values, found) for values in status(first, evaluator_id).scores]
     return len(rows) >= 2 and all(
         len({row.get(t.primary.name) for row in rows}) == 1 for t in campaign.config.all_tracks
     )
@@ -131,10 +134,8 @@ class Standing:
     metric: str
     """The track's primary."""
     mean: float | None
-    """Its mean of the primary, or None without a successful evaluation of the full panel."""
-    measured: int
-    failed: int
-    stopped: str | None
+    """Its mean of the primary, or None without an evaluation that scored."""
+    status: Status
     confirmed: bool
     refused: str | None
     """Why the best rule refuses it, when it is confirmed and better than the best, or None."""
@@ -158,11 +159,15 @@ class Standing:
 
     def told(self) -> str:
         """What its run's worker hears, after ``candidate#<id> (<revision>):``."""
-        if self.mean is None:
-            if self.stopped is not None:
-                return f'stopped at a rung of the ladder: {self.stopped}'
-            return 'crash: no evaluation succeeded' if self.failed else 'not scored'
-        evals = f'{self.measured} eval' + ('s' if self.measured != 1 else '')
+        if self.mean is None:  # a score without the primary is none
+            match self.status.state:
+                case Measured.STOPPED:
+                    return f'stopped at a rung of the ladder: {self.status.stopped}'
+                case Measured.CRASHED:
+                    return 'crash: no evaluation succeeded'
+                case _:
+                    return 'not scored'
+        evals = f'{self.status.scored} eval' + ('s' if self.status.scored != 1 else '')
         head = f'{self.metric} {number(self.mean)} over {evals}'
         if self.best == self.candidate:
             return f'{head}: the best of the {self.track} track now, rank 1 of {self.of}{self._deltas(best=False)}'
@@ -217,45 +222,20 @@ class Pool:
             )
         ).all()
         ours = select(Candidate.id).where(Candidate.campaign_id == campaign.id)
-        evaluated = s.execute(
-            select(
-                Measurement.candidate_id, Measurement.metrics, Measurement.error, Measurement.rung, Measurement.stopped
-            )
-            .where(Measurement.candidate_id.in_(ours), Measurement.evaluator_id == ev)
-            .order_by(Measurement.id)
-        ).all()
-        full: dict[CandidateId, list[dict[str, float]]] = {}
-        failed: dict[CandidateId, int] = {}
-        stops: dict[CandidateId, str | None] = {}
-        for c, values, error, rung, stopped in evaluated:
-            if error is not None:
-                failed[c] = failed.get(c, 0) + 1
-            elif rung is None:
-                full.setdefault(c, []).append(values)
-            stops[c] = stopped if rung is not None else None
-        sealed: dict[CandidateId, list[float]] = {}
-        if hidden is not None:
-            name = cfg.all_tracks[0].primary.name
-            scored = select(Measurement.candidate_id, Measurement.metrics).where(
-                Measurement.candidate_id.in_(ours),
-                Measurement.evaluator_id == hidden.id,
-                Measurement.error.is_(None),
-                Measurement.rung.is_(None),
-            )
-            for c, values in s.execute(scored):  # the sealed command reports the score, or its result is refused
-                sealed.setdefault(c, []).append(values[name])
+        visible, split = _statuses(s, ours, ev), _statuses(s, ours, hidden.id) if hidden is not None else {}
+        name, none = cfg.all_tracks[0].primary.name, Status()
         entries = {
             c: Entry(
                 id=c,
                 parent=parent,
                 origin=origin,
                 excluded=excluded,
-                means=derive(means(full.get(c, [])), found),
-                samples=_samples(full.get(c, [])),
-                measured=len(full.get(c, [])),
-                failed=failed.get(c, 0),
-                stopped=stops.get(c),
-                sealed=fmean(sealed[c]) if c in sealed else None,
+                status=(mine := visible.get(c, none)),
+                means=derive(means(mine.scores), found),
+                samples=_samples(mine.scores),
+                seal=(seal := split.get(c, none)),
+                # the sealed command reports the score, or its result is refused
+                sealed=fmean(v[name] for v in seal.scores) if seal.scores else None,
             )
             for c, parent, origin, excluded in rows
         }
@@ -279,7 +259,7 @@ class Pool:
 
     def confirmed(self, c: CandidateId) -> bool:
         """Whether ``c`` has the evaluations that confirm it."""
-        return self.entries[c].measured >= self.confirm
+        return self.entries[c].status.scored >= self.confirm
 
     def refusal(self, c: CandidateId) -> str | None:
         """Why ``c`` may not be best, or None. The baseline may always be best."""
@@ -291,7 +271,7 @@ class Pool:
         if self.mean(c) is None:
             return 'no successful evaluation'
         if not self.confirmed(c):
-            return f'{entry.measured} of the {self.confirm} evaluations that confirm it'
+            return f'{entry.status.scored} of the {self.confirm} evaluations that confirm it'
         assert self.baseline is not None  # a campaign with a candidate has a baseline
         sealed = criterion(self.cfg.all_tracks[0].primary) if self.sealed else None
         case = Case(
@@ -304,7 +284,7 @@ class Pool:
         return self.rule.refuse(case)
 
     def _scores(self, entry: Entry) -> Scores:
-        return Scores(entry.name, entry.means, entry.measured, entry.sealed)
+        return Scores(entry.name, entry.means, entry.status.scored, entry.sealed)
 
     @cached_property
     def ranked(self) -> list[CandidateId]:
@@ -349,9 +329,10 @@ class Pool:
     def seal_due(self, c: CandidateId) -> bool:
         """Whether the sealed split is to score ``c``: the campaign has one, ``c`` beats the best, and the split has not.
 
-        A confirmed candidate is due too, so a new sealed command scores the one that would be best.
+        A crash of the sealed command is the split's answer too (``Status.measured``): only a new sealed command runs
+        it again. A confirmed candidate is due too, so a new sealed command scores the one that would be best.
         """
-        return self.sealed and self.entries[c].sealed is None and self.beats_best(c)
+        return self.sealed and not self.entries[c].seal.measured and self.beats_best(c)
 
     def beats_best(self, c: CandidateId) -> bool:
         """Whether the mean of ``c``, not excluded and not the best, beats the best's."""
@@ -391,7 +372,7 @@ class Pool:
             and (gain := self.gain(c, other)) is not None
             and sigma is not None
             and other is not None
-            and abs(gain) <= WITHIN * sigma * sqrt(1 / max(entry.measured, 1) + 1 / max(self._n(other), 1))
+            and abs(gain) <= WITHIN * sigma * sqrt(1 / max(entry.status.scored, 1) + 1 / max(self._n(other), 1))
         )
         confirmed = self.confirmed(c)
         return Standing(
@@ -399,9 +380,7 @@ class Pool:
             track=self.track.name,
             metric=self.primary.name,
             mean=self.mean(c),
-            measured=entry.measured,
-            failed=entry.failed,
-            stopped=entry.stopped,
+            status=entry.status,
             confirmed=confirmed,
             refused=self.refusal(c) if self._would_be_best(c) else None,
             excluded=entry.excluded,
@@ -424,7 +403,7 @@ class Pool:
         return theirs is None or self.primary.direction.better(mine, theirs)
 
     def _n(self, c: CandidateId) -> int:
-        return self.entries[c].measured if c in self.entries else 0
+        return self.entries[c].status.scored if c in self.entries else 0
 
     def worth_branching(self, k: int = 3) -> list[CandidateId]:
         """The best, then the ``k`` best of ``ranked`` on other lines than the best's, one per line.
@@ -442,6 +421,19 @@ class Pool:
             if not any(t in mine or c in set(self.line(t)) for t in taken):
                 taken.append(c)
         return taken
+
+
+def _statuses(s: Session, ours: Select[CandidateId], evaluator_id: EvaluatorId | None) -> dict[CandidateId, Status]:
+    """The ``Status`` under ``evaluator_id`` of each candidate of ``ours`` that it measured, read as columns."""
+    rows: dict[CandidateId, list[tuple[dict[str, float], str | None, RungName | None, str | None]]] = {}
+    evaluated = (
+        select(Measurement.candidate_id, Measurement.metrics, Measurement.error, Measurement.rung, Measurement.stopped)
+        .where(Measurement.candidate_id.in_(ours), Measurement.evaluator_id == evaluator_id)
+        .order_by(Measurement.id)
+    )
+    for c, values, error, rung, stopped in s.execute(evaluated):
+        rows.setdefault(c, []).append((values, error, rung, stopped))
+    return {c: Status.of(found) for c, found in rows.items()}
 
 
 def _samples(rows: Sequence[dict[str, float]]) -> dict[str, list[float]]:
@@ -479,7 +471,7 @@ def branching(s: Session, campaign: Campaign, k: int = 3) -> list[str]:
         summary = s.get_one(Candidate, c).summary or 'no summary'
         mean = pool.mean(c)
         assert mean is not None  # ranked: it has a mean
-        evals = f'{entry.measured} eval' + ('s' if entry.measured != 1 else '')
+        evals = f'{entry.status.scored} eval' + ('s' if entry.status.scored != 1 else '')
         lines.append(f'  - candidate#{c}: {pool.primary.name} {number(mean)} over {evals}{versus} — {summary}')
     return lines
 
@@ -534,7 +526,7 @@ def carried(s: Session, campaign: Campaign) -> Candidate | None:
     hidden = {
         e.id
         for e in s.scalars(select(Evaluator).where(Evaluator.campaign_id == campaign.id))
-        if 'sealed' in e.definition
+        if split_of(e) is Split.SEALED
     }
     before = max((e for e in s.scalars(visible.distinct()) if e not in hidden), default=None)
     if before is None or first is None:

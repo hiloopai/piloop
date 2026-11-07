@@ -93,17 +93,25 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
     Split,
     current_evaluator,
     gate_of,
-    measured,
     remeasure_asked,
     retired,
     score,
     sealed_evaluator,
+    status,
 )
 from piloop.plugins.campaign_type.kit.evaluation.ops import hold_on_failed_baseline, hold_on_infra_errors
 from piloop.plugins.campaign_type.kit.evaluation.submissions import submitted
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator, Measurement
-from piloop.plugins.campaign_type.kit.pool.due import needs
-from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, baseline, branching, carried, criterion, track_of
+from piloop.plugins.campaign_type.kit.pool.due import firsts
+from piloop.plugins.campaign_type.kit.pool.pool import (
+    UNSCORED,
+    Pool,
+    baseline,
+    branching,
+    confirm_runs,
+    criterion,
+    track_of,
+)
 from piloop.plugins.campaign_type.kit.pool.scored import record_scored
 from piloop.plugins.campaign_type.kit.runs.ids import FINISHED_RUNS, OPEN_RUNS, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
@@ -767,7 +775,7 @@ class RunController:
         Never raises. If the evaluation cannot start, for example because the commit is gone, a crashed measurement is
         recorded. It is a result like any other, so the candidate is not tried again with this evaluator unless someone
         asks (``request_remeasure``). What someone asked for gets the evaluations that they asked for, and the baseline
-        and the carried best the ones that confirm them (``pool.needs``); anything else gets one. A candidate whose mean now beats the best's,
+        and the carried best the ones that confirm them (``Status.needs``); anything else gets one. A candidate whose mean now beats the best's,
         such as a new reference, is confirmed (``_confirm``), and a run's worker hears where its candidate stands
         (``CandidateScored``). A confirmed candidate that the sealed split is due to score (``Pool.seal_due``) is only
         scored there. A baseline
@@ -779,11 +787,11 @@ class RunController:
             cfg = campaign.config
             evaluator_id = current_evaluator(s, campaign, cfg).id
             s.commit()
-            asked = remeasure_asked(s, candidate)
-            firsts = {c.id for c in (baseline(s, campaign), carried(s, campaign)) if c is not None}
-            confirming = candidate.id in firsts
-            repeats = asked.repeats if asked is not None else max(needs(s, campaign, candidate), 1) if confirming else 1
-            visible = asked is not None or confirming or not measured(candidate, evaluator_id)
+            asked, now = remeasure_asked(s, candidate), status(candidate, evaluator_id)
+            confirming = candidate.id in {c.id for c in firsts(s, campaign)}
+            need = now.needs(confirm_runs(s, campaign, evaluator_id))
+            repeats = asked.repeats if asked is not None else max(need, 1) if confirming else 1
+            visible = asked is not None or confirming or not now.measured
             campaign_id, revision, run_id = campaign.id, candidate.revision, candidate.run_id
             vcs, campaign_path = vcs_of(campaign), Path(campaign.path)
         eval_dir = campaign_dir(self._home, campaign_id) / 'measure' / f'{candidate_id}-e{evaluator_id}'
@@ -872,7 +880,7 @@ class RunController:
                 evaluator_id = current_evaluator(s, campaign, cfg).id
                 s.commit()
                 best = Pool.of(s, campaign, track_of(cfg, candidate)).best()
-                known = any(m.evaluator_id == evaluator_id for m in candidate.measurements)
+                known = status(candidate, evaluator_id).latest is not None
                 campaign_id, revision = campaign.id, candidate.revision
             if not known and evaluator_id not in tried:
                 match ended := self._measure(
@@ -907,12 +915,14 @@ class RunController:
             confirming, sealing_due = pool.confirm_due(candidate_id), pool.seal_due(candidate_id)
             if not confirming and not sealing_due:
                 return Measuring.MEASURED
-            need = pool.confirm - pool.entries[candidate_id].measured if confirming else 0
+            need = pool.entries[candidate_id].status.needs(pool.confirm) if confirming else 0
             hidden = sealed_evaluator(s, campaign, cfg) if sealing_due else None
             s.commit()
             first = baseline(s, campaign)
             sides = [
-                c for c in (candidate, first) if c is not None and hidden is not None and not measured(c, hidden.id)
+                c
+                for c in (candidate, first)
+                if c is not None and hidden is not None and not status(c, hidden.id).measured
             ]
             seal = [(c.id, c.revision) for c in dict.fromkeys(sides)]
             campaign_id, revision, evaluator_id = campaign.id, candidate.revision, campaign.evaluator_id

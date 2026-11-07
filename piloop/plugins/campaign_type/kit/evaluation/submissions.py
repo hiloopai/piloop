@@ -21,7 +21,8 @@ from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, Candidate
 from piloop.plugins.campaign_type.kit.candidates.references import resolve
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Scoring
-from piloop.plugins.campaign_type.kit.evaluation.measure import remeasure_asked, request_remeasure
+from piloop.plugins.campaign_type.kit.evaluation.ids import Measured
+from piloop.plugins.campaign_type.kit.evaluation.measure import remeasure_asked, request_remeasure, status
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run, latest_agent_session, run_of
@@ -83,14 +84,13 @@ def resubmitted(s: Session, run: Run, version: Version) -> Candidate | None:
 
 
 def retried(s: Session, own: Candidate, actor: Actor) -> None:
-    """A resubmit of the run's own submission: ask once for one more evaluation when every evaluation of it failed.
+    """A resubmit of the run's own submission: ask once for one more evaluation when it crashed (``Measured.CRASHED``).
 
     Load can push an evaluation past the evaluate timeout. A version that scored keeps its score: to evaluate it again,
     ``piloop candidate remeasure``. The caller commits.
     """
     current = s.get_one(Campaign, own.campaign_id).evaluator_id
-    mine = [m for m in own.measurements if m.evaluator_id == current]
-    if mine and all(m.error is not None for m in mine) and remeasure_asked(s, own) is None:
+    if status(own, current).state is Measured.CRASHED and remeasure_asked(s, own) is None:
         request_remeasure(s, own, actor, repeats=1)
 
 

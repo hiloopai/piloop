@@ -14,8 +14,8 @@ from piloop.db.models import Campaign, Pause
 from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.measure import record
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured, Reading
+from piloop.plugins.campaign_type.kit.evaluation.measure import record, status
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import Report
 from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, track_of
@@ -23,20 +23,22 @@ from piloop.plugins.escalation.contract import Choice, EscalationView
 
 
 def hold_on_failed_baseline(s: Session, candidate: Candidate, logs: Path | None) -> None:
-    """Hold the launches of the campaign (``hold``) when ``candidate`` is its baseline and each evaluation of it failed.
+    """Hold the launches of the campaign (``hold``) when ``candidate`` is its baseline and no evaluator scored it.
 
-    Nothing can be compared with a baseline without a score, and no agent should spend on a campaign that has none.
-    One that an older evaluator measured has one, and its campaign goes on. The pause measures what is asked, so it
+    It holds once the current evaluator's evaluations of it crashed (``Measured.CRASHED``). Nothing can be compared with a baseline without a score, and no agent should spend on a campaign that has none.
+    One that an older evaluator scored has one, and its campaign goes on. The pause measures what is asked, so it
     can end on a measured baseline. The reason is the last error, with ``logs``, where that evaluation left its logs,
     and what to do. The caller commits.
     """
-    errors = [m.error for m in candidate.measurements]
     campaign = s.get_one(Campaign, candidate.campaign_id)
-    if candidate.origin is not Origin.BASELINE or None in errors or not errors:
+    now = status(candidate, campaign.evaluator_id)
+    ever = any(m.reading is Reading.SCORE for m in candidate.measurements)
+    if candidate.origin is not Origin.BASELINE or now.state is not Measured.CRASHED or ever:
         return
+    *_, last = (m.error for m in candidate.measurements if m.reading is Reading.CRASH)
     where = '' if logs is None else f'; its logs are in {logs}'
     fix = f'fix it, then `piloop candidate remeasure {candidate.id}` and `piloop resume {campaign.name}`'
-    hold(campaign, Pause.LAUNCHES, f'the baseline failed to evaluate: {errors[-1]}{where}; {fix}')
+    hold(campaign, Pause.LAUNCHES, f'the baseline failed to evaluate: {last}{where}; {fix}')
 
 
 def hold_on_cancelled_baseline(s: Session, candidate: Candidate, actor: Actor) -> None:

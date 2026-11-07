@@ -7,6 +7,7 @@ import pytest
 from git import Repo
 from sqlalchemy import delete, select
 from sqlalchemy.exc import NoResultFound
+from sqlalchemy.orm import Session
 
 from piloop.actor import Agent, System
 from piloop.campaign.ops import Refused
@@ -22,10 +23,11 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
-from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, sealed_of
+from piloop.plugins.campaign_type.kit.evaluation.ids import Measured
+from piloop.plugins.campaign_type.kit.evaluation.measure import current_evaluator, sealed_of, status
 from piloop.plugins.campaign_type.kit.evaluation.submissions import submit, waiting
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.pool.due import due, unready
+from piloop.plugins.campaign_type.kit.pool.due import due, firsts
 from piloop.plugins.campaign_type.kit.pool.pool import Pool, best_of, branching, carried, checkout_candidate
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
@@ -146,6 +148,11 @@ def pool(db: Database, campaign: Campaign) -> Pool:
         return Pool.of(s, p, p.config.all_tracks[0])
 
 
+def unmeasured(s: Session, campaign: Campaign) -> list[CandidateId]:
+    """What runs wait for (``firsts``) that the current evaluator has not answered yet."""
+    return [c.id for c in firsts(s, campaign) if not status(c, campaign.evaluator_id).measured]
+
+
 def told(db: Database, candidate: CandidateId) -> str:
     with db.session() as s:
         [*_, (_, last)] = [e for e in in_order(s, CandidateScored) if e[0].target_id == candidate]
@@ -243,6 +250,53 @@ def test_a_confirmed_candidate_that_fails_the_sealed_split_or_is_excluded_is_nev
         s.get_one(Candidate, honest).excluded_reason, s.get_one(Candidate, honest).excluded_by = 'gamed', 'human'
         s.commit()
     assert pool(db, campaign).best() == baseline(db, campaign.id).id
+
+
+def test_a_crashed_sealed_evaluation_is_the_split_s_answer_so_what_waits_behind_it_is_measured(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A crash of the sealed command is its answer, as a visible crash is: the daemon does not run it again each pass.
+
+    ``due`` serves its first item each pass, so a candidate that stayed due for ever kept the reference from its turn.
+    """
+    configure(db, campaign, evaluator={'scoring': 'submit', 'noise_runs': 1, 'sealed': ['sh', '-c', 'exit 1']})
+    ex = controller(db, runtime, tmp_path)
+    better = submitted(db, campaign, running(db, campaign), commit(checkout(campaign, tmp_path), 'base\na\n'))
+    ex.score_submission(better)
+    with db.session() as s:
+        reference = Candidate(campaign_id=campaign.id, tree_sha='f' * 40, revision='f' * 40, origin=Origin.REFERENCE)
+        s.add(reference)
+        s.commit()
+        p = s.get_one(Campaign, campaign.id)
+        hidden = sealed_of(s, p, p.config)
+        assert hidden is not None
+        assert status(s.get_one(Candidate, better), hidden.id).state is Measured.CRASHED
+        assert [c.id for c in due(s, p)] == [reference.id], 'the crashed seal waits for no second run'
+    assert evaluations(db, campaign, better) == (1, 1)
+    assert pool(db, campaign).refusal(better) is not None, 'without a sealed score it may not be best'
+
+
+def test_a_baseline_whose_evaluate_crashes_before_its_first_rung_is_due_until_noise_runs_crashes(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A crash before the first rung's line is stored at that rung. It is a crash all the same: the baseline is due
+    until ``noise_runs`` of its evaluations crashed, as without a ladder, and runs no longer wait for it."""
+    ladder = [{'name': 'screen', 'stop': {'score': {'floor': -1000}}}]
+    configure(db, campaign, evaluate=['sh', '-c', 'exit 3'], ladder=ladder, evaluator={'noise_runs': 3})
+    ex = controller(db, runtime, tmp_path)
+    base = baseline(db, campaign.id).id
+    passes = 0
+    for _ in range(5):
+        with db.session() as s:
+            if base not in [c.id for c in due(s, s.get_one(Campaign, campaign.id))]:
+                break
+        ex.remeasure(base)
+        passes += 1
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        now = status(s.get_one(Candidate, base), p.evaluator_id)
+        assert (now.state, now.crashes, now.rung, passes) == (Measured.CRASHED, 3, 'screen', 3)
+        assert unmeasured(s, p) == [], 'its crash answers it: runs do not wait for it'
 
 
 def test_a_claim_with_a_base_starts_the_run_there_and_its_submission_stands_against_parent_line_and_best(
@@ -362,13 +416,13 @@ def test_after_an_evaluator_change_runs_wait_for_the_baseline_and_the_old_best_a
     first = baseline(db, campaign.id).id
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        assert carried(s, p) is not None and [c.id for c in unready(s, p)] == [first, better]
+        assert carried(s, p) is not None and unmeasured(s, p) == [better, first]
         assert [c.id for c in due(s, p)] == [better, first]
     for c in (first, better):
         ex.remeasure(c)
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        assert unready(s, p) == [] and due(s, p) == []
+        assert unmeasured(s, p) == [] and due(s, p) == []
     assert pool(db, campaign).best() == better
 
 

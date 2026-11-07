@@ -49,7 +49,7 @@ def record_scored(s: Session, pool: Pool, candidate: CandidateId) -> CandidateSc
     scored = CandidateScored(
         track=standing.track,
         score=standing.mean,
-        measured=standing.measured,
+        measured=standing.status.scored,
         best=standing.best,
         rank=standing.rank,
         parent_delta=standing.vs_parent,

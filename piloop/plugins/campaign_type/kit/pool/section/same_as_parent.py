@@ -2,7 +2,8 @@ from sqlalchemy import select
 
 from piloop.api.views import Lines, Rendered
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.measure import full, metrics
+from piloop.plugins.campaign_type.kit.evaluation.ids import Reading
+from piloop.plugins.campaign_type.kit.evaluation.measure import metrics
 from piloop.plugins.campaign_type.kit.pool.pool import track_of
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.reports.overview import minutes
@@ -35,7 +36,7 @@ class SameAsParent(Section):
                 continue
             found.append(f'candidate#{c.id}')
             if latest is None:
-                rows = [m for m in c.measurements if m.evaluator_id == evaluator_id and full(m)]
+                rows = [m for m in c.measurements if m.evaluator_id == evaluator_id and m.reading is Reading.SCORE]
                 others = [name for name in mine if name != primary]
                 same = sum(mine[name] == theirs.get(name) for name in others)
                 at = min(m.created_at for m in rows)

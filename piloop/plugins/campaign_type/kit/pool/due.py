@@ -10,34 +10,23 @@ from piloop.db.models import Campaign
 from piloop.ids import CampaignStatus
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.measure import measured, requested
+from piloop.plugins.campaign_type.kit.evaluation.measure import requested, status
 from piloop.plugins.campaign_type.kit.pool.pool import Pool, baseline, carried, confirm_runs
 
 
-def needs(s: Session, campaign: Campaign, candidate: Candidate) -> int:
-    """How many more evaluations ``candidate`` needs under the current evaluator to be confirmed.
+def firsts(s: Session, campaign: Campaign) -> list[Candidate]:
+    """What runs wait for: the ``carried`` best, then the baseline. The daemon confirms both with the current evaluator.
 
-    0 once it is confirmed, and once that many of its evaluations failed: a fault of the evaluator is not fixed by
-    running it again (``hold_on_failed_baseline``).
+    Runs start once the current evaluator answered both (``Status.measured``).
     """
-    ev = campaign.evaluator_id
-    mine = [m for m in candidate.measurements if m.evaluator_id == ev and m.rung is None]
-    want = confirm_runs(s, campaign, ev)
-    if sum(m.error is not None for m in mine) >= want:
-        return 0
-    return max(want - sum(m.error is None for m in mine), 0)
-
-
-def unready(s: Session, campaign: Campaign) -> list[Candidate]:
-    """What runs wait for: the baseline and the ``carried`` best, while the current evaluator has measured neither."""
-    found = [c for c in (baseline(s, campaign), carried(s, campaign)) if c is not None]
-    return [c for c in found if not measured(c, campaign.evaluator_id)]
+    return [c for c in (carried(s, campaign), baseline(s, campaign)) if c is not None]
 
 
 def due(s: Session, campaign: Campaign) -> list[Candidate]:
     """Return what the daemon evaluates with the current evaluator, most urgent first, each once.
 
-    1. The ``carried`` best, until it is confirmed (``needs``): it is the best again once the new evaluator scores it.
+    1. The ``carried`` best, until it is confirmed (``Status.needs``): it is the best again once the new evaluator scores
+       it.
     2. The baseline, until it is confirmed: runs wait for it, and its evaluations show whether the evaluator is
        deterministic.
     3. Each candidate that someone asked to measure again (``requested``), oldest request first.
@@ -52,10 +41,11 @@ def due(s: Session, campaign: Campaign) -> list[Candidate]:
     asked = [c for c, _ in requested(s, campaign)]
     if campaign.status is not CampaignStatus.ACTIVE:
         return list(dict.fromkeys(asked))
-    firsts = [c for c in (carried(s, campaign), baseline(s, campaign)) if c is not None and needs(s, campaign, c)]
+    confirm = confirm_runs(s, campaign, campaign.evaluator_id)
+    unconfirmed = [c for c in firsts(s, campaign) if status(c, campaign.evaluator_id).needs(confirm)]
     new = select(Candidate).where(
         Candidate.campaign_id == campaign.id, Candidate.origin == Origin.REFERENCE, ~Candidate.measurements.any()
     )
     pool = Pool.of(s, campaign, campaign.config.all_tracks[0])
     sealing = [s.get_one(Candidate, c) for c in pool.ranked_all() if pool.seal_due(c)]
-    return list(dict.fromkeys([*firsts, *asked, *sealing, *s.scalars(new.order_by(Candidate.id))]))
+    return list(dict.fromkeys([*unconfirmed, *asked, *sealing, *s.scalars(new.order_by(Candidate.id))]))

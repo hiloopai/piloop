@@ -16,7 +16,7 @@ from piloop.db.models import EMPTY_JSON, NOW, PROCESS, Base, Campaign, text_chec
 from piloop.ids import CampaignId
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, RungName
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, MeasurementId, Reading, RungName
 
 # the types of its columns, beside core's in Base.type_annotation_map
 Base.registry.update_type_annotation_map(
@@ -88,6 +88,20 @@ class Measurement(Base):
 
     candidate: Mapped[Candidate] = relationship(back_populates='measurements')
     evaluator: Mapped[Evaluator] = relationship()
+
+    @property
+    def reading(self) -> Reading:
+        """What it says of its candidate: the one reading of ``error``, ``rung`` and ``stopped``."""
+        return read(self.error, self.rung, self.stopped)
+
+
+def read(error: str | None, rung: RungName | None, stopped: str | None) -> Reading:
+    """What a measurement with these columns says of its candidate, for a reader of columns, not rows (``Pool.of``)."""
+    if error is not None:
+        return Reading.CRASH
+    if rung is None:
+        return Reading.SCORE
+    return Reading.CLIMB if stopped is None else Reading.STOP
 
 
 class Evaluation(Base):

@@ -7,11 +7,12 @@ controller and the history block agree. Where a score stands among the others is
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from statistics import fmean
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from sqlalchemy import ColumnElement, select
@@ -36,9 +37,16 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import config
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric
 from piloop.plugins.campaign_type.kit.evaluation.evaluate import UNITS, Units
-from piloop.plugins.campaign_type.kit.evaluation.ids import MEASUREMENT, EvaluatorId, MeasurementId, RungName
+from piloop.plugins.campaign_type.kit.evaluation.ids import (
+    MEASUREMENT,
+    EvaluatorId,
+    Measured,
+    MeasurementId,
+    Reading,
+    RungName,
+)
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement, read
 from piloop.plugins.campaign_type.kit.evaluation.wire import REPEATS, RungResult
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 
@@ -106,6 +114,11 @@ def sealed_of(s: Session, campaign: Campaign, cfg: CampaignConfig) -> Evaluator 
     return s.scalar(row)
 
 
+def split_of(evaluator: Evaluator) -> Split:
+    """Which split ``evaluator`` scores: a sealed split's evaluator has its command in its ``definition``."""
+    return Split.SEALED if SEALED in evaluator.definition else Split.VISIBLE
+
+
 def retired(s: Session, evaluator_id: EvaluatorId) -> bool:
     """Whether its campaign no longer measures with ``evaluator_id``: as its current evaluator or its sealed one.
 
@@ -115,7 +128,7 @@ def retired(s: Session, evaluator_id: EvaluatorId) -> bool:
     campaign = s.get_one(Campaign, evaluator.campaign_id)
     if evaluator.id == campaign.evaluator_id:
         return False
-    if SEALED not in evaluator.definition:
+    if split_of(evaluator) is Split.VISIBLE:
         return True
     try:
         command = campaign.config.evaluator.sealed
@@ -137,14 +150,91 @@ def evaluator_runners() -> tuple[str, ...]:
     return (PROCESS,)
 
 
-def full(m: Measurement) -> bool:
-    """Whether ``m`` scores: it measured the full panel, and succeeded. A rung of the ladder never scores."""
-    return m.error is None and m.rung is None
+@dataclass(frozen=True)
+class Status:
+    """What one evaluator measured of one candidate: the one state that its measurements under it give.
+
+    Every reader that asks whether a candidate is measured, crashed, stopped at a rung or confirmed asks this
+    (``status``, and ``Pool.of`` for a whole campaign), so they agree.
+    """
+
+    scores: tuple[dict[str, float], ...] = ()
+    """The metrics of each measurement that scores (``Reading.SCORE``), oldest first."""
+    crashes: int = 0
+    """Its evaluations that failed, at a rung or on the full panel."""
+    latest: Reading | None = None
+    """What its latest measurement says, or None before its first."""
+    rung: RungName | None = None
+    """The rung of the latest measurement, or None."""
+    stopped: str | None = None
+    """Why the climb stopped at ``rung``, when the latest measurement is a stop."""
+
+    @classmethod
+    def of(cls, rows: Iterable[tuple[dict[str, float], str | None, RungName | None, str | None]]) -> Status:
+        """The status that measurements give, as ``(metrics, error, rung, stopped)``, oldest first."""
+        scores: list[dict[str, float]] = []
+        crashes, latest, rung, stopped = 0, None, None, None
+        for values, error, rung, stopped in rows:  # the latest row's rung and stop stay
+            if (latest := read(error, rung, stopped)) is Reading.SCORE:
+                scores.append(values)
+            elif latest is Reading.CRASH:
+                crashes += 1
+        return cls(tuple(scores), crashes, latest, rung, stopped)
+
+    @property
+    def state(self) -> Measured:
+        """Where its measurement is: a score, once it has one, else what its latest measurement says."""
+        return Measured.SCORED if self.scores else LATEST[self.latest]
+
+    @property
+    def scored(self) -> int:
+        """How many of its evaluations scored."""
+        return len(self.scores)
+
+    @property
+    def measured(self) -> bool:
+        """Whether the evaluator answered it: a score, or a crash.
+
+        A crash is a result like any other, so the daemon does not evaluate it again unasked. A climb that stopped at a
+        rung is no answer: what needs a score, a head or a bar, is measured in full, and a run that reaches the tree
+        again climbs again.
+        """
+        return bool(self.scores) or self.crashes > 0
+
+    def needs(self, confirm: int) -> int:
+        """How many more evaluations confirm it, with ``confirm`` successful ones (``confirm_runs``).
+
+        0 once it is confirmed, and once ``confirm`` of its evaluations failed: a fault of the evaluator is not fixed
+        by running it again.
+        """
+        return 0 if self.crashes >= confirm else max(confirm - self.scored, 0)
+
+    def climb(self) -> str | None:
+        """Where its latest climb of the ladder is: ``reached <rung>``, ``stopped at <rung>: <why>``, or None."""
+        match self.latest:
+            case Reading.CLIMB:
+                return f'reached {self.rung}'
+            case Reading.STOP:
+                return f'stopped at {self.rung}: {self.stopped}'
+            case _:
+                return None
 
 
-def full_clause() -> ColumnElement[bool]:
-    """Select the measurements that ``full`` is true of."""
-    return Measurement.error.is_(None) & Measurement.rung.is_(None)
+LATEST: Final[Mapping[Reading | None, Measured]] = {
+    None: Measured.UNMEASURED,
+    Reading.CRASH: Measured.CRASHED,
+    Reading.STOP: Measured.STOPPED,
+    Reading.CLIMB: Measured.CLIMBING,
+    Reading.SCORE: Measured.SCORED,
+}
+"""The state of a measurement without a score, by what its latest measurement says."""
+
+
+def status(candidate: Candidate, evaluator_id: EvaluatorId | None) -> Status:
+    """The ``Status`` of ``candidate`` under ``evaluator_id``, from its measurements."""
+    return Status.of(
+        (m.metrics, m.error, m.rung, m.stopped) for m in candidate.measurements if m.evaluator_id == evaluator_id
+    )
 
 
 class _Judged(BaseModel):
@@ -178,7 +268,7 @@ def metrics(candidate: Candidate, evaluator_id: EvaluatorId | None) -> dict[str,
 
     A ratio is the ratio of the means of its parts (``derive``).
     """
-    rows = [m for m in candidate.measurements if m.evaluator_id == evaluator_id and full(m)]
+    rows = [m for m in candidate.measurements if m.evaluator_id == evaluator_id and m.reading is Reading.SCORE]
     return derive(means([m.metrics for m in rows]), ratios(rows[0].evaluator) if rows else {})
 
 
@@ -194,7 +284,8 @@ def rung_results(candidate: Candidate, evaluator_id: EvaluatorId | None) -> list
     """
     found: dict[RungName, list[Measurement]] = {}
     for m in candidate.measurements:
-        if m.evaluator_id == evaluator_id and m.error is None and m.rung is not None:
+        if m.evaluator_id == evaluator_id and m.reading in (Reading.CLIMB, Reading.STOP):
+            assert m.rung is not None  # a climb is at a rung
             found.setdefault(m.rung, []).append(m)
     return [
         RungResult(
@@ -208,24 +299,6 @@ def rung_results(candidate: Candidate, evaluator_id: EvaluatorId | None) -> list
     ]
 
 
-def climb(candidate: Candidate, evaluator_id: EvaluatorId | None) -> str | None:
-    """Return where the candidate's latest climb of the ladder under ``evaluator_id`` is, or None after the full panel.
-
-    ``stopped at <rung>: <why>``, or ``reached <rung>`` while it climbs.
-    """
-    for m in reversed(candidate.measurements):
-        if m.evaluator_id != evaluator_id or m.error is not None:
-            continue
-        match m.rung, m.stopped:
-            case None, _:
-                return None
-            case rung, None:
-                return f'reached {rung}'
-            case _:
-                return f'stopped at {m.rung}: {m.stopped}'
-    return None
-
-
 def means(rows: Sequence[dict[str, float]]) -> dict[str, float]:
     """Return the mean of each metric over ``rows``, the metrics of measurements."""
     names = {name for row in rows for name in row}
@@ -235,17 +308,6 @@ def means(rows: Sequence[dict[str, float]]) -> dict[str, float]:
 def score(candidate: Candidate, evaluator_id: EvaluatorId | None, primary: Metric) -> float | None:
     """Return the primary metric under ``evaluator_id``, or None when no successful measurement has it."""
     return metrics(candidate, evaluator_id).get(primary.name)
-
-
-def measured(candidate: Candidate, evaluator_id: EvaluatorId | None) -> bool:
-    """Return whether the candidate needs no evaluation under ``evaluator_id``: a ``full`` measurement, or a crash.
-
-    A climb that stopped at a rung does not count, so what needs a score, a head or a bar, is measured in full, and a
-    run that reaches the tree again climbs again.
-    """
-    return any(
-        m.evaluator_id == evaluator_id and (m.rung is None or m.error is not None) for m in candidate.measurements
-    )
 
 
 class RemeasureRequested(EventModel):
@@ -378,7 +440,9 @@ def units(candidate: Candidate, evaluator_id: EvaluatorId, units_dir: Path) -> U
     rows = [
         UNITS.validate_json(path.read_bytes())
         for m in candidate.measurements
-        if m.evaluator_id == evaluator_id and full(m) and (path := units_file(units_dir, m.id)).is_file()
+        if m.evaluator_id == evaluator_id
+        and m.reading is Reading.SCORE
+        and (path := units_file(units_dir, m.id)).is_file()
     ]
     per_metric: dict[str, dict[str, list[float]]] = {}
     for row in rows:

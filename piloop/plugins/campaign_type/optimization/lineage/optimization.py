@@ -13,9 +13,7 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Track
-from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
-from piloop.plugins.campaign_type.kit.evaluation.measure import derive, full_clause, means, ratios
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
+from piloop.plugins.campaign_type.kit.evaluation.ids import Measured, TrackName
 from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, Standing, fallback_track
 from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunId
@@ -76,7 +74,6 @@ class OptimizationLineage(LineageProvider):
 
     def graph(self, s: Session, campaign: Campaign) -> Graph:
         tracks = campaign.config.all_tracks
-        scored = _scores(s, campaign, tracks)
         sessions = _sessions(s, campaign)
         made = select(
             Candidate.id,
@@ -113,7 +110,7 @@ class OptimizationLineage(LineageProvider):
                     parents=[] if parent is None else [_id(parent)],
                     created=created,
                     judged=None if by is None else Judged(by=by, reason=reason),
-                    scores=scored.get(c, {}),
+                    scores=_scores(pool, c, tracks),
                     links=_links(c, run, idea, title, sessions),
                     summary=summary,
                 )
@@ -143,7 +140,7 @@ def _status(standing: Standing) -> NodeStatus:
     if standing.excluded is not None:
         return EXCLUDED
     if standing.mean is None:
-        return CRASHED if standing.failed else PENDING
+        return CRASHED if standing.status.state is Measured.CRASHED else PENDING
     return RANKED if standing.rank is not None else SCORED
 
 
@@ -151,24 +148,10 @@ def _track(track: Track) -> ScoreTrack:
     return ScoreTrack(name=TrackKey(track.name), metric=track.primary.name, direction=track.primary.direction)
 
 
-def _scores(s: Session, campaign: Campaign, tracks: Sequence[Track]) -> dict[CandidateId, dict[TrackKey, float]]:
-    """The score of each candidate on each track that has one: its primary's mean under the current evaluator."""
-    measured = (
-        select(Measurement.candidate_id, Measurement.metrics)
-        .join(Candidate, Measurement.candidate_id == Candidate.id)
-        .where(Candidate.campaign_id == campaign.id, Measurement.evaluator_id == campaign.evaluator_id, full_clause())
-        .order_by(Measurement.id)
-    )
-    rows: dict[CandidateId, list[dict[str, float]]] = {}
-    for candidate, values in s.execute(measured):
-        rows.setdefault(candidate, []).append(values)
-    evaluator = s.get(Evaluator, campaign.evaluator_id) if campaign.evaluator_id is not None else None
-    computed = ratios(evaluator)
-    found: dict[CandidateId, dict[TrackKey, float]] = {}
-    for candidate, values in rows.items():
-        metrics = derive(means(values), computed)
-        found[candidate] = {TrackKey(t.name): metrics[t.primary.name] for t in tracks if t.primary.name in metrics}
-    return found
+def _scores(pool: Pool, c: CandidateId, tracks: Sequence[Track]) -> dict[TrackKey, float]:
+    """The score of ``c`` on each track that has one: its primary's mean in ``pool``, under its evaluator."""
+    found = pool.entries[c].means if c in pool.entries else {}
+    return {TrackKey(t.name): found[t.primary.name] for t in tracks if t.primary.name in found}
 
 
 def _sessions(s: Session, campaign: Campaign) -> dict[RunId, list[SessionLink]]:

@@ -65,7 +65,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import (
 )
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator, Measurement
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BEST_RULES
-from piloop.plugins.campaign_type.kit.pool.due import due, unready
+from piloop.plugins.campaign_type.kit.pool.due import due
 from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, best_of, track_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
 from piloop.plugins.campaign_type.kit.runs import stop as runs_stop
@@ -127,6 +127,7 @@ from tests.conftest import (
     workers_of,
     write_toml,
 )
+from tests.daemon.test_pool import unmeasured
 from tests.test_git import by
 from tests.test_vcs import git_words
 from tests.usage.test_usage import READS_PI, SESSIONS
@@ -1850,7 +1851,7 @@ def test_a_changed_evaluator_measures_again_and_old_numbers_do_not_count(
         sync(s, proj)
         s.commit()
         assert proj.evaluator_id != before, 'a new evaluate command is a new evaluator'
-        assert [c.id for c in unready(s, proj)] == [1, added.id], (
+        assert unmeasured(s, proj) == [added.id, 1], (
             'nothing is measured under the new evaluator yet: runs wait for the baseline and the best under the old one'
         )
     second = make_run(db, campaign, title='again')

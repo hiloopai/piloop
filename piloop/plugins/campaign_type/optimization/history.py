@@ -34,8 +34,8 @@ from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.references import references
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric
-from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
-from piloop.plugins.campaign_type.kit.evaluation.measure import climb, score
+from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured
+from piloop.plugins.campaign_type.kit.evaluation.measure import score, status
 from piloop.plugins.campaign_type.kit.pool.pool import baseline, fallback_track, track_of
 from piloop.plugins.campaign_type.kit.pool.scored import new_bests
 from piloop.plugins.campaign_type.kit.runs.sessions import session_tokens
@@ -282,8 +282,9 @@ def _outcome(s: Session, idea: Idea, primary: Metric, evaluator_id: EvaluatorId 
             best = (value, c, run.base_candidate_id)
     if best is None:  # Every commit crashed in measurement or was skipped (Piloop-Eval: skip).
         c, _ = produced[-1]
-        where = climb(c, evaluator_id)
-        crashed = any(m.evaluator_id == evaluator_id and m.error is not None for m in c.measurements)
+        now = status(c, evaluator_id)
+        where = now.climb()
+        crashed = now.state is Measured.CRASHED
         return f'{"crash" if crashed else c.origin}{f", {where}" if where else ""} (candidate#{c.id})'
     value, c, base_id = best
     base = score(s.get_one(Candidate, base_id), evaluator_id, primary)

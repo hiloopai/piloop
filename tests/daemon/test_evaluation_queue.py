@@ -24,10 +24,10 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId
 from piloop.plugins.campaign_type.kit.evaluation.jobs import KIND, EvaluationJob, InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     current_evaluator,
-    measured,
     request_remeasure,
     retired,
     sealed_evaluator,
+    status,
 )
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.pool.due import due
@@ -287,7 +287,7 @@ def test_a_cancel_holds_when_the_daemon_restarts_before_it_sees_it(db: Database,
         s.commit()
         s.execute(delete(Evaluation))  # what the next daemon's reap does
         s.commit()
-        assert not measured(s.get_one(Candidate, other.id), evaluator)
+        assert not status(s.get_one(Candidate, other.id), evaluator).measured
     assert skipped(db, other.id) == [], 'no daemon measures it'
 
 

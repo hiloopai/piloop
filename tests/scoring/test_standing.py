@@ -8,7 +8,8 @@ from statistics import fmean
 from piloop.config import CampaignConfig
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId, Origin
 from piloop.plugins.campaign_type.kit.evaluation.config import Metric, MetricRole
-from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
+from piloop.plugins.campaign_type.kit.evaluation.ids import RungName, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.measure import Status
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
 from piloop.plugins.campaign_type.kit.pool.pool import Entry, Pool
 from piloop.plugins.metric import Direction
@@ -35,17 +36,23 @@ def entry(
     stopped: str | None = None,
     sealed: float | None = None,
 ) -> Entry:
-    """Candidate ``c``, a child of ``parent``, with one successful evaluation per value of each list of ``samples``."""
+    """Candidate ``c``, a child of ``parent``, with one successful evaluation per value of each list of ``samples``.
+
+    Then ``failed`` crashes, then a climb that ``stopped`` at a rung.
+    """
+    n = max((len(v) for v in samples.values()), default=0)
+    rows = [({name: v[i] for name, v in samples.items()}, None, None, None) for i in range(n)]
+    rows += [({}, 'exit 1', None, None)] * failed
+    rows += [({}, None, RungName('screen'), stopped)] if stopped is not None else []
     return Entry(
         id=C(c),
         parent=None if parent is None else C(parent),
         origin=Origin.BASELINE if parent is None else Origin.RUN,
         excluded=excluded,
+        status=Status.of(rows),
         means={name: fmean(values) for name, values in samples.items() if values},
         samples=samples,
-        measured=max((len(v) for v in samples.values()), default=0),
-        failed=failed,
-        stopped=stopped,
+        seal=Status(),
         sealed=sealed,
     )
 

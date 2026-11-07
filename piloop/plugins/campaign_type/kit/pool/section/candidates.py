@@ -1,19 +1,27 @@
 from piloop.api.views import Rendered, Table, Value
 from piloop.db.models import count
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate, produced
-from piloop.plugins.campaign_type.kit.evaluation.ids import TrackName
-from piloop.plugins.campaign_type.kit.evaluation.measure import climb
+from piloop.plugins.campaign_type.kit.evaluation.ids import Measured, TrackName
+from piloop.plugins.campaign_type.kit.evaluation.measure import status
 from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, Standing, track_of
 from piloop.plugins.section.contract import Rendering, Section, Surface
 from piloop.text import age, cell
 
 CANDIDATES_SHOWN = 8
+PLACES = {
+    Measured.UNMEASURED: 'not scored',
+    Measured.CLIMBING: 'not scored',
+    Measured.STOPPED: 'stopped',
+    Measured.CRASHED: 'crash',
+    Measured.SCORED: 'not scored',
+}
+"""The place of a candidate without a mean of the primary, by its ``Status.state``."""
 
 
 def place(standing: Standing) -> str:
     """Where a candidate stands, in a cell: ``best``, ``#2 of 9``, ``2/3 evals``, ``refused``, or ``crash``."""
     if standing.mean is None:
-        return 'stopped' if standing.stopped is not None else ('crash' if standing.failed else 'not scored')
+        return PLACES[standing.status.state]
     if standing.best == standing.candidate:
         return 'best'
     if standing.excluded is not None:
@@ -22,7 +30,7 @@ def place(standing: Standing) -> str:
         return 'refused'
     if standing.rank is not None:
         return f'#{standing.rank} of {standing.of}'
-    return f'{standing.measured} eval' + ('s' if standing.measured != 1 else '')
+    return f'{standing.status.scored} eval' + ('s' if standing.status.scored != 1 else '')
 
 
 class Candidates(Section):
@@ -54,7 +62,7 @@ class Candidates(Section):
                     *([track.name] if cfg.multitrack else []),
                     None if standing is None else standing.mean,
                     None if standing is None else standing.vs_parent,
-                    *([climb(c, evaluator_id)] if cfg.ladder else []),
+                    *([status(c, evaluator_id).climb()] if cfg.ladder else []),
                     f'run#{c.run_id}' if c.run_id else 'no run',
                     age(c.created_at, r.now),
                     cell(c.summary or ''),

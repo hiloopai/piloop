@@ -21,7 +21,8 @@ from piloop.plugins.campaign_type.contract import CannotLaunch, Steering, Take, 
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.evaluation import submissions
-from piloop.plugins.campaign_type.kit.pool.due import due, unready
+from piloop.plugins.campaign_type.kit.evaluation.measure import status
+from piloop.plugins.campaign_type.kit.pool.due import due, firsts
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.runs.controller import RUNS, close_run, handed_off, wrap_up_lead
 from piloop.plugins.campaign_type.kit.runs.ids import OPEN_RUNS, RUN, RunEnd, RunStatus
@@ -191,11 +192,11 @@ class OptimizationPlanner:
         one and claims it, and may start from another candidate then (``--base``). Each role that does runs fills its
         own slots (``max_concurrent``), in the order of ``Roles.doing_runs``, on the next harness of its rotation that
         is not at its cap. Nothing starts while the campaign has no baseline, or while the current evaluator has not
-        measured it, nor the best before an evaluator change (``unready``: ``remeasure`` measures them first). Nor does a run whose session the
+        measured it, nor the best before an evaluator change (``firsts``: ``remeasure`` measures them first). Nor does a run whose session the
         stop rule's ``hours`` would end within its wrap-up lead: its worker would be told to wrap up as it starts.
         """
         best = best_of(s, campaign)
-        if best is None or unready(s, campaign):
+        if best is None or not all(status(c, campaign.evaluator_id).measured for c in firsts(s, campaign)):
             return
         cfg = campaign.config
         runs_left, hours_left = left.get(facts.RUNS), left.get(facts.HOURS)
