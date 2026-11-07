@@ -47,6 +47,7 @@ from piloop.campaign.campaigns import (
 from piloop.campaign.stop import run_cancel, seconds, timeout as agent_timeout
 from piloop.config import TRANSCRIPT, CampaignConfig
 from piloop.db.events import emit, has, latest
+from piloop.db.machine import Machine, Refused, transition
 from piloop.db.models import (
     AgentSession,
     AgentSessionState,
@@ -104,7 +105,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evalu
 from piloop.plugins.campaign_type.kit.pool.due import needs
 from piloop.plugins.campaign_type.kit.pool.pool import UNSCORED, Pool, baseline, branching, carried, criterion, track_of
 from piloop.plugins.campaign_type.kit.pool.scored import record_scored
-from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunEnding, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import FINISHED_RUNS, OPEN_RUNS, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested, end_requested
 from piloop.plugins.campaign_type.kit.runs.stop import release
 from piloop.plugins.campaign_type.kit.runs.tables import Run, working_on
@@ -172,6 +173,19 @@ class RunFinished(EventModel):
     kind: Literal['run.finished'] = 'run.finished'
     end: RunEnd
     error: str | None
+
+
+RUN_STATES: Machine[RunStatus] = Machine(
+    Run.status,
+    {
+        RunStatus.RUNNING: frozenset({RunStatus.QUEUED}),
+        RunStatus.QUEUED: frozenset({RunStatus.RUNNING}),
+        **dict.fromkeys(FINISHED_RUNS, frozenset(OPEN_RUNS)),
+    },
+    RUN,
+)
+"""A run's status: it starts (``RunStarted``), is queued again after a failed start (``RunRelaunched``), and closes
+once (``close_run``). A closed run never opens again."""
 
 
 class Measuring(StrEnum):
@@ -386,17 +400,9 @@ class RunController:
                 span.error(e)
                 error = f'{type(e).__name__}: {e}'
                 with self._db.session() as s:
-                    unstarted = (AgentSession.id == agent_session_id) & (
-                        AgentSession.state == AgentSessionState.STARTING
-                    )
-                    closed = s.scalar(
-                        update(AgentSession)
-                        .where(unstarted)
-                        .values(state=AgentSessionState.KILLED, ended_at=utcnow(), error=error)
-                        .returning(AgentSession.id)
-                    )
+                    closed = _close_unstarted(s, agent_session_id, error)
                     s.commit()
-                end = RunEnd.FAILED if closed is None else RunEnd.NOT_STARTED
+                end = RunEnd.NOT_STARTED if closed else RunEnd.FAILED
                 self._close(span, run_id, end, error)
                 self._settle(run_id, end, None)
 
@@ -442,16 +448,24 @@ class RunController:
                         case _:
                             assert_never(table.continuity)
                 brief = run.brief_cid
-                run.status = RunStatus.RUNNING
-                # A relaunch keeps the start time, so comments since then are sent to the new implementer again.
-                run.started_at = run.started_at or utcnow()
-                run.log_dir = str(self._runs_dir / str(run_id))
-                emit(
-                    s,
-                    RunStarted(harness=run.harness, model=run.model),
-                    TargetRef(RUN, run_id),
-                    System.DAEMON,
-                )
+                try:
+                    transition(
+                        s,
+                        RUN_STATES,
+                        run_id,
+                        RunStatus.RUNNING,
+                        RunStarted(harness=run.harness, model=run.model),
+                        System.DAEMON,
+                        # A relaunch keeps the start time, so comments since then are sent to the new implementer again.
+                        started_at=run.started_at or utcnow(),
+                        log_dir=str(self._runs_dir / str(run_id)),
+                    )
+                except Refused as e:  # a stop closed the run after the pass took its implementer: nothing starts
+                    s.rollback()
+                    _close_unstarted(s, agent_session_id, str(e))
+                    s.commit()
+                    span.set(status='already_closed', found=e.found)
+                    return
                 s.commit()
         self._finish(run_id, agent_session_id, brief, span, resumed)
 
@@ -641,7 +655,8 @@ class RunController:
                 if (why := unlaunchable(s, run.campaign, role.timeout, role.wrap_up_lead)) is not None:
                     span.set(relaunch=why)
                     return False
-                run.status = RunStatus.QUEUED
+                relaunched = RunRelaunched(agent_session=agent_session_id, launches=launches)
+                transition(s, RUN_STATES, run_id, RunStatus.QUEUED, relaunched, System.DAEMON)
                 agent_session = AgentSession(
                     kind=run.role,
                     campaign_id=run.campaign_id,
@@ -657,8 +672,6 @@ class RunController:
                 assert run.brief_cid is not None  # the launch that failed wrote it
                 resigned = re.sub(signed, rf'\g<1>#{agent_session.id}', read_brief(self.cas, run.brief_cid))
                 run.brief_cid = self.cas.put(resigned.encode())
-                relaunched = RunRelaunched(agent_session=agent_session_id, launches=launches)
-                emit(s, relaunched, TargetRef(RUN, run_id), System.DAEMON)
                 s.commit()
             transcript = log_dir / TRANSCRIPT
             if transcript.exists():
@@ -1226,7 +1239,11 @@ class RunController:
                 self._stopped(span, run_id)
                 return
             with self._db.session() as s:
-                close_run(s, s.get_one(Run, run_id), end, error).scoring = True
+                try:
+                    close_run(s, s.get_one(Run, run_id), end, error).scoring = True
+                except Refused as e:  # another writer closed it first, a stop's drain say: its end stands
+                    span.set(status='already_closed', found=e.found, end=end)
+                    return
                 s.commit()
         span.set(status=end.status, end=end, error=error)
 
@@ -1398,10 +1415,25 @@ def close_run(s: Session, run: Run, end: RunEnd, error: str | None) -> Run:
     """Close ``run`` as ``end``: its status, end, error and finish time, and ``RunFinished``. The caller commits.
 
     Every writer of a run's end goes through here.
+
+    Raises:
+        Refused: the run is closed already. Its first end stands.
     """
-    run.status, run.end, run.error, run.finished_at = end.status, end, error, utcnow()
-    emit(s, RunFinished(end=end, error=error), TargetRef(RUN, run.id), System.DAEMON)
+    finished = RunFinished(end=end, error=error)
+    transition(s, RUN_STATES, run.id, end.status, finished, System.DAEMON, end=end, error=error, finished_at=utcnow())
     return run
+
+
+def _close_unstarted(s: Session, agent_session_id: AgentSessionId, error: str) -> bool:
+    """Close the implementer if it is still ``starting``: it was not launched. Return whether it was. The caller commits."""
+    unstarted = (AgentSession.id == agent_session_id) & (AgentSession.state == AgentSessionState.STARTING)
+    closed = s.scalar(
+        update(AgentSession)
+        .where(unstarted)
+        .values(state=AgentSessionState.KILLED, ended_at=utcnow(), error=error)
+        .returning(AgentSession.id)
+    )
+    return closed is not None
 
 
 def handed_off(ending: RunEndRequested) -> tuple[RunEnd, str | None]:

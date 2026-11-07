@@ -1,4 +1,4 @@
-"""``run_failed``: a run failed or timed out, and no agent of the campaign got it yet: an orchestrator's wake-up.
+"""``run_failed``: a run ended as an incident (``INCIDENTS``), and no agent of the campaign got it yet: a wake-up.
 
 Each such run is an incident: the requested row gets one ``anomaly.reported`` event for it, which the agent's brief
 lists (the ``incidents`` section). Each incident goes to one agent only.
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from piloop.db.events import AnomalyReported, in_order
 from piloop.db.models import AgentSession, Event
 from piloop.ids import AgentSessionId, TargetKind, TargetRef
-from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd
+from piloop.plugins.campaign_type.kit.runs.ids import INCIDENTS, RUN
 from piloop.plugins.campaign_type.kit.runs.tables import Run, campaign_runs
 from piloop.plugins.role.orchestrator.passes import Fire, RolePass
 from piloop.settings import settings
@@ -42,7 +42,7 @@ class Incident:
 
 def run_failed(p: RolePass) -> Fire | None:
     """Request an agent for the failed runs that no agent of the campaign got yet, oldest first, or None."""
-    failed = p.s.scalars(campaign_runs(p.campaign.id).where(Run.end.in_((RunEnd.FAILED, RunEnd.TIMED_OUT))))
+    failed = p.s.scalars(campaign_runs(p.campaign.id).where(Run.end.in_(INCIDENTS)))
     found = [
         Incident(
             TargetRef(RUN, run.id),

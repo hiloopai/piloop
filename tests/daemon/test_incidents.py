@@ -12,7 +12,8 @@ from piloop.ids import TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
-from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RUN, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.role.orchestrator.passes import Fire, RolePass
 from piloop.plugins.role.orchestrator.run_failed import run_failed
 from piloop.plugins.section.contract import SECTIONS, Rendering, markdown
@@ -58,6 +59,20 @@ def test_a_failed_or_timed_out_run_is_an_incident_and_a_stopped_or_given_up_one_
     assert isinstance(first, AnomalyReported) and first.line == snapshot(
         '- run#2 failed, 1h ago: failed on script (idea#2): boom'
     )
+
+
+def test_a_run_whose_worker_was_lost_or_that_went_stale_is_an_incident_and_one_that_never_started_is_not(
+    db: Database, campaign: Campaign
+) -> None:
+    """#721: the orchestrator heard only of failed and timed-out runs. The startup breaker reports failed starts."""
+    live_campaign(db, campaign)
+    with db.session() as s:
+        p = s.get_one(Campaign, campaign.id)
+        for end in (RunEnd.WORKER_LOST, RunEnd.STALE, RunEnd.NOT_STARTED, RunEnd.GAVE_UP):
+            run(s, idea(s, p, f'{end}', IdeaStatus.OPEN), RunStatus.FAILED, 1, 60, 70).end = end
+        s.commit()
+        heard = {s.get_one(Run, RunId(int(subject.partition('#')[2]))).end for subject in subjects(fired(s, campaign))}
+    assert heard == {RunEnd.FAILED, RunEnd.WORKER_LOST, RunEnd.STALE}, "the live campaign's failed run, and these two"
 
 
 def test_an_incident_wakes_an_agent_once(db: Database, campaign: Campaign) -> None:

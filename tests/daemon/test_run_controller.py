@@ -20,7 +20,7 @@ from inline_snapshot import snapshot
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 from pytest_mock import MockerFixture
-from sqlalchemy import func, insert, select
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.orm import Session
 
 from piloop.actor import System
@@ -39,6 +39,7 @@ from piloop.campaign.campaigns import sync
 from piloop.cli.plugins import selections
 from piloop.config import CampaignConfig, ConfigError, load_campaign_config
 from piloop.db.events import has, in_order, latest
+from piloop.db.machine import Refused
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import OriginChanged
@@ -73,13 +74,16 @@ from piloop.plugins.campaign_type.kit.runs.controller import (
     Measuring,
     RunController,
     RunFacts,
+    RunFinished,
     RunRelaunched,
+    RunStarted,
     close_run,
     run_outcome,
 )
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunEnd, RunEnding, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.ops import RunEndRequested
 from piloop.plugins.campaign_type.kit.runs.section.long_jobs import LongJobs
+from piloop.plugins.campaign_type.kit.runs.stop import release
 from piloop.plugins.campaign_type.kit.runs.tables import Run, run_of, working_on
 from piloop.plugins.escalation.contract import ESCALATION
 from piloop.plugins.executor.contract import Source
@@ -1178,6 +1182,64 @@ def test_a_run_whose_implementer_never_worked_ends_at_once_when_its_campaign_wou
         )
         assert in_order(s, RunRelaunched) == []
         assert idea_of(run).status is IdeaStatus.OPEN
+
+
+def test_a_run_that_a_stop_closed_after_the_pass_took_its_implementer_never_starts_and_closes_once(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """The stop's pass drained the queued run while its implementer was ``starting``, before the run's thread ran.
+
+    The thread used to set ``running`` on the closed run. The CHECK refused that, and the run closed a second time,
+    ``not_started`` over ``campaign_stopped``. Now the thread starts nothing: the run's first end stands.
+    """
+    run_id = make_run(db, campaign)
+    with db.session() as s:  # one pass takes the implementer
+        implementer = s.scalars(select(AgentSession).where(working_on(run_id))).one()
+        implementer.state = AgentSessionState.STARTING
+        s.commit()
+        agent_session_id = implementer.id
+    with db.session() as s:  # the next pass drains the run, which is still queued
+        run = s.get_one(Run, run_id)
+        release(s, close_run(s, run, RunEnd.CAMPAIGN_STOPPED, None), RunEnd.CAMPAIGN_STOPPED, None)
+        s.commit()
+    controller(db, runtime, tmp_path).execute(run_id, agent_session_id)
+    with db.session() as s:
+        run = s.get_one(Run, run_id)
+        assert (run.status, run.end, run.error) == (RunStatus.FAILED, RunEnd.CAMPAIGN_STOPPED, None)
+        assert [f.end for _, f in in_order(s, RunFinished)] == [RunEnd.CAMPAIGN_STOPPED]
+        assert in_order(s, RunStarted) == []
+        implementer = s.get_one(AgentSession, agent_session_id)
+        assert (implementer.state, implementer.error) == (
+            AgentSessionState.KILLED,
+            f'run#{run_id} is failed: it cannot become running',
+        )
+        with pytest.raises(Refused, match='cannot become failed'):
+            close_run(s, run, RunEnd.FAILED, 'again')
+
+
+def test_a_run_closed_by_hand_while_its_implementer_starts_keeps_the_end_written_by_hand(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """``piloop sql`` is the escape hatch: a person closed the run. Its thread neither queues it again nor closes it."""
+    run_id = make_run(db, campaign)
+    ex = controller(db, runtime, tmp_path)
+
+    def closed_by_hand(*_: object, **__: object) -> NotStarted:
+        with db.session() as s:
+            ended = {'status': RunStatus.FAILED, 'end': RunEnd.CANCELLED, 'finished_at': utcnow()}
+            s.execute(update(Run).where(Run.id == run_id).values(ended))
+            s.commit()
+        return NotStarted('it failed to start')
+
+    mocker.patch.object(ex.launcher, 'launch', side_effect=closed_by_hand)
+    execute(ex, db, run_id)
+    with db.session() as s:
+        run = s.get_one(Run, run_id)
+        assert (run.status, run.end) == (RunStatus.FAILED, RunEnd.CANCELLED)
+        assert in_order(s, RunFinished) == [] and in_order(s, RunRelaunched) == []
+        assert [w.state for w in s.scalars(select(AgentSession).where(working_on(run_id)))] == [
+            AgentSessionState.KILLED
+        ]
 
 
 def test_a_worktree_that_cannot_be_made_is_a_failed_start_that_frees_the_slot(
