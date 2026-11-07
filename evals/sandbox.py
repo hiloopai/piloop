@@ -186,12 +186,6 @@ def built(settings: Settings, steps: Sequence[Step]) -> str:
     return bounded(BUILD_SECONDS, lambda: modal_image(steps, baked=True).build(app(settings)).object_id, 'image build')
 
 
-def tagged(settings: Settings, tags: dict[str, str]) -> dict[str, Box]:
-    """The running sandboxes of the app that have ``tags``, by id: those that a piloop daemon's provisioner started."""
-    found = bounded(None, lambda: list(modal.Sandbox.list(app_id=app(settings).app_id, tags=tags)), 'Sandbox.list')
-    return {s.object_id: Box(s) for s in found}
-
-
 class Reader(Protocol):
     """A stream that a background command wrote."""
 

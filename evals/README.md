@@ -45,11 +45,13 @@ A run holds its agent sessions in `EVALS_SESSION_LEDGER` while it lives. The dri
 sessions of every run on this machine over `EVALS_MAX_SESSIONS`. Sessions that no driver here starts, such as another
 campaign's on the same gateway pool, are a file there with `run`, `sessions` and `until`.
 
-The driver reads the spend every `EVALS_POLL_SECONDS`: the tokens of every session file in the agents' sandboxes at
-list price (a team's, found by its provisioner's tags), plus the sandboxes' CPU and memory. Each sample keeps the
-tokens too, by kind. The export (git bundle, piloop's database, session files, spend) goes to
-`results/<task>/<arm>-<repeat>/`, and to `EVALS_ARCHIVE_URI` when it is set. The export goes box by box: one that
-fails is named in `run.json`'s `export_failed`, and stops no other. A sandbox is deleted only after its export.
+The driver reads the spend every `EVALS_POLL_SECONDS`: the tokens of every agent's session file at list price, plus
+the sandboxes' CPU and memory. Each sample keeps the tokens too, by kind. The driver reaches only the control sandbox.
+A team's workers put each agent's session file into the control's CAS as it grows, at most 30 s behind; the driver
+copies the latest snapshot of each session to `agents/<harness>/<session id>.jsonl` there. The export (git bundle,
+piloop's database, session files, spend) goes to `results/<task>/<arm>-<repeat>/`, and to `EVALS_ARCHIVE_URI` when it
+is set. Session files that could not be brought up to date are named in `run.json`'s `export_failed`, and the rest
+of the export still goes. A sandbox is deleted only after its export.
 
 To stop a run early, write the reason into a file `halt` in its directory: the driver stops at its next sample and
 exports. Never signal the driver: Modal's client ends the sandboxes that it made when its process is interrupted.

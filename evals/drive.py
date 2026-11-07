@@ -12,6 +12,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import shlex
 import tarfile
 import tempfile
@@ -47,7 +48,6 @@ from evals.sandbox import (
     image,
     network_policy,
     recipe,
-    tagged,
 )
 from evals.score import sealed_data
 from evals.telemetry import exported, tracer
@@ -58,7 +58,6 @@ from piloop.plugins.harness.codex import Codex, toml
 from piloop.plugins.harness.contract import Harness, Usage
 from piloop.plugins.harness.pi import Pi
 from piloop.plugins.price_list.genai_prices import GenaiPrices
-from piloop.plugins.provisioner.modal import OWNER as MODAL_OWNER, POOL as MODAL_POOL
 from piloop.plugins.role.orchestrator import OrchestratorRole
 
 REPO = f'{WORK}/repo'
@@ -67,7 +66,21 @@ SEALED = f'{PILOOP_HOME}/sealed'
 OUT = f'{WORK}/out'
 HOME = '/root'
 SESSIONS = {'claude': '.claude/projects', 'codex': '.codex/sessions', 'pi': '.pi/agent/sessions'}
-"""Where each harness keeps its session files, under ``HOME``: the meter reads them, the export takes them."""
+"""Where each harness keeps its session files, under ``HOME``: a plain arm's meter reads them, its export takes them."""
+SNAPSHOTS = 'agents'
+"""A team's session files on its control sandbox, under ``WORK``, and in its export: ``agents/<harness>/<session
+id>.jsonl``."""
+LATEST = (
+    'select harness, session_id, session_file from agent_sessions a where session_file is not null'
+    ' and id = (select max(id) from agent_sessions b'
+    ' where b.harness = a.harness and b.session_id = a.session_id and b.session_file is not null) order by id'
+)
+"""The latest snapshot of each agent session, by harness and session id: a session that piloop restored for a resume
+starts from the file of the one before, so its latest snapshot holds the whole session."""
+SESSION_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')
+"""A session id that names a file: the harnesses' are UUIDs and the like."""
+FETCHES = 100
+"""The most snapshots that one command fetches: its length stays far below the kernel's cap on an argument."""
 HARNESSES: dict[str, Harness] = {'claude': Claude(), 'codex': Codex(), 'pi': Pi()}
 """piloop's own harnesses, which name the vendor of each model that the meter counts."""
 type Counts = dict[str, dict[str, dict[str, int]]]
@@ -415,30 +428,88 @@ def selftest(box: Shell, task: Task, settings: Settings) -> SelfTest:
     return SelfTest(cpu=cpu, values=values)
 
 
-def meter(box: Shell) -> dict[str, dict[str, dict[str, int]]]:
+@dataclass(frozen=True)
+class Sessions:
+    """Where the session files of a run's agents are on its control sandbox: a directory, and each harness's in it."""
+
+    base: str
+    dirs: Mapping[str, str]
+
+    def roots(self) -> str:
+        """The meter's arguments: ``<harness>=<directory>``."""
+        return ' '.join(f'{harness}={self.base}/{path}' for harness, path in self.dirs.items())
+
+    def tar(self) -> str:
+        """The arguments of ``tar`` that take every directory."""
+        return f'-C {self.base} {" ".join(self.dirs.values())}'
+
+
+def plain_sessions() -> Sessions:
+    """A plain arm's: where its harness writes them, in its one sandbox."""
+    return Sessions(HOME, SESSIONS)
+
+
+def team_sessions() -> Sessions:
+    """A team's: the snapshots that ``TeamSessions`` brought from the control's CAS."""
+    return Sessions(WORK, {harness: f'{SNAPSHOTS}/{harness}' for harness in SESSIONS})
+
+
+@dataclass
+class TeamSessions:
+    """A team's session files, from its control sandbox alone: the driver never reaches into a worker's.
+
+    Each worker puts the session file of each of its agents into the control's CAS as it grows (``agent_sessions
+    .session_file``, every 30 s at most), and once more when the agent ends. A call fetches each newer snapshot into
+    ``team_sessions``, and remembers what it fetched, so that the next one fetches only what changed.
+    """
+
+    box: Shell
+    fetched: dict[tuple[str, str], str] = field(default_factory=dict)
+
+    def __call__(self) -> None:
+        """Bring every agent's latest snapshot to ``team_sessions``.
+
+        Raises:
+            RuntimeError: a row names no harness of ``SESSIONS``, or a session id that names no file; or a fetch failed.
+        """
+        rows = self.box.run(f'sqlite3 {PILOOP_HOME}/piloop.db {shlex.quote(LATEST)}')
+        sessions = team_sessions()
+        where = {harness: f'{sessions.base}/{path}' for harness, path in sessions.dirs.items()}
+        due: dict[tuple[str, str], str] = {}
+        for line in rows.splitlines():
+            harness, session, cid = line.split('|')
+            if harness not in SESSIONS or not SESSION_ID.fullmatch(session):
+                raise RuntimeError(f'agent session {harness!r} {session!r}: no file of the meter can hold it')
+            if self.fetched.get((harness, session)) != cid:
+                due[harness, session] = cid
+        todo = list(due.items())
+        for start in range(0, len(todo), FETCHES):
+            batch = todo[start : start + FETCHES]
+            gets = [
+                f'piloop cas get {shlex.quote(cid)} > {where[harness]}/{session}.part'
+                f' && mv {where[harness]}/{session}.part {where[harness]}/{session}.jsonl'
+                for (harness, session), cid in batch
+            ]
+            self.box.run(' && '.join([f'mkdir -p {" ".join(where.values())}', *gets]), timeout=900)
+            self.fetched.update(batch)
+
+
+def meter(box: Shell, sessions: Sessions) -> dict[str, dict[str, dict[str, int]]]:
     """The tokens of the agents' session files in ``box``, by harness and model."""
-    roots = ' '.join(f'{harness}={HOME}/{path}' for harness, path in SESSIONS.items())
-    box.run(f'mkdir -p {WORK} && python3 {OPT}/meter.py {WORK}/meter.json {roots}')
+    box.run(f'mkdir -p {WORK} && python3 {OPT}/meter.py {WORK}/meter.json {sessions.roots()}')
     return json.loads(box.read(f'{WORK}/meter.json'))
 
 
-def sample(boxes: Mapping[str, Shell], seen: dict[str, Counts], usd_per_hour: float, hours: float) -> Sample:
+def sample(fleet: Fleet, hours: float) -> Sample:
     """What the run has spent so far: the tokens of its agents and their price, and its compute.
 
-    ``seen`` keeps each box's last count, by its id, so that a box that ended still counts.
+    Every session file of the run is on its control sandbox, an ended agent's too, so a count is never lost.
     """
-    for name, box in boxes.items():
-        seen[name] = meter(box)
-    tokens: Counts = {}
-    for counted in seen.values():
-        for harness, models in counted.items():
-            for model, count in models.items():
-                into = tokens.setdefault(harness, {}).setdefault(model, {})
-                for k, v in count.items():
-                    into[k] = into.get(k, 0) + v
+    fleet.collect()
+    tokens: Counts = meter(fleet.control, fleet.sessions)
     counts = [count for models in tokens.values() for count in models.values()]
     summed = Tokens(**{k: sum(c.get(k, 0) for c in counts) for k in Tokens.model_fields})
-    return Sample(hours=hours, models_usd=price(tokens), compute_usd=hours * usd_per_hour, tokens=summed)
+    return Sample(hours=hours, models_usd=price(tokens), compute_usd=hours * fleet.usd_per_hour, tokens=summed)
 
 
 def compute_rate(r: Resources, settings: Settings) -> float:
@@ -450,12 +521,14 @@ def compute_rate(r: Resources, settings: Settings) -> float:
 class Fleet:
     """The sandboxes of a run.
 
-    ``control`` holds the repo and the run. ``agents`` lists the sandboxes of its agents now, by id, ``control`` among
-    them for a plain arm: the meter reads their session files, and the export takes those of each but ``control``.
+    ``control`` holds the repo, the run and the session files of every agent (``sessions``): the meter reads them there,
+    and the export takes them from there. ``collect`` brings them up to date first: a team's come from its CAS
+    (``TeamSessions``), and a plain arm's harness writes them there itself.
     """
 
     control: Shell
-    agents: Callable[[], Mapping[str, Shell]]
+    sessions: Sessions
+    collect: Callable[[], None]
     usd_per_hour: float
     ids: list[str]
     close: Callable[[], None]
@@ -480,9 +553,7 @@ def on_modal(
         env=env,
         run=name,
     )
-    fleet = Fleet(
-        box, lambda: {box.sandbox.object_id: box}, compute_rate(r, settings), [box.sandbox.object_id], box.close
-    )
+    fleet = Fleet(box, plain_sessions(), lambda: None, compute_rate(r, settings), [box.sandbox.object_id], box.close)
     fleet.described = {'platform': 'modal'}
     return fleet, Plain(task, arm, settings, hours)
 
@@ -516,7 +587,7 @@ def on_daytona(
     """The plain session in a Modal sandbox of ``AGENT``, as each agent of a piloop arm."""
     only = agent_box(task, arm, settings, hours, env, name)
     ids = [only.sandbox.object_id]
-    fleet = Fleet(only, lambda: {ids[0]: only}, compute_rate(AGENT, settings), ids, only.close)
+    fleet = Fleet(only, plain_sessions(), lambda: None, compute_rate(AGENT, settings), ids, only.close)
     fleet.described = {'platform': 'daytona', 'agents_on': 'modal'}
     return fleet, Plain(task, arm, settings, hours)
 
@@ -576,8 +647,8 @@ def on_team(
 
     Each agent's worker is a Modal sandbox of ``AGENT``, which reaches what the task's ``network`` allows and the
     control sandbox. Each evaluator runs one evaluation at a time where the task is scored (``Task.scorer``): a Daytona
-    sandbox of ``daytona.EVALUATOR``, or a Modal one of the scorer's size. The driver starts only the control sandbox:
-    the meter and the export find the agents' sandboxes by their provisioner's tags.
+    sandbox of ``daytona.EVALUATOR``, or a Modal one of the scorer's size. The driver starts only the control sandbox,
+    and reaches only it: the meter and the export read the agents' session files from its CAS (``TeamSessions``).
     """
     cloud = daytona.client(settings)
     steps = recipe([task], arm, settings.gateway)
@@ -648,13 +719,7 @@ def on_team(
         control.close()  # none outlives a run that never started
         raise
     usd = daytona.rate(daytona.CONTROL, settings) + n * compute_rate(AGENT, settings) + e * evaluator_rate
-    fleet = Fleet(
-        control,
-        lambda: tagged(settings, {MODAL_OWNER: owner, MODAL_POOL: daytona.AGENTS}),
-        usd,
-        [control.id],
-        control.close,
-    )
+    fleet = Fleet(control, team_sessions(), TeamSessions(control), usd, [control.id], control.close)
     fleet.described = {
         'platform': 'team',
         'control': control.id,
@@ -787,54 +852,32 @@ def drive(task: Task, arm: PiloopArm | PlainArm, repeat: int, budget: float, hou
 
 
 def export(fleet: Fleet, run: Piloop | Plain, out: Path) -> list[str]:
-    """Export the run to ``out/export``, box by box, and return what failed: one box that fails stops no other.
+    """Export the run to ``out/export`` and return what failed.
 
-    Each agent's sandbox but the control one gives its session files, under ``workers/<id>``, while it runs; then the
-    run ends (a team drains), and the control sandbox gives its repo, its run and its own sessions. ``export.tgz``
-    holds all of it, for the archive.
+    The run ends first (a team drains, and its workers put their last snapshots into the CAS). Then the control sandbox
+    gives its repo, its run and every agent's session files: a team's under ``agents/<harness>/``. Session files that
+    could not be brought up to date are a failure of their own, and the control sandbox still gives the rest.
     """
     control, failed = fleet.control, []
-
-    def take(where: str, give: Callable[[], bytes]) -> None:
+    try:
         try:
-            with tarfile.open(fileobj=BytesIO(give())) as tar:
-                tar.extractall(out / 'export' / where, filter='data')
-        except Exception as e:  # recorded in run.json: the next box still gives its own
-            failed.append(f'{where or "control"}: {type(e).__name__}: {e}'[:500])
-
-    def sessions(box: Shell) -> bytes:
-        box.run(
-            f'mkdir -p {WORK} && tar czf {WORK}/sessions.tgz --ignore-failed-read'
-            f' -C {HOME} {" ".join(SESSIONS.values())}',
-            timeout=900,
-        )
-        return box.read(f'{WORK}/sessions.tgz')
-
-    def own() -> bytes:
-        try:
-            run.export(control)  # a team drains, whatever its sandboxes gave
+            run.export(control)  # a team drains, and its workers' last snapshots land in the CAS
         finally:
+            try:
+                fleet.collect()
+            except Exception as e:  # recorded: the control sandbox still gives the rest, and what was collected before
+                failed.append(f'sessions: {type(e).__name__}: {e}'[:500])
             control.run(
                 f'git -C {REPO} bundle create {OUT}/repo.bundle --all'
-                f' && tar czf {WORK}/export.tgz --ignore-failed-read -C {WORK} out'
-                f' -C {HOME} {" ".join(SESSIONS.values())}',
+                f' && tar czf {WORK}/export.tgz --ignore-failed-read -C {WORK} out {fleet.sessions.tar()}',
                 timeout=900,
             )
-        return control.read(f'{WORK}/export.tgz')
-
-    try:
-        agents = fleet.agents()
-    except Exception as e:  # recorded: the control sandbox still gives its own
-        agents = {}
-        failed.append(f'workers: {type(e).__name__}: {e}'[:500])
-    for name, box in agents.items():
-        if box is not control:
-            take(f'workers/{name}', lambda box=box: sessions(box))
-    take('', own)
-    if (out / 'export').is_dir():
-        with tarfile.open(out / 'export.tgz', 'w:gz') as tar:
-            for given in sorted((out / 'export').iterdir()):
-                tar.add(given, arcname=given.name)
+        data = control.read(f'{WORK}/export.tgz')
+        (out / 'export.tgz').write_bytes(data)
+        with tarfile.open(fileobj=BytesIO(data)) as tar:
+            tar.extractall(out / 'export', filter='data')
+    except Exception as e:  # recorded in run.json: the control sandbox is kept for inspection
+        failed.append(f'control: {type(e).__name__}: {e}'[:500])
     return failed
 
 
@@ -866,7 +909,6 @@ def watch(
     ``sample_attempts`` times: then the run stops with that error, and the driver still exports it.
     """
     stopped = ''
-    seen: dict[str, Counts] = {}
     with log.open('w') as f:
 
         def record() -> Sample | RuntimeError | ConnectionError | TimeoutError:
@@ -875,7 +917,7 @@ def watch(
                 failed: RuntimeError | ConnectionError | TimeoutError = RuntimeError('no attempt: sample_attempts is 0')
                 for attempt in range(settings.sample_attempts):
                     try:
-                        now = sample(fleet.agents(), seen, fleet.usd_per_hour, (time.monotonic() - started) / 3600)
+                        now = sample(fleet, (time.monotonic() - started) / 3600)
                     # Modal's link to the sandbox drops now and then, and the meter can be killed (exit 137 when the
                     # sandbox runs out of memory): try again.
                     except (ConnectionError, RuntimeError, TimeoutError) as e:

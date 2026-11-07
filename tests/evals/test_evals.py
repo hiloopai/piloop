@@ -3,6 +3,7 @@ import gzip
 import importlib.util
 import itertools
 import json
+import os
 import random
 import shutil
 import sqlite3
@@ -38,6 +39,7 @@ from evals.drive import (
     Fleet,
     Piloop,
     Plain,
+    TeamSessions,
     admitted,
     agent_box,
     archive,
@@ -47,6 +49,7 @@ from evals.drive import (
     merge,
     on_team,
     piloop_config,
+    plain_sessions,
     prepare,
     price,
     private_files,
@@ -54,6 +57,7 @@ from evals.drive import (
     sample,
     sealed_steps,
     sessions,
+    team_sessions,
     watch,
     workers,
 )
@@ -100,11 +104,13 @@ from piloop.db.session import Database
 from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.campaign_type.kit.candidates.ids import Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
+from piloop.plugins.cas.disk import Disk
 from piloop.plugins.harness.contract import ModelId, Usage
 from piloop.plugins.harness_choice.contract import HARNESS_CHOICES
 from piloop.plugins.harness_choice.round_robin import RoundRobin
 from piloop.plugins.price_list.genai_prices import GenaiPrices
 from piloop.settings import Settings as PiloopSettings
+from piloop.store.chunks import Chunked
 from tests.conftest import baseline
 
 
@@ -201,26 +207,6 @@ def test_meter_counts_a_pi_session_once_under_its_provider_and_prices_it_at_opus
     assert opus is not None and opus > 0 and price(tokens) == pytest.approx(opus)
     with pytest.raises(ValueError, match='no list price'):
         price({'pi': {'anthropic/no-such-model': PI_TOKENS}})
-
-
-def test_the_export_takes_a_workers_pi_sessions_and_the_meter_reads_them(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    home, work = tmp_path / 'home', tmp_path / 'work'
-    session = home / '.pi' / 'agent' / 'sessions' / '--root-.piloop-evals-runs-1-worktree--' / 'a_01a0a1b2.jsonl'
-    session.parent.mkdir(parents=True)
-    shutil.copy(PI_SESSION, session)
-    monkeypatch.setattr('evals.drive.HOME', str(home))
-    monkeypatch.setattr('evals.drive.WORK', str(work))
-    control = FakeBox(METER)
-    worker = LocalBox()
-    team_ = Fleet(control=control, agents=lambda: {'sb-w': worker}, usd_per_hour=0, ids=['a'], close=control.close)
-    assert export(team_, plain_run(Settings()), tmp_path / 'run') == []
-    exported = tmp_path / 'run' / 'export' / 'workers' / 'sb-w'
-    assert (exported / session.relative_to(home)).read_bytes() == PI_SESSION.read_bytes()
-    assert meter.main({'pi': exported / '.pi' / 'agent' / 'sessions'}) == {
-        'pi': {'anthropic/claude-opus-5-5': PI_TOKENS}
-    }
 
 
 def test_the_rotation_arm_runs_pi_claude_and_codex_in_turn_with_no_cap_per_harness_all_on_the_gateway():
@@ -362,8 +348,80 @@ class LocalBox(FakeBox):
 
 def fleet(box: FakeBox, usd_per_hour: float = 0) -> Fleet:
     return Fleet(
-        control=box, agents=lambda: {'sb-fake': box}, usd_per_hour=usd_per_hour, ids=['sb-fake'], close=box.close
+        control=box,
+        sessions=plain_sessions(),
+        collect=lambda: None,
+        usd_per_hour=usd_per_hour,
+        ids=['sb-fake'],
+        close=box.close,
     )
+
+
+def team_fleet(control: FakeBox) -> Fleet:
+    return Fleet(control, team_sessions(), TeamSessions(control), 0, ['sb-control'], control.close)
+
+
+class Recorded(LocalBox):
+    """This machine as a control sandbox, with each command it ran."""
+
+    def run(self, script: str, timeout: float | None = None) -> str:
+        self.commands.append(script)
+        return super().run(script, timeout)
+
+
+def test_a_team_s_session_files_are_each_session_s_latest_snapshot_from_the_control_s_cas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    home, work = tmp_path / 'home', tmp_path / 'work'
+    cas = Disk().open(home)
+    session = PI_SESSION.read_bytes()
+    lines = session.splitlines(keepends=True)
+    first = Chunked(chunks=tuple(cas.put(line) for line in lines[:2])).put(cas)
+    whole = Chunked(chunks=tuple(cas.put(line) for line in lines)).put(cas)
+    codex = cas.put(b'{"type": "turn_context", "payload": {"model": "gpt-6.1-sol"}}\n')
+    with closing(sqlite3.connect(home / 'piloop.db')) as db, db:
+        db.execute('create table agent_sessions (id integer primary key, harness, session_id, session_file)')
+        db.executemany(
+            'insert into agent_sessions values (?, ?, ?, ?)',
+            [
+                (1, 'pi', '01a0a1b2', str(first)),  # then restored for a resume: its file starts from this one
+                (2, 'pi', '01a0a1b2', str(whole)),
+                (3, 'codex', '019a-thread', str(codex)),
+                (4, 'claude', 'c-1', None),  # it never wrote a snapshot
+            ],
+        )
+    monkeypatch.setenv('PILOOP_HOME', str(home))
+    monkeypatch.setenv('PATH', f'{Path(sys.executable).parent}:{os.environ["PATH"]}')
+    monkeypatch.setattr('evals.drive.PILOOP_HOME', str(home))
+    monkeypatch.setattr('evals.drive.WORK', str(work))
+    control = Recorded()
+    collect = TeamSessions(control)
+    collect()
+    assert (work / 'agents' / 'pi' / '01a0a1b2.jsonl').read_bytes() == session, 'the latest snapshot, whole'
+    assert (work / 'agents' / 'codex' / '019a-thread.jsonl').is_file() and list(
+        (work / 'agents' / 'claude').iterdir()
+    ) == []
+    assert meter.main({h: work / 'agents' / h for h in ('pi', 'claude')}) == {
+        'pi': {'anthropic/claude-opus-5-5': PI_TOKENS},
+        'claude': {},
+    }, 'the session counts once'
+    control.commands.clear()
+    collect()
+    assert not any('cas get' in c for c in control.commands), 'a snapshot that it has is not fetched again'
+
+
+def test_a_session_id_that_names_no_file_fails_the_sample_and_names_it():
+    control = FakeBox(METER, out='claude|../escape|bafy\n')
+    with pytest.raises(RuntimeError, match=r"'claude' '../escape'"):
+        TeamSessions(control)()
+    assert len(control.commands) == 1, 'nothing fetched'
+
+
+def test_snapshots_are_fetched_a_batch_at_a_time(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr('evals.drive.FETCHES', 2)
+    control = FakeBox(METER, out=''.join(f'codex|s{n}|bafy{n}\n' for n in range(5)))
+    TeamSessions(control)()
+    assert [c.count('cas get') for c in control.commands[1:]] == [2, 2, 1]
 
 
 METER = {'codex': {'gpt-6.1-sol': {'input': 10, 'output': 5, 'cache_read': 100, 'cache_write': 0, 'turns': 1}}}
@@ -436,17 +494,16 @@ def test_a_daytona_scorer_ends_by_itself_after_its_scoring_could_have_finished(m
 def test_a_sample_keeps_the_meters_tokens_and_the_sandboxs_compute():
     count = {'input': 10, 'output': 5, 'cache_read': 100, 'cache_write': 1, 'turns': 1}
     box = FakeBox({'claude': {'claude-opus-5-5': count}, 'codex': {'gpt-6.1-sol': count}})
-    s = sample({'a': box, 'b': box}, {}, 3.0, 2)
-    assert s.tokens == Tokens(input=40, output=20, cache_read=400, cache_write=4, turns=4), 'summed over the boxes'
+    s = sample(fleet(box, 3.0), 2)
+    assert s.tokens == Tokens(input=20, output=10, cache_read=200, cache_write=2, turns=2), 'summed over the harnesses'
     assert s.compute_usd == 2 * 3.0 and s.models_usd > 0
 
 
-def test_a_sample_still_counts_a_box_that_ended_since_the_last():
-    box = FakeBox(METER)
-    seen: dict[str, dict[str, dict[str, dict[str, int]]]] = {}
-    sample({'a': box, 'b': box}, seen, 0, 1)
-    tokens = sample({'b': box}, seen, 0, 1).tokens
-    assert tokens is not None and tokens.input == 20, "a's last count stays"
+def test_a_team_s_sample_brings_the_snapshots_up_to_date_then_meters_them_on_the_control_sandbox():
+    control = FakeBox(METER, out='')
+    sample(team_fleet(control), 1)
+    assert 'select harness, session_id, session_file' in control.commands[0]
+    assert f'claude={WORK}/agents/claude codex={WORK}/agents/codex pi={WORK}/agents/pi' in control.commands[-1]
 
 
 def identical(n: int) -> PiloopArm:
@@ -963,9 +1020,9 @@ class FakeControl(FakeBox):
 
 def team(
     monkeypatch: pytest.MonkeyPatch, task: str, arm: PiloopArm, evaluators_per_worker: float = 1.0
-) -> tuple[Fleet, FakeControl, list[list[Step]], dict[str, dict[str, str]]]:
-    """A team of ``arm`` on ``task`` with no platform: what it built, and the tags that its meter lists by."""
-    control, listed = FakeControl(), {}
+) -> tuple[Fleet, FakeControl, list[list[Step]]]:
+    """A team of ``arm`` on ``task`` with no platform, and what it built."""
+    control = FakeControl()
     made: list[list[Step]] = []
     monkeypatch.setattr('evals.drive.daytona.client', lambda settings: 'daytona')
     monkeypatch.setattr('evals.drive.daytona.control', lambda *args: control)
@@ -973,7 +1030,6 @@ def team(
     monkeypatch.setattr('evals.drive.built', lambda settings, steps: made.append(steps) or f'im-{len(made)}')
     monkeypatch.setattr('evals.drive.sealed_data', lambda name, settings: tgz({'split.json': b'{}'}))
     monkeypatch.setattr('evals.drive.modal_config', {'token_id': 'ak-1', 'token_secret': 'as-1'})
-    monkeypatch.setattr('evals.drive.tagged', lambda settings, tags: listed.update(tags) or {'sb-w': FakeBox(METER)})
     settings = Settings(
         gateway='https://gw.example',
         gateway_token=SecretStr('gw-secret'),
@@ -987,8 +1043,7 @@ def team(
     }
     found, run = on_team(Task.load(task), arm, settings, 6, env, f'{task}/{arm.name}-1')
     assert isinstance(run, Piloop)
-    found.agents()
-    return found, control, made, {'tags': listed}
+    return found, control, made
 
 
 def tgz(files: dict[str, bytes]) -> bytes:
@@ -1005,7 +1060,7 @@ def test_a_piloop_arms_team_is_its_daemons_own_pools_on_modal_and_daytona(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     arm = identical(2).model_copy(update={'split': 'sealed'})
-    found, control, made, listed = team(monkeypatch, 't5-lpaq', arm, evaluators_per_worker=1.5)
+    found, control, made = team(monkeypatch, 't5-lpaq', arm, evaluators_per_worker=1.5)
     (tmp_path / 'config.toml').write_bytes(control.writes['/root/.piloop-evals/config.toml'])
     assert PiloopSettings(home=tmp_path).providers is not None, 'a valid home, its provisioners included'
     pools = tomllib.loads((tmp_path / 'config.toml').read_text())['plugins']['executor']['pools']
@@ -1040,15 +1095,18 @@ def test_a_piloop_arms_team_is_its_daemons_own_pools_on_modal_and_daytona(
     assert control.commands[0] == 'mkdir -p -m 700 /root/.piloop-evals', (
         'the daemon serves its socket in a private home'
     )
-    owner = control.writes['/root/.piloop-evals/owner'].decode()
-    assert listed['tags'] == {'piloop-owner': owner, 'piloop-pool': 'agents'}, "the meter finds the daemon's workers"
+    assert control.writes['/root/.piloop-evals/owner'], "the owner of the daemon's workers"
+    assert isinstance(found.collect, TeamSessions) and found.collect.box is control, (
+        'the driver reaches the control alone'
+    )
+    assert found.sessions == team_sessions()
     assert found.ids == ['sb-control'] and found.described['evaluators_on'] == 'daytona'
 
 
 def test_a_team_on_a_gateway_only_task_reaches_the_gateway_and_its_control_sandbox_and_is_scored_on_modal(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    found, control, _, _ = team(monkeypatch, 't6-optcomp', identical(1))
+    found, control, _ = team(monkeypatch, 't6-optcomp', identical(1))
     pools = tomllib.loads(control.writes['/root/.piloop-evals/config.toml'].decode())['plugins']['executor']['pools']
     agents, evaluate = pools['agents']['provisioner']['compute'], pools['eval']['provisioner']['compute']
     hosts = ['8443-sb.example', '7701-sb.example']
@@ -1080,38 +1138,46 @@ def test_the_credentials_name_what_is_missing(monkeypatch: pytest.MonkeyPatch) -
         credentials(Settings(gateway_token=SecretStr('t')))
 
 
-def test_a_team_drains_even_when_an_agents_sandbox_cannot_give_its_sessions(tmp_path: Path):
-    control, worker = FakeBox(METER, out='0'), FakeBox(METER, fail=('sessions.tgz',))
-    good = FakeBox(METER)
-    agents = {'sb-w': worker, 'sb-g': good}
-    team_ = Fleet(control=control, agents=lambda: agents, usd_per_hour=0, ids=['a'], close=control.close)
-    failed = export(team_, Piloop(Task.load('t2-circles'), identical(2), Settings(), 6, served=True), tmp_path)
-    assert [f.split(':')[0] for f in failed] == ['workers/sb-w'] and 'exited 137' in failed[0]
+def test_a_team_exports_its_run_even_when_its_session_files_cannot_be_brought_up_to_date(tmp_path: Path):
+    control = FakeBox(METER, out='0', fail=('session_file',))
+    failed = export(
+        team_fleet(control), Piloop(Task.load('t2-circles'), identical(2), Settings(), 6, served=True), tmp_path
+    )
+    assert [f.split(':')[0] for f in failed] == ['sessions'] and 'exited 137' in failed[0]
     assert any('provisioner.max=0' in c for c in control.commands) and any('piloop stop' in c for c in control.commands)
-    assert (tmp_path / 'export' / 'workers' / 'sb-g').is_dir() and (tmp_path / 'export' / 'out').is_dir(), 'the rest'
+    assert (tmp_path / 'export' / 'out').is_dir(), 'the rest'
 
 
-def test_a_provisioned_sandbox_gets_the_driver_s_work_directory_before_the_meter_writes_there():
+def test_a_sandbox_gets_the_driver_s_work_directory_before_the_meter_writes_there():
     box = FakeBox(METER)
-    sample({'sb-w': box}, {}, 0, 1)
+    sample(fleet(box), 1)
     assert box.commands[0].startswith(f'mkdir -p {WORK} && ')
 
 
-def test_the_export_takes_each_agents_sessions_before_the_run_drains(tmp_path: Path):
-    control, worker = FakeBox(METER), FakeBox(METER)
-    team_ = Fleet(
-        control=control,
-        agents=lambda: {'sb-c': control, 'sb-w': worker},
-        usd_per_hour=0,
-        ids=['a'],
-        close=control.close,
-    )
-    export(team_, plain_run(Settings()), tmp_path)
+def test_the_export_takes_the_team_s_last_snapshots_after_it_drains_with_the_run(tmp_path: Path):
+    control = FakeBox(METER, out='0')
+    export(team_fleet(control), Piloop(Task.load('t2-circles'), identical(1), Settings(), 6, served=True), tmp_path)
+    drained = max(i for i, c in enumerate(control.commands) if 'provisioner.max=0' in c)
+    collected = next(i for i, c in enumerate(control.commands) if 'select harness, session_id' in c)
+    tar = next(i for i, c in enumerate(control.commands) if 'export.tgz' in c)
+    assert drained < collected < tar, "the workers' last snapshots are in"
+    assert f'-C {WORK} out -C {WORK} agents/claude agents/codex agents/pi' in control.commands[tar]
     assert (tmp_path / 'export' / 'out' / 'sessions').exists() and (tmp_path / 'export.tgz').exists()
-    assert (tmp_path / 'export' / 'workers' / 'sb-w').is_dir() and not (
-        tmp_path / 'export' / 'workers' / 'sb-c'
-    ).exists()
-    assert ' out' not in worker.commands[0], "a worker's logs stay behind"
+
+
+class GivesSessions(FakeBox):
+    """A control sandbox whose export holds an agent's session file next to its run."""
+
+    def read(self, path: str) -> bytes:
+        if not path.endswith('export.tgz'):
+            return super().read(path)
+        buf = BytesIO()
+        with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+            for name in ('out/sessions', 'agents/pi/01a0a1b2.jsonl'):
+                info = tarfile.TarInfo(name)
+                info.size = 2
+                tar.addfile(info, BytesIO(b'1\n'))
+        return buf.getvalue()
 
 
 def test_the_archive_keeps_every_agents_sessions_with_the_control_sandboxs_export(
@@ -1127,12 +1193,12 @@ def test_the_archive_keeps_every_agents_sessions_with_the_control_sandboxs_expor
             uploaded[key] = set()
 
     monkeypatch.setattr('evals.drive.boto3.client', lambda name: SimpleNamespace(upload_file=upload_file))
-    control, worker = FakeBox(METER), FakeBox(METER)
-    team_ = Fleet(control=control, agents=lambda: {'sb-w': worker}, usd_per_hour=0, ids=['a'], close=control.close)
+    control = GivesSessions(METER, out='0')
     run = tmp_path / 't5-lpaq' / 'p-1'
-    export(team_, plain_run(Settings()), run)
+    run.mkdir(parents=True)
+    export(team_fleet(control), Piloop(Task.load('t5-lpaq'), identical(1), Settings(), 6, served=True), run)
     archive(run, Settings(archive_uri='s3://bucket/runs'))
-    assert uploaded['runs/t5-lpaq/p-1/export.tgz'] == {'out/sessions', 'workers/sb-w/out/sessions'}, (
+    assert uploaded['runs/t5-lpaq/p-1/export.tgz'] == {'out/sessions', 'agents/pi/01a0a1b2.jsonl'}, (
         "the agents' sessions too: a lost results directory loses nothing that the archive had"
     )
 
