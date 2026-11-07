@@ -42,6 +42,7 @@ from piloop.plugins.notifier.consumers import (
     Route,
     _answering,
     _failing,
+    _opening,
     contribution,
     due,
     home_notifiers,
@@ -828,6 +829,19 @@ def test_a_failure_to_write_an_answer_is_declined_and_a_span(
     assert spanned(spans, 'notification.listen_failed') == [
         {'notifier': 'chat', 'error': 'could not answer in Slack: user_not_in_channel'}
     ]
+
+
+def test_a_listener_s_first_open_is_a_connect_and_each_after_it_a_reconnect(
+    db: Database, tmp_path: Path, tracer: Tracer, spans: InMemorySpanExporter
+) -> None:
+    opened = _opening(host_of(db, tmp_path, tracer, {}), 'chat')
+    opened()
+    assert spanned(spans, 'notification.listen_connected') == [{'notifier': 'chat'}]
+    assert spanned(spans, 'notification.listen_reconnected') == []
+    opened()
+    opened()
+    assert spanned(spans, 'notification.listen_connected') == [{'notifier': 'chat'}]
+    assert spanned(spans, 'notification.listen_reconnected') == [{'notifier': 'chat'}] * 2
 
 
 def test_a_slack_app_of_config_toml_and_one_of_a_campaign_with_one_app_token_open_one_socket_once_it_is_set(

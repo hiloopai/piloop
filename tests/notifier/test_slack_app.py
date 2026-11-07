@@ -441,13 +441,17 @@ def test_a_person_is_whom_people_names_and_the_connection_is_the_app_token_never
 
 
 class Heard:
-    """A ``ListenHost`` that answers with ``receipt`` and keeps what it heard and what failed."""
+    """A ``ListenHost`` that answers with ``receipt`` and keeps what it heard, what failed, and how often it opened."""
 
     def __init__(self, secrets: HomeSecrets, receipt: Receipt) -> None:
         self.inbound: list[Inbound] = []
         self.failures: list[str] = []
+        self.opens = 0
         self.receipt = receipt
-        self.host = ListenHost(secrets, self._received, self.failures.append)
+        self.host = ListenHost(secrets, self._received, self.failures.append, self._opened)
+
+    def _opened(self) -> None:
+        self.opens += 1
 
     def _received(self, inbound: Inbound) -> Receipt:
         self.inbound.append(inbound)
@@ -553,6 +557,21 @@ def test_a_socket_that_does_not_open_is_a_failure_and_the_daemon_runs_on(
     try:
         assert unreachable.failures[0].startswith('Socket Mode: ConnectionRefusedError')
         wait_until(lambda: slack.connections == 1, "the SDK's reconnect, which asks for a new socket URL")
+    finally:
+        listener.stop(Leaving.STOP, 1)
+
+
+def test_the_listener_records_the_socket_that_opens_and_each_that_reopens(
+    slack: FakeSlackApp, secrets: HomeSecrets
+) -> None:
+    heard = Heard(secrets, Again())
+    listener = app_of(slack).listen(heard.host)
+    listener.start()
+    try:
+        wait_until(lambda: heard.opens == 1, 'the open')
+        slack.push({'type': 'disconnect', 'reason': 'refresh_requested'})
+        wait_until(lambda: heard.opens == 2, "the SDK's reconnect")
+        assert (slack.connections, heard.failures) == (2, [])
     finally:
         listener.stop(Leaving.STOP, 1)
 

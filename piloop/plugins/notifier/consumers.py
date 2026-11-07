@@ -221,7 +221,12 @@ class Listeners:
             for key, [(first, listens), *_] in wanted.items():
                 if key not in self._open:
                     listener = listens.listen(
-                        ListenHost(first.secrets, self._answering(key), _failing(self._host, first.name))
+                        ListenHost(
+                            first.secrets,
+                            self._answering(key),
+                            _failing(self._host, first.name),
+                            _opening(self._host, first.name),
+                        )
                     )
                     listener.start()
                     self._open[key] = (first, listener)
@@ -251,6 +256,19 @@ def _failing(host: DaemonHost, name: str) -> Callable[[str], None]:
         host.tracer.event('notification.listen_failed', notifier=name, error=error)
 
     return failed
+
+
+def _opening(host: DaemonHost, name: str) -> Callable[[], None]:
+    """``ListenHost.opened``: the first open is ``listen_connected``, each one after it ``listen_reconnected``."""
+    before = threading.Event()
+
+    def opened() -> None:
+        host.tracer.event(
+            'notification.listen_reconnected' if before.is_set() else 'notification.listen_connected', notifier=name
+        )
+        before.set()
+
+    return opened
 
 
 def received(db: Database, tracer: Tracer, shared: Sequence[Route], inbound: Inbound) -> Receipt:

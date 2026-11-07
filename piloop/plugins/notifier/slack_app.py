@@ -356,6 +356,7 @@ class SocketListener:
             on_error_listeners=[lambda e: self._host.failed(f'Socket Mode: {type(e).__name__}: {e}')],
         )
         client.socket_mode_request_listeners.append(lambda c, request: self._on(c, request, token))
+        client.message_listeners.append(self._hello)
         self._client = client
         try:
             client.connect()
@@ -374,6 +375,14 @@ class SocketListener:
         closing = threading.Thread(target=self._client.close, name='slack-socket-close', daemon=True)
         closing.start()
         closing.join(timeout)
+
+    def _hello(self, _client: BaseSocketModeClient, message: dict[str, object], _raw: str | None) -> None:
+        """Slack says ``hello`` on each socket that opens: the first, and each that the SDK reconnects."""
+        match message:
+            case {'type': 'hello'}:
+                self._host.opened()
+            case _:
+                return
 
     def _on(self, client: BaseSocketModeClient, request: SocketModeRequest, token: str) -> None:
         """Ack the envelope at once, as Slack asks within 3 seconds, then act on its event or its click."""

@@ -288,6 +288,8 @@ class ListenHost:
     """Write what a person did. Safe from any thread."""
     failed: Callable[[str], None]
     """Record what the listener could not do, such as an answer it could not post: a span event."""
+    opened: Callable[[], None]
+    """Record that the connection opened, at the start and at each reconnect: a span event."""
 
 
 @runtime_checkable
