@@ -1826,15 +1826,16 @@ def test_stop_waits_for_a_sweep_start_in_flight_then_kills_it(
     assert gate.entered.wait(10)
     stopper = threading.Thread(target=scheduler.stop, args=(10,))
     stopper.start()
-    stopper.join(0.3)
+
+    def row() -> tuple[AgentSessionState, str | None, object]:
+        with db.session() as s:
+            agent_session = s.get_one(AgentSession, agent_session_id)
+            return agent_session.state, agent_session.harness, agent_session.handle
+
+    # The stop writes the row from its own thread: on a slow machine that takes longer than any fixed wait.
+    wait_until(lambda: row()[0] is AgentSessionState.ENDING, 'the stop on the row')
+    assert row() == (AgentSessionState.ENDING, 'script', {}), 'the stop is on the row before its kill'
     assert stopper.is_alive(), 'stop() waits for the handle to be published'
-    with db.session() as s:
-        agent_session = s.get_one(AgentSession, agent_session_id)
-        assert (agent_session.state, agent_session.harness, agent_session.handle) == (
-            AgentSessionState.ENDING,
-            'script',
-            {},
-        ), 'the stop is on the row before its kill'
     gate.release.set()
     stopper.join(10)
     assert not stopper.is_alive()

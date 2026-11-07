@@ -462,6 +462,9 @@ def test_an_agent_whose_lease_ends_while_it_starts_is_ended_and_not_reported(
     gate.release.set()
     launching.join(30)
     wait_until(lambda: runtime.killed)
+    # The job's thread removes the checkout after the kill. On a busy machine the test could end before it does, and
+    # the unrecorded start's cleanup would go unmeasured: wait until the thread is done.
+    wait_until(lambda: not workers_of(ex).worker._threads, 'the job thread done with its checkout', timeout=120)
     assert outcomes[0] == DaemonStopped() and rows(db, agent_session_id)[1].state is LeaseState.CANCELLED
 
 
