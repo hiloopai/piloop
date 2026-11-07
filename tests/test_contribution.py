@@ -53,8 +53,7 @@ from piloop.plugins.runtime.contract import make_runtime
 from piloop.plugins.secrets.contract import HomeSecrets
 from piloop.plugins.secrets.local import LocalSecrets
 from piloop.settings import AgentSettings, DaemonSettings, Settings
-from tests.conftest import bare_config, disk, serving_api
-from tests.daemon.test_roles import forget_loaded, installed
+from tests.conftest import bare_config, disk, forget_loaded, install_plugins, serving_api
 from tests.fixtures.route_plugin import Greeting
 from tests.net.test_api import token
 
@@ -188,7 +187,7 @@ def forgets() -> Iterator[None]:
 def test_each_installed_provider_that_a_campaign_may_choose_serves_and_documents_its_routes(
     db: Database, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    installed(monkeypatch, [EntryPoint('notes', f'{__name__}:Notes', MEMORY.group)])
+    install_plugins(monkeypatch, [EntryPoint('notes', f'{__name__}:Notes', MEMORY.group)])
     controller = RunController(db, Tracer(None), tmp_path, executor=Workers())
     routers = Scheduler(db, controller, Tracer(None), tmp_path).contributions.routers
     assert routers[1:] == (optimization_api.ROUTES, spend_api.router, lineage_api.router, local_api.router, NOTES), (
@@ -207,7 +206,7 @@ def test_each_installed_provider_that_a_campaign_may_choose_serves_and_documents
 def test_a_provider_that_contributes_and_cannot_be_built_with_its_defaults_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    installed(monkeypatch, [EntryPoint('picky', f'{__name__}:Picky', MEMORY.group)])
+    install_plugins(monkeypatch, [EntryPoint('picky', f'{__name__}:Picky', MEMORY.group)])
     with pytest.raises(
         PluginError,
         match="^the memory provider 'picky' contributes, and cannot be built with its defaults: folder: Field required$",
@@ -219,7 +218,7 @@ def test_a_provider_that_contributes_and_cannot_be_built_with_its_defaults_is_re
 def test_a_package_s_route_authenticates_and_addresses_its_campaign_with_the_module_alone(
     db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    installed(monkeypatch, [EntryPoint('greeter', 'tests.fixtures.route_plugin:Greeter', MEMORY.group)])
+    install_plugins(monkeypatch, [EntryPoint('greeter', 'tests.fixtures.route_plugin:Greeter', MEMORY.group)])
     cfg = Settings(home=tmp_path)
     reader = token(db, 'ana', Access.READ)
     with serving_api(cfg), Client.on(cfg.socket_file, System.ORCHESTRATOR) as client:
@@ -242,17 +241,17 @@ def hello() -> str:
 def test_a_package_adds_a_command_by_its_path_and_one_with_a_name_of_piloop_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    installed(monkeypatch, [EntryPoint('hello', f'{__name__}:hello', COMMANDS.group)])
+    install_plugins(monkeypatch, [EntryPoint('hello', f'{__name__}:hello', COMMANDS.group)])
     cli = cyclopts.App()
     add_commands(cli)
     assert cli(['hello'], result_action='return_value') == 'hello'
     assert 'idea' in cli, "piloop's own commands are entry points of the same group"
-    installed(monkeypatch, [EntryPoint('status', f'{__name__}:hello', COMMANDS.group)])
+    install_plugins(monkeypatch, [EntryPoint('status', f'{__name__}:hello', COMMANDS.group)])
     taken = cyclopts.App()
     taken.command(hello, name='status')
     with pytest.raises(PluginError, match=f"status = {__name__}:hello in piloop.commands: 'status' is a command"):
         add_commands(taken)
-    installed(monkeypatch, [EntryPoint('idea', f'{__name__}:hello', COMMANDS.group)])
+    install_plugins(monkeypatch, [EntryPoint('idea', f'{__name__}:hello', COMMANDS.group)])
     with pytest.raises(PluginError, match=r"'idea' is a command already, from piloop \d"):
         add_commands(cyclopts.App())
 
@@ -309,19 +308,19 @@ ARTIFACT = {'vcs': {'provider': 'git'}, 'repo': 1, 'revision': 'abc'}
 def test_a_package_s_job_kind_is_checked_when_the_daemon_starts_and_one_of_piloop_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    installed(monkeypatch, [EntryPoint('lattice', f'{__name__}:LATTICE', JOB_KINDS.group)])
+    install_plugins(monkeypatch, [EntryPoint('lattice', f'{__name__}:LATTICE', JOB_KINDS.group)])
     check_declared()
     assert list(JOB_KINDS.loaded()) == ['evaluation', 'lattice'] and JOB_KINDS.loaded()['lattice'] is LATTICE
     assert JOBS.validate({'kind': 'lattice', 'artifact': ARTIFACT, 'place': 'p'}) == LatticeJob.model_validate(
         {'artifact': ARTIFACT, 'place': 'p'}
     ), 'a job of the kind validates with no change in core'
-    installed(monkeypatch, [EntryPoint('agent', f'{__name__}:LATTICE', JOB_KINDS.group)])
+    install_plugins(monkeypatch, [EntryPoint('agent', f'{__name__}:LATTICE', JOB_KINDS.group)])
     with pytest.raises(PluginError, match="piloop.job_kinds: piloop runs jobs of the kind 'agent' already"):
         check_declared()
-    installed(monkeypatch, [EntryPoint('mesh', f'{__name__}:LATTICE', JOB_KINDS.group)])
+    install_plugins(monkeypatch, [EntryPoint('mesh', f'{__name__}:LATTICE', JOB_KINDS.group)])
     with pytest.raises(PluginError, match="its job is of the kind 'lattice', not 'mesh'"):
         check_declared()
-    installed(monkeypatch, [EntryPoint('evaluation', f'{__name__}:LATTICE', JOB_KINDS.group)])
+    install_plugins(monkeypatch, [EntryPoint('evaluation', f'{__name__}:LATTICE', JOB_KINDS.group)])
     with pytest.raises(PluginError, match="'evaluation' is a job kind already"):
         check_declared()
 
@@ -329,12 +328,12 @@ def test_a_package_s_job_kind_is_checked_when_the_daemon_starts_and_one_of_piloo
 def test_a_package_s_target_kind_is_checked_when_the_daemon_starts_and_one_of_piloop_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    installed(
+    install_plugins(
         monkeypatch, [EntryPoint('notion', 'piloop.plugins.campaign_type.kit.backlog.tables:Idea', TARGET_KINDS.group)]
     )
     check_declared()
     assert TARGET_KINDS.loaded()['notion'] is Idea, "beside piloop's own: optimization's four"
-    installed(
+    install_plugins(
         monkeypatch,
         [EntryPoint('campaign', 'piloop.plugins.campaign_type.kit.backlog.tables:Idea', TARGET_KINDS.group)],
     )
@@ -360,7 +359,7 @@ class Loud(Commented):
 def test_a_package_s_comment_kind_is_checked_when_the_daemon_starts_and_one_of_piloop_is_refused(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    installed(monkeypatch, [EntryPoint('praise', f'{__name__}:Praised', COMMENT_KINDS.group)])
+    install_plugins(monkeypatch, [EntryPoint('praise', f'{__name__}:Praised', COMMENT_KINDS.group)])
     check_declared()
     assert set(COMMENT_KINDS.loaded()) == {'decision', 'escalation', 'praise'}, (
         "beside the escalation capability's kinds"
@@ -383,7 +382,7 @@ def test_a_package_s_comment_kind_is_checked_when_the_daemon_starts_and_one_of_p
         ('cheer', 'Praised', 'its event is comment.praise, not comment.cheer'),
         ('loud', 'Loud', 'its event has fields that a comment has not: volume'),
     ):
-        installed(monkeypatch, [EntryPoint(name, f'{__name__}:{model}', COMMENT_KINDS.group)])
+        install_plugins(monkeypatch, [EntryPoint(name, f'{__name__}:{model}', COMMENT_KINDS.group)])
         with pytest.raises(PluginError, match=f'piloop.comment_kinds: {re.escape(refused)}'):
             check_declared()
 

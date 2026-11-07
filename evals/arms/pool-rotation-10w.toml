@@ -14,9 +14,6 @@ split = "sealed"
 scoring = "submit"
 noise_runs = 3
 
-[overlay.plugins.role.orchestrator]
-triggers = []
-
 [overlay.plugins.role.implementer]
 max_concurrent = 10
 timeout = 3600

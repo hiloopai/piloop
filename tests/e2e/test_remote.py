@@ -4,13 +4,11 @@
         [--e2e-secret ANTHROPIC_API_KEY] [--e2e-campaign <name>] [--e2e-harness claude] [--e2e-model <model>]
 
 The server is any ``piloop serve --listen`` that this machine reaches with a bearer token in ``PILOOP_HTTPS_TOKEN``, of
-``act`` access, that signs as a person: only a person stops a campaign by hand, and only a person's message (or an
-escalation) wakes the orchestrator. A service account's token fails the first test. A person registers a toy repository
-by its URL, adds an idea and writes to the orchestrator. piloop launches the orchestrator on the server's workers within
-``WAKE_WAIT``, and it answers the message. The tests also act as an orchestrator from the CLI (``PILOOP_SERVER``): they
-add an idea, pause and resume the campaign, and fork it, and its stop is refused. The person stops, reopens and retires
-it, and no stop wakes the orchestrator. Two implementers run on the server's workers: each claims an idea or gives up,
-and a submission is scored.
+``act`` access, that signs as a person: only a person stops a campaign by hand. A service account's token fails the
+first test. A person registers a toy repository by its URL and adds an idea. The tests also act as an orchestrator from
+the CLI (``PILOOP_SERVER``): they add an idea, pause and resume the campaign, and fork it, and its stop is refused. The
+person stops, reopens and retires it. Two implementers run on the server's workers: each claims an idea or gives up, and
+a submission is scored.
 
 The toy is published as a secret gist (``gh``, logged in with the ``gist`` scope), which the server clones: the server
 needs to reach github.com. Its ``piloop.toml`` gives the harness each ``--e2e-secret`` from the server's secret of that
@@ -37,11 +35,8 @@ from piloop.api.client import Client, Refused
 from piloop.api.contract import (
     MAX_LIMIT,
     MAX_POLL_SECONDS,
-    AckBody,
-    CancelBody,
     Clone,
     EventsQuery,
-    MessageBody,
     PauseBody,
     Problem,
     Remote,
@@ -49,8 +44,8 @@ from piloop.api.contract import (
     Selection,
     StopBody,
 )
-from piloop.api.views import AckOutcome, CampaignState, Envelope
-from piloop.ids import AgentSessionId, CampaignId, Ending, RoleName
+from piloop.api.views import CampaignState, Envelope
+from piloop.ids import CampaignId, Ending
 from piloop.plugins.campaign_type.kit.backlog.wire import IdeaBody
 from piloop.plugins.network.https import TOKEN_ENV, Https
 from tests.conftest import EveryClient
@@ -66,12 +61,6 @@ MAX_CONCURRENT = 2
 PLUGINS: dict[str, object] = {
     'role': {
         'implementer': {'timeout': ROLE_TIMEOUT, 'max_concurrent': MAX_CONCURRENT},
-        'orchestrator': {
-            'triggers': ['news'],
-            'addendum': 'orchestrator.md',
-            'timeout': ROLE_TIMEOUT,
-            'quiet_seconds': 5,
-        },
     },
     'stop_rule': {'max_runs': 3, 'max_tokens': 4_000_000, 'hold_at': {'tokens': 3_000_000}},
 }
@@ -81,14 +70,8 @@ CONFIG = {
     'plugins': PLUGINS,
     'metrics': [{'name': 'bytes', 'direction': 'lower', 'role': 'primary'}],
 }
-"""The toy's ``piloop.toml``, without its name and harness: an orchestrator that piloop launches on a person's message or
-an escalation, and limits only as a backstop on what it costs. Two ideas run, so ``max_runs`` stops it only when both
-runs gave up."""
-ORCHESTRATOR = """# This campaign is a test
-
-Answer each message and escalation, and acknowledge it. Change nothing else: add, develop or change no idea, exclude no
-candidate, and launch, pause or stop nothing. The tests do that themselves.
-"""
+"""The toy's ``piloop.toml``, without its name and harness, with limits only as a backstop on what it costs. Two ideas
+run, so ``max_runs`` stops it only when both runs gave up."""
 BRIEF = """# Make primes.py smaller
 
 `primes.py` prints the first 50 prime numbers, one per line. Make the file as small as you can, in bytes, while it prints
@@ -145,10 +128,8 @@ RUNS_WAIT = 3 * ROLE_TIMEOUT + 600
 """Seconds to wait for both runs to end and be scored: their workers start, they work, then they are measured."""
 RETIRE_WAIT = ROLE_TIMEOUT + 300
 """Seconds to wait for a stop to be over before a campaign retires: its runs end."""
-WAKE_WAIT = 120
-"""Seconds from a person's message to the orchestrator that it wakes: the orchestrator's ``quiet_seconds``, then a pass."""
 QUIET = 90
-"""Seconds that the feed is read after a stop, to show that the stop woke no orchestrator."""
+"""Seconds that the feed is read after a stop, to show that no agent starts after it."""
 
 
 @dataclass(frozen=True)
@@ -236,10 +217,6 @@ class Server:
         """The events of ``kind`` read so far."""
         return [e for e in self.events if e.kind == kind]
 
-    def of_role(self, kind: str, role: str) -> list[Envelope]:
-        """The events of ``kind`` read so far whose payload names ``role``."""
-        return [e for e in self.of(kind) if payload(e).get('role') == role]
-
     def tail(self) -> list[str]:
         return [f'{e.id} {e.kind} {e.subject.kind}#{e.subject.id} by {e.actor}' for e in self.events[-8:]]
 
@@ -312,7 +289,6 @@ def server(request: pytest.FixtureRequest) -> Iterator[Server]:
         'brief.md': BRIEF,
         'evaluate.py': EVALUATE,
         'primes.py': PRIMES,
-        'orchestrator.md': ORCHESTRATOR,
         '.gitignore': 'workspace\n__pycache__\n',
     }
     gist = publish(directory, files)
@@ -339,9 +315,6 @@ def server(request: pytest.FixtureRequest) -> Iterator[Server]:
 def retire(api: Client, ref: str, reason: str) -> CampaignState:
     """Stop the campaign that ``ref`` names unless it is stopped, and retire it once its stop is over.
 
-    An orchestrator that news woke before the stop and that starts meanwhile is cancelled: nobody reads its answer, and
-    the retire would wait for it.
-
     Raises:
         Refused: ``ref`` names no campaign, or the stop is not over within ``RETIRE_WAIT``.
     """
@@ -359,23 +332,10 @@ def retire(api: Client, ref: str, reason: str) -> CampaignState:
             waits = e.error == Problem.STILL_STOPPING or any(p in str(e) for p in pending)
             if not waits or time.monotonic() > deadline:
                 raise
-            batch = api.events(EventsQuery(campaign=campaign, after=cursor, wait=MAX_POLL_SECONDS))
-            cursor = batch.next
-            for woken in batch.events:
-                if woken.kind == 'agent_session.requested' and payload(woken)['role'] == 'orchestrator':
-                    cancel(api, AgentSessionId(woken.subject.id))
+            cursor = api.events(EventsQuery(campaign=campaign, after=cursor, wait=MAX_POLL_SECONDS)).next
             continue
         assert isinstance(retired, CampaignState), retired
         return retired
-
-
-def cancel(api: Client, agent: AgentSessionId) -> None:
-    """Cancel ``agent`` at once, unless it ended already."""
-    try:
-        api.cancel_agent(agent, CancelBody(ending=Ending.NOW))
-    except Refused as e:
-        if 'is not requested, starting or running' not in str(e):  # it ended before the cancel: nothing to cancel
-            raise
 
 
 def test_registers_a_repository_by_its_url(server: Server) -> None:
@@ -430,47 +390,6 @@ def test_a_person_adds_an_idea_that_is_open_on_the_board(server: Server) -> None
     assert added.idea.created_by.startswith(PERSON), added.idea
     server.ideas['person'] = added.idea.id
     print(f'idea#{added.idea.id} by {added.idea.created_by}')
-
-
-@needs(test_measures_the_baseline)
-def test_a_message_wakes_the_orchestrator_that_piloop_launches_and_it_answers(server: Server) -> None:
-    """``POST /v1/campaigns/{campaign}/messages`` by a person wakes the orchestrator within ``WAKE_WAIT``, on a worker, and
-    its reply reaches the person.
-
-    Nothing else woke it before: an agent's idea is news, and news wakes no one. Each acknowledges what the other wrote:
-    the author of a comment cannot.
-    """
-    assert server.state().roles[RoleName('orchestrator')].triggered
-    assert not server.of_role('agent_session.requested', 'orchestrator'), 'only a person or an escalation wakes it'
-    sent = server.api.message(
-        server.name, MessageBody(body='e2e: how many bytes is primes.py now? Reply with the number.')
-    )
-    started = time.monotonic()
-    woken = server.seen(
-        lambda e: e.kind == 'agent_session.requested' and payload(e)['role'] == 'orchestrator',
-        'the orchestrator that the message wakes',
-        WAKE_WAIT,
-    )
-    print(f'orchestrator#{woken.subject.id} requested {time.monotonic() - started:.0f}s after the message')
-
-    def answered(e: Envelope) -> bool:
-        return e.kind == 'comment.decision' and e.actor.startswith('orchestrator#')
-
-    agent = int(server.seen(answered, "the orchestrator's reply", 600 + ROLE_TIMEOUT).actor.partition('#')[2])
-    running = server.seen(kind_on('agent_session.running', 'agent_session', agent), f'orchestrator#{agent} ran', 60)
-    thread = server.api.thread(sent.comment.id)
-    [reply, *_] = [c for c in thread.linked if c.author.startswith('orchestrator#')]
-    assert reply.in_reply_to == sent.comment.id, thread
-    server.seen(
-        kind_on('comment.acked_at', 'comment', sent.comment.id), 'the orchestrator acknowledges the message', 600
-    )
-    assert server.api.thread(sent.comment.id).comment.acked_by == reply.author
-    [acked] = server.api.ack(AckBody(ids=(reply.id,))).results
-    assert acked.outcome is AckOutcome.ACKED, acked
-    print(
-        f'comment#{sent.comment.id} by {sent.comment.author}, answered on {payload(running)["machine"]} by {reply.author}:'
-        f' {reply.body[:200]}'
-    )
 
 
 @needs(test_the_orchestrator_adds_an_idea, test_a_person_adds_an_idea_that_is_open_on_the_board)
@@ -567,7 +486,7 @@ def test_pause_and_resume(server: Server) -> None:
 @needs(test_registers_a_repository_by_its_url)
 def test_stop(server: Server) -> None:
     """The orchestrator's ``piloop campaign stop`` is refused: only a person or a stop rule stops a campaign. The
-    person's stop closes it, and wakes no orchestrator; once the agents that ran end, none starts."""
+    person's stop closes it; once the agents that ran end, none starts."""
     with pytest.raises(CommandFailed, match='may not stop a campaign: only a person or a stop rule does'):
         server.piloop('campaign', 'stop', server.name, '--reason', 'e2e: the orchestrator asks')
     if server.state().status == 'active':  # the stop rule's max_runs can stop it first
@@ -587,8 +506,6 @@ def test_stop(server: Server) -> None:
     state = server.state()
     assert state.status == 'stopped', state
     assert state.agents == [], state.agents
-    orchestrator = state.roles[RoleName('orchestrator')]
-    assert (orchestrator.requested, orchestrator.live) == (0, 0), orchestrator
     print(f'{server.name}: best {state.best}; no agent after the stop')
 
 
@@ -606,22 +523,16 @@ def test_fork(server: Server) -> None:
 
 @needs(test_stop)
 def test_reopen(server: Server) -> None:
-    """``piloop campaign reopen``: the stopped campaign is active again; the person's second stop closes it again, and
-    wakes no orchestrator."""
+    """``piloop campaign reopen``: the stopped campaign is active again; the person's second stop closes it again."""
     server.piloop('campaign', 'reopen', server.name, '--reason', 'e2e: one more round')
     server.seen(lambda e: e.kind == 'campaign.reopened', 'the reopen', 60)
     assert server.state().status == 'active'
     stop = server.cursor
     server.api.stop(str(server.id), StopBody(reason='e2e: stop again', ending=Ending.NOW))
     closed = server.seen(lambda e: e.id > stop and e.kind == 'campaign.closed', 'the second close', ROLE_TIMEOUT + 300)
-    server.none(
-        lambda e: e.id > stop and e.kind == 'agent_session.requested' and payload(e)['role'] == 'orchestrator',
-        'an orchestrator that the second stop woke',
-        QUIET,
-    )
     state = server.state()
     assert state.status == 'stopped', state
-    print(f'{server.name}: closed again at event {closed.id}; no orchestrator woke')
+    print(f'{server.name}: closed again at event {closed.id}')
 
 
 @needs(test_stop)

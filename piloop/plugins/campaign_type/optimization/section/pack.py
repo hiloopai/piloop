@@ -29,8 +29,6 @@ class Pack(Section):
     workspace: int = Field(default=10, ge=0)
     """How many of the newest files of the shared workspace the pack outlines."""
 
-    def render(self, r: Rendering) -> Rendered | None:
-        if r.given:
-            return None
+    def render(self, r: Rendering) -> Rendered:
         text = pack(r.s, r.campaign, r.campaign.config, workspace=r.workspace, shown=self)
         return Rendered(title='Research pack', blocks=(Text(text=text.strip()),))

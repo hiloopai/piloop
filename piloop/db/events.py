@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from piloop.actor import Actor
 from piloop.db.models import Event, EventModel
-from piloop.ids import CampaignId, Ref, TargetRef
+from piloop.ids import CampaignId, TargetRef
 
 
 class SubjectSettled(EventModel):
@@ -19,21 +19,6 @@ class SubjectSettled(EventModel):
 
     kind: Literal['subject.settled'] = 'subject.settled'
     campaign: CampaignId
-
-
-class AnomalyReported(EventModel):
-    """An incident that an agent was requested for, on the agent's row: one event for each incident.
-
-    The orchestrator's ``run_failed`` writes it (``piloop.plugins.role.orchestrator.run_failed``), and the inbox reports it.
-    """
-
-    kind: Literal['anomaly.reported'] = 'anomaly.reported'
-    subject: Ref
-    """The row that the incident is about."""
-    trigger: str
-    """What found it, by name: ``run_failed``. The name of a stored field."""
-    line: str
-    """The incident as the agent's brief shows it."""
 
 
 def emit(s: Session, event: EventModel, target: TargetRef, actor: Actor) -> Event:

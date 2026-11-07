@@ -123,7 +123,6 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'agent_session.finished': ['archiver', 'campaigns'],
             'agent_session.identified': [],
             'agent_session.job_ended': [],
-            'agent_session.news_taken': [],
             'agent_session.not_resumed': [],
             'agent_session.requested': ['campaigns'],
             'agent_session.running': ['prompts', 'wind_down', 'campaigns'],
@@ -134,7 +133,6 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'agent_session.work_unsaved': [],
             'agent_session.wrap_up': [],
             'anomaly.disk': [],
-            'anomaly.reported': ['campaigns'],
             'anomaly.startup': ['campaigns'],
             'campaign.added': ['listeners', 'facts', 'campaigns'],
             'campaign.closed': [],
@@ -160,18 +158,17 @@ def test_each_kind_wakes_the_consumers_that_it_woke_before(consumers: tuple[Cons
             'candidate.origin': ['campaigns'],
             'candidate.remeasure_requested': ['campaigns'],
             'comment.acked_at': [],
-            'comment.body': ['campaigns'],
-            'comment.decision': ['notify', 'prompts', 'campaigns'],
+            'comment.body': [],
+            'comment.decision': ['notify', 'prompts'],
             'comment.deleted': [],
             'comment.delivered': [],
-            'comment.escalation': ['notify', 'prompts', 'campaigns'],
-            'comment.message': ['notify', 'prompts', 'campaigns'],
-            'comment.note': ['notify', 'prompts', 'campaigns'],
+            'comment.escalation': ['notify', 'prompts'],
+            'comment.message': ['notify', 'prompts'],
+            'comment.note': ['notify', 'prompts'],
             'comment.queued': [],
             'comment.undelivered': [],
             'evaluation.cancelled': ['evaluations'],
             'evaluation.infra_error': [],
-            'evaluation.infra_retrying': ['campaigns'],
             'fact.read': ['campaigns'],
             'idea.created': ['campaigns'],
             'idea.deleted': ['campaigns'],
@@ -345,7 +342,7 @@ WRITES = (
     "INSERT INTO ideas (track, campaign_id, title, hypothesis, created_by, status) VALUES ('score', 1, 's', 'h', 'scout#9',"
     " 'dropped')",
     "UPDATE ideas SET priority = 0 WHERE title = 'a'",
-    "INSERT INTO agent_sessions (kind, campaign_id, state, reason) VALUES ('orchestrator', 1, 'requested', 'by hand')",
+    "INSERT INTO agent_sessions (kind, campaign_id, state, reason) VALUES ('auditor', 1, 'requested', 'by hand')",
     "UPDATE campaigns SET paused = 'launches', paused_reason = 'night', paused_by = 'human' WHERE id = 1",
     'UPDATE campaigns SET paused = NULL, paused_reason = NULL, paused_by = NULL WHERE id = 1',
     "UPDATE ideas SET status = 'dropped' WHERE title = 'a'",
@@ -356,6 +353,7 @@ WRITES = (
 """What a person or an agent writes, each through another connection, as the CLI or ``piloop sql`` does."""
 
 
+@pytest.mark.usefixtures('auditor')
 def test_routing_by_kind_decides_what_a_pass_on_every_change_decides(
     db: Database, campaign: Campaign, campaign_path: Path, schema: Path, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -396,7 +394,7 @@ def test_routing_by_kind_decides_what_a_pass_on_every_change_decides(
             ['campaigns'],
             ['campaigns'],
             ['campaigns'],
-            ['notify', 'prompts', 'campaigns'],
+            ['notify', 'prompts'],
             ['limits', 'evaluations', 'campaigns'],
             ['listeners', 'home_check', 'notify', 'wind_down', 'facts', 'campaigns'],
         ]

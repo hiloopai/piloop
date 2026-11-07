@@ -100,12 +100,12 @@ from piloop.plugins.runtime.contract import Handle
 from piloop.plugins.vcs.git import PILOOP, UNCOMMITTED, GitRepository, commands as git
 from piloop.settings import AgentSettings, DaemonSettings
 from tests.conftest import (
+    AUDITOR,
     END_RUN,
     EVALUATE,
     HARNESS_APPEND,
     HARNESS_SLEEPS,
     HARNESS_TWO_COMMITS,
-    LEAD,
     SETTLE,
     Gate,
     ScriptRuntime,
@@ -133,6 +133,9 @@ from tests.conftest import (
 )
 from tests.test_actor import ACTORS
 from tests.usage.test_usage import PI_ID, store
+
+pytestmark = pytest.mark.usefixtures('auditor')
+"""Its agents without a run are an ``AUDITOR``'s."""
 
 
 def scored(s: Session, candidate: CandidateId) -> bool:
@@ -190,9 +193,10 @@ def claim_for_queued(s: Session, campaign: Campaign) -> list[tuple[RunId, int]]:
     return claimed
 
 
-def request_lead(db: Database, campaign: Campaign) -> AgentSessionId:
+def request_auditor(db: Database, campaign: Campaign) -> AgentSessionId:
+    """Request an agent of ``AUDITOR`` by hand: the test must have installed it (``auditor``)."""
     with db.session() as s:
-        agent_session = AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand')
+        agent_session = AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='by hand')
         s.add(agent_session)
         s.commit()
         return agent_session.id
@@ -518,7 +522,9 @@ def test_a_claim_ends_with_its_run(
         assert s.get_one(Idea, idea).status is after, 'an idea that the run no longer holds stays as it is'
 
 
-def test_a_sweep_checks_out_the_best(db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path) -> None:
+def test_an_agent_without_a_run_checks_out_the_best(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
     scheduler = make_scheduler(db, runtime, tmp_path)
     add_ideas(db, campaign, 'more')
     assert run_all(scheduler) == [1]
@@ -530,36 +536,18 @@ def test_a_sweep_checks_out_the_best(db: Database, campaign: Campaign, runtime: 
         best_sha = best.revision
     write_toml(Path(campaign.path), '#!/bin/sh\ngit rev-parse HEAD > workspace/head.txt\n')
     set_config(db, campaign)
-    agent_session_id = request_lead(db, campaign)
+    agent_session_id = request_auditor(db, campaign)
     assert agent_session_id in run_all(scheduler), 'beside a fresh run in the free implementer slot'
     scheduler.wait(SETTLE)
     head = tmp_path / 'projects' / str(campaign.id) / 'workspace' / 'head.txt'
     assert head.read_text().strip() == best_sha
     assert (
-        'detached checkout of candidate#2, the best (score=2.0)'
+        'checkout of candidate#2, the best.'
         in (tmp_path / 'agent_sessions' / str(agent_session_id) / 'brief.md').read_text()
     )
-    # the executor removes it once the sweep's result is in, after what waits for the sweep returned
+    # the executor removes it once the agent's result is in, after what waits for the agent returned
     wait_until(lambda: git.worktrees_under(Repo(campaign.path), tmp_path / 'agent_sessions') == [])
-    hold = tmp_path / 'hold'
-    hold.touch()  # The tick measures the best again under the new evaluator: held until the sweep has its brief.
-    evaluate = f'while [ -f {hold} ]; do sleep 0.05; done; {reports(score="9", size="9")}'
-    with db.session() as s:
-        cfg = load_campaign_config(Path(campaign.path), evaluate=['sh', '-c', evaluate])
-        s.get_one(Campaign, campaign.id).config = cfg
-        current_evaluator(s, s.get_one(Campaign, campaign.id), cfg)
-        s.commit()
-    again = request_lead(db, campaign)
-    assert again in run_all(scheduler)
-    brief = tmp_path / 'agent_sessions' / str(again) / 'brief.md'
-    wait_until(brief.exists)
-    hold.unlink()
-    scheduler.wait(SETTLE)
     scheduler.stop(timeout=1)
-    assert 'detached checkout of candidate#2, the best (score=unmeasured)' in brief.read_text()
-    with db.session() as s:
-        measured = s.scalars(select(Measurement).where(Measurement.candidate_id == 2).order_by(Measurement.id))
-        assert [m.metrics['score'] for m in measured] == [2.0, 9.0], 'then the best is measured under the new evaluator'
 
 
 def test_runs_start_on_the_harnesses_of_the_rotation_in_turn(
@@ -663,9 +651,9 @@ def test_a_requested_worker_whose_harness_reached_its_cap_since_its_run_was_queu
     scheduler = make_scheduler(db, runtime, tmp_path, claims=False)
     (run,) = queued_runs(db, scheduler, campaign)
     with db.session() as s:
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, harness='script', state=AgentSessionState.RUNNING))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, harness='script', state=AgentSessionState.RUNNING))
         s.commit()
-    assert run_all(scheduler) == [], 'the sweeper took the last script slot first'
+    assert run_all(scheduler) == [], 'the auditor took the last script slot first'
     with db.session() as s:
         assert s.get_one(Run, run.id).status is RunStatus.QUEUED
         [worker] = s.scalars(select(AgentSession).where(AgentSession.subject_id == run.id)).all()
@@ -681,14 +669,14 @@ def test_a_sweep_passes_over_a_harness_at_its_cap_and_a_pinned_one_stays_request
         campaign,
         plugins={
             'harness': {'use': ['script', 'pi'], 'script': {'model': 'm', 'max_concurrent': 1}, 'pi': {'model': 'p'}},
-            'role': {'orchestrator': {'harnesses': ['script', 'pi']}},
+            'role': {AUDITOR: {'harnesses': ['script', 'pi']}},
         },
     )
     with db.session() as s:
         busy = AgentSession(
             kind=IMPLEMENTER, campaign_id=campaign.id, harness='script', state=AgentSessionState.RUNNING
         )
-        s.add_all([busy, AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand')])
+        s.add_all([busy, AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='by hand')])
         s.commit()
     scheduler = make_scheduler(db, runtime, tmp_path)
 
@@ -703,7 +691,7 @@ def test_a_sweep_passes_over_a_harness_at_its_cap_and_a_pinned_one_stays_request
     with db.session() as s:
         assert s.get_one(AgentSession, 2).harness == 'pi', 'script is at its cap: the sweep takes pi'
         s.get_one(AgentSession, 2).state = AgentSessionState.EXITED
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, harness='script', reason='pinned'))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, harness='script', reason='pinned'))
         s.commit()
     assert take() == [], 'a sweep pinned to a harness at its cap waits'
     with db.session() as s:
@@ -771,7 +759,7 @@ def test_an_after_link_holds_an_idea_until_its_prerequisite_is_done_or_dropped_a
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """A prerequisite that is done, kept or not, or dropped frees its dependents. One that is claimed or open holds
-    them, through a chain too. Nothing changes their status, and nothing asks the lead."""
+    them, through a chain too. Nothing changes their status."""
     (dropped, nothing, claimed) = add_ideas(db, campaign, 'dropped', 'kept nothing', 'claimed')
     with db.session() as s:
         for idea_id, status in (
@@ -841,7 +829,7 @@ def test_reap(
         s.commit()
         s.add(
             AgentSession(
-                kind='orchestrator',
+                kind=AUDITOR,
                 campaign_id=campaign.id,
                 harness='pi',
                 model='m',
@@ -854,7 +842,7 @@ def test_reap(
         )
         s.add(
             AgentSession(
-                kind='orchestrator',
+                kind=AUDITOR,
                 campaign_id=campaign.id,
                 harness='pi',
                 model='m',
@@ -906,7 +894,7 @@ def test_reap_tolerates_a_runtime_that_cannot_kill(
     with db.session() as s:
         s.add(
             AgentSession(
-                kind='orchestrator',
+                kind=AUDITOR,
                 harness='pi',
                 model='m',
                 runtime='subprocess',
@@ -1292,7 +1280,7 @@ def test_a_hand_over_leaves_a_sweep_running_and_the_next_scheduler_re_attaches_t
     hold.touch()
     write_toml(Path(campaign.path), f'#!/bin/sh\necho $$ > ../agent.pid\nwhile [ -f {hold} ]; do sleep 0.05; done\n')
     set_config(db, campaign)
-    agent_session_id = request_lead(db, campaign)
+    agent_session_id = request_auditor(db, campaign)
     first = make_scheduler(db, runtime, tmp_path)
     assert agent_session_id in run_all(first)
     sweep_dir = tmp_path / 'agent_sessions' / str(agent_session_id)
@@ -1792,10 +1780,10 @@ def test_stop_before_a_sweep_starts_never_starts_it(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     gate = Gate()
-    monkeypatch.setattr('piloop.plugins.role.orchestrator.wake.compose_brief', gate.wrap(compose_brief))
+    monkeypatch.setattr('tests.fixtures.plugin.compose_brief', gate.wrap(compose_brief))
     occupy_the_run_slot(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
-    agent_session_id = request_lead(db, campaign)
+    agent_session_id = request_auditor(db, campaign)
     assert run_all(scheduler) == [agent_session_id]
     assert gate.entered.wait(10)
     started = time.monotonic()
@@ -1824,7 +1812,7 @@ def test_stop_waits_for_a_sweep_start_in_flight_then_kills_it(
     monkeypatch.setattr(runtime, 'start', gate.wrap(runtime.start))
     occupy_the_run_slot(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
-    agent_session_id = request_lead(db, campaign)
+    agent_session_id = request_auditor(db, campaign)
     assert run_all(scheduler) == [agent_session_id]
     assert gate.entered.wait(10)
     stopper = threading.Thread(target=scheduler.stop, args=(10,))
@@ -2184,7 +2172,7 @@ def test_implementers_of_a_stopped_campaign_are_told_to_wrap_up_then_ended_after
     with db.session() as s:
         s.add(
             AgentSession(
-                kind=LEAD,
+                kind=AUDITOR,
                 campaign_id=campaign.id,
                 runtime='subprocess',
                 handle={'agent': 'research-2', 'pid': 4243},
@@ -2300,7 +2288,7 @@ def test_a_cancelled_run_is_told_to_wrap_up_and_ended_after_the_grace(
     running_agent_session(db, campaign, 'useful')
     with db.session() as s:
         sweep = AgentSession(
-            kind=LEAD,
+            kind=AUDITOR,
             campaign_id=campaign.id,
             runtime='subprocess',
             handle={'agent': 'research-3', 'pid': 4243},
@@ -2346,7 +2334,7 @@ def test_an_agent_of_no_campaign_winds_down_on_the_home_s_grace(
 ) -> None:
     with db.session() as s:
         orphan = AgentSession(
-            kind=LEAD,
+            kind=AUDITOR,
             runtime='subprocess',
             handle={'agent': 'research-1', 'pid': 4243},
             state=AgentSessionState.RUNNING,
@@ -2474,13 +2462,13 @@ def test_a_cancelled_request_never_launches_and_a_cancelled_sweep_is_ended(
             kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), harness='script', model='m'
         )
         sweep = AgentSession(
-            kind=LEAD,
+            kind=AUDITOR,
             campaign_id=campaign.id,
             runtime='subprocess',
             handle={'agent': 'research-2', 'pid': 4243},
             state=AgentSessionState.RUNNING,
         )
-        requested = AgentSession(kind=LEAD, campaign_id=campaign.id, reason='low_water')
+        requested = AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='low_water')
         s.add_all([queued, sweep, requested])
         s.flush()
         request_cancel(s, queued, System.HUMAN, ending=Ending.WRAP_UP)
@@ -2539,17 +2527,13 @@ def pause_escalations(db: Database) -> list[Comment]:
         return list(s.scalars(select(Comment).where(Comment.kind == 'escalation').order_by(Comment.id)))
 
 
-def test_a_paused_campaign_past_its_stop_limit_launches_its_requested_orchestrator_once(
+def test_a_paused_campaign_past_its_stop_limit_launches_a_requested_agent_of_a_role_awake_in_it_once(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    """A paused campaign does not stop at a limit, and its agent's timeout is not cut there either (``due``).
-
-    The pass takes the requested row of an orchestrator that a paused campaign wakes. Its launch used to read the
-    rule's stop, put the row back, and wake the pass at once: the same row was taken and put back every pass.
+    """A paused campaign does not stop at a limit (``due``): the pass takes the requested row of a role that wakes
+    while it is paused once, and never puts it back.
     """
-    set_config(
-        db, campaign, plugins={'role': {'orchestrator': {'triggers': ['news']}}, 'stop_rule': {'max_hours': 0.5}}
-    )
+    set_config(db, campaign, plugins={'role': {AUDITOR: {'awake': ['paused']}}, 'stop_rule': {'max_hours': 0.5}})
     with db.session() as s:
         run = Run(
             campaign_id=campaign.id,
@@ -2564,7 +2548,7 @@ def test_a_paused_campaign_past_its_stop_limit_launches_its_requested_orchestrat
         close_run(s, run, RunEnd.FINISHED, None)
         ops.pause(s, campaign.id, System.HUMAN, evals=False, reason='a review')
         s.commit()
-    row = request_lead(db, campaign)
+    row = request_auditor(db, campaign)
     sched = make_scheduler(db, runtime, tmp_path, claims=False)
     launched = []
     for _ in range(3):
@@ -2588,21 +2572,21 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
     """
     died_at_startup(db, campaign, IMPLEMENTER, minutes_ago=11)
     for _ in range(2):
-        died_at_startup(db, campaign, LEAD)
-    wanted = request_lead(db, campaign)
+        died_at_startup(db, campaign, AUDITOR)
+    wanted = request_auditor(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
     assert wanted in run_all(scheduler), 'two recent deaths: launches go on'
     scheduler.wait(SETTLE)
 
-    died = [died_at_startup(db, campaign, LEAD) for _ in range(2)]
-    request_lead(db, campaign)
+    died = [died_at_startup(db, campaign, AUDITOR) for _ in range(2)]
+    request_auditor(db, campaign)
     assert run_all(scheduler) == []
     [escalation] = pause_escalations(db)
     assert (escalation.target_kind, escalation.author, escalation.priority) == (TargetKind.CAMPAIGN, 'daemon', 1)
     assert details(escalation) == IsStr(
         regex=r'Launches paused: 4 agents died at startup in the last 10 minutes\. Load average [\d.]+ / [\d.]+ / [\d.]+'
-        rf' on \d+ CPUs when launches paused\..*\n- agent_session#\d+ \(orchestrator on script\): .*\n- agent_session#{died[0]} \(orchestrator on script\):'
-        rf' FileNotFoundError: orchestrator-{died[0]}: no such harness\n'
+        rf' on \d+ CPUs when launches paused\..*\n- agent_session#\d+ \(auditor on script\): .*\n- agent_session#{died[0]} \(auditor on script\):'
+        rf' FileNotFoundError: auditor-{died[0]}: no such harness\n'
         rf'- agent_session#{died[1]} .*',
         regex_flags=re.DOTALL,
     )
@@ -2613,13 +2597,13 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
         s.commit()
     assert run_all(scheduler) == [] and len(pause_escalations(db)) == 1, 'acknowledged means seen: not posted again'
 
-    latest = died_at_startup(db, campaign, LEAD)
+    latest = died_at_startup(db, campaign, AUDITOR)
     assert run_all(scheduler) == []
     [extended] = pause_escalations(db)
     assert extended.id == escalation.id and extended.acked_at is not None, 'the same pause: updated in place'
     assert details(extended).startswith(
         'Launches paused: 5 agents'
-    ) and f'- agent_session#{latest} (orchestrator' in details(extended)
+    ) and f'- agent_session#{latest} (auditor' in details(extended)
 
     with db.session() as s:
         for event in s.scalars(select(Event).where(has(StartupAnomaly))):
@@ -2629,8 +2613,8 @@ def test_startup_deaths_pause_launches_and_escalate_until_they_age_out(
     scheduler.wait(SETTLE)
 
     for _ in range(FewestLive().startup_breaker):
-        died_at_startup(db, campaign, LEAD)
-    request_lead(db, campaign)
+        died_at_startup(db, campaign, AUDITOR)
+    request_auditor(db, campaign)
     assert run_all(scheduler) == [] and len(pause_escalations(db)) == 2, 'a new pause: a new escalation'
     with db.session() as s:
         kinds = s.scalars(select(Event.kind).where(Event.kind.like('launch.%')).order_by(Event.id)).all()
@@ -2667,7 +2651,7 @@ def test_a_relaunch_does_not_wait_for_the_startup_breaker_its_run_ends_and_frees
     run_id, relaunch = relaunched(db, campaign)
     for _ in range(FewestLive().startup_breaker):
         died_at_startup(db, campaign, IMPLEMENTER)
-    first = request_lead(db, campaign)
+    first = request_auditor(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path, claims=False)
     assert run_all(scheduler) == []
     with db.session() as s:
@@ -2683,8 +2667,8 @@ def test_the_startup_breaker_acknowledges_its_escalation_once_launches_resume(
 ) -> None:
     """Nothing waits on the escalation once the deaths age out: it would remind the human of a pause that is over."""
     for _ in range(FewestLive().startup_breaker):
-        died_at_startup(db, campaign, LEAD)
-    request_lead(db, campaign)
+        died_at_startup(db, campaign, AUDITOR)
+    request_auditor(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
     assert run_all(scheduler) == []
     [escalation] = pause_escalations(db)

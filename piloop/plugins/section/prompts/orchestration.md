@@ -46,9 +46,9 @@ Each command takes `--reason '<why>'`, signs the change with your actor and reco
 
 ### Ask for an agent
 
-- `INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('<role>', <p>, 'requested')`. The daemon starts it at once.
-- Kind: `orchestrator`. A role that does runs needs a run, so leave its agents to the scheduler.
-- Optional: `harness` and `model` pin the choice. `reason` says why.
+- `piloop launch <campaign> <role> --reason '<why>'` asks for one more agent of a role that a package adds and that
+  starts its agents. The daemon starts it at once, within the role's `max_concurrent`.
+- A role that does runs needs a run, so leave its agents to the scheduler.
 
 ### Exclude a candidate
 
@@ -75,8 +75,7 @@ exclusion with your actor. Its scores stay in the pool, and a run may still star
 - `piloop pause <campaign> --reason '<why>'` launches nothing more: no run, no sweep, no requested agent. Running work
   finishes and is scored. It raises no escalation.
 - The daemon still measures what a new evaluator or a request needs. `--evals` holds that too.
-- No agent starts for an anomaly while paused; it gets the anomaly after the resume. Paused time does not count
-  toward `max_hours`.
+- Paused time does not count toward `max_hours`.
 - `piloop resume <campaign>` ends it. `campaigns.paused` and `paused_reason` show it, and `campaign.paused` events log it.
 - Pause with `piloop pause`, never with a `hold_at` fact that you set by hand: a hold stops every measurement too.
 
@@ -116,7 +115,7 @@ exclusion with your actor. Its scores stay in the pool, and a run may still star
 -- tokens per idea: every implementer run of it, summed (NULL usage counts nothing)
 SELECT i.id, i.title, SUM(json_extract(w.usage, '$.total')) AS tokens, COUNT(w.id) AS agents
 FROM ideas i JOIN runs r ON r.idea_id = i.id JOIN agent_sessions w ON w.subject_kind = 'run' AND w.subject_id = r.id
-WHERE i.campaign_id = <campaign id> GROUP BY i.id ORDER BY tokens DESC;
+WHERE i.campaign_id = <campaign id> AND w.campaign_id = <campaign id> GROUP BY i.id ORDER BY tokens DESC;
 
 -- tokens per role, every agent of the campaign that ended (filter by campaign: that is what the index serves)
 SELECT kind, SUM(json_extract(usage, '$.total')) AS tokens, COUNT(*) AS agents

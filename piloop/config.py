@@ -88,7 +88,7 @@ class CampaignAgents(BaseModel):
 class Roles:
     """The campaign's roles: one instance of ``ROLES`` for each, by its name (``[plugins.role.<name>]``).
 
-    Every role is a provider: piloop's (implementer, orchestrator) and those that packages add, each with its table over
+    Every role is a provider: piloop's (the implementer) and those that packages add, each with its table over
     its defaults, then the roles that the file defines. A table with a new name and ``runs = true`` defines a new role
     that does runs (``ImplementerRole``).
     """
@@ -123,8 +123,12 @@ SWEEP_KEYS = ('interval', 'incident_prompt', 'routine_prompt')
 REMOVED_SECTIONS = {
     'idle_queue': 'every free slot gets a run',
     'yields': 'the low-yield alarm is removed with it',
+    'incidents': 'no agent is woken for a failed run',
+    'reported': 'no agent is woken for a failed run',
+    'research_commands': 'no role shows it now',
 }
-"""The sections that 0.6 removed, and why: a file or a stored config that names one loads without it (``_removed_sections``)."""
+"""The sections that piloop removed, and why: a file or a stored config that names one loads without it
+(``_removed_sections``)."""
 
 
 class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docstrings=True):
@@ -199,39 +203,20 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     @classmethod
     @deprecated.until('0.7.0', 'the trigger tables are removed in 0.6: delete CampaignConfig._trigger_tables')
     def _trigger_tables(cls, data: object) -> object:
-        """Drop ``[plugins.trigger]``: the orchestrator's triggers are its own now, with no table.
+        """Drop ``[plugins.trigger]``: no role of piloop's has a trigger table now.
 
-        ``[plugins.trigger.news] quiet_seconds`` moves to ``[plugins.role.orchestrator]``, and its ``routine_every`` goes,
-        each with a warning. Any other table that sets a key warns too; a stored config's empty ones go without a word.
+        Each table that sets a key warns; a stored config's empty ones go without a word.
         """
         plugins = data.get('plugins') if isinstance(data, dict) else None
         if not isinstance(data, dict) or not isinstance(plugins, dict) or 'trigger' not in plugins:
             return data
-        kept = {k: v for k, v in plugins.items() if k != 'trigger'}
         tables = plugins['trigger'] if isinstance(plugins['trigger'], dict) else {}
-        news = dict(t) if isinstance(t := tables.get('news'), dict) else {}
-        if news.pop('routine_every', None) is not None:
-            deprecated.dropped(
-                'nothing routine wakes the orchestrator now, so routine_every is removed; delete it from its news table',
-                removed_in='0.7.0',
-            )
-        if 'quiet_seconds' in news:
-            deprecated.dropped(
-                "the news trigger is the orchestrator's own now: write quiet_seconds in [plugins.role.orchestrator],"
-                ' not in [plugins.trigger.news]',
-                removed_in='0.7.0',
-            )
-            roles = dict(r) if isinstance(r := kept.get('role'), dict) else {}
-            lead = dict(t) if isinstance(t := roles.get('orchestrator'), dict) else {}
-            roles['orchestrator'] = {'quiet_seconds': news.pop('quiet_seconds'), **lead}
-            kept['role'] = roles
         for name, table in tables.items():
-            if name != 'news' and table:
+            if table:
                 deprecated.dropped(
-                    f"the triggers are the orchestrator's own now, with no table: delete [plugins.trigger.{name}]",
-                    removed_in='0.7.0',
+                    f'the trigger tables are removed: delete [plugins.trigger.{name}]', removed_in='0.7.0'
                 )
-        return {**data, 'plugins': kept}
+        return {**data, 'plugins': {k: v for k, v in plugins.items() if k != 'trigger'}}
 
     @model_validator(mode='before')
     @classmethod
@@ -239,7 +224,7 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
     def _own_sweeps(cls, data: object) -> object:
         """Drop each role of the file's own that does no runs, and each ``sql`` trigger, with a warning for each.
 
-        Only the orchestrator sweeps: a role of your own does runs (``runs = true``). It runs after the validators of
+        A role of your own does runs (``runs = true``). It runs after the validators of
         the removed roles (research, the watchdog), whose own warnings say where their work went.
         """
         plugins = data.get('plugins') if isinstance(data, dict) else None
@@ -251,8 +236,8 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
             own = [n for n, t in roles.items() if n not in providers and isinstance(t, dict) and not t.get('runs')]
             for name in own:
                 deprecated.dropped(
-                    f'a sweep of your own is removed: delete [plugins.role.{name}]; only the orchestrator sweeps, and'
-                    ' a role of your own does runs (runs = true)',
+                    f'a sweep of your own is removed: delete [plugins.role.{name}]; a role of your own does runs'
+                    ' (runs = true)',
                     removed_in='0.7.0',
                 )
             kept['role'] = {n: t for n, t in roles.items() if n not in own}
@@ -380,15 +365,14 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
         if 'watchdog' not in roles or _packaged(ROLES, 'watchdog'):
             return data
         deprecated.dropped(
-            'the watchdog role is removed; delete [plugins.role.watchdog]: the orchestrator takes escalations and failed'
-            ' runs when its triggers name them',
+            'the watchdog role is removed; delete [plugins.role.watchdog]: escalations reach a human at once',
             removed_in='0.7.0',
         )
         return {**data, 'plugins': {**plugins, 'role': {n: t for n, t in roles.items() if n != 'watchdog'}}}
 
     @model_validator(mode='before')
     @classmethod
-    @deprecated.until('0.7.0', 'idle_queue and yields are removed in 0.6: delete CampaignConfig._removed_sections')
+    @deprecated.until('0.7.0', 'the REMOVED_SECTIONS are removed: delete CampaignConfig._removed_sections')
     def _removed_sections(cls, data: object) -> object:
         """Drop each section of ``REMOVED_SECTIONS`` from ``[plugins.section]``, its ``use`` and each role's ``sections``.
 
@@ -426,6 +410,30 @@ class CampaignConfig(BaseModel, extra='forbid', frozen=True, use_attribute_docst
                 tables[name] = role
             kept['role'] = tables
         return {**data, 'plugins': kept}
+
+    # Pydantic runs the 'before' validators in the reverse order of their definitions: this one runs first, so that
+    # the bridges after it read no table of the orchestrator.
+    @model_validator(mode='before')
+    @classmethod
+    @deprecated.until('0.7.0', 'the orchestrator role is removed: delete CampaignConfig._orchestrator')
+    def _orchestrator(cls, data: object) -> object:
+        """Drop ``[plugins.role.orchestrator]``, with a warning: of a file, or of a stored config.
+
+        piloop launches no agent of its own to answer escalations: they reach a human at once. A package's role called
+        ``orchestrator`` keeps its table (``_packaged``).
+        """
+        plugins = data.get('plugins') if isinstance(data, dict) else None
+        roles = plugins.get('role') if isinstance(plugins, dict) else None
+        if not isinstance(data, dict) or not isinstance(plugins, dict) or not isinstance(roles, dict):
+            return data
+        if 'orchestrator' not in roles or _packaged(ROLES, 'orchestrator'):
+            return data
+        deprecated.dropped(
+            'the orchestrator role is removed; delete [plugins.role.orchestrator]: escalations reach a human at once,'
+            ' and an agent that you run with the piloop-operate skill can answer them',
+            removed_in='0.7.0',
+        )
+        return {**data, 'plugins': {**plugins, 'role': {n: t for n, t in roles.items() if n != 'orchestrator'}}}
 
     @model_validator(mode='after')
     def _check(self) -> Self:

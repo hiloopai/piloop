@@ -29,7 +29,6 @@ CONFIG = {
     'plugins': {
         'role': {
             'implementer': {'max_concurrent': 1, 'timeout': TIMEOUT},
-            'orchestrator': {'triggers': []},
         },
         'stop_rule': {'max_runs': 3, 'max_hours': 1, 'max_tokens': 5_000_000},
     },

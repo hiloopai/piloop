@@ -5,17 +5,15 @@
 | `context` | `[plugins.section.context]`: who the agent is, where its campaign is, why it started, and how it runs piloop. | orchestrator, run | 1 | `lines` |
 | `measure` | How an implementer measures its change: the dev command (`[evaluator] dev`), and which commits are scored. | run | 3 | none |
 | `idea_comments` | `[plugins.section.idea_comments]`: the comments on the reader's idea and on its runs, the latest last. | run | 5 | `latest`, `chars` |
-| `database` | How to run `piloop sql`, and how to quote an agent's own text. Every built-in role shows it. | none | 10 | none |
+| `database` | How to run `piloop sql`, and how to quote an agent's own text. A role that does no runs shows it by default. | none | 10 | none |
 | `lessons` | The current lessons of the campaign's repo, most relevant first, in a reading budget. | orchestrator, run | 10 | `budget` |
 | `concepts` | Campaigns, ideas, runs, candidates, measurements, the pool, its best and the tracks. | none | 20 | none |
-| `incidents` | The anomalies that the agent who reads got to investigate. Nothing for every other reader. | orchestrator | 20 | none |
 | `scoring` | How the daemon scores a candidate into the pool, what makes one the best, and the query of the pool. | none | 30 | none |
 | `comments` | How agents talk to each other in comments, and what they never change. | none | 40 | none |
 | `priorities` | How a comment with a priority reaches the human's inbox. | none | 50 | none |
 | `search` | How to search the ideas and the comments in full text. | none | 60 | none |
 | `past_campaigns` | How to read what past campaigns on the repo tried, concluded (`lessons`) and wrote (`documents`). | none | 70 | none |
 | `links` | What `after` means, and how to link a new idea. | none | 80 | none |
-| `research_commands` | The orchestrator's commands for ideas, candidates and runs. | none | 85 | none |
 | `provenance` | Who changed a row, and when: `updated_by` and the change log in `events`. | none | 90 | none |
 | `queries` | Queries of the running runs, the queue and its prerequisites, and what was said about an idea. | none | 95 | none |
 | `headline` | The best of each track and its score, the candidates, the tokens, the evaluator, and why the campaign is held. | status, orchestrator | 100 | none |
@@ -32,7 +30,6 @@
 | `funnel` | The run funnel: ideas → attempts → reached the evaluator → measured → new bests, and how the unmeasured attempts ended. | status, orchestrator | 175 | none |
 | `candidates` | The latest candidates, oldest first, each with where it stands and its primary score against its parent's. | status, orchestrator | 180 | none |
 | `same_as_parent` | The candidates whose primary score is exactly their parent's: a cost, since the evaluation saw no change. | status, orchestrator | 185 | none |
-| `reported` | The latest incidents that the daemon gave to agents, newest first, each with the agent that got it. | status, orchestrator | 190 | none |
 | `inbox` | The unacknowledged inbox items and the latest decisions and escalations, newest first. | status, orchestrator | 200 | none |
 | `events` | The latest events of the campaign, newest first. | status, orchestrator | 210 | none |
 | `cost` | What the campaign spent: per new best, since the latest new best, and with `metric` per evaluation and per attempt. | none | 500 | `spend`, `metric` |

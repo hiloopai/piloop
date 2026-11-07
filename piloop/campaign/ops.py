@@ -256,7 +256,9 @@ def request_agent(
             if role in roles.doing_runs()
             else ''
         )
-        raise Refused(f'{campaign.name} has no role {role!r} to launch; it has {", ".join(starting)}.{by_itself}')
+        raise Refused(
+            f'{campaign.name} has no role {role!r} to launch; it has {", ".join(starting) or "none"}.{by_itself}'
+        )
     agent = AgentSession(kind=role, campaign_id=campaign.id, harness=harness, model=model, reason=reason)
     s.add(agent)
     s.flush()

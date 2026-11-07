@@ -153,8 +153,8 @@ ANTHROPIC_API_KEY = { secret = "ANTHROPIC_API_KEY" }
 For a Claude subscription, `claude setup-token` prints a token: store it as `CLAUDE_CODE_OAUTH_TOKEN` instead. For a
 model gateway, see [Model access](/guides/secrets#model-access).
 
-Nobody needs to keep a session open: `piloop message` and `piloop inbox` work from your laptop, and piloop can launch
-the [orchestrator](/concepts/orchestrator) on the server when you turn its triggers on.
+`piloop message` and `piloop inbox` work from your laptop, so your [orchestrator](/concepts/orchestrator) can run
+there.
 
 To run agents and evaluations on more machines, such as a GPU box, see [Workers](/guides/workers).
 

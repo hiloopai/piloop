@@ -34,9 +34,8 @@ from piloop.plugins.fact_source.kit.readings import FactRead, Readings
 from piloop.plugins.stop_rule.contract import STOP_RULES, Hold
 from piloop.reports.overview import progress
 from tests.campaign.test_stop import add_run
-from tests.conftest import END_RUN, LEAD, SETTLE, ScriptRuntime, run_all, write_toml
-from tests.daemon.test_roles import PLUGIN, installed
-from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_lead, set_config
+from tests.conftest import AUDITOR, END_RUN, PLUGIN, SETTLE, ScriptRuntime, install_plugins, run_all, write_toml
+from tests.daemon.test_scheduler import add_ideas, make_scheduler, request_auditor, set_config
 
 COMMAND = {'provider': 'command', 'command': ['true'], 'metrics': ['spend']}
 
@@ -184,6 +183,7 @@ HELD = 'nothing launches until you raise it and run piloop init'
 
 
 @pytest.mark.usefixtures('daemon_api')
+@pytest.mark.usefixtures('auditor')
 def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -210,7 +210,7 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
     assert len(daemon_comments(db)) == 1, 'each notice once'
 
     bill(db, campaign, file, '1012')
-    request_lead(db, campaign)
+    request_auditor(db, campaign)
     assert run_all(scheduler) == [], 'at the limit nothing launches, not even a row inserted by hand'
     note, (kind, priority, body) = daemon_comments(db)[1:]
     assert note == ('note', 1, 'Notice: spend is 1012, past the 200 notice.')
@@ -239,7 +239,7 @@ def test_notices_once_then_at_the_limit_nothing_starts_until_the_limit_is_raised
     with db.session() as s:
         sync(s, s.get_one(Campaign, campaign.id))  # This is what `piloop init` does.
         s.commit()
-    assert len(run_all(scheduler)) == 2, 'the limit raised: the sweeper and the next run launch'
+    assert len(run_all(scheduler)) == 2, 'the limit raised: the auditor and the next run launch'
     scheduler.wait(SETTLE)
 
 
@@ -314,7 +314,7 @@ def test_the_progress_line_is_what_the_stop_rule_describes(
     db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """piloop formats no fact: the rule shows its own, and a rule that describes nothing shows none."""
-    installed(
+    install_plugins(
         monkeypatch,
         [
             EntryPoint('watches', f'{PLUGIN}:Watches', STOP_RULES.group),
@@ -335,6 +335,7 @@ def test_the_progress_line_is_what_the_stop_rule_describes(
         host.close()
 
 
+@pytest.mark.usefixtures('auditor')
 def test_a_stopped_campaign_is_never_held(db: Database, campaign: Campaign) -> None:
     """piloop asks the stop rule only about an active campaign: a stopped one is not held, an agent requested or not."""
     set_config(db, campaign, plugins=limited(10))
@@ -343,6 +344,6 @@ def test_a_stopped_campaign_is_never_held(db: Database, campaign: Campaign) -> N
         cfg = CampaignConfig.model_validate(p.config)
         assert check(s, p, cfg) == Hold('spend not known')
         p.status, p.stopped_reason = CampaignStatus.STOPPED, 'by the test'
-        s.add(AgentSession(kind=LEAD, campaign_id=p.id, reason='by hand'))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=p.id, reason='by hand'))
         s.flush()
         assert progress(s, p, cfg, p.created_at).endswith(' · spend —/10 · no limit stops it: open-ended')

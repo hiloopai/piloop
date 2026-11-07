@@ -70,17 +70,14 @@ from piloop.plugins.campaign_type.kit.evaluation.section.funnel import RunFunnel
 from piloop.plugins.section.cost import Cost
 from piloop.plugins.campaign_type.kit.pool.section.candidates import Candidates
 from piloop.plugins.campaign_type.kit.pool.section.same_as_parent import SameAsParent
-from piloop.plugins.section.reported import Reported
 from piloop.plugins.section.inbox import Inbox
 from piloop.plugins.section.events import Events
 from piloop.plugins.section.tools import Tools
-from piloop.plugins.section.incidents import Incidents
 from piloop.plugins.campaign_type.optimization.section.pack import Pack
 from piloop.plugins.campaign_type.optimization.section.history import History
 from piloop.plugins.section.lessons import Lessons
 from piloop.plugins.section.database import Database
 from piloop.plugins.campaign_type.optimization.section.concepts import Concepts
-from piloop.plugins.campaign_type.optimization.section.research_commands import ResearchCommands
 from piloop.plugins.campaign_type.kit.pool.section.scoring import Scoring
 from piloop.plugins.section.comments import Comments
 from piloop.plugins.section.priorities import Priorities
@@ -97,7 +94,6 @@ from piloop.plugins.section.orchestration import Orchestration
 from piloop.plugins.role.contract import ROLES, ImplementerRole, StartsItsAgents
 from piloop.plugins.role.contract import Continuity, Quiet, Wake
 from piloop.plugins.role.contract import RoleConfig
-from piloop.plugins.role.orchestrator import OrchestratorRole
 
 from piloop.plugins.metric import Direction
 from piloop.plugins.metric import number

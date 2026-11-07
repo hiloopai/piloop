@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 
+import pytest
 from sqlalchemy.orm import Session
 
 from piloop.agents.roles import files_ideas
@@ -178,6 +179,7 @@ def test_yields_count_ideas_runs_and_new_bests_per_source(db: Database, campaign
     assert Yield('implementer', 3, 2, 1).line() == 'implementer 3 ideas, 2 ran → 1 new bests'
 
 
+@pytest.mark.usefixtures('auditor')
 def test_where_an_idea_comes_from_and_which_roles_file_ideas(campaign_path: Path) -> None:
     assert [source(a) for a in ('research#12', 'orchestrator', 'human', 'implementer#3')] == [
         'research',
@@ -185,7 +187,7 @@ def test_where_an_idea_comes_from_and_which_roles_file_ideas(campaign_path: Path
         'human',
         'implementer',
     ]
-    actors = ('implementer#3', 'orchestrator#4', 'research#5', 'orchestrator', 'human')
+    actors = ('implementer#3', 'auditor#4', 'research#5', 'orchestrator', 'human')
     cfg = load_campaign_config(campaign_path)
     assert [files_ideas(cfg, ACTORS.validate_python(a)) for a in actors] == [
         False,

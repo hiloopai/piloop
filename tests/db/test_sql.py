@@ -504,9 +504,9 @@ def test_only_the_daemon_writes_an_agents_usage_and_session_file(con: sqlite3.Co
     columns are not."""
     sql.run(
         con,
-        """INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{"plugins": {"role": {"orchestrator": {}}}}')""",
+        """INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{"plugins": {"role": {"auditor": {}}}}')""",
     )
-    sql.run(con, "INSERT INTO agent_sessions (kind, campaign_id) VALUES ('orchestrator', 1)")
+    sql.run(con, "INSERT INTO agent_sessions (kind, campaign_id) VALUES ('auditor', 1)")
     with pytest.raises(sqlite3.DatabaseError, match='not authorized'):
         sql.run(con, """UPDATE agent_sessions SET usage = '{"total": "many"}' WHERE id = 1""")
     with pytest.raises(sqlite3.DatabaseError, match='not authorized'):
@@ -520,8 +520,8 @@ def test_a_lesson_has_a_status_and_an_effect_only_with_its_metric(con: sqlite3.C
     sql.run(con, "INSERT INTO campaigns (name, path, config) VALUES ('p', '/p', '{}')")
     insert = 'INSERT INTO lessons (campaign_id, family, status, effect, metric, body, created_by) VALUES (1, {})'
     for values in (
-        "'voting', 'dead', 0.002, 'accuracy', 'the trees agree on every row: idea#3', 'orchestrator#2'",
-        "'voting', 'promising', -40, 'seconds', 'faster: candidate#9', 'orchestrator#2'",
+        "'voting', 'dead', 0.002, 'accuracy', 'the trees agree on every row: idea#3', 'auditor#2'",
+        "'voting', 'promising', -40, 'seconds', 'faster: candidate#9', 'auditor#2'",
         "'pruning', 'untested', NULL, NULL, 'never ran: idea#4', 'orchestrator'",
     ):
         sql.run(con, insert.format(values))
@@ -546,7 +546,7 @@ def test_a_lesson_has_a_status_and_an_effect_only_with_its_metric(con: sqlite3.C
         (
             'lessons',
             'INSERT INTO lessons (campaign_id, family, status, body, created_by)'
-            " VALUES (1, 'voting', 'dead', 'idea#3', 'orchestrator#2')",
+            " VALUES (1, 'voting', 'dead', 'idea#3', 'auditor#2')",
         ),
     ],
 )

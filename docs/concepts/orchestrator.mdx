@@ -18,13 +18,9 @@ campaign enwik8 stopped: max_runs: 1 runs
 next: piloop inbox wait enwik8 --after 17
 ```
 
-The wait returns on a new inbox item, score, anomaly or stop, or at the timeout. Its last line is the next wait, with a
+The wait returns on a new inbox item, score or stop, or at the timeout. Its last line is the next wait, with a
 cursor, so nothing is lost between two waits. The orchestrator uses no tokens while it waits. The daemon runs without
 one. Run one orchestrator for each campaign: two would answer an escalation twice.
-
-piloop can also launch an orchestrator of its own, so that nobody keeps a session open. It is off by default.
-`triggers = ["news", "run_failed"]` in `[plugins.role.orchestrator]` launches one on an escalation, a person's message
-or a failed run. Then do not run `piloop-operate` on that campaign: write to it with `piloop message`.
 
 ## The inbox
 
@@ -91,11 +87,8 @@ run#41 timed out.
 
 `piloop inbox choose 1 A` answers it, signed as you.
 
-- An agent's escalation reaches you at once. When piloop launches an orchestrator (`triggers` names `news`), the
-  escalation goes to it first, and a [notifier](/guides/notifications) sends it to you only when nobody acknowledged
-  it 30 minutes later.
-- The orchestrator's escalations, and the daemon's, reach you at once.
-- `[plugins.escalation]` sets the form, its limits and that wait.
+- Every escalation reaches you at once, through your [notifiers](/guides/notifications), whoever filed it.
+- `[plugins.escalation]` sets the form and its limits.
 
 ## Decisions
 

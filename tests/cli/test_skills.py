@@ -15,7 +15,7 @@ from piloop.cli.main import COMMANDS
 from piloop.cli.skills import SKILLS, SkillPart
 from piloop.plugins.host import PluginError
 from piloop.settings import Settings
-from tests.daemon.test_roles import forget_loaded, installed
+from tests.conftest import forget_loaded, install_plugins
 
 
 @pytest.fixture
@@ -103,7 +103,7 @@ def forgets() -> Iterator[None]:
 def test_a_package_adds_a_part_to_a_skill_in_its_order_and_replaces_another(
     monkeypatch: pytest.MonkeyPatch, forgets: None
 ) -> None:
-    installed(
+    install_plugins(
         monkeypatch,
         [
             EntryPoint('triage', f'{__name__}:TRIAGE', SKILLS.group),
@@ -119,7 +119,7 @@ def test_a_package_adds_a_part_to_a_skill_in_its_order_and_replaces_another(
 def test_two_parts_that_replace_one_and_a_part_of_no_piloop_skill_are_refused(
     monkeypatch: pytest.MonkeyPatch, forgets: None
 ) -> None:
-    installed(
+    install_plugins(
         monkeypatch,
         [
             EntryPoint('their-review', f'{__name__}:REVIEW', SKILLS.group),
@@ -128,7 +128,7 @@ def test_two_parts_that_replace_one_and_a_part_of_no_piloop_skill_are_refused(
     )
     with pytest.raises(PluginError, match="other-review and their-review both replace 'review'"):
         skills.composed()
-    installed(monkeypatch, [EntryPoint('mine', f'{__name__}:MINE', SKILLS.group)])
+    install_plugins(monkeypatch, [EntryPoint('mine', f'{__name__}:MINE', SKILLS.group)])
     with pytest.raises(PluginError, match="mine = .* in piloop.skills: 'mine' is no skill of piloop"):
         skills.composed()
 

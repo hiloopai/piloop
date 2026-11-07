@@ -20,7 +20,6 @@ from piloop.actor import Actor, party_of
 from piloop.api.views import (
     AckOutcome,
     AckResult,
-    AnomalyNews,
     CommentNews,
     CommentView,
     Linked,
@@ -32,7 +31,6 @@ from piloop.api.views import (
     Thread,
 )
 from piloop.db import feed as db_feed
-from piloop.db.events import AnomalyReported
 from piloop.db.models import NOT_RETIRED, AgentSession, Campaign, Comment, Event, utcnow
 from piloop.db.triggers.changelog import CampaignStatusChanged, Commented, CommentEdited
 from piloop.ids import CampaignId, CampaignStatus, CommentId, CommentKind, TargetKind, TargetRef
@@ -98,9 +96,7 @@ def waiting_for(
     return [(c, p) for c, p in found if party_of(c.author) != party]
 
 
-WAKES: Final = tuple(
-    db_feed.Topic(m) for m in (Commented, CommentEdited, CampaignStatusChanged, AnomalyReported, CandidateScored)
-)
+WAKES: Final = tuple(db_feed.Topic(m) for m in (Commented, CommentEdited, CampaignStatusChanged, CandidateScored))
 """The events that ``news`` reports: what ends ``piloop inbox wait``."""
 
 
@@ -112,7 +108,6 @@ def news(s: Session, after: int, *, campaign_id: CampaignId | None = None, party
     - new or edited unacknowledged inbox items that wait for ``party`` (``waiting_for``). The orchestrator's own
       decisions are for the human.
     - campaigns that the daemon stopped.
-    - anomalies that the daemon gave to an agent.
     - the daemon's scores of candidates (``CandidateScored``).
 
     It reads the ``WAKES`` events from the feed (``piloop.db.feed``), a page at a time until a page gives a line.
@@ -170,10 +165,6 @@ def _news(
                 campaign = s.get(Campaign, e.target_id)
                 if campaign is not None and campaign_id in (None, campaign.id):
                     found.append(StoppedNews(campaign_name=campaign.name, reason=why))
-            case AnomalyReported(line=line):
-                agent_session = s.get(AgentSession, e.target_id)
-                if agent_session is not None and campaign_id in (None, agent_session.campaign_id):
-                    found.append(AnomalyNews(role=agent_session.kind, agent_session=agent_session.id, line=line))
             case CandidateScored(told=told) if party_of(e.actor) != party:
                 candidate = s.get(Candidate, e.target_id)
                 if candidate is not None and campaign_id in (None, candidate.campaign_id):

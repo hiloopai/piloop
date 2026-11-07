@@ -19,22 +19,22 @@ from piloop.daemon.serve import LOCK_ENV, RESTART_SIGNAL, SERVE_ARGV, running_pi
 from piloop.db.events import latest
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Event
 from piloop.db.session import Database
-from piloop.ids import RoleName, TargetRef
+from piloop.ids import TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IdeaId, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
-from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RunEnd, RunId, RunStatus
+from piloop.plugins.campaign_type.kit.runs.ids import RunEnd, RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.proc import Inherited, alive, started
 from piloop.settings import Settings
 from tests.conftest import (
+    AUDITOR,
     END_RUN,
     HARNESS_APPEND,
     HARNESS_FAILS,
-    LEAD,
     SETTLE,
     WRITE_PID,
     ScriptRuntime,
@@ -88,7 +88,7 @@ def test_daemon_end_to_end(
         with daemon.db.session() as s:
             s.get_one(Campaign, campaign.id).config = load_campaign_config(campaign_path)
             s.commit()
-        assert run_all(daemon.scheduler) == [2], 'a fresh run fills the free slot; the successful run woke no sweeper'
+        assert run_all(daemon.scheduler) == [2], 'a fresh run fills the free slot'
         daemon.scheduler.wait(SETTLE)
         assert trace(daemon.db) == snapshot(
             [
@@ -136,25 +136,8 @@ def test_daemon_end_to_end(
         with daemon.db.session() as s:
             s.get_one(Campaign, campaign.id).config = load_campaign_config(campaign_path)
             s.commit()
-        assert run_all(daemon.scheduler) == [3, 4], 'a fresh run, and the sweeper sweep that the failure requests'
+        assert run_all(daemon.scheduler) == [3], 'a fresh run fills the free slot: the failure wakes no agent'
         daemon.scheduler.wait(SETTLE)
-        with daemon.db.session() as s:
-            sweeper = s.get_one(AgentSession, 4)
-            assert (sweeper.kind, sweeper.reason, sweeper.state, sweeper.harness) == (
-                LEAD,
-                'run_failed: run#2 failed',
-                AgentSessionState.EXITED,
-                'script',
-            )
-            assert sweeper.log_dir == str(home / 'agent_sessions' / '4')
-        brief = (home / 'agent_sessions' / '4' / 'brief.md').read_text()
-        assert (
-            'Why this agent started (context, not a scope): run_failed: run#2 failed' in brief
-            and '## Incidents to investigate' in brief
-        )
-        launched = run_all(daemon.scheduler)
-        with daemon.db.session() as s:
-            assert [s.get_one(AgentSession, i).kind for i in launched] == [IMPLEMENTER], 'one sweep per failure'
         daemon.shutdown(timeout=5)
 
 
@@ -457,6 +440,7 @@ def test_serve_refuses_when_a_daemon_holds_the_pid_file(tmp_path: Path, lock_hol
     assert cfg.pid_file.read_text() == str(lock_holder.pid) and not (tmp_path / 'piloop.db').exists()
 
 
+@pytest.mark.usefixtures('auditor')
 def test_shutdown_fails_open_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     daemon = Daemon(Settings(home=tmp_path / 'home'))
     with daemon.db.session() as s:
@@ -474,7 +458,7 @@ def test_shutdown_fails_open_runs(tmp_path: Path, capsys: pytest.CaptureFixture[
             )
         )
         s.flush()  # the run first: the unit of work orders unrelated mappers by name
-        s.add(AgentSession(kind=RoleName('orchestrator'), campaign_id=1, reason='by hand'))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=1, reason='by hand'))
         s.commit()
     daemon.shutdown(timeout=1)
     after = Database(daemon.db.engine.url.render_as_string(hide_password=False), actor=System.HUMAN)

@@ -11,9 +11,6 @@ instruction = """Before you write code, turn the idea into a spec in SPEC.md: on
 scoring = "submit"
 noise_runs = 3
 
-[overlay.plugins.role.orchestrator]
-triggers = []
-
 [overlay.plugins.role.implementer]
 max_concurrent = 1
 timeout = 3600

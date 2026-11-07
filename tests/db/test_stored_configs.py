@@ -19,8 +19,9 @@ from alembic import command
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import create_engine
 
-from piloop.config import CampaignConfig
+from piloop.config import REMOVED_SECTIONS, CampaignConfig
 from piloop.db.session import migrate
+from piloop.plugins.section.contract import SECTIONS
 from tests.conftest import disk
 from tests.db.test_migrations import alembic
 
@@ -46,11 +47,15 @@ def test_each_stored_config_of_a_real_home_migrates_and_validates(tmp_path: Path
     engine = create_engine(f'sqlite:///{path}')
     migrate(engine, cas=disk(tmp_path), backups=0, daemon=None)
     engine.dispose()
-    failed = {}
+    failed, loaded = {}, list[CampaignConfig]()
     with closing(sqlite3.connect(path)) as con:
         for name, config in con.execute('SELECT name, config FROM campaigns ORDER BY id'):
             try:
-                STORED.validate_json(config)
+                loaded.append(STORED.validate_json(config))
             except ValidationError as e:
                 failed[name] = str(e)
     assert failed == {}, 'an upgrade breaks a config that a real home stored'
+    for cfg in loaded:
+        assert 'orchestrator' not in cfg.roles.all(), 'the removed role goes'
+        shown = [*SECTIONS.used(cfg.plugins), *(s for r in cfg.roles.all().values() for s in r.sections or [])]
+        assert not REMOVED_SECTIONS.keys() & {*shown, *SECTIONS.instances(cfg.plugins)}, 'and the removed sections'

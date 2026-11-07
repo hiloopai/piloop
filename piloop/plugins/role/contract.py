@@ -57,8 +57,8 @@ RELAYED: frozenset[Verb] = frozenset(
         ('submit',),
     }
 )
-"""The commands that the prompts of the built-in roles name, besides the orchestrator's: what ``RoleConfig.RELAYED``
-lets their agents run on a worker elsewhere."""
+"""The commands that the prompts of the built-in roles name: what ``RoleConfig.RELAYED`` lets their agents run on a
+worker elsewhere."""
 
 
 class Continuity(StrEnum):
@@ -130,7 +130,7 @@ class RoleConfig(Parameters):
     slot is free."""
     addendum: str | None = None
     """A repo-relative file that is appended to ``brief.md`` in the briefs of this role only. Use it for instructions
-    that only this role needs, for example how the orchestrator reads a loss table."""
+    that only this role needs, for example how an implementer reads a loss table."""
     mcp: list[McpServerName] = []
     """The MCP servers that the agents of this role get, by the name of their ``[plugins.mcp_server.<name>]`` table.
     Every harness in the role's rotation must be able to take them in the invocation of the role's runtime."""

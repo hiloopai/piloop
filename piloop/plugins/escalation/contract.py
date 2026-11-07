@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from piloop.ids import CampaignId, CommentId, CommentKind
 from piloop.plugins.host import Capability, One, Parameters, Scope
 
-# TODO: core still special-cases these kinds: the inbox, the orchestrator's news, the notifiers, the inbox section, the API's
+# TODO: core still special-cases these kinds: the inbox, the notifiers, the inbox section, the API's
 # thread view, and the comments CHECK that an escalation has a priority. Those special cases are deleted when the
 # escalation plugin owns its event models and its inbox rules.
 ESCALATION: Final = CommentKind('escalation')
@@ -71,9 +71,6 @@ class Escalated:
     form: JsonValue | None
     """What ``EscalationPolicy.form`` returned when it was filed. None for one that an older piloop filed as free text,
     which every surface shows as its body: piloop asks the provider of no view or choice for it."""
-    orchestrated: bool
-    """Whether piloop launches an orchestrator for the campaign that takes the agents' escalations: its role wakes on
-    ``news``. False with the orchestrator off, the default: no agent answers an escalation, so it waits for nobody."""
 
 
 @dataclass(frozen=True)

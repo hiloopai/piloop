@@ -1,6 +1,6 @@
 """The harness choice capability: which harness of a role's rotation the next agent runs on (``[plugins.harness_choice]``).
 
-A run's harness is chosen when the run is queued, an orchestrator's when it is taken, and a queued run's again when
+A run's harness is chosen when the run is queued, an agent's without a run when it is taken, and a queued run's again when
 its harness left the rotation. Core keeps the rest: a harness that ``piloop launch --harness`` names is never chosen
 over, and a harness at its ``max_concurrent`` is ``full``. ``round_robin``, built
 in and the default, takes the rotation in turn.

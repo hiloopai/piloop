@@ -123,7 +123,25 @@ Before 1.0, a minor release may break these, and the changelog says so:
 
 `piloop.capabilities` is the stable plugin API. Other `piloop.*` imports can change in any release.
 
-## Upgrading to 0.6.0
+## Changes after 0.6.0
+
+### The orchestrator role is removed
+
+piloop launches no orchestrator of its own. Every escalation reaches your notifiers at once, and the coding agent that
+you talk to is the [orchestrator](/concepts/orchestrator), with the `piloop-operate` skill. A plugin can still add a
+role that starts its own agents ([Roles](/plugins/agents#roles)).
+
+These keys still load, with a warning, until 0.7.0, and do nothing:
+
+| Removed | Its keys |
+|---|---|
+| The orchestrator role, with its `news` and `run_failed` triggers. | `[plugins.role.orchestrator]` |
+| The wait of an agent's escalation for the orchestrator. | `[plugins.escalation] grace` |
+| The orchestrator's wake on an evaluation that retries. | `[evaluation] wake_after_tries` of `config.toml` |
+| The sections of the incidents that woke it, and its guide of commands. | `incidents`, `reported` and `research_commands` in a list of sections, and their `[plugins.section.<name>]` |
+
+`piloop inbox wait` and `GET /v1/inbox/news` no longer return news of kind `anomaly_requested`.
+
 
 ### Upgrade from 0.5
 

@@ -381,3 +381,18 @@ def relay_waits(toml: Path, raw: dict[str, object], removed_in: Version) -> None
             del agents[key]
             message = f'`piloop submit` returns at once, so [agents] {key} is removed; delete it'
             warn(toml, f'agents.{key}', message, removed_in=removed_in)
+
+
+@bridge('0.7.0', '[evaluation] wake_after_tries is removed: delete wake_after_tries', Scope.HOME)
+def wake_after_tries(toml: Path, raw: dict[str, object], removed_in: Version) -> None:
+    """``wake_after_tries`` of ``[evaluation]`` is removed: no agent wakes on an evaluation's retries. piloop drops it.
+
+    An evaluation that fails ``stop_after_tries`` times in a row for the machine still escalates.
+    """
+    evaluation = table_at(raw, 'evaluation') or {}
+    if 'wake_after_tries' in evaluation:
+        del evaluation['wake_after_tries']
+        message = (
+            'no agent wakes on the retries of an evaluation now, so [evaluation] wake_after_tries is removed; delete it'
+        )
+        warn(toml, 'evaluation.wake_after_tries', message, removed_in=removed_in)

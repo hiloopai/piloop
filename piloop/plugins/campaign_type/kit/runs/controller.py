@@ -85,7 +85,6 @@ from piloop.plugins.campaign_type.kit.evaluation.jobs import (
     EVALUATION,
     EvaluationJob,
     InfraFailed,
-    InfraRetrying,
     Sample,
     not_started,
     record,
@@ -1098,17 +1097,6 @@ class RunController:
                             hold_on_infra_errors(s, candidate_id, ended.evaluation, evaluator_id, error, failures)
                             s.commit()
                         return Measuring.ABANDONED
-                    if failures == self._evaluation.wake_after_tries:
-                        with self._db.session() as s:
-                            write_transaction(s)
-                            if latest(s, InfraRetrying, has(InfraRetrying, evaluation=ended.evaluation)) is None:
-                                emit(
-                                    s,
-                                    InfraRetrying(evaluation=ended.evaluation, failures=failures, error=error),
-                                    TargetRef(CANDIDATE, candidate_id),
-                                    System.DAEMON,
-                                )
-                            s.commit()
                     self._tracer.event(
                         ended.kind, candidate=candidate_id, error=error, failures=failures, retry=retry.total_seconds()
                     )

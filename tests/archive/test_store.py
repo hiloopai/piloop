@@ -48,7 +48,7 @@ from piloop.reports.feed import files_of
 from piloop.settings import INPUTS_DIR
 from piloop.store import tree as tree_module
 from piloop.store.tree import Manifest, Materialised, Removed, Stored, Walk
-from tests.conftest import LEAD, bare_config, end_of
+from tests.conftest import AUDITOR, bare_config, end_of
 
 LIVE = frozenset({'NOTES.md', 'research'})
 LOST = Cid.of(b'lost')
@@ -207,21 +207,20 @@ def test_a_done_idea_without_its_event_is_left_to_the_campaign_s_archiving(
     assert (row.subject, row.files) == (None, 1)
 
 
+@pytest.mark.usefixtures('auditor')
 def test_a_stopped_campaign_is_due_once_its_ideas_are_and_nothing_of_it_runs(db: Database, campaign: Campaign) -> None:
     idea = add_idea(db, campaign.id, 'idea')
     agent_session = add_run(db, idea)
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
         row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='campaign stopped'))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='campaign stopped'))
         s.commit()
         assert due(s) == Job(campaign.id, ref(idea)), 'its settled ideas first'
-        assert summary(s) == Summary((), subjects_due=1, campaigns_due=0, latest=None), (
-            'the closing sweeper is still requested'
-        )
+        assert summary(s) == Summary((), subjects_due=1, campaigns_due=0, latest=None), 'an agent is still requested'
         s.add(Archive(campaign_id=campaign.id, subject=ref(idea)))
         s.commit()
-        assert due(s) is None, 'the closing sweeper is still requested'
+        assert due(s) is None, 'an agent is still requested'
         for w in s.scalars(select(AgentSession).where(AgentSession.id != agent_session)):
             w.state, w.ended_at = AgentSessionState.EXITED, utcnow()
         s.commit()
@@ -235,7 +234,7 @@ def test_a_stopped_campaign_is_due_once_its_ideas_are_and_nothing_of_it_runs(db:
         assert done.latest is not None
     time.sleep(0.01)
     with db.session() as s:
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=utcnow()))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=utcnow()))
         s.commit()
         assert due(s) == Job(campaign.id, None), 'resumed and stopped again: what it wrote since is archived'
 
@@ -482,6 +481,7 @@ def test_an_idea_deleted_since_its_archiving_is_still_restored_by_its_id(
         assert restore(s, store, home, s.get_one(Campaign, campaign.id), ref(idea)).done.written == 1
 
 
+@pytest.mark.usefixtures('auditor')
 def test_a_newer_archiving_displaces_an_older_file_or_directory_at_the_same_path(
     db: Database, campaign: Campaign, home: Path, store: ObjectsCas
 ) -> None:
@@ -496,7 +496,9 @@ def test_a_newer_archiving_displaces_an_older_file_or_directory_at_the_same_path
         [row] = archive_job(db, store, home, Job(campaign.id, None)).rows
         prune(db, store, home, row.id)
         with db.session() as s:  # the next stop of the campaign
-            s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=utcnow()))
+            s.add(
+                AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.EXITED, ended_at=utcnow())
+            )
             s.commit()
         time.sleep(0.01)
     with db.session() as s:

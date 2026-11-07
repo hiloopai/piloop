@@ -8,7 +8,9 @@ import sys
 import threading
 from collections.abc import Sequence
 from functools import partial
+from importlib.metadata import EntryPoint
 from pathlib import Path
+from typing import ClassVar
 
 import httpx2 as httpx
 import pytest
@@ -23,6 +25,7 @@ from piloop.actor import Agent, System
 from piloop.agents.roles import PILOOP_HINT
 from piloop.campaign.campaigns import checkout_of
 from piloop.cli.main import app
+from piloop.config import load_campaign_config
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event
 from piloop.db.session import Database
 from piloop.ids import AgentSessionId, CampaignId, Revision
@@ -39,15 +42,15 @@ from piloop.plugins.executor.kit.clones import NotSent
 from piloop.plugins.executor.kit.door import AgentCall, Call, Relayed, main
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.executor.kit.relay import Relay, Runner, Shipped
-from piloop.plugins.role.contract import RELAYED, RoleConfig
-from piloop.plugins.role.orchestrator import OrchestratorRole
+from piloop.plugins.role.contract import RELAYED, RoleConfig, Verb
 from piloop.plugins.runtime.contract import MESSAGES_ENV, QUEUE, put
 from piloop.plugins.section.contract import SECTIONS, Guide
 from piloop.plugins.vcs.contract import Repository, UnknownRevision, VcsError
 from piloop.plugins.vcs.git import Git
 from piloop.proc import ACTOR_ENV, CHECKOUT_ENV
 from piloop.settings import Settings
-from tests.conftest import baseline, disk, no_land, no_ship, no_take
+from tests.conftest import ROLE_GROUP, baseline, disk, forget_loaded, install_plugins, no_land, no_ship, no_take
+from tests.fixtures.plugin import Auditor
 from tests.test_clones import REPO, commit, fetch_from
 from tests.test_lease import agent_job
 
@@ -85,9 +88,8 @@ def test_an_agent_on_another_machine_may_run_the_commands_that_the_role_prompts_
 
     The prompts are those of the roles and every guide that a brief can point to (``piloop schema <guide>``).
     """
-    roles = [p.read_text() for p in ROLE_PROMPTS if p.name != 'orchestrator.md']
-    for_the_orchestrator = ('orchestration', 'research_commands')
-    prompts = [*roles, *(guide.TEXT.read_text() for name, guide in GUIDES.items() if name not in for_the_orchestrator)]
+    roles = [p.read_text() for p in ROLE_PROMPTS]
+    prompts = [*roles, *(guide.TEXT.read_text() for name, guide in GUIDES.items() if name != 'orchestration')]
     briefs = [
         f'`{PILOOP_HINT} sql -`',
         f'`{PILOOP_HINT} schema <guide>`',
@@ -98,31 +100,32 @@ def test_an_agent_on_another_machine_may_run_the_commands_that_the_role_prompts_
     assert named == RELAYED
 
 
-def test_an_orchestrator_on_another_machine_may_run_the_commands_that_its_brief_names_and_no_other() -> None:
-    assert OrchestratorRole.PROMPT is not None
-    texts = [
-        OrchestratorRole.PROMPT.read_text(),
-        *(guide.TEXT.read_text() for name, guide in GUIDES.items() if name != 'orchestration'),
-        f'`{PILOOP_HINT} schema <guide>`',
-        f'`{PILOOP_HINT} sql -`',
-        OrchestratorRole.IDEAS.format(piloop='piloop', campaign='demo'),
-    ]
-    assert set().union(*(commands(text) for text in texts)) == OrchestratorRole.RELAYED
+class Reader(Auditor):
+    """A package's role whose prompt names ``piloop inbox show``: its agents on another machine may run it too."""
+
+    RELAYED: ClassVar[frozenset[Verb]] = frozenset({*RELAYED, ('inbox', 'show')})
 
 
 def test_the_commands_that_run_are_those_of_the_agents_role(
-    db: Database, campaign: Campaign, tmp_path: Path, runner: Runner
+    db: Database, campaign: Campaign, tmp_path: Path, runner: Runner, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    worker = agent_job(db, campaign, tmp_path)
-    with db.session() as s:
-        orchestrator = AgentSession(kind='orchestrator', campaign_id=campaign.id)
-        s.add(orchestrator)
-        s.commit()
-        job = worker.model_copy(update={'agent_session': orchestrator.id})
-    refused = runner(worker, Call(argv=['inbox', 'show', '1'], token=launched(db, worker)))
-    assert refused.exit_code == 2, 'not in the default list'
-    shown = runner(job, Call(argv=['inbox', 'show', '1'], token=launched(db, job)))
-    assert 'an agent on another machine runs only' not in shown.stderr, shown.stderr
+    install_plugins(monkeypatch, [EntryPoint('reader', f'{__name__}:Reader', ROLE_GROUP)])
+    try:
+        worker = agent_job(db, campaign, tmp_path)
+        with db.session() as s:
+            reading = {'role': {'reader': {'timeout': 60}}}  # its table puts it in the stored config
+            s.get_one(Campaign, campaign.id).config = load_campaign_config(Path(campaign.path), plugins=reading)
+            s.flush()
+            reader = AgentSession(kind='reader', campaign_id=campaign.id)
+            s.add(reader)
+            s.commit()
+            job = worker.model_copy(update={'agent_session': reader.id})
+        refused = runner(worker, Call(argv=['inbox', 'show', '1'], token=launched(db, worker)))
+        assert refused.exit_code == 2, 'not in the default list'
+        shown = runner(job, Call(argv=['inbox', 'show', '1'], token=launched(db, job)))
+        assert 'an agent on another machine runs only' not in shown.stderr, shown.stderr
+    finally:
+        forget_loaded()
 
 
 @pytest.fixture

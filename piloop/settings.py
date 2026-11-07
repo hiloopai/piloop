@@ -90,9 +90,6 @@ class EvaluationSettings(BaseModel):
     """How many times in a row an evaluation may fail for a cause that is not its candidate's. After the last, piloop
     records no measurement, pauses the measurements of the campaign, and escalates with the candidate, the evaluation,
     the evaluator and the last error. Fix the cause, then ``piloop resume``: the daemon evaluates it again."""
-    wake_after_tries: int = Field(default=1, ge=1)
-    """After this many consecutive infrastructure failures, notify the orchestrator once through its ``news``
-    trigger while retries continue. At or beyond ``stop_after_tries``, only the terminal escalation is sent."""
 
     @property
     def max_evidence_bytes(self) -> int:
@@ -240,7 +237,7 @@ class Settings(BaseSettings):
 
     actor: Annotated[Actor, NoDecode] = System.HUMAN
     """Who this process is. Every row it updates records this value in ``updated_by``. The daemon launches each agent
-    with ``<role>#<agent_session_id>``, for example ``implementer#12`` or ``orchestrator#7``."""
+    with ``<role>#<agent_session_id>``, for example ``implementer#12``."""
 
     agent_token: SecretStr | None = None
     """The token of the agent that the daemon launched as ``actor``, which its worker sets at its start: its calls act

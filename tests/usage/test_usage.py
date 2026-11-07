@@ -21,7 +21,7 @@ from piloop.plugins.harness.kit import jsonl as jsonl_module
 from piloop.plugins.harness.kit.jsonl import JsonlSessions, dash_non_alnum, dash_separators_wrapped, no_cwd
 from piloop.settings import env_names, expand_env
 from piloop.usage import UsageError, human
-from tests.conftest import LEAD, bare_config
+from tests.conftest import AUDITOR, bare_config
 
 SESSIONS = Path(__file__).parent.parent / 'fixtures' / 'sessions'
 """Redacted heads of real session files: the records that carry usage, with the prompts and outputs cut."""
@@ -305,7 +305,7 @@ def test_usage_of_an_implementer_never_raises(
         found = AgentSession(kind=IMPLEMENTER, harness='pi', session_id=PI_ID, **ended)
         removed = AgentSession(kind=IMPLEMENTER, harness='local-agent', session_id='x', **ended)
         no_spec = AgentSession(kind=IMPLEMENTER, harness='script', session_id='x', **ended)
-        orphan = AgentSession(kind=LEAD, harness='pi', session_id=PI_ID, state=AgentSessionState.EXITED)
+        orphan = AgentSession(kind=AUDITOR, harness='pi', session_id=PI_ID, state=AgentSessionState.EXITED)
         s.add_all([found, removed, no_spec, orphan])
         s.flush()
         usage = usage_of(s, found)
@@ -324,6 +324,7 @@ def test_human_tokens() -> None:
     )
 
 
+@pytest.mark.usefixtures('auditor')
 def test_the_usage_column_holds_a_usage_and_an_unknown_usage_is_null(db: Database) -> None:
     """``agent_sessions.usage`` loads as a ``Usage`` and saves its JSON. None is SQL NULL, so ``usage IS NULL`` finds
     the agents whose usage is unknown. A stored value of another shape fails the load of its row."""
@@ -331,7 +332,7 @@ def test_the_usage_column_holds_a_usage_and_an_unknown_usage_is_null(db: Databas
     with db.session() as s:
         s.add(Campaign(name='p', path='/p', config=bare_config('p')))
         s.flush()
-        s.add_all([AgentSession(kind=LEAD, campaign_id=1, usage=usage), AgentSession(kind=LEAD, campaign_id=1)])
+        s.add_all([AgentSession(kind=AUDITOR, campaign_id=1, usage=usage), AgentSession(kind=AUDITOR, campaign_id=1)])
         s.flush()
         s.get_one(AgentSession, 2).usage = None
         s.commit()

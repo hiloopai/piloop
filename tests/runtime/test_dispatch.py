@@ -11,28 +11,28 @@ from piloop.db.models import AgentSession, AgentSessionState, Campaign, utcnow
 from piloop.db.session import Database
 from piloop.plugins.runtime.contract import RUNTIMES
 from piloop.settings import Settings
-from tests.conftest import LEAD, reconfigured
-from tests.daemon.test_roles import PLUGIN, forget_loaded, installed
+from tests.conftest import AUDITOR, PLUGIN, ROLE_GROUP, forget_loaded, install_plugins, reconfigured
 from tests.reports.test_overview import overview
 
-SHOWN = [EntryPoint('shown', f'{PLUGIN}:Shown', RUNTIMES.group)]
+SHOWN = [EntryPoint('shown', f'{PLUGIN}:Shown', RUNTIMES.group), EntryPoint(AUDITOR, f'{PLUGIN}:Auditor', ROLE_GROUP)]
 
 
 @pytest.fixture
 def shown(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Install a package that adds the ``shown`` runtime (``tests.fixtures.plugin.Shown``)."""
-    installed(monkeypatch, SHOWN)
+    """Install a package that adds the ``shown`` runtime (``tests.fixtures.plugin.Shown``) and the ``auditor`` role."""
+    install_plugins(monkeypatch, SHOWN)
     yield
     forget_loaded()
 
 
+@pytest.mark.usefixtures('shown')
 def test_attach_and_status_read_the_output_through_a_runtime_that_a_package_adds(
-    db: Database, campaign: Campaign, shown: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    db: Database, campaign: Campaign, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with db.session() as s:
         s.get_one(Campaign, campaign.id).config = reconfigured(campaign.config, plugins={'runtime': {'use': 'shown'}})
         agent_session = AgentSession(
-            kind=LEAD,
+            kind=AUDITOR,
             campaign_id=campaign.id,
             harness='script',
             model='m',

@@ -79,7 +79,7 @@ from piloop.store.chunks import Chunked
 from piloop.version import direct_url, installed
 from piloop.watch.app import Watch
 from tests.conftest import (
-    LEAD,
+    AUDITOR,
     at_head,
     disk,
     example,
@@ -312,8 +312,8 @@ def test_a_claim_or_a_proposal_with_a_base_starts_the_run_from_that_candidate_an
     db.close()
 
 
-@pytest.mark.usefixtures('api')
-def test_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file_none(
+@pytest.mark.usefixtures('auditor', 'api')
+def test_a_role_that_does_no_runs_the_orchestrator_and_humans_add_ideas_and_a_role_that_does_runs_files_none(
     campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_cli(['init', str(campaign_path)])
@@ -326,7 +326,7 @@ def test_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file_none(
         run_cli(list(argv))
 
     out()
-    as_('orchestrator#7', 'idea', 'add', 'demo', 'longer lines', '--from', 'l.md', '--plan', 'one line more')
+    as_('auditor#7', 'idea', 'add', 'demo', 'longer lines', '--from', 'l.md', '--plan', 'one line more')
     as_('orchestrator', 'idea', 'add', 'demo', 'from the digest')
     as_('human', 'idea', 'add', 'demo', 'just try it')
     assert out().splitlines() == [
@@ -336,18 +336,18 @@ def test_the_orchestrator_and_humans_add_ideas_and_the_other_roles_file_none(
     ], 'every idea is open on the board'
     with pytest.raises(SystemExit, match='implementer#3 files no ideas for others: a worker tries one of its own'):
         as_('implementer#3', 'idea', 'add', 'demo', 'just do it')
-    as_('orchestrator#7', 'idea', 'add', 'demo', 'a long plan', '--plan', ' '.join(['step'] * 151))
-    assert out().splitlines() == ['idea#4 open p2: a long plan'], "no cap on the plan of a lead's idea"
+    as_('auditor#7', 'idea', 'add', 'demo', 'a long plan', '--plan', ' '.join(['step'] * 151))
+    assert out().splitlines() == ['idea#4 open p2: a long plan'], "no cap on the plan of an auditor's idea"
 
     db = Database(common.settings.database_url, actor=System.HUMAN)
     with db.session() as s:
         rows = [(i.created_by, i.provenance) for i in s.scalars(select(Idea))]
-        assert rows == [('orchestrator#7', 'l.md'), ('orchestrator', None), ('human', None), ('orchestrator#7', None)]
+        assert rows == [('auditor#7', 'l.md'), ('orchestrator', None), ('human', None), ('auditor#7', None)]
         assert [e.actor for e in s.scalars(select(Event).where(Event.kind == 'idea.created'))] == [
-            'orchestrator#7',
+            'auditor#7',
             'orchestrator',
             'human',
-            'orchestrator#7',
+            'auditor#7',
         ]
     db.close()
 
@@ -754,7 +754,7 @@ def test_inbox_lists_what_waits_shows_one_with_its_thread_and_acknowledges(
         [
             'sql',
             insert + f"('campaign', 1, 'pi', 'decision', 'requeued idea#4, re comment#2\nRevert: park it', 3, {at}),"
-            f"('campaign', 1, 'orchestrator#2', 'escalation', 'SSO expired; log in?', 1, {at}),"
+            f"('campaign', 1, 'auditor#2', 'escalation', 'SSO expired; log in?', 1, {at}),"
             f"('campaign', 2, 'pi', 'decision', '[goalpost, reversible] floor 2713 → 2687', 0, {at}),"
             f"('campaign', 1, 'research#3', 'note', 'the forum, not the inbox', NULL, {at}),"
             f"('comment', 2, 'pi', 'note', 'asked the team in chat', NULL, {at})",
@@ -774,7 +774,7 @@ def test_inbox_lists_what_waits_shows_one_with_its_thread_and_acknowledges(
     assert 'requeued idea#4' in (text := out()) and 'SSO' not in text and 'floor' not in text
     run_cli(['inbox', 'show', '2'])
     assert out().splitlines() == [
-        'comment#2 escalation on campaign#1 by orchestrator#2, 0s ago · p1, unacknowledged',
+        'comment#2 escalation on campaign#1 by auditor#2, 0s ago · p1, unacknowledged',
         'SSO expired; log in?',
         '',
         '- comment#5 note by pi, 0s ago, a reply: asked the team in chat',
@@ -827,7 +827,7 @@ def test_inbox_wait_blocks_until_an_item_lands_and_hands_over_a_cursor_that_miss
     quiet, again = out().splitlines()
     assert quiet == 'nothing new in 0:00:00' and re.fullmatch(r'next: piloop inbox wait --after \d+', again)
     cursor = again.split()[-1]
-    escalate = "INSERT INTO comments (target_kind, target_id, author, kind, priority, body) VALUES ('campaign', 1, 'orchestrator#2', 'escalation', 1, 'SSO expired')"
+    escalate = "INSERT INTO comments (target_kind, target_id, author, kind, priority, body) VALUES ('campaign', 1, 'auditor#2', 'escalation', 1, 'SSO expired')"
     writer = threading.Timer(0.3, run_cli, [['sql', escalate]])
     newest = db_feed.newest
 
@@ -844,7 +844,7 @@ def test_inbox_wait_blocks_until_an_item_lands_and_hands_over_a_cursor_that_miss
     wrote = '1 row(s) changed, last insert id 1'
     assert wrote in lines, 'the writer, from the other thread: it prints after its commit, so before or after the item'
     item, after = [line for line in lines if line != wrote]
-    assert item == 'comment#1 escalation p1 on campaign#1 (demo) by orchestrator#2: SSO expired'
+    assert item == 'comment#1 escalation p1 on campaign#1 (demo) by auditor#2: SSO expired'
     assert re.fullmatch(r'next: piloop inbox wait demo --after \d+', after) and after.split()[-1] != cursor
     run_cli(['inbox', 'wait', '--after', cursor, '--timeout', '30'])
     assert out().splitlines()[0].startswith('comment#1 escalation'), 'from an old cursor: what landed in between'
@@ -884,27 +884,27 @@ def test_a_message_reaches_the_orchestrator_s_wait_and_its_reply_the_sender_s_in
         run_cli(['message', 'nope', 'hello?'])
 
 
-@pytest.mark.usefixtures('api')
+@pytest.mark.usefixtures('auditor', 'api')
 def test_cli_writes_as_the_actor_from_the_environment(
     campaign_path: Path, tmp_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_cli(['init', str(campaign_path)])
-    agent = launched(tmp_path, 'orchestrator#4')
+    agent = launched(tmp_path, 'auditor#4')
     assert isinstance(agent['agent_token'], SecretStr)
-    monkeypatch.setenv('PILOOP_ACTOR', 'orchestrator#4')
+    monkeypatch.setenv('PILOOP_ACTOR', 'auditor#4')
     monkeypatch.setenv('PILOOP_AGENT_TOKEN', agent['agent_token'].get_secret_value())
     monkeypatch.setattr(common, 'settings', Settings(home=tmp_path))
     run_cli(['sql', "UPDATE campaigns SET name='renamed'"])
     out()
     run_cli(['sql', 'SELECT updated_by FROM campaigns'])
-    assert 'orchestrator#4' in out()
+    assert 'auditor#4' in out()
     run_cli(['sql', 'UPDATE campaigns SET updated_by = NULL'])
     run_cli(['init', str(campaign_path)])
     out()
     run_cli(['sql', 'SELECT updated_by FROM campaigns'])
-    assert 'orchestrator#4' in out(), 'ORM writes carry the same actor'
+    assert 'auditor#4' in out(), 'ORM writes carry the same actor'
     monkeypatch.setattr(common, 'settings', Settings(home=tmp_path, actor=System.ORCHESTRATOR))
-    with pytest.raises(SystemExit, match='^sql error: orchestrator#4 acts only as itself, not as orchestrator$'):
+    with pytest.raises(SystemExit, match='^sql error: auditor#4 acts only as itself, not as orchestrator$'):
         run_cli(['sql', "UPDATE campaigns SET name='posing'"])
     with closing(Database(common.settings.database_url, actor=System.DAEMON)) as db, db.session() as s:
         s.get_one(AgentSession, 4).state = AgentSessionState.EXITED
@@ -1320,7 +1320,7 @@ def test_init_waits_for_the_baseline_until_the_campaign_stops(
     stopping.join()
 
 
-@pytest.mark.usefixtures('api')
+@pytest.mark.usefixtures('auditor', 'api')
 def test_attach_prints_the_last_lines_that_an_agent_wrote(campaign_path: Path, out, tmp_path: Path) -> None:
     """A running agent's output, an ended agent's transcript, and why there is nothing to print."""
     run_cli(['init', str(campaign_path)])
@@ -1338,7 +1338,7 @@ def test_attach_prints_the_last_lines_that_an_agent_wrote(campaign_path: Path, o
         ):
             s.add(
                 AgentSession(
-                    kind='orchestrator',
+                    kind=AUDITOR,
                     campaign_id=1,
                     harness='pi',
                     model='m',
@@ -1395,7 +1395,7 @@ def test_agent_messages_takes_the_queue_as_the_hook_of_the_harness_reads_it(
         run_cli(['agent', 'messages'])
 
 
-@pytest.mark.usefixtures('api')
+@pytest.mark.usefixtures('auditor', 'api')
 def test_prompt_is_a_message_to_the_agent_and_says_whether_it_arrived(
     campaign_path: Path, out, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1460,7 +1460,7 @@ def test_prompt_is_a_message_to_the_agent_and_says_whether_it_arrived(
             'human',
             'no answer',
         )
-        s.add(AgentSession(kind='orchestrator', campaign_id=1, state=AgentSessionState.EXITED))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=1, state=AgentSessionState.EXITED))
         s.get_one(AgentSession, 1).harness = 'codex'
         s.commit()
     with pytest.raises(SystemExit, match='^agent_session#2 is not running$'):
@@ -1473,7 +1473,7 @@ def test_prompt_is_a_message_to_the_agent_and_says_whether_it_arrived(
     )
 
 
-@pytest.mark.usefixtures('api')
+@pytest.mark.usefixtures('auditor', 'api')
 def test_campaign_stop_and_cancels_are_requests_that_the_daemon_acts_on(campaign_path: Path, out) -> None:
     run_cli(['init', str(campaign_path)])
     db = Database(common.settings.database_url, actor=common.settings.actor)
@@ -1501,7 +1501,7 @@ def test_campaign_stop_and_cancels_are_requests_that_the_daemon_acts_on(campaign
                 AgentSession(
                     kind='implementer', campaign_id=1, subject=TargetRef(RUN, 1), state=AgentSessionState.EXITED
                 ),
-                AgentSession(kind='orchestrator', campaign_id=1, state=AgentSessionState.RUNNING),
+                AgentSession(kind=AUDITOR, campaign_id=1, state=AgentSessionState.RUNNING),
             ]
         )
         s.commit()
@@ -1659,17 +1659,15 @@ def test_campaign_sync_takes_a_token_from_stdin_or_a_secret_s_name_but_not_both(
     assert sent.call_count == calls, 'none of them reached the daemon'
 
 
-@pytest.mark.usefixtures('api')
-def test_launch_requests_an_implementer(campaign_path: Path, out) -> None:
+@pytest.mark.usefixtures('auditor', 'api')
+def test_launch_requests_an_agent_of_a_role_that_starts_its_agents(campaign_path: Path, out) -> None:
     run_cli(['init', str(campaign_path)])
     out()
-    run_cli(['launch', 'demo', 'orchestrator'])
-    run_cli(
-        ['launch', str(campaign_path), 'orchestrator', '--harness', 'pi', '--model', 'opus', '--reason', 'eyeball it']
-    )
+    run_cli(['launch', 'demo', 'auditor'])
+    run_cli(['launch', str(campaign_path), 'auditor', '--harness', 'pi', '--model', 'opus', '--reason', 'eyeball it'])
     assert out().splitlines() == [
-        'agent_session#1 orchestrator requested for demo: requested from the CLI',
-        'agent_session#2 orchestrator requested for demo: eyeball it',
+        'agent_session#1 auditor requested for demo: requested from the CLI',
+        'agent_session#2 auditor requested for demo: eyeball it',
     ]
     db = Database(common.settings.database_url, actor=common.settings.actor)
     with db.session() as s:
@@ -1679,17 +1677,24 @@ def test_launch_requests_an_implementer(campaign_path: Path, out) -> None:
         ]
     db.close()
     assert rows == [
-        ('orchestrator', AgentSessionState.REQUESTED, None, None, 'requested from the CLI'),
-        (LEAD, AgentSessionState.REQUESTED, 'pi', 'opus', 'eyeball it'),
+        (AUDITOR, AgentSessionState.REQUESTED, None, None, 'requested from the CLI'),
+        (AUDITOR, AgentSessionState.REQUESTED, 'pi', 'opus', 'eyeball it'),
     ]
     run_cli(['status', 'demo'])
-    assert '- Agents live: none; requested: orchestrator#1, orchestrator#2' in out(), (
+    assert '- Agents live: none; requested: auditor#1, auditor#2' in out(), (
         'a request is not an agent until the daemon launches it'
     )
-    with pytest.raises(SystemExit, match="demo has no role 'janitor' to launch; it has orchestrator.$"):
+    with pytest.raises(SystemExit, match="demo has no role 'janitor' to launch; it has auditor.$"):
         run_cli(['launch', 'demo', 'janitor'])
     with pytest.raises(SystemExit, match='The daemon launches implementers by itself, one for each queued run'):
         run_cli(['launch', 'demo', 'implementer'])
+
+
+@pytest.mark.usefixtures('api')
+def test_launch_refuses_a_campaign_whose_roles_all_do_runs(campaign_path: Path) -> None:
+    run_cli(['init', str(campaign_path)])
+    with pytest.raises(SystemExit, match="^demo has no role 'auditor' to launch; it has none.$"):
+        run_cli(['launch', 'demo', 'auditor'])
 
 
 def test_serve_builds_a_daemon(mocker: MockerFixture) -> None:

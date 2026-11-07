@@ -148,7 +148,7 @@ A `StartsItsAgents` role decides when its agents start, such as on a timer or on
 campaign, the daemon calls its `request`, which inserts the rows of the agents it wants and says when to ask again.
 `wakes_on` names the events that make the daemon pass for the role, and `wakes_while` says whether it wakes while the
 campaign is paused, held or stopped. The daemon launches each row within the role's `max_concurrent` and the free
-slots, and calls `launch` in a thread of its own. The orchestrator is the built-in role of this kind.
+slots, and calls `launch` in a thread of its own. piloop has no built-in role of this kind.
 
 A package's role keeps its whole table and its keys, also a name or a key that piloop's own roles no longer have, such
 as `watchdog` or `interval`.

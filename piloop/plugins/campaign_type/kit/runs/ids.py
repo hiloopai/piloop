@@ -76,11 +76,5 @@ ATTEMPTS: Final = frozenset({RunEnd.FINISHED, RunEnd.GAVE_UP, RunEnd.FAILED, Run
 """The ends of a run that tried its idea. The others say that the run was stopped, or that no agent started to work."""
 
 
-INCIDENTS: Final = frozenset({RunEnd.FAILED, RunEnd.TIMED_OUT, RunEnd.WORKER_LOST, RunEnd.STALE})
-"""The ends of a run that an orchestrator hears of (``run_failed``): its process failed or timed out, its worker was
-lost, or a daemon died while it ran. ``not_started`` is the startup breaker's to report, and ``gave_up`` is the
-implementer's own choice."""
-
-
 END_STATUS: Final = {RunEnd.FINISHED: RunStatus.SUCCEEDED, RunEnd.TIMED_OUT: RunStatus.TIMED_OUT}
 """The status of a run by its end, where it is not ``failed``."""

@@ -187,7 +187,6 @@ DIAGNOSTICS: list[Row] = [
     ('keeps per run', lambda r: r.funnel.kept / r.funnel.runs if r.funnel.runs else None, 2, statistics.median),
     ('escalations', lambda r: r.escalations, 0, statistics.median),
     ('human interventions', lambda r: r.interventions, 0, statistics.median),
-    ('lead token share', lambda r: r.lead_token_share, 3, statistics.median),
     ('daemon restarts', lambda r: r.restarts, 0, statistics.median),
     (
         "self-test: the base's dev metric, mean",

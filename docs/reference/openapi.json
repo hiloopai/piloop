@@ -4877,36 +4877,6 @@
         "title": "AgentOutput",
         "description": "The last lines that an agent wrote: the text of its harness session, else its runtime's output."
       },
-      "AnomalyNews": {
-        "properties": {
-          "kind": {
-            "type": "string",
-            "const": "anomaly_requested",
-            "title": "Kind",
-            "default": "anomaly_requested"
-          },
-          "role": {
-            "type": "string",
-            "title": "Role"
-          },
-          "agent_session": {
-            "type": "integer",
-            "title": "Agent Session"
-          },
-          "line": {
-            "type": "string",
-            "title": "Line"
-          }
-        },
-        "type": "object",
-        "required": [
-          "role",
-          "agent_session",
-          "line"
-        ],
-        "title": "AnomalyNews",
-        "description": "An anomaly that the daemon gave to an agent."
-      },
       "Base": {
         "properties": {
           "candidate": {
@@ -7028,7 +6998,7 @@
           "role"
         ],
         "title": "LaunchBody",
-        "description": "One more agent of a role that starts its agents, the orchestrator. The agent's brief includes the reason."
+        "description": "One more agent of a role that starts its agents (``StartsItsAgents``). The agent's brief includes the reason."
       },
       "LimitBody": {
         "properties": {
@@ -7575,16 +7545,12 @@
             "$ref": "#/components/schemas/StoppedNews"
           },
           {
-            "$ref": "#/components/schemas/AnomalyNews"
-          },
-          {
             "$ref": "#/components/schemas/ScoreNews"
           }
         ],
         "discriminator": {
           "propertyName": "kind",
           "mapping": {
-            "anomaly_requested": "#/components/schemas/AnomalyNews",
             "campaign_stopped": "#/components/schemas/StoppedNews",
             "comment": "#/components/schemas/CommentNews",
             "score": "#/components/schemas/ScoreNews"

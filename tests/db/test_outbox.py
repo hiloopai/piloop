@@ -19,13 +19,13 @@ from piloop.db.triggers.changelog import (
     LimitSet,
     LimitUnset,
 )
-from piloop.ids import HOME, CampaignId, RoleName, TargetKind, TargetRef
+from piloop.ids import HOME, CampaignId, TargetKind, TargetRef
 from piloop.plugins.campaign_type.kit.backlog.ids import IDEA
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation
-from tests.conftest import baseline
+from tests.conftest import AUDITOR, baseline
 
 
 def emitted(db: Database, after: int = 0) -> list[tuple[str, TargetRef, EventModel]]:
@@ -39,6 +39,7 @@ def newest(db: Database) -> int:
         return s.scalar(select(Event.id).order_by(Event.id.desc()).limit(1)) or 0
 
 
+@pytest.mark.usefixtures('auditor')
 def test_a_requested_agent_emits_its_request_from_piloop_sql_and_no_other_insert_does(
     db: Database, campaign: Campaign, tmp_path: Path
 ) -> None:
@@ -46,18 +47,16 @@ def test_a_requested_agent_emits_its_request_from_piloop_sql_and_no_other_insert
     with closing(sql.connect(tmp_path / 'piloop.db', actor=System.HUMAN)) as con:
         sql.run(
             con,
-            f"INSERT INTO agent_sessions (kind, campaign_id, state, reason) VALUES ('orchestrator', {campaign.id},"
+            f"INSERT INTO agent_sessions (kind, campaign_id, state, reason) VALUES ('{AUDITOR}', {campaign.id},"
             " 'requested', 'by hand')",
         )
         sql.run(
             con,
-            f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('orchestrator', {campaign.id}, 'exited')",
+            f"INSERT INTO agent_sessions (kind, campaign_id, state) VALUES ('{AUDITOR}', {campaign.id}, 'exited')",
         )
     [(actor, target, event)] = emitted(db, start)
     assert actor == 'human' and target.kind == TargetKind.AGENT_SESSION
-    assert event == AgentSessionRequested(
-        role=RoleName('orchestrator'), campaign=CampaignId(campaign.id), reason='by hand'
-    )
+    assert event == AgentSessionRequested(role=AUDITOR, campaign=CampaignId(campaign.id), reason='by hand')
 
 
 def test_a_new_idea_emits_its_creation_signed_by_who_created_it(db: Database, campaign: Campaign) -> None:

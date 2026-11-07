@@ -3,8 +3,8 @@
 This file is for a coding agent that a human asks to set up, run or review a piloop campaign. To change piloop's own
 code, read [CONTRIBUTING.md](CONTRIBUTING.md) instead.
 
-If `PILOOP_ACTOR` is already set to an `implementer#` or `orchestrator#` id, piloop started you. Follow
-your brief, and ignore this file and the skills.
+If `PILOOP_ACTOR` is already set to an agent's id, such as `implementer#12`, piloop started you. Follow your brief,
+and ignore this file and the skills.
 
 piloop runs an autoresearch campaign on a git repo. A daemon starts coding agents (Claude Code, Codex or pi). Each
 agent tries an idea in its own git worktree, and submits commits with `piloop submit`. piloop scores each with the

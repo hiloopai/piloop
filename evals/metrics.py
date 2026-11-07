@@ -23,9 +23,6 @@ from evals.model import Funnel, Point, PoolCounts, Regression, Regressions, Resu
 from evals.score import Score
 from evals.team import final_keeps, final_line, notes, races
 
-LEADS = ('orchestrator', 'lead')
-"""The roles whose tokens are the lead's share."""
-
 
 def between(points: list[tuple[float, float]], hours: float) -> float:
     """The value at ``hours`` of ``points``, its (hours, value) pairs in order.
@@ -164,8 +161,8 @@ def pool_counts(db: sqlite3.Connection) -> PoolCounts:
     return PoolCounts(confirmations=confirmations, sealed_scorings=scorings, based_runs=based)
 
 
-def piloop_counts(db: sqlite3.Connection, base: str) -> tuple[Funnel, int, int, float | None]:
-    """The funnel, the escalations, the people's comments, and the lead's share of the tokens."""
+def piloop_counts(db: sqlite3.Connection, base: str) -> tuple[Funnel, int, int]:
+    """The funnel, the escalations and the people's comments."""
 
     def one(query: str, *args: object) -> int:
         return int(db.execute(query, args).fetchone()[0] or 0)
@@ -185,10 +182,7 @@ def piloop_counts(db: sqlite3.Connection, base: str) -> tuple[Funnel, int, int, 
     )
     escalations = one("select count(*) from comments where kind = 'escalation'")
     people = one("select count(*) from comments where author like 'human%'")
-    tokens = db.execute("select kind, sum(json_extract(usage, '$.total')) from agent_sessions group by kind").fetchall()
-    total = sum(n or 0 for _, n in tokens)
-    lead = sum(n or 0 for kind, n in tokens if kind in LEADS)
-    return funnel, escalations, people, (lead / total if total else None)
+    return funnel, escalations, people
 
 
 def restarts(export: Path) -> int:
@@ -264,13 +258,13 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         sessions = int((export / 'sessions').read_text())
         funnel = Funnel(ideas=None, runs=sessions, submissions=commits, kept=len(heads))
         sent = delivered = refused = None
-        escalations, people, lead = 0, 0, None
+        escalations, people = 0, 0
         kept, held, line, written, read, raced, counted = {}, {}, {}, {}, {}, None, None
     else:
         with closing(sqlite3.connect(export / 'piloop.db')) as db:
             heads = piloop_heads(db, base, started)
             submitted = piloop_submissions(db)
-            funnel, escalations, people, lead = piloop_counts(db, base)
+            funnel, escalations, people = piloop_counts(db, base)
             sent, delivered, refused = messages(db)
             if pool(db):
                 (kept, line), held, raced, counted = final_line(db, heads), {}, None, pool_counts(db)
@@ -312,7 +306,6 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         funnel=funnel,
         escalations=escalations,
         interventions=people,
-        lead_token_share=lead,
         restarts=restarts(export) if meta.get('supervised') else None,
         messages_sent=sent,
         messages_delivered=delivered,

@@ -67,10 +67,10 @@ def test_a_malformed_signature_or_an_unknown_name_is_refused(signed: str) -> Non
 def test_an_actor_is_written_as_its_signature(tmp_path: Path, schema: Path) -> None:
     """``emit`` signs ``events.actor``, and the connection's actor signs ``updated_by``, with the signature."""
     at_head(schema, tmp_path / 'piloop.db')
-    sweeper = Agent(role='orchestrator', session=3)
+    sweeper = Agent(role='auditor', session=3)
     with closing(Database(f'sqlite:///{tmp_path / "piloop.db"}', actor=sweeper)) as db, db.session() as s:
         emit(s, IdeaCreated(), TargetRef(IDEA, 1), sweeper)
         s.commit()
         assert [ACTORS.validate_python(e.actor) for e in s.query(Event)] == [sweeper]
     with closing(sql.connect(tmp_path / 'piloop.db', actor=sweeper)) as con:
-        assert tuple(con.execute('SELECT actor FROM temp.session_actor').fetchone()) == ('orchestrator#3',)
+        assert tuple(con.execute('SELECT actor FROM temp.session_actor').fetchone()) == ('auditor#3',)

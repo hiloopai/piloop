@@ -381,9 +381,9 @@ def test_a_write_answers_its_cursor_and_refuses_what_its_operation_refuses(
 
 
 def test_only_a_person_or_a_stop_rule_stops_a_campaign(db: Database, campaign: Campaign, cfg: Settings) -> None:
-    lead = Agent(role=RoleName('orchestrator'), session=AgentSessionId(4))
-    with db.session() as s, pytest.raises(ops.Refused, match=r'^orchestrator#4 may not stop a campaign: only a person'):
-        ops.stop(s, campaign.id, lead, reason='the gains have flattened', ending=Ending.WRAP_UP)
+    auditor = Agent(role=RoleName('auditor'), session=AgentSessionId(4))
+    with db.session() as s, pytest.raises(ops.Refused, match=r'^auditor#4 may not stop a campaign: only a person'):
+        ops.stop(s, campaign.id, auditor, reason='the gains have flattened', ending=Ending.WRAP_UP)
     with serving_api(cfg):
         with EveryClient.on(cfg.socket_file, System.ORCHESTRATOR) as client, pytest.raises(Refused) as refused:
             client.stop('demo', StopBody(reason='the gains have flattened'))

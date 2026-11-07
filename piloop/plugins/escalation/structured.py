@@ -1,30 +1,24 @@
-"""``structured``: an escalation asks for one decision in plain words, offers choices, and goes to the orchestrator first.
+"""``structured``: an escalation asks for one decision in plain words, offers choices, and reaches a human at once.
 
 The form has an ``ask`` (one sentence), a ``why`` (a few short sentences), two or more ``options``, each a ``choice`` and
 its ``result``, an optional ``recommend``, and ``details`` for the evidence. The ask, the why and the options follow
 the rules of Simplified Technical English that a program can check: short sentences, and no ids, hashes or paths,
 which go in ``details``. The limits are keys.
 
-An escalation of the orchestrator or of the daemon reaches a human at once. Any other agent's goes to the orchestrator,
-when piloop launches one that takes escalations (``Escalated.orchestrated``), which answers it, merges it with its
-duplicates, or escalates it itself; it reaches a human only when nobody has acknowledged it ``grace`` after it was
-filed. With the orchestrator off, an agent's escalation reaches a human at once too: no agent would answer it.
+Every escalation reaches a human at once, whoever filed it.
 """
 
 import json
 import re
 import string
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
 
-from piloop.actor import ACTORS, Agent, System
-from piloop.plugins.escalation.contract import At, Choice, Escalated, EscalationPolicy, EscalationView, Now, ToHuman
+from piloop import deprecated
+from piloop.plugins.escalation.contract import Choice, Escalated, EscalationPolicy, EscalationView, Now, ToHuman
 
-# TODO(skills slot): give the orchestrator its triage guidance from here, as SkillPart(skill='piloop-operate',
-# order=350) and the launched orchestrator's Guide, once `piloop.skills` is on main. Until then the guidance is core
-# text: "Escalations" in role/prompts/orchestrator.md, and step 2 of "Escalations" in skills/piloop-operate/SKILL.md.
 SENTENCE = re.compile(r'(?<=[.!?])\s+')
 """Where one sentence ends and the next starts."""
 JARGON = {
@@ -85,11 +79,8 @@ EXAMPLE = Form(
 
 
 class Structured(EscalationPolicy):
-    """``structured``: one decision in plain words, with choices; an agent's goes to the orchestrator first."""
+    """``structured``: one decision in plain words, with choices, which reaches a human at once."""
 
-    grace: timedelta = Field(default=timedelta(minutes=30), ge=timedelta(0))
-    """How long an agent's escalation waits for the orchestrator before it goes to a human too. 0: at once. With the
-    orchestrator off, it waits for nothing."""
     ask_words: int = Field(default=25, gt=0)
     """The most words that the ask has."""
     why_sentences: int = Field(default=3, gt=0)
@@ -170,15 +161,19 @@ class Structured(EscalationPolicy):
         return '\n'.join([*lines, '', 'Details:', view.details] if view.details else lines)
 
     def reach(self, item: Escalated, now: datetime) -> ToHuman:
-        try:
-            actor = ACTORS.validate_python(item.author)
-        except ValidationError:  # a signature that an older piloop wrote: the human decides, at once
-            return Now()
-        match actor:
-            case Agent() as agent if agent.party != System.ORCHESTRATOR.party and item.orchestrated:
-                return At(item.filed + self.grace)
-            case _:  # the orchestrator, the daemon, a person or a service
-                return Now()
+        return Now()
+
+    @model_validator(mode='before')
+    @classmethod
+    @deprecated.until('0.7.0', 'no agent waits for an escalation in 0.6: delete Structured._grace')
+    def _grace(cls, data: object) -> object:
+        """Drop ``grace``, with a warning: of a file, or of a stored config. Every escalation reaches a human at once."""
+        if not isinstance(data, dict) or 'grace' not in data:
+            return data
+        deprecated.dropped(
+            'every escalation reaches a human at once now: delete grace from [plugins.escalation]', removed_in='0.7.0'
+        )
+        return {k: v for k, v in data.items() if k != 'grace'}
 
     def view(self, item: Escalated) -> EscalationView:
         return self._view(Form.model_validate(item.form))

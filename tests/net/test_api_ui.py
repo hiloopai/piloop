@@ -29,10 +29,11 @@ from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.tables import Measurement
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.settings import Settings
-from tests.conftest import EveryClient, serving_api
+from tests.conftest import AUDITOR, EveryClient, serving_api
 from tests.reports.test_history import idea
 
 
+@pytest.mark.usefixtures('auditor')
 def test_the_reads_of_a_ui_answer_agents_their_output_ideas_and_comments(
     db: Database, campaign: Campaign, cfg: Settings, tmp_path: Path
 ) -> None:
@@ -59,7 +60,7 @@ def test_the_reads_of_a_ui_answer_agents_their_output_ideas_and_comments(
         idea(s, p, 'a hunch', IdeaStatus.DROPPED)
         s.add(
             AgentSession(
-                kind='orchestrator',
+                kind=AUDITOR,
                 campaign_id=p.id,
                 harness='claude',
                 model='opus',

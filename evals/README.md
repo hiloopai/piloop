@@ -31,10 +31,9 @@ A piloop arm runs as a team (`drive.on_team`):
 
 - Its daemon (`piloop serve --listen`, `piloop cas serve`) runs in a control sandbox on Daytona, which takes no job.
   Its `config.toml` gives it two pools whose provisioners start the rest at once, and drain it when the run is over.
-- The pool `agents`: a Modal sandbox for each worker (the runs it keeps open at once, and each agent of an orchestrator
-  that its triggers start), with 2 CPUs and a hard 8 GiB
+- The pool `agents`: a Modal sandbox for each worker (the runs it keeps open at once), with 2 CPUs and a hard 8 GiB
   (or the task's `memory_limit_mb`), reaching what the task's `network` allows and the control sandbox.
-- The pool `eval`: `EVALS_EVALUATORS_PER_WORKER` evaluators for each run slot, one evaluation at a time each, where the
+- The pool `eval`: `EVALS_EVALUATORS_PER_WORKER` evaluators for each worker, one evaluation at a time each, where the
   task is scored: on Daytona for a task with `scorer = "daytona"`, else on Modal at the scorer's size. So every
   timing that decides a verdict runs where the holdout is scored, with hard limits.
 - A Daytona sandbox starts from a snapshot of its image, one per image and size. When the org is at its snapshot quota, the driver deletes the least recently used `evals-` snapshot that no sandbox uses, and tries once more: a run that needs it again builds it again.
@@ -74,7 +73,7 @@ scorer had items, remove its `scores.json` first.
 ## Metrics
 
 `result.json` holds, per run: the sealed and dev score of each head against hours, $, the models' $ and the tokens, $ and hours to the first
-keep, the funnel (ideas, runs, submissions, kept), escalations, comments by people, the lead's share of the tokens,
+keep, the funnel (ideas, runs, submissions, kept), escalations, comments by people,
 the gap between the dev and sealed score of the final head, and the regressions: the submissions, those scored, and
 each scored submission that fails an item that its parent passed, with the items it lost (`regressions.found`; null for
 a task without items). A crash fails every item. The report gives their share of the scored submissions. Spend is split into models and compute. Before the agents

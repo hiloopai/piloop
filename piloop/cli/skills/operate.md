@@ -1,6 +1,6 @@
 ---
 name: piloop-operate
-description: Operate a running piloop autoresearch campaign as its orchestrator, from any harness with a shell (Claude Code, Codex, pi, Gemini CLI, Cursor), by looping on piloop inbox wait to decide escalations, manage ideas, launch sweeps, steer implementers and read the pool. Use when the human asks you to orchestrate, watch, run or report on a campaign, when an escalation arrives, or when you take a decision for the human; do not use it in an agent that piloop launched (PILOOP_ACTOR is an implementer or orchestrator id).
+description: Operate a running piloop autoresearch campaign as its orchestrator, from any harness with a shell (Claude Code, Codex, pi, Gemini CLI, Cursor), by looping on piloop inbox wait to decide escalations, manage ideas, launch sweeps, steer implementers and read the pool. Use when the human asks you to orchestrate, watch, run or report on a campaign, when an escalation arrives, or when you take a decision for the human; do not use it in an agent that piloop launched (PILOOP_ACTOR is an agent id, such as implementer#12).
 ---
 
 # Operate a piloop campaign
@@ -33,7 +33,6 @@ It returns, one line each, as soon as something needs you:
 
 - a new unacknowledged inbox item that someone else wrote,
 - a campaign that the daemon stopped,
-- an anomaly that the daemon gave to an agent,
 - the daemon's score of a candidate.
 
 Otherwise it returns `nothing new` at the timeout.
@@ -65,7 +64,7 @@ Steps:
 2. **Wait.** Run the command above.
 3. **Read** each line.
    - An item: `piloop inbox show <id>` shows it with its thread.
-   - A stop or an anomaly: `piloop status <name>`.
+   - A stop: `piloop status <name>`.
 4. **Decide and record.** See "The inbox" below: escalations, every decision, the surfacing policy.
 5. **Acknowledge** what you answered: `PILOOP_ACTOR=orchestrator piloop inbox ack <id>`. Leave unacknowledged what
    only the human can decide.
@@ -85,10 +84,7 @@ Steps:
 Run the loop yourself, or give it to a background subagent so that the human's session stays free. Give the subagent
 this skill and the campaign name. Tell it to report decisions and status back.
 
-Run one orchestrator per campaign. Two loops answer the same escalation twice. When `piloop status` lists live or
-past `orchestrator#…` agents, or `piloop.toml` turns `[plugins.role.orchestrator]` on, piloop launches the campaign's
-orchestrator itself: do not loop. Write to it with `piloop message <name> '<text>'`, and read its answer in
-`piloop inbox`.
+Run one orchestrator per campaign. Two loops answer the same escalation twice.
 
 ## Status
 

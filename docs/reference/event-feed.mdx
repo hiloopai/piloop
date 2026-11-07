@@ -294,7 +294,7 @@ Only piloop writes events: `piloop sql` cannot insert one. A stored value that i
 comes as null with its stored text under `invalid`, and the events after it read as usual.
 
 `agent_session.identified` comes once for each harness session id of an agent, with `session_id`, `harness`,
-`executable`, `role`, `model`, `campaign`, `subject` (what the agent works on, such as `run#12`, or null for an orchestrator),
+`executable`, `role`, `model`, `campaign`, `subject` (what the agent works on, such as `run#12`, or null for an agent without a run),
 `groups` (what its work belongs to, such as the run's `idea#4`) and `parent` (the agent that proposed the idea, with its
 `actor`, `harness`, `executable` and `session_id`).
 

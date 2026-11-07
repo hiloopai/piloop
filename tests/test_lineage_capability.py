@@ -51,8 +51,7 @@ from piloop.plugins.lineage.contract import (
 )
 from piloop.plugins.metric import Direction
 from piloop.settings import Settings
-from tests.conftest import reconfigured, serving_api, store_config
-from tests.daemon.test_roles import forget_loaded, installed
+from tests.conftest import forget_loaded, install_plugins, reconfigured, serving_api, store_config
 
 T0 = datetime(2026, 10, 27, 12, tzinfo=UTC)
 PATH = '/v1/campaigns/{campaign}/lineage'
@@ -122,7 +121,7 @@ def _match(name: str, home: str, away: str, winner: str) -> LineageNode:
 @pytest.fixture
 def bracket(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Install a package with the ``bracket`` lineage provider."""
-    installed(monkeypatch, [EntryPoint('bracket', f'{__name__}:Bracket', LINEAGE.group)])
+    install_plugins(monkeypatch, [EntryPoint('bracket', f'{__name__}:Bracket', LINEAGE.group)])
     yield
     forget_loaded()
 

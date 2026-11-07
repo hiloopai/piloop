@@ -58,7 +58,6 @@ from piloop.plugins.harness.codex import Codex, toml
 from piloop.plugins.harness.contract import Harness, Usage
 from piloop.plugins.harness.pi import Pi
 from piloop.plugins.price_list.genai_prices import GenaiPrices
-from piloop.plugins.role.orchestrator import OrchestratorRole
 
 REPO = f'{WORK}/repo'
 SEALED = f'{PILOOP_HOME}/sealed'
@@ -210,22 +209,9 @@ def price(tokens: Counts) -> float:
     return usd
 
 
-def run_slots(task: Task, arm: PiloopArm, settings: Settings, hours: float) -> int:
-    """The runs that a piloop arm keeps open at once: each gets an evaluator."""
-    return CampaignConfig.model_validate(piloop_config(task, arm, settings, hours)).run_slots
-
-
 def workers(task: Task, arm: PiloopArm, settings: Settings, hours: float) -> int:
-    """The agents that a piloop arm keeps open at once, each in a box of its own.
-
-    One for each run slot (``run_slots``), plus each agent of an orchestrator that its triggers start: without a box of
-    its own, it would wait for a run to free one and then take it from the implementers.
-    """
-    cfg = CampaignConfig.model_validate(piloop_config(task, arm, settings, hours))
-    lead = sum(
-        r.max_concurrent for r in cfg.roles.starting().values() if isinstance(r, OrchestratorRole) and r.triggers
-    )
-    return cfg.run_slots + lead
+    """The runs that a piloop arm keeps open at once (``run_slots``): its workers."""
+    return CampaignConfig.model_validate(piloop_config(task, arm, settings, hours)).run_slots
 
 
 @dataclass
@@ -659,7 +645,7 @@ def on_team(
         own: list[JsonValue] = [h for h in (urlsplit(api).hostname, urlsplit(cas).hostname) if h]
         reach = network_policy(settings, task.network).outbound_domain_allowlist
         n = workers(task, arm, settings, hours)
-        e = daytona.evaluators(run_slots(task, arm, settings, hours), settings)
+        e = daytona.evaluators(n, settings)
         # Spans come from the daemon alone: a worker without the collector's credentials would be refused.
         team_env: dict[str, JsonValue] = {k: v for k, v in env.items() if not k.startswith('OTEL_')}
         team_env['PILOOP_PLUGINS'] = daytona.worker_plugins(cas)

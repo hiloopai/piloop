@@ -56,7 +56,7 @@ from piloop.plugins.campaign_type.kit.candidates.wire import ImportBody
 from piloop.plugins.campaign_type.kit.evaluation.measure import MeasurementRecorded
 from piloop.plugins.vcs.git import Git
 from piloop.settings import Settings
-from tests.conftest import EveryClient, measuring, serving_api, store_config
+from tests.conftest import AUDITOR, EveryClient, measuring, serving_api, store_config
 from tests.net.test_api import first
 from tests.test_git import Basic, basic_server
 
@@ -232,6 +232,7 @@ def test_a_registration_names_the_campaign_and_its_git_refs_carry_that_name(
     assert f'refs/piloop/chosen/reference/{imported.id}' in refs.stdout.split(), 'not the name of piloop.toml'
 
 
+@pytest.mark.usefixtures('auditor')
 def test_a_stopped_campaign_retires_once_its_stop_is_over_and_its_name_registers_again(
     db: Database, campaign: Campaign, campaign_path: Path, cfg: Settings
 ) -> None:
@@ -245,7 +246,7 @@ def test_a_stopped_campaign_retires_once_its_stop_is_over_and_its_name_registers
         with db.session() as s:
             row = s.get_one(Campaign, campaign.id)
             row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
-            s.add(AgentSession(kind='orchestrator', campaign_id=campaign.id, state=AgentSessionState.RUNNING))
+            s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING))
             s.add(
                 Comment(
                     target=TargetRef(TargetKind.CAMPAIGN, campaign.id),

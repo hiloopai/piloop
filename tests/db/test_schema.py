@@ -13,7 +13,7 @@ from piloop.db.session import Database
 from piloop.db.triggers import Trigger
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.host import PluginError
-from tests.daemon.test_roles import installed
+from tests.conftest import install_plugins
 
 NO_REVISIONS = Path(__file__).parent / 'no_revisions'
 """A test schema's revisions, which no test runs."""
@@ -95,7 +95,7 @@ def test_every_table_of_a_migrated_database_is_in_one_schema(db: Database) -> No
 
 
 def schema_of(monkeypatch: pytest.MonkeyPatch, name: str, attribute: str) -> None:
-    installed(monkeypatch, [EntryPoint(name, f'{__name__}:{attribute}', SCHEMAS.group)])
+    install_plugins(monkeypatch, [EntryPoint(name, f'{__name__}:{attribute}', SCHEMAS.group)])
 
 
 def test_a_plugin_s_table_references_a_core_table_s_id(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -307,8 +307,9 @@ class SelfTest(Frozen):
     """The dev metric of each run."""
 
 
-REMOVED = ('built_on', 'replaced')
-"""Fields of results from earlier rounds that ``keeps``, ``keeps_in_final`` and ``races`` replaced: dropped on load."""
+REMOVED = ('built_on', 'replaced', 'lead_token_share')
+"""Fields of results from earlier rounds, dropped on load: ``keeps``, ``keeps_in_final`` and ``races`` replaced the first
+two, and the lead's share of the tokens went with the lead."""
 
 
 class Result(Frozen):
@@ -330,8 +331,6 @@ class Result(Frozen):
     funnel: Funnel
     escalations: int
     interventions: int
-    lead_token_share: float | None
-    """The orchestrator's share of the tokens. None: a plain arm."""
     restarts: int | None = None
     """How many times the daemon's supervisor started it again after it died. None: a plain arm, or a run whose daemon
     had no supervisor."""

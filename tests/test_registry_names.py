@@ -25,24 +25,14 @@ LEAVES: dict[str, frozenset[str] | None] = {
     'ids.py': None,
     'db/migrations/versions/*.py': None,
     'plugins/campaign_type/*/migrations/*.py': None,
-    'actor.py': frozenset({'orchestrator'}),
     'deprecated.py': None,
-    'plugins/role/contract.py': frozenset({'orchestrator'}),
-    'config.py': frozenset({'orchestrator'}),
-    'plugins/section/contract.py': frozenset({'orchestrator'}),
     'plugins/runtime/docker.py': frozenset({'docker'}),
 }
 """The files that may name entries, and which ones (None: any). The reasons:
 
 - The harnesses (``plugins/harness/``) and ``ids.py`` (the built-in roles) define the entries. The migrations, core's
   and each campaign type's, are history.
-- ``actor.py``: the outside orchestrator, ``orchestrator``, one party with the agents of the role.
 - ``deprecated.py``: the bridges rewrite the keys of earlier releases, which named built-in roles.
-- ``plugins/role/contract.py``: ``orchestrator`` among the names that a new role may not take: the outside
-  orchestrator signs with it.
-- ``config.py``: its 0.7.0 bridge moves ``[plugins.trigger.news] quiet_seconds`` into the ``orchestrator``'s table.
-- ``plugins/section/contract.py``: ``Surface.ORCHESTRATOR``, the surface of the briefs of a role that does no runs, named
-  after the built-in one in the sections table.
 - ``plugins/runtime/docker.py``: ``docker``, the Docker CLI that the runtime runs, not the runtime's name.
 """
 

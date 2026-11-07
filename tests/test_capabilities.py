@@ -53,6 +53,9 @@ HELPERS: tuple[object, ...] = (  # a tuple: some are values that do not hash, su
     capabilities.McpError,  # what a harness's MCP renderer raises
     capabilities.NotDelivered,  # what a notifier's send raises
     capabilities.ToHuman,  # what an escalation provider's reach returns: a union of contract types
+    capabilities.StartsItsAgents,  # what a package's role that starts its agents subclasses, and what it reads
+    capabilities.Wake,
+    capabilities.Quiet,
     capabilities.Listens,  # a notifier's optional protocol, what it is given, and what it hears and answers
     capabilities.ListenHost,
     capabilities.Inbound,

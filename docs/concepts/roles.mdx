@@ -36,10 +36,10 @@ Each agent is an **agent session**, with an id, a log and the tokens that it use
 | Role | What it does | When it starts |
 |---|---|---|
 | **implementer** | Claims an idea from the board, or proposes its own, implements it, and submits versions. Its submissions are scored. | On each free slot. |
-| **orchestrator** | Answers escalations and messages, and records its decisions. | Off by default: you run your own [orchestrator](/concepts/orchestrator). |
 
-The implementer **does runs**: each run claims one idea. The orchestrator does none, and nothing that it commits is
-scored.
+The implementer **does runs**: each run claims one idea. A plugin can add a role that does none, whose commits are
+never scored: see [Roles](/plugins/agents#roles). The coding agent that you talk to answers escalations and messages:
+see [the orchestrator](/concepts/orchestrator).
 
 ## Define a role
 
@@ -121,7 +121,7 @@ role's `runtime` for one role. To run each agent in a container, see [Run agents
 | `piloop attach 12` | Prints the last lines that agent 12 wrote. |
 | `piloop prompt 12 "<text>"` | Sends a message to the running agent. |
 
-A run's brief, log and transcript are in `~/.piloop/runs/<run>/`, and an orchestrator's in
+A run's brief, log and transcript are in `~/.piloop/runs/<run>/`, and those of an agent without a run in
 `~/.piloop/agent_sessions/<id>/`. When an agent ends, piloop ends every process that it started.
 
 | `agent_sessions.state` | Meaning |

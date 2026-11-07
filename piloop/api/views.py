@@ -494,19 +494,6 @@ class StoppedNews(View):
         return f'campaign {self.campaign_name} stopped: {self.reason}'
 
 
-class AnomalyNews(View):
-    """An anomaly that the daemon gave to an agent."""
-
-    kind: Literal['anomaly_requested'] = 'anomaly_requested'
-    role: str
-    agent_session: AgentSessionId
-    line: str
-
-    def text(self) -> str:
-        """The item as ``piloop inbox wait`` prints it."""
-        return f'anomaly, {self.role}#{self.agent_session} requested: {self.line}'
-
-
 class ScoreNews(View):
     """The daemon scored a candidate into the pool: where it stands."""
 
@@ -520,7 +507,7 @@ class ScoreNews(View):
         return f'candidate#{self.candidate}: {cell(self.told)}'
 
 
-type NewsItem = Annotated[CommentNews | StoppedNews | AnomalyNews | ScoreNews, Field(discriminator='kind')]
+type NewsItem = Annotated[CommentNews | StoppedNews | ScoreNews, Field(discriminator='kind')]
 
 
 class News(View):

@@ -31,7 +31,16 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IDEA, IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.runs.controller import RunController
 from piloop.plugins.contribution import Contribution, DaemonHost, Leaving, Lifecycle
-from piloop.plugins.escalation.contract import DECISION, ESCALATION, Choice, Escalated, EscalationView, Never, ToHuman
+from piloop.plugins.escalation.contract import (
+    DECISION,
+    ESCALATION,
+    At,
+    Choice,
+    Escalated,
+    EscalationView,
+    Never,
+    ToHuman,
+)
 from piloop.plugins.escalation.structured import Structured
 from piloop.plugins.executor.kit.tables import INSTANCE
 from piloop.plugins.executor.workers import Workers
@@ -905,14 +914,6 @@ TIMEOUT_FORM: JsonValue = {
 """An implementer's escalation, in the ``structured`` form."""
 
 
-def lead_on(db: Database, campaign: Campaign) -> None:
-    """Turn on ``campaign``'s orchestrator role, woken by news: it takes the agents' escalations."""
-    with db.session() as s:
-        stored = s.get_one(Campaign, campaign.id)
-        stored.config = reconfigured(stored.config, plugins={'role': {'orchestrator': {'triggers': ['news']}}})
-        s.commit()
-
-
 def implementer_escalates(db: Database, campaign: Campaign) -> Comment:
     with db.session() as s:
         filed = escalations.escalate(
@@ -926,20 +927,25 @@ def implementer_escalates(db: Database, campaign: Campaign) -> Comment:
         return filed
 
 
-def test_with_no_orchestrator_on_an_agent_s_escalation_reaches_a_human_at_once(
-    db: Database, campaign: Campaign
-) -> None:
+def test_an_agent_s_escalation_reaches_a_human_at_once(db: Database, campaign: Campaign) -> None:
     filed = implementer_escalates(db, campaign)
     with db.session() as s:
         [notice] = due(s, route_of(db, campaign, 'outbox', Outbox()), filed.created_at).notices
     assert notice.comment == filed.id
 
 
-def test_an_agent_s_escalation_waits_its_grace_for_the_orchestrator_then_reaches_a_human_with_its_view(
-    db: Database, campaign: Campaign
+class Waits(Structured):
+    """A provider whose escalations reach a human 30 minutes after they are filed, unless someone acknowledged them."""
+
+    def reach(self, item: Escalated, now: datetime) -> ToHuman:
+        return At(item.filed + timedelta(minutes=30))
+
+
+def test_an_escalation_that_its_provider_holds_reaches_a_human_at_its_time_with_its_view(
+    db: Database, campaign: Campaign, mocker: MockerFixture
 ) -> None:
-    lead_on(db, campaign)
     filed = implementer_escalates(db, campaign)
+    mocker.patch.object(escalations, 'policy', return_value=Waits())
     with db.session() as s:
         found = due(s, route_of(db, campaign, 'outbox', Outbox()), filed.created_at)
         assert (found.notices, found.later) == ((), filed.created_at + timedelta(minutes=30))
@@ -979,7 +985,6 @@ def test_a_provider_decides_whether_an_escalation_reaches_a_human_and_a_broken_c
     store_config(db, campaign.id, {'name': 'demo', 'plugins': {'escalation': {'provider': 'nope'}}})
     with db.session() as s:
         assert isinstance(escalations.policy(s, campaign.id), Structured), 'a stored config that no longer loads'
-        assert not escalations.orchestrated(s, campaign.id), 'nor has it an orchestrator: a human gets its escalations'
         routes_of = [route_of(db, owner, 'outbox', Outbox()) for owner in (campaign, None)]
         assert [len(due(s, route, utcnow()).notices) for route in routes_of] == [1, 1]
         mocker.patch.object(escalations, 'policy', return_value=Silent())

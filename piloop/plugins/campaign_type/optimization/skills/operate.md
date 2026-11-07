@@ -8,7 +8,6 @@
 - open runs and the open ideas,
 - the live agents with their last line,
 - the last 8 candidates with where each stands and its delta against its parent,
-- the anomalies that the daemon detects,
 - the inbox and the latest decisions,
 - the last events with their ages.
 

@@ -134,6 +134,7 @@ class CommentAcked(Changed[datetime]):
 class CommentEdited(Changed[str]):
     """A comment's text changed: its author edited it. ``old`` keeps what readers saw, and the edit is news."""
 
+    READ_BY: ClassVar[ReadBy] = ReadBy.READERS
     kind: Literal['comment.body'] = 'comment.body'
 
 

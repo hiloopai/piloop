@@ -63,8 +63,6 @@ class Rendering:
     """The campaign's shared workspace, where agents leave notes and artifacts for each other."""
     cas: Cas
     """The home's CAS: the agents' sessions are there (``agent_sessions.session_file``)."""
-    given: tuple[str, ...] = ()
-    """The anomaly lines that the agent who reads got to investigate, in order. Empty for every other reader."""
     brief: Briefing | None = None
     """The agent who reads, when the reader is an agent's brief. None for every other reader."""
 

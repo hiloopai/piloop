@@ -64,10 +64,12 @@ from piloop.plugins.vcs.git import Git
 from piloop.settings import AgentSettings
 from piloop.store.tree import Manifest, Merged, Staged, put_tree
 from tests.agents.test_launcher import MINTED_HARNESS, agent_session, launch, request, use_harness
-from tests.conftest import HARNESS_PROMPT_TO_FILE, LEAD, ScriptRuntime, baseline, disk
+from tests.conftest import AUDITOR, HARNESS_PROMPT_TO_FILE, ScriptRuntime, baseline, disk
 from tests.test_lease import BRIEF, START
 
 RESEARCH_SESSION = '0c5b9f9e-3a43-4c39-9a51-6f0cfa1a3b0e'
+
+pytestmark = pytest.mark.usefixtures('auditor')
 
 
 def test_an_evaluation_that_left_the_queue_or_never_started_is_settled(
@@ -108,7 +110,7 @@ def test_a_start_report_moves_a_starting_agent_to_running_and_leaves_an_ending_o
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
     with db.session() as s:
         rows = [
-            AgentSession(kind=LEAD, campaign_id=campaign.id, harness='script', state=state)
+            AgentSession(kind=AUDITOR, campaign_id=campaign.id, harness='script', state=state)
             for state in (AgentSessionState.STARTING, AgentSessionState.ENDING)
         ]
         s.add_all(rows)
@@ -136,7 +138,7 @@ def test_the_finished_event_of_an_agent_says_the_state_of_its_closed_row(
     """A cancelled agent's process exits once the daemon killed it: its row and its event both say killed."""
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
     with db.session() as s:
-        w = AgentSession(kind=LEAD, campaign_id=campaign.id, state=state, reason='t', error='cancelled by human')
+        w = AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=state, reason='t', error='cancelled by human')
         s.add(w)
         s.commit()
         agent_session_id = w.id
@@ -202,7 +204,7 @@ def test_a_report_read_after_a_restart_closes_the_agent_as_the_stop_on_its_row_s
     """The daemon that reads the report does not stop: only the stop that the earlier one recorded says it was cut."""
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
     with db.session() as s:
-        w = AgentSession(kind=LEAD, campaign_id=campaign.id, state=state, reason='t')
+        w = AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=state, reason='t')
         s.add(w)
         s.flush()
         if stop:
@@ -234,7 +236,7 @@ def test_an_end_that_comes_after_the_agents_report_leaves_its_row_closed(
     """
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
     with db.session() as s:
-        w = AgentSession(kind=LEAD, campaign_id=campaign.id, state=AgentSessionState.RUNNING, reason='t')
+        w = AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING, reason='t')
         s.add(w)
         s.commit()
         agent_session_id = w.id
@@ -264,7 +266,7 @@ def test_two_results_for_one_job_in_plain_sessions_close_its_row_once_and_measur
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
     base = baseline(db, campaign.id)
     with db.session() as s:
-        w = AgentSession(kind=LEAD, campaign_id=campaign.id, state=AgentSessionState.RUNNING, reason='t')
+        w = AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING, reason='t')
         evaluation = Evaluation(
             candidate_id=base.id, evaluator_id=s.get_one(Campaign, campaign.id).evaluator_id, started_at=utcnow()
         )
@@ -366,8 +368,8 @@ def test_an_implementer_with_a_minted_session_id_is_identified_at_launch_with_th
     campaign: Campaign, db: Database, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     use_harness(db, campaign, HARNESS_PROMPT_TO_FILE, **MINTED_HARNESS)
-    research = request(db, campaign, LEAD, harness='claude', session_id=RESEARCH_SESSION)
-    implementer, run, idea = implementer_of(db, campaign, f'orchestrator#{research}')
+    research = request(db, campaign, AUDITOR, harness='claude', session_id=RESEARCH_SESSION)
+    implementer, run, idea = implementer_of(db, campaign, f'auditor#{research}')
     launch(db, runtime, tmp_path, implementer)
     w = agent_session(db, implementer)
     assert identified(db, implementer) == [
@@ -381,7 +383,7 @@ def test_an_implementer_with_a_minted_session_id_is_identified_at_launch_with_th
             'subject': f'run#{run}',
             'groups': [f'idea#{idea}'],
             'parent': {
-                'actor': f'orchestrator#{research}',
+                'actor': f'auditor#{research}',
                 'harness': 'claude',
                 'executable': 'claude',
                 'session_id': RESEARCH_SESSION,
@@ -395,7 +397,7 @@ def test_a_reported_session_id_is_identified_once_whatever_repeats_it(
 ) -> None:
     """Heartbeats and the final report repeat the id: only an id that is new to the row emits the event."""
     results = CampaignResults(db, Tracer(None), tmp_path, disk(tmp_path), lambda: False)
-    research = request(db, campaign, LEAD, harness='script', state=AgentSessionState.STARTING)
+    research = request(db, campaign, AUDITOR, harness='script', state=AgentSessionState.STARTING)
     key = AgentKey(research)
     results.started(key, {}, None)
     assert identified(db, research) == []
@@ -410,7 +412,7 @@ def test_a_reported_session_id_is_identified_once_whatever_repeats_it(
         'session_id': 'first',
         'harness': 'script',
         'executable': str(Path(campaign.path).parent / 'harness.sh'),
-        'role': 'orchestrator',
+        'role': 'auditor',
         'model': None,
         'campaign': 'demo',
         'subject': None,
@@ -435,8 +437,8 @@ def test_an_id_that_only_the_final_report_carries_is_identified(
         ('human', None),
         ('orchestrator', None),
         (
-            'orchestrator#{research}',
-            {'actor': 'orchestrator#{research}', 'harness': 'claude', 'executable': 'claude', 'session_id': None},
+            'auditor#{research}',
+            {'actor': 'auditor#{research}', 'harness': 'claude', 'executable': 'claude', 'session_id': None},
         ),
         ('research#9999', {'actor': 'research#9999', 'harness': None, 'executable': None, 'session_id': None}),
     ],
@@ -449,7 +451,7 @@ def test_the_proposer_is_an_agent_only(
     created_by: str,
     proposed_by: dict[str, object] | None,
 ) -> None:
-    research = request(db, campaign, LEAD, harness='claude')
+    research = request(db, campaign, AUDITOR, harness='claude')
     implementer, _, _ = implementer_of(
         db, campaign, created_by.format(research=research), harness='script', state=AgentSessionState.RUNNING
     )
@@ -539,7 +541,7 @@ def test_two_agents_that_change_one_workspace_file_keep_the_first_ones_and_the_s
         place=live.relative_to(tmp_path).as_posix(), manifest=put_tree(cas, live, ['NOTES.md']).manifest.put(cas)
     )
     with db.session() as s:
-        agents = [AgentSession(kind=LEAD, campaign_id=campaign.id, state=AgentSessionState.RUNNING) for _ in '1234']
+        agents = [AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING) for _ in '1234']
         s.add_all(agents)
         s.commit()
         first, second, third, fourth = (a.id for a in agents)
@@ -562,11 +564,11 @@ def test_two_agents_that_change_one_workspace_file_keep_the_first_ones_and_the_s
     finish(third, {'research': (lost := cas.put(b'a file where a directory stands'))})
     finish(fourth, {'NOTES.md': None})
     assert (live / 'NOTES.md').read_text() == 'notes\nfirst\n', 'its removal waited on a NOTES.md that changed since'
-    assert (live / f'NOTES.md.orchestrator-{second}').read_text() == 'notes\nsecond\n'
+    assert (live / f'NOTES.md.auditor-{second}').read_text() == 'notes\nsecond\n'
     assert sorted(p.name for p in (live / 'research').iterdir()) == ['a.csv', 'b.csv']
     with db.session() as s:
         assert [(e.target_id, p) for e, p in in_order(s, WorkspaceConflict)] == [
-            (second, WorkspaceConflict(beside={'NOTES.md': f'NOTES.md.orchestrator-{second}'})),
+            (second, WorkspaceConflict(beside={'NOTES.md': f'NOTES.md.auditor-{second}'})),
             (third, WorkspaceConflict(blocked={'research': lost})),
             (fourth, WorkspaceConflict(kept=['NOTES.md'])),
         ]
@@ -585,7 +587,7 @@ def test_a_workspace_merge_holds_no_write_lock(
         place=live.relative_to(tmp_path).as_posix(), manifest=put_tree(cas, live, []).manifest.put(cas)
     )
     with db.session() as s:
-        agent = AgentSession(kind=LEAD, campaign_id=campaign.id, state=AgentSessionState.RUNNING)
+        agent = AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING)
         s.add(agent)
         s.commit()
         agent_session_id = agent.id

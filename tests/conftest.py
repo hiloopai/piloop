@@ -29,6 +29,7 @@ from pydantic import TypeAdapter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from piloop import settings as settings_module
 from piloop.actor import Agent, SignedAgent, System
 from piloop.campaign.campaigns import CampaignAdded
 from piloop.campaign.stop import left
@@ -43,6 +44,7 @@ from piloop.ids import AgentSessionId, CampaignId, Revision, RoleName
 from piloop.net.server import Server, app, local_listener, url
 from piloop.net.tokens import Tokens, mint_agent
 from piloop.otel import Tracer
+from piloop.plugins import host as plugins_module
 from piloop.plugins.archive.local import store as archive_module
 from piloop.plugins.campaign_type.consumers import Campaigns
 from piloop.plugins.campaign_type.kit.backlog import ops as backlog_ops
@@ -74,7 +76,7 @@ from piloop.plugins.harness.contract import Usage, each_provider
 from piloop.plugins.lineage.wire import LineageClient
 from piloop.plugins.network.contract import NetworkConfig, NetworkHost
 from piloop.plugins.network.https import TOKEN_ENV, Https
-from piloop.plugins.role.contract import RoleConfig
+from piloop.plugins.role.contract import ROLES, RoleConfig
 from piloop.plugins.runtime.contract import Handle, Runtime, RuntimeFactory, make_runtime
 from piloop.plugins.runtime.subprocess import SubprocessRuntime
 from piloop.plugins.secrets.contract import HomeSecrets
@@ -162,13 +164,6 @@ use = ["script"]
 timeout = {implementer_timeout}
 max_concurrent = {max_implementers}
 
-[plugins.role.orchestrator]
-triggers = ["run_failed"]
-continuity = "fresh"
-harnesses = ["script"]
-model = {{ script = "lead-model" }}
-timeout = {sweep_timeout}
-
 [[metrics]]
 name = "score"
 direction = "higher"
@@ -187,12 +182,6 @@ model = "test-model"
 executable = "{script}"
 headless = ["{{prompt}}"]
 """
-
-LEAD_TRIGGERS = 'triggers = ["run_failed"]'
-"""The line of ``TOML`` that lists the triggers of ``LEAD``: a test replaces it to set its own."""
-LEAD = RoleName('orchestrator')
-"""The orchestrator, the only role whose agents start without a run. The tests turn it on for failed runs, and each of
-its agents starts a fresh session."""
 
 
 def spent(total: int, turns: int = 1) -> Usage:
@@ -233,15 +222,15 @@ def write_toml(
     evaluate: list[str] = EVALUATE,
 ) -> None:
     script = write_script(campaign.parent / 'harness.sh', harness_body)
-    (campaign / 'piloop.toml').write_text(
-        TOML.format(
-            evaluate=json.dumps(evaluate),
-            implementer_timeout=implementer_timeout,
-            sweep_timeout=AGENT_TIMEOUT,
-            max_implementers=max_implementers,
-            script=script,
-        )
+    toml = TOML.format(
+        evaluate=json.dumps(evaluate),
+        implementer_timeout=implementer_timeout,
+        max_implementers=max_implementers,
+        script=script,
     )
+    if AUDITOR in ROLES.providers():
+        toml += AUDITOR_TOML.format(timeout=AGENT_TIMEOUT)
+    (campaign / 'piloop.toml').write_text(toml)
 
 
 def package(root: Path, name: str, version: str, entry_points: str) -> None:
@@ -262,6 +251,47 @@ EXAMPLES = Path(__file__).parent.parent / 'examples' / 'plugins'
 def piloop_entry_points(group: str) -> list[EntryPoint]:
     """piloop's own entry points of ``group``: its built-in providers, which every test that fakes the others keeps."""
     return [ep for ep in entry_points(group=group) if ep.dist is not None and ep.dist.name == 'piloop']
+
+
+PLUGIN = 'tests.fixtures.plugin'
+"""The module of the providers that the tests install as a package's (``install_plugins``)."""
+ROLE_GROUP = ROLES.group
+
+
+def forget_loaded() -> None:
+    """Forget the loaded plugins, and the instances of ``config.toml`` that the process validated with them."""
+    plugins_module.close()
+    vars(settings_module.settings).pop('providers', None)
+
+
+def install_plugins(monkeypatch: pytest.MonkeyPatch, entries: list[EntryPoint]) -> None:
+    """Make piloop's own entry points and ``entries`` the installed ones, and forget the ones that were loaded."""
+
+    def entry_points(*, group: str) -> list[EntryPoint]:
+        return [*piloop_entry_points(group), *(ep for ep in entries if ep.group == group)]
+
+    monkeypatch.setattr(plugins_module, 'entry_points', entry_points)
+    forget_loaded()
+
+
+AUDITOR = RoleName('auditor')
+"""A package's role whose agents start without a run, on request (``tests.fixtures.plugin.Auditor``). A test of such
+agents installs it (``auditor``), and the campaign's ``piloop.toml`` then has its table (``write_toml``)."""
+AUDITOR_TOML = """
+[plugins.role.auditor]
+continuity = "fresh"
+harnesses = ["script"]
+model = {{ script = "auditor-model" }}
+timeout = {timeout}
+"""
+
+
+@pytest.fixture
+def auditor(monkeypatch: pytest.MonkeyPatch) -> Iterator[RoleName]:
+    """Install ``AUDITOR``. Ask for it before the campaign, with ``usefixtures``, so that its ``piloop.toml`` has it."""
+    install_plugins(monkeypatch, [EntryPoint(AUDITOR, f'{PLUGIN}:Auditor', ROLE_GROUP)])
+    yield AUDITOR
+    forget_loaded()
 
 
 def example(root: Path, name: str) -> None:

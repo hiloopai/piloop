@@ -13,7 +13,7 @@ from piloop.api.views import AckOutcome, News, Relation, thread_lines
 from piloop.campaign import inbox
 from piloop.campaign.escalations import DecisionWritten
 from piloop.db import feed as db_feed
-from piloop.db.events import AnomalyReported, emit, in_order
+from piloop.db.events import emit, in_order
 from piloop.db.models import AgentSession, AgentSessionState, Campaign, Comment, Event, utcnow
 from piloop.db.session import Database
 from piloop.db.triggers.changelog import CommentAcked, Commented, IdeaCreated
@@ -163,42 +163,37 @@ def test_an_author_never_has_its_own_comment_waiting_nor_acknowledges_it(db: Dat
         assert (own.outcome, own.acked_by) == (AckOutcome.OWN, 'orchestrator'), 'yours, whoever acknowledged it'
 
 
-def test_every_agent_of_a_role_and_the_outside_orchestrator_are_one_party_for_what_waits_and_what_is_news(
+def test_every_agent_of_a_role_is_one_party_and_so_is_the_outside_orchestrator_for_what_waits_and_what_is_news(
     db: Database, campaign: Campaign
 ) -> None:
-    earlier, later = Agent(role='orchestrator', session=41), Agent(role='orchestrator', session=42)
+    earlier, later = Agent(role='auditor', session=41), Agent(role='auditor', session=42)
+    outside = (System.ORCHESTRATOR, Orchestrating(by=Person(name='ana')))
+    for author, same in ((earlier, (later,)), (outside[1], outside)):
+        with db.session() as s:
+            cursor = db_feed.newest(s)
+            decided = Comment(
+                author=author.signature,
+                kind=DECISION,
+                priority=3,
+                body='parked idea#1',
+                target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
+            )
+            s.add(decided)
+            s.flush()
+            emit(s, scored('mine'), TargetRef(CANDIDATE, 1), author)
+            emit(s, scored('the daemon'), TargetRef(CANDIDATE, 1), System.DAEMON)
+            s.commit()
+            for me in same:
+                assert decided.id not in [c.id for c, _ in inbox.waiting_for(s, me.party)], f'{me} wrote it'
+                assert news_lines(s, cursor, me=me)[1] == ['candidate#1: the daemon'], 'its own event is no news'
+                assert [r.outcome for r in inbox.ack(s, [decided.id], me)] == [AckOutcome.OWN]
+            assert decided.id in [c.id for c, _ in inbox.waiting_for(s, Agent(role='implementer', session=41).party)]
     with db.session() as s:
-        cursor = db_feed.newest(s)
-        decided = Comment(
-            author=earlier.signature,
-            kind=DECISION,
-            priority=3,
-            body='parked idea#1',
-            target=TargetRef(TargetKind.CAMPAIGN, campaign.id),
-        )
-        s.add(decided)
-        s.flush()
-        emit(
-            s,
-            scored('mine'),
-            TargetRef(CANDIDATE, 1),
-            earlier,
-        )
-        emit(
-            s,
-            scored('the daemon'),
-            TargetRef(CANDIDATE, 1),
-            System.DAEMON,
-        )
-        s.commit()
-        for me in (later, System.ORCHESTRATOR, Orchestrating(by=Person(name='ana'))):
-            assert inbox.waiting_for(s, me.party) == [], f'{me} wrote it, as one party'
-            assert news_lines(s, cursor, me=me)[1] == ['candidate#1: the daemon'], 'its own event is no news'
-            assert [r.outcome for r in inbox.ack(s, [decided.id], me)] == [AckOutcome.OWN]
-        assert [c.id for c, _ in inbox.waiting_for(s, Agent(role='implementer', session=41).party)] == [decided.id]
-        assert party_of('not an actor') == 'not an actor'
-        assert Service(name='ci').party == Service(name='ci').signature, 'a service writes for itself'
-        assert party_of('orchestrator via human:ana') == party_of('orchestrator#7') == 'orchestrator'
+        assert [c.id for c, _ in inbox.waiting_for(s, System.ORCHESTRATOR.party)] == [1], "an agent's, for the others"
+    assert party_of('not an actor') == 'not an actor'
+    assert Service(name='ci').party == Service(name='ci').signature, 'a service writes for itself'
+    assert party_of('orchestrator via human:ana') == party_of('orchestrator') == 'orchestrator'
+    assert party_of('auditor#7') == 'auditor'
 
 
 def test_thread_follows_citations_both_ways_and_the_replies_not_the_rest_of_the_target(
@@ -284,9 +279,6 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
         s.commit()
         cursor = s.scalar(select(func.max(Event.id)))
         assert cursor is not None
-        worker = AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id)
-        s.add(worker)
-        s.flush()
         s.add_all(
             [
                 Comment(author='implementer#1', kind=ESCALATION, priority=1, body='SSO\nlog in', **on(campaign)),
@@ -322,9 +314,6 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
         ]
         s.add_all(ideas)  # an idea on the board is no news: the lead reads the board
         s.flush()
-        run3 = TargetRef(RUN, 3)
-        reported = AnomalyReported(subject=run3, trigger='run_failed', line='run#3 failed: boom')
-        emit(s, reported, TargetRef(TargetKind.AGENT_SESSION, worker.id), System.DAEMON)
         candidate = TargetRef(CANDIDATE, 1)
         emit(s, scored('score 2 over 1 eval: the best of the score track now, rank 1 of 1'), candidate, System.DAEMON)
         row = s.get_one(Campaign, campaign.id)
@@ -335,7 +324,6 @@ def test_news_is_what_happened_since_the_cursor_that_the_orchestrator_did_not_wr
             [
                 'comment#6 escalation p0 on campaign#2 (other) by implementer#5: theirs',
                 'comment#2 escalation p1 on campaign#1 (demo) by implementer#1: SSO',
-                'anomaly, implementer#1 requested: run#3 failed: boom',
                 'candidate#1: score 2 over 1 eval: the best of the score track now, rank 1 of 1',
                 'campaign demo stopped: max_tokens 100 reached',
             ]

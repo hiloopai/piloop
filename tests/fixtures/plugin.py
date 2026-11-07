@@ -4,17 +4,26 @@ type."""
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
+from importlib.resources import files
+from importlib.resources.abc import Traversable
 from typing import Annotated, ClassVar
 
+from sqlalchemy import select
+
+from piloop.actor import Agent
+from piloop.agents.roles import briefing, compose_brief, compose_resumed, render_sections, role_of
 from piloop.api.views import Rendered
-from piloop.db.models import EventModel
-from piloop.ids import AgentSessionId
+from piloop.campaign.campaigns import workspace_dir
+from piloop.db.models import AgentSession, Campaign, Comment, EventModel, utcnow
+from piloop.ids import AgentSessionId, TargetKind, TargetRef
+from piloop.plugins.campaign_type.consumers import AGENT_SESSIONS
 from piloop.plugins.campaign_type.kit.pool.best_rule.baseline import Baseline
 from piloop.plugins.campaign_type.kit.pool.best_rule.contract import BestRule, Case
+from piloop.plugins.campaign_type.kit.pool.pool import checkout_candidate
 from piloop.plugins.contribution import DaemonHost
 from piloop.plugins.fact_source.facts import ATTEMPTS, EVALUATIONS, FUNNEL, Fact, FactValue, since_best
 from piloop.plugins.host import Capability, Parameters, Tier
-from piloop.plugins.role.contract import ImplementerRole, Quiet, StartsItsAgents, Wake
+from piloop.plugins.role.contract import PUSHED, Continuity, ImplementerRole, Quiet, StartsItsAgents, Wake
 from piloop.plugins.runtime.contract import Handle, RuntimeName
 from piloop.plugins.runtime.subprocess import Subprocess, SubprocessRuntime
 from piloop.plugins.section.contract import Rendering, Section, Surface
@@ -116,6 +125,61 @@ class Ticker(StartsItsAgents):
 
     def launch(self, host: DaemonHost, agent_session_id: AgentSessionId) -> None:
         raise AssertionError('a ticker requests no agent')
+
+
+class Auditor(StartsItsAgents):
+    """``auditor``: a package's role whose agents start only on request (``piloop launch``), and do no runs.
+
+    Each agent runs in a checkout of the campaign's best, with a brief of the role's sections and the notes written on
+    its row before it started. With ``continuity = "resume"``, it continues the session of the role's last agent. Its
+    rows launch in the quiet phases that ``awake`` names.
+    """
+
+    PROMPT: ClassVar[Traversable | None] = files(__package__) / 'auditor.md'
+    SURFACE: ClassVar[Surface] = Surface.ORCHESTRATOR
+    awake: list[Quiet] = []
+
+    @classmethod
+    def wakes_on(cls) -> frozenset[type[EventModel]]:
+        return frozenset()
+
+    def request(self, wake: Wake) -> datetime | None:
+        return None
+
+    def wakes_while(self, quiet: Quiet) -> bool:
+        return quiet in self.awake
+
+    def starts_by_itself(self) -> bool:
+        return False
+
+    def launch(self, host: DaemonHost, agent_session_id: AgentSessionId) -> None:
+        controller = host.controller
+        with host.db.session() as s:
+            row = s.get_one(AgentSession, agent_session_id)
+            campaign = s.get_one(Campaign, row.campaign_id)
+            base = checkout_candidate(s, campaign)
+            notes = s.scalars(
+                select(Comment)
+                .where(Comment.target == TargetRef(TargetKind.AGENT_SESSION, agent_session_id), Comment.kind == PUSHED)
+                .order_by(Comment.id)
+            ).all()
+            agent = Agent(role=row.kind, session=agent_session_id)
+            lines = [f'- Your cwd is a checkout of candidate#{base.id}, the best.', *(n.body for n in notes)]
+            brief_of = briefing(role_of(s, row), campaign, agent, reason=row.reason or 'requested', lines=lines)
+            r = Rendering(s, utcnow(), campaign, workspace_dir(host.home, campaign.id), controller.cas, brief=brief_of)
+            sections = render_sections(campaign.config.sections_of(row.kind), r)
+            brief = compose_brief(role_of(s, row), campaign, sections.whole)
+            resumed = compose_resumed(self, agent, sections.resumed) if self.continuity is Continuity.RESUME else None
+        cas = controller.cas
+        controller.launcher.launch(
+            agent_session_id,
+            brief=cas.put(brief.encode()),
+            place=f'{AGENT_SESSIONS}/{agent_session_id}',
+            artifact=controller.sources.agent(campaign, base.revision),
+            timeout=self.timeout,
+            resumed_brief=None if resumed is None else cas.put(resumed.encode()),
+            read=[n.id for n in notes],
+        )
 
 
 class Yields(Section):

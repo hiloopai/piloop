@@ -4,6 +4,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+import pytest
 from git import Repo
 from pytest_mock import MockerFixture
 from sqlalchemy import select
@@ -26,7 +27,9 @@ from piloop.plugins.campaign_type.optimization.planner import OptimizationPlanne
 from piloop.plugins.vcs.git import PILOOP, GitRepository
 from tests.conftest import SETTLE, ScriptRuntime, run_all, write_script
 from tests.daemon.test_run_controller import controller, execute, make_run
-from tests.daemon.test_scheduler import add_ideas, make_scheduler, measured_by, request_lead, statuses
+from tests.daemon.test_scheduler import add_ideas, make_scheduler, measured_by, request_auditor, statuses
+
+pytestmark = pytest.mark.usefixtures('auditor')
 
 
 def pause(db: Database, *, evals: bool) -> None:
@@ -40,20 +43,20 @@ def test_a_paused_campaign_launches_nothing_requests_nothing_and_escalates_nothi
 ) -> None:
     sched = make_scheduler(db, runtime, tmp_path)
     add_ideas(db, campaign, 'more lines')
-    sweeper = request_lead(db, campaign)
+    asked = request_auditor(db, campaign)
     pause(db, evals=False)
     assert run_all(sched) == [] and run_all(sched) == []
     assert statuses(db) == [IdeaStatus.OPEN], 'no run is queued'
     with db.session() as s:
         agent_sessions = s.scalars(select(AgentSession)).all()
-        assert [(w.id, w.state) for w in agent_sessions] == [(sweeper, AgentSessionState.REQUESTED)], (
+        assert [(w.id, w.state) for w in agent_sessions] == [(asked, AgentSessionState.REQUESTED)], (
             'nothing launches or is asked'
         )
         assert s.scalars(select(Comment)).all() == [], 'a pause raises no escalation'
         ops.resume(s, CampaignId(1))
         s.commit()
     launched = run_all(sched)
-    assert sweeper in launched and len(launched) == 2, 'the request and the run of the idea'
+    assert asked in launched and len(launched) == 2, 'the request and the run of the idea'
     assert statuses(db) == [IdeaStatus.CLAIMED]
     sched.stop(timeout=10)
 
@@ -129,7 +132,7 @@ def test_an_agent_requested_while_a_retire_checks_either_stops_the_retire_or_nev
         """The daemon's pass commits a request on its own connection, between the retire's check and its change."""
         with closing(sqlite3.connect(path, timeout=0.2, isolation_level=None)) as con:
             try:
-                con.execute("INSERT INTO agent_sessions (kind, campaign_id) VALUES ('orchestrator', ?)", (campaign.id,))
+                con.execute("INSERT INTO agent_sessions (kind, campaign_id) VALUES ('auditor', ?)", (campaign.id,))
                 landed.append(True)
             except sqlite3.OperationalError as e:
                 assert 'database is locked' in str(e), e
@@ -157,7 +160,7 @@ def test_a_campaign_retired_while_the_daemon_takes_its_request_launches_nothing(
         row = s.get_one(Campaign, campaign.id)
         row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         s.commit()
-    asked = request_lead(db, campaign)
+    asked = request_auditor(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
     path = db.engine.url.database
     assert path is not None
@@ -179,12 +182,12 @@ def test_a_campaign_retired_while_the_daemon_takes_its_request_launches_nothing(
 def test_a_campaign_that_a_feed_read_finds_retired_during_the_pass_drops_out_of_it(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
 ) -> None:
-    """A feed read (a news trigger's, say) reloads what the pass read: a retire that committed before it shows."""
+    """A feed read (a role's, say) reloads what the pass read: a retire that committed before it shows."""
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
         row.status, row.stopped_reason = CampaignStatus.STOPPED, 'by the test'
         s.commit()
-    asked = request_lead(db, campaign)
+    asked = request_auditor(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path)
     path = db.engine.url.database
     assert path is not None

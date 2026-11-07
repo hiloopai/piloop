@@ -1,5 +1,6 @@
 """The secrets capability: a campaign's secret wins over the home's, and the events say who set one, never its value."""
 
+import pytest
 from pydantic import SecretStr
 
 from piloop.actor import System
@@ -8,8 +9,10 @@ from piloop.db.session import Database
 from piloop.ids import AgentSessionId
 from piloop.plugins.secrets.contract import SECRETS, SecretKey, listed, remove_secret, set_secret, values
 from piloop.plugins.secrets.local import LocalSecrets
+from tests.conftest import AUDITOR
 
 
+@pytest.mark.usefixtures('auditor')
 def test_an_agent_gets_its_campaigns_secret_over_the_homes_and_a_listing_says_who_set_each(
     db: Database, campaign: Campaign
 ) -> None:
@@ -20,8 +23,8 @@ def test_an_agent_gets_its_campaigns_secret_over_the_homes_and_a_listing_says_wh
         set_secret(s, local, System.ORCHESTRATOR, None, 'KEY', SecretStr('home, again'))
         set_secret(s, local, System.HUMAN, campaign.id, 'KEY', SecretStr('campaign'))
         local.put(s, None, 'ELSEWHERE', SecretStr('not through piloop'))
-        session = AgentSession(kind='orchestrator', campaign_id=campaign.id)
-        orphan = AgentSession(kind='orchestrator', campaign_id=None)
+        session = AgentSession(kind=AUDITOR, campaign_id=campaign.id)
+        orphan = AgentSession(kind=AUDITOR, campaign_id=None)
         s.add_all([session, orphan])
         s.commit()
         assert {k: v.get_secret_value() for k, v in values(s, local, session.id, ['KEY', 'NONE']).items()} == {

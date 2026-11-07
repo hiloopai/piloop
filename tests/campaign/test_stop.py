@@ -87,21 +87,22 @@ from piloop.plugins.stop_rule.contract import GO, STOP_RULES, Escalate, Go, Hold
 from piloop.plugins.stop_rule.limits import Limits
 from piloop.reports.overview import progress
 from tests.conftest import (
+    AUDITOR,
     HARNESS_APPEND,
     HARNESS_NOOP,
     HARNESS_WORSE,
-    LEAD,
+    PLUGIN,
     SETTLE,
     ScriptRuntime,
     details,
     end_of,
     example,
+    install_plugins,
     run_all,
     span_named,
     spent,
     write_toml,
 )
-from tests.daemon.test_roles import PLUGIN, installed
 from tests.daemon.test_scheduler import add_ideas, make_scheduler, set_config, stop_campaign
 
 LOWER_PRIMARY = [{'name': 'score', 'direction': 'higher'}, {'name': 'size', 'direction': 'lower', 'role': 'primary'}]
@@ -402,6 +403,7 @@ def test_the_time_a_campaign_was_paused_does_not_count_toward_max_hours(db: Data
     assert elapsed() == 10.75
 
 
+@pytest.mark.usefixtures('auditor')
 def test_max_tokens_sums_the_usage_of_every_ended_agent_of_the_campaign(db: Database, campaign: Campaign) -> None:
     configure(db, campaign, max_tokens=100_000)
     assert reason(db, campaign) is None, 'nothing spent yet'
@@ -413,15 +415,15 @@ def test_max_tokens_sums_the_usage_of_every_ended_agent_of_the_campaign(db: Data
         s.add_all(
             [
                 AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, usage=spent(60_000, 9), **ended),
-                AgentSession(kind=LEAD, campaign_id=campaign.id, usage=spent(30_000, 2), **ended),
-                AgentSession(kind=LEAD, campaign_id=campaign.id, usage=None, **ended),
+                AgentSession(kind=AUDITOR, campaign_id=campaign.id, usage=spent(30_000, 2), **ended),
+                AgentSession(kind=AUDITOR, campaign_id=campaign.id, usage=None, **ended),
                 AgentSession(kind=IMPLEMENTER, campaign_id=other.id, usage=spent(50_000, 1), **ended),
             ]
         )
         s.commit()
     assert reason(db, campaign) is None, "90k: every role counts, another campaign's agents do not, unknown usage is 0"
     with db.session() as s:
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, usage=spent(10_000, 1), **ended))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, usage=spent(10_000, 1), **ended))
         s.commit()
     assert reason(db, campaign) == 'max_tokens: 100000 tokens spent'
 
@@ -556,6 +558,7 @@ def test_plateau_ignores_runs_that_finished_before_a_later_new_best(db: Database
     assert reason(db, campaign) is None, 'the later-created run finished before the new best, so it does not count'
 
 
+@pytest.mark.usefixtures('auditor')
 def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
@@ -572,7 +575,7 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
                 kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, run.id), harness='script', model='m'
             )
         )
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='requested before the stop'))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='requested before the stop'))
         s.commit()
     sched = make_scheduler(db, runtime, tmp_path)
 
@@ -580,14 +583,14 @@ def test_stopping_drains_the_requests_and_queued_runs_pending_at_that_moment(
     with db.session() as s:
         assert [(w.kind, w.state, w.error, w.ended_at is not None) for w in s.scalars(select(AgentSession))] == [
             (IMPLEMENTER, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
-            (LEAD, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
+            (AUDITOR, AgentSessionState.KILLED, RunEnd.CAMPAIGN_STOPPED, True),
         ]
         run = s.get_one(Run, 2)
         assert (run.status, run.end, run.finished_at is not None) == (RunStatus.FAILED, RunEnd.CAMPAIGN_STOPPED, True)
         assert s.get_one(Idea, idea).status is IdeaStatus.OPEN
         [(event, finished)] = in_order(s, RunFinished)
         assert (event.target_id, finished) == (2, RunFinished(end=RunEnd.CAMPAIGN_STOPPED, error=None))
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand, after the stop'))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='by hand, after the stop'))
         s.commit()
     assert run_all(sched) == [3], 'a request made after the stop is explicit and launches'
     sched.wait(SETTLE)
@@ -679,7 +682,9 @@ def due_now(db: Database, campaign: Campaign) -> None:
 
 def sweeps(db: Database, campaign: Campaign) -> list[AgentSessionState]:
     with db.session() as s:
-        rows = s.scalars(select(AgentSession).where(AgentSession.campaign_id == campaign.id, AgentSession.kind == LEAD))
+        rows = s.scalars(
+            select(AgentSession).where(AgentSession.campaign_id == campaign.id, AgentSession.kind == AUDITOR)
+        )
         return [w.state for w in rows]
 
 
@@ -756,6 +761,7 @@ def test_the_close_waits_until_the_stopped_campaigns_runs_are_scored_and_comes_o
     restarted.stop(timeout=5)
 
 
+@pytest.mark.usefixtures('auditor')
 def test_a_stopped_campaign_gets_no_trigger_requests(
     db: Database,
     campaign: Campaign,
@@ -778,7 +784,7 @@ def test_a_stopped_campaign_gets_no_trigger_requests(
         assert [
             (w.kind, w.reason)
             for w in s.scalars(select(AgentSession).where(AgentSession.id > 1).order_by(AgentSession.id))
-        ] == [], 'no implementer or sweeper request follows'
+        ] == [], 'no request follows'
         assert s.scalars(select(Run)).all() and s.get_one(Idea, 2).status is IdeaStatus.OPEN, 'idea b never ran'
         [(event, change)] = in_order(s, CampaignStatusChanged)
         assert (event.actor, event.target_id, change) == (
@@ -794,7 +800,7 @@ def test_a_stopped_campaign_gets_no_trigger_requests(
     }
 
     with db.session() as s:
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand'))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='by hand'))
         s.commit()
     assert run_all(sched) == [2], 'a hand-inserted request is explicit and launches'
     sched.wait(SETTLE)
@@ -961,7 +967,7 @@ def test_a_rule_that_reads_a_fact_needs_a_source_of_it_and_a_source_alone_only_p
     campaign: Campaign, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A rule that reads a fact without a source of it would hold forever."""
-    installed(monkeypatch, [EntryPoint('goes_on', f'{PLUGIN}:GoesOn', STOP_RULES.group)])
+    install_plugins(monkeypatch, [EntryPoint('goes_on', f'{PLUGIN}:GoesOn', STOP_RULES.group)])
     try:
         sources = with_spend(notices={'spend': [10]})
         load_campaign_config(
@@ -1184,7 +1190,7 @@ def test_the_campaign_facts_sum_every_evaluation_count_the_attempts_and_a_readin
 def test_a_rule_that_escalates_lets_the_campaign_go_on_and_tells_a_human_once_per_reason(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    installed(monkeypatch, [EntryPoint('escalates', f'{PLUGIN}:Escalates', STOP_RULES.group)])
+    install_plugins(monkeypatch, [EntryPoint('escalates', f'{PLUGIN}:Escalates', STOP_RULES.group)])
     try:
         set_config(
             db, campaign, plugins={'stop_rule': {'provider': 'escalates', 'reason': '$900 since the last new best'}}
@@ -1233,7 +1239,7 @@ def test_the_example_best_cost_rule_escalates_once_per_new_best_then_stops_at_it
 def test_a_rule_that_reads_the_spend_since_a_new_best_needs_a_source_of_it(
     campaign: Campaign, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    installed(monkeypatch, [EntryPoint('best_cost', 'piloop_best_cost:BestCost', STOP_RULES.group)])
+    install_plugins(monkeypatch, [EntryPoint('best_cost', 'piloop_best_cost:BestCost', STOP_RULES.group)])
     try:
         refused = "the stop rule 'best_cost' reads spend, spend_since_best, which no fact source of this campaign"
         with pytest.raises(ConfigError, match=re.escape(refused)):

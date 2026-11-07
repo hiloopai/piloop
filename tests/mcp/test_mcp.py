@@ -13,7 +13,6 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from piloop.config import CampaignConfig
-from piloop.ids import RoleName
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER
 from piloop.plugins.executor.contract import AgentJob
 from piloop.plugins.harness import claude, codex, pi
@@ -25,7 +24,7 @@ from piloop.plugins.host import ContractBroken
 from piloop.plugins.mcp_server.contract import MCP_SERVERS, McpServer, env_names
 from piloop.plugins.mcp_server.http import HttpServer
 from piloop.plugins.mcp_server.stdio import StdioServer
-from tests.conftest import write_script
+from tests.conftest import AUDITOR, write_script
 
 EXA = HttpServer(url='https://mcp.exa.ai/mcp', headers_env={'x-api-key': 'EXA_API_KEY'})
 FIRECRAWL = HttpServer(url='https://mcp.firecrawl.dev/v2/mcp', bearer_token_env='FIRECRAWL_API_KEY')
@@ -327,11 +326,12 @@ def config(**extra: object) -> dict[str, object]:
     return base | extra
 
 
+@pytest.mark.usefixtures('auditor')
 def test_a_role_lists_servers_by_table_and_gets_exactly_those() -> None:
     cfg = CampaignConfig.model_validate(
-        config(plugins={'harness': MODELS, 'mcp_server': SERVERS, 'role': {'orchestrator': {'mcp': ['xai', 'exa']}}})
+        config(plugins={'harness': MODELS, 'mcp_server': SERVERS, 'role': {AUDITOR: {'mcp': ['xai', 'exa']}}})
     )
-    assert cfg.role_servers(RoleName('orchestrator')) == {'xai': XAI, 'exa': EXA}
+    assert cfg.role_servers(AUDITOR) == {'xai': XAI, 'exa': EXA}
     assert cfg.role_servers(IMPLEMENTER) == {}, 'a role lists none by default'
     with pytest.raises(
         ValidationError, match=re.escape("plugins.role.implementer.mcp[1] = 'nope': no [plugins.mcp_server.nope]")
@@ -347,10 +347,11 @@ def test_a_role_lists_servers_by_table_and_gets_exactly_those() -> None:
         )
 
 
+@pytest.mark.usefixtures('auditor')
 def test_every_harness_a_role_with_servers_may_run_must_carry_them() -> None:
     def with_plain(plain: Mapping[str, object], **role: object) -> dict[str, object]:
         harness = {'use': ['claude', 'plain'], 'claude': {'model': 'c'}, 'plain': {'model': 'p', **plain}}
-        return config(plugins={'harness': harness, 'mcp_server': SERVERS, 'role': {'orchestrator': role}})
+        return config(plugins={'harness': harness, 'mcp_server': SERVERS, 'role': {AUDITOR: role}})
 
     plain = {'executable': 'x', 'headless': ['{prompt}']}
     custom = with_plain(plain)

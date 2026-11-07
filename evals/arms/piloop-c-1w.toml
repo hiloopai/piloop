@@ -15,8 +15,5 @@ max_concurrent = 1
 timeout = 3600
 effort = "medium"
 
-[overlay.plugins.role.orchestrator]
-triggers = []
-
 [overlay.plugins.role.watchdog]
 triggers = []

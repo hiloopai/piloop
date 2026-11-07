@@ -2,7 +2,7 @@
 
 import sqlite3
 from contextlib import closing
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import JsonValue
@@ -13,7 +13,7 @@ from piloop.campaign import escalations
 from piloop.db.models import Campaign
 from piloop.db.session import Database
 from piloop.ids import CampaignId, CommentId
-from piloop.plugins.escalation.contract import At, Choice, Escalated, EscalationView, Now
+from piloop.plugins.escalation.contract import Choice, Escalated, EscalationView, Now
 from piloop.plugins.escalation.structured import EXAMPLE, Structured
 
 FILED = datetime(2026, 10, 28, 12, tzinfo=UTC)
@@ -21,11 +21,9 @@ GOOD: dict[str, JsonValue] = EXAMPLE.model_dump(mode='json')
 OPTIONS: list[JsonValue] = [o.model_dump(mode='json') for o in EXAMPLE.options]
 
 
-def item(
-    author: str = 'implementer#12', form: object = GOOD, body: str = 'x', *, orchestrated: bool = True
-) -> Escalated:
+def item(author: str = 'implementer#12', form: object = GOOD, body: str = 'x') -> Escalated:
     stored = Structured().form(form) if isinstance(form, dict) else None
-    return Escalated(CommentId(7), CampaignId(1), author, FILED, body, stored, orchestrated)
+    return Escalated(CommentId(7), CampaignId(1), author, FILED, body, stored)
 
 
 def test_a_good_form_is_stored_as_it_was_filed_and_its_body_is_plain_text() -> None:
@@ -85,27 +83,11 @@ def test_the_guide_names_the_fields_and_the_limits_and_shows_the_example() -> No
 
 
 @pytest.mark.parametrize(
-    ('author', 'reach'),
-    [
-        ('implementer#12', At(FILED + timedelta(minutes=30))),
-        ('research#3', At(FILED + timedelta(minutes=30))),
-        ('orchestrator#9', Now()),
-        ('orchestrator', Now()),
-        ('orchestrator via human:alice', Now()),
-        ('daemon', Now()),
-        ('human:alice', Now()),
-        ('not a signature #', Now()),
-    ],
+    'author',
+    ['implementer#12', 'auditor#3', 'orchestrator', 'orchestrator via human:alice', 'daemon', 'human:alice', 'not a #'],
 )
-def test_an_agent_s_escalation_waits_for_the_orchestrator_and_the_rest_reach_a_human_at_once(
-    author: str, reach: object
-) -> None:
-    assert Structured().reach(item(author), FILED) == reach
-
-
-@pytest.mark.parametrize('author', ['implementer#12', 'implementer_b#4', 'orchestrator#9', 'daemon'])
-def test_with_no_orchestrator_that_takes_escalations_every_escalation_reaches_a_human_at_once(author: str) -> None:
-    assert Structured().reach(item(author, orchestrated=False), FILED) == Now()
+def test_every_escalation_reaches_a_human_at_once_whoever_filed_it(author: str) -> None:
+    assert Structured().reach(item(author), FILED) == Now()
 
 
 def test_the_view_has_the_ask_the_why_and_lettered_choices_and_a_free_text_one_reads_as_filed() -> None:

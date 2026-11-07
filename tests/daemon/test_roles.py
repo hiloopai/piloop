@@ -13,7 +13,6 @@ import pytest
 from covalence import Cas as Covalence
 from sqlalchemy import select
 
-from piloop import settings as settings_module
 from piloop.actor import System
 from piloop.agents.results import PromptOutcome
 from piloop.campaign import ops
@@ -44,20 +43,23 @@ from piloop.plugins.cas.contract import CAS
 from piloop.plugins.executor.workers import Workers
 from piloop.plugins.host import Capability, PluginError, compose
 from piloop.plugins.lineage.contract import LINEAGE
-from piloop.plugins.role.contract import ROLES, ImplementerRole, Quiet, new_role
+from piloop.plugins.role.contract import ImplementerRole, Quiet, new_role
 from piloop.plugins.runtime.contract import RUNTIMES, Runtime, RuntimeConfig, RuntimeFactory
 from piloop.plugins.section.contract import SECTIONS
 from piloop.settings import Settings
 from tests.conftest import (
+    AUDITOR,
     END_RUN,
     HARNESS_APPEND,
-    LEAD,
+    PLUGIN,
+    ROLE_GROUP,
     SETTLE,
     ScriptRuntime,
     campaigns_of,
     example,
+    forget_loaded,
+    install_plugins,
     package,
-    piloop_entry_points,
     queued,
     reconfigured,
     run_all,
@@ -69,8 +71,7 @@ from tests.conftest import (
 from tests.daemon.test_scheduler import add_ideas
 from tests.fixtures.plugin import Ticker
 
-PLUGIN = 'tests.fixtures.plugin'
-ROLE_GROUP, RUNTIME_GROUP = ROLES.group, RUNTIMES.group
+RUNTIME_GROUP = RUNTIMES.group
 
 
 def recording(runtime: ScriptRuntime, kinds: list[str]) -> RuntimeFactory:
@@ -232,13 +233,13 @@ def test_a_request_for_a_role_that_piloop_toml_no_longer_has_is_refused(
     assert (row.state, row.error) == (AgentSessionState.KILLED, 'no [plugins.role.reviewer] in piloop.toml')
 
 
-@pytest.mark.usefixtures('no_fresh_runs')
-def test_a_message_to_a_sweep_that_has_not_started_is_in_its_brief_and_is_not_sent_again(
+@pytest.mark.usefixtures('auditor', 'no_fresh_runs')
+def test_a_message_to_an_agent_that_has_not_started_is_in_its_brief_and_is_not_sent_again(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
-    configure(db, campaign, '#!/bin/sh\ntrue\n', orchestrator={'triggers': [], 'sections': ['context']})
+    configure(db, campaign, '#!/bin/sh\ntrue\n', auditor={'sections': ['context']})
     with db.session() as s:
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand'))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='by hand'))
         s.flush()
         on_it = TargetRef(TargetKind.AGENT_SESSION, 1)
         s.add(Comment(target=on_it, author='human', kind=CommentKind.MESSAGE, body='look at run#4 first'))
@@ -249,22 +250,22 @@ def test_a_message_to_a_sweep_that_has_not_started_is_in_its_brief_and_is_not_se
     sched.wait(SETTLE)
     sched.stop(timeout=5)
     brief = (tmp_path / 'agent_sessions' / '1' / 'brief.md').read_text()
-    assert '\n# Notes\nlook at run#4 first\n' in brief and 'a note is on the board only' not in brief
+    assert '\nlook at run#4 first\n' in brief and 'a note is on the board only' not in brief
     with db.session() as s:
         got = in_order(s, PromptOutcome, Event.target == on_it)
         assert [(o.kind, o.comment) for _, o in got] == [('comment.delivered', 1)]
 
 
-@pytest.mark.usefixtures('no_fresh_runs')
-def test_a_hand_over_leaves_a_sweep_running_and_the_next_scheduler_re_attaches_to_it(
+@pytest.mark.usefixtures('auditor', 'no_fresh_runs')
+def test_a_hand_over_leaves_an_agent_without_a_run_running_and_the_next_scheduler_re_attaches_to_it(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     hold = tmp_path / 'hold'
     hold.touch()
     harness = f'#!/bin/sh\necho $$ > {tmp_path}/agent.pid\nwhile [ -f {hold} ]; do sleep 0.05; done\n'
-    configure(db, campaign, harness, orchestrator={'triggers': []})
+    configure(db, campaign, harness)
     with db.session() as s:
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand'))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='by hand'))
         s.commit()
     first = scheduler(db, recording(runtime, []), tmp_path)
     assert run_all(first) == [1]
@@ -276,8 +277,8 @@ def test_a_hand_over_leaves_a_sweep_running_and_the_next_scheduler_re_attaches_t
     second.wait(SETTLE)
     first.wait(SETTLE)
     with db.session() as s:
-        sweep = s.get_one(AgentSession, 1)
-    assert (sweep.state, sweep.error) == (AgentSessionState.EXITED, None), 'the next daemon watched it to its end'
+        agent = s.get_one(AgentSession, 1)
+    assert (agent.state, agent.error) == (AgentSessionState.EXITED, None), 'the next daemon watched it to its end'
     assert Path(campaign.path).is_dir()
     second.stop(timeout=5)
 
@@ -288,46 +289,32 @@ ENTRY_POINTS = [
 ]
 
 
-def forget_loaded() -> None:
-    """Forget the loaded plugins, and the instances of ``config.toml`` that the process validated with them."""
-    plugins_module.close()
-    vars(settings_module.settings).pop('providers', None)
-
-
-def installed(monkeypatch: pytest.MonkeyPatch, entries: list[EntryPoint]) -> None:
-    """Make piloop's own entry points and ``entries`` the installed ones, and forget the ones that were loaded."""
-
-    def entry_points(*, group: str) -> list[EntryPoint]:
-        return [*piloop_entry_points(group), *(ep for ep in entries if ep.group == group)]
-
-    monkeypatch.setattr(plugins_module, 'entry_points', entry_points)
-    forget_loaded()
-
-
 @pytest.fixture
 def typed(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Install a package that adds only the ``typed`` runtime."""
-    installed(monkeypatch, [EntryPoint('typed', f'{PLUGIN}:Typed', RUNTIME_GROUP)])
+    install_plugins(monkeypatch, [EntryPoint('typed', f'{PLUGIN}:Typed', RUNTIME_GROUP)])
     yield
     forget_loaded()
 
 
 @pytest.fixture
 def plugins(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    installed(monkeypatch, ENTRY_POINTS)
+    install_plugins(monkeypatch, ENTRY_POINTS)
     yield
     forget_loaded()
 
 
-@pytest.mark.parametrize(('triggers', 'launches'), [(['news'], True), (['run_failed'], False)])
-def test_the_orchestrator_launches_while_its_campaign_is_paused_only_if_a_trigger_names_the_phase(
-    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, triggers: list[str], launches: bool
+@pytest.mark.usefixtures('auditor')
+@pytest.mark.parametrize(('awake', 'launches'), [(list(Quiet), True), ([], False)])
+def test_a_role_that_starts_its_agents_launches_while_its_campaign_is_paused_only_if_it_wakes_in_the_phase(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, awake: list[Quiet], launches: bool
 ) -> None:
-    """``news`` wakes the orchestrator while its campaign is paused, held or stopped: ``run_failed`` does not."""
-    configure(db, campaign, '#!/bin/sh\ntrue\n', orchestrator={'triggers': triggers})
+    """A requested row of a role launches while its campaign is paused, held or stopped only if the role wakes in that
+    phase (``StartsItsAgents.wakes_while``); else it waits."""
+    configure(db, campaign, '#!/bin/sh\ntrue\n', auditor={'awake': awake})
     with db.session() as s:
         ops.pause(s, campaign.id, System.HUMAN, evals=False, reason='a person reads the results')
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand'))
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='by hand'))
         s.commit()
     sched = scheduler(db, recording(runtime, []), tmp_path)
     assert run_all(sched) == ([1] if launches else [])
@@ -335,7 +322,7 @@ def test_the_orchestrator_launches_while_its_campaign_is_paused_only_if_a_trigge
     sched.stop(timeout=5)
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
-        assert awake_roles(row.config, Quiet.HELD) == ({LEAD} if launches else frozenset())
+        assert awake_roles(row.config, Quiet.HELD) == ({AUDITOR} if launches else frozenset())
         assert (quiet_phase(s, row, None), quiet_phase(s, row, 'at the spend limit')) == (Quiet.PAUSED, Quiet.HELD)
         row.paused = row.paused_reason = row.paused_by = None
         assert (quiet_phase(s, row, None), awake_roles(row.config, None)) == (None, frozenset())
@@ -393,7 +380,7 @@ def test_a_package_role_takes_its_defaults_and_a_roles_value_that_is_not_a_table
             EntryPoint('auditor', f'{PLUGIN}:NOT_A_ROLE', ROLE_GROUP),
             'is not a subclass of piloop.plugins.role.contract.RoleConfig',
         ),
-        (EntryPoint('orchestrator', f'{PLUGIN}:Quick', ROLE_GROUP), "'orchestrator' is a role already, from piloop "),
+        (EntryPoint('implementer', f'{PLUGIN}:Quick', ROLE_GROUP), "'implementer' is a role already, from piloop "),
         (
             EntryPoint('typed', f'{PLUGIN}:NOT_A_RUNTIME', RUNTIME_GROUP),
             'is not a subclass of piloop.plugins.runtime.contract.RuntimeConfig',
@@ -405,7 +392,7 @@ def test_an_entry_point_of_the_wrong_kind_fails_with_its_name(
     monkeypatch: pytest.MonkeyPatch, entry: EntryPoint, error: str
 ) -> None:
     """The daemon's composition fails before it starts anything, and registers nothing."""
-    installed(monkeypatch, [entry])
+    install_plugins(monkeypatch, [entry])
     try:
         with pytest.raises(PluginError, match=f'entry point {entry.name} = {entry.value} in {entry.group}.*{error}'):
             compose(*plugins_module.declared())
@@ -432,7 +419,7 @@ before 0.6."""
 
 @pytest.fixture
 def tickers(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    installed(monkeypatch, TICKERS)
+    install_plugins(monkeypatch, TICKERS)
     Ticker.woken.clear()
     yield
     forget_loaded()
@@ -466,7 +453,7 @@ def test_a_package_role_that_starts_its_agents_wakes_on_the_timer_that_its_reque
 @pytest.fixture
 def tickers_and_yields(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """``TICKERS``, and a section that the package calls ``yields``."""
-    installed(monkeypatch, [*TICKERS, EntryPoint('yields', f'{PLUGIN}:Yields', SECTIONS.group)])
+    install_plugins(monkeypatch, [*TICKERS, EntryPoint('yields', f'{PLUGIN}:Yields', SECTIONS.group)])
     yield
     forget_loaded()
 
@@ -510,16 +497,18 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
     example(tmp_path / 'site', 'nice-runtime')
     example(tmp_path / 'site', 'sqlite-cas')
     package(tmp_path / 'site', 'piloop-fast-role', '1.0', f'[piloop.roles]\nfast = {PLUGIN}:Fast\n')
+    package(tmp_path / 'site', 'piloop-auditor', '1.0', f'[piloop.roles]\n{AUDITOR} = {PLUGIN}:Auditor\n')
     monkeypatch.syspath_prepend(tmp_path / 'site')
     monkeypatch.setenv('PILOOP_HOME', str(tmp_path))  # where the harness writes its niceness
     forget_loaded()
     write_toml(Path(campaign.path), HARNESS_NICENESS)
     with db.session() as s:
         cfg = load_campaign_config(
-            Path(campaign.path), plugins={'runtime': {'use': 'nice'}, 'role': {'orchestrator': {'runtime': 'nice'}}}
+            Path(campaign.path), plugins={'runtime': {'use': 'nice'}, 'role': {AUDITOR: {'runtime': 'nice'}}}
         )
         s.get_one(Campaign, campaign.id).config = cfg
-        s.add(AgentSession(kind=LEAD, campaign_id=campaign.id, reason='by hand'))
+        s.flush()  # the config first: a row's kind must be a role of its campaign's
+        s.add(AgentSession(kind=AUDITOR, campaign_id=campaign.id, reason='by hand'))
         s.commit()
     cas = f'[plugins.cas]\nprovider = "sqlite"\npath = "{tmp_path / "blobs.sqlite"}"\n'
     (tmp_path / 'config.toml').write_text(f'{cas}[plugins.runtime.nice]\nniceness = 5\n')
@@ -555,14 +544,17 @@ def test_example_plugins_replace_the_built_in_runtime_and_cas_through_the_config
     assert (
         f'  demo: section goal, from {SECTIONS.sources()["goal"].release} ([plugins.section] use, {stored})' in selected
     )
-    assert [line for line in selected if not line.startswith(by_list)] == [
+    *listed, fast, auditor = [line for line in selected if not line.startswith(by_list)]
+    assert listed == [
         f'  {store}',
         f'  demo: lineage provider optimization, from {LINEAGE.sources()["optimization"].release} ([plugins.lineage]'
         f' use, {stored})',
         f'  demo: {nice} ([plugins.runtime] use, {stored})',
-        f'  demo: {nice} ([plugins.role.orchestrator] runtime, {stored})',
-        f'  demo: {nice} ([plugins.role.fast] runtime, {stored})',
     ]
+    assert {fast, auditor} == {
+        f'  demo: {nice} ([plugins.role.fast] runtime, {stored})',
+        f'  demo: {nice} ([plugins.role.auditor] runtime, {stored})',
+    }, 'two packages add the roles: they come in the order in which their entry points are found'
     with db.session() as s:
         row = s.get_one(Campaign, campaign.id)
         row.config = reconfigured(row.config, plugins={'runtime': {'use': 'subprocess'}})
@@ -590,9 +582,9 @@ def test_a_runtime_that_is_not_registered_fails_with_the_registered_ones(campaig
     ):
         load_campaign_config(campaign_path, plugins={'runtime': {'use': 'tmux'}})
     with pytest.raises(
-        ConfigError, match=re.escape("plugins.role.orchestrator.runtime = 'tmux': no [plugins.runtime.tmux]")
+        ConfigError, match=re.escape("plugins.role.implementer.runtime = 'tmux': no [plugins.runtime.tmux]")
     ):
-        load_campaign_config(campaign_path, plugins={'role': {'orchestrator': {'runtime': 'tmux'}}})
+        load_campaign_config(campaign_path, plugins={'role': {'implementer': {'runtime': 'tmux'}}})
 
 
 def test_a_table_of_a_new_name_does_runs() -> None:

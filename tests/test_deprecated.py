@@ -24,8 +24,7 @@ from piloop.deprecated import PiloopDeprecationWarning
 from piloop.plugins.host import PluginError, Scope
 from piloop.plugins.role import bridges as role_bridges
 from piloop.version import Version
-from tests.conftest import HARNESS_APPEND, write_toml
-from tests.daemon.test_roles import installed
+from tests.conftest import HARNESS_APPEND, install_plugins, write_toml
 
 
 @deprecated.bridge('9.0.0', 'size is width: delete rename_size')
@@ -553,23 +552,25 @@ def test_a_package_s_bridge_runs_on_its_file_after_the_bridges_it_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """It reads ``[plugins.role]``, which ``end_grace`` writes to; a cycle or a missing name is refused."""
-    installed(monkeypatch, [EntryPoint('shade', f'{__name__}:shade', deprecated.BRIDGES.group)])
+    install_plugins(monkeypatch, [EntryPoint('shade', f'{__name__}:shade', deprecated.BRIDGES.group)])
     order = deprecated.bridges(Scope.CAMPAIGN)
     assert order.index(shade) > order.index(role_bridges.end_grace)
     assert shade not in deprecated.bridges(Scope.HOME), 'config.toml has no roles'
-    raw: dict[str, object] = {'plugins': {'role': {'orchestrator': {'shade': 2}}}}
+    raw: dict[str, object] = {'plugins': {'role': {'quick': {'shade': 2}}}}
     toml = tmp_path / 'piloop.toml'
-    toml.write_text('[plugins.role.orchestrator]\nshade = 2\n')
+    toml.write_text('[plugins.role.quick]\nshade = 2\n')
     deprecated.apply(toml, raw, deprecated.bridges(Scope.CAMPAIGN))
-    assert deprecated.table_at(raw, 'plugins', 'role', 'orchestrator') == {'tint': 2}
-    installed(monkeypatch, [EntryPoint(n, f'{__name__}:{n}', deprecated.BRIDGES.group) for n in ('shade', 'early')])
+    assert deprecated.table_at(raw, 'plugins', 'role', 'quick') == {'tint': 2}
+    install_plugins(
+        monkeypatch, [EntryPoint(n, f'{__name__}:{n}', deprecated.BRIDGES.group) for n in ('shade', 'early')]
+    )
     order = deprecated.bridges(Scope.CAMPAIGN)
     assert order.index(early) < order.index(shade), 'a bridge can name one that runs after it'
     cycle = [EntryPoint(n, f'{__name__}:{n}', deprecated.BRIDGES.group) for n in ('first', 'second')]
-    installed(monkeypatch, cycle)
+    install_plugins(monkeypatch, cycle)
     with pytest.raises(PluginError, match='in a cycle: first -> second -> first|in a cycle: second -> first -> second'):
         deprecated.bridges(Scope.CAMPAIGN)
-    installed(monkeypatch, cycle[:1])
+    install_plugins(monkeypatch, cycle[:1])
     with pytest.raises(PluginError, match='the bridge first runs after or before no bridge called second'):
         deprecated.bridges(Scope.CAMPAIGN)
 

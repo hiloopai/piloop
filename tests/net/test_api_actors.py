@@ -27,15 +27,17 @@ from piloop.db.models import (
     Event,
 )
 from piloop.db.session import Database
-from piloop.ids import CommentId, RoleName
+from piloop.ids import CommentId
 from piloop.net import tokens
 from piloop.plugins.memory.local.api import JournalBody, Journaled
 from piloop.plugins.memory.local.tables import Journal
 from piloop.plugins.network.https import ACTOR_HEADER, TIMEOUT
 from piloop.plugins.network.proxy import Proxy, Rule
 from piloop.settings import Settings
-from tests.conftest import EveryClient, serving_api
+from tests.conftest import AUDITOR, EveryClient, serving_api
 from tests.net.test_api import comment, token
+
+pytestmark = pytest.mark.usefixtures('auditor')
 
 
 def test_a_caller_acts_as_itself_or_the_orchestrator_and_only_an_agent_s_token_as_that_agent(
@@ -62,12 +64,10 @@ def test_an_agent_s_token_acts_as_its_agent_only_and_the_owner_on_the_socket_as_
 ) -> None:
     """The owner acts as the orchestrator with no setup. An agent's token on the socket is that agent, whatever it asks."""
     with db.session() as s:
-        live = [
-            AgentSession(kind='orchestrator', campaign_id=campaign.id, state=AgentSessionState.RUNNING) for _ in '12'
-        ]
+        live = [AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING) for _ in '12']
         s.add_all(live)
         s.flush()
-        [bound, older] = [Agent(role=RoleName('orchestrator'), session=w.id) for w in live]
+        [bound, older] = [Agent(role=AUDITOR, session=w.id) for w in live]
         secret = tokens.mint_agent(s, bound).get_secret_value()
         s.commit()
     uds = httpx.HTTPTransport(uds=str(cfg.socket_file))
@@ -92,7 +92,7 @@ def test_an_agent_s_token_acts_as_its_agent_only_and_the_owner_on_the_socket_as_
             'detail': f'owner may not act as {bound}: only the token of {bound} acts as it',
         }, 'without its token, nobody acts as an agent'
         assert journal('an agent with no token', str(older)).status_code == 403, 'the owner acts as no agent'
-        assert journal('no such agent', 'orchestrator#99').status_code == 403
+        assert journal('no such agent', 'auditor#99').status_code == 403
     with db.session() as s:
         signed = {(j.line, j.author) for j in s.scalars(select(Journal))}
     assert signed >= {
@@ -118,7 +118,7 @@ PROXY = Proxy.model_validate(
 def test_a_proxy_caller_s_ack_reply_and_pause_sign_as_the_person_it_names(
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
-    comment(db, 'orchestrator#2', 'look at this')
+    comment(db, 'auditor#2', 'look at this')
     stamped = {'x-principal-id': 'ana@example.com'}
     with serving_api(cfg, network_config=PROXY) as [_, tcp], httpx.Client(base_url=tcp.url, headers=stamped) as http:
         client = Client(http)
@@ -163,11 +163,11 @@ def test_behind_the_proxy_an_agent_s_token_signs_on_the_socket_and_no_piloop_tok
     """A relayed call runs ``piloop`` on the server's socket with the agent's token; the proxy fronts the listener."""
     with db.session() as s:
         live, ended = [
-            AgentSession(kind='orchestrator', campaign_id=campaign.id, state=AgentSessionState.RUNNING) for _ in '12'
+            AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING) for _ in '12'
         ]
         s.add_all([live, ended])
         s.flush()
-        agent, gone = (Agent(role=RoleName('orchestrator'), session=w.id) for w in (live, ended))
+        agent, gone = (Agent(role=AUDITOR, session=w.id) for w in (live, ended))
         [secret, stale] = [tokens.mint_agent(s, a).get_secret_value() for a in (agent, gone)]
         ended.state = AgentSessionState.EXITED
         s.commit()
@@ -205,7 +205,7 @@ def test_behind_the_proxy_an_agent_s_token_signs_on_the_socket_and_no_piloop_tok
 def test_a_proxy_caller_that_its_rule_calls_a_service_never_signs_as_a_person(
     db: Database, campaign: Campaign, cfg: Settings
 ) -> None:
-    comment(db, 'orchestrator#2', 'look at this')
+    comment(db, 'auditor#2', 'look at this')
     rules = [{'when': {}, 'access': 'act', 'caller': 'service'}]
     network = PROXY.model_copy(update={'rules': [Rule.model_validate(r) for r in rules]})
     stamped = {'x-principal-id': 'key-2'}

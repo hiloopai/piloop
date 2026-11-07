@@ -57,8 +57,10 @@ from piloop.plugins.vcs.contract import Pin
 from piloop.plugins.vcs.git import Git
 from piloop.settings import Settings
 from tests.conftest import (
+    AUDITOR,
     HARNESS_SLEEPS,
-    LEAD,
+    PLUGIN,
+    ROLE_GROUP,
     ScriptRuntime,
     baseline,
     disk,
@@ -81,6 +83,16 @@ def provider(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest
         monkeypatch.syspath_prepend(tmp_path / 'site')
     plugins.close()  # the registry loads again, with the example's entry point
     yield request.param
+    plugins.close()
+
+
+@pytest.fixture
+def auditor_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Install ``AUDITOR`` as a package beside the example executor that ``provider`` may install, before the campaign."""
+    package(tmp_path / 'site', 'piloop-auditor', '1.0', f'[{ROLE_GROUP}]\n{AUDITOR} = {PLUGIN}:Auditor\n')
+    monkeypatch.syspath_prepend(tmp_path / 'site')
+    plugins.close()
+    yield
     plugins.close()
 
 
@@ -110,7 +122,7 @@ def launch_in_thread(
     ex: RunController, db: Database, campaign: Campaign, tmp_path: Path
 ) -> tuple[AgentSessionId, list[Ended]]:
     with db.session() as s:
-        w = AgentSession(kind=LEAD, campaign_id=campaign.id, harness='script', reason='contract')
+        w = AgentSession(kind=AUDITOR, campaign_id=campaign.id, harness='script', reason='contract')
         s.add(w)
         s.commit()
         agent_session_id = w.id
@@ -177,6 +189,7 @@ def test_a_remeasure_records_as_many_evaluations_as_it_asks(
     assert [m.metrics for m in added] == [{'score': 2.0, 'size': 10.0}] * 2
 
 
+@pytest.mark.usefixtures('auditor_package')
 def test_a_cancelled_agent_is_stopped_and_still_reports(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, provider: str, controller: Controller
 ) -> None:
@@ -192,6 +205,7 @@ def test_a_cancelled_agent_is_stopped_and_still_reports(
         assert s.get_one(AgentSession, agent_session_id).state not in LIVE
 
 
+@pytest.mark.usefixtures('auditor_package')
 def test_a_stop_closes_a_running_agent_as_stopped(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, provider: str, controller: Controller
 ) -> None:
@@ -219,6 +233,7 @@ class Steerable(ScriptRuntime):
         self.prompts.append(text)
 
 
+@pytest.mark.usefixtures('auditor_package')
 def test_a_prompt_reaches_the_running_agent_and_its_outcome_is_recorded(
     db: Database, campaign: Campaign, tmp_path: Path, provider: str, controller: Controller
 ) -> None:

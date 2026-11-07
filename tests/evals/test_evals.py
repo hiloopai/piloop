@@ -46,20 +46,16 @@ from evals.drive import (
     credentials,
     drive,
     export,
-    merge,
     on_team,
     piloop_config,
     plain_sessions,
     prepare,
     price,
     private_files,
-    run_slots,
     sample,
     sealed_steps,
-    sessions,
     team_sessions,
     watch,
-    workers,
 )
 from evals.loop import evaluations
 from evals.metrics import (
@@ -227,18 +223,6 @@ def test_the_rotation_arm_runs_pi_claude_and_codex_in_turn_with_no_cap_per_harne
     assert models and '{"providers": {"anthropic": {"baseUrl": "https://gw.example"}}}' in models[0]
     with pytest.raises(ValueError, match='gateway'):
         recipe([Task.load('t5-lpaq')], arm)
-
-
-def test_an_orchestrator_that_its_triggers_start_gets_a_box_and_a_session_of_its_own_but_no_evaluator():
-    settings = Settings(gateway='https://gw.example', gateway_token=SecretStr('t'))
-    task, plain = Task.load('t5-lpaq'), load_arm('pool-2w')
-    assert isinstance(plain, PiloopArm)
-    led = plain.model_copy(
-        update={'overlay': merge(plain.overlay, {'plugins': {'role': {'orchestrator': {'triggers': ['news']}}}})}
-    )
-    assert (workers(task, plain, settings, 6), sessions(task, plain, settings, 6)) == (2, 2)
-    assert (workers(task, led, settings, 6), sessions(task, led, settings, 6)) == (3, 3)
-    assert run_slots(task, led, settings, 6) == 2
 
 
 def test_a_pi_agent_runs_only_an_anthropic_model_which_the_gateway_serves():
@@ -626,9 +610,9 @@ def test_piloop_arms_export_to_the_same_collector(monkeypatch: pytest.MonkeyPatc
 
 
 def test_a_sealed_split_arm_gets_dev_and_its_own_sealed_command():
-    v0 = load_arm('piloop-v0')
-    assert isinstance(v0, PiloopArm) and v0.split == 'sealed'
-    config = piloop_config(Task.load('t1-enwik8'), v0, Settings(gateway='https://gw.example'), 4)
+    pool = load_arm('pool-1w')
+    assert isinstance(pool, PiloopArm) and pool.split == 'sealed'
+    config = piloop_config(Task.load('t1-enwik8'), pool, Settings(gateway='https://gw.example'), 4)
     nice = ['nice', '-n', '10']
     assert get(config, 'evaluator', 'dev') == [*nice, 'uv', 'run', 'python', 'evaluate.py']
     assert get(config, 'evaluate') == [*nice, 'uv', 'run', 'python', 'evaluate.py']
@@ -888,8 +872,8 @@ def test_a_result_from_an_earlier_round_loads_without_its_removed_fields():
     started = datetime(2026, 11, 1, tzinfo=UTC)
     r = Result(task='t', arm='a', repeat=1, piloop='p', started_at=started, budget_usd=60, max_hours=4, stopped='hours',
                spend=[], curve=[Point(revision='b', hours=0, usd=0, dev=0, sealed=0)], funnel=Funnel(ideas=1, runs=1, submissions=1, kept=0),
-               escalations=0, interventions=0, lead_token_share=None)  # fmt: skip
-    old = json.loads(r.model_dump_json()) | {'built_on': {'a>b': 1}, 'replaced': {}}
+               escalations=0, interventions=0)  # fmt: skip
+    old = json.loads(r.model_dump_json()) | {'built_on': {'a>b': 1}, 'replaced': {}, 'lead_token_share': 0.08}
     assert Result.model_validate(old) == r
     assert r.curve[0].tokens is None and Sample(hours=0, models_usd=0, compute_usd=0).tokens is None
     with pytest.raises(ValueError, match='extra'):

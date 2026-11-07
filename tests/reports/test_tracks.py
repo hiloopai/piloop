@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from inline_snapshot import snapshot
 
 from piloop.actor import System
@@ -22,6 +23,8 @@ from piloop.watch.panels import Api, CandidatesPanel, Frame, campaigns, read_fra
 from tests.conftest import has_lines, reconfigured, serving_api
 from tests.reports.test_history import SHOWN, full
 from tests.reports.test_overview import NOW, candidate, live_campaign, render, score_at
+
+pytestmark = pytest.mark.usefixtures('auditor')
 
 TRACKS = {
     'metrics': [

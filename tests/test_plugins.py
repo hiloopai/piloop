@@ -56,8 +56,7 @@ from piloop.plugins.runtime.contract import RUNTIMES, RuntimeName, make_runtime,
 from piloop.plugins.runtime.subprocess import Subprocess
 from piloop.plugins.section.contract import SECTIONS
 from piloop.settings import HOME_PLUGINS, Settings
-from tests.conftest import example, package
-from tests.daemon.test_roles import PLUGIN, forget_loaded, installed
+from tests.conftest import PLUGIN, example, forget_loaded, install_plugins, package
 from tests.fixtures.plugin import AsMeasured, Checked, Needy, Typed
 from tests.test_docs import BASE_CONFIG
 
@@ -179,7 +178,7 @@ def test_config_toml_that_binds_a_provider_that_there_is_not_fails_before_the_da
 
 
 def test_an_entry_point_that_does_not_load_fails_with_its_name_and_the_cause(monkeypatch: pytest.MonkeyPatch) -> None:
-    installed(monkeypatch, [EntryPoint('gone', 'tests.fixtures.no_such_module:Gone', RUNTIMES.group)])
+    install_plugins(monkeypatch, [EntryPoint('gone', 'tests.fixtures.no_such_module:Gone', RUNTIMES.group)])
     with pytest.raises(
         PluginError,
         match=r'^entry point gone = tests.fixtures.no_such_module:Gone in piloop.runtimes does not load:'
@@ -194,12 +193,12 @@ def test_a_failed_composition_unregisters_what_it_activated_and_keeps_what_was_a
 ) -> None:
     """A broken role unwinds the runtimes and the sections of the same call, and leaves the remotes, active before."""
     typed = EntryPoint('typed', f'{PLUGIN}:Typed', RUNTIMES.group)
-    installed(monkeypatch, [typed, EntryPoint('auditor', f'{PLUGIN}:NOT_A_ROLE', ROLES.group)])
+    install_plugins(monkeypatch, [typed, EntryPoint('auditor', f'{PLUGIN}:NOT_A_ROLE', ROLES.group)])
     CAS.providers()
     with pytest.raises(PluginError, match='is not a subclass of piloop.plugins.role.contract.RoleConfig'):
         compose(*declared('runtime', 'section', 'role'))
     assert [c.active for c in (RUNTIMES, SECTIONS, ROLES, CAS)] == [False, False, False, True]
-    installed(monkeypatch, [typed])
+    install_plugins(monkeypatch, [typed])
     compose(*declared('runtime', 'section', 'role'))
     assert [c.active for c in (RUNTIMES, SECTIONS, ROLES)] == [True, True, True]
     assert RUNTIMES.get('typed').model is Typed
@@ -220,7 +219,7 @@ def test_a_broken_package_of_a_capability_that_nothing_binds_is_a_warning(
 ) -> None:
     """With no ``[plugins.extra]``, the daemon starts without the extras that a plugin declares: one that does not load
     warns."""
-    installed(
+    install_plugins(
         monkeypatch,
         [
             EntryPoint('extra', f'{__name__}:EXTRAS', plugins.CAPABILITIES),
@@ -261,7 +260,7 @@ class Reentrant(EntryPoint):
 
 
 def test_an_entry_point_that_needs_its_own_capability_while_it_loads_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    installed(monkeypatch, [Reentrant('loop', f'{PLUGIN}:Typed', SECTIONS.group)])
+    install_plugins(monkeypatch, [Reentrant('loop', f'{PLUGIN}:Typed', SECTIONS.group)])
     with pytest.raises(
         PluginError,
         match=rf'^the sections are needed while they load: an entry point of {re.escape(SECTIONS.group)} uses its own'
@@ -389,7 +388,7 @@ def test_a_pure_plugin_is_installed_selected_by_config_and_answers_with_data(
 def test_a_provider_is_a_class_that_implements_its_contract(
     monkeypatch: pytest.MonkeyPatch, value: str, error: str
 ) -> None:
-    installed(monkeypatch, [EntryPoint('odd', value, BEST_RULES.group)])
+    install_plugins(monkeypatch, [EntryPoint('odd', value, BEST_RULES.group)])
     with pytest.raises(PluginError, match=f'^entry point odd = {value} in piloop.best_rules {error}'):
         BEST_RULES.providers()
 
@@ -476,7 +475,7 @@ def test_a_plugin_declares_a_capability_calls_its_providers_and_another_package_
     """A package declares ``best_check`` and calls its providers from its best rule; another provides one.
     piloop lists, loads and checks it as one of its own."""
     campaign_path = Path(campaign.path)
-    installed(
+    install_plugins(
         monkeypatch,
         [
             EntryPoint('best_check', f'{PLUGIN}:BEST_CHECKS', plugins.CAPABILITIES),
@@ -534,7 +533,7 @@ BELLS = Capability(
 def test_config_toml_refuses_an_instance_that_no_use_names_and_a_use_that_names_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    installed(
+    install_plugins(
         monkeypatch,
         [
             EntryPoint('bell', f'{__name__}:BELLS', plugins.CAPABILITIES),
@@ -563,7 +562,7 @@ def test_a_declared_capability_loads_is_a_capability_and_has_a_group_of_its_own(
     monkeypatch: pytest.MonkeyPatch, value: str, error: str
 ) -> None:
     """Each entry point of ``piloop.capabilities`` names one capability; the next one with its group is refused."""
-    installed(monkeypatch, [EntryPoint('odd', value, plugins.CAPABILITIES)])
+    install_plugins(monkeypatch, [EntryPoint('odd', value, plugins.CAPABILITIES)])
     with pytest.raises(PluginError, match=f'^entry point odd = {re.escape(value)} in piloop.capabilities.*{error}'):
         plugins.declared()
 
@@ -593,14 +592,14 @@ def test_only_the_class_that_sets_default_is_a_default_and_a_campaign_has_one_de
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A subclass of a default provider inherits its code, not its place among the defaults."""
-    installed(monkeypatch, [EntryPoint('typed', f'{PLUGIN}:Typed', RUNTIMES.group)])
+    install_plugins(monkeypatch, [EntryPoint('typed', f'{PLUGIN}:Typed', RUNTIMES.group)])
     assert (is_default(Subprocess), is_default(Typed)) == (True, False)
     assert RUNTIMES.used({}) == ('subprocess',), 'Typed subclasses Subprocess, and is no second default'
     assert HARNESSES.used({}) == ('claude', 'codex')
-    installed(monkeypatch, [EntryPoint('also', f'{PLUGIN}:AlsoDefault', RUNTIMES.group)])
+    install_plugins(monkeypatch, [EntryPoint('also', f'{PLUGIN}:AlsoDefault', RUNTIMES.group)])
     with pytest.raises(ContractBroken, match='^one installed runtime is DEFAULT, not 2: subprocess, also$'):
         RUNTIMES.used({})
-    installed(monkeypatch, [])
+    install_plugins(monkeypatch, [])
     monkeypatch.setattr(Subprocess, 'DEFAULT', False)
     with pytest.raises(ContractBroken, match='^one installed runtime is DEFAULT, not 0: none$'):
         RUNTIMES.used({})
@@ -637,10 +636,10 @@ def test_refs_finds_each_name_of_an_instance_and_where_it_is() -> None:
     ]
     plugins = {
         'harness': {'claude': {'model': 'm'}, 'codex': {'model': 'm'}},
-        'role': {'orchestrator': {'model': {'claude': 'w'}}},
+        'role': {'implementer': {'model': {'claude': 'w'}}},
     }
     roles = refs(CampaignConfig.model_validate({**BASE_CONFIG, 'plugins': plugins}))
-    assert ('harness', 'claude', ('plugins', 'role', 'orchestrator', 'model')) in [
+    assert ('harness', 'claude', ('plugins', 'role', 'implementer', 'model')) in [
         (r.capability.name, r.name, r.at) for r in roles
     ], 'the instances of [plugins] too'
 
@@ -667,7 +666,7 @@ def test_the_instances_of_a_capability_of_several_by_name(monkeypatch: pytest.Mo
         BEST_RULES.instances({})
     with pytest.raises(ValidationError, match='use of the runtimes is not set in this file'):
         HOME_PLUGINS.validate_python({'runtime': {'use': 'subprocess'}})
-    installed(monkeypatch, [EntryPoint('needy', f'{PLUGIN}:Needy', RUNTIMES.group)])
+    install_plugins(monkeypatch, [EntryPoint('needy', f'{PLUGIN}:Needy', RUNTIMES.group)])
     assert list(RUNTIMES.instances(HOME_PLUGINS.validate_python({}))) == ['subprocess'], (
         'a provider that needs keys is an instance only through a table'
     )

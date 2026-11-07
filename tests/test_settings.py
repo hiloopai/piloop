@@ -15,6 +15,7 @@ from piloop.plugins.host import campaign_defaults
 from piloop.settings import (
     UNDER_TEST_ENV,
     AgentSettings,
+    EvaluationSettings,
     Settings,
     StorageSettings,
     TracingSettings,
@@ -110,9 +111,9 @@ def test_a_runtime_value_that_is_no_table_of_tables_is_refused(tmp_path: Path, m
 def test_the_actor_is_read_from_its_signature(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('PILOOP_ACTOR', 'implementer#12')
     assert Settings(home=tmp_path).actor == Agent(role='implementer', session=12)
-    monkeypatch.setenv('PILOOP_ACTOR', 'orchestrator#3')
-    assert Settings(home=tmp_path).actor == Agent(role='orchestrator', session=3)
-    monkeypatch.setenv('PILOOP_ACTOR', 'orchestrator#')
+    monkeypatch.setenv('PILOOP_ACTOR', 'auditor#3')
+    assert Settings(home=tmp_path).actor == Agent(role='auditor', session=3)
+    monkeypatch.setenv('PILOOP_ACTOR', 'auditor#')
     with pytest.raises(ValidationError, match=r'actor\.Agent\.session'):
         Settings(home=tmp_path)
     monkeypatch.delenv('PILOOP_ACTOR')
@@ -154,6 +155,17 @@ def test_the_relay_s_wait_and_deadline_of_config_toml_are_dropped_with_a_warning
         '`piloop submit` returns at once, so [agents] relay_deadline is removed; delete it',
     ]
     assert home.agents == AgentSettings()
+
+
+def test_wake_after_tries_of_config_toml_is_dropped_with_a_warning(tmp_path: Path) -> None:
+    """No agent wakes on the retries of an evaluation: the key has nothing to set."""
+    (tmp_path / 'config.toml').write_text('[evaluation]\nwake_after_tries = 2\nstop_after_tries = 4\n')
+    with pytest.warns(PiloopDeprecationWarning) as warned:
+        home = Settings(home=tmp_path)
+    assert [str(w.message).split('; removed')[0] for w in warned] == [
+        'no agent wakes on the retries of an evaluation now, so [evaluation] wake_after_tries is removed; delete it'
+    ]
+    assert home.evaluation == EvaluationSettings(stop_after_tries=4)
 
 
 def test_a_role_s_finding_grace_of_config_toml_is_its_end_grace_with_a_warning(tmp_path: Path) -> None:

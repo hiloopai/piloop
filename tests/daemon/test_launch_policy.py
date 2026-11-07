@@ -23,15 +23,14 @@ from piloop.plugins.host import ContractBroken, data_errors
 from piloop.plugins.launch_policy.contract import LAUNCH_POLICIES, LaunchCase, LaunchPolicy, Share
 from piloop.plugins.launch_policy.fewest_live import FewestLive
 from piloop.settings import DaemonSettings
-from tests.conftest import HARNESS_SLEEPS, ScriptRuntime, register, run_all, workers_of, write_toml
-from tests.daemon.test_roles import installed
+from tests.conftest import HARNESS_SLEEPS, ScriptRuntime, install_plugins, register, run_all, workers_of, write_toml
 from tests.daemon.test_run_controller import reload_campaign
 from tests.daemon.test_scheduler import (
     add_ideas,
     died_at_startup,
     make_scheduler,
     pause_escalations,
-    request_lead,
+    request_auditor,
 )
 
 
@@ -172,17 +171,18 @@ def test_a_launch_policy_that_picks_a_campaign_that_does_not_wait_breaks_its_con
     scheduler.stop(timeout=5)
 
 
+@pytest.mark.usefixtures('auditor')
 def test_the_startup_breaker_counts_with_the_launch_policys_limits(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
 ) -> None:
     """``[plugins.launch_policy] startup_breaker = 1``: a single death at startup pauses the campaign's launches."""
     policy = FewestLive(startup_breaker=1, startup_window=timedelta(minutes=2))
     died_at_startup(db, campaign, IMPLEMENTER, minutes_ago=3)
-    wanted = request_lead(db, campaign)
+    wanted = request_auditor(db, campaign)
     scheduler = make_scheduler(db, runtime, tmp_path, plugins={'launch_policy': policy})
     assert wanted in run_all(scheduler), 'the death is older than the window'
     died_at_startup(db, campaign, IMPLEMENTER)
-    request_lead(db, campaign)
+    request_auditor(db, campaign)
     assert run_all(scheduler) == []
     [escalation] = pause_escalations(db)
     assert '1 agents failed in the last 2 minutes.' in escalation.body
@@ -193,7 +193,7 @@ def test_a_campaigns_harness_choice_picks_the_harness_of_each_run_it_queues(
     db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A cost-aware choice: every run goes to the harness whose model is cheapest, whatever the rotation's turn."""
-    installed(monkeypatch, [EntryPoint('cheapest', f'{__name__}:Cheapest', HARNESS_CHOICES.group)])
+    install_plugins(monkeypatch, [EntryPoint('cheapest', f'{__name__}:Cheapest', HARNESS_CHOICES.group)])
     write_toml(Path(campaign.path), '#!/bin/sh\ntrue\n')
     cfg = load_campaign_config(
         Path(campaign.path),

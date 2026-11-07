@@ -14,8 +14,7 @@ from piloop.db import sql
 from piloop.db.models import TARGET_KINDS
 from piloop.db.schema import SCHEMAS
 from piloop.db.session import SchemaAhead, migrate, schema_mismatch, stamps
-from tests.conftest import disk
-from tests.daemon.test_roles import installed
+from tests.conftest import disk, install_plugins
 
 NOTES = 'tests.fixtures.notes.tables'
 
@@ -23,7 +22,7 @@ NOTES = 'tests.fixtures.notes.tables'
 def install(monkeypatch: pytest.MonkeyPatch, schema: str | None) -> None:
     """Install the ``notes`` package with its schema ``schema`` (``SCHEMA``, ``LATER``), or uninstall it (None)."""
     entries = [] if schema is None else [EntryPoint('notes', f'{NOTES}:{schema}', SCHEMAS.group)]
-    installed(monkeypatch, entries)
+    install_plugins(monkeypatch, entries)
     sql.declared.cache_clear()
 
 
@@ -52,7 +51,7 @@ def test_a_kind_that_a_package_declares_on_a_home_at_its_heads_is_written_by_the
         rows(path, on_note)
 
     entries = [EntryPoint('notes', f'{NOTES}:SCHEMA', SCHEMAS.group)]
-    installed(monkeypatch, [*entries, EntryPoint('note', f'{NOTES}:Note', TARGET_KINDS.group)])
+    install_plugins(monkeypatch, [*entries, EntryPoint('note', f'{NOTES}:Note', TARGET_KINDS.group)])
     sql.declared.cache_clear()
     migrated(path)
     migrated(path)

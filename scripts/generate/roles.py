@@ -1,7 +1,6 @@
 """Generate ``docs/snippets/generated/roles.mdx``: the built-in roles."""
 
 from piloop.plugins.role.contract import ROLES, ImplementerRole
-from piloop.plugins.role.orchestrator import OrchestratorRole
 from scripts.generate import SNIPPETS, header
 from scripts.generate.markdown import cell, lead
 
@@ -13,10 +12,7 @@ def generate() -> str:
     rows = ['| Role | Does runs | Starts on | What it is |', '|---|---|---|---|']
     for name, provider in ROLES.builtins().items():
         role = provider()
-        if isinstance(role, OrchestratorRole):
-            triggers = ', '.join(f'`{t}`' for t in role.triggers) or '`piloop launch` only: `triggers = []`'
-        else:
-            triggers = 'a free slot'
+        triggers = 'a free slot' if isinstance(role, ImplementerRole) else 'its provider'
         what = cell(lead(type(role), type(role).__name__)).split(': ', 1)[-1]
         what = what[:1].upper() + what[1:]
         rows.append(f'| `{name}` | {"yes" if isinstance(role, ImplementerRole) else "no"} | {triggers} | {what} |')

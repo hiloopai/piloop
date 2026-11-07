@@ -17,13 +17,12 @@ from piloop.plugins.campaign_type.kit.runs.section.idea_comments import IdeaComm
 from piloop.plugins.fact_source.kit.readings import Readings
 from piloop.plugins.host import Scope
 from piloop.plugins.role.contract import ROLES, ImplementerRole
-from piloop.plugins.role.orchestrator import OrchestratorRole
 from piloop.plugins.section.contract import SECTIONS, Guide, Rendering, Section, Surface, defaults, guides, markdown
 from piloop.plugins.stop_rule.contract import STOP_RULES
 from tests.campaign.test_stop import add_run
-from tests.conftest import cas_of
-from tests.daemon.test_roles import PLUGIN, forget_loaded, installed
+from tests.conftest import PLUGIN, cas_of, forget_loaded, install_plugins
 from tests.daemon.test_scheduler import set_config
+from tests.fixtures.plugin import Auditor
 from tests.reports.test_overview import NOW
 
 
@@ -60,15 +59,11 @@ def sections(*names: str) -> list[Section]:
     return [SECTIONS.validated({'provider': name}) for name in names]
 
 
-def test_the_incidents_and_the_pack_depend_on_what_the_agent_got(db: Database, campaign: Campaign) -> None:
+def test_the_pack_is_the_research_pack(db: Database, campaign: Campaign) -> None:
     with db.session() as s:
         p = s.get_one(Campaign, campaign.id)
-        routine = markdown(sections('incidents', 'pack'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
-        incident = markdown(
-            sections('incidents', 'pack'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s), ('- run#1',))
-        )
-    assert routine.startswith('## Research pack\n\n### Research pack: metrics'), 'no incidents: the pack'
-    assert incident == '## Incidents to investigate\n\n- run#1', 'an incident sweep reads its incidents alone'
+        text = markdown(sections('pack'), Rendering(s, NOW, p, Path('/no/workspace'), cas_of(s)))
+    assert text.startswith('## Research pack\n\n### Research pack: metrics')
 
 
 def test_the_headline_says_why_the_campaign_is_held(db: Database, campaign: Campaign) -> None:
@@ -94,7 +89,7 @@ class KeepRate(Section):
 
 @pytest.fixture
 def keep_rate(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    installed(monkeypatch, [EntryPoint('keep_rate', f'{__name__}:KeepRate', SECTIONS.group)])
+    install_plugins(monkeypatch, [EntryPoint('keep_rate', f'{__name__}:KeepRate', SECTIONS.group)])
     yield
     forget_loaded()
 
@@ -114,9 +109,9 @@ def test_an_installed_section_shows_where_it_declares_in_its_order_unless_a_list
 
 def test_each_surface_shows_its_built_in_sections_by_default() -> None:
     overview = ['headline', 'goal', 'tracks', 'trajectory', 'runs', 'queue', 'agents', 'evaluations']
-    overview += ['funnel', 'candidates', 'same_as_parent', 'reported', 'inbox', 'events']
+    overview += ['funnel', 'candidates', 'same_as_parent', 'inbox', 'events']
     assert defaults(Surface.STATUS) == overview == list(SECTIONS.used({}))
-    assert defaults(Surface.ORCHESTRATOR) == ['context', 'lessons', 'incidents', *overview, 'tools', 'pack']
+    assert defaults(Surface.ORCHESTRATOR) == ['context', 'lessons', *overview, 'tools', 'pack']
     assert defaults(Surface.RUN) == ['context', 'measure', 'idea_comments', 'lessons', 'history'], (
         'no board: a worker claims or proposes its idea with `piloop idea`'
     )
@@ -180,7 +175,7 @@ ideas: 4 · attempts: 4 · reached the evaluator: 2 · measured: 2 · new bests:
 def test_the_funnel_shows_nothing_without_the_source_of_its_fact(
     db: Database, campaign: Campaign, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    installed(monkeypatch, [EntryPoint('goes_on', f'{PLUGIN}:GoesOn', STOP_RULES.group)])
+    install_plugins(monkeypatch, [EntryPoint('goes_on', f'{PLUGIN}:GoesOn', STOP_RULES.group)])
     try:
         set_config(db, campaign, plugins={'stop_rule': {'provider': 'goes_on'}, 'fact_source': {'use': ['campaign']}})
         with db.session() as s:
@@ -235,19 +230,15 @@ class Units(Guide):
 
 @pytest.fixture
 def units(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    installed(monkeypatch, [EntryPoint('units', f'{__name__}:Units', SECTIONS.group)])
+    install_plugins(monkeypatch, [EntryPoint('units', f'{__name__}:Units', SECTIONS.group)])
     yield
     forget_loaded()
 
 
+@pytest.mark.usefixtures('auditor')
 def test_each_role_has_guides_of_its_own_that_extend_a_shared_list() -> None:
     shown = {name: [n for n in p.model().shown() if n in guides()] for name, p in ROLES.providers().items()}
-    assert shown == snapshot(
-        {
-            'implementer': [],
-            'orchestrator': ['database', 'concepts', 'scoring', 'comments', 'priorities', 'links', 'research_commands'],
-        }
-    )
+    assert shown == snapshot({'implementer': [], 'auditor': ['database']})
     assert not any(SECTIONS.providers()[n].model.SHOWN_IN for n in guides()), (
         'a built-in guide goes where a role names it'
     )
@@ -255,9 +246,9 @@ def test_each_role_has_guides_of_its_own_that_extend_a_shared_list() -> None:
 
 @pytest.mark.usefixtures('units')
 def test_a_packages_guide_shows_in_every_role_of_its_surface_after_the_roles_own() -> None:
-    assert 'units' not in OrchestratorRole().shown(), 'the orchestrator lists its sections'
-    shown = OrchestratorRole(sections=None).shown()
-    assert shown.index('research_commands') < shown.index('units') < shown.index('context'), (
+    assert 'units' not in Auditor(sections=['context']).shown(), 'a role that lists its sections shows those'
+    shown = Auditor().shown()
+    assert shown.index('database') < shown.index('units') < shown.index('context'), (
         "a guide goes after the role's own and before the other sections of a default list"
     )
     assert 'units' not in ImplementerRole().shown()

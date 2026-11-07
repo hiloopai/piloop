@@ -24,7 +24,7 @@ from piloop.plugins.campaign_type.kit.evaluation.measure import record, request_
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run
-from tests.conftest import LEAD
+from tests.conftest import AUDITOR
 
 
 def test_an_ask_is_pending_while_it_is_the_latest_of_its_kind_on_its_target_and_unanswered(
@@ -65,21 +65,22 @@ def queued_run(db: Database, campaign: Campaign, state: AgentSessionState) -> tu
         return run.id, agent
 
 
+@pytest.mark.usefixtures('auditor')
 def test_a_cancel_is_answered_once_none_of_its_agents_is_requested_starting_or_running(
     db: Database, campaign: Campaign
 ) -> None:
     run_id, agent = queued_run(db, campaign, AgentSessionState.STARTING)
     with db.session() as s:
         request_cancel(s, s.get_one(Run, run_id), System.HUMAN, ending=Ending.NOW)
-        sweep = AgentSession(kind=LEAD, campaign_id=campaign.id, state=AgentSessionState.RUNNING)
-        s.add(sweep)
+        auditing = AgentSession(kind=AUDITOR, campaign_id=campaign.id, state=AgentSessionState.RUNNING)
+        s.add(auditing)
         s.flush()
-        request_cancel(s, sweep, System.HUMAN, ending=Ending.WRAP_UP)
+        request_cancel(s, auditing, System.HUMAN, ending=Ending.WRAP_UP)
         answer_done(s)
         s.commit()
-        assert len(pending(s, CancelRequested)) == 2, 'a starting agent and a running sweep: not yet'
+        assert len(pending(s, CancelRequested)) == 2, 'a starting agent and a running auditor: not yet'
         s.get_one(AgentSession, agent.id).state = AgentSessionState.ENDING
-        s.get_one(AgentSession, sweep.id).state = AgentSessionState.EXITED
+        s.get_one(AgentSession, auditing.id).state = AgentSessionState.EXITED
         answer_done(s)
         s.commit()
         assert pending(s, CancelRequested) == [], 'the daemon ended one, and the other ended on its own'
