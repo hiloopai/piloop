@@ -205,6 +205,7 @@ from piloop.plugins.provisioner.contract import StartRefused
 from piloop.plugins.provisioner.kit.conformance import check_provisioning
 from piloop.plugins.provisioner.modal import Modal
 from piloop.plugins.provisioner.daytona import Daytona
+from piloop.plugins.provisioner.kubernetes import Kubernetes
 
 from piloop.plugins.secrets.contract import SECRETS, SecretsProvider, SecretKey, Owner, HomeSecrets
 from piloop.plugins.secrets.contract import SecretReader

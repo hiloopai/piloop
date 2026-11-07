@@ -159,6 +159,35 @@ ttl_hours = 4
 - Daytona deletes a sandbox after `ttl_hours`, 24 by default.
 - The server needs `DAYTONA_API_KEY` and `piloop[daytona]`.
 
+On Kubernetes, each worker is a Job of an image with `piloop` in it:
+
+```toml
+[plugins.executor.pools.agents]
+agents = 1
+slots = { evaluation = 0 }
+
+[plugins.executor.pools.agents.provisioner]
+max = 8
+
+[plugins.executor.pools.agents.provisioner.compute]
+provider = "kubernetes"
+namespace = "compute"
+image = "registry.example.com/piloop-worker:0.6"
+cpu = 2
+memory_mb = 8192
+ttl_hours = 9
+queue = "research"
+```
+
+- The image runs as user 65532, with a read-only root file system. `HOME` and `/tmp` are writable.
+- The worker's credential is in a Secret that the Job owns. The pod requests `cpu` and `memory_mb`, with no limit unless
+  you set `memory_limit_mb`.
+- `queue` names a Kueue `LocalQueue`. A Job that waits in the queue counts as pending.
+- `managed_by = "kueue.x-k8s.io/multikueue"` runs the Job on another cluster. MultiKueue copies no Secret, so it needs
+  `credential_in_job_env = true`: anyone who can read the Job can read the credential.
+- In the cluster, the server uses its pod's service account. From outside, set
+  `api = { server = "https://…", token_file = "…", ca_file = "…" }`. The server reads the token at each call.
+
 The [configuration reference](/reference/configuration#plugins) lists each provider's keys. To stop every worker of a
 pool, drain them:
 

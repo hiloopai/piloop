@@ -160,6 +160,7 @@ proxy = "piloop.plugins.network.proxy:Proxy"
 [project.entry-points."piloop.provisioners"]
 modal = "piloop.plugins.provisioner.modal:Modal"
 daytona = "piloop.plugins.provisioner.daytona:Daytona"
+kubernetes = "piloop.plugins.provisioner.kubernetes:Kubernetes"
 
 [project.entry-points."piloop.vcs"]
 git = "piloop.plugins.vcs.git:Git"
