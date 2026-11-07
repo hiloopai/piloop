@@ -39,6 +39,7 @@ from evals.drive import (
     Fleet,
     Piloop,
     Plain,
+    Sessions,
     TeamSessions,
     admitted,
     agent_box,
@@ -1147,6 +1148,44 @@ def test_the_export_takes_the_team_s_last_snapshots_after_it_drains_with_the_run
     assert drained < collected < tar, "the workers' last snapshots are in"
     assert f'-C {WORK} out -C {WORK} agents/claude agents/codex agents/pi' in control.commands[tar]
     assert (tmp_path / 'export' / 'out' / 'sessions').exists() and (tmp_path / 'export.tgz').exists()
+
+
+def test_the_export_takes_a_log_that_the_daemon_still_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    work, bin_dir, run = tmp_path / 'work', tmp_path / 'bin', tmp_path / 'run'
+    for d in (work / 'out', work / 'agents' / 'pi', bin_dir, run):
+        d.mkdir(parents=True)
+    subprocess.run(['git', 'init', '-q', str(work / 'repo')], check=True)
+    subprocess.run(
+        ['git', '-C', str(work / 'repo'), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty']
+        + ['-m', 'base'],
+        check=True,
+    )
+    serve = work / 'out' / 'serve.out'
+    serve.write_bytes(bytes(5_000_000))
+    # tar 1.34, the control sandbox's, exits 1 when a file changes as it reads it, --ignore-failed-read or not
+    seen = tmp_path / 'changed'
+    (bin_dir / 'tar').write_text(
+        f'#!/bin/bash\n{shutil.which("tar")} "$@" 2>{tmp_path}/tar.err; code=$?; cat {tmp_path}/tar.err >&2\n'
+        f'grep -q "file changed as we read it" {tmp_path}/tar.err && touch {seen} && [ $code -eq 0 ] && code=1\n'
+        'exit $code\n'
+    )
+    (bin_dir / 'tar').chmod(0o755)
+    monkeypatch.setenv('PATH', f'{bin_dir}:{os.environ["PATH"]}')
+    for name, path in (('WORK', work), ('REPO', work / 'repo'), ('OUT', work / 'out')):
+        monkeypatch.setattr(f'evals.drive.{name}', str(path))
+    control = LocalBox()
+    team = Fleet(control, Sessions(str(work), {'pi': 'agents/pi'}), lambda: None, 0, ['sb-control'], control.close)
+    writer = subprocess.Popen(['bash', '-c', f'while :; do echo line; done >> {serve}'])
+    try:
+        time.sleep(0.2)
+        failed = export(team, plain_run(Settings()), run)
+    finally:
+        writer.kill()
+        writer.wait()
+    assert seen.exists(), 'the log changed as tar read it'
+    assert failed == [], 'the export of a log that the daemon still writes succeeds'
+    assert (run / 'export' / 'out' / 'serve.out').stat().st_size >= 5_000_000
+    assert (run / 'export' / 'out' / 'repo.bundle').is_file()
 
 
 class GivesSessions(FakeBox):

@@ -853,9 +853,13 @@ def export(fleet: Fleet, run: Piloop | Plain, out: Path) -> list[str]:
                 fleet.collect()
             except Exception as e:  # recorded: the control sandbox still gives the rest, and what was collected before
                 failed.append(f'sessions: {type(e).__name__}: {e}'[:500])
+            # The daemon may still write its log while tar reads it: tar 1.34 (Debian bookworm) exits 1 for "file
+            # changed as we read it" even with --ignore-failed-read, and on --create exit 1 means only that. The
+            # archive is whole, with the file as it was read.
             control.run(
                 f'git -C {REPO} bundle create {OUT}/repo.bundle --all'
-                f' && tar czf {WORK}/export.tgz --ignore-failed-read -C {WORK} out {fleet.sessions.tar()}',
+                f' && {{ tar czf {WORK}/export.tgz --ignore-failed-read -C {WORK} out {fleet.sessions.tar()};'
+                ' [ $? -le 1 ]; }',
                 timeout=900,
             )
         data = control.read(f'{WORK}/export.tgz')
