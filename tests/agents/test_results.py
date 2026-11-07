@@ -56,10 +56,12 @@ from piloop.plugins.executor.contract import (
     Source,
     Workspace,
 )
+from piloop.plugins.harness.contract import Usage
 from piloop.plugins.metric import Direction
 from piloop.plugins.runtime.contract import AgentExit, ExitStatus
 from piloop.plugins.vcs.contract import Transfer
 from piloop.plugins.vcs.git import Git
+from piloop.settings import AgentSettings
 from piloop.store.tree import Manifest, Merged, Staged, put_tree
 from tests.agents.test_launcher import MINTED_HARNESS, agent_session, launch, request, use_harness
 from tests.conftest import HARNESS_PROMPT_TO_FILE, LEAD, ScriptRuntime, baseline, disk
@@ -637,3 +639,38 @@ def test_an_exit_says_the_end_of_its_output_in_one_line_with_each_secret_as_its_
     process = AgentExit(ExitStatus.EXITED, 1.0, 1, error)
     found = {'A': SecretStr('sk-1'), 'B': SecretStr('sk-12'), 'EMPTY': SecretStr('')}
     assert explained(process, output, found, chars).error == expected
+
+
+@pytest.mark.parametrize(
+    ('seconds', 'usage', 'worked'),
+    [
+        (48.0, Usage(input=106, output=3673, cache_read=313229, cache_write=13142, total=330150, turns=13), True),
+        (37.0, Usage(input=98, output=2940, cache_read=269313, cache_write=9830, total=282181, turns=12), True),
+        (23.7, Usage(input=42, output=1690, cache_read=101571, cache_write=7784, total=111087, turns=5), True),
+        (20.0, Usage(input=40, output=310, cache_read=18000, cache_write=6000, total=24350, turns=2), False),
+        (20.0, None, False),
+    ],
+    ids=[
+        'the e2e implementer, 48 s',
+        'the e2e implementer, 37 s',
+        'the e2e implementer, 24 s',
+        'a launch that failed',
+        'no usage read',
+    ],
+)
+def test_an_implementer_that_took_more_than_startup_turns_worked_however_soon_it_ended_with_nothing(
+    db: Database, campaign: Campaign, seconds: float, usage: Usage | None, worked: bool
+) -> None:
+    """#775: the 0.6.0 upgrade e2e. Three implementers tried, made tool calls for 24 s to 48 s, and gave up with no
+    commit, no comment and no run end. ``never_worked`` labelled them a fault of the host, so their runs were no
+    attempts, and the startup breaker counted them. More turns than ``[agents] startup_turns`` (3) is work. A launch
+    that failed reads its brief and stops in a turn or two, and is still ``never_worked``. The first three rows are the
+    e2e agents' own ``agent_sessions.usage``."""
+    with db.session() as s:
+        w = AgentSession(kind=IMPLEMENTER, campaign_id=campaign.id, subject=TargetRef(RUN, 1), harness='claude')
+        s.add(w)
+        s.flush()
+        report = AgentFinished(process=AgentExit(ExitStatus.EXITED, seconds, 0), usage=usage, changed=False)
+        settings = AgentSettings()
+        never = results_module._never_worked(s, w, report, settings.startup_seconds, settings.startup_turns)
+    assert (never, settings.startup_turns) == (not worked, 3)

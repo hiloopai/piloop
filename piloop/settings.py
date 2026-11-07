@@ -153,7 +153,10 @@ class AgentSettings(BaseModel):
     escalation. The values of its secrets read as their names. 0 leaves none."""
     startup_seconds: float = Field(default=120, ge=0)
     """An agent that ends this soon after its start and left nothing (no change and no comment) never worked: it failed
-    at startup, a fault of the host or the harness, not an attempt."""
+    at startup, a fault of the host or the harness, not an attempt. Unless it took more than ``startup_turns``."""
+    startup_turns: int = Field(default=3, ge=0)
+    """An agent whose harness counted more model turns than this worked, however soon it ended and whatever it left:
+    an agent whose launch failed reads its brief and stops in a turn or two, and one that tries and gives up takes more."""
     detail_chars: int = Field(default=160, gt=1)
     """How many characters of a comment or an error one line of a brief shows: an inbox item, an incident."""
     attach_lines: int = Field(default=40, gt=0)

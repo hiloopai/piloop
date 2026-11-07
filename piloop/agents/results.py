@@ -433,6 +433,7 @@ class CampaignResults:
         secrets: SecretsProvider | None = None,
         exit_output_chars: int = AgentSettings().exit_output_chars,
         startup_seconds: float = AgentSettings().startup_seconds,
+        startup_turns: int = AgentSettings().startup_turns,
     ) -> None:
         self._db = db
         self._tracer = tracer
@@ -446,6 +447,8 @@ class CampaignResults:
         """``[agents] exit_output_chars``: how much of its last output a failed or early end says."""
         self._startup_seconds = startup_seconds
         """``[agents] startup_seconds``: an agent that ends sooner and left nothing never worked."""
+        self._startup_turns = startup_turns
+        """``[agents] startup_turns``: an agent that took more turns worked, however soon it ended."""
         self._merging = threading.Lock()
         """Held by a workspace merge: each path's compare-and-swap must not interleave with another merge's."""
 
@@ -609,7 +612,9 @@ class CampaignResults:
                     return
                 ending = w.state is AgentSessionState.ENDING  # its error says why the daemon ended it
                 seconds = process.seconds
-                worked = _ended_by_daemon(s, w.id) or not _never_worked(s, w, report, self._startup_seconds)
+                worked = _ended_by_daemon(s, w.id) or not _never_worked(
+                    s, w, report, self._startup_seconds, self._startup_turns
+                )
                 match worked, process.error:
                     case True, _:
                         ended = Ran(process, report.work)
@@ -808,20 +813,28 @@ def _ended_by_daemon(s: Session, agent_session_id: AgentSessionId) -> bool:
     return s.scalar(ended.limit(1)) is not None
 
 
-def _never_worked(s: Session, w: AgentSession, report: AgentFinished, startup_seconds: float) -> bool:
+def _never_worked(
+    s: Session, w: AgentSession, report: AgentFinished, startup_seconds: float, startup_turns: int
+) -> bool:
     """Return whether a started agent ended within ``startup_seconds`` (``[agents]``) and left nothing behind.
+
+    An agent whose harness counted more than ``startup_turns`` model turns worked, whatever it left: it tried, and
+    gave up or ran out of ideas. That is an attempt, not a fault of the host or the harness.
 
     Nothing behind means no change to its checkout (``AgentFinished.changed``: no commit, no uncommitted change outside
     the links), no comment signed by it, and no event on its subject signed by it, such as its run's end
     (``piloop run end``).
 
-    A run's work is a change to its worktree, a comment or a write that it signs, so that decides for an agent with a run, whatever its
-    harness and its tokens: an agent whose tools fail at launch still reads its brief and says that it is blocked.
+    Otherwise a run's work is a change to its worktree, a comment or a write that it signs, so that decides for an
+    agent with a run, whatever its tokens: an agent whose tools fail at launch still reads its brief and says that it
+    is blocked, which costs tokens but few turns.
     A sweep's work can be rows that no comment signs, so a sweep that spent tokens worked, and only a sweep whose
     harness's usage is read is judged. The tokens can be unknown for a sweep that worked too, when its session id
     was not found.
     """
     if report.process.status is ExitStatus.TIMED_OUT or report.process.seconds >= startup_seconds or report.changed:
+        return False
+    if report.usage is not None and report.usage.turns > startup_turns:
         return False
     if run_of(w) is None:
         definition = harness_of(s, w)

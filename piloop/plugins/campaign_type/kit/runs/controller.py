@@ -256,6 +256,7 @@ class RunController:
             secrets=secrets,
             exit_output_chars=self._agents.exit_output_chars,
             startup_seconds=self._agents.startup_seconds,
+            startup_turns=self._agents.startup_turns,
         )
         if network is None:
             network = NETWORKS.selected({}).open(NetworkHost(Tokens(db), HomeSecrets(db, secrets)))
