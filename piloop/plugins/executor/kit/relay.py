@@ -35,7 +35,6 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from socketserver import ThreadingUnixStreamServer
 
-import httpx2 as httpx
 from covalence import Cid
 from pydantic import ValidationError
 
@@ -49,10 +48,9 @@ from piloop.net.tokens import Caller
 from piloop.plugins.executor.contract import AgentJob, RepoId
 from piloop.plugins.executor.kit import door as agent_end
 from piloop.plugins.executor.kit.client import Dismissed
-from piloop.plugins.executor.kit.door import RELAY_SECONDS, AgentCall, Call, Relayed
+from piloop.plugins.executor.kit.door import NEVER_SENT, RELAY_SECONDS, AgentCall, Call, Relayed
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.role.contract import RELAYED, Verb
-from piloop.plugins.vcs.contract import VcsError
 from piloop.proc import ACTOR_ENV, AGENT_TOKEN_ENV, CHECKOUT_ENV, PILOOP_ARGV, child_env, run_group
 from piloop.settings import socket_dir
 
@@ -159,7 +157,7 @@ def shipped_commands() -> frozenset[Verb]:
 
 type Land = Callable[[AgentJob, Revision], None]
 """Move the job's checkout to ``revision``, a version of the repo of record, which the worker's clone takes from the
-server first if it lacks it (``jobs.land``). Raises ``VcsError``."""
+server first if it lacks it (``jobs.land``). Raises ``VcsError``, or the error of the server's send."""
 type Take = Callable[[AgentJob, Sequence[Revision]], None]
 """Take those of the versions of the repo of record that the job's clone lacks from the server (``jobs.take``)."""
 type Run = Callable[[AgentJob, Call], Relayed]
@@ -226,10 +224,12 @@ class Relay:
     def shipped(self, job: AgentJob, argv: list[str]) -> list[str]:
         """``argv``, or for a command of ``SHIPPED_GROUP``, the call that names the version it sent (``Ship``).
 
-        The version is the first word after the command, else the one that the agent's checkout is at.
+        The version is the first word after the command unless it is a flag, else the one that the agent's checkout is
+        at. The rest of the words stay as they came: ``submit --help`` asks for help, and submits nothing.
 
         Raises:
-            VcsError: the checkout has no such version.
+            Exception: what ``Ship`` raised, such as a ``VcsError`` for a version that the checkout lacks: nothing was
+                sent.
         """
         if (shipping := verb(argv, self._shipped)) is None:
             return argv
@@ -237,7 +237,7 @@ class Relay:
         named = Revision(rest[0]) if rest and not rest[0].startswith('-') else None
         sent = self._ship(job, named)
         blob = [] if sent.blob is None else ['--blob', str(sent.blob)]
-        return [*shipping, sent.revision, *blob]
+        return [*shipping, sent.revision, *blob, *(rest if named is None else rest[1:])]
 
     def stop(self) -> None:
         """Stop serving."""
@@ -268,6 +268,9 @@ class Relay:
     def answer(self, body: bytes) -> tuple[HTTPStatus, Relayed | str]:
         """What a call gets: what the server's run printed, or why there is none.
 
+        It says only what is known: the call did not run, it ran, or it may have run. It answers every error: the
+        agent's piloop reads a call without an answer as one that may have run.
+
         A command of ``SHIPPED_GROUP`` first sends the version of the agent's checkout that it names through the CAS
         (``shipped``). After the call ran, the clone takes the candidates that the answer names (``Take``), and a call
         that moves the agent's checkout (``Relayed.checkout``) moves it (``Land``).
@@ -283,17 +286,16 @@ class Relay:
         lease, job = found
         try:
             argv = self.shipped(job, call.argv)
-        except VcsError as e:
-            return HTTPStatus.OK, Relayed(stderr=f'piloop: the version did not leave this worker: {e}\n', exit_code=1)
+        except Exception as e:  # a VcsError, or the server's error as it took the version: nothing was sent
+            why = f'piloop: the version did not leave this worker, and the call did not run: {e}\n'
+            return HTTPStatus.OK, Relayed(stderr=why, exit_code=1)
         try:
             relayed = self._send(lease, Call(argv=argv, stdin=call.stdin, token=call.token))
         except StaleLease as e:
             return HTTPStatus.OK, Relayed(stderr=f'piloop: the lease of this agent ended: {e}\n', exit_code=1)
-        except (httpx.ConnectError, Dismissed) as e:  # it never reached the command: running it again is safe
+        except (*NEVER_SENT, Dismissed) as e:  # it never reached the command: running it again is safe
             return HTTPStatus.OK, Relayed(stderr=f'piloop: the call did not run on the server: {e}\n', exit_code=1)
-        except (
-            Exception
-        ) as e:  # the answer was lost, so the command may have run: the agent must look before it retries
+        except Exception as e:  # the answer was lost, so the command may have run: look before a retry
             stderr = f'piloop: the answer of the server was lost, and the call may have run there: {e}\n'
             return HTTPStatus.OK, Relayed(stderr=stderr, exit_code=1)
         relayed = self.took(job, relayed)
@@ -301,7 +303,7 @@ class Relay:
             return HTTPStatus.OK, relayed
         try:
             self._land(job, relayed.checkout)
-        except VcsError as e:
+        except Exception as e:  # a VcsError, or the server's error as the clone took the version: the call ran
             why = f'piloop: the call ran, but your checkout did not move to {relayed.checkout}: {e}\n'
             return HTTPStatus.OK, relayed.model_copy(update={'stderr': relayed.stderr + why, 'exit_code': 1})
         moved = f'your checkout is at {relayed.checkout[:12]}\n'

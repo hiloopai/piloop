@@ -19,6 +19,9 @@ from piloop.settings import settings
 
 RELAY_SECONDS = 120.0
 """The longest that a relayed call runs on the server before it is stopped."""
+NEVER_SENT: tuple[type[httpx.TransportError], ...] = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+"""The errors of a request that never left: no connection opened, so the call did not run. After any other error the
+call may have run, and only its answer is lost."""
 
 
 class Call(BaseModel):
@@ -89,8 +92,10 @@ def main() -> None:
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         raise SystemExit(f'piloop: the call did not run: {e.response.text}') from e
-    except httpx.HTTPError as e:
+    except NEVER_SENT as e:
         raise SystemExit(f'piloop: the relay of this worker did not answer, and the call did not run: {e}') from e
+    except httpx.HTTPError as e:  # the relay had the call: it may have sent it on before it went away
+        raise SystemExit(f'piloop: the relay of this worker did not answer, and the call may have run: {e}') from e
     done = Relayed.model_validate_json(response.content)
     sys.stdout.write(done.stdout)
     sys.stderr.write(done.stderr)

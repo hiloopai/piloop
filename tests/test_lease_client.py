@@ -611,6 +611,38 @@ def test_a_worker_asks_the_server_for_versions_and_gets_their_address_in_the_cas
         SendAsked(repo=RepoId(CampaignId(3)), revisions=[c2], have=[c1] * (MAX_HAVE + 1), wait=0)
 
 
+def first_try_fails(error: type[httpx.TransportError]) -> tuple[Remote, list[httpx.Request]]:
+    """A remote whose server's first try raises ``error``, and whose next ones run the call; and what reached it."""
+    sent: list[httpx.Request] = []
+
+    def server(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if len(sent) == 1:
+            raise error('the first try', request=request)
+        return httpx.Response(200, content=Relayed(stdout='ran', exit_code=0).model_dump_json())
+
+    http = httpx.Client(transport=httpx.MockTransport(server), base_url='http://server')
+    return Remote(http, Naps(), Tracer(None)), sent
+
+
+RELAYED_CALL = Call(argv=['sql', 'SELECT 1'], token=SecretStr('plt_x'))
+
+
+@pytest.mark.parametrize('error', [httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout])
+def test_a_relayed_call_that_never_left_is_sent_again(error: type[httpx.TransportError]) -> None:
+    """A connect or pool timeout never sent the call, as a refused connection did not (B43)."""
+    w1, sent = first_try_fails(error)
+    assert (w1.cli(1, RELAYED_CALL), len(sent)) == (Relayed(stdout='ran', exit_code=0), 2)
+
+
+@pytest.mark.parametrize('error', [httpx.ReadTimeout, httpx.WriteTimeout, httpx.RemoteProtocolError])
+def test_a_relayed_call_that_may_have_run_is_not_sent_again(error: type[httpx.TransportError]) -> None:
+    w1, sent = first_try_fails(error)
+    with pytest.raises(error):
+        w1.cli(1, RELAYED_CALL)
+    assert len(sent) == 1
+
+
 def test_an_agents_relayed_call_runs_on_its_live_lease_only_and_a_lost_answer_is_not_sent_again(
     remote: Callable[..., Remote], server: Server, db: Database, campaign: Campaign, tmp_path: Path, leases: Leases
 ) -> None:

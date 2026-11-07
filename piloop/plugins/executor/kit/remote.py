@@ -44,7 +44,7 @@ from piloop.plugins.executor.contract import REPORTS, HarnessSession, JobSecrets
 from piloop.plugins.executor.kit.capacity import HostSample
 from piloop.plugins.executor.kit.client import PROTOCOL, Dismissed, Local, Registration, Rejected, WorkerInfo
 from piloop.plugins.executor.kit.clones import NotSent
-from piloop.plugins.executor.kit.door import RELAY_SECONDS, Call, Relayed
+from piloop.plugins.executor.kit.door import NEVER_SENT, RELAY_SECONDS, Call, Relayed
 from piloop.plugins.executor.kit.leases import (
     DEFAULT_TIMING,
     SERVE,
@@ -316,7 +316,7 @@ class Resend(StrEnum):
     ANSWERLESS = 'answerless'
     """After a call that got no answer, or a 5xx: the call is idempotent, by its request id or its content."""
     UNSENT = 'unsent'
-    """Only after a connection that never opened: the call, a relayed ``piloop`` command, must not run twice."""
+    """Only after a request that never left (``NEVER_SENT``): the call, a relayed command, must not run twice."""
 
 
 class Remote:
@@ -434,7 +434,7 @@ class Remote:
                 )
             except httpx.TransportError as e:
                 error: Exception = e
-                again = resend is Resend.ANSWERLESS or isinstance(e, httpx.ConnectError)
+                again = resend is Resend.ANSWERLESS or isinstance(e, NEVER_SENT)
             else:
                 if response.status_code < HTTPStatus.INTERNAL_SERVER_ERROR and response.status_code not in RETRIED:
                     with self._lock:

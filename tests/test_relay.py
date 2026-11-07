@@ -12,6 +12,7 @@ from pathlib import Path
 
 import httpx2 as httpx
 import pytest
+from covalence import Cid
 from git import Repo
 from pydantic import SecretStr
 from pytest_mock import MockerFixture
@@ -34,6 +35,7 @@ from piloop.plugins.campaign_type.kit.evaluation.section import measure
 from piloop.plugins.executor.contract import AgentJob, RepoId, Source
 from piloop.plugins.executor.kit import door as door_module, jobs, relay as relay_module
 from piloop.plugins.executor.kit.client import Dismissed
+from piloop.plugins.executor.kit.clones import NotSent
 from piloop.plugins.executor.kit.door import AgentCall, Call, Relayed, main
 from piloop.plugins.executor.kit.leases import StaleLease
 from piloop.plugins.executor.kit.relay import Relay, Runner, Shipped
@@ -301,11 +303,17 @@ def test_the_piloop_of_an_agent_elsewhere_prints_what_the_call_printed_and_exits
     relay.stop()
     with pytest.raises(SystemExit, match='no worker relays on .*, and the call did not run'):
         main()
-    with socket.socket(socket.AF_UNIX) as hung:  # a worker that dies while it reads the call
+    relay.path.touch()  # the socket of a worker that was killed, whose connection did not open in time
+    unsent = mocker.patch.object(httpx.Client, 'post', side_effect=httpx.ConnectTimeout('timed out'))
+    with pytest.raises(SystemExit, match='the relay of this worker did not answer, and the call did not run'):
+        main()
+    mocker.stop(unsent)
+    relay.path.unlink()
+    with socket.socket(socket.AF_UNIX) as hung:  # a worker that dies once it has the call, which it may have relayed
         hung.bind(str(relay.path))
         hung.listen()
         threading.Thread(target=lambda: hung.accept()[0].close(), daemon=True).start()
-        with pytest.raises(SystemExit, match='the relay of this worker did not answer, and the call did not run'):
+        with pytest.raises(SystemExit, match='the relay of this worker did not answer, and the call may have run'):
             main()
     monkeypatch.setattr(door_module, 'settings', Settings(home=tmp_path, actor=System.HUMAN))
     with pytest.raises(SystemExit, match='relays the calls of an agent, and human is none'):
@@ -359,10 +367,94 @@ def test_a_submit_ships_the_version_of_the_agents_checkout_and_is_called_once(tm
     assert answered == Relayed(stdout='candidate#2 is queued', exit_code=0)
     assert [c.argv for _, c in sent] == [['submit', 'abc']], 'shipped, and called once'
     assert Relayed.model_validate_json(post(relay, call(argv=['submit', 'gone'])).content) == Relayed(
-        stderr='piloop: the version did not leave this worker: no gone\n', exit_code=1
+        stderr='piloop: the version did not leave this worker, and the call did not run: no gone\n', exit_code=1
     )
     assert shipped == [None, 'gone'], 'the checkout head, else the named version'
     relay.stop()
+
+
+def test_a_shipped_call_keeps_the_words_of_the_agents_call(tmp_path: Path) -> None:
+    """The relay used to rebuild a submit from its version alone: ``submit --help`` submitted the head (B30)."""
+    head, blob = Revision('h' * 40), Cid.of(b'mine')
+
+    def ship(job: AgentJob, revision: Revision | None) -> Shipped:
+        return Shipped(revision or head, blob)
+
+    relay = Relay(Settings(home=tmp_path).relay_file, Server(), ship, no_land, no_take)
+    sent = ['--blob', str(blob)]
+    assert relay.shipped(JOB, ['submit', '--help']) == ['submit', head, *sent, '--help']
+    assert relay.shipped(JOB, ['submit', '-h']) == ['submit', head, *sent, '-h']
+    assert relay.shipped(JOB, ['submit', 'abc', '--wait', '5']) == ['submit', 'abc', *sent, '--wait', '5']
+    assert relay.shipped(JOB, ['sql', '--help']) == ['sql', '--help'], 'a command that ships nothing is as it came'
+
+
+@pytest.mark.parametrize(
+    'error',
+    [
+        VcsError('no gone'),
+        NotSent('the server could not put the versions into the CAS'),
+        httpx.RemoteProtocolError('the server went away'),
+        Dismissed('the server refused this worker (401): revoked'),
+    ],
+)
+def test_a_call_that_ran_says_so_whatever_stopped_its_checkout_moving(tmp_path: Path, error: Exception) -> None:
+    """A Land that raised anything but a ``VcsError`` sent no answer, and the agent read "did not run" (B31)."""
+    server = Server()
+
+    def server_moves(lease: int, relayed: Call) -> Relayed:
+        server(lease, relayed)
+        return Relayed(stdout='idea#1 claimed\n', exit_code=0, checkout=Revision('a' * 40))
+
+    def land(job: AgentJob, revision: Revision) -> None:
+        raise error
+
+    relay = Relay(Settings(home=tmp_path).relay_file, server_moves, no_ship, land, no_take)
+    relay.start()
+    relay.open(3, JOB)
+    answered = post(relay, call(argv=['idea', 'claim', '1']))
+    relay.stop()
+    assert len(server.calls) == 1
+    assert Relayed.model_validate_json(answered.content) == Relayed(
+        stdout='idea#1 claimed\n',
+        stderr=f'piloop: the call ran, but your checkout did not move to {"a" * 40}: {error}\n',
+        exit_code=1,
+        checkout=Revision('a' * 40),
+    )
+
+
+@pytest.mark.parametrize('error', [NotSent('the server is gone'), httpx.ReadTimeout('timed out'), Dismissed('revoked')])
+def test_a_call_whose_version_did_not_leave_says_it_did_not_run(tmp_path: Path, error: Exception) -> None:
+    server = Server()
+
+    def ship(job: AgentJob, revision: Revision | None) -> Shipped:
+        raise error
+
+    relay = Relay(Settings(home=tmp_path).relay_file, server, ship, no_land, no_take)
+    relay.start()
+    relay.open(3, JOB)
+    answered = post(relay, call(argv=['submit']))
+    relay.stop()
+    assert server.calls == []
+    assert Relayed.model_validate_json(answered.content) == Relayed(
+        stderr=f'piloop: the version did not leave this worker, and the call did not run: {error}\n', exit_code=1
+    )
+
+
+@pytest.mark.parametrize(
+    'error', [httpx.ConnectError('refused'), httpx.ConnectTimeout('timed out'), httpx.PoolTimeout('timed out')]
+)
+def test_a_call_that_never_left_this_worker_did_not_run(tmp_path: Path, error: Exception) -> None:
+    """A connect or pool timeout never sent the call, as a refused connection did not (B43)."""
+    server = Server()
+    server.fail = error
+    relay = Relay(Settings(home=tmp_path).relay_file, server, no_ship, no_land, no_take)
+    relay.start()
+    relay.open(3, JOB)
+    answered = post(relay, call())
+    relay.stop()
+    assert Relayed.model_validate_json(answered.content).stderr == (
+        f'piloop: the call did not run on the server: {error}\n'
+    )
 
 
 def test_a_worker_ships_what_the_repo_of_record_lacks_of_a_version_of_its_agents_checkout(tmp_path: Path) -> None:
