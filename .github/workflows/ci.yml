@@ -268,6 +268,10 @@ jobs:
           cache-suffix: test
       - run: uv sync
       - run: make test PYTEST_WORKERS=logical
+        env:
+          # The eval runner (evals/) targets Linux sandboxes and is not in the package, so its tests run on the Linux
+          # shards only: they use GNU tar and x86-only codecs.
+          PYTEST_ADDOPTS: --ignore=tests/evals
 
   # Not in `check`: a quarantined test fails here without failing CI. It runs on every push, so its fix shows as a
   # run of passes.

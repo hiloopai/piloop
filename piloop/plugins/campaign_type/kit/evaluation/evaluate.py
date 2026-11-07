@@ -425,11 +425,17 @@ class _Lines:
             self._end()
 
     def track(self, proc: subprocess.Popen[bytes] | None) -> None:
-        """Learn the run's process when it starts, and forget it once it is reaped (``Track``)."""
+        """Learn the run's process when it starts, and forget it once it is reaped (``Track``).
+
+        After a stop, what the run left in its group dies with it: a process that ignores the SIGTERM, or that missed it
+        because sh blocks SIGTERM while it forks (macOS), would otherwise outlive the run once its grace is cancelled.
+        """
         with self._lock:
-            self._proc = proc
-            if proc is None and self._kill is not None:
+            if proc is None and self._kill is not None and self._proc is not None:
                 self._kill.cancel()
+                # The group outlives its reaped leader while a member lives, so its id cannot be reused meanwhile.
+                kill_group(self._proc)
+            self._proc = proc
             if proc is not None and self._ended:
                 self._signal(proc)
 

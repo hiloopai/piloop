@@ -29,6 +29,7 @@ from piloop.db.session import (
 )
 from piloop.otel import Tracer
 from piloop.settings import TracingSettings
+from tests.conftest import wait_until
 
 RELEASE_SECONDS = 0.05
 """How long the lock is held: well over the default ``slow_write``."""
@@ -185,7 +186,8 @@ def test_a_session_waits_out_a_stall_that_holds_every_connection_and_records_eac
 
     reader = threading.Thread(target=read)
     reader.start()
-    time.sleep(0.3)  # several rounds of the pool's timeout
+    # Rounds, not a fixed time: on a slow machine the reader can take longer than any sleep to begin its first.
+    wait_until(lambda: len(pool_waits(spans)) >= 2, 'two rounds of the pool timeout')
     assert answered == [], 'it waits while every connection is held'
     stalled.set()
     reader.join(10)
@@ -193,8 +195,12 @@ def test_a_session_waits_out_a_stall_that_holds_every_connection_and_records_eac
         t.join(10)
     patient.close()
     assert answered == [1], 'it got a connection once the stall ended, and its work went on'
-    waits = [s for s in spans.get_finished_spans() if s.name == POOL_WAIT_SPAN]
+    waits = pool_waits(spans)
     assert len(waits) >= 2 and {(s.attributes or {})['checked_out'] for s in waits} == {POOL_CONNECTIONS}
+
+
+def pool_waits(spans: InMemorySpanExporter) -> list[ReadableSpan]:
+    return [s for s in spans.get_finished_spans() if s.name == POOL_WAIT_SPAN]
 
 
 def test_a_checkout_that_waits_gives_up_once_its_database_closes(db: Database) -> None:

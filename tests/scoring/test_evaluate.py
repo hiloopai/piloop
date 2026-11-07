@@ -219,7 +219,7 @@ def test_evaluate_timeout_kills_grandchildren_and_keeps_logs(tmp_path: Path) -> 
 
 
 def test_a_child_left_holding_the_pipe_does_not_hold_the_evaluation(tmp_path: Path) -> None:
-    script = f'{write({"metrics": {"a": 1}})}; (exec 3>>"$PILOOP_RESULT_FILE"; sleep 30) & echo $! > child.pid'
+    script = f'{write({"metrics": {"a": 1}})}; (exec 3>>"$PILOOP_RESULT_FILE"; exec sleep 30) & echo $! > child.pid'
     started = time.monotonic()
     r = evaluate(tmp_path, script)
     assert isinstance(r, Measured) and time.monotonic() - started < 5
@@ -418,6 +418,20 @@ def test_a_command_that_ignores_sigterm_is_killed_after_the_grace(tmp_path: Path
     results = climb(tmp_path, script, Step(rungs=(SCREEN,)), grace=0.3)
     assert isinstance(results[-1], StoppedAt)
     assert time.monotonic() - started < 5, 'SIGKILL after 0.3 s'
+
+
+def test_a_stop_kills_what_its_command_leaves_once_the_command_ends(tmp_path: Path) -> None:
+    """A process of the group that outlives the SIGTERM dies with the command, not later and not never.
+
+    Here it ignores SIGTERM. On macOS one also misses it by chance: sh blocks SIGTERM while it forks, so a child that it
+    forks as the stop comes never gets it.
+    """
+    script = f"(trap '' TERM; exec sleep 30) & echo $! > child.pid; {rung('screen', {'a': 0.5})}; sleep 30"
+    started = time.monotonic()
+    results = climb(tmp_path, script, Step(rungs=(SCREEN,)))
+    assert isinstance(results[-1], StoppedAt)
+    assert time.monotonic() - started < 5, 'the command ended at the SIGTERM, before the grace'
+    assert_dead(int((tmp_path / 'child.pid').read_text()))
 
 
 def test_without_a_gate_every_rung_is_climbed(tmp_path: Path) -> None:
