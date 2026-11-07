@@ -334,8 +334,8 @@ def request_remeasure(s: Session, candidate: Candidate, actor: Actor, repeats: i
     """Ask the daemon to evaluate ``candidate`` ``repeats`` more times with the current evaluator. The caller commits.
 
     Use it for a measurement that a fault of the host spoiled (a full disk, a lost GPU), or that load made noisy. The
-    request (``RemeasureRequested``) is pending until a measurement of the candidate under the campaign's current
-    evaluator is recorded (``record``). A commit that the daemon never measured (``skipped`` or ``recovered``) gets
+    request (``RemeasureRequested``) is pending until the evaluation that the daemon makes for it measures the candidate
+    under the campaign's current evaluator (``answer_remeasure``). A commit that the daemon never measured (``skipped`` or ``recovered``) gets
     its first measurements, to isolate a regression to it, say. The candidate's mean then includes them. The ask lifts
     each cancel of the candidate (``Cancel``).
     """
@@ -343,10 +343,22 @@ def request_remeasure(s: Session, candidate: Candidate, actor: Actor, repeats: i
     emit(s, RemeasureRequested(repeats=repeats), TargetRef(CANDIDATE, candidate.id), actor)
 
 
-def remeasure_asked(s: Session, candidate: Candidate) -> RemeasureRequested | None:
-    """Return the pending request to measure ``candidate`` again, or None."""
+def remeasure_asked(s: Session, candidate: Candidate) -> tuple[Event, RemeasureRequested] | None:
+    """Return the pending request to measure ``candidate`` again, its event and what it asks, or None."""
     found = requests.pending(s, RemeasureRequested, Event.target == TargetRef(CANDIDATE, candidate.id))
-    return found[0][1] if found else None
+    return found[0] if found else None
+
+
+def answer_remeasure(s: Session, candidate: Candidate, evaluator_id: EvaluatorId, ask: int) -> None:
+    """Answer the remeasure ``ask`` (the id of its event): its own evaluation measured ``candidate``. The caller commits.
+
+    Only while it is pending, and only under the campaign's current evaluator: a newer ask, or a new evaluator, waits
+    for an evaluation of its own.
+    """
+    if evaluator_id != s.get_one(Campaign, candidate.campaign_id).evaluator_id:
+        return
+    for asked, _ in requests.pending(s, RemeasureRequested, Event.id == ask):
+        requests.answer(s, asked)
 
 
 def candidates_of(campaign: Campaign) -> ColumnElement[bool]:
@@ -381,9 +393,8 @@ def record(
 
     The one writer of measurements. ``run`` is the run that the daemon measured it for, ``rung`` the rung of the ladder that it measured, and
     ``stopped`` why the climb stopped there, and ``feedback`` the line that the result said of the run, which only its
-    event keeps. A measurement of the full panel under the campaign's current evaluator
-    answers the pending request to measure the candidate again (``request_remeasure``). A rung does not: the request
-    waits for the full panel.
+    event keeps. It answers no request to measure the candidate again: only that request's own evaluation does
+    (``answer_remeasure``).
     """
     measurement = Measurement(
         candidate=candidate,
@@ -406,9 +417,6 @@ def record(
         feedback=feedback,
     )
     emit(s, recorded, TargetRef(MEASUREMENT, measurement.id), actor)
-    if rung is None and evaluator_id == s.get_one(Campaign, candidate.campaign_id).evaluator_id:
-        for asked, _ in requests.pending(s, RemeasureRequested, Event.target == TargetRef(CANDIDATE, candidate.id)):
-            requests.answer(s, asked)
     return measurement
 
 

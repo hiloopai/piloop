@@ -7,13 +7,14 @@ campaign with many requests never holds back the requests of another, and inside
 for the ones before it. The queue is in the database: ``view`` answers it, and ``cancel`` takes from it.
 
 Every write of a row is here, one function for each move, each a guarded statement: ``request`` (absent → waiting),
-``start`` (waiting → running), ``lost`` (running → waiting, or absent when it was cancelled), ``cancel`` (waiting →
-absent, running → running and cancelled), ``withdraw`` (waiting under a retired evaluator → absent), ``done`` (running
-→ absent) and ``clear`` (every row, when a daemon starts). Only a running row is cancelled (``EVALUATION_CHECKS``).
+``start`` (waiting → running), ``unmade`` (waiting → absent), ``lost`` (running → waiting, or absent when it was
+cancelled), ``cancel`` (waiting → absent, running → running and cancelled), ``withdraw`` (waiting under a retired
+evaluator → absent), ``done`` (running → absent) and ``clear`` (every row, when a daemon starts). Only a running row is
+cancelled (``EVALUATION_CHECKS``).
 
 A remeasure that someone asked for (``ledger.request_remeasure``) enters the queue only when the daemon gets to it, one
-per campaign at a time. Until then ``requested`` lists its pending request, so ``piloop eval queue`` shows it from the
-moment it is asked.
+per campaign at a time, as a row of its own (``Evaluation.ask``). Until then ``requested`` lists its pending request, so
+``piloop eval queue`` shows it from the moment it is asked.
 """
 
 from collections import Counter
@@ -42,18 +43,21 @@ from piloop.plugins.campaign_type.kit.evaluation.wire import (
 )
 
 
-def request(s: Session, candidate_id: CandidateId, evaluator_id: EvaluatorId) -> tuple[Evaluation, bool]:
+def request(
+    s: Session, candidate_id: CandidateId, evaluator_id: EvaluatorId, ask: int | None = None
+) -> tuple[Evaluation, bool]:
     """Queue an evaluation of the candidate under the evaluator, or find the one that waits or runs. The caller commits.
 
     Returns ``(evaluation, created)``. The requests for one candidate and evaluator share one evaluation, so a tree is
-    evaluated once.
+    evaluated once. A new one answers ``ask``, the remeasure that it is made for (``Evaluation.ask``); one that is found
+    keeps its own.
     """
     found = s.scalar(
         select(Evaluation).where(Evaluation.candidate_id == candidate_id, Evaluation.evaluator_id == evaluator_id)
     )
     if found is not None:
         return found, False
-    evaluation = Evaluation(candidate_id=candidate_id, evaluator_id=evaluator_id)
+    evaluation = Evaluation(candidate_id=candidate_id, evaluator_id=evaluator_id, ask=ask)
     s.add(evaluation)
     s.flush()
     return evaluation, True
@@ -69,6 +73,20 @@ def start(s: Session, evaluation_id: int) -> bool:
         .execution_options(synchronize_session='fetch')
     ).first()
     return moved is not None
+
+
+def unmade(s: Session, evaluation_id: int) -> bool:
+    """A waiting evaluation whose job its request could not make leaves the queue. False when it does not wait.
+
+    The caller commits, with why (``InfraFailed``).
+    """
+    gone = s.execute(
+        delete(Evaluation)
+        .where(Evaluation.id == evaluation_id, Evaluation.started_at.is_(None))
+        .returning(Evaluation.id)
+        .execution_options(synchronize_session='fetch')
+    ).first()
+    return gone is not None
 
 
 def lost(s: Session, evaluation_id: int) -> bool:
@@ -173,21 +191,17 @@ def listing(s: Session) -> list[Evaluation]:
 
 
 def requested(s: Session) -> list[tuple[Candidate, datetime]]:
-    """Return each remeasure that someone asked for and that has no evaluation in the queue yet, with when it was asked.
+    """Return each remeasure that someone asked for and whose own evaluation is not in the queue yet, and when.
 
-    In campaign order, then oldest request first (``ledger.requested``). An evaluation that someone cancelled does not
-    answer a request that came after the cancel, so the request is listed while that evaluation stops.
+    In campaign order, then oldest request first (``ledger.requested``). Another evaluation of the candidate does not
+    answer it (``Evaluation.ask``), nor does one that someone cancelled, so the request is listed while that one runs.
     """
-    queued = set(
-        s.execute(
-            select(Evaluation.candidate_id, Evaluation.evaluator_id).where(Evaluation.cancelled_by.is_(None))
-        ).all()
-    )
+    queued = set(s.scalars(select(Evaluation.ask).where(Evaluation.cancelled_by.is_(None))))
     return [
         (candidate, asked.at)
         for campaign in s.scalars(select(Campaign).where(NOT_RETIRED).order_by(Campaign.id))
         for candidate, asked in ledger.requested(s, campaign)
-        if (candidate.id, campaign.evaluator_id) not in queued
+        if asked.id not in queued
     ]
 
 

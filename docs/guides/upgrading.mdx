@@ -149,6 +149,16 @@ evaluator that scored it. The cancel stands under the evaluator that it cancelle
 candidate, score it on the sealed split, or measure it again as the baseline or the best before an evaluator change.
 `piloop candidate remeasure` asks for it again. The table `cancels` holds each cancel.
 
+### A remeasure gets the evaluations that it asks for
+
+`piloop candidate remeasure --repeats 5` gets 5 evaluations of its own. An evaluation of the candidate that ran when
+you asked, or `piloop measurement add`, no longer ends the request: the candidate's mean includes it, and the request
+waits for its own evaluations. The column `evaluations.ask` names the request that an evaluation is for.
+
+A full disk while piloop stores a campaign's linked inputs is no longer the candidate's crash. It is an infra error, as
+in the evaluate command: the evaluation runs again after `[evaluation] infra_retry`, and after `stop_after_tries`
+failures in a row the campaign's measurements pause and piloop escalates.
+
 
 ### Upgrade from 0.5
 

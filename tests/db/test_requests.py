@@ -20,7 +20,13 @@ from piloop.plugins.campaign_type.kit.backlog.ids import IdeaStatus
 from piloop.plugins.campaign_type.kit.backlog.tables import Idea
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
-from piloop.plugins.campaign_type.kit.evaluation.measure import record, request_remeasure, requested
+from piloop.plugins.campaign_type.kit.evaluation.measure import (
+    answer_remeasure,
+    record,
+    remeasure_asked,
+    request_remeasure,
+    requested,
+)
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator
 from piloop.plugins.campaign_type.kit.runs.ids import IMPLEMENTER, RUN, RunId
 from piloop.plugins.campaign_type.kit.runs.tables import Run
@@ -111,18 +117,26 @@ def test_a_stop_is_answered_once_its_campaign_is_stopped_and_with_now_its_implem
         assert pending(s, StopRequested) == []
 
 
-def test_only_a_measurement_under_the_current_evaluator_answers_a_remeasure(db: Database, campaign: Campaign) -> None:
+def test_only_its_own_evaluation_under_the_current_evaluator_answers_a_remeasure(
+    db: Database, campaign: Campaign
+) -> None:
     with db.session() as s:
         baseline = s.get_one(Candidate, CandidateId(1))
         request_remeasure(s, baseline, System.HUMAN)
-        old = Evaluator(campaign_id=campaign.id, key='old', definition={})
-        s.add(old)
-        s.flush()
-        record(s, baseline, old.id, System.DAEMON, metrics={'score': 1.0}, error=None, seconds=1.0)
         s.commit()
-        assert [c.id for c, _ in requested(s, s.get_one(Campaign, campaign.id))] == [1], 'an old evaluator'
+        asked = remeasure_asked(s, baseline)
+        assert asked is not None
         current = s.get_one(Campaign, campaign.id).evaluator_id
         assert current is not None
         record(s, baseline, current, System.DAEMON, metrics={'score': 1.0}, error=None, seconds=1.0)
+        s.commit()
+        assert [c.id for c, _ in requested(s, s.get_one(Campaign, campaign.id))] == [1], 'another evaluation'
+        old = Evaluator(campaign_id=campaign.id, key='old', definition={})
+        s.add(old)
+        s.flush()
+        answer_remeasure(s, baseline, old.id, asked[0].id)
+        s.commit()
+        assert [c.id for c, _ in requested(s, s.get_one(Campaign, campaign.id))] == [1], 'an old evaluator'
+        answer_remeasure(s, baseline, current, asked[0].id)
         s.commit()
         assert requested(s, s.get_one(Campaign, campaign.id)) == []

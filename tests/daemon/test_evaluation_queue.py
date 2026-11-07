@@ -12,18 +12,21 @@ from pytest_mock import MockerFixture
 from sqlalchemy import delete, select
 
 from piloop.actor import System
+from piloop.config import CampaignConfig
 from piloop.db.events import in_order, latest
 from piloop.db.models import PROCESS, Campaign, Comment, Event, Pause, utcnow
 from piloop.db.session import Database
-from piloop.ids import TargetRef
-from piloop.otel import Tracer
+from piloop.ids import CampaignId, Revision, TargetRef
+from piloop.otel import Span, Tracer
 from piloop.plugins.campaign_type.kit.candidates.ids import CANDIDATE, CandidateId, Origin
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation import queue
 from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measured
 from piloop.plugins.campaign_type.kit.evaluation.jobs import KIND, EvaluationJob, InfraFailed
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
+    Split,
     current_evaluator,
+    remeasure_asked,
     request_remeasure,
     retired,
     sealed_evaluator,
@@ -33,7 +36,7 @@ from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measu
 from piloop.plugins.campaign_type.kit.pool.due import due
 from piloop.plugins.campaign_type.kit.pool.pool import best_of
 from piloop.plugins.campaign_type.kit.pool.scored import CandidateScored
-from piloop.plugins.campaign_type.kit.runs.controller import RunController
+from piloop.plugins.campaign_type.kit.runs.controller import Measuring, RunController
 from piloop.plugins.campaign_type.kit.runs.ids import RunId, RunStatus
 from piloop.plugins.campaign_type.kit.runs.tables import Run
 from piloop.plugins.escalation.contract import ESCALATION
@@ -104,6 +107,11 @@ def evaluated(tmp_path: Path) -> list[str]:
 def run_candidates(db: Database, run_id: RunId) -> list[Candidate]:
     with db.session() as s:
         return list(s.scalars(select(Candidate).where(Candidate.run_id == run_id).order_by(Candidate.id)))
+
+
+type MeasureArgs = tuple[CampaignId, CampaignConfig, Revision, CandidateId, EvaluatorId]
+"""What ``RunController._measure`` takes after the run: the campaign, its config, the commit, the candidate and the
+evaluator."""
 
 
 RETRY = EvaluationSettings(infra_retry=timedelta(milliseconds=50))
@@ -781,7 +789,9 @@ def test_a_requested_remeasure_is_listed_as_waiting_before_the_daemon_queues_it(
         request_remeasure(s, base, System.HUMAN)
         s.commit()
         assert [c.id for c, _ in queue.requested(s)] == [base.id], 'listed from the moment it is accepted'
-        evaluation, _ = queue.request(s, base.id, evaluator)
+        asked = remeasure_asked(s, base)
+        assert asked is not None
+        evaluation, _ = queue.request(s, base.id, evaluator, asked[0].id)
         assert queue.requested(s) == [], 'once queued, it is listed as its evaluation, not twice'
         evaluation.started_at = utcnow()  # a worker took it
         queue.cancel(s, base.id, System.HUMAN)
@@ -811,3 +821,109 @@ def test_a_waiting_evaluation_that_this_daemon_did_not_ask_for_is_never_submitte
     ex = queued_executor(db, runtime, tmp_path, slots=2)  # a free slot that the foreign row does not take
     ex.remeasure(base.id)
     assert rows(db) == [(other_id, False, None)], 'measured, and the foreign row still waits'
+
+
+def measuring(db: Database, campaign: Campaign, candidate_id: CandidateId) -> MeasureArgs:
+    """What ``RunController._measure`` takes to measure ``candidate_id`` with its campaign's current evaluator."""
+    with db.session() as s:
+        proj = s.get_one(Campaign, campaign.id)
+        evaluator = current_evaluator(s, proj, proj.config).id
+        s.commit()
+        return proj.id, proj.config, s.get_one(Candidate, candidate_id).revision, candidate_id, evaluator
+
+
+def test_a_request_reads_the_infra_error_of_its_put_back_evaluation_that_another_request_ran_as_its_own(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path
+) -> None:
+    """A request that failed for the machine puts its evaluation back and waits to try again. A second request runs
+    that evaluation meanwhile, and it fails for the machine again. The first counts that failure: its second in a row
+    reaches ``stop_after_tries``. It read it as a cancel, which dropped the count and recorded no failure."""
+    set_config(db, campaign, evaluate=infra_first(tmp_path, times=99))
+    settings = EvaluationSettings(infra_retry=timedelta(minutes=10), stop_after_tries=2)
+    ex = queued_executor(db, runtime, tmp_path, 1, settings)
+    base = baseline(db, campaign.id).id
+    args = measuring(db, campaign, base)
+    ended: dict[str, object] = {}
+    first = in_thread(lambda: ended.update(first=ex._measure(None, *args, tmp_path / 'first')))
+    wait_until(
+        lambda: (tmp_path / 'tries').exists() and tries(tmp_path) == 1 and rows(db) == [(base, False, None)],
+        'the first request to wait to try again',
+    )
+    ended['second'] = ex._request(None, *args, tmp_path / 'second', 1, None, Split.VISIBLE, None)
+    first.join(30)
+    assert isinstance(ended['second'], InfraFailed)
+    assert ended['first'] is Measuring.ABANDONED, 'two failures in a row: the measurements wait for a human'
+    with db.session() as s:
+        assert s.get_one(Campaign, campaign.id).paused is Pause.ALL
+        assert s.get_one(Candidate, base).cancels == [], 'no cancel'
+
+
+def test_a_remeasure_whose_inputs_cannot_be_stored_fails_for_the_machine_not_for_its_candidate(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """A full disk while piloop stores the campaign's linked inputs is not the candidate's crash, which would count as
+    its measurement and never run again. It is an infra error like one in the job: it runs again, and after
+    ``stop_after_tries`` the measurements wait for a human."""
+    settings = EvaluationSettings(
+        infra_retry=timedelta(milliseconds=10), infra_retry_max=timedelta(milliseconds=20), stop_after_tries=2
+    )
+    ex = queued_executor(db, runtime, tmp_path, 1, settings)
+    mocker.patch.object(ex.sources, 'source', side_effect=OSError(28, 'No space left on device'))
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        before = len(s.get_one(Candidate, base).measurements)
+    ex.remeasure(base)
+    with db.session() as s:
+        assert len(s.get_one(Candidate, base).measurements) == before, 'no crash'
+        failed = [p.error for _, p in in_order(s, InfraFailed)]
+        assert failed == ['cannot store its inputs: OSError: [Errno 28] No space left on device'] * 2
+        assert s.get_one(Campaign, campaign.id).paused is Pause.ALL
+    assert rows(db) == [], 'nothing waits'
+
+
+def test_a_remeasure_that_fails_for_another_cause_records_nothing_and_the_next_pass_asks_again(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """A locked database, say, is not the candidate's crash: the span records it, and the ask stays open."""
+    ex = queued_executor(db, runtime, tmp_path, slots=1)
+    mocker.patch.object(ex, '_measure', side_effect=RuntimeError('database is locked'))
+    errors = mocker.spy(Span, 'error')
+    base = baseline(db, campaign.id).id
+    with db.session() as s:
+        request_remeasure(s, s.get_one(Candidate, base), System.HUMAN, repeats=1)
+        s.commit()
+        before = len(s.get_one(Candidate, base).measurements)
+    ex.remeasure(base)
+    assert [str(c.args[1]) for c in errors.call_args_list] == ['database is locked']
+    with db.session() as s:
+        assert len(s.get_one(Candidate, base).measurements) == before, 'no crash'
+        assert [c.id for c in due(s, s.get_one(Campaign, campaign.id))] == [base], 'the next pass asks again'
+
+
+def test_a_remeasure_is_answered_only_by_an_evaluation_of_its_own_with_the_repeats_that_it_asked_for(
+    db: Database, campaign: Campaign, runtime: ScriptRuntime, tmp_path: Path, mocker: MockerFixture
+) -> None:
+    """An evaluation that runs when someone asks for 2, and that the remeasure joins, measures once: that is not what
+    was asked. It answered the ask. Now the ask stays open, and the daemon's next remeasure evaluates it twice."""
+    (tmp_path / 'hold').touch()
+    set_config(db, campaign, evaluate=held_evaluate(tmp_path))
+    ex = queued_executor(db, runtime, tmp_path, slots=1)
+    base = baseline(db, campaign.id).id
+    args = measuring(db, campaign, base)
+    waits = mocker.spy(queue, 'request')
+    running = in_thread(lambda: ex._measure(None, *args, tmp_path / 'running'))
+    wait_until(lambda: len(evaluated(tmp_path)) == 1, 'the evaluation that runs before the ask')
+    with db.session() as s:
+        request_remeasure(s, s.get_one(Candidate, base), System.HUMAN, repeats=2)
+        s.commit()
+    joined = in_thread(lambda: ex.remeasure(base))
+    wait_until(lambda: waits.call_count == 2, 'the remeasure joins')
+    (tmp_path / 'hold').unlink()
+    running.join(30)
+    joined.join(30)
+    with db.session() as s:
+        assert remeasure_asked(s, s.get_one(Candidate, base)) is not None, 'still asked'
+    ex.remeasure(base)
+    assert len(evaluated(tmp_path)) == 3, 'once before the ask, then twice for it'
+    with db.session() as s:
+        assert remeasure_asked(s, s.get_one(Candidate, base)) is None

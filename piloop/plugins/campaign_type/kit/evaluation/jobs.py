@@ -42,7 +42,7 @@ from piloop.plugins.campaign_type.kit.evaluation.ids import EvaluatorId, Measure
 from piloop.plugins.campaign_type.kit.evaluation.ladder import Gate
 from piloop.plugins.campaign_type.kit.evaluation.measure import evaluator_runners, save_units
 from piloop.plugins.campaign_type.kit.evaluation.ops import sealed_refused
-from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluator
+from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Evaluator
 from piloop.plugins.campaign_type.kit.runs.ids import RunId
 from piloop.plugins.executor.contract import Applying, Control, Job, JobKind, Report, Settled, Site
 from piloop.plugins.executor.kit.jobs import SHOWN, rebuilt
@@ -218,10 +218,22 @@ def not_started(s: Session, job: EvaluationJob, error: str) -> None:
     emit(s, failed, TargetRef(CANDIDATE, job.candidate), System.DAEMON)
 
 
-def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: Applying) -> None:
-    """Record each sample of an evaluation as one measurement, and take the evaluation out of the queue.
+def unmade(s: Session, evaluation: Evaluation, error: str) -> InfraFailed:
+    """Its request could not make the job of a waiting evaluation: it leaves the queue as an infra error.
 
-    A cancelled evaluation records nothing (``queue.cancel``). Nor does one that ends while the daemon stops: its
+    Nothing ran, so nothing is the candidate's: its request asks again, after its backoff. The caller commits.
+    """
+    queue.unmade(s, evaluation.id)
+    failed = InfraFailed(evaluation=evaluation.id, error=error)
+    emit(s, failed, TargetRef(CANDIDATE, evaluation.candidate_id), System.DAEMON)
+    return failed
+
+
+def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: Applying) -> None:
+    """Record each sample of an evaluation as one measurement, take the evaluation out of the queue, and answer its ask.
+
+    The remeasure that it was made for (``Evaluation.ask``) is answered (``answer_remeasure``), whatever it measured: a
+    score, a crash, or a crash at a rung. A cancelled evaluation records nothing (``queue.cancel``). Nor does one that ends while the daemon stops: its
     evaluator was killed, and the next daemon measures it again. Nor does an infra error: it emits ``InfraFailed``, and
     its request asks again. A sealed command whose result piloop refuses escalates too, once (``sealed_refused``).
     """
@@ -237,6 +249,8 @@ def measured(s: Session, job: EvaluationJob, report: EvaluationReport, daemon: A
         return
     for sample in report.samples:
         record(s, daemon.home / UNITS_DIR, job.run, job.candidate, evaluation.evaluator_id, sample)
+    if evaluation.ask is not None:
+        ledger.answer_remeasure(s, s.get_one(Candidate, job.candidate), evaluation.evaluator_id, evaluation.ask)
 
 
 def record(

@@ -152,5 +152,9 @@ class Evaluation(Base):
     cancelled_by: Mapped[str | None]
     """Who cancelled it while it ran: the daemon stops the evaluator and records nothing. A waiting one that is
     cancelled leaves the queue instead, so only a running one has it (a CHECK)."""
+    ask: Mapped[int | None]
+    """The remeasure that it answers (``RemeasureRequested``), by the id of its event: set by the request that made it
+    for the ask. NULL for any other. Only its own evaluation answers an ask: one that ran before it, or that another
+    request made, measures the candidate but leaves the ask open."""
 
     candidate: Mapped[Candidate] = relationship()

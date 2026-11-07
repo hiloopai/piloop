@@ -466,6 +466,7 @@ CREATE TABLE evaluations (
 	created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
 	started_at DATETIME,
 	cancelled_by VARCHAR,
+	ask INTEGER,
 	UNIQUE (candidate_id, evaluator_id),
 	CONSTRAINT "evaluations.only a running evaluation is cancelled" CHECK (cancelled_by IS NULL OR started_at IS NOT NULL),
 	CONSTRAINT "evaluations.cancelled_by must be a text value" CHECK (typeof(cancelled_by) IN ('text', 'null')),

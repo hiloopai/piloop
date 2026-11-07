@@ -26,7 +26,7 @@ from piloop.net import tokens
 from piloop.plugins.campaign_type.kit.candidates.ids import CandidateId
 from piloop.plugins.campaign_type.kit.candidates.tables import Candidate
 from piloop.plugins.campaign_type.kit.evaluation.ids import RungName
-from piloop.plugins.campaign_type.kit.evaluation.measure import record, remeasure_asked
+from piloop.plugins.campaign_type.kit.evaluation.measure import answer_remeasure, record, remeasure_asked
 from piloop.plugins.campaign_type.kit.evaluation.tables import Evaluation, Measurement
 from piloop.plugins.campaign_type.kit.evaluation.wire import (
     CancelledBy,
@@ -204,11 +204,16 @@ def scored(
     metrics: dict[str, float] | None = None,
     error: str | None = None,
 ) -> str:
-    """Record an evaluation of ``candidate`` as the daemon does, then its score: the line its worker hears."""
+    """Record an evaluation of ``candidate`` as the daemon does, then its score: the line its worker hears.
+
+    It answers the pending remeasure, as the evaluation that the daemon makes for one does.
+    """
     with db.session() as s:
         row, here = s.get_one(Candidate, candidate), s.get_one(Campaign, campaign.id)
         assert here.evaluator_id is not None  # a registered campaign has its evaluator
         record(s, row, here.evaluator_id, System.DAEMON, metrics=metrics or {}, error=error, seconds=1.0)
+        if (asked := remeasure_asked(s, row)) is not None:
+            answer_remeasure(s, row, here.evaluator_id, asked[0].id)
         s.flush()
         told = record_scored(s, Pool.of(s, here, track_of(here.config, row)), candidate).told
         s.commit()

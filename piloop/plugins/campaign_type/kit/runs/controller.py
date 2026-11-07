@@ -88,6 +88,7 @@ from piloop.plugins.campaign_type.kit.evaluation.jobs import (
     Sample,
     not_started,
     record,
+    unmade,
 )
 from piloop.plugins.campaign_type.kit.evaluation.measure import (
     Split,
@@ -125,6 +126,7 @@ from piloop.plugins.executor.contract import (
     ExecutorConfig,
     Host,
     JobKey,
+    Source,
 )
 from piloop.plugins.network.contract import NETWORKS, Network, NetworkHost
 from piloop.plugins.role.contract import Continuity
@@ -772,14 +774,15 @@ class RunController:
     def remeasure(self, candidate_id: CandidateId) -> None:
         """Evaluate a candidate with the campaign's current evaluator, as ``pool.due`` asks, then confirm it if due.
 
-        Never raises. If the evaluation cannot start, for example because the commit is gone, a crashed measurement is
-        recorded. It is a result like any other, so the candidate is not tried again with this evaluator unless someone
-        asks (``request_remeasure``). What someone asked for gets the evaluations that they asked for, and the baseline
-        and the carried best the ones that confirm them (``Status.needs``); anything else gets one. A candidate whose mean now beats the best's,
-        such as a new reference, is confirmed (``_confirm``), and a run's worker hears where its candidate stands
-        (``CandidateScored``). A confirmed candidate that the sealed split is due to score (``Pool.seal_due``) is only
-        scored there. A baseline
-        that fails and never measured pauses its campaign (``hold_on_failed_baseline``).
+        Never raises. If its campaign's repo is gone, a crashed measurement is recorded. It is a result like any other,
+        so the candidate is not tried again with this evaluator unless someone asks (``request_remeasure``). Any other
+        failure is not the candidate's: it is an infra error (``_measure``), or the span records it and the next pass
+        asks again. What someone asked for gets an evaluation of its own with the evaluations that they asked for
+        (``Evaluation.ask``), and the baseline and the carried best the ones that confirm them (``Status.needs``);
+        anything else gets one. A candidate whose mean now beats the best's, such as a new reference, is confirmed
+        (``_confirm``), and a run's worker hears where its candidate stands (``CandidateScored``). A confirmed candidate
+        that the sealed split is due to score (``Pool.seal_due``) is only scored there. A baseline that fails and never
+        measured pauses its campaign (``hold_on_failed_baseline``).
         """
         with self._db.session() as s:
             candidate = s.get_one(Candidate, candidate_id)
@@ -790,26 +793,35 @@ class RunController:
             asked, now = remeasure_asked(s, candidate), status(candidate, evaluator_id)
             confirming = candidate.id in {c.id for c in firsts(s, campaign)}
             need = now.needs(confirm_runs(s, campaign, evaluator_id))
-            repeats = asked.repeats if asked is not None else max(need, 1) if confirming else 1
+            repeats = asked[1].repeats if asked is not None else max(need, 1) if confirming else 1
+            ask = asked[0].id if asked is not None else None
             visible = asked is not None or confirming or not now.measured
             campaign_id, revision, run_id = campaign.id, candidate.revision, candidate.run_id
             vcs, campaign_path = vcs_of(campaign), Path(campaign.path)
         eval_dir = campaign_dir(self._home, campaign_id) / 'measure' / f'{candidate_id}-e{evaluator_id}'
         try:
-            with closing(vcs.open(campaign_path)):  # a repo that is gone is the candidate's crash, not a job's
+            with closing(vcs.open(campaign_path)):
                 pass
-            ended = (
-                self._measure(None, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir, repeats=repeats)
-                if visible
-                else Measuring.MEASURED
-            )
-        except Exception as e:  # the thread's last frame: the failure is the candidate's measurement, never lost
+        except Exception as e:  # a repo that is gone is the candidate's crash, not a job's
             with self._db.session() as s:
                 error = Sample(metrics={}, seconds=0.0, error=f'{type(e).__name__}: {e}')
                 record(s, self._units_dir, None, candidate_id, evaluator_id, error)
                 hold_on_failed_baseline(s, s.get_one(Candidate, candidate_id), None)
                 s.commit()
             return
+        with self._tracer.span('piloop.remeasure', candidate=candidate_id) as span:
+            try:
+                ended = (
+                    self._measure(
+                        None, campaign_id, cfg, revision, candidate_id, evaluator_id, eval_dir, repeats=repeats, ask=ask
+                    )
+                    if visible
+                    else Measuring.MEASURED
+                )
+            except Exception as e:  # the thread's last frame: what failed goes into the span, never lost
+                span.error(e)
+                return
+            span.set(status=ended)
         if ended is not Measuring.MEASURED:
             return  # a stop, a cancel, a new evaluator or the last infra error ended it: there is nothing new
         with self._db.session() as s:
@@ -1067,35 +1079,41 @@ class RunController:
         repeats: int = 1,
         gate: CandidateId | None = None,
         split: Split = Split.VISIBLE,
+        ask: int | None = None,
     ) -> Measuring:
         """Measure ``revision`` on the executor, and wait until its measurement is recorded. Return how it ended.
 
         ``repeats`` samples of ``revision``. With ``gate``, the candidate whose rungs the ladder's stops compare with
         (the best), the first sample may stop at a rung (``EvaluationJob.gate``): only a run's own version's first
-        evaluation. Without, every sample climbs every rung.
+        evaluation. Without, every sample climbs every rung. ``ask`` is the remeasure that it is for: only an
+        evaluation that this request makes answers it (``Evaluation.ask``).
 
-        An evaluation that failed for a cause that is not its candidate's records nothing (``InfraFailed``): it waits in
-        the queue, where ``piloop eval queue`` lists it and ``piloop eval cancel`` cancels it, and runs again after
-        ``[evaluation] infra_retry``, twice as long after each failure up to ``infra_retry_max``. Each failure is an
-        event. It ends once it measures, someone cancels it, the daemon stops, a new evaluator of its split replaces
+        An evaluation that failed for a cause that is not its candidate's records nothing (``InfraFailed``), whichever
+        request ran it (``left``): it waits in the queue, where ``piloop eval queue`` lists it and ``piloop eval
+        cancel`` cancels it, and runs again after ``[evaluation] infra_retry``, twice as long after each failure up to
+        ``infra_retry_max``. Each failure is an event. It ends once it measures, someone cancels it, the daemon stops, a new evaluator of its split replaces
         ``evaluator_id`` (``queue.withdraw``): the caller then asks the current one (``Measuring.REPLACED``), or it
         failed ``stop_after_tries`` times in a row: then the campaign's measurements pause, and piloop escalates
         (``hold_on_infra_errors``).
         """
         failures, retry = 0, min(self._evaluation.infra_retry, self._evaluation.infra_retry_max)
+        request = partial(
+            self._request,
+            run_id,
+            campaign_id,
+            cfg,
+            revision,
+            candidate_id,
+            evaluator_id,
+            eval_dir,
+            repeats,
+            gate,
+            split,
+            ask,
+        )
+        ended = request()
         while True:
-            match ended := self._request(
-                run_id,
-                campaign_id,
-                cfg,
-                revision,
-                candidate_id,
-                evaluator_id,
-                eval_dir,
-                repeats,
-                gate,
-                split,
-            ):
+            match ended:
                 case InfraFailed(error=error):
                     failures += 1
                     if failures >= self._evaluation.stop_after_tries:
@@ -1112,7 +1130,7 @@ class RunController:
                     # waits in the queue meanwhile, so a cancel finds it; the lock as in ``_request``: the runs that
                     # shared the evaluation all put it back
                     with self.launcher.lock, self._db.session() as s:
-                        waiting, _ = queue.request(s, candidate_id, evaluator_id)
+                        waiting, _ = queue.request(s, candidate_id, evaluator_id, ask)
                         s.commit()
                         row, before = waiting.id, _last_measurement(s, candidate_id, evaluator_id)
                     self.dispatch()  # as after each request: a new evaluator takes it from the queue
@@ -1125,10 +1143,12 @@ class RunController:
                     retry = min(retry * 2, self._evaluation.infra_retry_max)
                     if self.launcher.cancelled.is_set():
                         return Measuring.STOPPED
-                    if gone:  # another request ran it meanwhile, someone cancelled it, or a new evaluator took it
-                        with self._db.session() as s:
-                            after = _last_measurement(s, candidate_id, evaluator_id)
-                            return Measuring.MEASURED if after != before else _unmeasured(s, evaluator_id)
+                    if not gone:
+                        ended = request()
+                        continue
+                    # another request ran it meanwhile, someone cancelled it, or a new evaluator took it
+                    with self._db.session() as s:
+                        ended = left(s, row, candidate_id, evaluator_id, before)
                 case Measuring():
                     return ended
                 case never:
@@ -1146,25 +1166,38 @@ class RunController:
         repeats: int,
         gate: CandidateId | None,
         split: Split,
+        ask: int | None,
     ) -> Measuring | InfraFailed:
-        """Ask for one evaluation (``_measure``), and wait until it leaves the queue. Return how it ended.
+        """Ask for one evaluation (``_measure``), and wait until it leaves the queue. Return how it ended (``left``).
 
         A request for a candidate that already waits or runs under the evaluator waits for that evaluation and submits
         nothing of its own (``queue.request``). It is submitted when the queue gives it a slot (``dispatch``), and its
         result records the measurement (``CampaignResults``). An evaluation that fails is a crash, a measurement too.
         A cancelled one records nothing (``queue.cancel``), nor does an infra error, which says so (``InfraFailed``).
+        Nor does a job whose campaign's inputs cannot be stored (a full disk, say): never its candidate's fault, it is
+        an infra error too (``unmade``).
         """
-        artifact = self.sources.source(self._campaign(campaign_id), revision)
+        try:
+            artifact: Source | str = self.sources.source(self._campaign(campaign_id), revision)
+        except Exception as e:  # only a request that makes the job needs the inputs: a joined one waits all the same
+            artifact = f'cannot store its inputs: {type(e).__name__}: {e}'
         with self.launcher.lock:
             if self.launcher.cancelled.is_set():
                 return Measuring.STOPPED
             with self._db.session() as s:  # two requests for one tree must not both insert it
                 before = _last_measurement(s, candidate_id, evaluator_id)
-                evaluation, created = queue.request(s, candidate_id, evaluator_id)
-                # a row that waits with no job of this daemon is one that an infra error put back (``_measure``)
-                mine = created or (evaluation.started_at is None and evaluation.id not in self._jobs)
+                evaluation, created = queue.request(s, candidate_id, evaluator_id, ask)
+                # a row that waits with no job of this daemon is one that an infra error put back (``_measure``): a
+                # request for the same ask makes its job again
+                mine = created or (
+                    evaluation.started_at is None and evaluation.id not in self._jobs and evaluation.ask == ask
+                )
                 job = None
                 if mine:
+                    if isinstance(artifact, str):
+                        failed = unmade(s, evaluation, artifact)
+                        s.commit()
+                        return failed
                     score = Score.of(cfg.all_tracks[0].primary)
                     job = EvaluationJob(
                         evaluation=evaluation.id,
@@ -1213,28 +1246,19 @@ class RunController:
                 span.set(status='cancelled')
                 return Measuring.STOPPED
             with self._db.session() as s:
-                measurement = s.scalars(
-                    select(Measurement)
-                    .where(
-                        Measurement.candidate_id == candidate_id,
-                        Measurement.evaluator_id == evaluator_id,
-                        Measurement.id > (before or 0),
-                    )
-                    .order_by(Measurement.id.desc())
-                    .limit(1)
-                ).first()
-                if measurement is None:
-                    if (infra := latest(s, InfraFailed, has(InfraFailed, evaluation=evaluation_id))) is not None:
+                match ended := left(s, evaluation_id, candidate_id, evaluator_id, before):
+                    case InfraFailed():
                         span.set(status='infra_error')
-                        return infra[1]
-                    span.set(status=(unmeasured := _unmeasured(s, evaluator_id)))
-                    return unmeasured
-                span.set(
-                    measurement=measurement.id,
-                    error=measurement.error,
-                    **{f'metric.{k}': v for k, v in measurement.metrics.items()},
-                )
-        return Measuring.MEASURED
+                    case Measuring.MEASURED:
+                        measurement = s.get_one(Measurement, _last_measurement(s, candidate_id, evaluator_id))
+                        span.set(
+                            measurement=measurement.id,
+                            error=measurement.error,
+                            **{f'metric.{k}': v for k, v in measurement.metrics.items()},
+                        )
+                    case _:
+                        span.set(status=ended)
+        return ended
 
     def _close(self, span: Span, run_id: RunId, end: RunEnd, error: str | None) -> None:
         """Record the run's end when its implementer ends, so the slot is free while the commits are scored (``scoring``)."""
@@ -1323,11 +1347,20 @@ def track_brief(idea: Idea) -> str | None:
     return '\n\n'.join(p for p in (rule, addendum) if p)
 
 
-def _unmeasured(s: Session, evaluator_id: EvaluatorId) -> Literal[Measuring.CANCELLED, Measuring.REPLACED]:
-    """Why an evaluation under ``evaluator_id`` left the queue with no measurement and no infra error.
+def left(
+    s: Session, evaluation_id: int, candidate_id: CandidateId, evaluator_id: EvaluatorId, before: MeasurementId | None
+) -> Literal[Measuring.MEASURED, Measuring.CANCELLED, Measuring.REPLACED] | InfraFailed:
+    """How the evaluation ``evaluation_id`` ended, once it left the queue, for a request that waited for it.
 
-    A new evaluator took it from the queue (``queue.withdraw``), or someone cancelled it (``queue.cancel``).
+    ``before`` is the candidate's last measurement under ``evaluator_id`` when the request found the evaluation. The one
+    place that says it, whichever request ran the evaluation: it failed for a cause that is not its candidate's
+    (``InfraFailed``), so the request asks again; it measured the candidate (``MEASURED``); else a new evaluator took it
+    from the queue (``REPLACED``, ``queue.withdraw``), or someone cancelled it (``CANCELLED``, ``queue.cancel``).
     """
+    if (infra := latest(s, InfraFailed, has(InfraFailed, evaluation=evaluation_id))) is not None:
+        return infra[1]
+    if _last_measurement(s, candidate_id, evaluator_id) != before:
+        return Measuring.MEASURED
     return Measuring.REPLACED if retired(s, evaluator_id) else Measuring.CANCELLED
 
 
