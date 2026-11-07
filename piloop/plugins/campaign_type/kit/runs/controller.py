@@ -580,9 +580,7 @@ class RunController:
         """
         with self._db.session() as s:
             agent = s.get_one(AgentSession, agent_session_id)
-            if agent.deadline is None:
-                return False
-            return (agent.deadline - agent.started_at).total_seconds() < role_timeout
+            return agent.deadline is not None and (agent.deadline - agent.started_at).total_seconds() < role_timeout
 
     def _cut(
         self,
