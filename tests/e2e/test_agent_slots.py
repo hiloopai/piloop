@@ -4,7 +4,8 @@
 
 Each campaign takes four implementers (``max_concurrent``) but two runs (``[stop] max_runs``), and the pool ``serve``
 takes two agents. The campaigns start paused, with two small ideas each on the board; once they resume, each run's
-worker claims an idea or proposes its own: six runs, at most two at a time. About 8 minutes and 0.4 USD.
+worker claims one of them (``CLAIM_THE_BOARD``) and does only its plan: six runs, at most two at a time. About 8 minutes
+and 0.4 USD.
 """
 
 import shutil
@@ -15,7 +16,7 @@ import pytest
 import tomli_w
 
 from tests.conftest import wait_until
-from tests.e2e.campaign import OPEN, TEMPLATES, Smoke, merged, needs
+from tests.e2e.campaign import CLAIM_THE_BOARD, OPEN, TEMPLATES, Smoke, merged, needs
 from tests.e2e.conftest import MakeCampaign
 
 pytestmark = pytest.mark.e2e
@@ -26,7 +27,6 @@ CONFIG = {
     'plugins': {
         'role': {
             'implementer': {'max_concurrent': 4, 'timeout': 600},
-            'research': {'triggers': []},
             'orchestrator': {'triggers': []},
         },
         'stop_rule': {'max_runs': 2, 'max_hours': 1, 'max_tokens': 20_000_000},
@@ -34,8 +34,9 @@ CONFIG = {
 }
 OTHERS = ('enwik8-b', 'enwik8-c')
 """The two campaigns that join the first one's home."""
-LEVELS = (1, 9)
-"""One idea for each zlib level, in each campaign."""
+LEVELS = (1, 6)
+"""One idea for each zlib level, in each campaign. Neither is the template's level 9: a plan that changes nothing has
+nothing to submit, so its worker gives up, and its idea goes back to the board for another run."""
 PAUSED = 'e2e: the ideas of all three campaigns go in first'
 
 
@@ -46,12 +47,14 @@ def host(make_campaign: MakeCampaign) -> Iterator[Smoke]:
         config=CONFIG,
         home_config={'plugins': {'executor': {'provider': 'workers', 'pools': {'serve': {'agents': AGENTS}}}}},
         paused=PAUSED,
+        brief=CLAIM_THE_BOARD,
     )
     toml = tomllib.loads((first.repo / 'piloop.toml').read_text())  # its evaluate command waits on the same hold
     for name in OTHERS:
         repo = first.dir / name
         shutil.copytree(TEMPLATES / 'enwik8', repo, ignore=shutil.ignore_patterns('data', '.venv', '__pycache__'))
         (repo / 'piloop.toml').write_text(tomli_w.dumps(merged(toml, {'name': name})))
+        shutil.copy(first.repo / 'brief.md', repo / 'brief.md')  # with CLAIM_THE_BOARD, as the first campaign's
         first.init_paused(repo, 'enwik8', PAUSED)
     first.start_readers()
     yield first
@@ -89,7 +92,7 @@ def test_six_runs_go_two_at_a_time_across_the_campaigns(host: Smoke) -> None:
 
     wait_until(settled, timeout=900)
     claims = host.sql('SELECT idea_id FROM runs')
-    assert None not in [r['idea_id'] for r in claims], 'each worker claimed an idea, or proposed its own'
+    assert None not in [r['idea_id'] for r in claims], 'each worker claimed an idea'
     host.join_readers()
     agents = [a for _, _, a in host.queue_samples]
     assert agents, f'no sample; reader errors {host.errors[-3:]}'

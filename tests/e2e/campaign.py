@@ -48,10 +48,13 @@ def needs(*tests: FunctionType) -> pytest.MarkDecorator:
 
 
 CLAIM_THE_BOARD = (
-    'This campaign tests piloop itself. Claim an open idea of the board, never one of your own, and follow its plan'
-    ' exactly.'
+    'This campaign tests piloop itself, not the compressor. Claim an open idea of the board with `piloop idea claim`,'
+    ' never one of your own. Do what its plan says, exactly, and nothing more: no idea of your own and no further'
+    ' improvement. A message from piloop, such as a wrap-up, comes before the plan.'
 )
-"""A ``brief`` for ``make_campaign``: a worker that proposed its own idea would leave the test's idea unclaimed."""
+"""A ``brief`` for ``make_campaign``: the scenarios seed the board, and the product brief tells a worker that a plan is a
+starting point and to keep improving. Without this, a worker proposes its own idea and leaves the test's unclaimed, and
+its run takes as long as its timeout allows."""
 
 
 def held(toml: Toml, hold: Path) -> dict[str, object]:

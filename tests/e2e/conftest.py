@@ -186,7 +186,6 @@ def make_campaign(request: pytest.FixtureRequest, piloop_install: Install, e2e_m
             {
                 'plugins': {
                     'harness': {'use': [harness], harness: {'model': model}},
-                    'role': {'research': {'model': {harness: model}}},
                 },
             },
         )
