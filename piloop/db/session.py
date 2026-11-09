@@ -115,6 +115,17 @@ RELEASES = (
             'secrets/local': MigrationRevision('0001'),
         },
     ),
+    Release(
+        Version(0, 6, 0),
+        {
+            CORE: MigrationRevision('0080'),
+            'archive/local': MigrationRevision('0003'),
+            'executor/workers': MigrationRevision('0001'),
+            'memory/local': MigrationRevision('0002'),
+            'optimization': MigrationRevision('0009'),
+            'secrets/local': MigrationRevision('0001'),
+        },
+    ),
 )
 """Every minor release, oldest first. The newest is the floor: this piloop migrates each chain of a database from its
 head there or from a newer revision, never from an older one, so a database upgrades one minor release at a time.

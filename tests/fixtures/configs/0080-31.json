@@ -124,7 +124,6 @@
         },
         "timeout": 14400.0
       },
-      "scout": {},
       "watchdog": {
         "interval": 1800.0,
         "max_concurrent": 1,
@@ -135,5 +134,9 @@
       "use": "subprocess"
     }
   },
-  "tracks": {}
+  "tracks": {},
+  "evaluator": {
+    "scoring": "run_end",
+    "noise_runs": 1
+  }
 }

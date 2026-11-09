@@ -71,7 +71,6 @@
     "role": {
       "implementer": {
         "addendum": null,
-        "explore_every": 0,
         "harnesses": null,
         "max_concurrent": 3,
         "mcp": [],
@@ -87,8 +86,7 @@
         "model": null,
         "timeout": 7200.0,
         "triggers": [
-          "research_low_water",
-          "seed"
+          "research_low_water"
         ]
       },
       "watchdog": {
@@ -143,7 +141,14 @@
           "billing_usd"
         ]
       }
+    },
+    "verdict_rule": {
+      "provider": "bootstrap"
     }
   },
-  "tracks": {}
+  "tracks": {},
+  "evaluator": {
+    "scoring": "run_end",
+    "noise_runs": 1
+  }
 }

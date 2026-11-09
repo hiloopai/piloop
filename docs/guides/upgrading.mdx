@@ -179,22 +179,13 @@ A rung of the ladder still reports its metrics alone.
 - `Surface.SWEEP` is gone: write `Surface.ORCHESTRATOR`.
 - A vcs provider's `Version` has no `skip` and no `notes`, and the prompts have no `{vcs:mark}` part.
 
-## Changes after 0.6.0
-
 ### The orchestrator role is removed
 
 piloop launches no orchestrator of its own. Every escalation reaches your notifiers at once, and the coding agent that
 you talk to is the [orchestrator](/concepts/orchestrator), with the `piloop-operate` skill. A plugin can still add a
-role that starts its own agents ([Roles](/plugins/agents#roles)).
-
-These keys still load, with a warning, until 0.7.0, and do nothing:
-
-| Removed | Its keys |
-|---|---|
-| The orchestrator role, with its `news` and `run_failed` triggers. | `[plugins.role.orchestrator]` |
-| The wait of an agent's escalation for the orchestrator. | `[plugins.escalation] grace` |
-| The orchestrator's wake on an evaluation that retries. | `[evaluation] wake_after_tries` of `config.toml` |
-| The sections of the incidents that woke it, and its guide of commands. | `incidents`, `reported` and `research_commands` in a list of sections, and their `[plugins.section.<name>]` |
+role that starts its own agents ([Roles](/plugins/agents#roles)). Its keys are in
+[Removed keys](#removed-keys): `[plugins.role.orchestrator]`, `[plugins.escalation] grace`,
+`[evaluation] wake_after_tries` of `config.toml`, and the `incidents`, `reported` and `research_commands` sections.
 
 `piloop inbox wait` and `GET /v1/inbox/news` no longer return news of kind `anomaly_requested`.
 
@@ -202,7 +193,7 @@ These keys still load, with a warning, until 0.7.0, and do nothing:
 
 Each party, such as the people or the orchestrator, acknowledges an inbox item for itself. The table `acks` holds one
 row for each party that acknowledged an item, and replaces `comments.acked_at` and `comments.acked_by`. A `piloop sql`
-query on those columns fails: read `acks`. The API keeps `acked_at` and `acked_by` until 0.7.0, as the earliest ack.
+query on those columns fails: read `acks`. The API shows `acks` too: see [The API and the CLI](#the-api-and-the-cli).
 
 - An answer takes an item out of every inbox. An escalation takes one answer: a second one is refused, with the first.
 - An orchestrator's ack no longer stops a notifier: it sends what no person acknowledged.

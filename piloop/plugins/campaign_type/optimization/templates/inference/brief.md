@@ -17,8 +17,8 @@ Make `server.py` generate more tokens per second under load, with the same outpu
   - `match`: the share of the checked tokens that equal `model.reference`. It must stay at least 0.98. Floating-point
     drift that changes a rare token is allowed; an approximation that changes many is not.
   - `p95_ms`: the 95th percentile latency of a request. It may grow by at most 25% per step.
-- Commit with `git add server.py && git commit -m "<what you did and why>"`. Every commit is scored. If the idea did
-  not work, commit anyway and say so in the message.
+- Commit with `git add server.py && git commit -m "<what you did and why>"`, and score the commit with
+  `piloop submit`: only a submitted commit is scored. If the idea did not work, say so in the message.
 - Do not stop to ask questions. Decide and commit.
 
 ## Starting points

@@ -1345,8 +1345,7 @@ class RunFacts:
     unsaved: str | None = None
     """Why the save of what the implementer left unsaved failed (``WorkUnsaved``)."""
     submitted: bool = False
-    """It submitted a version (``piloop submit``), or, in a campaign that scores every version after the run, it saved
-    one of its own: not only what it left unsaved (``Version.recovered``)."""
+    """It submitted a version (``piloop submit``)."""
 
 
 def run_outcome(facts: RunFacts) -> tuple[RunEnd, str | None]:

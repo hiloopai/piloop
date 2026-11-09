@@ -1,51 +1,28 @@
 {
-  "name": "titanic-tracks",
+  "name": "my-campaign",
   "metrics": [
     {
-      "floor": 0.74,
-      "margin": 0.02,
+      "floor": null,
+      "margin": null,
       "fraction": null,
-      "name": "accuracy",
+      "name": "score",
       "direction": "higher",
       "role": "primary",
-      "track": "accuracy",
+      "track": null,
       "ratio": null,
       "repeats": null
-    },
-    {
-      "floor": 2.0,
-      "margin": 0.3,
-      "fraction": null,
-      "name": "cost_seconds",
-      "direction": "lower",
-      "role": "primary",
-      "track": "cost",
-      "ratio": null,
-      "repeats": 3
     }
   ],
-  "tracks": {
-    "accuracy": {
-      "share": 0.75,
-      "addendum": "briefs/accuracy.md"
-    },
-    "cost": {
-      "share": 0.25,
-      "addendum": "briefs/cost.md"
-    }
-  },
+  "tracks": {},
   "evaluate": [
     "uv",
     "run",
     "python",
     "evaluate.py"
   ],
-  "evaluate_timeout": 300.0,
+  "evaluate_timeout": 600.0,
   "ladder": [],
-  "link": [
-    "data",
-    ".venv"
-  ],
+  "link": [],
   "context": [],
   "agents": {
     "wrap_up_grace": null,
@@ -73,12 +50,40 @@
     },
     "role": {
       "implementer": {
-        "timeout": 900.0
+        "timeout": 1800.0,
+        "max_concurrent": 4,
+        "runs": true
       },
-      "orchestrator": {},
-      "research": {},
-      "scout": {},
-      "watchdog": {}
+      "orchestrator": {
+        "timeout": 900.0,
+        "max_concurrent": 1,
+        "runs": false,
+        "triggers": []
+      },
+      "research": {
+        "timeout": 900.0,
+        "max_concurrent": 1,
+        "runs": false,
+        "triggers": [
+          "low_water",
+          "stalled"
+        ],
+        "max_ideas": 3
+      },
+      "watchdog": {
+        "timeout": 600.0,
+        "max_concurrent": 1,
+        "runs": false,
+        "triggers": [
+          "run_failed",
+          "dead_at_startup",
+          "low_yield",
+          "cron",
+          "stopped"
+        ],
+        "interval": 1800.0,
+        "max_ideas": 1
+      }
     },
     "fact_source": {
       "use": [
@@ -160,14 +165,19 @@
     "trigger": {
       "cron": {},
       "dead_at_startup": {},
-      "leaking_funnel": {},
       "low_water": {},
       "low_yield": {},
       "news": {},
       "run_failed": {},
-      "seed": {},
       "stalled": {},
       "stopped": {}
+    },
+    "verdict_rule": {
+      "provider": "bootstrap"
     }
+  },
+  "evaluator": {
+    "scoring": "run_end",
+    "noise_runs": 1
   }
 }

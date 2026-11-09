@@ -1,11 +1,10 @@
 {
-  "version": "0.6.0",
+  "version": "0.7.0",
   "heads": {
-    "core": "0080",
+    "core": "0088",
     "archive/local": "0003",
     "executor/workers": "0001",
-    "memory/local": "0002",
-    "optimization": "0009",
+    "optimization": "0012",
     "secrets/local": "0001"
   },
   "triggers": {
@@ -20,17 +19,11 @@
     "comments_fts_insert": "CREATE TRIGGER comments_fts_insert AFTER INSERT ON comments\nBEGIN\n  INSERT INTO comments_fts (rowid, body) VALUES (NEW.id, NEW.body);\nEND",
     "comments_fts_update": "CREATE TRIGGER comments_fts_update AFTER UPDATE OF id, body ON comments\nBEGIN\n  INSERT INTO comments_fts (comments_fts, rowid, body) VALUES ('delete', OLD.id, OLD.body);\n  INSERT INTO comments_fts (rowid, body) VALUES (NEW.id, NEW.body);\nEND",
     "comments_updated_at": "CREATE TRIGGER comments_updated_at AFTER UPDATE ON comments\nWHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by\nBEGIN\n  UPDATE comments SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;\nEND",
-    "documents_fts_delete": "CREATE TRIGGER documents_fts_delete AFTER DELETE ON documents\nBEGIN\n  INSERT INTO documents_fts (documents_fts, rowid, title, body) VALUES ('delete', OLD.id, OLD.title, OLD.body);\nEND",
-    "documents_fts_insert": "CREATE TRIGGER documents_fts_insert AFTER INSERT ON documents\nBEGIN\n  INSERT INTO documents_fts (rowid, title, body) VALUES (NEW.id, NEW.title, NEW.body);\nEND",
-    "documents_fts_update": "CREATE TRIGGER documents_fts_update AFTER UPDATE OF id, title, body ON documents\nBEGIN\n  INSERT INTO documents_fts (documents_fts, rowid, title, body) VALUES ('delete', OLD.id, OLD.title, OLD.body);\n  INSERT INTO documents_fts (rowid, title, body) VALUES (NEW.id, NEW.title, NEW.body);\nEND",
-    "documents_updated_at": "CREATE TRIGGER documents_updated_at AFTER UPDATE ON documents\nWHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by\nBEGIN\n  UPDATE documents SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;\nEND",
     "idea_links_campaign": "CREATE TRIGGER idea_links_campaign BEFORE INSERT ON idea_links\nWHEN (SELECT campaign_id FROM ideas WHERE id = NEW.idea_id) IS NOT (SELECT campaign_id FROM ideas WHERE id = NEW.target_id)\nBEGIN\n  SELECT RAISE(ABORT, 'idea_links: idea_id and target_id must be ideas of the same campaign');\nEND",
     "ideas_fts_delete": "CREATE TRIGGER ideas_fts_delete AFTER DELETE ON ideas\nBEGIN\n  INSERT INTO ideas_fts (ideas_fts, rowid, title, hypothesis, plan) VALUES ('delete', OLD.id, OLD.title, OLD.hypothesis, OLD.plan);\nEND",
     "ideas_fts_insert": "CREATE TRIGGER ideas_fts_insert AFTER INSERT ON ideas\nBEGIN\n  INSERT INTO ideas_fts (rowid, title, hypothesis, plan) VALUES (NEW.id, NEW.title, NEW.hypothesis, NEW.plan);\nEND",
     "ideas_fts_update": "CREATE TRIGGER ideas_fts_update AFTER UPDATE OF id, title, hypothesis, plan ON ideas\nBEGIN\n  INSERT INTO ideas_fts (ideas_fts, rowid, title, hypothesis, plan) VALUES ('delete', OLD.id, OLD.title, OLD.hypothesis, OLD.plan);\n  INSERT INTO ideas_fts (rowid, title, hypothesis, plan) VALUES (NEW.id, NEW.title, NEW.hypothesis, NEW.plan);\nEND",
     "ideas_updated_at": "CREATE TRIGGER ideas_updated_at AFTER UPDATE ON ideas\nWHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by\nBEGIN\n  UPDATE ideas SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;\nEND",
-    "journal_no_replace": "CREATE TRIGGER journal_no_replace BEFORE INSERT ON journal\nWHEN EXISTS (SELECT 1 FROM journal WHERE id = NEW.id)\nBEGIN\n  SELECT RAISE(ABORT, 'journal rows are never replaced: insert a new row');\nEND",
-    "lessons_no_replace": "CREATE TRIGGER lessons_no_replace BEFORE INSERT ON lessons\nWHEN EXISTS (SELECT 1 FROM lessons WHERE id = NEW.id)\nBEGIN\n  SELECT RAISE(ABORT, 'lessons rows are never replaced: insert a new row');\nEND",
     "runs_updated_at": "CREATE TRIGGER runs_updated_at AFTER UPDATE ON runs\nWHEN NEW.updated_at IS OLD.updated_at AND NEW.updated_by IS OLD.updated_by\nBEGIN\n  UPDATE runs SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id;\nEND"
   }
 }

@@ -67,7 +67,6 @@
       },
       "orchestrator": {},
       "research": {},
-      "scout": {},
       "watchdog": {}
     },
     "fact_source": {
@@ -150,14 +149,19 @@
     "trigger": {
       "cron": {},
       "dead_at_startup": {},
-      "leaking_funnel": {},
       "low_water": {},
       "low_yield": {},
       "news": {},
       "run_failed": {},
-      "seed": {},
       "stalled": {},
       "stopped": {}
+    },
+    "verdict_rule": {
+      "provider": "bootstrap"
     }
+  },
+  "evaluator": {
+    "scoring": "run_end",
+    "noise_runs": 1
   }
 }

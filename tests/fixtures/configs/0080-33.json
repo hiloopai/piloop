@@ -64,8 +64,6 @@
     "role": {
       "implementer": {
         "addendum": null,
-        "explore_every": 4,
-        "files": "nothing",
         "harnesses": [
           "codex"
         ],
@@ -75,10 +73,8 @@
         ],
         "model": null,
         "prompt": null,
-        "recovery_requeues": 2,
         "runs": true,
         "runtime": null,
-        "takes": null,
         "timeout": 28800.0,
         "writes": [
           "commits",
@@ -114,43 +110,12 @@
           "comments(note) on an idea"
         ],
         "triggers": [
-          "research_low_water",
-          "seed"
-        ]
-      },
-      "scout": {
-        "addendum": null,
-        "files": "seeds",
-        "harnesses": [
-          "codex"
-        ],
-        "incident_prompt": null,
-        "interval": 21600.0,
-        "max_concurrent": 1,
-        "max_ideas": 1,
-        "mcp": [
-          "xai",
-          "exa"
-        ],
-        "model": null,
-        "prompt": null,
-        "routine_prompt": null,
-        "runs": false,
-        "runtime": null,
-        "seeds": 3,
-        "timeout": 1800.0,
-        "writes": [
-          "seeds via idea seed (at most the count under Context)",
-          "techniques (the library), by INSERT",
-          "one comments(finding) on the campaign"
-        ],
-        "triggers": [
-          "cron"
+          "research_low_water"
         ]
       },
       "watchdog": {
         "addendum": "dir/file85.md",
-        "files": "seeds",
+        "files": "nothing",
         "harnesses": [
           "codex"
         ],
@@ -251,7 +216,14 @@
         ],
         "provider": "stdio"
       }
+    },
+    "verdict_rule": {
+      "provider": "bootstrap"
     }
   },
-  "tracks": {}
+  "tracks": {},
+  "evaluator": {
+    "scoring": "run_end",
+    "noise_runs": 1
+  }
 }

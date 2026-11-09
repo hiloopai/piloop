@@ -5,6 +5,90 @@ All notable changes to piloop are in this file. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, a minor release may contain breaking changes.
 A deprecated configuration key shows a warning for at least one minor release before it is removed.
 
+## [0.7.0](https://github.com/hiloopai/piloop/compare/v0.6.0...v0.7.0) - 2026-11-09
+
+This release has breaking changes, marked **Breaking** below. Read
+[Upgrading](https://piloop.autoresearch.inc/guides/upgrading) before you upgrade.
+
+The upgrade migrates the database from 0.6.0 or newer only. A 0.5 database upgrades through 0.6 first.
+
+### Added
+
+- A docs page, [Choose a setup](https://piloop.autoresearch.inc/guides/choose-a-setup): how many implementers, how many
+  hours and how much money, from what we measured.
+- `[agents] startup_turns`, 3 by default: an agent whose harness counted more turns than that worked, however soon it
+  ended.
+- A pause records its owner (`campaigns.paused_by`), and `piloop resume` and `piloop status` say whose pause it is.
+- `agent_sessions.deadline`: when its timeout ends an agent, stored at its launch.
+
+### Changed
+
+- **Breaking:** Each party acknowledges an inbox item for itself: the people, the orchestrator and each role. The
+  table `acks` replaces `comments.acked_at` and `acked_by`, and an inbox item and a comment in the API show `acks`. An
+  answer takes an item out of every inbox, and an escalation takes one answer: a second one is refused, with the
+  first.
+- **Breaking:** The result line of the evaluate command must carry `status`. A full-panel line without it is a bad
+  result, which is a crash.
+- **Breaking:** New CHECKs refuse a `piloop sql` write that leaves a campaign, an agent session or an evaluation in an
+  impossible state. The upgrade repairs the rows that an earlier write broke, and logs how many.
+- The upgrade rewrites each stored copy of a `piloop.toml`: it takes out the keys that 0.6 deprecated, and a campaign
+  that scored at run end scores what its implementers submit.
+- A cancel stands under the evaluator that it cancelled until someone asks again, and keeps the candidate's origin:
+  `piloop eval cancel` no longer makes a run's candidate `skipped`. The upgrade gives each candidate that 0.6.0 skipped
+  for a cancel its origin back.
+- `piloop candidate remeasure` gets the evaluations that it asks for. An evaluation that ran when you asked, or
+  `piloop measurement add`, no longer ends the request.
+
+### Deprecated
+
+These still load, with a warning, until 0.8.0, and do nothing:
+
+- `[evaluator] scoring`. piloop scores only what an implementer submits.
+- `[plugins.memory]`, the `lessons` section and `[agents] wake_budget` of `config.toml`.
+
+### Removed
+
+- **Breaking:** The built-in orchestrator role, with its `news` and `run_failed` triggers, the `incidents`, `reported`
+  and `research_commands` sections, `[evaluation] wake_after_tries` and `[plugins.escalation] grace`. Every
+  escalation reaches your notifiers at once, and the coding agent that you talk to is the orchestrator, with the
+  `piloop-operate` skill.
+- **Breaking:** Research memory: the lessons, the documents and the orchestrator's journal, `piloop wake`,
+  `piloop journal`, the memory capability and the SQL function `blake3()`. The upgrade drops the `lessons`,
+  `documents` and `journal` tables with their rows; the backup that it writes first keeps them.
+- **Breaking:** Run-end scoring (`scoring = "run_end"`). A version of a run that its implementer does not submit is
+  `skipped`, never measured. piloop no longer reads the `Piloop-Eval: skip` and `Piloop-Note` trailers.
+- **Breaking:** Every form that 0.6 bridged with a warning until 0.7.0. The keys of 0.6's removed roles, triggers and
+  sections, `[plugins.verdict_rule]`, a role's `follow_head` and `finding_grace`, a metric's `repeats`, the section
+  `judging`, `[tracks.<name>] share`, and `[agents] relay_wait` and `relay_deadline` of `config.toml` now fail as
+  unknown keys. `piloop submit --wait`, the API's `acked_at` and `acked_by`, and `Surface.SWEEP` are gone.
+
+### Fixed
+
+- A campaign's status has one writer, and one rule says when a stop is due. `piloop init` reopens a stopped campaign
+  only when `piloop campaign reopen` would, and says why when it does not. Every limit counts from the same reopen. A
+  paused campaign past its limit cuts no agent short.
+- A submit that the executor refuses no longer wedges a candidate's measurements: its request retries after its
+  backoff. A cancel stands even when the worker that ran the evaluation is lost.
+- A crash before the first rung counts, so such a baseline is not due for ever. A crashed sealed evaluation no longer
+  starves the candidates behind it.
+- A cancelled confirmation or sealed evaluation no longer runs again on the next pass, and a cancel of the best's
+  remeasure no longer takes it out of the pool.
+- A request that waits to retry after an infra error no longer reads a later infra error as a cancel. A full disk
+  while piloop stores a campaign's linked inputs is an infra error, not the candidate's crash.
+- An agent session's state has one writer, and its first end stands. A stop or a cancel ends a starting agent at
+  once, and the id of a deleted agent session is never used again.
+- The wrap-up message and the stop's cut read the agent's stored deadline, so a rule change after the launch no longer
+  moves one away from the other. An agent's token ends with its session.
+- An implementer that worked and gave up within `startup_seconds` is an attempt, not `never_worked`, and the startup
+  breaker no longer counts it.
+- A relayed call says only what is known: it did not run, it ran, or it may have run. `piloop submit --help` on a
+  worker elsewhere prints the help and submits nothing.
+- A child process that exits while piloop asks whether it runs is reaped, so an agent whose process exited then keeps
+  its exit code.
+- Of two acks that race, one wins, and the other says who acknowledged the item. A person's "seen" no longer hides an
+  unanswered escalation from the orchestrator.
+- The briefs of the bundled examples say that only a commit submitted with `piloop submit` is scored.
+
 ## [0.6.0](https://github.com/hiloopai/piloop/compare/v0.5.0...v0.6.0) - 2026-11-07
 
 This release has breaking changes, marked **Breaking** below. Read

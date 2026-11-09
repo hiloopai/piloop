@@ -177,6 +177,13 @@
     },
     "runtime": {
       "use": "subprocess"
+    },
+    "verdict_rule": {
+      "provider": "bootstrap"
     }
+  },
+  "evaluator": {
+    "scoring": "run_end",
+    "noise_runs": 1
   }
 }

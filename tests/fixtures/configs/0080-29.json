@@ -114,8 +114,6 @@
     "role": {
       "implementer": {
         "addendum": null,
-        "explore_every": 4,
-        "files": "nothing",
         "harnesses": [
           "codex"
         ],
@@ -125,10 +123,8 @@
         ],
         "model": null,
         "prompt": null,
-        "recovery_requeues": 2,
         "runs": true,
         "runtime": null,
-        "takes": null,
         "timeout": 28800.0,
         "writes": [
           "commits",
@@ -162,38 +158,12 @@
           "comments(note) on an idea"
         ],
         "triggers": [
-          "research_low_water",
-          "seed"
-        ]
-      },
-      "scout": {
-        "addendum": null,
-        "files": "seeds",
-        "harnesses": null,
-        "incident_prompt": null,
-        "interval": 0.0,
-        "max_concurrent": 1,
-        "max_ideas": 1,
-        "mcp": [],
-        "model": null,
-        "prompt": null,
-        "routine_prompt": null,
-        "runs": false,
-        "runtime": null,
-        "seeds": 3,
-        "timeout": 900.0,
-        "writes": [
-          "seeds via idea seed (at most the count under Context)",
-          "techniques (the library), by INSERT",
-          "one comments(finding) on the project"
-        ],
-        "triggers": [
-          "cron"
+          "research_low_water"
         ]
       },
       "watchdog": {
         "addendum": "dir/file51.md",
-        "files": "seeds",
+        "files": "nothing",
         "harnesses": null,
         "incident_prompt": null,
         "interval": 1800.0,
@@ -284,16 +254,21 @@
         ],
         "provider": "stdio"
       }
+    },
+    "verdict_rule": {
+      "provider": "bootstrap"
     }
   },
   "tracks": {
     "name_3": {
-      "addendum": null,
-      "share": 0.5
+      "addendum": null
     },
     "name_5": {
-      "addendum": null,
-      "share": 0.5
+      "addendum": null
     }
+  },
+  "evaluator": {
+    "scoring": "run_end",
+    "noise_runs": 1
   }
 }

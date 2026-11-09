@@ -11,8 +11,9 @@
 - Use only pandas, numpy and scikit-learn (see `pyproject.toml`). Do not add dependencies.
 - `workspace/` is shared by all implementers and kept between runs. Use it for notes, cached features and plots. It is not
   committed.
-- Commit with `git add solve.py && git commit -m "<what you did and why>"`. Every commit is scored, and the message
-  records what you tried. If the idea did not work, commit anyway, say so, and leave a `note` on the idea.
+- Commit with `git add solve.py && git commit -m "<what you did and why>"`, and score the commit with `piloop submit`:
+  only a submitted commit is scored. The message records what you tried. If the idea did not work, say so, and leave a
+  `note` on the idea.
 - Do not stop to ask questions. Decide and commit.
 
 ## Two tracks, one pool

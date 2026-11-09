@@ -2,18 +2,18 @@
 
     uv run pytest -m e2e tests/e2e/test_upgrade.py -rA [--e2e-model <model>]
 
-piloop ``RELEASE`` from PyPI runs a small enwik8 campaign: a keep, a discard, a cancelled run, notes, an archive of the
-keep's workspace files and a ``research/`` loss table. Its ``config.toml`` and ``piloop.toml`` have keys that the
-release bridged with a warning and this checkout removed: the implementer's timings of ``[daemon]`` and ``[agents]``.
-While two agents of the release work, the user upgrades as the upgrading guide says: ``uv tool install --reinstall
-<this checkout>`` and ``piloop upgrade``, which refuses the removed keys of ``config.toml`` and changes nothing until
-the user deletes them. Then every row, ref, commit and file of the release is still there, the migrations rewrote only
-what the guide lists (the ideas' statuses, the columns of the board, claims, branch runs and verdicts, the stored
-configs' removed keys and 0.5's scoring), the backup is the database before the migration, the new code cancels one
-agent and scores the other's run, the removed keys of ``piloop.toml`` fail as unknown keys, and the store restores
-what both piloops archived.
+piloop ``RELEASE`` from PyPI runs a small enwik8 campaign: a better and a worse submission in the pool, a cancelled
+run, notes, an acknowledged decision, an archive of a done idea's workspace files and a ``research/`` loss table. Its
+``config.toml`` and ``piloop.toml`` have keys that the release bridged with a warning or that this checkout removed:
+``[agents] relay_wait`` and ``[evaluation] wake_after_tries`` of ``config.toml``, and the implementer's
+``finding_grace``. While two agents of the release work, the user upgrades as the upgrading guide says: ``uv tool
+install --reinstall <this checkout>`` and ``piloop upgrade``, which refuses the removed keys of ``config.toml`` and
+changes nothing until the user deletes them. Then every row, ref, commit and file of the release is still there, the
+migrations rewrote only what the guide lists (the acks, research memory, the stored configs' removed keys and their
+scoring), the backup is the database before the migration, the new code cancels one agent and scores the other's run,
+the removed keys of ``piloop.toml`` fail as unknown keys, and the store restores what both piloops archived.
 
-A home of 0.4 is refused, untouched, with the release to install first.
+A home of 0.5 is refused, untouched, with the release to install first.
 
 Claude only: the release does not know the other harnesses' flags of today.
 """
@@ -42,64 +42,56 @@ from piloop.db.models import EVENT, LIVE_LEASES, UnknownEvent
 from piloop.plugins.campaign_type.kit.candidates.ids import SCORED
 from piloop.plugins.runtime.kit.tags import tagged
 from tests.conftest import wait_until
-from tests.e2e.campaign import CHEAPEST_MODEL, OPEN, ROOT, STATUS, TEMPLATES, Smoke, merged, needs
+from tests.e2e.campaign import (
+    CHEAPEST_MODEL,
+    CLAIM_THE_BOARD,
+    OPEN,
+    ROOT,
+    STATUS,
+    TEMPLATES,
+    Smoke,
+    held,
+    merged,
+    needs,
+)
 from tests.e2e.conftest import Install, caller_env
 from tests.e2e.inventory import Changed, Inventory, Renames, differences, take
 
 pytestmark = pytest.mark.e2e
 
-RELEASE = '0.5.0'
-RELEASE_HEAD = '0073'
+RELEASE = '0.6.0'
+RELEASE_HEAD = '0080'
 """The schema revision of core that ``RELEASE`` shipped."""
-IDEA_STATES = {
-    'seed': 'open',
-    'proposed': 'open',
-    'ready': 'open',
-    'scheduled': 'claimed',
-    'done': 'done',
-    'parked': 'dropped',
-    'rejected': 'dropped',
-}
-RENAMES = Renames(values={('ideas', 'status', old): new for old, new in IDEA_STATES.items()})
-"""The renames since ``RELEASE`` that the upgrading guide documents: the idea states, which optimization revision 0005
-maps onto the board. A rename of a later release goes here."""
-DROPPED = {
-    'ideas.family',
-    'ideas.harness',
-    'ideas.base_candidate_id',
-    'ideas.max_runs',
-    'runs.branch',
-    *(f'candidates.{c}' for c in ('verdict', 'cause', 'verdict_by', 'verdict_reason', 'track')),
-    'measurements.pair_id',
-    'comment_kinds.after_end',
-}
-"""The columns that the upgrading guide documents as removed: an idea's family (optimization 0005), what assigned it
-to a run (0006), branch runs (0008), a candidate's verdict and a measurement's pair (0009): each verdict stays in a
-``candidate.verdict`` event (``test_nothing_of_the_release_is_lost``), and what a finding after its agent's end was
-(core 0077), with the finding kind."""
+RENAMES = Renames()
+"""The renames since ``RELEASE`` that the upgrading guide documents: none. A rename of a later release goes here."""
+DROPPED = {'comments.acked_at', 'comments.acked_by'}
+"""The columns that the upgrading guide documents as removed: an item's ack, which moves to ``acks`` (core 0084,
+``test_nothing_of_the_release_is_lost``)."""
+DROPPED_TABLES = {'lessons', 'documents', 'journal'}
+"""The tables of research memory, which core 0085 drops with their rows."""
 CONFIG_REWRITES = (
-    'plugins.role.scout.*',
+    'plugins.memory.*',
+    'plugins.section.*',
+    'plugins.role.*.sections',
+    'plugins.role.orchestrator.*',
+    'plugins.role.research.*',
+    'plugins.role.watchdog.*',
+    'plugins.role.*.interval',
+    'plugins.role.*.incident_prompt',
+    'plugins.role.*.routine_prompt',
+    'plugins.role.*.follow_head',
     'plugins.trigger.*',
-    'plugins.role.*.triggers',
-    'plugins.role.*.files',
-    'plugins.role.*.plan_words',
-    'plugins.role.*.idle_alert',
-    'plugins.section.pack.seeds',
-    'plugins.role.*.takes',
-    'plugins.role.*.explore_every',
-    'plugins.role.*.recovery_requeues',
-    'tracks.*.share',
-    'plugins.role.*.finding_grace',
-    'plugins.role.*.end_grace',
+    'plugins.verdict_rule.*',
+    'plugins.stop_rule.while_held',
+    'plugins.escalation.grace',
+    'metrics',
     'evaluator.scoring',
-    'evaluator.noise_runs',
-    'plugins.verdict_rule.provider',
 )
-"""The keys of the stored ``piloop.toml`` that a migration may change, as patterns: revision 0074 drops the scout, the
-``leaking_funnel`` trigger and the keys that filed ideas for other runs, 0075 the seed trigger and the keys of seeds
-and reviews, 0076 the keys that assigned ideas, 0077 renames each role's ``finding_grace`` ``end_grace``, and 0078 pins
-0.5's scoring. The keys that a later ``piloop init`` stores again, such as each role's defaults, are not a
-migration's."""
+"""The keys of the stored ``piloop.toml`` that a migration may change, as patterns: revision 0085 drops
+``[plugins.memory]`` and the ``lessons`` section, 0086 the keys of 0.6's removed features (the orchestrator, research
+and watchdog roles, their sections, triggers and role keys, the verdict rule, ``while_held``, an escalation's
+``grace`` and each metric's ``repeats``: ``metrics`` as a whole, a list), and 0087 and 0088 the scoring key. The keys that a later ``piloop init`` stores again, such as each role's
+defaults, are not a migration's."""
 
 QUEUE = re.compile(r'evaluations#\d+: |home/runs/\d+/eval-\d+/')
 """The evaluation queue, rows and worktrees: a daemon's start empties it, and what still needs a measurement asks
@@ -107,32 +99,31 @@ again (``Scheduler.reap``)."""
 CONFIG = {
     'evaluate_timeout': 300,
     'plugins': {
-        'stop_rule': {'max_runs': 6, 'max_hours': 1, 'max_tokens': 20_000_000},
-        'role': {
-            'implementer': {'max_concurrent': 2, 'timeout': 600},
-            'watchdog': {'triggers': []},
-            'research': {'triggers': []},
-        },
+        'stop_rule': {'max_runs': 10, 'max_hours': 1, 'max_tokens': 20_000_000},
+        'role': {'implementer': {'max_concurrent': 2, 'timeout': 600, 'finding_grace': 30}},
     },
-    'agents': {'finding_grace': 30},
 }
-"""Over the release's enwik8 template: two implementers, and no sweep: no research, no incident or progress review.
-``[agents] finding_grace`` is a key that the release bridged with a warning and this checkout removed: the upgrade
-leaves it for the user to delete."""
-REMOVED_KEYS = {('agents', 'finding_grace'): 'agents.finding_grace = 30: Extra inputs are not permitted'}
+"""Over the release's enwik8 template: two implementers, and stop conditions only as a backstop. The implementer's
+``finding_grace`` is a key that the release bridged with a warning and this checkout removed: the upgrade leaves it for
+the user to delete."""
+REMOVED_KEYS = {
+    ('plugins', 'role', 'implementer', 'finding_grace'): (
+        'plugins.role.implementer.finding_grace = 30: Extra inputs are not permitted'
+    )
+}
 """Each removed key that the campaign's ``piloop.toml`` still has after the upgrade, and how ``piloop doctor`` names
 it: an unknown key."""
 HOME_CONFIG = {
     # a shared disk with less than [storage]'s default 20 GB free would evict and archive by pressure all along
     'storage': {'min_free_gb': 0},
-    'daemon': {'startup_relaunches': 1},
-    'agents': {'finding_grace': 60, 'wrap_up_lead': 120},
+    'agents': {'relay_wait': 30},
+    'evaluation': {'wake_after_tries': 2},
 }
-"""The home's ``config.toml``. The implementer's timings of ``[daemon]`` and ``[agents]`` are keys that the release
-bridged with a warning and this checkout removed (``REMOVED_HOME_KEYS``)."""
+"""The home's ``config.toml``. ``[agents] relay_wait``, which the release bridged with a warning, and ``[evaluation]
+wake_after_tries``, which it read, are keys that this checkout removed (``REMOVED_HOME_KEYS``)."""
 REMOVED_HOME_KEYS = {
     key: f'{".".join(key)}\n  Extra inputs are not permitted'
-    for key in (('daemon', 'startup_relaunches'), ('agents', 'finding_grace'), ('agents', 'wrap_up_lead'))
+    for key in (('agents', 'relay_wait'), ('evaluation', 'wake_after_tries'))
 }
 """Each removed key of ``config.toml``, and how this checkout names it: every command refuses the file, ``piloop
 upgrade`` too, before it changes anything."""
@@ -148,32 +139,37 @@ WAIT = (
 )
 """How a plan holds its agent until the test removes ``{hold}``: a sleep in Python, a minute at a time, because Claude
 Code moves a long ``sleep`` to the background and goes on."""
+SUBMIT = ' Then run `piloop submit`, and end your run with `piloop run end submitted`.'
+"""How each plan that the release finishes ends: one submission, then the run's end."""
 IDEAS = {
     'cancelled': ('Wait for the data, then use lzma at preset 0', f'{WAIT} use lzma preset 0.', 0),
-    'keep': (
+    'better': (
         'Replace zlib with lzma at preset 1',
         f'{HERE} In compressor.py, compress with lzma.compress(data, preset=1) and decompress with lzma.decompress.'
-        f' Run `uv run python evaluate.py`. Change nothing else. {NOTE}',
+        f' Run `uv run python evaluate.py`. Change nothing else. {NOTE}{SUBMIT}',
         1,
     ),
-    'discard': (
+    'worse': (
         'Lower the zlib level to 1',
         f'{HERE} In compressor.py, change the zlib level from 9 to 1. Run `uv run python evaluate.py`. Change nothing'
-        f' else. {NOTE}',
+        f' else. {NOTE}{SUBMIT}',
         2,
     ),
 }
+"""Two implementers claim cancelled and better; the cancel frees a slot for worse. Better beats the baseline, and worse
+loses to it."""
 IN_FLIGHT = (
     'Wait for the data, then use lzma at preset 2',
     f'{HERE} {WAIT} in compressor.py, use lzma.compress(data, preset=2) and lzma.decompress. Run'
-    ' `uv run python evaluate.py`, then commit. Change nothing else, and write nothing in ./workspace.',
-    0,
+    f' `uv run python evaluate.py`, then commit. Change nothing else, and write nothing in ./workspace.{SUBMIT}',
+    3,
 )
-"""The idea whose agent works through the upgrade: it waits until the test lets it go, after the upgrade."""
+"""The idea whose agent works through the upgrade: it waits until the test lets it go, after the upgrade. It and
+``TO_CANCEL`` go on the board after the cancel, below the others, so the slots that better and worse free take them."""
 TO_CANCEL = (
     'Wait long for the data, then use lzma at preset 3',
     f'{HERE} {WAIT} use lzma preset 3, measure and commit.',
-    0,
+    4,
 )
 """The idea of a second agent of the release, which the new code cancels after the upgrade."""
 LIVE = ('NOTES.md', 'research')
@@ -181,7 +177,7 @@ LIVE = ('NOTES.md', 'research')
 LIVE_STATES = {'requested', 'starting', 'running'}
 """The states of an agent that is not done."""
 OLD_SHAPE = 'old-shape'
-OLD_SHAPE_CONFIG = Path(__file__).parents[1] / 'fixtures' / 'configs' / '0073-6.json'
+OLD_SHAPE_CONFIG = Path(__file__).parents[1] / 'fixtures' / 'configs' / '0080-30.json'
 """A second campaign, paused, with a stored config of a real home as the release left it
 (``tests/db/test_stored_configs.py``), with codex among its harnesses."""
 PLANTED_BACKUPS = [f'piloop.db.bak-{RELEASE_HEAD}-2025010{day}T000000Z' for day in (1, 2, 3)]
@@ -204,7 +200,7 @@ class Upgrade:
         self.after: Inventory | None = None
         self.output = ''
         self.archive: int | None = None
-        """The id of the archive that the release wrote, of the keep's workspace files."""
+        """The id of the archive that the release wrote, of the better idea's workspace files."""
         self.in_flight: int | None = None
         """The id of the run that the upgrade happens in."""
         self.to_cancel: int | None = None
@@ -287,10 +283,11 @@ def upgrade(request: pytest.FixtureRequest, e2e_summary: list[str]) -> Iterator[
         shutil.copytree(Path(templates) / 'templates' / 'enwik8', smoke.repo)
         template = tomllib.loads((smoke.repo / 'piloop.toml').read_text())
         toml = merged(merged(template, CONFIG), {'plugins': {'harness': {'claude': {'model': model}}}})
-        (smoke.repo / 'piloop.toml').write_text(tomli_w.dumps(toml))
-        smoke.piloop('init', str(smoke.repo), '--example', 'enwik8')
+        (smoke.repo / 'piloop.toml').write_text(tomli_w.dumps(held(toml, smoke.hold)))
+        with (smoke.repo / 'brief.md').open('a') as f:
+            f.write(f'\n{CLAIM_THE_BOARD}\n')
         smoke.piloop('install-skills')
-        wait_until((smoke.home / 'serve.pid').is_file)  # the release's init starts the daemon
+        smoke.init_paused(smoke.repo, 'enwik8', 'e2e: the ideas go on the board first')
         yield up
     finally:
         try:
@@ -306,33 +303,31 @@ def upgrade(request: pytest.FixtureRequest, e2e_summary: list[str]) -> Iterator[
 
 
 def test_the_release_does_real_work(upgrade: Upgrade) -> None:
-    """A keep, a discard, a cancelled run, notes, comments, an archive and a loss table, all written by the release."""
+    """A better and a worse candidate, a cancelled run, notes, an acknowledged decision, an archive and a loss table,
+    all written by the release."""
     smoke = upgrade.smoke
     for key, (title, plan, priority) in IDEAS.items():
         smoke.add_idea(key, title, upgrade.held(plan, key), priority)
-    # the keep's own entry, which the release archives once the idea is done; the release makes the workspace with its
-    # first agent
+    # the better idea's own entry, which the release archives once the idea is done; the release makes the workspace
+    # with its first agent
     upgrade.workspace.mkdir(parents=True, exist_ok=True)
-    result = {'metrics': {'bytes': 3342035, 'seconds': 0.82}}  # the release's result line
-    (upgrade.workspace / f'idea{smoke.ideas["keep"]}-eval.txt').write_text(json.dumps(result) + '\n')
-    wait_until(lambda: smoke.run_in('cancelled', {'running'}), timeout=180)
-    time.sleep(15)  # into its sleep, so the cancel ends an agent in the middle of its work
+    result = {'status': 'ok', 'score': 3342035, 'direction': 'lower', 'metrics': {'seconds': 0.82}}
+    (upgrade.workspace / f'idea{smoke.ideas["better"]}-eval.txt').write_text(json.dumps(result) + '\n')
+    smoke.piloop('resume', smoke.name)
+    wait_until(lambda: smoke.run_in('cancelled', {'running'}), timeout=600)
+    time.sleep(15)  # into its wait, so the cancel ends an agent in the middle of its work
     cancelled = smoke.run_of('cancelled')
     assert cancelled is not None
+    # dropped first: a cancelled run gives its idea back to the board, and a free slot would claim it again
+    smoke.piloop('idea', 'status', str(smoke.ideas['cancelled']), 'dropped', '--reason', 'e2e: cancelled')
     smoke.piloop('run', 'cancel', str(cancelled['id']))
-    for key in ('keep', 'discard'):
-        # the release scores a run's commits after the run ends, and only then is its idea no longer scheduled
-        wait_until(lambda key=key: idea_status(smoke, key) not in {'ready', 'scheduled'}, timeout=900)
-    verdicts = {
-        r['idea_id']: r['verdicts']
-        for r in smoke.sql(
-            'SELECT r.idea_id, group_concat(c.verdict) AS verdicts FROM candidates c JOIN runs r ON r.id = c.run_id'
-            ' GROUP BY r.idea_id'
-        )
-    }
-    # The release makes a candidate that loses `interesting`, not `discard`, when its agent's note gives a reason.
-    assert 'keep' in verdicts[smoke.ideas['keep']], verdicts
-    assert set((verdicts[smoke.ideas['discard']] or 'none').split(',')) <= {'discard', 'interesting'}, verdicts
+    for key, (title, plan, priority) in (('in flight', IN_FLIGHT), ('to cancel', TO_CANCEL)):
+        smoke.add_idea(key, title, upgrade.held(plan, key), priority)
+    for key in ('better', 'worse'):
+        wait_until(lambda key=key: idea_status(smoke, key) == 'done', timeout=900)
+    [baseline] = mean_bytes(smoke, "c.origin = 'baseline'")
+    scores = {key: min(mean_bytes(smoke, 'r.idea_id = ?', smoke.ideas[key])) for key in ('better', 'worse')}
+    assert scores['better'] < baseline < scores['worse'], (baseline, scores)
     wait_until(lambda: smoke.run_in('cancelled', OPEN, within=False), timeout=120)
     cancelled = smoke.run_of('cancelled')
     assert cancelled is not None and (cancelled['status'], cancelled['end']) == ('failed', 'cancelled'), dict(
@@ -341,12 +336,13 @@ def test_the_release_does_real_work(upgrade: Upgrade) -> None:
     smoke.piloop(
         'sql',
         'INSERT INTO comments (target_kind, target_id, author, kind, body) VALUES'
-        f" ('idea', {smoke.ideas['discard']}, 'human', 'note', 'a lower level loses bytes, as expected')",
+        f" ('idea', {smoke.ideas['worse']}, 'human', 'note', 'a lower level loses bytes, as expected')",
     )
     smoke.piloop(
         'sql',
-        'INSERT INTO comments (target_kind, target_id, author, kind, body, priority) VALUES'
-        " ('campaign', 1, 'orchestrator', 'decision', 'decision: lzma before any context model', 3)",
+        'INSERT INTO comments (target_kind, target_id, author, kind, body, priority, acked_at, acked_by) VALUES'
+        " ('campaign', 1, 'orchestrator', 'decision', 'decision: lzma before any context model', 3,"
+        " '2026-01-01 00:00:00', 'human')",
     )
     workspace = upgrade.workspace
     (workspace / 'research').mkdir(parents=True, exist_ok=True)
@@ -360,20 +356,19 @@ def test_the_release_does_real_work(upgrade: Upgrade) -> None:
     archived = (
         "SELECT id FROM archives WHERE subject_kind = 'idea' AND subject_id = ? AND complete AND manifest IS NOT NULL"
     )
-    wait_until(lambda: smoke.sql(archived, smoke.ideas['keep']), timeout=300)
-    upgrade.archive = smoke.sql(archived, smoke.ideas['keep'])[0]['id']
+    wait_until(lambda: smoke.sql(archived, smoke.ideas['better']), timeout=300)
+    upgrade.archive = smoke.sql(archived, smoke.ideas['better'])[0]['id']
     log = subprocess.run(['git', 'log', '--format=%s', 'main'], cwd=smoke.repo, capture_output=True, text=True).stdout
     assert log.splitlines() == ['enwik8: baseline'], f'an agent committed in the campaign repo, not its worktree: {log}'
-    print(f'verdicts by idea {verdicts}; cancelled run {cancelled["id"]}; archive#{upgrade.archive} of the keep')
+    print(f'bytes by idea {scores}; cancelled run {cancelled["id"]}; archive#{upgrade.archive} of the better idea')
 
 
 @needs(test_the_release_does_real_work)
 def test_two_agents_of_the_release_are_in_flight(upgrade: Upgrade) -> None:
-    """The release starts the two agents that the upgrade happens under, and they get into their wait."""
+    """The release starts the two agents that the upgrade happens under, on the slots that better and worse freed, and
+    they get into their wait."""
     smoke = upgrade.smoke
-    for key, (title, plan, priority) in (('in flight', IN_FLIGHT), ('to cancel', TO_CANCEL)):
-        smoke.add_idea(key, title, upgrade.held(plan, key), priority)
-    wait_until(lambda: smoke.run_in('in flight', {'running'}) and smoke.run_in('to cancel', {'running'}), timeout=180)
+    wait_until(lambda: smoke.run_in('in flight', {'running'}) and smoke.run_in('to cancel', {'running'}), timeout=300)
     time.sleep(20)  # the agents are in their wait
     run, other = smoke.run_in('in flight', {'running'}), smoke.run_in('to cancel', {'running'})
     assert run is not None and other is not None, 'a run in flight ended before the upgrade'
@@ -453,23 +448,15 @@ def test_nothing_of_the_release_is_lost(upgrade: Upgrade) -> None:
     live = live_dirs(before)  # an agent at work changes its own directories, and they go when it ends
     files = [f for f in found.files if not any(f'/{n}/' in f or f'-{n.replace("/", "-")}-' in f for n in live)]
     lost = [d for d in found.lost() if d not in found.files and d not in DROPPED] + files
-    lost = [d for d in lost if not QUEUE.match(d)]
+    lost = [d for d in lost if not QUEUE.match(d) and not dropped(d, before)]
     assert lost == [], '\n'.join(lost)
     kinds = [{r['id'] for r in i.tables['comment_kinds']} for i in (before, after)]
     assert kinds[0] <= kinds[1], 'every kind of comment is still there'
     candidates = {r['revision'] for r in before.tables['candidates']}
     assert candidates <= after.commits, 'every candidate commit is still in the repo'
-    verdicts = {
-        r['__rowid']: r['verdict']
-        for r in before.tables['candidates']
-        if r['verdict'] is not None and ('candidates', r['__rowid']) not in open_rows
-    }
-    logged = {
-        e['target_id']: payload['new']
-        for e in after.tables['events']
-        if (payload := json.loads(str(e['payload'])))['kind'] == 'candidate.verdict'
-    }  # in the order of the events: the latest of each candidate
-    assert {c: logged.get(c) for c in verdicts} == verdicts, 'each verdict of the release stays in the events'
+    acked = {(r['__rowid'], r['acked_by']) for r in before.tables['comments'] if r['acked_at'] is not None}
+    acks = {(r['comment_id'], r['acked_by']) for r in after.tables['acks']}
+    assert acked and acked <= acks, 'each ack of the release stays, in acks'
     worktree = next(w for p, w in before.worktrees.items() if p.endswith(f'runs/{upgrade.in_flight}/worktree'))
     kept = after.worktrees.get(worktree.path)
     assert kept is not None and kept.head is not None and worktree.head is not None, after.worktrees
@@ -491,8 +478,8 @@ def test_each_run_of_the_release_has_its_end(upgrade: Upgrade) -> None:
     ends = {key: (run['status'], run['end']) for key in IDEAS if (run := smoke.run_of(key)) is not None}
     assert ends == {
         'cancelled': ('failed', 'cancelled'),
-        'keep': ('succeeded', 'finished'),
-        'discard': ('succeeded', 'finished'),
+        'better': ('succeeded', 'finished'),
+        'worse': ('succeeded', 'finished'),
     }, ends
     unended = smoke.sql('SELECT id FROM runs WHERE "end" IS NULL AND status NOT IN (?, ?)', *OPEN)
     assert unended == [], [dict(r) for r in unended]
@@ -500,12 +487,8 @@ def test_each_run_of_the_release_has_its_end(upgrade: Upgrade) -> None:
 
 @needs(test_upgrade_with_an_agent_in_flight)
 def test_the_new_code_cancels_an_agent_of_the_release(upgrade: Upgrade) -> None:
-    """``piloop run cancel`` on the new code ends an agent that the release started.
-
-    The run fails, unless the agent left its finding before the daemon ended it: a finding is the report that the run
-    is done, and wins over the cancel. That happens. Claude Code runs the agent's `sleep 900` in the background, and a
-    fast agent finishes its idea in about 40 seconds, about when the cancel comes.
-    """
+    """``piloop run cancel`` on the new code ends an agent that the release started, and its run fails as cancelled.
+    Its idea is dropped first, so no free slot claims it again."""
     smoke = upgrade.smoke
     assert upgrade.before is not None
     [session] = [
@@ -515,20 +498,11 @@ def test_the_new_code_cancels_an_agent_of_the_release(upgrade: Upgrade) -> None:
     ]
     marker = f'PILOOP_ACTOR=implementer#{session}'  # what the release put in the environment of its agent
     assert tagged(marker), 'the agent of the release still runs'
+    smoke.piloop('idea', 'status', str(smoke.ideas['to cancel']), 'dropped', '--reason', 'e2e: cancelled')
     smoke.piloop('run', 'cancel', str(upgrade.to_cancel))
     wait_until(lambda: smoke.run_in('to cancel', OPEN, within=False), timeout=120)
     run = smoke.run_of('to cancel')
-    findings = smoke.sql(
-        "SELECT created_at FROM comments WHERE kind = 'finding' AND author = ?", f'implementer#{session}'
-    )
-    [ended] = smoke.sql(
-        "SELECT at FROM events WHERE kind = 'agent_session.stop_ended' AND target_kind = 'agent_session'"
-        ' AND target_id = ?',
-        session,
-    )
-    # the agent's raw INSERT stamps its finding to the second; one later than the end must have been refused
-    assert all(str(f['created_at']) <= str(ended['at']) for f in findings), 'a finding came after the end'
-    assert run is not None and run['status'] == ('succeeded' if findings else 'failed'), (run and dict(run), findings)
+    assert run is not None and (run['status'], run['end']) == ('failed', 'cancelled'), run and dict(run)
     home = f'PILOOP_HOME={smoke.home}'
 
     def left() -> list[str]:
@@ -542,8 +516,7 @@ def test_the_new_code_cancels_an_agent_of_the_release(upgrade: Upgrade) -> None:
     for line in upgrade.leftovers:  # so that the steps after this one see only their own processes
         with suppress(psutil.Error):
             psutil.Process(int(line.split()[0])).kill()
-    finished = 'after its finding' if findings else 'cancelled'
-    print(f'run {run["id"]} {run["status"]}, {finished}; processes of implementer#{session} left: {upgrade.leftovers}')
+    print(f'run {run["id"]} {run["status"]}, cancelled; processes of implementer#{session} left: {upgrade.leftovers}')
 
 
 @needs(test_the_new_code_cancels_an_agent_of_the_release)
@@ -595,7 +568,7 @@ def test_the_store_restores_what_both_piloops_archived(upgrade: Upgrade) -> None
     smoke.piloop('restore', smoke.name)
     archived = {str(p.relative_to(aside)): p.read_bytes() for p in aside.rglob('*') if p.is_file()}
     restored = {str(p.relative_to(workspace)): p.read_bytes() for p in workspace.rglob('*') if p.is_file()}
-    assert {f'idea{smoke.ideas["keep"]}-eval.txt', 'scratch/bulk.bin'} <= set(archived), sorted(archived)
+    assert {f'idea{smoke.ideas["better"]}-eval.txt', 'scratch/bulk.bin'} <= set(archived), sorted(archived)
     assert {k: restored.get(k) for k in archived} == archived
     print(f'{verified}; restored {len(archived)} file(s) byte for byte')
 
@@ -633,21 +606,21 @@ def test_no_process_of_the_release_is_left(upgrade: Upgrade) -> None:
         raise AssertionError(f'processes left: {smoke.processes()}') from e
 
 
-def test_a_home_of_0_4_is_refused_and_left_as_it_was(piloop_install: Install, tmp_path: Path) -> None:
+def test_a_home_of_0_5_is_refused_and_left_as_it_was(piloop_install: Install, tmp_path: Path) -> None:
     """This piloop migrates from ``RELEASE``'s schema only: it names the release to install first, and changes
-    nothing, on a database that piloop 0.4.0 created."""
+    nothing, on a database that piloop 0.5.0 created."""
     home = tmp_path / 'home'
     env = piloop_install.env(home) | {
         'UV_TOOL_DIR': str(tmp_path / 'uv-tools'),
         'UV_TOOL_BIN_DIR': str(tmp_path / 'bin'),
     }
-    subprocess.run(['uv', 'tool', 'install', '--quiet', '--python', '3.14', 'piloop==0.4.0'], env=env, check=True)
+    subprocess.run(['uv', 'tool', 'install', '--quiet', '--python', '3.14', 'piloop==0.5.0'], env=env, check=True)
     subprocess.run([str(tmp_path / 'bin' / 'piloop'), 'migrate'], env=env, check=True, capture_output=True)
     before = (home / 'piloop.db').read_bytes()
     proc = subprocess.run(['piloop', 'migrate'], env=env, capture_output=True, text=True, timeout=120)
     assert proc.returncode != 0
-    assert 'is from piloop 0.4 (schema revision core 0067' in proc.stderr, proc.stderr
-    assert "install piloop 0.5 (`uv tool install 'piloop==0.5.*'`)" in proc.stderr, proc.stderr
+    assert 'is from piloop 0.5 (schema revision core 0073' in proc.stderr, proc.stderr
+    assert "install piloop 0.6 (`uv tool install 'piloop==0.6.*'`)" in proc.stderr, proc.stderr
     assert (home / 'piloop.db').read_bytes() == before
     assert list(home.glob('piloop.db.bak-*')) == []
 
@@ -684,25 +657,53 @@ def delete_keys(path: Path, keys: Iterable[tuple[str, ...]]) -> None:
     path.write_text(tomli_w.dumps(toml))
 
 
+def mean_bytes(smoke: Smoke, where: str, *params: object) -> list[float]:
+    """The mean ``bytes`` of each measured candidate that ``where`` selects, of ``c`` the candidate and ``r`` its run."""
+    rows = smoke.sql(
+        "SELECT AVG(json_extract(m.metrics, '$.bytes')) AS bytes FROM candidates c LEFT JOIN runs r ON r.id = c.run_id"
+        ' JOIN measurements m ON m.candidate_id = c.id AND m.error IS NULL AND m.rung IS NULL'
+        f' WHERE {where} GROUP BY c.id',
+        *params,
+    )
+    return [r['bytes'] for r in rows]
+
+
 def idea_status(smoke: Smoke, key: str) -> str:
     return smoke.sql('SELECT status FROM ideas WHERE id = ?', smoke.ideas[key])[0]['status']
 
 
 def opened(inventory: Inventory) -> set[tuple[str, object]]:
-    """``(table, rowid)`` of the rows that the campaign still changes: open runs, live agents, scheduled ideas, pending
-    candidates (no verdict yet), the campaign row, the live leases, and the workers that renew them: a worker restarts
-    on the new piloop, says its version, and renews the leases of the agents in flight."""
+    """``(table, rowid)`` of the rows that the campaign still changes: open runs and their candidates, live agents,
+    claimed ideas, the campaign row, the live leases, and the workers that renew them: a worker restarts on the new
+    piloop, says its version, and renews the leases of the agents in flight."""
     rows = {('campaigns', r['__rowid']) for r in inventory.tables['campaigns']}
     rows |= {('lease_workers', r['__rowid']) for r in inventory.tables['lease_workers']}
     for table, column, values in (
         ('runs', 'status', OPEN),
         ('agent_sessions', 'state', LIVE_STATES),
-        ('ideas', 'status', {'scheduled'}),
-        ('candidates', 'verdict', {None}),
+        ('ideas', 'status', {'claimed'}),
         ('leases', 'state', {str(s) for s in LIVE_LEASES}),
     ):
         rows |= {(table, r['__rowid']) for r in inventory.tables[table] if r[column] in values}
+    runs = {rowid for table, rowid in rows if table == 'runs'}
+    rows |= {('candidates', r['__rowid']) for r in inventory.tables['candidates'] if r['run_id'] in runs}
     return rows
+
+
+def dropped(lost: str, before: Inventory) -> bool:
+    """A loss that the upgrading guide documents: a table of research memory, the ``memory/local`` row of
+    ``migrations`` (core 0085), or the token of an agent that had ended (core 0083)."""
+    table, _, rest = lost.partition('#')
+    if lost.partition(' ')[0] in DROPPED_TABLES:
+        return True
+    if table == 'migrations':
+        return '"memory/local"' in rest
+    if table == 'tokens':
+        rowid = int(rest.partition(':')[0])
+        [token] = [r for r in before.tables['tokens'] if r['__rowid'] == rowid]
+        ended = {r['id'] for r in before.tables['agent_sessions'] if r['state'] not in LIVE_STATES}
+        return token['agent_session_id'] in ended
+    return False
 
 
 def allowed(change: Changed, open_rows: set[tuple[str, object]]) -> bool:
@@ -717,8 +718,6 @@ def allowed(change: Changed, open_rows: set[tuple[str, object]]) -> bool:
             return column in {'updated_at', 'updated_by'}
         case 'migrations', 'fingerprint':
             return True  # each chain records the fingerprint of its new head
-        case 'comment_kinds', 'id':
-            return True  # 0077 rebuilds the table: a kind keeps its id, not its rowid (checked by id)
         case 'events', 'payload':
             return typed(change)
         case table, _:
@@ -726,9 +725,8 @@ def allowed(change: Changed, open_rows: set[tuple[str, object]]) -> bool:
 
 
 def typed(change: Changed) -> bool:
-    """An event payload that the migrations rewrote: the payload loads as its model (``idea.status`` names the board's
-    statuses, optimization revision 0005, and ``run.queued`` drops the idea that the scheduler picked, 0006), or a kind
-    that nothing registers only gained its ``kind``. This checks that the rows of a real campaign load.
+    """An event payload that the migrations rewrote: the payload loads as its model, or a kind that nothing registers
+    only gained its ``kind``. This checks that the rows of a real campaign load.
     """
     importlib.import_module('piloop.daemon.scheduler')  # registers the events of every layer
     importlib.import_module('piloop.plugins.campaign_type.optimization.planner')  # and of the optimization type

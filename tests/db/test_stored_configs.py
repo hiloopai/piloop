@@ -3,10 +3,10 @@
 ``tests/fixtures/configs/<revision>-<n>.json`` is a ``campaigns.config`` as a real home stored it at that revision,
 structure only: its keys, tables and value types, with every path, name, command and text replaced. Together, the
 files of a revision hold every key and value type that those homes stored at it. Only a revision that this piloop
-migrates from has files: the head of the previous minor release, or a newer one. Files 1 to 4 of 0073 (0.5.0) and the
-files of 0078 (the 0.6 pins before ``optimization 0009``) are the bundled templates' configs as those checkouts stored
-them, one for each structure. Files 5 to 10 of 0073 are those that real homes stored at 0053, as 0.4's and 0.5's
-revisions rewrote them.
+migrates from has files: the head of the previous minor release, or a newer one. All are at 0080 (0.6.0), as 0.6's
+revisions left them. Files 1 to 24 are the bundled templates' configs as the 0.6 pins before ``optimization 0009``
+stored them, and files 25 to 28 as 0.5.0 stored them, one for each structure. Files 29 to 34 are those that real homes
+stored at 0053, as 0.4's, 0.5's and 0.6's revisions rewrote them.
 """
 
 import sqlite3
