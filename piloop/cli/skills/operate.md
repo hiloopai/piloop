@@ -1,6 +1,6 @@
 ---
 name: piloop-operate
-description: Operate a running piloop autoresearch campaign as its orchestrator, from any harness with a shell (Claude Code, Codex, pi, Gemini CLI, Cursor), by looping on piloop inbox wait to decide escalations, manage ideas, launch sweeps, steer implementers and read the pool. Use when the human asks you to orchestrate, watch, run or report on a campaign, when an escalation arrives, or when you take a decision for the human; do not use it in an agent that piloop launched (PILOOP_ACTOR is an agent id, such as implementer#12).
+description: Operate a running piloop autoresearch campaign as its orchestrator, from any harness with a shell (Claude Code, Codex, pi, Gemini CLI, Cursor), by looping on piloop inbox wait to decide escalations, manage ideas, steer implementers and read the pool. Use when the human asks you to orchestrate, watch, run or report on a campaign, when an escalation arrives, or when you take a decision for the human; do not use it in an agent that piloop launched (PILOOP_ACTOR is an agent id, such as implementer#12).
 ---
 
 # Operate a piloop campaign
@@ -69,8 +69,8 @@ Steps:
 5. **Acknowledge** what you read and need not answer: `PILOOP_ACTOR=orchestrator piloop inbox ack <id>`. It leaves
    your waits only; the human still sees it. Your answer leaves every inbox. Leave unanswered what only the human can
    decide.
-6. **Act.** Apply the decision with a piloop command: `piloop pause`, a sweep, a command of the campaign's type
-   (below), or `piloop.toml` followed by `piloop init .`. Use `piloop sql` for a write only when no command does it.
+6. **Act.** Apply the decision with a piloop command: `piloop pause`, a command of the campaign's type (below),
+   or `piloop.toml` followed by `piloop init .`. Use `piloop sql` for a write only when no command does it.
    Never raise `hold_at` in `[plugins.stop_rule]` yourself. An escalation that a fact reached its `hold_at` belongs to
    the human.
 7. **Journal** each decision, plan and result as you go, one line with its ids:
@@ -85,11 +85,11 @@ Steps:
 Run the loop yourself, or give it to a background subagent so that the human's session stays free. Give the subagent
 this skill and the campaign name. Tell it to report decisions and status back.
 
-Run one orchestrator per campaign. Two loops answer the same escalation twice.
+Run one orchestrator per campaign. Two loops do the same work twice, and an escalation takes only one answer.
 
 ## Status
 
-`piloop status [<name>]` shows the same overview that sweeps get in their brief.
+`piloop status [<name>]` shows the overview of a campaign: its best, its agents, its last candidates and its inbox.
 Without a name, it uses the campaign in the current directory, else the only active campaign, else every campaign.
 
 `piloop watch` shows the same as `piloop status`, live, in the human's terminal.

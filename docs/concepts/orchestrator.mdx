@@ -20,7 +20,7 @@ next: piloop inbox wait enwik8 --after 17
 
 The wait returns on a new inbox item, score or stop, or at the timeout. Its last line is the next wait, with a
 cursor, so nothing is lost between two waits. The orchestrator uses no tokens while it waits. The daemon runs without
-one. Run one orchestrator for each campaign: two would answer an escalation twice.
+one. Run one orchestrator for each campaign: two would do the same work twice, and an escalation takes only one answer.
 
 ## The inbox
 

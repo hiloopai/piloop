@@ -18,7 +18,7 @@ wrote it: `~/.agents/skills/<skill>/SKILL.md`. Each `SKILL.md` is complete on it
 | Skill | Use it to |
 |---|---|
 | `piloop-setup` | Set up or change a campaign in the current repo: check the machine, interview the human, write `brief.md` and `piloop.toml`, register the campaign, start the daemon. |
-| `piloop-operate` | Orchestrate a running campaign: the inbox loop, ideas and priorities, escalations and decisions, sweeps, steering implementers. |
+| `piloop-operate` | Orchestrate a running campaign: the inbox loop, ideas and priorities, escalations and decisions, steering implementers. |
 | `piloop-review` | Review a campaign during or after a run: are the gains real, did an agent game the evaluation, where did the time and tokens go. |
 
 `piloop install-skills` composes these skills from the installed packages. It writes them into `~/.claude/skills`

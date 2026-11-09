@@ -7,7 +7,7 @@
   - `git cherry-pick <revision>` takes it.
   - The new bests in `piloop history` list the commit of each one.
 - Why it was made: read the session of the agent that made it, the harness's own file:
-  `piloop cas get <agent_sessions.session_file>`, for any agent, sweeps included. It is long: read it only for a
+  `piloop cas get <agent_sessions.session_file>`, for any agent. It is long: read it only for a
   specific question.
 
 ## Past research
@@ -81,5 +81,9 @@ PILOOP_ACTOR=orchestrator piloop candidate exclude <c> --reason '<what the numbe
 - After a new evaluator, the daemon measures the baseline and the best of the old evaluator. Every other candidate
   keeps its old score until you ask for it with `piloop candidate remeasure <c>`.
 - Evaluations wait for a worker's slot (`evaluations` of its pool in `[plugins.executor.pools]`): `piloop eval queue`
-  lists them. `piloop eval cancel <c>` cancels one that is no longer worth its slot; a run's candidate with no
-  measurement becomes `skipped`. Never kill an evaluator process by hand.
+  lists them. `piloop eval cancel <c>` cancels one that is no longer worth its slot. Never kill an evaluator process by
+  hand.
+  - The candidate keeps its origin and its scores.
+  - The cancel stands under that evaluator until `piloop candidate remeasure <c>`: until then the daemon does not
+    confirm the candidate, score it on the sealed split, or measure it again as the baseline or the best. So never
+    cancel the confirmation of a candidate that may be the best.

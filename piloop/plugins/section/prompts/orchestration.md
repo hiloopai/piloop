@@ -72,7 +72,7 @@ exclusion with your actor. Its scores stay in the pool, and a run may still star
 
 ### Pause a campaign
 
-- `piloop pause <campaign> --reason '<why>'` launches nothing more: no run, no sweep, no requested agent. Running work
+- `piloop pause <campaign> --reason '<why>'` launches nothing more: no run, no requested agent. Running work
   finishes and is scored. It raises no escalation.
 - The daemon still measures what a new evaluator or a request needs. `--evals` holds that too.
 - Paused time does not count toward `max_hours`.

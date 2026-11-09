@@ -11,7 +11,7 @@ You do the setup. The human answers an interview and logs in where a CLI needs a
 - Run every command yourself.
 - After each step, report the result in one line.
 - To try a bundled example, run `piloop init --example enwik8 <dir>` (or `titanic-tracks`). It registers the campaign, so
-  skip steps 2 to 4: fit `harnesses` in `<dir>/piloop.toml` to step 1, run `piloop init <dir>` again, and
+  skip steps 2 to 4: fit `[plugins.harness] use` in `<dir>/piloop.toml` to step 1, run `piloop init <dir>` again, and
   go on at step 5.
 
 ## 1. Check the machine
@@ -62,14 +62,18 @@ Topics to cover:
 - **Editable surface and forbidden moves.** The files an implementer may change. The frozen files (data preparation, the
   evaluator, the tokenizer). Forbidden dependencies and techniques (no external data, no pretrained model X).
 - **Hours and money.** Always ask the campaign's hours (suggest 6) and its cap in USD of model tokens.
-- **Width.** Ask it in budget terms, and check that the machine fits it. Offer 2 (the default) or 10 or more. A 6-hour
-  benchmark measured (holdout score, median of 3):
+- **Width.** Ask it in budget terms, and check that the machine fits it. Offer 2 (the default) or 10. A 6-hour
+  compression benchmark on Codex measured (holdout score, median of 3):
 
   | Implementers | Score | Model USD per campaign |
   |---|---|---|
-  | 1 | .461 | 13 |
+  | None: one plain Codex agent | .466 | 13.5 |
+  | 1 | .461 | 13.5 |
   | 2 | .542 | 30 |
-  | 10 | .660 | 140 |
+  | 10 | .660 | 133 |
+
+  One run with 20 implementers scored .622, below 10. https://piloop.autoresearch.inc/guides/choose-a-setup has the
+  rest of the measurements.
 - **Prior art and beliefs.** What the human tried, what they believe works, what result would surprise them.
 - **Harnesses and models.** Which ones are installed and logged in (from step 1), and which ones run implementers.
 - **Escalation policy.** What the human wants to be asked about (a new dependency, data changes, a cost above X), and
@@ -138,7 +142,7 @@ Map each answer to its keys:
   not have. Add pi only on request: on a Claude subscription, Anthropic refuses pi unless extra usage is on.
 - **`link`:** gitignored data or virtualenvs that the evaluate command needs inside a worktree.
 - **Hours and money → `[plugins.stop_rule]` `max_hours` and `hold_at = { models_usd = <usd> }`**, with `"models"`
-  in `[plugins.fact_source] use`. Add `target` when the human names one. Never write `[stop]`: it is deprecated.
+  in `[plugins.fact_source] use`. Add `target` when the human names one. Never write `[stop]`: piloop refuses it.
 - **Money spent outside piloop (a GPU cloud, a paid API) → a `[plugins.fact_source.billing]` table with
   `provider = "command"`, `[plugins.fact_source.spend] facts = ["billing_usd"]`, and
   `[plugins.fact_source] use = ["campaign", "optimization", "billing", "spend"]`:**

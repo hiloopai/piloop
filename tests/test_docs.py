@@ -151,7 +151,10 @@ def check_toml(block: Block, _db: Path) -> None:
         if (storage := data.get('storage')) is not None:
             StorageSettings.model_validate(storage)
         return
-    CampaignConfig.model_validate(data if {'name', 'evaluate'} <= data.keys() else merged(BASE_CONFIG, data))
+    config = CampaignConfig.model_validate(data if {'name', 'evaluate'} <= data.keys() else merged(BASE_CONFIG, data))
+    plugins = data.get('plugins', {})
+    unused = [str(u) for u in config.unreached() if u.name in plugins.get(u.capability, {})]
+    assert not unused, f'{block.at()}: {"; ".join(unused)}'  # what `piloop init` refuses
 
 
 def table_paths(table: dict[str, object], path: tuple[str, ...] = ()) -> Iterator[tuple[str, ...]]:

@@ -15,6 +15,7 @@
         "pages": [
           "index",
           "quickstart",
+          "guides/choose-a-setup",
           "by-hand"
         ]
       },

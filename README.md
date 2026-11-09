@@ -44,8 +44,8 @@ The agent sets up the campaign, runs it, and asks you only what needs you. To tr
   [covalence](https://pypi.org/project/covalence/) from source, which needs a recent Rust.
 - git 2.40 or later, with a commit identity.
 - [uv](https://docs.astral.sh/uv/). The installer installs it.
-- At least one of [Claude Code](https://code.claude.com), [Codex](https://github.com/openai/codex) or
-  [pi](https://github.com/badlogic/pi-mono), logged in.
+- [Claude Code](https://code.claude.com) or [Codex](https://github.com/openai/codex), logged in.
+  [pi](https://github.com/badlogic/pi-mono) is opt-in.
 
 ## Documentation
 

@@ -23,7 +23,7 @@ model = "claude-opus-5-5"
 max_runs = 20                            # the campaign ends after 20 scored implementer runs
 
 [plugins.role.implementer]
-timeout = 1800
+timeout = 3600
 max_concurrent = 2
 
 [[metrics]]

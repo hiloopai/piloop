@@ -35,7 +35,7 @@ piloop upgrade
 Then install the next release in the same way. `uv tool install piloop` drops the pin. Quote the requirement: `*` is
 a glob in zsh.
 
-This page covers the upgrade to 0.6.0. For an earlier one, follow the guide of the release that you upgrade to:
+This page covers the upgrade to 0.6.0, and the changes on `main` after it. For an earlier one, follow the guide of the release that you upgrade to:
 [0.5.0](https://github.com/hiloopai/piloop/blob/v0.5.0/docs/guides/upgrading.mdx),
 [0.4.0](https://github.com/hiloopai/piloop/blob/v0.4.0/docs/guides/upgrading.mdx),
 [0.3.1](https://github.com/hiloopai/piloop/blob/v0.3.1/docs/guides/upgrading.mdx) or
@@ -142,12 +142,22 @@ These keys still load, with a warning, until 0.7.0, and do nothing:
 
 `piloop inbox wait` and `GET /v1/inbox/news` no longer return news of kind `anomaly_requested`.
 
+### An escalation takes one answer
+
+Each party, such as the people or the orchestrator, acknowledges an inbox item for itself. The table `acks` holds one
+row for each party that acknowledged an item, and replaces `comments.acked_at` and `comments.acked_by`. A `piloop sql`
+query on those columns fails: read `acks`. The API keeps `acked_at` and `acked_by` until 0.7.0, as the earliest ack.
+
+- An answer takes an item out of every inbox. An escalation takes one answer: a second one is refused, with the first.
+- An orchestrator's ack no longer stops a notifier: it sends what no person acknowledged.
+
 ### A cancel stands, and keeps the origin
 
 `piloop eval cancel` no longer makes a run's candidate `skipped`. It keeps its origin, and stays in the pool of every
 evaluator that scored it. The cancel stands under the evaluator that it cancelled: the daemon does not confirm the
 candidate, score it on the sealed split, or measure it again as the baseline or the best before an evaluator change.
-`piloop candidate remeasure` asks for it again. The table `cancels` holds each cancel.
+`piloop candidate remeasure` asks for it again. The table `cancels` holds each cancel. The migration gives each
+candidate that 0.6.0 made `skipped` for a cancel its origin back.
 
 ### A remeasure gets the evaluations that it asks for
 
@@ -159,6 +169,30 @@ A full disk while piloop stores a campaign's linked inputs is no longer the cand
 in the evaluate command: the evaluation runs again after `[evaluation] infra_retry`, and after `stop_after_tries`
 failures in a row the campaign's measurements pause and piloop escalates.
 
+### An agent that took a few turns worked
+
+An agent whose harness counted more than `[agents] startup_turns` turns (3 by default) worked, however soon it ended.
+It is not `never_worked`, and its run is an attempt. Below that number, `startup_seconds` decides as before.
+
+### An agent's deadline and token
+
+- `agent_sessions.deadline` is when its timeout ends the agent, stored at its launch. The agents that run at the
+  upgrade have none: they get no wrap-up message before their timeout.
+- An agent's token ends with its session. The migration deletes the tokens of the agents that ended.
+- A stop or a cancel ends a starting agent at once. The id of a deleted agent session is never used again.
+
+### The database refuses impossible rows
+
+New CHECKs refuse a `piloop sql` write that leaves a row in an impossible state. The migration repairs the rows that
+an earlier write broke, and logs how many:
+
+| Table | A write is refused when |
+|---|---|
+| `campaigns` | A pause has no owner (`paused_by`, new), an owner has no pause, an active campaign has a `stopped_reason`, a stopped or retired one has none, or a retired one is paused. |
+| `agent_sessions` | An ended agent has no `ended_at`, an open one has one, or a `never_worked` one has no `error`. |
+| `evaluations` | A cancelled evaluation is not running. |
+
+## Upgrading to 0.6.0
 
 ### Upgrade from 0.5
 
@@ -193,7 +227,7 @@ Their keys still load, with a warning, until 0.7.0, and do nothing. What they wr
 | Ideas that implementers file for other runs. A hunch for another run goes in a note on the board. | `files` and `plan_words` of a role that does runs |
 | The caps on the orchestrator's ideas. | `files`, `plan_words` and `max_ideas` of `[plugins.role.orchestrator]` |
 | The rules that gave ideas to runs, and ideas that wait for a review. | `takes`, `explore_every`, `recovery_requeues`, `idle_alert` |
-| The trigger tables. `quiet_seconds` moves to `[plugins.role.orchestrator]`, with its value. | `[plugins.trigger.<name>]` |
+| The trigger tables, `quiet_seconds` included. | `[plugins.trigger.<name>]` |
 | The `idle_queue` section. | `"idle_queue"` in a list of sections, `[plugins.section.idle_queue]` |
 
 A package's own role, trigger or section of one of these names keeps its table and its keys.
@@ -203,8 +237,8 @@ A package's own role, trigger or section of one of these names keeps its table a
 `piloop.capabilities` no longer has `SweepRole`, `Sweep` or `Files`, and a role has no `ideas_line` or `refuses_idea`.
 A plugin's role is a subclass of `ImplementerRole`, which does runs, or of `StartsItsAgents`, which decides when its
 agents start: it answers each pass over a campaign with its requests (`request`), says whether it wakes while the
-campaign is paused, held or stopped (`wakes_while`), and launches its agents (`launch`). The orchestrator is the
-built-in role of that kind. `Quiet` comes from `piloop.capabilities`.
+campaign is paused, held or stopped (`wakes_while`), and launches its agents (`launch`). `Quiet` comes
+from `piloop.capabilities`.
 
 ### The board
 
@@ -253,7 +287,8 @@ An implementer's clean exit ends its run: `finished` when it submitted a version
 ### An agent that never worked ends `never_worked`
 
 An agent whose job did not start, or that ended within `startup_seconds` and left nothing, ends `never_worked`, not
-`exited` or `killed`. Its `error` says why, also when it exited 0. A query that counts ended agents with
+`exited` or `killed`. After 0.6.0, an agent that took more than `startup_turns` turns worked: see
+[An agent that took a few turns worked](#an-agent-that-took-a-few-turns-worked). Its `error` says why, also when it exited 0. A query that counts ended agents with
 `state IN ('exited', 'killed')` adds `'never_worked'`. Rows that ended before the upgrade keep their state.
 
 - A wrap-up no longer hides such an end: an implementer told to wrap up as it starts, that leaves nothing, never
@@ -337,7 +372,8 @@ A plugin imports `BestRule`, `Case`, `Scores`, `Criterion` and `Baseline` from `
 
 ### A cancelled evaluation records nothing
 
-`piloop eval cancel` records no measurement. A run's candidate is `skipped`, not a `crash`.
+`piloop eval cancel` records no measurement. In 0.6.0, a run's candidate is `skipped`, not a `crash`. After 0.6.0 it
+keeps its origin: see [A cancel stands, and keeps the origin](#a-cancel-stands-and-keeps-the-origin).
 
 ### The implementer's brief is shorter
 
@@ -354,11 +390,13 @@ the guide. To keep them, list them in `[plugins.role.implementer] sections`.
 
 A `piloop.toml` that sets a key keeps its value. To keep pi, set `use = ["pi"]`.
 
-### The orchestrator wakes only for a decision
+### Only a stop rule or a person stops a campaign
 
-`[plugins.role.orchestrator] triggers` takes only `news` and `run_failed`. `news` wakes it for an escalation or what a
-person writes. Another trigger, and `[plugins.trigger.news] routine_every`, are dropped with a warning.
+`piloop campaign stop` by an agent is refused, and the agent escalates a stop instead. After 0.6.0, piloop has no
+orchestrator role: see [The orchestrator role is removed](#the-orchestrator-role-is-removed).
 
-- With the orchestrator off (no `news` in its `triggers`), an agent's escalation reaches your notifiers at once.
-- Only a stop rule or a person stops a campaign: `piloop campaign stop` by an agent is refused, and the agent
-  escalates a stop instead.
+### One worker on a home
+
+A second `piloop worker` on one `PILOOP_HOME` exits and says why. The daemon's own worker uses its home too, so a
+`piloop worker` on the daemon's home is refused, and a daemon does not start on a home where a worker runs. Give each
+worker its own home.

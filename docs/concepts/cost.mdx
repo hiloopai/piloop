@@ -75,6 +75,9 @@ a subscription bills otherwise. A model without a price makes the fact unknown, 
 no list price, so give it one, in USD per million tokens:
 
 ```toml
+[plugins.fact_source]
+use = ["campaign", "optimization", "models"]
+
 [plugins.fact_source.models]
 prices = { sonnet = { input = 3.0, output = 15.0, cache_read = 0.3, cache_write = 3.75 } }
 ```

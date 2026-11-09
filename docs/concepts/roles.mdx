@@ -8,7 +8,7 @@ import Runtimes from '/snippets/generated/runtimes.mdx';
 import Harnesses from '/snippets/generated/harnesses.mdx';
 
 Each role has a table in `piloop.toml`. By default, two implementers run at a time, for at most an hour each, in turn
-on Claude Code and Codex. This campaign runs ten, for 30 minutes each:
+on Claude Code and Codex. This campaign runs ten:
 
 ```toml
 [plugins.harness]
@@ -22,11 +22,11 @@ model = "gpt-6.1-sol"
 
 [plugins.role.implementer]
 max_concurrent = 10
-timeout = 1800
 ```
 
-More implementers find a better best in the same hours, at more cost. Run `piloop init` after each change. The
-[configuration reference](/reference/configuration#roleconfig) lists every key of a role.
+More implementers find a better best in the same hours, at more cost: see [Choose a setup](/guides/choose-a-setup).
+Run `piloop init` after each change. The [configuration reference](/reference/configuration#roleconfig) lists every
+key of a role.
 
 Each agent is an **agent session**, with an id, a log and the tokens that it used. It signs its writes
 `<role>#<id>`, such as `implementer#4`.
@@ -64,10 +64,10 @@ list, each shows every section that declares it. A section with parameters has a
 
 ```toml
 [plugins.section]
-use = ["headline", "trajectory", "runs"]
+use = ["headline", "trajectory", "runs", "queue"]
 
-[plugins.section.history]
-budget = 600                 # the tokens of an implementer's history
+[plugins.section.queue]
+ideas = 20                   # the claimable ideas that it lists
 ```
 
 A brief is the role's prompt, then `brief.md`, then the role's `addendum`, then its sections. A **guide**, such as
@@ -130,7 +130,7 @@ A run's brief, log and transcript are in `~/.piloop/runs/<run>/`, and those of a
 | `starting`, `running` | Its process starts, then works. |
 | `ending` | A stop, a cancel or its run's end ends it. |
 | `exited`, `killed` | It ended by itself, or piloop ended it. |
-| `never_worked` | It did not start to work: its job did not start, or it ended within `startup_seconds` and left nothing. `error` says why. |
+| `never_worked` | It did not start to work: its job did not start, or it ended within `startup_seconds`, took at most `startup_turns` turns (`[agents]`, 3 by default), and left nothing. `error` says why. |
 
 ## Sessions
 

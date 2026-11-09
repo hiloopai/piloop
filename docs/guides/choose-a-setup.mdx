@@ -1,0 +1,106 @@
+---
+title: Choose a setup
+sidebarTitle: Setup
+description: How many implementers, how many hours and how much money, from what we measured.
+---
+
+Start with 2 implementers for 6 hours, with a cap in USD:
+
+```toml
+[plugins.role.implementer]
+max_concurrent = 2
+
+[plugins.stop_rule]
+max_hours = 6
+hold_at = { models_usd = 30 }      # nothing new starts at 30 USD of model tokens
+
+[plugins.fact_source]
+use = ["campaign", "optimization", "models"]
+```
+
+Go to 10 implementers when your budget allows. The setup skill asks you for these values and writes them. This page
+gives the measurements behind them.
+
+## The short answer
+
+| Setting | Choose | Why |
+|---|---|---|
+| Width: `[plugins.role.implementer] max_concurrent` | 2. 10 when the budget allows. | 2 beat one plain agent. 10 got the best score. |
+| Hours: `[plugins.stop_rule] max_hours` | 6 | The measurements of width ran for 6 hours. |
+| Money: `hold_at = { models_usd = … }` | The cost of your width, from the table below | Nothing new starts at the cap. |
+| Run length: `[plugins.role.implementer] timeout` | 3600, the default | Every piloop campaign on this page used 60-minute runs, each with a new agent. |
+| Harnesses: `[plugins.harness] use` | Claude Code and Codex, the default, or the one that you have | The rotation had no clear effect on the score. |
+| The evaluate command | One that fails a commit that breaks your tests | Otherwise a commit that breaks them can become the best. |
+
+## Width and money
+
+We measured each width on one task: a 6-hour compression benchmark, with Codex agents. The score is on held-out data,
+and higher is better. Each row is the median of 3 campaigns, unless it says otherwise.
+
+| Setup | Score | Model USD per campaign | Time to reach the plain agent's final score |
+|---|---|---|---|
+| One plain Codex agent, without piloop | 0.466 | 13.5 | – |
+| 1 implementer | 0.461 | 13.5 | – |
+| 2 implementers | 0.542 | 30 | 3.7 h |
+| 10 implementers | 0.660 | 133 | 1.9 h |
+| 20 implementers, 1 campaign | 0.622 | 272 | – |
+
+Model USD is the list price of the agents' tokens for the whole campaign.
+
+- One implementer did not beat one plain agent. The gain comes from more implementers.
+- 2 implementers beat the plain agent in each of their 3 campaigns, for about twice its cost.
+- 10 implementers got the best score, and reached the plain agent's final score in less than 2 hours.
+- The one campaign with 20 implementers scored less than 10. We saw no gain past 10.
+
+These numbers come from one task and one harness. Your task can be different. Start with 2 implementers, and use
+more when the result is worth the cost.
+
+## Hours and the budget
+
+`max_hours` ends the campaign. `hold_at` is a cap: at it, nothing new starts, and what runs finishes and is scored.
+Set both, as in the example at the top. Take the cap from the table above: for 6 hours, 2 implementers used about 30
+USD of model tokens, and 10 implementers about 133 USD. [Stop conditions and cost](/concepts/cost) gives every limit.
+
+## Run length
+
+Each run starts a new agent from the best, for at most `timeout` seconds: 3600 by default. Every piloop campaign
+on this page used 60-minute runs. Make the timeout longer only when one evaluation takes a large part of the hour.
+
+## Harnesses
+
+`[plugins.harness] use` lists the harnesses that the runs use in turn: Claude Code and Codex by default. In a second
+set of campaigns with 10 implementers, Claude Code and Codex in turn scored 0.660 (2 campaigns), and Codex alone
+0.635 (3 campaigns). The ranges of the two overlap, so the rotation had no clear effect. Use the harnesses that you
+have.
+
+## Make the evaluate command the check
+
+The [evaluate command](/concepts/campaigns#the-evaluate-command) is the only check of a commit that piloop runs. A
+rule in `brief.md` is only a request to the agents. So make the command fail a commit that breaks the repo's own tests:
+
+```python
+import subprocess
+
+if subprocess.run(["uv", "run", "pytest", "-q"]).returncode != 0:
+    report({"status": "crash", "feedback": "the test suite fails"})
+    raise SystemExit(0)
+```
+
+`report` writes the result line, as on [the evaluate command](/concepts/campaigns#the-evaluate-command). Otherwise a
+commit that breaks the tests can get a good score and become the best. In a 3-hour bug-fixing task, campaigns with
+one implementer let 12% to 17% of their scored commits break the repo's tests (5 campaigns for each of 2 briefs). One
+plain agent broke none (6 campaigns).
+
+## What did not help
+
+- **A focus area for each implementer**, such as an `addendum` for each role or track. With 10 implementers, the
+  campaigns with focus areas scored 0.607, and those without 0.660 (3 campaigns each).
+- **A built-in agent that coordinates the implementers.** With 10 implementers, it scored 0.610, against 0.635
+  without it (3 campaigns each). It did not decrease the duplicate ideas, and it cost about 17 to 33 USD more for each
+  campaign. piloop does not ship it.
+- **A brief that asks for a written spec before the code.** On the bug-fixing task, it gave no gain to one plain agent
+  (3 campaigns each) or to one implementer (5 campaigns each).
+- **A rotation of harnesses, for the score.** See [Harnesses](#harnesses).
+
+Why more implementers help: an implementer rarely continues the work of another one. So each implementer is one more
+independent try, and each new run starts from the best, which keeps the gains.

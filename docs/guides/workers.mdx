@@ -236,6 +236,14 @@ provider's `env`.
   it ends.
 - Its `piloop` commands, which the worker relays to the server while the agent's job runs.
 
+When a relayed command fails, its output says what is known:
+
+| The output says | Run it again? |
+|---|---|
+| `the call did not run on the server`, or `the version did not leave this worker, and the call did not run` | Yes. |
+| `the answer of the server was lost, and the call may have run there` | Only after you check that it did not run. |
+| `the call ran, but your checkout did not move to …` | No: the call ran. |
+
 Its session goes to the server's CAS at least every 30 seconds, so `piloop attach` shows what it wrote, and a lost
 worker loses at most those 30 seconds.
 
@@ -253,6 +261,7 @@ worker loses at most those 30 seconds.
 | A worker stops before it sends a report | The report waits in `$PILOOP_HOME/spool/<worker>`, and goes out when the worker starts again. Its lease stays renewed while it waits. |
 | The server answers a report with an error, such as a 5xx | The worker sends it again on each heartbeat. After `report_tries` (30) such answers, the job ends as a crash and frees its slot. |
 | A second worker starts on the same `PILOOP_HOME` | It exits and says so: each worker needs its own home. |
+| A worker starts on the home of `piloop serve` | It exits and says so: the daemon's own worker uses that home. When the worker started first, the daemon does not start, and says why. |
 | The server does not answer | The worker tries each call again. Its log says `worker.unreachable`. |
 | `piloop serve` restarts | Its worker finds its leases again and re-attaches to each agent. It ends each process whose job it cannot read. |
 | A started worker does not register within `register_seconds` | It is stopped, and the pool backs off before it starts another. |

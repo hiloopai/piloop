@@ -28,7 +28,8 @@ Run 41's evaluation takes 3 h, over the 1 h timeout. Raise the timeout, or drop 
 
 ## What is sent
 
-- An escalation or a priority-0 item that nobody has acknowledged, and that a person did not write.
+- An escalation or a priority-0 item that no person has acknowledged and nobody has answered, and that a person did
+  not write. An orchestrator's ack does not stop it.
 - Only priorities 0 and 1, unless `max_priority` says otherwise: `4` sends every priority.
 - A reminder a day later while the item waits and its campaign is active. `piloop inbox ack` ends the reminders.
 - Nothing twice: each send is a `notification.sent` event. A failed send is retried with a doubling wait up to an

@@ -5,7 +5,8 @@ description: The docker runtime gives each agent a container that sees only its 
 ---
 
 The `docker` runtime runs each agent in a container of your image. The agent sees its worktree, its logs and the hosts
-that you allow, and nothing else of the machine. Set it in the `config.toml` of the home:
+that you allow, and nothing else of the machine. This page sets it up for Claude Code only. Set it in the
+`config.toml` of the home:
 
 ```toml
 [plugins.runtime.docker]
@@ -13,11 +14,15 @@ image = "ghcr.io/acme/agent:1"
 allow = ["api.anthropic.com"]
 ```
 
-Then pick it in the campaign's `piloop.toml`, for every role or for one:
+Then pick it in the campaign's `piloop.toml`, for every role or for one. Run only Claude Code: the default rotation
+also starts Codex agents, and this image and `allow` do not serve them.
 
 ```toml
 [plugins.runtime]
 use = "docker"
+
+[plugins.harness]
+use = ["claude"]
 ```
 
 ## The image
@@ -63,7 +68,7 @@ allow = ["127.0.0.1:8317"]
 | The shared workspace | Read-write |
 | The harness's sessions | Read-write: piloop reads the tokens and keeps the session |
 | Your home | An empty one: no `CLAUDE.md`, `AGENTS.md`, skills, settings or credentials |
-| `piloop` | The calls of the agent's role, relayed as on a [worker elsewhere](/guides/workers) |
+| `piloop` | The calls of the agent's role, relayed as on a [worker elsewhere](/guides/workers#what-an-agent-on-a-worker-gets) |
 | The network | Only `allow` and the role's HTTP MCP servers, through a proxy of the worker |
 
 Any other host gets a `403` from the proxy. The container runs as your user, and piloop removes it when the agent
