@@ -100,8 +100,6 @@ HEADERS = 'OTEL_EXPORTER_OTLP_HEADERS'
 """The collector's credentials, which only the control sandbox gets (``CREDENTIALS``)."""
 HALT = 'halt'
 """A file in a run's directory that stops it at the next sample, with its text as the reason."""
-INSTRUCTION = 'worker-instruction.md'
-"""The file of an arm's instruction in the campaign's checkout, out of git: the implementer's ``addendum``."""
 BASE_DATE = '2026-01-01T00:00:00Z'
 """The date of the starting commit, so that every arm starts from the same commit id."""
 PLAIN_PROMPT = """You work alone in this repository, and no one will answer questions. Read brief.md and do the task.
@@ -175,8 +173,6 @@ def piloop_config(task: Task, arm: PiloopArm, settings: Settings, hours: float) 
     evaluate = task.piloop.get('evaluate')
     if isinstance(evaluate, list):
         own['evaluate'] = [*nice, *evaluate]
-    if arm.instruction:
-        own = merge(own, {'plugins': {'role': {'implementer': {'addendum': INSTRUCTION}}}})
     match arm.split:
         case 'sealed':
             script = f'{OPT}/campaign_sealed.py'
@@ -236,9 +232,6 @@ class Piloop:
     def start(self, box: Shell) -> None:
         """Start the daemon, whose provisioners start the team, and register the campaign once its baseline is in."""
         config = piloop_config(self.task, self.arm, self.settings, self.hours)
-        if self.arm.instruction:
-            box.write(f'{REPO}/{INSTRUCTION}', self.arm.instruction.encode())
-            box.run(f'cd {REPO} && echo {INSTRUCTION} >> .git/info/exclude')
         box.write(f'{REPO}/piloop.toml', tomli_w.dumps(config).encode())
         box.run(f'cd {REPO} && echo piloop.toml >> .git/info/exclude')
         box.start(SUPERVISE.format(listen=f'0.0.0.0:{daytona.API}'))

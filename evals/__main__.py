@@ -6,8 +6,8 @@ from cyclopts import App
 from rich.console import Console
 
 from evals.drive import drive
+from evals.metrics import scored
 from evals.model import Result, Settings, Task, load_arm
-from evals.pilot import pilot as run_pilot, scored
 from evals.report import write
 from evals.telemetry import traced
 
@@ -41,43 +41,6 @@ def rescore(run: Path) -> None:
     settings = Settings()
     with traced(settings):
         scored(run, settings)
-
-
-@app.command
-def pilot(
-    tasks: list[str],
-    *,
-    arms: list[str],
-    budget: float = 60,
-    hours: float = 4,
-    concurrency: int = 10,
-    ceiling: float = 1000,
-    first: int = 1,
-) -> None:
-    """Run many arms on many tasks from this one process, under one $ ceiling for all of them.
-
-    Args:
-        tasks: Directories of ``tasks/``.
-        arms: ``<arm>=<repeats>``, each arm a file of ``arms/`` or the path of an arm's file.
-        budget: The cap of each run on models plus compute, in USD.
-        hours: The cap of each run on wall-clock time.
-        concurrency: How many runs go at once.
-        ceiling: The cap on the spend of all runs together: at it, every run still going stops.
-        first: The number of the first repeat of each arm.
-    """
-    settings = Settings()
-    plan = [(load_arm(name), int(n)) for name, _, n in (a.partition('=') for a in arms)]
-    with traced(settings):
-        run_pilot(
-            [Task.load(t) for t in tasks],
-            plan,
-            budget=budget,
-            hours=hours,
-            concurrency=concurrency,
-            ceiling=ceiling,
-            first=first,
-            settings=settings,
-        )
 
 
 @app.command

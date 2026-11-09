@@ -86,7 +86,7 @@ def quantile(xs: list[float], q: float) -> float | None:
 def submissions(db: Path) -> tuple[list[datetime], list[float], list[float], list[float]]:
     """When each version was submitted, and the seconds to its verdict, its visible and its sealed measurement.
 
-    A pool run's verdict is its first score.
+    A version's verdict is its first score.
     """
     with closing(sqlite3.connect(db)) as con:
         submitted = {
@@ -95,11 +95,8 @@ def submissions(db: Path) -> tuple[list[datetime], list[float], list[float], lis
         }
         if not submitted:  # a campaign that scores every commit: a version is submitted when it is made
             submitted = {cid: when(at) for cid, at in con.execute('select id, created_at from candidates where id > 1')}
-        judged = dict(  # a verdict, or a pool's first score
-            con.execute(
-                "select target_id, min(at) from events where kind in ('candidate.judged', 'candidate.scored')"
-                ' group by target_id'
-            )
+        judged = dict(
+            con.execute("select target_id, min(at) from events where kind = 'candidate.scored' group by target_id")
         )
         measured: dict[tuple[int, int], str] = {}
         for cid, evaluator, at in con.execute(

@@ -246,41 +246,25 @@ def count_of(key: str, counts: Callable[[Result], dict[str, int]]) -> Callable[[
     return lambda r: None if r.piloop is None else counts(r).get(key, 0)
 
 
-def on_final_line(r: Result) -> dict[str, int]:
-    """A piloop run's candidates on its final best's line: a pool run's, or a verdict run's keeps in its final head."""
-    return r.on_final_line if r.pool is not None else r.keeps_in_final
-
-
 def share_in_final(r: Result) -> float | None:
     """The share of a piloop run's keeps (new bests) on its final best's line. None: a plain run, or none kept."""
     kept = sum(r.keeps.values())
-    return None if r.piloop is None or not kept else min(sum(on_final_line(r).values()) / kept, 1.0)
+    return None if r.piloop is None or not kept else min(sum(r.on_final_line.values()) / kept, 1.0)
 
 
 def pooled(count: Callable[[Result], int]) -> Callable[[Result], float | None]:
-    """A pool run's ``count``. None: a plain run, or a verdict run."""
+    """A piloop run's ``count``. None: a plain run, or one from before 0.6."""
     return lambda r: None if r.pool is None else count(r)
-
-
-def race_rate(r: Result) -> float | None:
-    """The share of a piloop run's submissions lost to a race."""
-    return None if r.races is None or not r.funnel.submissions else r.races / r.funnel.submissions
 
 
 def team(by_arm: dict[str, list[Result]]) -> list[Row]:
     """How the workers built on each other: in total, then for each role, and each pair of roles, that shows up."""
     rows: list[Row] = [
-        (
-            "candidates on the final best's line (before 0.6: keeps in the final head)",
-            total(on_final_line),
-            0,
-            statistics.median,
-        ),
+        ("candidates on the final best's line", total(lambda r: r.on_final_line), 0, statistics.median),
         ("share of keeps on the final best's line", share_in_final, 2, statistics.median),
         ('confirmations (pool)', pooled(lambda r: r.pool.confirmations if r.pool else 0), 0, statistics.median),
         ('sealed scorings (pool)', pooled(lambda r: r.pool.sealed_scorings if r.pool else 0), 0, statistics.median),
         ('runs from another base (pool)', pooled(lambda r: r.pool.based_runs if r.pool else 0), 0, statistics.median),
-        ('race rate (beat its start, not the moved head)', race_rate, 2, statistics.median),
         ('notes written', total(lambda r: r.notes_written), 0, statistics.median),
         ('notes read by a worker of another run', total(lambda r: r.notes_read), 0, statistics.median),
     ]
@@ -290,7 +274,12 @@ def team(by_arm: dict[str, list[Result]]) -> list[Row]:
         for role in roles:
             rows.append((f'keeps by {role}', count_of(role, lambda r: r.keeps), 0, statistics.median))
             rows.append(
-                (f"keeps by {role} on the final best's line", count_of(role, on_final_line), 0, statistics.median)
+                (
+                    f"keeps by {role} on the final best's line",
+                    count_of(role, lambda r: r.on_final_line),
+                    0,
+                    statistics.median,
+                )
             )
     for key in sorted({k for r in runs for k in r.notes_read}):
         a, _, b = key.partition('>')

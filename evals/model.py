@@ -133,8 +133,6 @@ class PiloopArm(Frozen):
     split: Literal['visible', 'sealed'] = 'visible'
     """``visible``: the daemon scores with the task's evaluator alone. ``sealed``: the campaign also gets the task's dev
     command as ``[evaluator] dev``, and a sealed split of its own as ``[evaluator] sealed``, kept in its home."""
-    instruction: str = ''
-    """A paragraph added to what each worker reads: a piloop arm's implementer brief, a plain session's prompt."""
     env: dict[str, str] = {}
     """Variables of the arm's sandboxes, which a task's evaluator may read: ``EVALS_DEV_LOOP = "slow"`` turns a warm
     dev loop off."""
@@ -149,7 +147,7 @@ class PlainArm(Frozen):
     effort: str = 'high'
     """How hard it thinks, as the harness names it: piloop's default for its roles."""
     instruction: str = ''
-    """A paragraph added to what each worker reads: a piloop arm's implementer brief, a plain session's prompt."""
+    """A paragraph added to the session's prompt."""
     env: dict[str, str] = {}
     """Variables of the arm's sandbox, which a task's evaluator may read: ``EVALS_DEV_LOOP = "slow"`` turns a warm
     dev loop off."""
@@ -222,7 +220,7 @@ class Point(Frozen):
 class Funnel(Frozen):
     """Ideas → runs → submissions → kept. A plain session has no ideas; its runs are its sessions.
 
-    ``kept`` is a verdict run's keeps, a pool run's new bests, and a plain session's commits on ``main``.
+    ``kept`` is a piloop run's new bests, and a plain session's commits on ``main``.
     """
 
     ideas: int | None
@@ -255,8 +253,8 @@ class Regression(Frozen):
 class Regressions(Frozen):
     """A run's submissions on the holdout, each against its parent: the version it started from.
 
-    A pool run's submissions are its implementers' candidates, a verdict run's too, and a plain run's the commits of
-    ``main``'s first-parent line, each with its first parent.
+    A piloop run's submissions are its implementers' candidates, and a plain run's the commits of ``main``'s
+    first-parent line, each with its first parent.
     """
 
     submissions: int
@@ -307,9 +305,9 @@ class SelfTest(Frozen):
     """The dev metric of each run."""
 
 
-REMOVED = ('built_on', 'replaced', 'lead_token_share')
-"""Fields of results from earlier rounds, dropped on load: ``keeps``, ``keeps_in_final`` and ``races`` replaced the first
-two, and the lead's share of the tokens went with the lead."""
+REMOVED = ('built_on', 'replaced', 'lead_token_share', 'keeps_in_final', 'races')
+"""Fields of results from earlier rounds, dropped on load: the lead's share of the tokens went with the lead, and the
+others counted the keeps and races of a piloop with verdicts (before 0.6)."""
 
 
 class Result(Frozen):
@@ -352,17 +350,11 @@ class Result(Frozen):
 
     keeps: dict[str, int] = {}
     """The keeps of each role that does runs (``evals.team``)."""
-    keeps_in_final: dict[str, int] = {}
-    """The keeps of each role that the final head contains: the gains that stacked. Empty for a pool run, which has
-    ``on_final_line`` instead."""
     on_final_line: dict[str, int] = {}
-    """A pool run's candidates on the final best's line (its chain of parents, the best included), by the role of
+    """A piloop run's candidates on the final best's line (its chain of parents, the best included), by the role of
     their run."""
     pool: PoolCounts | None = None
-    """A pool run's confirmations, sealed scorings and runs from another base. None: a plain run, or a verdict run."""
-    races: int | None = None
-    """Submissions that beat the version they started from, but not the head that another run's keep had moved on to
-    by the time they were judged. None: a plain run, or a pool run, which has no head to race."""
+    """A piloop run's confirmations, sealed scorings and runs from another base. None: a plain run."""
     notes_written: dict[str, int] = {}
     """The notes that the workers of each role wrote."""
     notes_read: dict[str, int] = {}

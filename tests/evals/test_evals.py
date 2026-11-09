@@ -33,10 +33,9 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from pydantic import JsonValue, SecretStr
 from sqlalchemy import select
 
-from evals import daytona, meter, pilot, score as scoring
+from evals import daytona, meter, metrics, score as scoring
 from evals.drive import (
     CREDENTIALS,
-    HALT,
     HEADERS,
     REPO,
     Fleet,
@@ -66,7 +65,6 @@ from evals.metrics import (
     at,
     piloop_submissions,
     plain_submissions,
-    pool,
     pool_counts,
     pool_heads,
     regressions,
@@ -92,11 +90,10 @@ from evals.model import (
     Tokens,
     load_arm,
 )
-from evals.pilot import guard, spent
 from evals.report import plain_bar, write
 from evals.sandbox import OPT, PI_MODELS, WORK, Box, Copy, Egress, Run, Step, memory, network_policy, recipe
 from evals.score import Score, Scoring, score
-from evals.team import final_keeps, final_line, notes, races
+from evals.team import final_line, notes
 from evals.telemetry import exported
 from piloop.config import CampaignConfig
 from piloop.db.models import Campaign
@@ -209,9 +206,14 @@ def test_meter_counts_a_pi_session_once_under_its_provider_and_prices_it_at_opus
         price({'pi': {'anthropic/no-such-model': PI_TOKENS}})
 
 
-def test_the_rotation_arm_runs_pi_claude_and_codex_in_turn_with_no_cap_per_harness_all_on_the_gateway():
-    arm = load_arm('pool-rotation-10w')
-    assert isinstance(arm, PiloopArm)
+def test_an_arm_of_pi_claude_and_codex_runs_them_in_turn_with_no_cap_per_harness_all_on_the_gateway():
+    agents = [
+        Agent(harness='pi', model='anthropic/claude-opus-5-5'),
+        Agent(harness='claude', model='claude-opus-5-5'),
+        Agent(harness='codex', model='gpt-6.1-sol'),
+    ]
+    overlay: dict[str, JsonValue] = {'plugins': {'role': {'implementer': {'max_concurrent': 10}}}}
+    arm = PiloopArm(kind='piloop', name='rotation', piloop='piloop', agents=agents, overlay=overlay)
     settings = Settings(gateway='https://gw.example', gateway_token=SecretStr('t'))
     config = piloop_config(Task.load('t5-lpaq'), arm, settings, 6)
     harness = get(config, 'plugins', 'harness')
@@ -640,75 +642,17 @@ def test_campaign_sealed_scores_the_checkout_on_the_split(tmp_path: Path, monkey
     assert campaign_sealed.main(TASKS / 't2-circles', sealed, 'lower')['status'] == 'crash'
 
 
-def test_the_guard_halts_every_unfinished_run_at_the_ceiling(tmp_path: Path):
-    settings = Settings(results=tmp_path, poll_seconds=0.01)
-    for name, usd, finished in (('a-1', 400, True), ('b-1', 700, False)):
-        run = tmp_path / 't' / name
-        run.mkdir(parents=True)
-        (run / 'spend.jsonl').write_text(Sample(hours=1, models_usd=usd, compute_usd=0).model_dump_json())
-        if finished:
-            (run / 'run.json').write_text('{}')
-    assert spent(settings) == 1100
-    done = threading.Event()
-    watcher = threading.Thread(target=guard, args=(settings, 1000, done))
-    watcher.start()
-    halt = tmp_path / 't' / 'b-1' / HALT
-    try:
-        for _ in range(500):
-            if halt.exists():
-                break
-            time.sleep(0.01)
-    finally:
-        done.set()
-        watcher.join()
-    assert 'ceiling of $1000' in halt.read_text()
-    assert not (tmp_path / 't' / 'a-1' / HALT).exists()
-
-
-def test_team_counts_keeps_in_the_final_head_races_and_notes_read_across(tmp_path: Path):
-    repo = tmp_path / 'repo'
-    repo.mkdir()
-    git(repo, 'init', '-q', '-b', 'main')
-    revs = []
-    for name in ('base', 'a1', 'b-on-a1'):
-        (repo / 'f').write_text(name)
-        git(repo, 'add', 'f')
-        git(repo, 'commit', '-qm', name)
-        revs.append(git(repo, 'rev-parse', 'HEAD').strip())
-    git(repo, 'checkout', '-q', '-b', 'side', revs[0])
-    (repo / 'g').write_text('a2')
-    git(repo, 'add', 'g')
-    git(repo, 'commit', '-qm', 'a2 not on b')
-    revs.append(git(repo, 'rev-parse', 'HEAD').strip())
-    bundle = tmp_path / 'repo.bundle'
-    git(repo, 'bundle', 'create', str(bundle), '--all')
+def test_team_counts_notes_read_by_a_worker_of_another_run(tmp_path: Path):
     with closing(sqlite3.connect(':memory:')) as db:
         db.executescript(
             """
-            create table runs (id integer, role text);
-            create table candidates (id integer, revision text, run_id integer, verdict text, updated_at text);
-            create table events (target_kind text, target_id integer, kind text, at text, payload text);
             create table agent_sessions (id integer, kind text, subject_kind text, subject_id integer, session_id text);
             create table comments (author text, body text, kind text);
-            insert into runs values (1, 'implementer'), (2, 'implementer_b'), (3, 'implementer');
             insert into agent_sessions values (10, 'implementer', 'run', 1, 's1'), (20, 'implementer_b', 'run', 2, 's2');
             insert into comments values ('implementer#10', 'The   mixer weights saturate at 4096.', 'note'),
                 ('implementer_b#20', 'Never read by anyone.', 'note'), ('human', 'Not a worker.', 'note');
             """
         )
-        for i, (rev, run) in enumerate(zip(revs, (None, 1, 2, 3), strict=True)):
-            db.execute("insert into candidates values (?, ?, ?, 'keep', ?)", (i, rev, run, f'2026-01-01 00:0{i}'))
-        assert final_keeps(db, bundle) == (
-            {'implementer': 2, 'implementer_b': 1},
-            {'implementer': 1, 'implementer_b': 0},
-        )
-        for i, (verdict, parent, best) in enumerate(
-            (('discard', 5, -1), ('discard', -2, -3), ('keep', 4, 4)), start=10
-        ):
-            db.execute("insert into candidates values (?, 'x', 1, ?, '2026-01-02')", (i, verdict))
-            judged = json.dumps({'parent_delta': parent, 'best_delta': best})
-            db.execute("insert into events values ('candidate', ?, 'candidate.judged', '2026-01-02', ?)", (i, judged))
-        assert races(db) == 1
         sessions = tmp_path / 'export' / '.claude' / 'projects' / 'p'
         sessions.mkdir(parents=True)
         read = {
@@ -1586,11 +1530,8 @@ def test_a_run_whose_export_fails_writes_its_record_and_keeps_its_sandbox_for_in
     assert not box.closed, 'a sandbox that could not give its export waits for inspection, until its TTL'
 
 
-def test_a_pool_run_s_heads_are_its_best_over_time_and_its_line_holds_what_stacked(db: Database) -> None:
-    """A piloop with a pool (0.6) has no verdicts: its curve is the best that each score names, and its team counts
-    the candidates on the final best's line. A database at piloop's head is one; a verdict run's is not."""
-    with closing(sqlite3.connect(db.engine.url.database or '')) as at_head:
-        assert pool(at_head)
+def test_a_pool_run_s_heads_are_its_best_over_time_and_its_line_holds_what_stacked() -> None:
+    """A run's curve is the best that each score names, and its team counts the candidates on the final best's line."""
     with closing(sqlite3.connect(':memory:')) as con:
         con.executescript(
             """
@@ -1693,7 +1634,6 @@ def test_a_piloop_run_s_submissions_are_its_implementers_candidates_each_with_th
         ],
     )
     with closing(sqlite3.connect(db.engine.url.database or '')) as con:
-        assert pool(con)
         assert piloop_submissions(con) == [('a', base), ('b', 'recovered'), ('c', 'a')]
 
 
@@ -1840,14 +1780,14 @@ def test_rescoring_an_old_run_scores_its_submissions_only_when_the_task_reports_
         for rev in revisions:
             yield rev, Score.of([scoring_of(items[rev])])
 
-    monkeypatch.setattr(pilot, 'score', fake_score)
-    pilot.scored(run, Settings())
+    monkeypatch.setattr(metrics, 'score', fake_score)
+    metrics.scored(run, Settings())
     assert asked == [], 'the base and the head were scored, and the base has no items'
     r = Result.model_validate_json((run / 'result.json').read_text())
     assert r.regressions == Regressions(submissions=2, scored=1, found=None)
     assert [p.revision for p in r.curve] == [base, a]
     (run / 'scores.json').unlink()
-    pilot.scored(run, Settings())
+    metrics.scored(run, Settings())
     assert asked == [[base, a], [b]], 'the base and the head first; then the submission that is not a head'
     r = Result.model_validate_json((run / 'result.json').read_text())
     assert r.regressions == Regressions(submissions=2, scored=2, found=[Regression(revision=b, parent=a, lost=['x'])])
@@ -1906,8 +1846,8 @@ def test_each_score_is_kept_as_it_arrives_so_a_failure_loses_none_of_the_others(
         assert set(json.loads((run / 'scores.json').read_text())) == {base}, 'kept before the next one ends'
         raise ExceptionGroup('1 of 2 versions could not be scored', [RuntimeError('502')])
 
-    monkeypatch.setattr(pilot, 'score', fake_score)
+    monkeypatch.setattr(metrics, 'score', fake_score)
     with pytest.raises(ExceptionGroup):
-        pilot.scored(run, Settings())
+        metrics.scored(run, Settings())
     assert set(json.loads((run / 'scores.json').read_text())) == {base}
     assert not (run / 'result.json').exists(), 'no result while a head is unscored: rescore scores only that one'

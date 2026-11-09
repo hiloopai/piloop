@@ -1,7 +1,6 @@
 """Turn a run's export into its ``Result``: the heads over $ and time, the funnel, and the coordination counts.
 
-A piloop arm's heads are its keeps, at the time of their verdict, for a piloop with verdicts (before 0.6). For one with
-a pool (``pool``), they are its best over time: each candidate that a score made the best, at the time of that score.
+A piloop arm's heads are its best over time: each candidate that a score made the best, at the time of that score.
 A plain arm's heads are the commits of ``main``'s first-parent line, at their commit time: it was told to commit only
 what beats its best.
 
@@ -19,9 +18,21 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from evals.loop import loop
-from evals.model import Funnel, Point, PoolCounts, Regression, Regressions, Result, Sample, SelfTest, Tokens
-from evals.score import Score
-from evals.team import final_keeps, final_line, notes, races
+from evals.model import (
+    Funnel,
+    Point,
+    PoolCounts,
+    Regression,
+    Regressions,
+    Result,
+    Sample,
+    SelfTest,
+    Settings,
+    Task,
+    Tokens,
+)
+from evals.score import Score, score
+from evals.team import final_line, notes
 
 
 def between(points: list[tuple[float, float]], hours: float) -> float:
@@ -101,28 +112,6 @@ def piloop_submissions(db: sqlite3.Connection) -> list[tuple[str, str]]:
     ).fetchall()
 
 
-def pool(db: sqlite3.Connection) -> bool:
-    """Whether the run's piloop has the pool (0.6): its candidates have no verdict."""
-    return 'verdict' not in {row[1] for row in db.execute('pragma table_info(candidates)')}
-
-
-def piloop_heads(db: sqlite3.Connection, base: str, started: datetime) -> list[tuple[str, float]]:
-    """The heads after the baseline, in order, with their hours: the keeps, or the pool's best over time."""
-    if pool(db):
-        return pool_heads(db, base, started)
-    rows = db.execute(
-        """
-        select c.revision, coalesce(
-            (select max(e.at) from events e
-             where e.target_kind = 'candidate' and e.target_id = c.id and e.kind = 'candidate.verdict'),
-            c.updated_at) as at
-        from candidates c where c.verdict = 'keep' and c.revision != ? order by at
-        """,
-        (base,),
-    ).fetchall()
-    return [(rev, hours_since(started, stamp)) for rev, stamp in rows]
-
-
 def pool_heads(db: sqlite3.Connection, base: str, started: datetime) -> list[tuple[str, float]]:
     """The best of a pool run over time: each change of the best that a ``candidate.scored`` records, oldest first.
 
@@ -167,18 +156,12 @@ def piloop_counts(db: sqlite3.Connection, base: str) -> tuple[Funnel, int, int]:
     def one(query: str, *args: object) -> int:
         return int(db.execute(query, args).fetchone()[0] or 0)
 
-    if pool(db):
-        scored = "select distinct target_id from events where kind = 'candidate.scored' and target_kind = 'candidate'"
-        submissions = one(f'select count(*) from candidates where id in ({scored}) and revision != ?', base)
-        kept = len(pool_heads(db, base, datetime.now(UTC)))
-    else:
-        submissions = one('select count(*) from candidates where verdict is not null and revision != ?', base)
-        kept = one("select count(*) from candidates where verdict = 'keep' and revision != ?", base)
+    scored = "select distinct target_id from events where kind = 'candidate.scored' and target_kind = 'candidate'"
     funnel = Funnel(
         ideas=one('select count(*) from ideas'),
         runs=one('select count(*) from runs'),
-        submissions=submissions,
-        kept=kept,
+        submissions=one(f'select count(*) from candidates where id in ({scored}) and revision != ?', base),
+        kept=len(pool_heads(db, base, datetime.now(UTC))),
     )
     escalations = one("select count(*) from comments where kind = 'escalation'")
     people = one("select count(*) from comments where author like 'human%'")
@@ -206,7 +189,7 @@ def heads_of(run: Path) -> list[tuple[str, float]]:
     if meta['piloop'] is None:
         return plain_heads(export / 'repo.bundle', meta['base'], started)[0]
     with closing(sqlite3.connect(export / 'piloop.db')) as db:
-        return piloop_heads(db, meta['base'], started)
+        return pool_heads(db, meta['base'], started)
 
 
 def submissions_of(run: Path) -> list[tuple[str, str]]:
@@ -259,18 +242,15 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         funnel = Funnel(ideas=None, runs=sessions, submissions=commits, kept=len(heads))
         sent = delivered = refused = None
         escalations, people = 0, 0
-        kept, held, line, written, read, raced, counted = {}, {}, {}, {}, {}, None, None
+        kept, line, written, read, counted = {}, {}, {}, {}, None
     else:
         with closing(sqlite3.connect(export / 'piloop.db')) as db:
-            heads = piloop_heads(db, base, started)
+            heads = pool_heads(db, base, started)
             submitted = piloop_submissions(db)
             funnel, escalations, people = piloop_counts(db, base)
             sent, delivered, refused = messages(db)
-            if pool(db):
-                (kept, line), held, raced, counted = final_line(db, heads), {}, None, pool_counts(db)
-            else:
-                kept, held = final_keeps(db, export / 'repo.bundle')
-                line, raced, counted = {}, races(db), None
+            kept, line = final_line(db, heads)
+            counted = pool_counts(db)
             written, read = notes(db, run / 'export')
         made = None
     curve = []
@@ -312,12 +292,38 @@ def result(run: Path, scores: dict[str, Score]) -> Result:
         messages_refused=refused,
         selftest=SelfTest.model_validate_json(test.read_text()) if (test := run / 'selftest.json').exists() else None,
         keeps=kept,
-        keeps_in_final=held,
         on_final_line=line,
         pool=counted,
-        races=raced,
         notes_written=written,
         notes_read=read,
         regressions=regressions(submitted, scores, base),
         loop=loop(run / 'export', made, spend[-1].hours if spend else 0.0, spend[-1].usd if spend else 0.0),
     )
+
+
+def scored(run: Path, settings: Settings) -> None:
+    """Score what ``run`` has not scored yet, and write its ``result.json``.
+
+    The base and the heads first; then, for a task whose scorer reports items for the base, every submission and its
+    parent, so that ``result.json`` can count regressions. A task without items would pay for scorings that count
+    nothing.
+    """
+    meta = json.loads((run / 'run.json').read_text())
+    task, base = Task.load(meta['task']), meta['base']
+    known = run / 'scores.json'
+    scores = {k: Score.model_validate(v) for k, v in json.loads(known.read_text()).items()} if known.exists() else {}
+
+    def add(revisions: list[str]) -> None:
+        """Score the ``revisions`` not scored yet, and keep each score in ``scores.json`` as soon as it is made."""
+        if not (wanted := [rev for rev in dict.fromkeys(revisions) if rev not in scores]):
+            return
+        for rev, found in score(task, run / 'export' / 'out' / 'repo.bundle', base, wanted, settings):
+            scores[rev] = found
+            kept = known.with_suffix('.tmp')
+            kept.write_text(json.dumps({k: v.model_dump() for k, v in scores.items()}, indent=2))
+            kept.replace(known)  # a driver that dies mid-write leaves the last whole file
+
+    add([base, *(rev for rev, _ in heads_of(run))])
+    if scores[base].items is not None:
+        add([rev for submission in submissions_of(run) for rev in submission])
+    (run / 'result.json').write_text(result(run, scores).model_dump_json(indent=2))

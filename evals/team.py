@@ -1,4 +1,4 @@
-"""How the workers of a piloop run built on each other: keeps in the final head, races, and notes read across workers.
+"""How the workers of a piloop run built on each other: the final best's line, and notes read across workers.
 
 A worker is one run, of one role. A key ``a>b`` counts what a worker of role ``b`` did with the work of a worker of role
 ``a`` in another run, so two runs of one role count as two workers (``implementer>implementer``).
@@ -7,8 +7,6 @@ A worker is one run, of one role. A key ``a>b`` counts what a worker of role ``b
 import json
 import re
 import sqlite3
-import subprocess
-import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -17,36 +15,6 @@ SNIPPET = 60
 
 SIGNATURE = re.compile(r'^[a-z][a-z0-9_]*#(\d+)$')
 """An agent's signature, ``<role>#<agent session id>``, as it signs a note."""
-
-
-def final_keeps(db: sqlite3.Connection, bundle: Path) -> tuple[dict[str, int], dict[str, int]]:
-    """The keeps of each role, and those of them that the final head contains: the gains that stacked.
-
-    The final head is the last keep. A keep that it does not contain was dropped when another line won.
-    """
-    keeps = db.execute(
-        """
-        select c.revision, r.role from candidates c join runs r on r.id = c.run_id
-        where c.verdict = 'keep'
-        order by coalesce(
-            (select max(e.at) from events e
-             where e.target_kind = 'candidate' and e.target_id = c.id and e.kind = 'candidate.verdict'),
-            c.updated_at)
-        """
-    ).fetchall()
-    kept: Counter[str] = Counter(role for _, role in keeps)
-    held: Counter[str] = Counter()
-    if not keeps:
-        return {}, {}
-    final = keeps[-1][0]
-    with tempfile.TemporaryDirectory() as repo:
-        subprocess.run(['git', 'clone', '-q', '--bare', str(bundle), repo], check=True)
-        for revision, role in keeps:
-            ancestor = subprocess.run(['git', '-C', repo, 'merge-base', '--is-ancestor', revision, final], check=False)
-            if ancestor.returncode not in (0, 1):
-                raise RuntimeError(f'git merge-base {revision} {final} exited {ancestor.returncode}')
-            held[role] += ancestor.returncode == 0
-    return dict(kept), dict(held)
 
 
 def final_line(db: sqlite3.Connection, heads: list[tuple[str, float]]) -> tuple[dict[str, int], dict[str, int]]:
@@ -78,21 +46,6 @@ def final_line(db: sqlite3.Connection, heads: list[tuple[str, float]]) -> tuple[
             line[r] += 1
         at = parent.get(at)
     return dict(bests), dict(line)
-
-
-def races(db: sqlite3.Connection) -> int:
-    """Submissions lost to a race: not kept, though they beat the version they started from.
-
-    Another run's keep had moved the head past them by the time they were judged.
-    """
-    judged = db.execute(
-        """
-        select json_extract(e.payload, '$.parent_delta'), json_extract(e.payload, '$.best_delta'), c.verdict
-        from events e join candidates c on c.id = e.target_id
-        where e.kind = 'candidate.judged' and e.target_kind = 'candidate'
-        """
-    ).fetchall()
-    return sum(1 for parent, best, verdict in judged if verdict != 'keep' and (parent or 0) > 0 and (best or 0) <= 0)
 
 
 def record(line: str) -> dict[str, object]:
